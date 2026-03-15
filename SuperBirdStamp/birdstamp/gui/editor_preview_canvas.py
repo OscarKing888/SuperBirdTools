@@ -179,6 +179,21 @@ class EditorPreviewCanvas(PreviewCanvas):
         if self._crop_edit_mode and self._crop_effect_box:
             self._paint_crop_handles(painter, draw_rect, content_rect)
 
+    def _composition_grid_target_rect(self, draw_rect: QRectF, content_rect) -> QRectF:  # type: ignore[override]
+        """构图线优先限制在当前裁切范围内，避免覆盖到裁切外区域。"""
+        box = self._crop_effect_box
+        if box is None:
+            return draw_rect
+        crop_rect = QRectF(
+            draw_rect.left() + box[0] * draw_rect.width(),
+            draw_rect.top() + box[1] * draw_rect.height(),
+            max(0.0, (box[2] - box[0]) * draw_rect.width()),
+            max(0.0, (box[3] - box[1]) * draw_rect.height()),
+        ).intersected(draw_rect)
+        if crop_rect.width() < 1.0 or crop_rect.height() < 1.0:
+            return draw_rect
+        return crop_rect
+
     # ------------------------------------------------------------------
     # Private overlay painters
     # ------------------------------------------------------------------

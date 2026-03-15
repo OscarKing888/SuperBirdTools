@@ -43,7 +43,13 @@ from PyQt6.QtWidgets import (
     QColorDialog,
 )
 
-from app_common.preview_canvas import PreviewWithStatusBar
+from app_common.preview_canvas import (
+    PREVIEW_COMPOSITION_GRID_LINE_WIDTHS,
+    PREVIEW_COMPOSITION_GRID_MODES,
+    PreviewWithStatusBar,
+    normalize_preview_composition_grid_line_width,
+    normalize_preview_composition_grid_mode,
+)
 from birdstamp.gui import editor_core, editor_options, editor_template, editor_utils, template_context as _template_context
 from birdstamp.gui.editor_preview_canvas import (
     EditorPreviewCanvas,
@@ -82,6 +88,9 @@ _sanitize_template_name = editor_utils.sanitize_template_name
 _DEFAULT_TEMPLATE_BANNER_COLOR = editor_utils.DEFAULT_TEMPLATE_BANNER_COLOR
 _TEMPLATE_BANNER_COLOR_NONE = editor_utils.TEMPLATE_BANNER_COLOR_NONE
 _TEMPLATE_BANNER_COLOR_CUSTOM = editor_utils.TEMPLATE_BANNER_COLOR_CUSTOM
+_PREVIEW_GRID_MODE_ITEMS = editor_utils.PREVIEW_GRID_MODE_ITEMS
+_PREVIEW_GRID_MODE_COMBO_WIDTH = editor_utils.PREVIEW_GRID_MODE_COMBO_WIDTH
+_PREVIEW_GRID_LINE_WIDTH_COMBO_WIDTH = editor_utils.PREVIEW_GRID_LINE_WIDTH_COMBO_WIDTH
 
 _CENTER_MODE_BIRD = editor_core.CENTER_MODE_BIRD
 _CENTER_MODE_FOCUS = editor_core.CENTER_MODE_FOCUS
@@ -755,14 +764,14 @@ class TemplateManagerDialog(QDialog):
                 if not isinstance(raw_meta, dict):
                     raw_meta = {}
                 self._preview_raw_metadata = raw_meta
-                self._preview_photo_info = _template_context.ensure_photo_info(src, raw_metadata=raw_meta)
+                self._preview_photo_info = _template_context.ensure_editor_photo_info(src, raw_metadata=raw_meta)
                 self._preview_metadata_context = _build_metadata_context(src, raw_meta)
                 return
             except Exception:
                 pass
         # 回退：使用 placeholder PIL 图 + 空 metadata
         self._preview_source_image = self.placeholder.copy()
-        self._preview_photo_info = _template_context.ensure_photo_info(self._preview_source_path, raw_metadata={})
+        self._preview_photo_info = _template_context.ensure_editor_photo_info(self._preview_source_path, raw_metadata={})
 
     # ------------------------------------------------------------------
     # UI construction
@@ -893,6 +902,34 @@ class TemplateManagerDialog(QDialog):
         self.show_bird_box_check.setChecked(True)
         self.show_bird_box_check.toggled.connect(self._on_preview_overlay_toggled)
         preview_toolbar.addWidget(self.show_bird_box_check)
+
+        self.preview_grid_combo = QComboBox()
+        self.preview_grid_combo.setFixedWidth(_PREVIEW_GRID_MODE_COMBO_WIDTH)
+        valid_grid_modes = set(PREVIEW_COMPOSITION_GRID_MODES)
+        for mode, label in _PREVIEW_GRID_MODE_ITEMS:
+            if mode in valid_grid_modes:
+                self.preview_grid_combo.addItem(label, mode)
+        current_grid_index = self.preview_grid_combo.findData("none")
+        if current_grid_index < 0 and self.preview_grid_combo.count() > 0:
+            current_grid_index = 0
+        if current_grid_index >= 0:
+            self.preview_grid_combo.setCurrentIndex(current_grid_index)
+        self.preview_grid_combo.setToolTip("设置模板预览构图辅助线；显示范围会限制在当前裁切区域内。")
+        self.preview_grid_combo.currentIndexChanged.connect(self._on_preview_grid_mode_changed)
+        preview_toolbar.addWidget(self.preview_grid_combo)
+
+        self.preview_grid_line_width_combo = QComboBox()
+        self.preview_grid_line_width_combo.setFixedWidth(_PREVIEW_GRID_LINE_WIDTH_COMBO_WIDTH)
+        for line_width in PREVIEW_COMPOSITION_GRID_LINE_WIDTHS:
+            self.preview_grid_line_width_combo.addItem(f"{line_width} px", line_width)
+        current_width_index = self.preview_grid_line_width_combo.findData(1)
+        if current_width_index < 0 and self.preview_grid_line_width_combo.count() > 0:
+            current_width_index = 0
+        if current_width_index >= 0:
+            self.preview_grid_line_width_combo.setCurrentIndex(current_width_index)
+        self.preview_grid_line_width_combo.setToolTip("设置构图辅助线线宽。")
+        self.preview_grid_line_width_combo.currentIndexChanged.connect(self._on_preview_grid_line_width_changed)
+        preview_toolbar.addWidget(self.preview_grid_line_width_combo)
 
         preview_toolbar.addStretch(1)
         layout.addLayout(preview_toolbar)
@@ -2042,6 +2079,14 @@ class TemplateManagerDialog(QDialog):
             show_bird_box=bool(self.show_bird_box_check.isChecked()),
             show_crop_effect=bool(self.show_crop_effect_check.isChecked()),
             crop_effect_alpha=int(self.crop_effect_alpha_slider.value()),
+            composition_grid_mode=normalize_preview_composition_grid_mode(
+                self.preview_grid_combo.currentData() if self.preview_grid_combo is not None else "none"
+            ),
+            composition_grid_line_width=normalize_preview_composition_grid_line_width(
+                self.preview_grid_line_width_combo.currentData()
+                if self.preview_grid_line_width_combo is not None
+                else 1
+            ),
         )
 
     def _apply_preview_overlay_options(self) -> None:
@@ -2059,9 +2104,20 @@ class TemplateManagerDialog(QDialog):
     def _on_tmpl_canvas_crop_box_changed(self, box: tuple[float, float, float, float]) -> None:
         if self.current_payload is not None:
             self.current_payload["crop_box"] = [box[0], box[1], box[2], box[3]]
+            if self._preview_photo_info is not None:
+                self._preview_photo_info = _template_context.ensure_editor_photo_info(
+                    self._preview_photo_info,
+                    crop_box=box,
+                )
             self._refresh_preview()
 
     def _on_preview_overlay_toggled(self, _checked: bool) -> None:
+        self._apply_preview_overlay_options()
+
+    def _on_preview_grid_mode_changed(self, _index: int) -> None:
+        self._apply_preview_overlay_options()
+
+    def _on_preview_grid_line_width_changed(self, _index: int) -> None:
         self._apply_preview_overlay_options()
 
     def _on_preview_crop_effect_alpha_changed(self, value: int) -> None:
@@ -2112,6 +2168,11 @@ class TemplateManagerDialog(QDialog):
                     crop_box_override = (float(cb_raw[0]), float(cb_raw[1]), float(cb_raw[2]), float(cb_raw[3]))
                 except (TypeError, ValueError):
                     pass
+            if self._preview_photo_info is not None:
+                self._preview_photo_info = _template_context.ensure_editor_photo_info(
+                    self._preview_photo_info,
+                    crop_box=crop_box_override,
+                )
             crop_box, outer_pad = _compute_crop_plan(
                 source,
                 self._preview_raw_metadata,

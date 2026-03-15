@@ -13,6 +13,10 @@ from typing import Any
 from PIL import Image
 from PyQt6.QtGui import QPixmap
 
+from app_common.preview_canvas import (
+    normalize_preview_composition_grid_line_width,
+    normalize_preview_composition_grid_mode,
+)
 from birdstamp.decoders.image_decoder import decode_image
 from birdstamp.gui import editor_core, editor_options, editor_template, editor_utils, template_context as _template_context
 from birdstamp.gui.editor_preview_canvas import EditorPreviewOverlayOptions, EditorPreviewOverlayState
@@ -89,11 +93,19 @@ class _BirdStampRendererMixin:
 
     def _build_preview_overlay_options(self) -> EditorPreviewOverlayOptions:
         """Build editor preview overlay options from the current toolbar UI state."""
+        preview_grid_combo = getattr(self, "preview_grid_combo", None)
+        preview_grid_line_width_combo = getattr(self, "preview_grid_line_width_combo", None)
         return EditorPreviewOverlayOptions(
             show_focus_box=bool(self.show_focus_box_check.isChecked()),
             show_bird_box=bool(self.show_bird_box_check.isChecked()),
             show_crop_effect=bool(self.show_crop_effect_check.isChecked()),
             crop_effect_alpha=int(self.crop_effect_alpha_slider.value()),
+            composition_grid_mode=normalize_preview_composition_grid_mode(
+                preview_grid_combo.currentData() if preview_grid_combo is not None else "none"
+            ),
+            composition_grid_line_width=normalize_preview_composition_grid_line_width(
+                preview_grid_line_width_combo.currentData() if preview_grid_line_width_combo is not None else 1
+            ),
         )
 
     def _apply_preview_overlay_options_from_ui(self) -> None:
@@ -361,7 +373,7 @@ class _BirdStampRendererMixin:
             "crop_padding_left": padding["left"],
             "crop_padding_right": padding["right"],
             "crop_padding_fill": padding["fill"],
-            "crop_box": getattr(self, "_crop_box_override", None),
+            "crop_box": _template_context.normalize_crop_box(getattr(self, "_crop_box_override", None)),
             "custom_center_x": float(custom_center[0]) if center_mode == _CENTER_MODE_CUSTOM and custom_center else None,
             "custom_center_y": float(custom_center[1]) if center_mode == _CENTER_MODE_CUSTOM and custom_center else None,
         }
@@ -412,7 +424,7 @@ class _BirdStampRendererMixin:
             "crop_padding_left": _pad_px("crop_padding_left"),
             "crop_padding_right": _pad_px("crop_padding_right"),
             "crop_padding_fill": fill,
-            "crop_box": settings.get("crop_box"),
+            "crop_box": _template_context.normalize_crop_box(settings.get("crop_box")),
             "custom_center_x": float(custom_center_x) if custom_center_x is not None else None,
             "custom_center_y": float(custom_center_y) if custom_center_y is not None else None,
         }
@@ -482,7 +494,16 @@ class _BirdStampRendererMixin:
         key = _path_key(path)
         if prefer_current_ui and self.current_path is not None and key == _path_key(self.current_path):
             return fallback
-        return self._normalize_render_settings(self.photo_render_overrides.get(key), fallback=fallback)
+        settings = self._normalize_render_settings(self.photo_render_overrides.get(key), fallback=fallback)
+        getter = getattr(self, "_photo_crop_box_for_path", None)
+        if callable(getter):
+            try:
+                photo_crop_box = getter(path)
+            except Exception:
+                photo_crop_box = None
+            if photo_crop_box is not None:
+                settings["crop_box"] = photo_crop_box
+        return settings
 
     def _ratio_combo_index_for_value(self, ratio: Any) -> int:
         for idx in range(self.ratio_combo.count()):
@@ -549,6 +570,16 @@ class _BirdStampRendererMixin:
             normalized["template_payload"],
             fallback_name=template_name,
         )
+        self._crop_box_override = _template_context.normalize_crop_box(normalized.get("crop_box"))
+        if normalized["center_mode"] == _CENTER_MODE_CUSTOM:
+            cx = normalized.get("custom_center_x")
+            cy = normalized.get("custom_center_y")
+            if cx is not None and cy is not None:
+                self._custom_center = (float(cx), float(cy))
+            else:
+                self._custom_center = None
+        else:
+            self._custom_center = None
 
     def _compose_preview_with_crop_aligned_overlay(
         self,

@@ -46,8 +46,10 @@ TEMPLATE_SOURCE_AUTO = "auto"
 TEMPLATE_SOURCE_METADATA_LEGACY = "metadata"
 
 TemplateContext = Dict[str, str]
+NormalizedCropBox = tuple[float, float, float, float]
 
 _REPORT_DB_ROW_RESOLVER: Optional[Callable[[Path], Optional[Dict[str, Any]]]] = None
+_PHOTO_INFO_CROP_BOX_UNSET = object()
 
 _BASE_TEMPLATE_CONTEXT: TemplateContext = {
     "bird": "",
@@ -100,6 +102,32 @@ class PhotoInfo:
             path=resolved_path,
             sidecar_path=resolved_sidecar,
             raw_metadata=metadata,
+        )
+
+
+@dataclass(slots=True)
+class EditorPhotoInfo(PhotoInfo):
+    """编辑器使用的照片信息，额外保存逐图裁切框。"""
+
+    crop_box: NormalizedCropBox | None = None
+
+    @classmethod
+    def from_path(
+        cls,
+        path: Path | str,
+        *,
+        sidecar_path: Path | str | None = None,
+        raw_metadata: Dict[str, Any] | None = None,
+        crop_box: Any = None,
+    ) -> "EditorPhotoInfo":
+        resolved_path = Path(path).resolve(strict=False)
+        resolved_sidecar = _normalize_sidecar_path(sidecar_path, source_path=resolved_path)
+        metadata = dict(raw_metadata) if isinstance(raw_metadata, dict) else {}
+        return cls(
+            path=resolved_path,
+            sidecar_path=resolved_sidecar,
+            raw_metadata=metadata,
+            crop_box=normalize_crop_box(crop_box),
         )
 
 
@@ -156,6 +184,55 @@ def ensure_photo_info(
         photo,
         sidecar_path=sidecar_path,
         raw_metadata=raw_metadata,
+    )
+
+
+def normalize_crop_box(crop_box: Any) -> NormalizedCropBox | None:
+    if crop_box is None or not isinstance(crop_box, (list, tuple)) or len(crop_box) != 4:
+        return None
+    try:
+        return tuple(float(value) for value in crop_box)
+    except (TypeError, ValueError):
+        return None
+
+
+def photo_crop_box(photo: PhotoInfo | None) -> NormalizedCropBox | None:
+    if not isinstance(photo, PhotoInfo):
+        return None
+    return normalize_crop_box(getattr(photo, "crop_box", None))
+
+
+def ensure_editor_photo_info(
+    photo: PhotoInfo | Path | str,
+    *,
+    raw_metadata: Dict[str, Any] | None = None,
+    sidecar_path: Path | str | None = None,
+    crop_box: Any = _PHOTO_INFO_CROP_BOX_UNSET,
+) -> EditorPhotoInfo:
+    normalized_crop_box = (
+        photo_crop_box(photo) if crop_box is _PHOTO_INFO_CROP_BOX_UNSET else normalize_crop_box(crop_box)
+    )
+    if isinstance(photo, EditorPhotoInfo):
+        if isinstance(raw_metadata, dict):
+            photo.raw_metadata = dict(raw_metadata)
+        elif not isinstance(photo.raw_metadata, dict):
+            photo.raw_metadata = {}
+        if sidecar_path is not None or photo.sidecar_path is None:
+            photo.sidecar_path = _normalize_sidecar_path(sidecar_path, source_path=photo.path)
+        if crop_box is not _PHOTO_INFO_CROP_BOX_UNSET:
+            photo.crop_box = normalized_crop_box
+        return photo
+
+    base = ensure_photo_info(
+        photo,
+        raw_metadata=raw_metadata,
+        sidecar_path=sidecar_path,
+    )
+    return EditorPhotoInfo(
+        path=base.path,
+        sidecar_path=base.sidecar_path,
+        raw_metadata=dict(base.raw_metadata) if isinstance(base.raw_metadata, dict) else {},
+        crop_box=normalized_crop_box,
     )
 
 

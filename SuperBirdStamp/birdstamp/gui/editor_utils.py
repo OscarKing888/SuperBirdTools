@@ -29,6 +29,16 @@ TEMPLATE_BANNER_COLOR_CUSTOM = "custom"
 TEMPLATE_BANNER_TOP_PADDING_PX = 16
 DEFAULT_TEMPLATE_FONT_TYPE = "auto"
 DEFAULT_CROP_EFFECT_ALPHA = 160
+PREVIEW_GRID_MODE_ITEMS = (
+    ("none", "构图线：不显示"),
+    ("thirds", "构图线：均分九宫格"),
+    ("golden_thirds", "构图线：黄金分割九宫格"),
+    ("square", "构图线：方格网格"),
+    ("diag_square", "构图线：对角线 + 方格"),
+    ("crosshair", "构图线：中心十字线"),
+)
+PREVIEW_GRID_MODE_COMBO_WIDTH = 180
+PREVIEW_GRID_LINE_WIDTH_COMBO_WIDTH = 96
 _CHINESE_FONT_NAME_ALIASES: tuple[tuple[str, str], ...] = (
     ("microsoft yahei", "微软雅黑"),
     ("msyh", "微软雅黑"),

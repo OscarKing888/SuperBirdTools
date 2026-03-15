@@ -102,7 +102,11 @@ from birdstamp.gui.editor_template_dialog import (
     _GradientEditorWidget,  # noqa: F401
     TemplateManagerDialog,
 )
-from app_common.preview_canvas import PreviewWithStatusBar
+from app_common.preview_canvas import (
+    PREVIEW_COMPOSITION_GRID_LINE_WIDTHS,
+    PREVIEW_COMPOSITION_GRID_MODES,
+    PreviewWithStatusBar,
+)
 from birdstamp.gui.editor_preview_canvas import EditorPreviewCanvas, EditorPreviewOverlayState
 from birdstamp.gui.editor_photo_metadata_loader import EditorPhotoListMetadataLoader
 from birdstamp.gui.editor_photo_list import (
@@ -163,6 +167,9 @@ _DEFAULT_TEMPLATE_BANNER_COLOR = editor_utils.DEFAULT_TEMPLATE_BANNER_COLOR
 _TEMPLATE_BANNER_COLOR_NONE = editor_utils.TEMPLATE_BANNER_COLOR_NONE
 _TEMPLATE_BANNER_COLOR_CUSTOM = editor_utils.TEMPLATE_BANNER_COLOR_CUSTOM
 _TEMPLATE_BANNER_TOP_PADDING_PX = editor_utils.TEMPLATE_BANNER_TOP_PADDING_PX
+_PREVIEW_GRID_MODE_ITEMS = editor_utils.PREVIEW_GRID_MODE_ITEMS
+_PREVIEW_GRID_MODE_COMBO_WIDTH = editor_utils.PREVIEW_GRID_MODE_COMBO_WIDTH
+_PREVIEW_GRID_LINE_WIDTH_COMBO_WIDTH = editor_utils.PREVIEW_GRID_LINE_WIDTH_COMBO_WIDTH
 _build_color_preview_swatch = editor_utils.build_color_preview_swatch
 _set_color_preview_swatch = editor_utils.set_color_preview_swatch
 _configure_form_layout = editor_utils.configure_form_layout
@@ -936,6 +943,35 @@ class BirdStampEditorWindow(QMainWindow, _BirdStampCropMixin, _BirdStampRenderer
         self.show_bird_box_check.setChecked(True)
         self.show_bird_box_check.toggled.connect(self._on_preview_toolbar_toggled)
         preview_toolbar.addWidget(self.show_bird_box_check)
+
+        self.preview_grid_combo = QComboBox()
+        self.preview_grid_combo.setFixedWidth(_PREVIEW_GRID_MODE_COMBO_WIDTH)
+        valid_grid_modes = set(PREVIEW_COMPOSITION_GRID_MODES)
+        for mode, label in _PREVIEW_GRID_MODE_ITEMS:
+            if mode in valid_grid_modes:
+                self.preview_grid_combo.addItem(label, mode)
+        current_grid_index = self.preview_grid_combo.findData("none")
+        if current_grid_index < 0 and self.preview_grid_combo.count() > 0:
+            current_grid_index = 0
+        if current_grid_index >= 0:
+            self.preview_grid_combo.setCurrentIndex(current_grid_index)
+        self.preview_grid_combo.setToolTip("设置预览图构图辅助线；BirdStamp 中会优先绘制在当前裁切范围内。")
+        self.preview_grid_combo.currentIndexChanged.connect(self._on_preview_grid_mode_changed)
+        preview_toolbar.addWidget(self.preview_grid_combo)
+
+        self.preview_grid_line_width_combo = QComboBox()
+        self.preview_grid_line_width_combo.setFixedWidth(_PREVIEW_GRID_LINE_WIDTH_COMBO_WIDTH)
+        for line_width in PREVIEW_COMPOSITION_GRID_LINE_WIDTHS:
+            self.preview_grid_line_width_combo.addItem(f"{line_width} px", line_width)
+        current_width_index = self.preview_grid_line_width_combo.findData(1)
+        if current_width_index < 0 and self.preview_grid_line_width_combo.count() > 0:
+            current_width_index = 0
+        if current_width_index >= 0:
+            self.preview_grid_line_width_combo.setCurrentIndex(current_width_index)
+        self.preview_grid_line_width_combo.setToolTip("设置构图辅助线线宽。")
+        self.preview_grid_line_width_combo.currentIndexChanged.connect(self._on_preview_grid_line_width_changed)
+        preview_toolbar.addWidget(self.preview_grid_line_width_combo)
+
         preview_toolbar.addStretch(1)
         right_layout.addLayout(preview_toolbar)
 
@@ -1211,6 +1247,12 @@ class BirdStampEditorWindow(QMainWindow, _BirdStampCropMixin, _BirdStampRenderer
     def _on_preview_toolbar_toggled(self, _checked: bool) -> None:
         self._refresh_preview_label(preserve_view=True)
 
+    def _on_preview_grid_mode_changed(self, _index: int) -> None:
+        self._apply_preview_overlay_options_from_ui()
+
+    def _on_preview_grid_line_width_changed(self, _index: int) -> None:
+        self._apply_preview_overlay_options_from_ui()
+
     def _on_canvas_crop_box_changed(self, box: tuple[float, float, float, float]) -> None:
         """9 宫格裁切框变更。
 
@@ -1232,6 +1274,7 @@ class BirdStampEditorWindow(QMainWindow, _BirdStampCropMixin, _BirdStampRenderer
                 self._set_custom_center_from_box(box)
 
         self._crop_box_override = box
+        self._set_photo_crop_box_for_path(self.current_path, box)
         self._on_crop_settings_changed()
 
     def _get_crop_padding_state(self) -> dict[str, Any]:
@@ -1346,6 +1389,7 @@ class BirdStampEditorWindow(QMainWindow, _BirdStampCropMixin, _BirdStampRenderer
         if self.current_path is not None and not self._is_placeholder_active():
             key = _path_key(self.current_path)
             snapshot = self._photo_override_settings_from_snapshot(self._build_current_render_settings())
+            self._set_photo_crop_box_for_path(self.current_path, snapshot.get("crop_box"))
             self.photo_render_overrides[key] = snapshot
             self._update_photo_list_item_display(self.current_path, settings=snapshot)
             self._invalidate_original_mode_cache()
@@ -1591,13 +1635,58 @@ class BirdStampEditorWindow(QMainWindow, _BirdStampCropMixin, _BirdStampRenderer
         item = self._find_photo_item_by_path(path)
         existing = item.data(PHOTO_COL_ROW, PHOTO_LIST_PHOTO_INFO_ROLE) if item is not None else None
         metadata = raw_metadata if isinstance(raw_metadata, dict) else self._load_raw_metadata(path)
-        photo_info = _template_context.ensure_photo_info(
+        photo_info = _template_context.ensure_editor_photo_info(
             existing if isinstance(existing, _template_context.PhotoInfo) else path,
             raw_metadata=metadata,
         )
         if item is not None:
             item.setData(PHOTO_COL_ROW, PHOTO_LIST_PHOTO_INFO_ROLE, photo_info)
         return photo_info
+
+    def _photo_crop_box_for_path(self, path: Path | None) -> tuple[float, float, float, float] | None:
+        if path is None:
+            return _template_context.photo_crop_box(self.current_photo_info)
+        key = _path_key(path)
+        if self.current_path is not None and key == _path_key(self.current_path):
+            current_crop_box = _template_context.photo_crop_box(self.current_photo_info)
+            if current_crop_box is not None:
+                return current_crop_box
+        item = self._find_photo_item_by_path(path)
+        if item is None:
+            return None
+        photo_info = item.data(PHOTO_COL_ROW, PHOTO_LIST_PHOTO_INFO_ROLE)
+        if not isinstance(photo_info, _template_context.PhotoInfo):
+            return None
+        return _template_context.photo_crop_box(photo_info)
+
+    def _set_photo_crop_box_for_path(self, path: Path | None, crop_box: Any) -> None:
+        if path is None:
+            if isinstance(self.current_photo_info, _template_context.PhotoInfo):
+                self.current_photo_info = _template_context.ensure_editor_photo_info(
+                    self.current_photo_info,
+                    crop_box=crop_box,
+                )
+            return
+
+        updated_info: _template_context.PhotoInfo | None = None
+        item = self._find_photo_item_by_path(path)
+        if item is not None:
+            photo_info = item.data(PHOTO_COL_ROW, PHOTO_LIST_PHOTO_INFO_ROLE)
+            updated_info = _template_context.ensure_editor_photo_info(
+                photo_info if isinstance(photo_info, _template_context.PhotoInfo) else path,
+                crop_box=crop_box,
+            )
+            item.setData(PHOTO_COL_ROW, PHOTO_LIST_PHOTO_INFO_ROLE, updated_info)
+
+        if self.current_path is not None and _path_key(path) == _path_key(self.current_path):
+            base_info = updated_info if updated_info is not None else (
+                self.current_photo_info if isinstance(self.current_photo_info, _template_context.PhotoInfo) else path
+            )
+            self.current_photo_info = _template_context.ensure_editor_photo_info(
+                base_info,
+                raw_metadata=self.current_raw_metadata if isinstance(self.current_raw_metadata, dict) else None,
+                crop_box=crop_box,
+            )
 
     def _provider_text_candidates(
         self,
@@ -2207,7 +2296,11 @@ class BirdStampEditorWindow(QMainWindow, _BirdStampCropMixin, _BirdStampRenderer
             sequence_value = self._next_photo_sequence_value()
             item.setData(PHOTO_COL_SEQ, PHOTO_LIST_SORT_ROLE, (0, sequence_value))
             item.setData(PHOTO_COL_ROW, PHOTO_LIST_PATH_ROLE, str(path))
-            item.setData(PHOTO_COL_ROW, PHOTO_LIST_PHOTO_INFO_ROLE, _template_context.ensure_photo_info(path))
+            item.setData(
+                PHOTO_COL_ROW,
+                PHOTO_LIST_PHOTO_INFO_ROLE,
+                _template_context.ensure_editor_photo_info(path, crop_box=current_settings.get("crop_box")),
+            )
             item.setData(PHOTO_COL_ROW, PHOTO_LIST_SEQUENCE_ROLE, sequence_value)
             item.setData(PHOTO_COL_ROW, PHOTO_LIST_SORT_ROLE, (0, sequence_value))
             item.setToolTip(PHOTO_COL_ROW, "")
@@ -2362,13 +2455,14 @@ class BirdStampEditorWindow(QMainWindow, _BirdStampCropMixin, _BirdStampRenderer
         self._invalidate_original_mode_cache()
         self.current_raw_metadata = self._load_raw_metadata(path)
         photo_info = current.data(PHOTO_COL_ROW, PHOTO_LIST_PHOTO_INFO_ROLE)
-        self.current_photo_info = _template_context.ensure_photo_info(
+        self.current_photo_info = _template_context.ensure_editor_photo_info(
             photo_info if isinstance(photo_info, _template_context.PhotoInfo) else path,
             raw_metadata=self.current_raw_metadata,
         )
         current.setData(PHOTO_COL_ROW, PHOTO_LIST_PHOTO_INFO_ROLE, self.current_photo_info)
         self.current_metadata_context = _build_metadata_context(self.current_photo_info, self.current_raw_metadata)
         settings = self._render_settings_for_path(path, prefer_current_ui=False)
+        self._set_photo_crop_box_for_path(path, settings.get("crop_box"))
         self._apply_render_settings_to_ui(settings)
         self._update_photo_list_item_display(path, raw_metadata=self.current_raw_metadata, settings=settings)
         self.current_file_label.setText(f"当前照片: {path}")
@@ -2735,6 +2829,7 @@ class BirdStampEditorWindow(QMainWindow, _BirdStampCropMixin, _BirdStampRenderer
         for path in targets:
             normalized = self._clone_render_settings(snapshot)
             self.photo_render_overrides[_path_key(path)] = normalized
+            self._set_photo_crop_box_for_path(path, normalized.get("crop_box"))
             self._update_photo_list_item_display(path, settings=normalized)
 
         if self.current_path is not None:
@@ -2754,6 +2849,7 @@ class BirdStampEditorWindow(QMainWindow, _BirdStampCropMixin, _BirdStampRenderer
         for path in targets:
             normalized = self._clone_render_settings(snapshot)
             self.photo_render_overrides[_path_key(path)] = normalized
+            self._set_photo_crop_box_for_path(path, normalized.get("crop_box"))
             self._update_photo_list_item_display(path, settings=normalized)
 
         if self.current_path is not None:
