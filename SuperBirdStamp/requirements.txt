@@ -1,0 +1,18 @@
+typer>=0.12,<1.0
+Pillow>=10.0
+PyYAML>=6.0
+PyQt6>=6.6
+numpy>=2.0
+
+# Bird body detection (YOLO)
+ultralytics>=8.3,<9.0
+torch>=2.2
+torchvision>=0.17
+
+# Optional extras:
+rawpy>=0.20
+pillow-heif>=0.16
+# pytest>=8.0
+piexif>=1.1.0
+
+PyInstaller>=6.0

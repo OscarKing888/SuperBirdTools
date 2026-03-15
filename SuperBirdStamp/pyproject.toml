@@ -1,0 +1,37 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "birdstamp"
+version = "0.1.0"
+description = "Batch photo banner renderer for bird photography."
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+  "typer>=0.12,<1.0",
+  "Pillow>=10.0",
+  "PyYAML>=6.0",
+  "piexif>=1.1.3",
+]
+
+[project.optional-dependencies]
+raw = ["rawpy>=0.20"]
+heif = ["pillow-heif>=0.16"]
+gui = ["PyQt6>=6.6"]
+dev = ["pytest>=8.0"]
+
+[project.scripts]
+birdstamp = "birdstamp.cli:main"
+
+[tool.setuptools]
+packages = [
+  "birdstamp",
+  "birdstamp.decoders",
+  "birdstamp.gui",
+  "birdstamp.meta",
+  "birdstamp.render",
+]
+
+[tool.setuptools.package-data]
+"birdstamp.gui" = ["icons/*.png", "icons/*.ico", "icons/*.icns"]
