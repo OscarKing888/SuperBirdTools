@@ -2,6 +2,8 @@
 
 `birdstamp` is a cross-platform Python tool for batch rendering bird-photo outputs with a metadata banner.
 
+当前仓库推荐的使用方式是 monorepo 根目录共享 `.venv`，通过 `python init_dev.py` 初始化环境；GUI 启动优先使用仓库根 `run.sh` / `run.bat`，打包优先使用仓库根 `build_all.sh` / `build_all.bat`。
+
 ## Features
 
 - Batch process single files or directories (`--recursive`).
@@ -12,57 +14,61 @@
 - Render banner templates (YAML/JSON), built-in: `default/minimal/dark/compact`.
 - Bird name priority: CLI arg, metadata, filename regex.
 - Output modes: `keep`, `fit`, `square`, `vertical`.
-- Commands:
-  - `birdstamp render`
-  - `birdstamp inspect`
-  - `birdstamp templates`
-  - `birdstamp init-config`
-  - `birdstamp gui`
+- CLI module commands (run from `SuperBirdStamp/` with the shared `.venv`):
+  - `python -m birdstamp render`
+  - `python -m birdstamp inspect`
+  - `python -m birdstamp templates`
+  - `python -m birdstamp init-config`
+  - `python -m birdstamp gui`
 
-## Install
-
-```bash
-pip install .
-```
-
-Optional extras:
+## Development Setup
 
 ```bash
-pip install .[raw,heif,gui]
+python init_dev.py
 ```
 
-- `raw`: enables `rawpy` decoding.
-- `heif`: enables `pillow-heif` decoding.
-- `gui`: enables PyQt6 GUI editor.
+启动两个 GUI：
+
+```bash
+./run.sh
+```
+
+只启动 SuperBirdStamp GUI：
+
+```bash
+python SuperBirdStamp/entry.py
+```
 
 ## Quick Start
 
+CLI 示例默认在 `SuperBirdStamp/` 目录内执行；如果你在仓库根目录，请先 `cd SuperBirdStamp`。
+
 ```bash
-birdstamp render ./photos --recursive --out ./output --template default --theme gray --bird "灰喜鹊"
+python -m birdstamp render ./photos --recursive --out ./output --template default --theme gray --bird "灰喜鹊"
 ```
 
 Print parsed metadata:
 
 ```bash
-birdstamp inspect ./photos/IMG_0001.JPG
+python -m birdstamp inspect ./photos/IMG_0001.JPG
 ```
 
 Initialize user config:
 
 ```bash
-birdstamp init-config
+python -m birdstamp init-config
 ```
 
 Open GUI editor:
 
 ```bash
-birdstamp gui
+python -m birdstamp gui
 ```
 
 Open GUI with a startup image:
 
 ```bash
-birdstamp gui --file ./photos/IMG_0001.JPG
+python -m birdstamp gui --file ./photos/IMG_0001.JPG
 ```
 
 GUI capabilities:

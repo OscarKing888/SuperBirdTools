@@ -48,7 +48,7 @@ BUILD_PYTHON="$(resolve_python)"
 echo "[build_all] dist=${DIST_ROOT}"
 echo "[build_all] build=${BUILD_ROOT}"
 
-bash "${ROOT_DIR}/scripts/build_superviewer_mac.sh"
+bash "${ROOT_DIR}/SuperViewer/scripts_dev/build_mac.sh"
 
 BIRD_ARGS=()
 if [[ -n "$TARGET_ARCH" ]]; then
@@ -58,9 +58,9 @@ if [[ $CONSOLE -eq 1 ]]; then
   BIRD_ARGS+=(--console)
 fi
 if [[ ${#BIRD_ARGS[@]} -gt 0 ]]; then
-  bash "${ROOT_DIR}/scripts/build_superbirdstamp_mac.sh" "${BIRD_ARGS[@]}"
+  bash "${ROOT_DIR}/SuperBirdStamp/scripts_dev/build_mac.sh" "${BIRD_ARGS[@]}"
 else
-  bash "${ROOT_DIR}/scripts/build_superbirdstamp_mac.sh"
+  bash "${ROOT_DIR}/SuperBirdStamp/scripts_dev/build_mac.sh"
 fi
 
 if [[ $SKIP_DEDUPE -eq 0 ]]; then

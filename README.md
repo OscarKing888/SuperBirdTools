@@ -5,7 +5,6 @@
 - `app_common/`：共享通用库，作为 git submodule 维护。
 - `SuperViewer/`：SuperViewer 模块，保留自身配置、图标、脚本与打包 spec。
 - `SuperBirdStamp/`：SuperBirdStamp 模块，保留自身包代码、模型、资源、脚本与打包 spec。
-- `scripts/`：仓库级构建入口，统一从 monorepo 根目录触发打包。
 
 ## 目录原则
 
@@ -27,7 +26,25 @@
 git submodule update --init --recursive
 ```
 
-从仓库根目录运行：
+初始化共享开发环境：
+
+```bash
+python init_dev.py
+```
+
+从仓库根目录启动两个 GUI：
+
+```bash
+./run.sh
+```
+
+Windows：
+
+```bat
+run.bat
+```
+
+如果只想直接运行某个 app，也可以从仓库根目录执行：
 
 ```bash
 python -m SuperViewer
@@ -43,28 +60,35 @@ python SuperBirdStamp/entry.py
 
 ## 打包入口
 
-Windows：
-
-```bat
-scripts\\build_superviewer_win.bat
-scripts\\build_superbirdstamp_win.bat
-build_all.bat
-```
+推荐的全量打包入口：
 
 macOS：
 
 ```bash
-bash scripts/build_superviewer_mac.sh
-bash scripts/build_superbirdstamp_mac.sh
 bash build_all.sh
 ```
 
-各 app 自己原有的构建脚本仍然保留在模块目录内：
+Windows：
 
-- `SuperViewer/scripts_dev/build_win.bat`
-- `SuperViewer/scripts_dev/build_mac.sh`
-- `SuperBirdStamp/build_win.bat`
-- `SuperBirdStamp/scripts_dev/build_mac.sh`
+```bat
+build_all.bat
+```
+
+如果只想单独打包某个 app，可直接使用模块目录内的实际脚本：
+
+macOS：
+
+```bash
+bash SuperViewer/scripts_dev/build_mac.sh
+bash SuperBirdStamp/scripts_dev/build_mac.sh
+```
+
+Windows：
+
+```bat
+SuperViewer\\scripts_dev\\build_win.bat
+SuperBirdStamp\\build_win.bat
+```
 
 ## 输出布局
 
