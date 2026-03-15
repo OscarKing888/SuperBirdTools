@@ -2,5 +2,4 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-exec "${ROOT_DIR}/SuperViewer/scripts/build_mac.sh" "$@"
-
+exec "${ROOT_DIR}/SuperViewer/scripts_dev/build_mac.sh" "$@"

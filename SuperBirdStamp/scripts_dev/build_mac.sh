@@ -25,6 +25,10 @@ PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 REPO_ROOT="$(dirname "$PROJECT_ROOT")"
 cd "$PROJECT_ROOT"
 
+DIST_ROOT="${SUPERBIRDTOOLS_DIST_ROOT:-${REPO_ROOT}/dist}"
+WORK_ROOT="${SUPERBIRDTOOLS_BUILD_ROOT:-${REPO_ROOT}/build/SuperBirdStamp}"
+SPEC_BUILD_DIR="${WORK_ROOT}/spec"
+
 # ── defaults ─────────────────────────────────────────────────────────────────
 CLEAN=0
 TARGET_ARCH=""   # empty = native arch
@@ -63,26 +67,27 @@ if ! "$PYTHON" -c "import PyInstaller" 2>/dev/null; then
 fi
 
 APP_NAME="SuperBirdStamp"
-APP_DIR="dist/${APP_NAME}.app"
-ZIP_FILE="dist/${APP_NAME}-mac.zip"
+APP_DIR="${DIST_ROOT}/${APP_NAME}.app"
+ZIP_FILE="${DIST_ROOT}/${APP_NAME}-mac.zip"
+COLLECT_DIR="${DIST_ROOT}/${APP_NAME}"
 
 # ── optional clean ────────────────────────────────────────────────────────────
 if [[ $CLEAN -eq 1 ]]; then
-    echo "Cleaning dist/ and build/ ..."
-    rm -rf dist/ build/
+    echo "Cleaning ${APP_DIR} and ${WORK_ROOT} ..."
+    rm -rf "$APP_DIR" "$ZIP_FILE" "$WORK_ROOT"
 fi
 
 # ── patch target_arch in spec if --arch was passed ───────────────────────────
 SPEC_FILE="BirdStamp_mac.spec"
-mkdir -p build
+mkdir -p "$SPEC_BUILD_DIR"
 if [[ -n "$TARGET_ARCH" ]]; then
     echo "Setting target_arch to: $TARGET_ARCH"
-    SPEC_FILE="build/BirdStamp_mac_patched.spec"
+    SPEC_FILE="${SPEC_BUILD_DIR}/BirdStamp_mac_patched.spec"
     sed "s/target_arch=None/target_arch=\"$TARGET_ARCH\"/" BirdStamp_mac.spec > "$SPEC_FILE"
 fi
 if [[ $CONSOLE -eq 1 ]]; then
     echo "Building with CONSOLE (logs visible in Terminal)."
-    CONSOLE_SPEC="$PROJECT_ROOT/BirdStamp_mac_console.spec"
+    CONSOLE_SPEC="${SPEC_BUILD_DIR}/BirdStamp_mac_console.spec"
     sed 's/console=False/console=True/' "$SPEC_FILE" > "$CONSOLE_SPEC"
     SPEC_FILE="$CONSOLE_SPEC"
 fi
@@ -92,11 +97,15 @@ echo "============================================================"
 echo " Building ${APP_NAME}.app (this may take several minutes) ..."
 echo "============================================================"
 
-"$PYTHON" -m PyInstaller "$SPEC_FILE" --noconfirm
+"$PYTHON" -m PyInstaller "$SPEC_FILE" --noconfirm --distpath "$DIST_ROOT" --workpath "$WORK_ROOT"
 
 if [[ ! -d "$APP_DIR" ]]; then
     echo "ERROR: Build failed — $APP_DIR not found." >&2
     exit 1
+fi
+
+if [[ -d "$COLLECT_DIR" ]]; then
+    rm -rf "$COLLECT_DIR"
 fi
 
 # ── bundle sanity check ───────────────────────────────────────────────────────
@@ -143,19 +152,25 @@ fi
 
 # ── create zip ────────────────────────────────────────────────────────────────
 echo ""
-echo "Creating zip: $ZIP_FILE ..."
-# ditto preserves resource forks and symlinks inside .app bundles
-#if command -v ditto &>/dev/null; then
-#    ditto -c -k --sequesterRsrc --keepParent "$APP_DIR" "$ZIP_FILE"
-#else
-#    (cd dist && zip -ry "$(basename "$ZIP_FILE")" "$(basename "$APP_DIR")")
-#fi
-#echo "Zip created: $ZIP_FILE"
+if [[ "${BIRDSTAMP_CREATE_ZIP:-0}" == "1" ]]; then
+    echo "Creating zip: $ZIP_FILE ..."
+    # ditto preserves resource forks and symlinks inside .app bundles
+    if command -v ditto &>/dev/null; then
+        ditto -c -k --sequesterRsrc --keepParent "$APP_DIR" "$ZIP_FILE"
+    else
+        (cd "$DIST_ROOT" && zip -ry "$(basename "$ZIP_FILE")" "$(basename "$APP_DIR")")
+    fi
+    echo "Zip created: $ZIP_FILE"
+else
+    echo "Zip step skipped (set BIRDSTAMP_CREATE_ZIP=1 to enable)."
+fi
 
 echo ""
 echo "Done."
 echo "  App : $APP_DIR"
-echo "  Zip : $ZIP_FILE"
+if [[ -f "$ZIP_FILE" ]]; then
+    echo "  Zip : $ZIP_FILE"
+fi
 echo ""
 echo "To open the app:"
 echo "  open $APP_DIR"

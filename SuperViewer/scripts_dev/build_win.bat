@@ -6,6 +6,17 @@ for %%I in ("%SCRIPT_DIR%..") do set "ROOT_DIR=%%~fI"
 for %%I in ("%ROOT_DIR%..") do set "REPO_ROOT=%%~fI"
 cd /d "%ROOT_DIR%"
 
+if defined SUPERBIRDTOOLS_DIST_ROOT (
+  set "DIST_ROOT=%SUPERBIRDTOOLS_DIST_ROOT%"
+) else (
+  set "DIST_ROOT=%REPO_ROOT%\dist"
+)
+if defined SUPERBIRDTOOLS_BUILD_ROOT (
+  set "WORK_ROOT=%SUPERBIRDTOOLS_BUILD_ROOT%\SuperViewer"
+) else (
+  set "WORK_ROOT=%REPO_ROOT%\build\SuperViewer"
+)
+
 if exist "%ROOT_DIR%\.venv\Scripts\python.exe" (
   set "PYTHON_EXE=%ROOT_DIR%\.venv\Scripts\python.exe"
   goto :build_with_exe
@@ -35,6 +46,8 @@ if errorlevel 1 (
 "%PYTHON_EXE%" -m PyInstaller ^
   --noconfirm ^
   --clean ^
+  --distpath "%DIST_ROOT%" ^
+  --workpath "%WORK_ROOT%" ^
   SuperViewer_win.spec
 goto :after_build
 
@@ -48,6 +61,8 @@ if errorlevel 1 (
 py -3 -m PyInstaller ^
   --noconfirm ^
   --clean ^
+  --distpath "%DIST_ROOT%" ^
+  --workpath "%WORK_ROOT%" ^
   SuperViewer_win.spec
 goto :after_build
 
@@ -61,18 +76,20 @@ if errorlevel 1 (
 python -m PyInstaller ^
   --noconfirm ^
   --clean ^
+  --distpath "%DIST_ROOT%" ^
+  --workpath "%WORK_ROOT%" ^
   SuperViewer_win.spec
 
 :after_build
 if errorlevel 1 goto :end
 
-echo [OK] 打包完成: dist\SuperViewer
+echo [OK] 打包完成: %DIST_ROOT%\SuperViewer
 
 set "SUFFIX=%~1"
 if not "%SUFFIX%"=="" (
   set "ZIP_NAME=SuperViewer%SUFFIX%.zip"
-  powershell -NoProfile -Command "Compress-Archive -Path 'dist\SuperViewer' -DestinationPath 'dist\SuperViewer%SUFFIX%.zip' -Force"
-  echo [OK] ZIP 已生成: dist\SuperViewer%SUFFIX%.zip
+  powershell -NoProfile -Command "Compress-Archive -Path '%DIST_ROOT%\SuperViewer' -DestinationPath '%DIST_ROOT%\SuperViewer%SUFFIX%.zip' -Force"
+  echo [OK] ZIP 已生成: %DIST_ROOT%\SuperViewer%SUFFIX%.zip
 )
 
 :end

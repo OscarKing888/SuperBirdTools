@@ -48,6 +48,7 @@ Windows：
 ```bat
 scripts\\build_superviewer_win.bat
 scripts\\build_superbirdstamp_win.bat
+build_all.bat
 ```
 
 macOS：
@@ -55,14 +56,30 @@ macOS：
 ```bash
 bash scripts/build_superviewer_mac.sh
 bash scripts/build_superbirdstamp_mac.sh
+bash build_all.sh
 ```
 
 各 app 自己原有的构建脚本仍然保留在模块目录内：
 
-- `SuperViewer/scripts/build_win.bat`
-- `SuperViewer/scripts/build_mac.sh`
+- `SuperViewer/scripts_dev/build_win.bat`
+- `SuperViewer/scripts_dev/build_mac.sh`
 - `SuperBirdStamp/build_win.bat`
 - `SuperBirdStamp/scripts_dev/build_mac.sh`
+
+## 输出布局
+
+- 单独 build 和全量 build 都默认输出到仓库根 `dist/`
+- macOS 全量 build 后，`dist/` 顶层只保留：
+  - `SuperViewer.app`
+  - `SuperBirdStamp.app`
+- Windows 单独 build 仍输出 `dist/SuperViewer/`、`dist/SuperBirdStamp/`
+- Windows `build_all.bat` 默认走根级 merged spec，目标是让两个 app 在同一个 `dist/` 下共享尽可能多的运行库
+
+## 平台差异
+
+- macOS：`.app` bundle 天然更偏向自包含，`build_all.sh` 采用“统一 `dist` + 构建后 hardlink 去重”的方式，减少两个 `.app` 在同一磁盘上的总占用，但不改变 bundle 自身结构
+- Windows：`build_all.bat` 使用 PyInstaller `MERGE` 多程序构建，让后一个 app 尽量引用前一个 app 已收集的公共运行库，避免简单串行 build 带来的重复 `_internal`
+- Windows merged 输出要求两个 app 目录一起分发，不能单独拿走其中一个目录
 
 ## 这次重组的关键点
 

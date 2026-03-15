@@ -1,0 +1,40 @@
+# AGENTS.md (Codex / OpenAI Coding Agents)
+
+Follow `ai_rules/AI_CODING_RULES.md` as the project baseline.
+
+## Mandatory Project Constraints
+
+- Keep files in UTF-8; avoid introducing mojibake.
+- For ExifTool non-ASCII metadata writes, prefer UTF-8 temp-file redirection (`-Tag<=file`) over inline command args.
+- Preserve Windows/macOS compatibility for paths and subprocess behavior.
+- Ensure persistent external processes (like `exiftool -stay_open`) have explicit shutdown and are closed on exit.
+- For packaged-only CUDA issues, first suspect packaging/runtime differences.
+- In Windows PyInstaller spec for Torch/CUDA, keep `upx=False` unless explicitly re-validated.
+
+## Monorepo Environment
+
+- `SuperBirdTools/.venv` is the preferred shared development virtual environment for this monorepo.
+- Use `python init_dev.py` from repo root to initialize the shared `.venv` and fan out to app-level initialization.
+- `SuperViewer/init_dev.py` installs only SuperViewer dependencies.
+- `SuperBirdStamp/init_dev.py` installs SuperBirdStamp dependencies and then prepares app-specific assets such as `yolo11n.pt` and ffmpeg.
+- Downloaded development assets should not be added to git unless the user explicitly asks for that workflow.
+
+## Packaging Layout
+
+- Single-app build scripts should default to repository-root `dist/` and `build/`, not per-app output directories.
+- Use `build_all.sh` for macOS full builds and `build_all.bat` for Windows full builds when the goal is to produce both apps together.
+- On macOS, full build output should end up with `dist/SuperViewer.app` and `dist/SuperBirdStamp.app` at repo root.
+- On macOS, aggregate size reduction is implemented via post-build hardlink deduplication; do not describe this as true cross-bundle shared runtime.
+- On Windows, `build_all.bat` should prefer the merged spec workflow (`build_all_win_merged.spec`) so shared runtime files are referenced instead of duplicated when possible.
+- Windows merged build outputs must be distributed together; do not assume one merged app directory is independently relocatable.
+
+## Validation Minimum
+
+- Run `py -3 -m py_compile` on changed Python files.
+- For metadata changes: write + read-back verification with Chinese sample values.
+- For `.spec` changes: packaged startup smoke test.
+- For `init_dev.py` changes: run at least a `--dry-run` verification from repo root.
+- For `build_all.*` changes: verify the final repo-root `dist/` layout matches the intended multi-app output.
+
+## New Feature: GUI Options
+- Keep new GUI options feature reading from json config file @birdstamp/gui/resources/editor_options.json.

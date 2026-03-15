@@ -6,6 +6,11 @@ ROOT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 REPO_ROOT="$(cd "${ROOT_DIR}/.." && pwd)"
 cd "${ROOT_DIR}"
 
+DIST_ROOT="${SUPERBIRDTOOLS_DIST_ROOT:-${REPO_ROOT}/dist}"
+WORK_ROOT="${SUPERBIRDTOOLS_BUILD_ROOT:-${REPO_ROOT}/build/SuperViewer}"
+APP_DIR="${DIST_ROOT}/SuperViewer.app"
+COLLECT_DIR="${DIST_ROOT}/SuperViewer"
+
 if [[ -n "${PYTHON_BIN:-}" ]]; then
   SELECTED_PYTHON="${PYTHON_BIN}"
 elif [[ -x "${ROOT_DIR}/.venv/bin/python3" ]]; then
@@ -21,6 +26,12 @@ fi
 "${SELECTED_PYTHON}" -m PyInstaller \
   --noconfirm \
   --clean \
+  --distpath "${DIST_ROOT}" \
+  --workpath "${WORK_ROOT}" \
   SuperViewer_mac.spec
 
-echo "[OK] 打包完成: dist/SuperViewer.app"
+if [[ -d "${COLLECT_DIR}" ]]; then
+  rm -rf "${COLLECT_DIR}"
+fi
+
+echo "[OK] 打包完成: ${APP_DIR}"
