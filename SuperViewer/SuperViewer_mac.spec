@@ -51,7 +51,8 @@ a = Analysis(
     pathex=[str(APP_ROOT), str(REPO_ROOT)],
     binaries=[],
     datas=datas,
-    hiddenimports=collect_submodules("app_common"),
+    hiddenimports=collect_submodules("app_common")
+    + collect_submodules("superviewer"),
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],

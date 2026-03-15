@@ -68,94 +68,185 @@ from app_common.superviewer_user_options import (
     apply_runtime_user_options,
 )
 
-from .superviewer.exif_helpers import (
-    HEIF_EXTENSIONS,
-    META_DESCRIPTION_TAG_ID,
-    META_IFD_NAME,
-    META_TITLE_TAG_ID,
-    PIEXIF_WRITABLE_EXTENSIONS,
-    apply_tag_priority,
-    format_exif_value,
-    get_tag_name,
-    get_tag_name_for_exiftool_key,
-    get_tag_type,
-    load_all_exif,
-    load_display_description,
-    load_display_title,
-    load_exif_tag_names_zh_from_settings,
-    load_exif_piexif,
-    load_hyperfocal_coc_mm_from_settings,
-    load_tag_label_chinese_from_settings,
-    load_tag_priority_from_settings,
-    load_preview_grid_mode_from_settings,
-    load_preview_grid_line_width_from_settings,
-    merge_report_metadata_rows,
-    save_tag_label_chinese_to_settings,
-    save_preview_grid_mode_to_settings,
-    save_preview_grid_line_width_to_settings,
-    _format_exception_message,
-    _normalize_meta_edit_text,
-    _parse_value_back,
-)
-from .superviewer.exif_tag_order_dialog import ExifTagOrderDialog
-from .superviewer.focus_box_loader import FocusBoxLoader
-from .superviewer.focus_cache_preload_worker import FOCUS_PRELOAD_BATCH_SIZE, FocusCachePreloadWorker
-from .superviewer.focus_preview_loader import (
-    RAW_EXTENSIONS,
-    _load_exifread_metadata_for_focus,
-    _load_focus_box_for_preview,
-    _load_preview_pixmap_for_canvas,
-    _resolve_focus_calc_image_size,
-)
-from .superviewer.paths_settings import (
-    _build_main_window_title,
-    _get_app_dir,
-    _get_app_icon_path,
-    _apply_runtime_app_identity,
-    _get_config_resource_path,
-    _get_product_display_name,
-    _get_resource_path,
-    load_last_selected_directory_from_settings,
-    save_last_selected_directory_to_settings,
-)
-from .superviewer.photo_focus_memory_cache_state import (
-    FOCUS_CACHE_STATUS_LOADING,
-    FOCUS_CACHE_STATUS_MISS,
-    FOCUS_CACHE_STATUS_READY,
-    FOCUS_CACHE_STATUS_UNKNOWN,
-    PhotoFocusMemoryCacheState,
-)
-from .superviewer.photo_preview_memory_entry import PhotoPreviewMemoryEntry
-from .superviewer.preview_panel import PreviewPanel
-from .superviewer.exif_table import ExifTable
-from .superviewer.super_viewer_user_options_dialog import SuperViewerUserOptionsDialog
-from .superviewer import qt_compat
-from .superviewer.qt_compat import (
-    QAction,
-    QApplication,
-    QCheckBox,
-    QColor,
-    QComboBox,
-    QDialog,
-    QFileDialog,
-    QGroupBox,
-    QHBoxLayout,
-    QIcon,
-    QLabel,
-    QLineEdit,
-    QMainWindow,
-    QMessageBox,
-    QPalette,
-    QPainter,
-    QPen,
-    QPushButton,
-    QPixmap,
-    QSplitter,
-    QTimer,
-    QVBoxLayout,
-    QWidget,
-    _Horizontal,
-)
+# 开发时从包内相对导入，打包后 entry/main 作为顶层脚本无父包，改用绝对导入 superviewer
+try:
+    from .superviewer.exif_helpers import (
+        HEIF_EXTENSIONS,
+        META_DESCRIPTION_TAG_ID,
+        META_IFD_NAME,
+        META_TITLE_TAG_ID,
+        PIEXIF_WRITABLE_EXTENSIONS,
+        apply_tag_priority,
+        format_exif_value,
+        get_tag_name,
+        get_tag_name_for_exiftool_key,
+        get_tag_type,
+        load_all_exif,
+        load_display_description,
+        load_display_title,
+        load_exif_tag_names_zh_from_settings,
+        load_exif_piexif,
+        load_hyperfocal_coc_mm_from_settings,
+        load_tag_label_chinese_from_settings,
+        load_tag_priority_from_settings,
+        load_preview_grid_mode_from_settings,
+        load_preview_grid_line_width_from_settings,
+        merge_report_metadata_rows,
+        save_tag_label_chinese_to_settings,
+        save_preview_grid_mode_to_settings,
+        save_preview_grid_line_width_to_settings,
+        _format_exception_message,
+        _normalize_meta_edit_text,
+        _parse_value_back,
+    )
+    from .superviewer.exif_tag_order_dialog import ExifTagOrderDialog
+    from .superviewer.focus_box_loader import FocusBoxLoader
+    from .superviewer.focus_cache_preload_worker import FOCUS_PRELOAD_BATCH_SIZE, FocusCachePreloadWorker
+    from .superviewer.focus_preview_loader import (
+        RAW_EXTENSIONS,
+        _load_exifread_metadata_for_focus,
+        _load_focus_box_for_preview,
+        _load_preview_pixmap_for_canvas,
+        _resolve_focus_calc_image_size,
+    )
+    from .superviewer.paths_settings import (
+        _build_main_window_title,
+        _get_app_dir,
+        _get_app_icon_path,
+        _apply_runtime_app_identity,
+        _get_config_resource_path,
+        _get_product_display_name,
+        _get_resource_path,
+        load_last_selected_directory_from_settings,
+        save_last_selected_directory_to_settings,
+    )
+    from .superviewer.photo_focus_memory_cache_state import (
+        FOCUS_CACHE_STATUS_LOADING,
+        FOCUS_CACHE_STATUS_MISS,
+        FOCUS_CACHE_STATUS_READY,
+        FOCUS_CACHE_STATUS_UNKNOWN,
+        PhotoFocusMemoryCacheState,
+    )
+    from .superviewer.photo_preview_memory_entry import PhotoPreviewMemoryEntry
+    from .superviewer.preview_panel import PreviewPanel
+    from .superviewer.exif_table import ExifTable
+    from .superviewer.super_viewer_user_options_dialog import SuperViewerUserOptionsDialog
+    from .superviewer import qt_compat
+    from .superviewer.qt_compat import (
+        QAction,
+        QApplication,
+        QCheckBox,
+        QColor,
+        QComboBox,
+        QDialog,
+        QFileDialog,
+        QGroupBox,
+        QHBoxLayout,
+        QIcon,
+        QLabel,
+        QLineEdit,
+        QMainWindow,
+        QMessageBox,
+        QPalette,
+        QPainter,
+        QPen,
+        QPushButton,
+        QPixmap,
+        QSplitter,
+        QTimer,
+        QVBoxLayout,
+        QWidget,
+        _Horizontal,
+    )
+except ImportError:
+    from superviewer.exif_helpers import (
+        HEIF_EXTENSIONS,
+        META_DESCRIPTION_TAG_ID,
+        META_IFD_NAME,
+        META_TITLE_TAG_ID,
+        PIEXIF_WRITABLE_EXTENSIONS,
+        apply_tag_priority,
+        format_exif_value,
+        get_tag_name,
+        get_tag_name_for_exiftool_key,
+        get_tag_type,
+        load_all_exif,
+        load_display_description,
+        load_display_title,
+        load_exif_tag_names_zh_from_settings,
+        load_exif_piexif,
+        load_hyperfocal_coc_mm_from_settings,
+        load_tag_label_chinese_from_settings,
+        load_tag_priority_from_settings,
+        load_preview_grid_mode_from_settings,
+        load_preview_grid_line_width_from_settings,
+        merge_report_metadata_rows,
+        save_tag_label_chinese_to_settings,
+        save_preview_grid_mode_to_settings,
+        save_preview_grid_line_width_to_settings,
+        _format_exception_message,
+        _normalize_meta_edit_text,
+        _parse_value_back,
+    )
+    from superviewer.exif_tag_order_dialog import ExifTagOrderDialog
+    from superviewer.focus_box_loader import FocusBoxLoader
+    from superviewer.focus_cache_preload_worker import FOCUS_PRELOAD_BATCH_SIZE, FocusCachePreloadWorker
+    from superviewer.focus_preview_loader import (
+        RAW_EXTENSIONS,
+        _load_exifread_metadata_for_focus,
+        _load_focus_box_for_preview,
+        _load_preview_pixmap_for_canvas,
+        _resolve_focus_calc_image_size,
+    )
+    from superviewer.paths_settings import (
+        _build_main_window_title,
+        _get_app_dir,
+        _get_app_icon_path,
+        _apply_runtime_app_identity,
+        _get_config_resource_path,
+        _get_product_display_name,
+        _get_resource_path,
+        load_last_selected_directory_from_settings,
+        save_last_selected_directory_to_settings,
+    )
+    from superviewer.photo_focus_memory_cache_state import (
+        FOCUS_CACHE_STATUS_LOADING,
+        FOCUS_CACHE_STATUS_MISS,
+        FOCUS_CACHE_STATUS_READY,
+        FOCUS_CACHE_STATUS_UNKNOWN,
+        PhotoFocusMemoryCacheState,
+    )
+    from superviewer.photo_preview_memory_entry import PhotoPreviewMemoryEntry
+    from superviewer.preview_panel import PreviewPanel
+    from superviewer.exif_table import ExifTable
+    from superviewer.super_viewer_user_options_dialog import SuperViewerUserOptionsDialog
+    from superviewer import qt_compat
+    from superviewer.qt_compat import (
+        QAction,
+        QApplication,
+        QCheckBox,
+        QColor,
+        QComboBox,
+        QDialog,
+        QFileDialog,
+        QGroupBox,
+        QHBoxLayout,
+        QIcon,
+        QLabel,
+        QLineEdit,
+        QMainWindow,
+        QMessageBox,
+        QPalette,
+        QPainter,
+        QPen,
+        QPushButton,
+        QPixmap,
+        QSplitter,
+        QTimer,
+        QVBoxLayout,
+        QWidget,
+        _Horizontal,
+    )
 
 # Re-export for scripts (import main)
 # RAW_EXTENSIONS, _load_preview_pixmap_for_canvas, _load_exifread_metadata_for_focus,
