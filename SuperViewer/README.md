@@ -1,6 +1,22 @@
 # Super Viewer - 图片 EXIF 查看器/编辑器
 适合通过`慧眼选鸟(4.1.0及后继版本)`处理后，不需要LRC、PS流程处理照片的情况
 
+## 代码结构（重构后）
+
+- **main.py**：应用入口 `main()`、主窗口类 `MainWindow`、构图线常量与线宽图标；对脚本兼容的 re-export（`QApplication`、`RAW_EXTENSIONS`、`_load_preview_pixmap_for_canvas`、`_load_exifread_metadata_for_focus`、`_resolve_focus_calc_image_size`、`_load_focus_box_for_preview`）。脚本仍可 `import main` 使用上述符号。
+- **superviewer/**：子包，包含以下模块：
+  - **qt_compat.py**：PyQt5/PyQt6 统一导入与枚举别名，无业务逻辑。
+  - **paths_settings.py**：程序目录、用户状态目录、last folder、cfg 读写、应用身份与窗口标题。
+  - **exif_helpers.py**：EXIF 读取/解析、标签显示与优先级、报告元数据、扩展名常量（如 `RAW_EXTENSIONS`、`HEIF_EXTENSIONS`）。
+  - **focus_preview_loader.py**：预览图加载、焦点框提取与 report.db 保底、`IMAGE_EXTENSIONS`。
+  - **photo_focus_memory_cache_state.py** / **photo_preview_memory_entry.py**：预览期焦点缓存 dataclass。
+  - **super_viewer_user_options_dialog.py**：用户选项对话框。
+  - **focus_box_loader.py** / **focus_cache_preload_worker.py**：焦点加载与预加载线程。
+  - **preview_panel.py**：预览区控件（内嵌 PreviewCanvas）。
+  - **exif_table.py**：EXIF 表格；**exif_tag_order_dialog.py**：EXIF 显示顺序与禁止显示配置。
+
+推荐从 `main` 或 `SuperViewer` 包导入以保持兼容；新代码可按需从 `SuperViewer.superviewer` 子模块直接导入。
+
 * V0.1.0版本功能
   * 选中`慧眼选鸟`处理过的目录会自动读取数据库并可过滤显示
   * 支持从`慧眼选鸟`发送文件到本应用
