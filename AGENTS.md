@@ -36,5 +36,16 @@ Follow `ai_rules/AI_CODING_RULES.md` as the project baseline.
 - For `init_dev.py` changes: run at least a `--dry-run` verification from repo root.
 - For `build_all.*` changes: verify the final repo-root `dist/` layout matches the intended multi-app output.
 
+## Protected Preview Overlay Flow
+
+- `app_common.preview_canvas` is the shared source of truth for preview composition-grid / 9-grid overlay behavior; do not silently reduce supported grid modes to a disabled-only state.
+- `PreviewOverlayOptions` / `PreviewCanvas` composition-grid fields and `render_source_pixmap_with_overlays()` / `save_source_pixmap_with_overlays()` are protected behavior because SuperViewer preview display and overlay export both depend on them.
+- `SuperViewer` preview composition grids must continue to show in both the toolbar selector and the actual preview canvas.
+- `SuperBirdStamp` preview composition grids must continue to be available in the main editor and template preview, and must be drawn only inside the active crop box rather than over the full preview image.
+- Any change touching `app_common.preview_canvas`, `SuperViewer` preview overlay UI, or `SuperBirdStamp` preview canvas/toolbar must include a regression check for:
+  - SuperViewer grid selector options visible + selected grid actually rendered.
+  - SuperBirdStamp grid selector options visible + selected grid rendered only within crop bounds.
+  - Overlay export path still includes active composition grids.
+
 ## New Feature: GUI Options
 - Keep new GUI options feature reading from json config file @birdstamp/gui/resources/editor_options.json.
