@@ -363,22 +363,38 @@ class EditorPreviewCanvas(PreviewCanvas):
         # Target ratio R is for crop in pixels: (r-l)*W / ((b-t)*H) = R => (r-l)/(b-t) = R/image_aspect.
         target_pixel_ratio = self._crop_ratio if self._crop_ratio is not None and self._crop_ratio > 0 else image_aspect
         ratio_norm = target_pixel_ratio / image_aspect if image_aspect > 0 else target_pixel_ratio
+        # Corner handles: fix the opposite corner and constrain to ratio.
         if handle == "nw":
             return self._constrain_box_to_ratio_from_fixed_corner(r, b, r, b, new_nx, new_ny, "nw", ratio_norm)
-        if handle == "n":
-            return self._constrain_box_to_ratio_from_fixed_corner(l, b, r, b, (l + r) * 0.5, new_ny, "n", ratio_norm)
         if handle == "ne":
             return self._constrain_box_to_ratio_from_fixed_corner(l, b, l, b, new_nx, new_ny, "ne", ratio_norm)
-        if handle == "e":
-            return self._constrain_box_to_ratio_from_fixed_corner(l, t, l, b, new_nx, (t + b) * 0.5, "e", ratio_norm)
         if handle == "se":
             return self._constrain_box_to_ratio_from_fixed_corner(l, t, l, t, new_nx, new_ny, "se", ratio_norm)
-        if handle == "s":
-            return self._constrain_box_to_ratio_from_fixed_corner(l, t, r, t, (l + r) * 0.5, new_ny, "s", ratio_norm)
         if handle == "sw":
             return self._constrain_box_to_ratio_from_fixed_corner(r, t, r, t, new_nx, new_ny, "sw", ratio_norm)
+        # Edge handles: move the dragged edge, keep the opposite edge fixed,
+        # adjust the perpendicular dimension symmetrically around box center
+        # (consistent with editor_core.constrain_box_to_ratio).
+        if handle == "n":
+            new_h = max(b - new_ny, _MIN_CROP_SIZE)
+            req_w = new_h * ratio_norm
+            cx = (l + r) * 0.5
+            return self._clamp_box(cx - req_w * 0.5, b - new_h, cx + req_w * 0.5, b)
+        if handle == "s":
+            new_h = max(new_ny - t, _MIN_CROP_SIZE)
+            req_w = new_h * ratio_norm
+            cx = (l + r) * 0.5
+            return self._clamp_box(cx - req_w * 0.5, t, cx + req_w * 0.5, t + new_h)
+        if handle == "e":
+            new_w = max(new_nx - l, _MIN_CROP_SIZE)
+            req_h = new_w / ratio_norm if ratio_norm > 0 else new_w
+            cy = (t + b) * 0.5
+            return self._clamp_box(l, cy - req_h * 0.5, l + new_w, cy + req_h * 0.5)
         if handle == "w":
-            return self._constrain_box_to_ratio_from_fixed_corner(r, t, r, b, new_nx, (t + b) * 0.5, "w", ratio_norm)
+            new_w = max(r - new_nx, _MIN_CROP_SIZE)
+            req_h = new_w / ratio_norm if ratio_norm > 0 else new_w
+            cy = (t + b) * 0.5
+            return self._clamp_box(r - new_w, cy - req_h * 0.5, r, cy + req_h * 0.5)
         return start_box
 
     _CROP_DRAG_CENTER = "center"

@@ -328,6 +328,7 @@ class MainWindow(QMainWindow):
         # 连接文件列表选中 → 预览 + EXIF 刷新
         self._file_list.file_fast_preview_requested.connect(self._on_file_fast_preview_requested)
         self._file_list.file_selected.connect(self._on_file_selected_from_list)
+        self._file_list.files_loaded.connect(self._on_file_list_loaded_for_focus_preload)
         self._file_list.focus_cache_batch_ready.connect(self._on_metadata_focus_cache_batch_ready)
 
         # ── 面板 3：App 信息 + 文件名 + 拖放预览区 ──
