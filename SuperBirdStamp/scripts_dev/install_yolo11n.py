@@ -9,6 +9,7 @@ from pathlib import Path
 
 MODEL_NAME = "yolo11n.pt"
 ULTRALYTICS_SPEC = "ultralytics>=8.3,<9.0"
+ASSET_REPO = "ultralytics/assets"
 
 
 def _project_root() -> Path:
@@ -57,10 +58,25 @@ def _default_target_path(project_root: Path) -> Path:
     return project_root / "models" / MODEL_NAME
 
 
+def _resolve_release_tag(*, repo: str, release: str, asset_name: str) -> str:
+    normalized_release = (release or "").strip() or "latest"
+    if normalized_release != "latest":
+        return normalized_release
+
+    from ultralytics.utils.downloads import get_github_assets
+
+    tag, assets = get_github_assets(repo, version="latest")
+    if not tag:
+        raise RuntimeError(f"无法获取 {repo} 的 latest release 标签。")
+    if asset_name not in assets:
+        raise FileNotFoundError(f"{repo} 的 latest release({tag}) 中未找到资源: {asset_name}")
+    return tag
+
+
 def download_yolo11n(*, target_path: Path, force: bool = False, release: str = "latest") -> Path:
     _ensure_ultralytics()
 
-    from ultralytics.utils.downloads import attempt_download_asset
+    from ultralytics.utils.downloads import safe_download
 
     target_path = target_path.resolve(strict=False)
     target_path.parent.mkdir(parents=True, exist_ok=True)
@@ -71,18 +87,22 @@ def download_yolo11n(*, target_path: Path, force: bool = False, release: str = "
             return target_path
         target_path.unlink()
 
+    resolved_release = _resolve_release_tag(repo=ASSET_REPO, release=release, asset_name=MODEL_NAME)
+    print(f"使用 Ultralytics assets release: {resolved_release}")
+    download_url = f"https://github.com/{ASSET_REPO}/releases/download/{resolved_release}/{MODEL_NAME}"
     downloaded_path = Path(
-        attempt_download_asset(
-            str(target_path),
-            repo="ultralytics/assets",
-            release=release,
+        safe_download(
+            url=download_url,
+            file=target_path,
+            unzip=False,
+            min_bytes=1e5,
         )
     ).resolve(strict=False)
 
     if downloaded_path != target_path:
         raise RuntimeError(f"模型下载到了意外路径: {downloaded_path} != {target_path}")
     if not target_path.is_file():
-        raise FileNotFoundError(f"下载完成后未找到模型文件: {target_path}")
+        raise FileNotFoundError(f"下载完成后未找到模型文件: {target_path} (release={resolved_release})")
 
     print(f"已下载模型: {target_path}")
     return target_path
