@@ -10,26 +10,60 @@ import os
 import sys
 from pathlib import Path
 
+_RESOURCE_ROOT_SENTINELS: tuple[tuple[str, ...], ...] = (
+    ("config", "editor_options.json"),
+    ("config", "templates", "default.json"),
+    ("images", "default.jpg"),
+    ("scripts_dev", "install_ffmpeg_tool.py"),
+)
 
-def _resource_dir() -> Path:
+
+def _iter_resource_dirs() -> list[Path]:
     executable_dir = Path(sys.executable).resolve().parent
-    candidates: list[Path] = []
+    raw_candidates: list[Path] = []
 
     meipass = getattr(sys, "_MEIPASS", None)
     if meipass:
-        candidates.append(Path(meipass))
+        raw_candidates.append(Path(meipass))
 
     if sys.platform == "darwin":
-        candidates.append(executable_dir.parent / "Resources")
+        raw_candidates.append(executable_dir.parent / "Resources")
 
-    candidates.append(executable_dir / "_internal")
-    candidates.append(executable_dir)
+    raw_candidates.append(executable_dir / "_internal")
+    raw_candidates.append(executable_dir)
 
+    candidates: list[Path] = []
+    seen: set[str] = set()
+    for candidate in raw_candidates:
+        normalized = candidate.resolve(strict=False)
+        key = str(normalized)
+        if key in seen:
+            continue
+        seen.add(key)
+        if normalized.is_dir():
+            candidates.append(normalized)
+    return candidates
+
+
+def _looks_like_resource_dir(path: Path) -> bool:
+    for sentinel_parts in _RESOURCE_ROOT_SENTINELS:
+        try:
+            if path.joinpath(*sentinel_parts).exists():
+                return True
+        except OSError:
+            continue
+    return False
+
+
+def _resource_dir() -> Path:
+    candidates = _iter_resource_dirs()
     for candidate in candidates:
-        if candidate.is_dir():
+        if _looks_like_resource_dir(candidate):
             return candidate
 
-    return executable_dir
+    if candidates:
+        return candidates[0]
+    return Path(sys.executable).resolve().parent
 
 
 if getattr(sys, "frozen", False):

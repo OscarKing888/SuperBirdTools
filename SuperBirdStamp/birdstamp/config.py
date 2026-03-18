@@ -11,6 +11,13 @@ import yaml
 
 from birdstamp.constants import DEFAULT_SHOW_FIELDS
 
+_RESOURCE_ROOT_SENTINELS: tuple[tuple[str, ...], ...] = (
+    ("config", "editor_options.json"),
+    ("config", "templates", "default.json"),
+    ("config", "template_context_routes.json"),
+    ("images", "default.jpg"),
+)
+
 
 def default_jobs() -> int:
     cpu_count = os.cpu_count() or 2
@@ -52,6 +59,46 @@ def get_app_dir() -> Path:
     return Path(__file__).resolve().parent.parent
 
 
+def _iter_app_resource_dirs() -> list[Path]:
+    if not getattr(sys, "frozen", False):
+        return [get_app_dir()]
+
+    executable_dir = Path(sys.executable).resolve().parent
+    raw_candidates: list[Path] = []
+
+    meipass = getattr(sys, "_MEIPASS", None)
+    if meipass:
+        raw_candidates.append(Path(meipass))
+
+    if sys.platform == "darwin":
+        raw_candidates.append(executable_dir.parent / "Resources")
+
+    raw_candidates.append(executable_dir / "_internal")
+    raw_candidates.append(executable_dir)
+
+    candidates: list[Path] = []
+    seen: set[str] = set()
+    for candidate in raw_candidates:
+        normalized = candidate.resolve(strict=False)
+        key = str(normalized)
+        if key in seen:
+            continue
+        seen.add(key)
+        if normalized.is_dir():
+            candidates.append(normalized)
+    return candidates
+
+
+def _looks_like_app_resource_dir(path: Path) -> bool:
+    for sentinel_parts in _RESOURCE_ROOT_SENTINELS:
+        try:
+            if path.joinpath(*sentinel_parts).exists():
+                return True
+        except OSError:
+            continue
+    return False
+
+
 def get_app_resource_dir() -> Path:
     """返回打包资源根目录。
 
@@ -59,31 +106,28 @@ def get_app_resource_dir() -> Path:
     Windows onedir 优先返回 ``_internal``；
     macOS .app 优先返回 ``Contents/Resources``。
     """
-    if not getattr(sys, "frozen", False):
-        return get_app_dir()
-
-    executable_dir = Path(sys.executable).resolve().parent
-    candidates: list[Path] = []
-
-    meipass = getattr(sys, "_MEIPASS", None)
-    if meipass:
-        candidates.append(Path(meipass))
-
-    if sys.platform == "darwin":
-        candidates.append(executable_dir.parent / "Resources")
-
-    candidates.append(executable_dir / "_internal")
-    candidates.append(executable_dir)
-
+    candidates = _iter_app_resource_dirs()
     for candidate in candidates:
-        if candidate.is_dir():
+        if _looks_like_app_resource_dir(candidate):
             return candidate
 
-    return executable_dir
+    if candidates:
+        return candidates[0]
+    return Path(sys.executable).resolve().parent if getattr(sys, "frozen", False) else get_app_dir()
 
 
 def resolve_bundled_path(*parts: str) -> Path:
     """基于资源根目录拼接内置文件路径。"""
+    if not parts:
+        return get_app_resource_dir()
+
+    for candidate in _iter_app_resource_dirs():
+        candidate_path = candidate.joinpath(*parts)
+        try:
+            if candidate_path.exists():
+                return candidate_path
+        except OSError:
+            continue
     return get_app_resource_dir().joinpath(*parts)
 
 

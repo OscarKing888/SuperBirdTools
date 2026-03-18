@@ -452,6 +452,26 @@ def _lookup_tag_value(tag: str, lookup: dict[str, Any], context: dict[str, str])
     return None
 
 
+def _latin1_safe_text(text: str) -> str:
+    try:
+        return str(text or "").encode("latin-1", errors="replace").decode("latin-1")
+    except Exception:
+        return "".join(ch if ord(ch) < 128 else "?" for ch in str(text or ""))
+
+
+def _measure_text_with_fallback(
+    draw: ImageDraw.ImageDraw,
+    text: str,
+    *,
+    font: Any,
+) -> tuple[str, tuple[int, int, int, int]]:
+    try:
+        return text, draw.textbbox((0, 0), text, font=font)
+    except UnicodeError:
+        fallback_text = _latin1_safe_text(text)
+        return fallback_text, draw.textbbox((0, 0), fallback_text, font=font)
+
+
 def _draw_styled_text(
     image: Image.Image,
     draw: ImageDraw.ImageDraw,
@@ -463,7 +483,8 @@ def _draw_styled_text(
     font: Any,
     style: str,
 ) -> None:
-    left, top, right, bottom = draw.textbbox((0, 0), text, font=font)
+    draw_text, text_box = _measure_text_with_fallback(draw, text, font=font)
+    left, top, right, bottom = text_box
     width = max(1, right - left)
     height = max(1, bottom - top)
     layer = Image.new("RGBA", (width + 10, height + 10), (0, 0, 0, 0))
@@ -474,9 +495,9 @@ def _draw_styled_text(
     if is_bold:
         offsets = [(0, 0), (1, 0), (0, 1)]
         for dx, dy in offsets:
-            layer_draw.text((text_pos[0] + dx, text_pos[1] + dy), text, font=font, fill=color)
+            layer_draw.text((text_pos[0] + dx, text_pos[1] + dy), draw_text, font=font, fill=color)
     else:
-        layer_draw.text(text_pos, text, font=font, fill=color)
+        layer_draw.text(text_pos, draw_text, font=font, fill=color)
     if is_italic:
         shear = -0.28
         new_width = int(round(layer.width + abs(shear) * layer.height))
@@ -776,9 +797,10 @@ def render_template_overlay(
         chosen_x = 0
         chosen_y = 0
         chosen_rect = (0, 0, 1, 1)
+        draw_text = text
         for candidate_size in _iter_font_sizes_for_layout(scaled_size, minimum=8):
             font = load_font(field_font_path, candidate_size)
-            text_box = draw.textbbox((0, 0), text, font=font)
+            measured_text, text_box = _measure_text_with_fallback(draw, text, font=font)
             text_width = max(1, text_box[2] - text_box[0])
             text_height = max(1, text_box[3] - text_box[1])
             base_x, base_y = _compute_template_text_position(
@@ -807,11 +829,12 @@ def render_template_overlay(
             chosen_x = x
             chosen_y = y
             chosen_rect = rect
+            draw_text = measured_text
             if non_overlap:
                 break
         draw_commands.append(
             (
-                text,
+                draw_text,
                 chosen_x,
                 chosen_y,
                 color,
