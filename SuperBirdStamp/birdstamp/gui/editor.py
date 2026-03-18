@@ -106,6 +106,8 @@ from app_common.preview_canvas import (
     PREVIEW_COMPOSITION_GRID_LINE_WIDTHS,
     PREVIEW_COMPOSITION_GRID_MODES,
     PreviewWithStatusBar,
+    configure_preview_scale_preset_combo,
+    sync_preview_scale_preset_combo,
 )
 from birdstamp.gui.editor_preview_canvas import EditorPreviewCanvas, EditorPreviewOverlayState
 from birdstamp.gui.editor_photo_metadata_loader import EditorPhotoListMetadataLoader
@@ -170,6 +172,7 @@ _TEMPLATE_BANNER_TOP_PADDING_PX = editor_utils.TEMPLATE_BANNER_TOP_PADDING_PX
 _PREVIEW_GRID_MODE_ITEMS = editor_utils.PREVIEW_GRID_MODE_ITEMS
 _PREVIEW_GRID_MODE_COMBO_WIDTH = editor_utils.PREVIEW_GRID_MODE_COMBO_WIDTH
 _PREVIEW_GRID_LINE_WIDTH_COMBO_WIDTH = editor_utils.PREVIEW_GRID_LINE_WIDTH_COMBO_WIDTH
+_PREVIEW_SCALE_COMBO_WIDTH = 96
 _build_color_preview_swatch = editor_utils.build_color_preview_swatch
 _set_color_preview_swatch = editor_utils.set_color_preview_swatch
 _configure_form_layout = editor_utils.configure_form_layout
@@ -972,6 +975,15 @@ class BirdStampEditorWindow(QMainWindow, _BirdStampCropMixin, _BirdStampRenderer
         self.preview_grid_line_width_combo.currentIndexChanged.connect(self._on_preview_grid_line_width_changed)
         preview_toolbar.addWidget(self.preview_grid_line_width_combo)
 
+        self.preview_scale_combo = QComboBox()
+        configure_preview_scale_preset_combo(
+            self.preview_scale_combo,
+            tooltip="设置预览缩放比例，表示当前显示像素相对原图像素的百分比。",
+            fixed_width=_PREVIEW_SCALE_COMBO_WIDTH,
+        )
+        self.preview_scale_combo.activated.connect(self._on_preview_scale_preset_activated)
+        preview_toolbar.addWidget(self.preview_scale_combo)
+
         preview_toolbar.addStretch(1)
         right_layout.addLayout(preview_toolbar)
 
@@ -982,6 +994,9 @@ class BirdStampEditorWindow(QMainWindow, _BirdStampCropMixin, _BirdStampRenderer
         canvas = self.preview_label.canvas
         if hasattr(canvas, "crop_box_changed"):
             canvas.crop_box_changed.connect(self._on_canvas_crop_box_changed)
+        if hasattr(self.preview_label, "display_scale_percent_changed"):
+            self.preview_label.display_scale_percent_changed.connect(self._sync_preview_scale_combo)
+        self._sync_preview_scale_combo(self.preview_label.current_display_scale_percent())
         right_layout.addWidget(self.preview_label, stretch=1)
 
         return right_panel
@@ -1252,6 +1267,18 @@ class BirdStampEditorWindow(QMainWindow, _BirdStampCropMixin, _BirdStampRenderer
 
     def _on_preview_grid_line_width_changed(self, _index: int) -> None:
         self._apply_preview_overlay_options_from_ui()
+
+    def _on_preview_scale_preset_activated(self, index: int) -> None:
+        percent = self.preview_scale_combo.itemData(index)
+        try:
+            parsed = float(percent)
+        except Exception:
+            return
+        self.preview_label.set_display_scale_percent(parsed, preserve_view=True)
+        self._sync_preview_scale_combo(self.preview_label.current_display_scale_percent())
+
+    def _sync_preview_scale_combo(self, scale_percent: object) -> None:
+        sync_preview_scale_preset_combo(self.preview_scale_combo, scale_percent)
 
     def _on_canvas_crop_box_changed(self, box: tuple[float, float, float, float]) -> None:
         """9 宫格裁切框变更。

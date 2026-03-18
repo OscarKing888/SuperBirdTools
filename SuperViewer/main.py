@@ -39,11 +39,10 @@ from app_common.focus_calc import (
 from app_common.preview_canvas import (
     PREVIEW_COMPOSITION_GRID_LINE_WIDTHS,
     PREVIEW_COMPOSITION_GRID_MODES,
-    PreviewCanvas,
-    PreviewOverlayOptions,
-    PreviewOverlayState,
+    configure_preview_scale_preset_combo,
     normalize_preview_composition_grid_line_width,
     normalize_preview_composition_grid_mode,
+    sync_preview_scale_preset_combo,
 )
 from app_common.report_db import PHOTO_COLUMNS, find_report_root, ReportDB
 from app_common.send_to_app import (
@@ -264,6 +263,7 @@ PREVIEW_GRID_MODE_ITEMS = (
 )
 PREVIEW_GRID_MODE_COMBO_WIDTH = 190
 PREVIEW_GRID_LINE_WIDTH_COMBO_WIDTH = 120
+PREVIEW_SCALE_COMBO_WIDTH = 96
 PHOTO_PREVIEW_MEMORY_CACHE_LIMIT = 2048
 FOCUS_PRELOAD_CANONICAL_SIZE = (0, 0)
 
@@ -328,6 +328,7 @@ class MainWindow(QMainWindow):
         # 连接文件列表选中 → 预览 + EXIF 刷新
         self._file_list.file_fast_preview_requested.connect(self._on_file_fast_preview_requested)
         self._file_list.file_selected.connect(self._on_file_selected_from_list)
+        self._file_list.files_loaded.connect(self._on_file_list_loaded_for_focus_preload)
         self._file_list.focus_cache_batch_ready.connect(self._on_metadata_focus_cache_batch_ready)
 
         # ── 面板 3：App 信息 + 文件名 + 拖放预览区 ──
@@ -394,12 +395,22 @@ class MainWindow(QMainWindow):
         self.combo_preview_grid_line_width.setToolTip("设置构图辅助线线宽，列表图标按 1 到 4 像素直观显示粗细。")
         self.combo_preview_grid_line_width.currentIndexChanged.connect(self._on_preview_grid_line_width_changed)
         overlay_row.addWidget(self.combo_preview_grid_line_width)
+        self.combo_preview_scale = QComboBox(self)
+        configure_preview_scale_preset_combo(
+            self.combo_preview_scale,
+            tooltip="设置预览缩放比例，表示当前显示像素相对原图像素的百分比。",
+            fixed_width=PREVIEW_SCALE_COMBO_WIDTH,
+        )
+        self.combo_preview_scale.activated.connect(self._on_preview_scale_preset_activated)
+        overlay_row.addWidget(self.combo_preview_scale)
         overlay_row.addStretch(1)
         left_layout.addLayout(overlay_row)
         self.preview_panel = PreviewPanel(central)
         self.preview_panel.set_show_focus_enabled(self.check_show_focus.isChecked())
         self.preview_panel.set_composition_grid_mode(self.combo_preview_grid.currentData())
         self.preview_panel.set_composition_grid_line_width(self.combo_preview_grid_line_width.currentData())
+        self.preview_panel.display_scale_percent_changed.connect(self._sync_preview_scale_combo)
+        self._sync_preview_scale_combo(self.preview_panel.current_display_scale_percent())
         left_layout.addWidget(self.preview_panel, stretch=1)
         splitter.addWidget(left_widget)
 
@@ -901,6 +912,18 @@ class MainWindow(QMainWindow):
         normalized = normalize_preview_composition_grid_line_width(width)
         self.preview_panel.set_composition_grid_line_width(normalized)
         save_preview_grid_line_width_to_settings(normalized)
+
+    def _on_preview_scale_preset_activated(self, index: int) -> None:
+        percent = self.combo_preview_scale.itemData(index)
+        try:
+            parsed = float(percent)
+        except Exception:
+            return
+        self.preview_panel.set_display_scale_percent(parsed, preserve_view=True)
+        self._sync_preview_scale_combo(self.preview_panel.current_display_scale_percent())
+
+    def _sync_preview_scale_combo(self, scale_percent: object) -> None:
+        sync_preview_scale_preset_combo(self.combo_preview_scale, scale_percent)
 
     def _on_exif_filter_changed(self, text: str):
         self.exif_table.set_filter_text(text)

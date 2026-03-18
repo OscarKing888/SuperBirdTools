@@ -47,8 +47,10 @@ from app_common.preview_canvas import (
     PREVIEW_COMPOSITION_GRID_LINE_WIDTHS,
     PREVIEW_COMPOSITION_GRID_MODES,
     PreviewWithStatusBar,
+    configure_preview_scale_preset_combo,
     normalize_preview_composition_grid_line_width,
     normalize_preview_composition_grid_mode,
+    sync_preview_scale_preset_combo,
 )
 from birdstamp.gui import editor_core, editor_options, editor_template, editor_utils, template_context as _template_context
 from birdstamp.gui.editor_preview_canvas import (
@@ -91,6 +93,7 @@ _TEMPLATE_BANNER_COLOR_CUSTOM = editor_utils.TEMPLATE_BANNER_COLOR_CUSTOM
 _PREVIEW_GRID_MODE_ITEMS = editor_utils.PREVIEW_GRID_MODE_ITEMS
 _PREVIEW_GRID_MODE_COMBO_WIDTH = editor_utils.PREVIEW_GRID_MODE_COMBO_WIDTH
 _PREVIEW_GRID_LINE_WIDTH_COMBO_WIDTH = editor_utils.PREVIEW_GRID_LINE_WIDTH_COMBO_WIDTH
+_PREVIEW_SCALE_COMBO_WIDTH = 96
 
 _CENTER_MODE_BIRD = editor_core.CENTER_MODE_BIRD
 _CENTER_MODE_FOCUS = editor_core.CENTER_MODE_FOCUS
@@ -931,6 +934,15 @@ class TemplateManagerDialog(QDialog):
         self.preview_grid_line_width_combo.currentIndexChanged.connect(self._on_preview_grid_line_width_changed)
         preview_toolbar.addWidget(self.preview_grid_line_width_combo)
 
+        self.preview_scale_combo = QComboBox()
+        configure_preview_scale_preset_combo(
+            self.preview_scale_combo,
+            tooltip="设置预览缩放比例，表示当前显示像素相对原图像素的百分比。",
+            fixed_width=_PREVIEW_SCALE_COMBO_WIDTH,
+        )
+        self.preview_scale_combo.activated.connect(self._on_preview_scale_preset_activated)
+        preview_toolbar.addWidget(self.preview_scale_combo)
+
         preview_toolbar.addStretch(1)
         layout.addLayout(preview_toolbar)
 
@@ -942,6 +954,9 @@ class TemplateManagerDialog(QDialog):
         canvas = self.preview_label.canvas
         if hasattr(canvas, "crop_box_changed"):
             canvas.crop_box_changed.connect(self._on_tmpl_canvas_crop_box_changed)
+        if hasattr(self.preview_label, "display_scale_percent_changed"):
+            self.preview_label.display_scale_percent_changed.connect(self._sync_preview_scale_combo)
+        self._sync_preview_scale_combo(self.preview_label.current_display_scale_percent())
         preview_layout.addWidget(self.preview_label, stretch=1)
         layout.addWidget(preview_group, stretch=1)
         return panel
@@ -2119,6 +2134,18 @@ class TemplateManagerDialog(QDialog):
 
     def _on_preview_grid_line_width_changed(self, _index: int) -> None:
         self._apply_preview_overlay_options()
+
+    def _on_preview_scale_preset_activated(self, index: int) -> None:
+        percent = self.preview_scale_combo.itemData(index)
+        try:
+            parsed = float(percent)
+        except Exception:
+            return
+        self.preview_label.set_display_scale_percent(parsed, preserve_view=True)
+        self._sync_preview_scale_combo(self.preview_label.current_display_scale_percent())
+
+    def _sync_preview_scale_combo(self, scale_percent: object) -> None:
+        sync_preview_scale_preset_combo(self.preview_scale_combo, scale_percent)
 
     def _on_preview_crop_effect_alpha_changed(self, value: int) -> None:
         alpha = max(0, min(255, int(value)))

@@ -10,6 +10,7 @@ from app_common.preview_canvas import (
     PreviewCanvas,
     PreviewOverlayOptions,
     PreviewOverlayState,
+    format_preview_scale_percent,
     normalize_preview_composition_grid_line_width,
     normalize_preview_composition_grid_mode,
 )
@@ -29,17 +30,21 @@ from .qt_compat import (
     QVBoxLayout,
     QWidget,
     _LeftButton,
+    pyqtSignal,
 )
 
 
 class PreviewPanel(QWidget):
     """预览区：内嵌 app_common.preview_canvas.PreviewCanvas，提供拖放、点击选图及 set_image 等接口。"""
 
+    display_scale_percent_changed = pyqtSignal(object)
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setMinimumSize(320, 240)
         self.setAcceptDrops(True)
         self._current_path = None
+        self._preview_resolution: tuple[int, int] | None = None
         self._show_focus_enabled = True
         self._keep_view_on_switch = bool(get_keep_view_on_switch())
         self._composition_grid_mode = normalize_preview_composition_grid_mode("none")
@@ -50,8 +55,10 @@ class PreviewPanel(QWidget):
         self._canvas = PreviewCanvas(self, placeholder_text="将图片拖入或点击选择")
         if hasattr(self._canvas, "set_keep_view_on_switch"):
             self._canvas.set_keep_view_on_switch(self._keep_view_on_switch)
+        if hasattr(self._canvas, "display_scale_percent_changed"):
+            self._canvas.display_scale_percent_changed.connect(self._on_canvas_display_scale_percent_changed)
         layout.addWidget(self._canvas, stretch=1)
-        self._preview_status_label = QLabel("当前预览分辨率: -")
+        self._preview_status_label = QLabel("当前预览分辨率: - | 当前缩放: -")
         self._preview_status_label.setStyleSheet("color: #aaa; font-size: 12px;")
         layout.addWidget(self._preview_status_label)
 
@@ -91,6 +98,16 @@ class PreviewPanel(QWidget):
         self._show_focus_enabled = bool(enabled)
         self._apply_overlay_options()
 
+    @property
+    def canvas(self) -> PreviewCanvas:
+        return self._canvas
+
+    def current_display_scale_percent(self) -> float | None:
+        return self._canvas.current_display_scale_percent()
+
+    def set_display_scale_percent(self, scale_percent: float | int, *, preserve_view: bool = True) -> bool:
+        return self._canvas.set_display_scale_percent(scale_percent, preserve_view=preserve_view)
+
     def render_source_pixmap_with_overlays(self) -> QPixmap | None:
         return self._canvas.render_source_pixmap_with_overlays()
 
@@ -121,9 +138,22 @@ class PreviewPanel(QWidget):
 
     def _set_preview_status_text(self, width: int | None, height: int | None) -> None:
         if width is None or height is None:
-            self._preview_status_label.setText("当前预览分辨率: -")
-            return
-        self._preview_status_label.setText(f"当前预览分辨率: {int(width)}x{int(height)}")
+            self._preview_resolution = None
+        else:
+            self._preview_resolution = (int(width), int(height))
+        self._refresh_preview_status_text()
+
+    def _refresh_preview_status_text(self) -> None:
+        if self._preview_resolution is None:
+            resolution_text = "-"
+        else:
+            resolution_text = f"{self._preview_resolution[0]}x{self._preview_resolution[1]}"
+        scale_text = format_preview_scale_percent(self.current_display_scale_percent())
+        self._preview_status_label.setText(f"当前预览分辨率: {resolution_text} | 当前缩放: {scale_text}")
+
+    def _on_canvas_display_scale_percent_changed(self, scale_percent: object) -> None:
+        self._refresh_preview_status_text()
+        self.display_scale_percent_changed.emit(scale_percent)
 
     def current_path(self):
         return self._current_path
