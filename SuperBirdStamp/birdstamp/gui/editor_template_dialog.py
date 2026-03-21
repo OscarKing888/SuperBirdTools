@@ -850,11 +850,22 @@ class TemplateManagerDialog(QDialog):
         layout.setSpacing(8)
 
         with stat_span("tmpl_build_header_group"):
-            layout.addWidget(self._build_header_group())
+            header_group = self._build_header_group()
         with stat_span("tmpl_build_fields_group"):
-            layout.addWidget(self._build_fields_group(), stretch=1)
+            fields_group = self._build_fields_group()
         with stat_span("tmpl_build_field_edit_group"):
-            layout.addWidget(self._build_field_edit_group())
+            field_edit_group = self._build_field_edit_group()
+
+        self._editor_group_splitter = QSplitter(Qt.Orientation.Vertical)
+        self._editor_group_splitter.setChildrenCollapsible(False)
+        self._editor_group_splitter.addWidget(header_group)
+        self._editor_group_splitter.addWidget(fields_group)
+        self._editor_group_splitter.addWidget(field_edit_group)
+        self._editor_group_splitter.setStretchFactor(0, 2)
+        self._editor_group_splitter.setStretchFactor(1, 2)
+        self._editor_group_splitter.setStretchFactor(2, 4)
+        self._editor_group_splitter.setSizes([280, 220, 520])
+        layout.addWidget(self._editor_group_splitter, stretch=1)
         return panel
 
     def _build_preview_panel(self) -> QWidget:
