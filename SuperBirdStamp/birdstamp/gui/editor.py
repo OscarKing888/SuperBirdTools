@@ -78,7 +78,7 @@ from app_common.send_to_app import (
 )
 
 import birdstamp
-from birdstamp.config import get_config_path
+from birdstamp.config import get_app_resource_dir, get_config_path, resolve_bundled_path
 from birdstamp.constants import SEND_TO_APP_ID, SUPPORTED_EXTENSIONS
 from birdstamp.decoders.image_decoder import decode_image
 from birdstamp.discover import discover_inputs
@@ -309,6 +309,114 @@ def _get_bird_detector_error_message() -> str:
 _pil_to_qpixmap = editor_utils.pil_to_qpixmap
 _log = get_logger("editor")
 _PHOTO_LIST_META_PROGRESS_HIDE_DELAY_MS = 600
+_ABOUT_CFG_FILENAME = "about.cfg"
+_BIRDSTAMP_DEFAULT_APP_NAME = "极速鸟框 - 鸟类照片智能裁切与模板叠加工具"
+_BIRDSTAMP_DEFAULT_PRODUCT_NAME = "极速鸟框"
+_BIRDSTAMP_DEFAULT_SUBTITLE = "鸟类照片智能裁切与模板叠加"
+
+
+def _sanitize_about_display_text(value: Any) -> str:
+    text = str(value or "").replace("\x00", " ").strip()
+    if not text:
+        return ""
+    cleaned: list[str] = []
+    for ch in text:
+        code = ord(ch)
+        if code < 32 and ch not in "\t\n\r":
+            cleaned.append(" ")
+        else:
+            cleaned.append(ch)
+    return "".join(cleaned).strip()
+
+
+def _bundled_about_cfg_path() -> Path:
+    return resolve_bundled_path(_ABOUT_CFG_FILENAME)
+
+
+def _user_about_cfg_path() -> Path:
+    return get_config_path().parent / _ABOUT_CFG_FILENAME
+
+
+def _load_about_override_info(path: Path | None) -> dict[str, str]:
+    if path is None or not path.is_file():
+        return {}
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    about = raw.get("about") if isinstance(raw, dict) else None
+    if not isinstance(about, dict):
+        return {}
+    result: dict[str, str] = {}
+    for key, value in about.items():
+        key_text = _sanitize_about_display_text(key)
+        value_text = _sanitize_about_display_text(value)
+        if not key_text or not value_text:
+            continue
+        value_text = value_text.replace("{app_name}", _BIRDSTAMP_DEFAULT_APP_NAME)
+        value_text = value_text.replace("{version}", birdstamp.__version__)
+        result[key_text] = value_text
+    return result
+
+
+def _load_birdstamp_about_info() -> dict[str, str]:
+    info = load_about_info(
+        app_name=_BIRDSTAMP_DEFAULT_APP_NAME,
+        version=birdstamp.__version__,
+    )
+    for cfg_path in (_bundled_about_cfg_path(), _user_about_cfg_path()):
+        info.update(_load_about_override_info(cfg_path))
+    return info
+
+
+def _birdstamp_product_name(about_info: dict[str, Any] | None = None) -> str:
+    raw_name = ""
+    if isinstance(about_info, dict):
+        raw_name = _sanitize_about_display_text(about_info.get("app_name", ""))
+    if not raw_name:
+        raw_name = _BIRDSTAMP_DEFAULT_APP_NAME
+    short_name = raw_name.split(" - ", 1)[0].strip()
+    return short_name or _BIRDSTAMP_DEFAULT_PRODUCT_NAME
+
+
+def _birdstamp_app_subtitle(about_info: dict[str, Any] | None = None) -> str:
+    raw_name = ""
+    if isinstance(about_info, dict):
+        raw_name = _sanitize_about_display_text(about_info.get("app_name", ""))
+    if " - " in raw_name:
+        subtitle = raw_name.split(" - ", 1)[1].strip()
+        if subtitle:
+            return subtitle
+    return _BIRDSTAMP_DEFAULT_SUBTITLE
+
+
+def _build_birdstamp_main_window_title(about_info: dict[str, Any] | None = None) -> str:
+    if not isinstance(about_info, dict):
+        return _BIRDSTAMP_DEFAULT_PRODUCT_NAME
+    app_name = _sanitize_about_display_text(about_info.get("app_name", "")) or _BIRDSTAMP_DEFAULT_APP_NAME
+    version = _sanitize_about_display_text(about_info.get("version", "")) or ""
+    author = _sanitize_about_display_text(about_info.get("作者", "")) or ""
+    parts: list[str] = [app_name]
+    if version:
+        parts.append(version)
+    if author:
+        parts.append(author)
+    return " - ".join(parts)
+
+
+def _load_birdstamp_about_images() -> list[dict]:
+    user_path = _user_about_cfg_path()
+    if user_path.is_file():
+        user_images = load_about_images(override_path=str(user_path))
+        if user_images:
+            return user_images
+    bundled_path = _bundled_about_cfg_path()
+    if bundled_path.is_file():
+        return load_about_images(
+            override_path=str(bundled_path),
+            base_dir=str(get_app_resource_dir()),
+        )
+    return load_about_images()
 
 
 # PreviewCanvas and PhotoListWidget now live in editor_preview_canvas.py / editor_photo_list.py
@@ -320,7 +428,8 @@ class BirdStampEditorWindow(QMainWindow, _BirdStampCropMixin, _BirdStampRenderer
         startup_files: list[Path] | None = None,
     ) -> None:
         super().__init__()
-        self.setWindowTitle("极速鸟框")
+        self._about_info = _load_birdstamp_about_info()
+        self.setWindowTitle(_build_birdstamp_main_window_title(self._about_info))
         self.resize(1420, 920)
         self.setMinimumSize(1120, 720)
 
@@ -592,8 +701,8 @@ class BirdStampEditorWindow(QMainWindow, _BirdStampCropMixin, _BirdStampRenderer
             self.setWindowIcon(_app_icon)
         self._info_bar = AppInfoBar(
             self,
-            title="极速鸟框",
-            subtitle="自动裁切鸟类照片",
+            title=_birdstamp_product_name(self._about_info),
+            subtitle=_birdstamp_app_subtitle(self._about_info),
             icon_path=str(_info_bar_icon_path) if _info_bar_icon_path.exists() else None,
             on_about_clicked=self._show_about_dialog,
         )
@@ -1224,21 +1333,10 @@ class BirdStampEditorWindow(QMainWindow, _BirdStampCropMixin, _BirdStampRenderer
         return answer == QMessageBox.StandardButton.Yes
 
     def _show_about_dialog(self) -> None:
-        override_path = get_config_path().parent / "about.cfg"
-        override_str = str(override_path) if override_path.exists() else None
-        # base_dir: 优先用工程根目录，使 about.cfg 中的相对图片路径（如 images/download.png）可正确解析
-        import sys
-        from pathlib import Path as _Path
-        if getattr(sys, "frozen", False):
-            base_dir = str(_Path(sys.executable).resolve().parent)
-        else:
-            base_dir = str(_Path(__file__).resolve().parent.parent.parent)
-        about_info = load_about_info(
-            override_path=override_str,
-            app_name="极速鸟框",
-            version=birdstamp.__version__,
-        )
-        about_images = load_about_images(override_path=override_str, base_dir=base_dir)
+        about_info = _load_birdstamp_about_info()
+        self._about_info = about_info
+        self.setWindowTitle(_build_birdstamp_main_window_title(about_info))
+        about_images = _load_birdstamp_about_images()
         show_about_dialog(self, about_info, logo_path=None, banner_path=None, images=about_images)
 
     def resizeEvent(self, event) -> None:  # type: ignore[override]
@@ -2894,6 +2992,14 @@ def launch_gui(
         [str(path) for path in (startup_files or [])],
     )
     app = ensure_file_open_aware_application(sys.argv)
+    about_info = _load_birdstamp_about_info()
+    app_name = _birdstamp_product_name(about_info)
+    if hasattr(app, "setApplicationName"):
+        app.setApplicationName(app_name)
+    if hasattr(app, "setApplicationDisplayName"):
+        app.setApplicationDisplayName(app_name)
+    if hasattr(app, "setApplicationVersion"):
+        app.setApplicationVersion(str(about_info.get("version", "")))
     window = BirdStampEditorWindow()
     _log.info("editor window created")
 

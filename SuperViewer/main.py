@@ -340,7 +340,7 @@ class MainWindow(QMainWindow):
         app_info_widget = AppInfoBar(
             self,
             title=product_name,
-            subtitle="查看与编辑EXIF",
+            subtitle="慧眼选鸟结果快速浏览筛选工具",
             icon_path=app_info_path,
             on_about_clicked=self._show_about_dialog,
         )

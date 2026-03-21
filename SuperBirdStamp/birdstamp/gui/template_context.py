@@ -42,6 +42,7 @@ _FROM_FILE_CONTEXT_KEY_ALIASES: dict[str, str] = {
 TEMPLATE_SOURCE_EXIF = "exif"
 TEMPLATE_SOURCE_REPORT_DB = "report_db"
 TEMPLATE_SOURCE_FROM_FILE = "from_file"
+TEMPLATE_SOURCE_EDITOR = "editor"
 TEMPLATE_SOURCE_AUTO = "auto"
 TEMPLATE_SOURCE_METADATA_LEGACY = "metadata"
 
@@ -110,6 +111,7 @@ class EditorPhotoInfo(PhotoInfo):
     """编辑器使用的照片信息，额外保存逐图裁切框。"""
 
     crop_box: NormalizedCropBox | None = None
+    editor_row_number: int | None = None
 
     @classmethod
     def from_path(
@@ -119,6 +121,7 @@ class EditorPhotoInfo(PhotoInfo):
         sidecar_path: Path | str | None = None,
         raw_metadata: Dict[str, Any] | None = None,
         crop_box: Any = None,
+        editor_row_number: Any = None,
     ) -> "EditorPhotoInfo":
         resolved_path = Path(path).resolve(strict=False)
         resolved_sidecar = _normalize_sidecar_path(sidecar_path, source_path=resolved_path)
@@ -128,6 +131,7 @@ class EditorPhotoInfo(PhotoInfo):
             sidecar_path=resolved_sidecar,
             raw_metadata=metadata,
             crop_box=normalize_crop_box(crop_box),
+            editor_row_number=_normalize_editor_row_number(editor_row_number),
         )
 
 
@@ -202,15 +206,31 @@ def photo_crop_box(photo: PhotoInfo | None) -> NormalizedCropBox | None:
     return normalize_crop_box(getattr(photo, "crop_box", None))
 
 
+def _normalize_editor_row_number(value: Any) -> int | None:
+    try:
+        normalized = int(value)
+    except (TypeError, ValueError):
+        return None
+    if normalized <= 0:
+        return None
+    return normalized
+
+
 def ensure_editor_photo_info(
     photo: PhotoInfo | Path | str,
     *,
     raw_metadata: Dict[str, Any] | None = None,
     sidecar_path: Path | str | None = None,
     crop_box: Any = _PHOTO_INFO_CROP_BOX_UNSET,
+    editor_row_number: Any = _PHOTO_INFO_CROP_BOX_UNSET,
 ) -> EditorPhotoInfo:
     normalized_crop_box = (
         photo_crop_box(photo) if crop_box is _PHOTO_INFO_CROP_BOX_UNSET else normalize_crop_box(crop_box)
+    )
+    normalized_editor_row_number = (
+        getattr(photo, "editor_row_number", None)
+        if editor_row_number is _PHOTO_INFO_CROP_BOX_UNSET
+        else _normalize_editor_row_number(editor_row_number)
     )
     if isinstance(photo, EditorPhotoInfo):
         if isinstance(raw_metadata, dict):
@@ -221,6 +241,8 @@ def ensure_editor_photo_info(
             photo.sidecar_path = _normalize_sidecar_path(sidecar_path, source_path=photo.path)
         if crop_box is not _PHOTO_INFO_CROP_BOX_UNSET:
             photo.crop_box = normalized_crop_box
+        if editor_row_number is not _PHOTO_INFO_CROP_BOX_UNSET:
+            photo.editor_row_number = normalized_editor_row_number
         return photo
 
     base = ensure_photo_info(
@@ -233,6 +255,7 @@ def ensure_editor_photo_info(
         sidecar_path=base.sidecar_path,
         raw_metadata=dict(base.raw_metadata) if isinstance(base.raw_metadata, dict) else {},
         crop_box=normalized_crop_box,
+        editor_row_number=normalized_editor_row_number,
     )
 
 
@@ -722,6 +745,7 @@ def _normalize_auto_proxy_route_config(
         value = {}
     result: dict[str, tuple[AutoProxyFieldRoute, ...]] = {}
     valid_provider_ids = {
+        TEMPLATE_SOURCE_EDITOR,
         TEMPLATE_SOURCE_EXIF,
         TEMPLATE_SOURCE_FROM_FILE,
         TEMPLATE_SOURCE_REPORT_DB,
@@ -773,6 +797,7 @@ def normalize_template_source_type(value: Any) -> str:
         return TEMPLATE_SOURCE_AUTO
     if source_type in {
         TEMPLATE_SOURCE_AUTO,
+        TEMPLATE_SOURCE_EDITOR,
         TEMPLATE_SOURCE_EXIF,
         TEMPLATE_SOURCE_REPORT_DB,
         TEMPLATE_SOURCE_FROM_FILE,
@@ -785,7 +810,7 @@ def template_source_display_name(source_type: str) -> str:
     normalized = normalize_template_source_type(source_type)
     provider_cls = _PROVIDER_CLASS_REGISTRY.get(normalized)
     if provider_cls is None:
-        return "FromFile"
+        return "文件"
     return provider_cls.display_name
 
 
@@ -885,13 +910,67 @@ class TemplateContextProvider(ABC):
     def get_display_caption(self, photo_info: PhotoInfo) -> str:  # noqa: ARG002
         field = self.resolve_field_definition(self.source_key)
         label = self.display_label or (field.display_label if field else "") or self.source_key or "未设置"
-        #return f"{self.display_name} - {label}"
+        prefix = str(self.display_name or "").strip()
+        if prefix:
+            return f"{prefix}:{label}"
         return f"{label}"
+
+
+class EditorTemplateContextProvider(TemplateContextProvider):
+    provider_id = TEMPLATE_SOURCE_EDITOR
+    display_name = "编辑器"
+
+    _FIELD_DEFINITIONS: tuple[TemplateContextField, ...] = (
+        TemplateContextField(
+            "row_number",
+            "列表编号",
+            aliases=("editor.row_number", "editor.index", "editor.sequence", "index", "sequence", "seq"),
+        ),
+    )
+
+    @classmethod
+    def normalize_field_key(cls, source_key: str) -> str:
+        return _normalize_from_file_context_key(source_key)
+
+    @classmethod
+    def _build_field_definitions(cls) -> tuple[TemplateContextField, ...]:
+        return cls._FIELD_DEFINITIONS
+
+    @classmethod
+    def build_context_entries(cls, photo_info: PhotoInfo) -> TemplateContext:
+        row_number = _normalize_editor_row_number(getattr(photo_info, "editor_row_number", None))
+        if row_number is None:
+            return {}
+        row_text = str(row_number)
+        return {
+            "row_number": row_text,
+            "editor.row_number": row_text,
+            "editor.index": row_text,
+            "editor.sequence": row_text,
+        }
+
+    def _read_text_value(self, photo_info: PhotoInfo, field: TemplateContextField | None) -> str:
+        context = self.build_context_entries(photo_info)
+        if field is not None:
+            for candidate in (field.key, *field.aliases):
+                normalized = self.normalize_field_key(candidate)
+                direct_value = _clean_text(context.get(normalized, ""))
+                if direct_value:
+                    return direct_value
+                direct_value = _clean_text(context.get(candidate, ""))
+                if direct_value:
+                    return direct_value
+        normalized_key = self.normalize_field_key(self.source_key)
+        if normalized_key:
+            direct_value = _clean_text(context.get(normalized_key, ""))
+            if direct_value:
+                return direct_value
+        return _clean_text(context.get(self.source_key, ""))
 
 
 class ExifTemplateContextProvider(TemplateContextProvider):
     provider_id = TEMPLATE_SOURCE_EXIF
-    display_name = "Exif"
+    display_name = "EXIF"
 
     _EXIF_CONTEXT_FIELDS: tuple[TemplateContextField, ...] = (
         TemplateContextField("bird", "鸟种(归一化)"),
@@ -996,7 +1075,7 @@ class ExifTemplateContextProvider(TemplateContextProvider):
 
 class ReportDBTemplateContextProvider(TemplateContextProvider):
     provider_id = TEMPLATE_SOURCE_REPORT_DB
-    display_name = "ReportDB"
+    display_name = "慧眼选鸟"
 
     _COLUMN_LABELS: dict[str, str] = {
         "filename": "文件名",
@@ -1096,7 +1175,7 @@ class ReportDBTemplateContextProvider(TemplateContextProvider):
 
 class FromFileTemplateContextProvider(TemplateContextProvider):
     provider_id = TEMPLATE_SOURCE_FROM_FILE
-    display_name = "FromFile"
+    display_name = "文件"
 
     _FIELD_DEFINITIONS: tuple[TemplateContextField, ...] = (
         TemplateContextField("{bird}", "鸟种名称", aliases=("bird",)),
@@ -1173,16 +1252,24 @@ class FromFileTemplateContextProvider(TemplateContextProvider):
 
 class AutoProxyTemplateContextProvider(TemplateContextProvider):
     provider_id = TEMPLATE_SOURCE_AUTO
-    display_name = "Auto"
+    display_name = ""
     _route_definitions_cache: dict[str, tuple[AutoProxyFieldRoute, ...]] | None = None
 
     @classmethod
     def delegate_provider_classes(cls) -> tuple[type[TemplateContextProvider], ...]:
         return (
+            EditorTemplateContextProvider,
+            ReportDBTemplateContextProvider,
             FromFileTemplateContextProvider,
             ExifTemplateContextProvider,
-            ReportDBTemplateContextProvider,
         )
+
+    @classmethod
+    def field_options(cls) -> list[tuple[str, str, str]]:
+        result: list[tuple[str, str, str]] = []
+        for provider_cls in cls.delegate_provider_classes():
+            result.extend(provider_cls.field_options())
+        return result
 
     @classmethod
     def normalize_field_key(cls, source_key: str) -> str:
@@ -1299,10 +1386,10 @@ class AutoProxyTemplateContextProvider(TemplateContextProvider):
 
     def get_display_caption(self, photo_info: PhotoInfo) -> str:
         if self.display_label:
-            return self.display_label
+            return f"{self.display_name}:{self.display_label}"
         field = self.resolve_field_definition(self.source_key)
         if field is not None and field.display_label:
-            return field.display_label
+            return f"{self.display_name}:{field.display_label}"
         for candidate in self.inspect_candidates(photo_info):
             caption = _clean_text(candidate.display_caption)
             if caption:
@@ -1312,9 +1399,10 @@ class AutoProxyTemplateContextProvider(TemplateContextProvider):
 
 def iter_template_context_provider_classes() -> tuple[type[TemplateContextProvider], ...]:
     return (
-        ExifTemplateContextProvider,
-        FromFileTemplateContextProvider,
+        EditorTemplateContextProvider,
         ReportDBTemplateContextProvider,
+        FromFileTemplateContextProvider,
+        ExifTemplateContextProvider,
     )
 
 
@@ -1351,12 +1439,7 @@ def build_template_context_provider(
     display_label: str = "",
 ) -> TemplateContextProvider:
     normalized = normalize_template_source_type(source_type)
-    if normalized in {
-        TEMPLATE_SOURCE_AUTO,
-        TEMPLATE_SOURCE_EXIF,
-        TEMPLATE_SOURCE_REPORT_DB,
-        TEMPLATE_SOURCE_FROM_FILE,
-    }:
+    if normalized == TEMPLATE_SOURCE_AUTO:
         return AutoProxyTemplateContextProvider(source_key, display_label=display_label)
     provider_cls = _PROVIDER_CLASS_REGISTRY.get(normalized, AutoProxyTemplateContextProvider)
     return provider_cls(source_key, display_label=display_label)

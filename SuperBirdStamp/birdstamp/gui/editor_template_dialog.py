@@ -1098,7 +1098,11 @@ class TemplateManagerDialog(QDialog):
         self._field_fallback_combo.addItem("（空）", ("", ""))
         for data_source, key, display_label in _get_template_context_field_options():
             source_name = _template_context.template_source_display_name(data_source)
-            display_text = f"{source_name} — {key}  —  {display_label}"
+            display_core = str(display_label or key or "").strip()
+            if display_core and str(key or "").strip() and display_core != str(key or "").strip():
+                display_text = f"{source_name}:{display_core} ({key})"
+            else:
+                display_text = f"{source_name}:{key}"
             self._field_fallback_combo.addItem(display_text, (data_source, key))
         self._field_fallback_combo.setCurrentIndex(0)
         if self._field_fallback_combo.lineEdit():
@@ -1721,6 +1725,18 @@ class TemplateManagerDialog(QDialog):
                 and item_key == target_key
                 and target_source in {
                     _template_context.TEMPLATE_SOURCE_AUTO,
+                    _template_context.TEMPLATE_SOURCE_EDITOR,
+                    _template_context.TEMPLATE_SOURCE_EXIF,
+                    _template_context.TEMPLATE_SOURCE_FROM_FILE,
+                    _template_context.TEMPLATE_SOURCE_REPORT_DB,
+                }
+            ):
+                return idx
+            if (
+                target_source == _template_context.TEMPLATE_SOURCE_AUTO
+                and item_key == target_key
+                and item_source in {
+                    _template_context.TEMPLATE_SOURCE_EDITOR,
                     _template_context.TEMPLATE_SOURCE_EXIF,
                     _template_context.TEMPLATE_SOURCE_FROM_FILE,
                     _template_context.TEMPLATE_SOURCE_REPORT_DB,
@@ -1892,6 +1908,19 @@ class TemplateManagerDialog(QDialog):
                             and item_key == key
                             and ds in {
                                 _template_context.TEMPLATE_SOURCE_AUTO,
+                                _template_context.TEMPLATE_SOURCE_EDITOR,
+                                _template_context.TEMPLATE_SOURCE_EXIF,
+                                _template_context.TEMPLATE_SOURCE_FROM_FILE,
+                                _template_context.TEMPLATE_SOURCE_REPORT_DB,
+                            }
+                        ):
+                            matched = i
+                            break
+                        if (
+                            ds == _template_context.TEMPLATE_SOURCE_AUTO
+                            and item_key == key
+                            and item_source in {
+                                _template_context.TEMPLATE_SOURCE_EDITOR,
                                 _template_context.TEMPLATE_SOURCE_EXIF,
                                 _template_context.TEMPLATE_SOURCE_FROM_FILE,
                                 _template_context.TEMPLATE_SOURCE_REPORT_DB,

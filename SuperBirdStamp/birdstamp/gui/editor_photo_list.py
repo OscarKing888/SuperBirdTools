@@ -19,6 +19,7 @@ from PyQt6.QtWidgets import (
 from app_common.file_browser import FileListPanel
 from birdstamp.constants import SUPPORTED_EXTENSIONS
 from birdstamp.discover import discover_inputs
+from birdstamp.gui import template_context as _template_context
 from birdstamp.gui.editor_utils import path_key as _path_key
 
 # Column indices for editor photo list (must match header and editor.py usage)
@@ -39,6 +40,7 @@ PHOTO_LIST_PATH_ROLE = _UserRole + 1
 PHOTO_LIST_SEQUENCE_ROLE = _UserRole + 2
 PHOTO_LIST_SORT_ROLE = _UserRole + 3
 PHOTO_LIST_PHOTO_INFO_ROLE = _UserRole + 4
+PHOTO_LIST_DISPLAY_ROW_ROLE = _UserRole + 5
 
 
 class PhotoListItem(QTreeWidgetItem):
@@ -397,5 +399,24 @@ class PhotoListWidget(FileListPanel):
         self._tree_widget.sortByColumn(column, order)
 
     def refresh_row_numbers(self) -> None:
-        """刷新行号显示；统一复用 FileListPanel 的通用实现。"""
-        super().refresh_row_numbers()
+        """刷新首列显示编号，并同步回编辑器 photo info。"""
+        for row in range(self._tree_widget.topLevelItemCount()):
+            item = self._tree_widget.topLevelItem(row)
+            if item is None:
+                continue
+            display_row_number = row + 1
+            item.setText(PHOTO_COL_SEQ, str(display_row_number))
+            item.setTextAlignment(PHOTO_COL_SEQ, int(Qt.AlignmentFlag.AlignCenter))
+            item.setToolTip(PHOTO_COL_SEQ, str(display_row_number))
+            item.setData(PHOTO_COL_ROW, PHOTO_LIST_DISPLAY_ROW_ROLE, display_row_number)
+
+            photo_info = item.data(PHOTO_COL_ROW, PHOTO_LIST_PHOTO_INFO_ROLE)
+            if isinstance(photo_info, _template_context.PhotoInfo):
+                item.setData(
+                    PHOTO_COL_ROW,
+                    PHOTO_LIST_PHOTO_INFO_ROLE,
+                    _template_context.ensure_editor_photo_info(
+                        photo_info,
+                        editor_row_number=display_row_number,
+                    ),
+                )

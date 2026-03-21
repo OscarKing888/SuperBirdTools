@@ -233,12 +233,6 @@ def _normalize_template_text_source(data: dict[str, Any]) -> dict[str, str]:
             source_key = legacy_tag
 
     source_type = normalize_template_source_type(source_type)
-    if source_key and source_type in {
-        TEMPLATE_SOURCE_EXIF,
-        TEMPLATE_SOURCE_FROM_FILE,
-        TEMPLATE_SOURCE_REPORT_DB,
-    }:
-        source_type = TEMPLATE_SOURCE_AUTO
     if not source_key:
         source_type = TEMPLATE_SOURCE_AUTO
         source_key = "{bird}"
