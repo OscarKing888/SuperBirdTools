@@ -54,6 +54,7 @@ _compute_ratio_crop_box = editor_core.compute_ratio_crop_box
 _draw_focus_box_overlay = editor_core.draw_focus_box_overlay
 _expand_unit_box_to_unclamped_pixels = editor_core.expand_unit_box_to_unclamped_pixels
 _normalize_unit_box = editor_core.normalize_unit_box
+_normalize_extended_unit_box = editor_core.normalize_extended_unit_box
 _box_center = editor_core.box_center
 _get_focus_point_for_display = editor_core.get_focus_point_for_display
 _resolve_focus_box_after_processing = editor_core.resolve_focus_box_after_processing
@@ -403,7 +404,7 @@ def _clone_render_settings(settings: dict[str, Any]) -> dict[str, Any]:
     crop_box_raw = settings.get("crop_box")
     if isinstance(crop_box_raw, (list, tuple)) and len(crop_box_raw) == 4:
         try:
-            normalized_crop_box = _normalize_unit_box(
+            normalized_crop_box = _normalize_extended_unit_box(
                 (
                     float(crop_box_raw[0]),
                     float(crop_box_raw[1]),

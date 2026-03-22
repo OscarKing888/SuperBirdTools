@@ -28,6 +28,7 @@ NormalizedBox = tuple[float, float, float, float]
 _CROP_HANDLES = ("nw", "n", "ne", "e", "se", "s", "sw", "w")
 _HANDLE_HIT_RADIUS = 8
 _MIN_CROP_SIZE = 0.02
+_MIN_VISIBLE_OVERLAP = _MIN_CROP_SIZE
 
 
 @dataclass(slots=True)
@@ -290,7 +291,24 @@ class EditorPreviewCanvas(PreviewCanvas):
             r = l + _MIN_CROP_SIZE
         if h < _MIN_CROP_SIZE:
             b = t + _MIN_CROP_SIZE
-        return (max(0.0, min(1.0, l)), max(0.0, min(1.0, t)), max(0.0, min(1.0, r)), max(0.0, min(1.0, b)))
+        # 允许裁切框超出图像范围，但至少保留一小段与图像重叠，避免整块拖出后无法继续编辑。
+        if r < _MIN_VISIBLE_OVERLAP:
+            shift_x = _MIN_VISIBLE_OVERLAP - r
+            l += shift_x
+            r += shift_x
+        elif l > 1.0 - _MIN_VISIBLE_OVERLAP:
+            shift_x = l - (1.0 - _MIN_VISIBLE_OVERLAP)
+            l -= shift_x
+            r -= shift_x
+        if b < _MIN_VISIBLE_OVERLAP:
+            shift_y = _MIN_VISIBLE_OVERLAP - b
+            t += shift_y
+            b += shift_y
+        elif t > 1.0 - _MIN_VISIBLE_OVERLAP:
+            shift_y = t - (1.0 - _MIN_VISIBLE_OVERLAP)
+            t -= shift_y
+            b -= shift_y
+        return (l, t, r, b)
 
     def _constrain_box_to_ratio_from_fixed_corner(
         self,
@@ -405,25 +423,11 @@ class EditorPreviewCanvas(PreviewCanvas):
         dnx: float,
         dny: float,
     ) -> NormalizedBox:
-        """Shift crop box by (dnx, dny) in normalized space, clamped to [0,1] preserving size."""
+        """Shift crop box by (dnx, dny) in normalized space, preserving size and allowing limited overscan."""
         l = start_box[0] + dnx
         t = start_box[1] + dny
         r = start_box[2] + dnx
         b = start_box[3] + dny
-        w = r - l
-        h = b - t
-        if l < 0.0:
-            l = 0.0
-            r = l + w
-        if r > 1.0:
-            r = 1.0
-            l = r - w
-        if t < 0.0:
-            t = 0.0
-            b = t + h
-        if b > 1.0:
-            b = 1.0
-            t = b - h
         return self._clamp_box(l, t, r, b)
 
     def _paint_crop_handles(self, painter, draw_rect: QRectF, content_rect) -> None:

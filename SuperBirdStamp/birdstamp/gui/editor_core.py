@@ -491,13 +491,28 @@ def transform_focus_box_after_crop(
 
 
 def normalize_unit_box(box: tuple[float, float, float, float] | None) -> tuple[float, float, float, float] | None:
+    normalized = normalize_extended_unit_box(box)
+    if normalized is None:
+        return None
+    left = clamp01(normalized[0])
+    top = clamp01(normalized[1])
+    right = clamp01(normalized[2])
+    bottom = clamp01(normalized[3])
+    if right - left <= 0.0001 or bottom - top <= 0.0001:
+        return None
+    return (left, top, right, bottom)
+
+
+def normalize_extended_unit_box(
+    box: tuple[float, float, float, float] | None,
+) -> tuple[float, float, float, float] | None:
     if box is None:
         return None
     try:
-        left = clamp01(float(box[0]))
-        top = clamp01(float(box[1]))
-        right = clamp01(float(box[2]))
-        bottom = clamp01(float(box[3]))
+        left = float(box[0])
+        top = float(box[1])
+        right = float(box[2])
+        bottom = float(box[3])
     except Exception:
         return None
     if right < left:
@@ -922,7 +937,7 @@ def compute_ratio_crop_box(
 
 
 def crop_box_has_effect(crop_box: tuple[float, float, float, float] | None) -> bool:
-    normalized = normalize_unit_box(crop_box)
+    normalized = normalize_extended_unit_box(crop_box)
     if normalized is None:
         return False
     eps = 0.0005
@@ -940,12 +955,16 @@ def constrain_box_to_ratio(
     width: int,
     height: int,
 ) -> tuple[float, float, float, float]:
-    """Return a normalized box with the same center but crop aspect in pixels = ratio, clamped to [0,1].
+    """Return a normalized box with the same center but crop aspect in pixels = ratio.
+
+    The returned crop box may extend outside ``[0,1]`` so the caller can
+    request outer padding and fill the extra area later.
+
     In normalized space (r-l)/(b-t) must equal ratio*height/width so that (r-l)*width/((b-t)*height)=ratio.
     When ratio is None, use image aspect. When ratio is RATIO_FREE, return box unchanged.
     """
     if is_ratio_free(ratio) or width <= 0 or height <= 0:
-        return normalize_unit_box(box) or box
+        return normalize_extended_unit_box(box) or box
     # Pixel aspect R = (r-l)*W / ((b-t)*H) => (r-l)/(b-t) = R*H/W in normalized space.
     pixel_ratio = float(ratio) if ratio is not None and ratio > 0 else width / float(height)
     target_ratio = pixel_ratio * height / float(width) if width > 0 else pixel_ratio
@@ -964,15 +983,7 @@ def constrain_box_to_ratio(
     new_r = cx + new_w * 0.5
     new_t = cy - new_h * 0.5
     new_b = cy + new_h * 0.5
-    if new_l < 0.0:
-        new_l, new_r = 0.0, new_w
-    if new_r > 1.0:
-        new_r, new_l = 1.0, 1.0 - new_w
-    if new_t < 0.0:
-        new_t, new_b = 0.0, new_h
-    if new_b > 1.0:
-        new_b, new_t = 1.0, 1.0 - new_h
-    return (clamp01(new_l), clamp01(new_t), clamp01(new_r), clamp01(new_b))
+    return normalize_extended_unit_box((new_l, new_t, new_r, new_b)) or box
 
 
 def crop_image_by_normalized_box(

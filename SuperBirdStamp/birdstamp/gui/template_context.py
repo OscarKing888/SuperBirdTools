@@ -4,11 +4,14 @@ from abc import ABC, abstractmethod
 from collections import defaultdict
 from dataclasses import dataclass
 from datetime import datetime
+from fractions import Fraction
 from functools import lru_cache
 import json
 from pathlib import Path
 import re
 from typing import Any, Callable, Dict, Optional
+
+from PIL import Image
 
 from app_common.exif_io.config import load_exif_settings
 from app_common.report_db import PHOTO_COLUMNS
@@ -327,7 +330,7 @@ def _extract_capture_date_text(photo_info: PhotoInfo, raw_metadata: Dict[str, An
     return dt.strftime("%Y-%m-%d")
 
 
-def _extract_capture_datetime(photo_info: PhotoInfo, raw_metadata: Dict[str, Any]) -> datetime | None:
+def _extract_capture_datetime_from_metadata(raw_metadata: Dict[str, Any]) -> datetime | None:
     lookup = _normalize_lookup(raw_metadata)
     for key in (
         "DateTimeOriginal",
@@ -340,6 +343,13 @@ def _extract_capture_datetime(photo_info: PhotoInfo, raw_metadata: Dict[str, Any
         dt = _parse_datetime_value(value)
         if dt is not None:
             return dt
+    return None
+
+
+def _extract_capture_datetime(photo_info: PhotoInfo, raw_metadata: Dict[str, Any]) -> datetime | None:
+    dt = _extract_capture_datetime_from_metadata(raw_metadata)
+    if dt is not None:
+        return dt
     try:
         return datetime.fromtimestamp(photo_info.path.stat().st_ctime)
     except Exception:
@@ -367,6 +377,567 @@ def _extract_author_text(raw_metadata: Dict[str, Any]) -> str:
             if text:
                 return text
     return ""
+
+
+def _lookup_metadata_text(raw_metadata: Dict[str, Any], *candidate_keys: str) -> str:
+    for candidate in candidate_keys:
+        text = lookup_exif_text(candidate, raw_metadata, {})
+        if text:
+            return text
+    return ""
+
+
+def _try_parse_float(value: Any) -> float | None:
+    if isinstance(value, bool):
+        return float(int(value))
+    if isinstance(value, (int, float)):
+        return float(value)
+    text = _clean_text(value)
+    if not text:
+        return None
+    if re.fullmatch(r"-?\d+\s*/\s*-?\d+", text):
+        try:
+            numerator_text, denominator_text = text.split("/", 1)
+            denominator = float(denominator_text.strip())
+            if denominator == 0:
+                return None
+            return float(numerator_text.strip()) / denominator
+        except Exception:
+            return None
+    if not re.fullmatch(r"-?\d+(?:\.\d+)?", text):
+        return None
+    try:
+        return float(text)
+    except Exception:
+        return None
+
+
+def _format_decimal_number(value: float) -> str:
+    if abs(float(value) - round(float(value))) < 1e-9:
+        return str(int(round(float(value))))
+    return f"{float(value):.4f}".rstrip("0").rstrip(".")
+
+
+def _format_length_mm_text(value: Any) -> str:
+    text = _clean_text(value)
+    if not text:
+        return ""
+    match = re.fullmatch(r"(-?\d+(?:\.\d+)?)\s*(?:mm|毫米)?", text, flags=re.IGNORECASE)
+    if match:
+        try:
+            return f"{_format_decimal_number(float(match.group(1)))} 毫米"
+        except Exception:
+            return text
+    return text
+
+
+def _format_aperture_text(value: Any) -> str:
+    text = _clean_text(value)
+    if not text:
+        return ""
+    normalized = text.strip().lower().replace(" ", "")
+    if normalized.startswith("f/"):
+        return text
+    if normalized.startswith("f"):
+        normalized = normalized[1:]
+    if re.fullmatch(r"-?\d+(?:\.\d+)?", normalized):
+        try:
+            return f"f/{_format_decimal_number(float(normalized))}"
+        except Exception:
+            return text
+    return text
+
+
+def _format_exposure_time_text(value: Any) -> str:
+    text = _clean_text(value)
+    if not text:
+        return ""
+    normalized = text.strip()
+    normalized_lower = normalized.lower()
+    if normalized_lower.endswith("s") and len(normalized) > 1:
+        normalized = normalized[:-1].strip()
+        normalized_lower = normalized.lower()
+    if "/" in normalized:
+        return normalized
+    seconds = _try_parse_float(normalized_lower)
+    if seconds is None or seconds <= 0:
+        return text
+    if seconds < 1:
+        fraction = Fraction(seconds).limit_denominator(10000)
+        if fraction.denominator > 0:
+            return f"{fraction.numerator}/{fraction.denominator}"
+    return _format_decimal_number(seconds)
+
+
+def _format_yes_no_text(value: Any) -> str:
+    text = _clean_text(value)
+    if not text:
+        return ""
+    lowered = text.strip().lower()
+    if lowered in {"1", "true", "yes", "y", "on", "enabled", "enable", "supported", "support", "是", "有"}:
+        return "是"
+    if lowered in {"0", "false", "no", "n", "off", "disabled", "disable", "none", "否", "无"}:
+        return "否"
+    parsed = _try_parse_float(lowered)
+    if parsed is not None:
+        return "是" if parsed != 0 else "否"
+    return text
+
+
+def _format_datetime_text(value: datetime | None) -> str:
+    if value is None:
+        return ""
+    return value.strftime("%Y-%m-%d %H:%M")
+
+
+def _format_iso_text(value: Any) -> str:
+    parsed = _try_parse_float(value)
+    if parsed is not None:
+        return _format_decimal_number(parsed)
+    return _clean_text(value)
+
+
+def _format_white_balance_text(value: Any) -> str:
+    text = _clean_text(value)
+    if not text:
+        return ""
+    parsed = _try_parse_float(text)
+    if parsed is not None:
+        if int(round(parsed)) == 0:
+            return "自动"
+        if int(round(parsed)) == 1:
+            return "手动"
+    lowered = text.lower()
+    if lowered in {"auto", "automatic"}:
+        return "自动"
+    if lowered in {"manual"}:
+        return "手动"
+    return text
+
+
+def _format_flash_text(value: Any) -> str:
+    text = _clean_text(value)
+    if not text:
+        return ""
+    parsed = _try_parse_float(text)
+    if parsed is not None:
+        return "是" if (int(round(parsed)) & 0x1) else "否"
+    lowered = text.lower()
+    if any(token in lowered for token in ("did not fire", "not fire", "no flash", "flash off", "off")):
+        return "否"
+    if any(token in lowered for token in ("fired", "flash on", "on")):
+        return "是"
+    if lowered in {"yes", "true"}:
+        return "是"
+    if lowered in {"no", "false"}:
+        return "否"
+    return text
+
+
+def _format_file_size_text(size_bytes: Any) -> str:
+    parsed = _try_parse_float(size_bytes)
+    if parsed is None or parsed < 0:
+        return _clean_text(size_bytes)
+    size = float(parsed)
+    units = ("B", "KB", "MB", "GB", "TB")
+    unit_index = 0
+    while size >= 1000.0 and unit_index < len(units) - 1:
+        size /= 1000.0
+        unit_index += 1
+    if unit_index == 0:
+        return f"{int(round(size))} {units[unit_index]}"
+    return f"{size:.1f} {units[unit_index]}"
+
+
+def _stat_timestamp_to_datetime(timestamp: Any) -> datetime | None:
+    try:
+        return datetime.fromtimestamp(float(timestamp))
+    except Exception:
+        return None
+
+
+def _extract_file_created_datetime(photo_info: PhotoInfo) -> datetime | None:
+    try:
+        stat_result = photo_info.path.stat()
+    except Exception:
+        return None
+    birth_time = getattr(stat_result, "st_birthtime", None)
+    if birth_time not in (None, 0):
+        dt = _stat_timestamp_to_datetime(birth_time)
+        if dt is not None:
+            return dt
+    return _stat_timestamp_to_datetime(getattr(stat_result, "st_ctime", None))
+
+
+def _extract_file_modified_datetime(photo_info: PhotoInfo) -> datetime | None:
+    try:
+        return _stat_timestamp_to_datetime(photo_info.path.stat().st_mtime)
+    except Exception:
+        return None
+
+
+@lru_cache(maxsize=1024)
+def _probe_image_file_properties(path_text: str) -> tuple[int | None, int | None, bool | None]:
+    try:
+        with Image.open(path_text) as image:
+            width, height = image.size
+            bands = tuple(str(band or "").upper() for band in image.getbands())
+            has_alpha = "A" in bands
+            if not has_alpha:
+                has_alpha = "transparency" in image.info
+            return int(width), int(height), bool(has_alpha)
+    except Exception:
+        return None, None, None
+
+
+def _extract_title_text(raw_metadata: Dict[str, Any]) -> str:
+    return _lookup_metadata_text(
+        raw_metadata,
+        "Meta:Title",
+        "XMP-dc:Title",
+        "XMP:Title",
+        "Title",
+        "IFD0:XPTitle",
+        "XPTitle",
+        "IPTC:ObjectName",
+        "ObjectName",
+    )
+
+
+def _extract_description_text(raw_metadata: Dict[str, Any]) -> str:
+    return _lookup_metadata_text(
+        raw_metadata,
+        "Meta:Description",
+        "XMP-dc:Description",
+        "XMP:Description",
+        "Description",
+        "EXIF:ImageDescription",
+        "ExifIFD:ImageDescription",
+        "IFD0:ImageDescription",
+        "ImageDescription",
+        "IPTC:Caption-Abstract",
+        "Caption-Abstract",
+    )
+
+
+def _extract_device_make_text(raw_metadata: Dict[str, Any]) -> str:
+    return _lookup_metadata_text(
+        raw_metadata,
+        "Make",
+        "IFD0:Make",
+        "EXIF:Make",
+        "XMP-tiff:Make",
+    )
+
+
+def _extract_device_model_text(raw_metadata: Dict[str, Any]) -> str:
+    return _lookup_metadata_text(
+        raw_metadata,
+        "Model",
+        "CameraModelName",
+        "IFD0:Model",
+        "EXIF:Model",
+        "XMP-tiff:Model",
+    )
+
+
+def _extract_lens_model_text(raw_metadata: Dict[str, Any]) -> str:
+    return _lookup_metadata_text(
+        raw_metadata,
+        "LensModel",
+        "ExifIFD:LensModel",
+        "EXIF:LensModel",
+        "Composite:LensModel",
+        "Lens",
+        "LensID",
+        "XMP-aux:LensModel",
+        "XMP-aux:Lens",
+    )
+
+
+def _extract_color_space_text(raw_metadata: Dict[str, Any], *, profile_description: str = "") -> str:
+    text = _lookup_metadata_text(
+        raw_metadata,
+        "ColorSpace",
+        "EXIF:ColorSpace",
+        "ExifIFD:ColorSpace",
+        "ICC_Profile:ColorSpaceData",
+        "ICC_Profile:ColorSpace",
+    )
+    if not text:
+        profile_lower = profile_description.lower()
+        if "rgb" in profile_lower:
+            return "RGB"
+        if "cmyk" in profile_lower:
+            return "CMYK"
+        return ""
+
+    lowered = text.lower()
+    if lowered in {"1", "srgb", "adobergb", "adobe rgb"}:
+        return "RGB"
+    if lowered in {"65535", "uncalibrated"}:
+        profile_lower = profile_description.lower()
+        if "rgb" in profile_lower:
+            return "RGB"
+    return text
+
+
+def _extract_profile_description_text(raw_metadata: Dict[str, Any]) -> str:
+    return _lookup_metadata_text(
+        raw_metadata,
+        "ICC_Profile:ProfileDescription",
+        "ICC_Profile:ProfileDescriptionML",
+        "ProfileDescription",
+        "ICC_Profile:Description",
+    )
+
+
+def _extract_focal_length_text(raw_metadata: Dict[str, Any]) -> str:
+    return _format_length_mm_text(
+        _lookup_metadata_text(
+            raw_metadata,
+            "FocalLength",
+            "EXIF:FocalLength",
+            "ExifIFD:FocalLength",
+            "Composite:FocalLength",
+            "XMP-exif:FocalLength",
+        )
+    )
+
+
+def _extract_iso_text(raw_metadata: Dict[str, Any]) -> str:
+    return _format_iso_text(
+        _lookup_metadata_text(
+            raw_metadata,
+            "ISO",
+            "PhotographicSensitivity",
+            "ISOSpeedRatings",
+            "EXIF:ISO",
+            "ExifIFD:ISO",
+            "XMP-exif:PhotographicSensitivity",
+            "XMP-exif:ISOSpeedRatings",
+        )
+    )
+
+
+def _extract_alpha_channel_text(photo_info: PhotoInfo, raw_metadata: Dict[str, Any]) -> str:
+    text = _lookup_metadata_text(
+        raw_metadata,
+        "AlphaChannel",
+        "Alpha",
+        "HasAlpha",
+        "AlphaChannels",
+        "File:AlphaChannels",
+    )
+    normalized = _format_yes_no_text(text)
+    if normalized:
+        return normalized
+    _width, _height, has_alpha = _probe_image_file_properties(str(photo_info.path))
+    if has_alpha is None:
+        return ""
+    return "是" if has_alpha else "否"
+
+
+def _extract_red_eye_text(raw_metadata: Dict[str, Any]) -> str:
+    return _format_yes_no_text(
+        _lookup_metadata_text(
+            raw_metadata,
+            "RedEye",
+            "RedEyeMode",
+            "RedEyeReduction",
+            "FlashRedEyeMode",
+        )
+    )
+
+
+def _extract_metering_mode_text(raw_metadata: Dict[str, Any]) -> str:
+    return _lookup_metadata_text(
+        raw_metadata,
+        "MeteringMode",
+        "EXIF:MeteringMode",
+        "ExifIFD:MeteringMode",
+    )
+
+
+def _extract_aperture_text(raw_metadata: Dict[str, Any]) -> str:
+    return _format_aperture_text(
+        _lookup_metadata_text(
+            raw_metadata,
+            "FNumber",
+            "EXIF:FNumber",
+            "ExifIFD:FNumber",
+            "Aperture",
+            "Composite:Aperture",
+            "ApertureValue",
+        )
+    )
+
+
+def _extract_exposure_program_text(raw_metadata: Dict[str, Any]) -> str:
+    return _lookup_metadata_text(
+        raw_metadata,
+        "ExposureProgram",
+        "EXIF:ExposureProgram",
+        "ExifIFD:ExposureProgram",
+    )
+
+
+def _extract_exposure_time_text(raw_metadata: Dict[str, Any]) -> str:
+    return _format_exposure_time_text(
+        _lookup_metadata_text(
+            raw_metadata,
+            "ExposureTime",
+            "EXIF:ExposureTime",
+            "ExifIFD:ExposureTime",
+            "ShutterSpeed",
+            "Composite:ShutterSpeed",
+        )
+    )
+
+
+def _extract_flash_text(raw_metadata: Dict[str, Any]) -> str:
+    return _format_flash_text(
+        _lookup_metadata_text(
+            raw_metadata,
+            "Flash",
+            "EXIF:Flash",
+            "ExifIFD:Flash",
+            "FlashMode",
+            "FlashFired",
+        )
+    )
+
+
+def _extract_white_balance_text(raw_metadata: Dict[str, Any]) -> str:
+    return _format_white_balance_text(
+        _lookup_metadata_text(
+            raw_metadata,
+            "WhiteBalance",
+            "EXIF:WhiteBalance",
+            "ExifIFD:WhiteBalance",
+        )
+    )
+
+
+def _extract_dimensions_text(photo_info: PhotoInfo, raw_metadata: Dict[str, Any]) -> str:
+    width = _try_parse_float(
+        _lookup_metadata_text(
+            raw_metadata,
+            "ImageWidth",
+            "File:ImageWidth",
+            "ExifImageWidth",
+            "EXIF:ImageWidth",
+            "RawImageWidth",
+        )
+    )
+    height = _try_parse_float(
+        _lookup_metadata_text(
+            raw_metadata,
+            "ImageHeight",
+            "File:ImageHeight",
+            "ExifImageHeight",
+            "EXIF:ImageHeight",
+            "RawImageHeight",
+        )
+    )
+    if width is None or height is None:
+        probed_width, probed_height, _has_alpha = _probe_image_file_properties(str(photo_info.path))
+        if width is None and probed_width is not None:
+            width = float(probed_width)
+        if height is None and probed_height is not None:
+            height = float(probed_height)
+    if width is None or height is None:
+        return ""
+    return f"{_format_decimal_number(width)}x{_format_decimal_number(height)}"
+
+
+def _extract_resolution_dpi_text(raw_metadata: Dict[str, Any]) -> str:
+    x_resolution = _try_parse_float(
+        _lookup_metadata_text(
+            raw_metadata,
+            "XResolution",
+            "IFD0:XResolution",
+            "EXIF:XResolution",
+        )
+    )
+    y_resolution = _try_parse_float(
+        _lookup_metadata_text(
+            raw_metadata,
+            "YResolution",
+            "IFD0:YResolution",
+            "EXIF:YResolution",
+        )
+    )
+    if x_resolution is None and y_resolution is None:
+        return ""
+    if x_resolution is None:
+        x_resolution = y_resolution
+    if y_resolution is None:
+        y_resolution = x_resolution
+    return f"{_format_decimal_number(float(x_resolution))}x{_format_decimal_number(float(y_resolution))}"
+
+
+def _extract_creator_tool_text(raw_metadata: Dict[str, Any]) -> str:
+    return _lookup_metadata_text(
+        raw_metadata,
+        "XMP-xmp:CreatorTool",
+        "XMP:CreatorTool",
+        "CreatorTool",
+        "Software",
+        "ProcessingSoftware",
+    )
+
+
+def _extract_content_created_time_text(raw_metadata: Dict[str, Any]) -> str:
+    return _format_datetime_text(_extract_capture_datetime_from_metadata(raw_metadata))
+
+
+def _extract_file_created_time_text(photo_info: PhotoInfo) -> str:
+    return _format_datetime_text(_extract_file_created_datetime(photo_info))
+
+
+def _extract_file_modified_time_text(photo_info: PhotoInfo) -> str:
+    return _format_datetime_text(_extract_file_modified_datetime(photo_info))
+
+
+def _extract_file_size_text(photo_info: PhotoInfo, raw_metadata: Dict[str, Any]) -> str:
+    try:
+        return _format_file_size_text(photo_info.path.stat().st_size)
+    except Exception:
+        return _format_file_size_text(
+            _lookup_metadata_text(
+                raw_metadata,
+                "File:FileSize",
+                "FileSize",
+            )
+        )
+
+
+def _extract_normalized_file_entries(photo_info: PhotoInfo, raw_metadata: Dict[str, Any]) -> TemplateContext:
+    try:
+        normalized = normalize_metadata(
+            photo_info.path,
+            raw_metadata,
+            bird_arg=None,
+            bird_priority=["meta", "filename"],
+            bird_regex=r"(?P<bird>[^_]+)_",
+            time_format="%Y-%m-%d %H:%M",
+        )
+    except Exception:
+        return {}
+
+    context: TemplateContext = {}
+    if normalized.location:
+        context["location"] = normalized.location
+    if normalized.gps_text:
+        context["gps_text"] = normalized.gps_text
+    if normalized.settings_text:
+        context["settings_text"] = normalized.settings_text
+    else:
+        settings = format_settings_line(normalized, show_eq_focal=True) or ""
+        if settings:
+            context["settings_text"] = settings
+    return context
 
 
 def set_report_db_row_resolver(
@@ -1178,29 +1749,42 @@ class FromFileTemplateContextProvider(TemplateContextProvider):
     display_name = "文件"
 
     _FIELD_DEFINITIONS: tuple[TemplateContextField, ...] = (
-        TemplateContextField("{bird}", "鸟种名称", aliases=("bird",)),
-        TemplateContextField("{bird_latin}", "鸟种拉丁文名称", aliases=("bird_latin",)),
-        TemplateContextField("{bird_scientific}", "鸟种学名", aliases=("bird_scientific",)),
-        TemplateContextField("{bird_common}", "鸟种通用名", aliases=("bird_common",)),
-        TemplateContextField("{bird_family}", "鸟种科名", aliases=("bird_family",)),
-        TemplateContextField("{bird_order}", "鸟种目名", aliases=("bird_order",)),
-        TemplateContextField("{bird_class}", "鸟种纲名", aliases=("bird_class",)),
-        TemplateContextField("{bird_phylum}", "鸟种门名", aliases=("bird_phylum",)),
-        TemplateContextField("{bird_kingdom}", "鸟种界名", aliases=("bird_kingdom",)),
-        TemplateContextField("{capture_date}", "拍摄日期", aliases=("capture_date", "date")),
+        TemplateContextField("title", "标题"),
+        TemplateContextField("file_created_time", "创建时间", aliases=("created_time",)),
+        TemplateContextField("file_modified_time", "修改时间", aliases=("modified_time",)),
+        TemplateContextField("content_created_time", "内容创建时间"),
+        TemplateContextField("dimensions", "尺寸", aliases=("size", "image_size")),
+        TemplateContextField("resolution_dpi", "分辨率", aliases=("resolution", "dpi")),
+        TemplateContextField("device_make", "设备制造商", aliases=("make", "camera_make")),
+        TemplateContextField("device_model", "设备型号", aliases=("camera", "camera_model", "model")),
+        TemplateContextField("lens", "镜头型号", aliases=("lens_model",)),
+        TemplateContextField("exposure_time", "曝光时间", aliases=("shutter_speed",)),
+        TemplateContextField("focal_length", "焦距", aliases=("focal",)),
+        TemplateContextField("iso", "ISO感光度"),
+        TemplateContextField("flash", "闪光灯"),
+        TemplateContextField("aperture", "光圈数", aliases=("f_number", "fnumber")),
+        TemplateContextField("exposure_program", "曝光程序"),
+        TemplateContextField("metering_mode", "测光模式"),
+        TemplateContextField("white_balance", "白平衡"),
+        TemplateContextField("color_space", "色彩空间"),
+        TemplateContextField("profile_description", "颜色描述文件", aliases=("profile", "icc_profile")),
+        TemplateContextField("creator_tool", "内容创作者", aliases=("software", "processing_software")),
+        TemplateContextField("file_size", "文件大小"),
+        TemplateContextField("description", "描述", aliases=("caption", "image_description")),
+        TemplateContextField("alpha_channel", "Alpha通道", aliases=("alpha", "has_alpha")),
+        TemplateContextField("red_eye", "红眼", aliases=("redeye",)),
+        TemplateContextField("capture_date", "拍摄日期", aliases=("date",)),
         TemplateContextField(
-            "{capture_text}",
+            "capture_text",
             "拍摄日期时间",
-            aliases=("capture_text", "capture_time", "capture_datetime", "date_time_original", "datetime_original"),
+            aliases=("capture_time", "capture_datetime", "date_time_original", "datetime_original"),
         ),
-        TemplateContextField("{author}", "作者", aliases=("author",)),
-        TemplateContextField("{location}", "拍摄地点", aliases=("location",)),
-        TemplateContextField("{gps_text}", "GPS 坐标文字", aliases=("gps_text",)),
-        TemplateContextField("{camera}", "相机型号", aliases=("camera",)),
-        TemplateContextField("{lens}", "镜头型号", aliases=("lens",)),
-        TemplateContextField("{settings_text}", "拍摄参数", aliases=("settings_text",)),
-        TemplateContextField("{stem}", "文件名（不含扩展名）", aliases=("stem",)),
-        TemplateContextField("{filename}", "完整文件名", aliases=("filename",)),
+        TemplateContextField("author", "作者"),
+        TemplateContextField("location", "拍摄地点"),
+        TemplateContextField("gps_text", "GPS 坐标文字", aliases=("gps",)),
+        TemplateContextField("settings_text", "拍摄参数", aliases=("settings",)),
+        TemplateContextField("stem", "文件名（不含扩展名）"),
+        TemplateContextField("filename", "完整文件名"),
     )
 
     @classmethod
@@ -1218,6 +1802,103 @@ class FromFileTemplateContextProvider(TemplateContextProvider):
             "stem": photo_info.path.stem,
             "filename": photo_info.path.name,
         }
+
+        title = _extract_title_text(metadata)
+        if title:
+            context["title"] = title
+
+        file_created_time = _extract_file_created_time_text(photo_info)
+        if file_created_time:
+            context["file_created_time"] = file_created_time
+
+        file_modified_time = _extract_file_modified_time_text(photo_info)
+        if file_modified_time:
+            context["file_modified_time"] = file_modified_time
+
+        content_created_time = _extract_content_created_time_text(metadata)
+        if content_created_time:
+            context["content_created_time"] = content_created_time
+
+        dimensions = _extract_dimensions_text(photo_info, metadata)
+        if dimensions:
+            context["dimensions"] = dimensions
+
+        resolution_dpi = _extract_resolution_dpi_text(metadata)
+        if resolution_dpi:
+            context["resolution_dpi"] = resolution_dpi
+
+        device_make = _extract_device_make_text(metadata)
+        if device_make:
+            context["device_make"] = device_make
+
+        device_model = _extract_device_model_text(metadata)
+        if device_model:
+            context["device_model"] = device_model
+
+        lens = _extract_lens_model_text(metadata)
+        if lens:
+            context["lens"] = lens
+
+        exposure_time = _extract_exposure_time_text(metadata)
+        if exposure_time:
+            context["exposure_time"] = exposure_time
+
+        focal_length = _extract_focal_length_text(metadata)
+        if focal_length:
+            context["focal_length"] = focal_length
+
+        iso = _extract_iso_text(metadata)
+        if iso:
+            context["iso"] = iso
+
+        flash = _extract_flash_text(metadata)
+        if flash:
+            context["flash"] = flash
+
+        aperture = _extract_aperture_text(metadata)
+        if aperture:
+            context["aperture"] = aperture
+
+        exposure_program = _extract_exposure_program_text(metadata)
+        if exposure_program:
+            context["exposure_program"] = exposure_program
+
+        metering_mode = _extract_metering_mode_text(metadata)
+        if metering_mode:
+            context["metering_mode"] = metering_mode
+
+        white_balance = _extract_white_balance_text(metadata)
+        if white_balance:
+            context["white_balance"] = white_balance
+
+        profile_description = _extract_profile_description_text(metadata)
+        if profile_description:
+            context["profile_description"] = profile_description
+
+        color_space = _extract_color_space_text(metadata, profile_description=profile_description)
+        if color_space:
+            context["color_space"] = color_space
+
+        creator_tool = _extract_creator_tool_text(metadata)
+        if creator_tool:
+            context["creator_tool"] = creator_tool
+
+        file_size = _extract_file_size_text(photo_info, metadata)
+        if file_size:
+            context["file_size"] = file_size
+
+        description = _extract_description_text(metadata)
+        if description:
+            context["description"] = description
+
+        alpha_channel = _extract_alpha_channel_text(photo_info, metadata)
+        if alpha_channel:
+            context["alpha_channel"] = alpha_channel
+
+        red_eye = _extract_red_eye_text(metadata)
+        if red_eye:
+            context["red_eye"] = red_eye
+
         capture_text = _extract_capture_text(photo_info, metadata)
         if capture_text:
             context["capture_text"] = capture_text
@@ -1229,14 +1910,19 @@ class FromFileTemplateContextProvider(TemplateContextProvider):
         author = _extract_author_text(metadata)
         if author:
             context["author"] = author
+
+        context.update(_extract_normalized_file_entries(photo_info, metadata))
         return context
 
     def _read_text_value(self, photo_info: PhotoInfo, field: TemplateContextField | None) -> str:
-        context = build_template_context(photo_info)
+        context = self.build_context_entries(photo_info)
         if field is not None:
             for candidate in (field.key, *field.aliases):
                 normalized = _normalize_from_file_context_key(candidate)
                 direct_value = _clean_text(context.get(normalized, ""))
+                if direct_value:
+                    return direct_value
+                direct_value = _clean_text(context.get(candidate, ""))
                 if direct_value:
                     return direct_value
         normalized_key = _normalize_from_file_context_key(self.source_key)
@@ -1244,9 +1930,12 @@ class FromFileTemplateContextProvider(TemplateContextProvider):
             direct_value = _clean_text(context.get(normalized_key, ""))
             if direct_value:
                 return direct_value
+            direct_value = _clean_text(context.get(self.source_key, ""))
+            if direct_value:
+                return direct_value
         template_text = str(self.source_key or "").strip()
         if "{" in template_text and "}" in template_text:
-            return _clean_text(format_text_with_context(template_text, context))
+            return _clean_text(format_text_with_context(template_text, build_template_context(photo_info)))
         return ""
 
 

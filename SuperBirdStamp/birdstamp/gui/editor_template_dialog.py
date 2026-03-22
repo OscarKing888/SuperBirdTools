@@ -73,7 +73,6 @@ STYLE_OPTIONS = editor_options.STYLE_OPTIONS
 
 ALIGN_OPTIONS_HORIZONTAL = editor_utils.ALIGN_OPTIONS_HORIZONTAL
 ALIGN_OPTIONS_VERTICAL = editor_utils.ALIGN_OPTIONS_VERTICAL
-_get_fallback_context_vars = editor_utils.get_fallback_context_vars
 _get_template_context_field_options = editor_utils.get_template_context_field_options
 _DEFAULT_TEMPLATE_FONT_TYPE = editor_utils.DEFAULT_TEMPLATE_FONT_TYPE
 _normalize_template_font_type = editor_utils.normalize_template_font_type

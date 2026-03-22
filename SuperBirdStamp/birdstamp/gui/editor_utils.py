@@ -1,7 +1,6 @@
 # Editor UI utilities: color, font, screen picker, placeholder, metadata context.
 from __future__ import annotations
 
-import json
 import re
 from functools import lru_cache
 from pathlib import Path
@@ -390,78 +389,6 @@ def build_metadata_context(path: Path | PhotoInfo, raw_metadata: dict[str, Any])
     当前实现委托给 PhotoInfo + template_context 数据源装配，便于后续继续扩展字段来源。
     """
     return build_template_context(path, raw_metadata)
-
-
-_DEFAULT_FALLBACK_CONTEXT_VARS: list[tuple[str, str]] = [
-    ("{bird}", "鸟种名称"),
-    ("{bird_latin}", "鸟种拉丁文名称"),
-    ("{bird_scientific}", "鸟种学名"),
-    ("{bird_common}", "鸟种通用名"),
-    ("{bird_family}", "鸟种科名"),
-    ("{bird_order}", "鸟种目名"),
-    ("{bird_class}", "鸟种纲名"),
-    ("{bird_phylum}", "鸟种门名"),
-    ("{bird_kingdom}", "鸟种界名"),
-    ("{capture_date}", "拍摄日期"),
-    ("{capture_text}", "拍摄日期时间"),
-    ("{author}", "作者"),
-    ("{location}", "拍摄地点"),
-    ("{gps_text}", "GPS 坐标文字"),
-    ("{camera}", "相机型号"),
-    ("{lens}", "镜头型号"),
-    ("{settings_text}", "拍摄参数"),
-    ("{stem}", "文件名（不含扩展名）"),
-    ("{filename}", "完整文件名"),
-]
-
-
-def get_birdstamp_cfg_path() -> Path:
-    """返回内置 birdstamp.cfg 的路径。"""
-    return resolve_bundled_path("config", "birdstamp.cfg")
-
-
-def _load_birdstamp_cfg_raw() -> dict[str, Any]:
-    path = get_birdstamp_cfg_path()
-    try:
-        if not path.exists():
-            return {}
-        text = path.read_text(encoding="utf-8")
-    except OSError:
-        return {}
-    text = (text or "").strip()
-    if not text:
-        return {}
-    try:
-        data = json.loads(text)
-    except Exception:
-        return {}
-    return data if isinstance(data, dict) else {}
-
-
-def _fallback_context_vars_from_cfg(data: dict[str, Any]) -> list[tuple[str, str]]:
-    items = data.get("template_fallback_context_vars")
-    if not isinstance(items, list):
-        return list(_DEFAULT_FALLBACK_CONTEXT_VARS)
-    result: list[tuple[str, str]] = []
-    for item in items:
-        if not isinstance(item, dict):
-            continue
-        expr = str(item.get("expr") or "").strip()
-        label = str(item.get("label") or "").strip()
-        if not expr or not label:
-            continue
-        result.append((expr, label))
-    return result or list(_DEFAULT_FALLBACK_CONTEXT_VARS)
-
-
-@lru_cache(maxsize=1)
-def get_fallback_context_vars() -> list[tuple[str, str]]:
-    """返回用于 Fallback 下拉列表的上下文变量配置。
-
-    优先从 config/birdstamp.cfg 读取；否则回退到内置默认列表。
-    """
-    data = _load_birdstamp_cfg_raw()
-    return _fallback_context_vars_from_cfg(data)
 
 
 def get_template_context_field_options() -> list[tuple[str, str, str]]:
