@@ -9,7 +9,7 @@ import sys
 import threading
 import time
 import xml.etree.ElementTree as ET
-from collections import defaultdict
+from collections import defaultdict, deque
 from datetime import datetime
 from functools import lru_cache
 from importlib import resources
@@ -122,6 +122,7 @@ from birdstamp.gui.editor_photo_list import (
     PHOTO_COL_SEQ,
     PHOTO_COL_SHUTTER,
     PHOTO_COL_TITLE,
+    PHOTO_LIST_DISPLAY_ROW_ROLE,
     PHOTO_LIST_PHOTO_INFO_ROLE,
     PHOTO_LIST_PATH_ROLE,
     PHOTO_LIST_SEQUENCE_ROLE,
@@ -309,6 +310,10 @@ def _get_bird_detector_error_message() -> str:
 _pil_to_qpixmap = editor_utils.pil_to_qpixmap
 _log = get_logger("editor")
 _PHOTO_LIST_META_PROGRESS_HIDE_DELAY_MS = 600
+_RECEIVE_PROGRESS_HIDE_DELAY_MS = 1200
+_RECEIVED_PHOTO_IMPORT_BATCH_MIN = 16
+_RECEIVED_PHOTO_IMPORT_BATCH_MAX = 64
+_RECEIVED_PHOTO_IMPORT_BATCH_BUDGET_S = 0.012
 _ABOUT_CFG_FILENAME = "about.cfg"
 _BIRDSTAMP_DEFAULT_APP_NAME = "极速鸟框 - 鸟类照片智能裁切与模板叠加工具"
 _BIRDSTAMP_DEFAULT_PRODUCT_NAME = "极速鸟框"
@@ -473,6 +478,20 @@ class BirdStampEditorWindow(QMainWindow, _BirdStampCropMixin, _BirdStampRenderer
         self._pending_photo_list_metadata_loaders: list[EditorPhotoListMetadataLoader] = []
         self._photo_list_metadata_loading = False
         self._photo_list_header_fast_mode = False
+        self._next_photo_sequence_number: int = 0
+        self._received_photo_import_pending_paths: deque[Path] = deque()
+        self._received_photo_import_total: int = 0
+        self._received_photo_import_processed: int = 0
+        self._received_photo_import_added: int = 0
+        self._received_photo_import_auto_report_db_count: int = 0
+        self._received_photo_import_last_added_item: QTreeWidgetItem | None = None
+        self._received_photo_import_added_paths: list[Path] = []
+        self._received_photo_import_completion_callbacks: list[Callable[[], None]] = []
+        self._received_photo_import_progress_callbacks: list[Callable[[dict[str, Any]], None]] = []
+        self._received_photo_import_existing_keys: set[str] = set()
+        self._received_photo_import_default_settings: dict[str, Any] | None = None
+        self._received_photo_import_select_last_added: bool = False
+        self._receive_progress_reset_token: int = 0
         self._pending_preview_fit_reset: bool = False
         self._video_export_worker: VideoExportWorker | None = None
         self._video_export_started_at: float | None = None
@@ -490,6 +509,10 @@ class BirdStampEditorWindow(QMainWindow, _BirdStampCropMixin, _BirdStampRenderer
         self._preview_debounce_timer.setSingleShot(True)
         self._preview_debounce_timer.setInterval(250)
         self._preview_debounce_timer.timeout.connect(self.render_preview)
+        self._received_photo_import_timer = QTimer(self)
+        self._received_photo_import_timer.setSingleShot(False)
+        self._received_photo_import_timer.setInterval(0)
+        self._received_photo_import_timer.timeout.connect(self._process_received_photo_import_batch)
 
         self._setup_ui()
         self._setup_shortcuts()
@@ -789,6 +812,16 @@ class BirdStampEditorWindow(QMainWindow, _BirdStampCropMixin, _BirdStampRenderer
         self.photo_list_progress.setFormat("照片信息 0/0")
         self.photo_list_progress.hide()
         photos_layout.addWidget(self.photo_list_progress)
+
+        self.receive_progress = QProgressBar()
+        self.receive_progress.setMinimum(0)
+        self.receive_progress.setMaximum(1)
+        self.receive_progress.setValue(0)
+        self.receive_progress.setFixedHeight(18)
+        self.receive_progress.setTextVisible(True)
+        self.receive_progress.setFormat("热接收 0/0")
+        self.receive_progress.hide()
+        photos_layout.addWidget(self.receive_progress)
 
         self.photo_list = PhotoListWidget()
         self.photo_list.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
@@ -2102,6 +2135,57 @@ class BirdStampEditorWindow(QMainWindow, _BirdStampCropMixin, _BirdStampRenderer
         self.photo_list_progress.setFormat("照片信息 0/0")
         self.photo_list_progress.hide()
 
+    def _set_receive_progress(self, phase_text: str, current: int, total: int) -> None:
+        total_value = max(0, int(total))
+        current_value = max(0, min(int(current), max(1, total_value)))
+        self.receive_progress.setMaximum(max(1, total_value))
+        self.receive_progress.setValue(current_value)
+        self.receive_progress.setFormat(f"{phase_text} {current_value}/{total_value}")
+        if total_value > 0:
+            self.receive_progress.show()
+        self._receive_progress_reset_token += 1
+
+    def _reset_receive_progress(self) -> None:
+        self.receive_progress.setMaximum(1)
+        self.receive_progress.setValue(0)
+        self.receive_progress.setFormat("热接收 0/0")
+        self.receive_progress.hide()
+
+    def _schedule_receive_progress_reset(self) -> None:
+        self._receive_progress_reset_token += 1
+        token = self._receive_progress_reset_token
+        QTimer.singleShot(
+            _RECEIVE_PROGRESS_HIDE_DELAY_MS,
+            lambda expected_token=token: self._reset_receive_progress()
+            if (
+                expected_token == self._receive_progress_reset_token
+                and not self._received_photo_import_pending_paths
+                and not self._received_photo_import_timer.isActive()
+            )
+            else None,
+        )
+
+    def _emit_received_photo_import_progress(
+        self,
+        phase: str,
+        current: int,
+        total: int,
+        *,
+        message: str = "",
+    ) -> None:
+        payload = {
+            "phase": str(phase or "").strip(),
+            "current": max(0, int(current)),
+            "total": max(0, int(total)),
+            "message": str(message or "").strip(),
+        }
+        self._apply_receive_transfer_progress(dict(payload))
+        for callback in list(self._received_photo_import_progress_callbacks):
+            try:
+                callback(dict(payload))
+            except Exception:
+                pass
+
     def _set_photo_list_header_fast_mode(self, enabled: bool) -> None:
         if enabled == self._photo_list_header_fast_mode:
             return
@@ -2262,19 +2346,44 @@ class BirdStampEditorWindow(QMainWindow, _BirdStampCropMixin, _BirdStampRenderer
         self._photo_list_metadata_loader = None
         self._finish_photo_list_metadata_loading()
 
+    def _reset_received_photo_import_state(self) -> None:
+        self._received_photo_import_pending_paths.clear()
+        self._received_photo_import_total = 0
+        self._received_photo_import_processed = 0
+        self._received_photo_import_added = 0
+        self._received_photo_import_auto_report_db_count = 0
+        self._received_photo_import_last_added_item = None
+        self._received_photo_import_added_paths = []
+        self._received_photo_import_completion_callbacks = []
+        self._received_photo_import_progress_callbacks = []
+        self._received_photo_import_existing_keys = set()
+        self._received_photo_import_default_settings = None
+        self._received_photo_import_select_last_added = False
+
+    def _stop_received_photo_import(self, *, reset_progress: bool = False) -> None:
+        if self._received_photo_import_timer.isActive():
+            self._received_photo_import_timer.stop()
+        self._reset_received_photo_import_state()
+        if reset_progress:
+            self._reset_receive_progress()
+
     def _next_photo_sequence_value(self) -> int:
-        next_value = 1
-        for idx in range(self.photo_list.topLevelItemCount()):
-            item = self.photo_list.topLevelItem(idx)
-            if item is None:
-                continue
-            raw_value = item.data(PHOTO_COL_ROW, PHOTO_LIST_SEQUENCE_ROLE)
-            try:
-                candidate = int(raw_value)
-            except Exception:
-                continue
-            next_value = max(next_value, candidate + 1)
-        return next_value
+        if self._next_photo_sequence_number <= 0:
+            next_value = 1
+            for idx in range(self.photo_list.topLevelItemCount()):
+                item = self.photo_list.topLevelItem(idx)
+                if item is None:
+                    continue
+                raw_value = item.data(PHOTO_COL_ROW, PHOTO_LIST_SEQUENCE_ROLE)
+                try:
+                    candidate = int(raw_value)
+                except Exception:
+                    continue
+                next_value = max(next_value, candidate + 1)
+            self._next_photo_sequence_number = next_value
+        sequence_value = self._next_photo_sequence_number
+        self._next_photo_sequence_number += 1
+        return sequence_value
 
     def _find_photo_item_by_path(self, path: Path) -> QTreeWidgetItem | None:
         key = _path_key(path)
@@ -2382,13 +2491,8 @@ class BirdStampEditorWindow(QMainWindow, _BirdStampCropMixin, _BirdStampRenderer
                 paths.append(Path(raw))
         return paths
 
-    def _add_photo_paths(
-        self,
-        paths: Iterable[Path],
-        *,
-        select_last_added: bool = False,
-        pre_added_report_db_count: int = 0,
-    ) -> None:
+    @staticmethod
+    def _filter_supported_photo_paths(paths: Iterable[Path]) -> list[Path]:
         valid_paths: list[Path] = []
         for incoming in paths:
             try:
@@ -2399,7 +2503,240 @@ class BirdStampEditorWindow(QMainWindow, _BirdStampCropMixin, _BirdStampRenderer
             if not path.is_file() or path.suffix.lower() not in SUPPORTED_EXTENSIONS:
                 continue
             valid_paths.append(path)
+        return valid_paths
 
+    def _append_photo_path_to_list(
+        self,
+        path: Path,
+        *,
+        existing_keys: set[str],
+        default_settings: dict[str, Any],
+    ) -> tuple[bool, QTreeWidgetItem | None]:
+        key = _path_key(path)
+        if key in existing_keys:
+            return (False, None)
+        existing_keys.add(key)
+
+        current_settings = self._photo_override_settings_from_snapshot(default_settings)
+        self.photo_render_overrides[key] = current_settings
+        item = PhotoListItem(["", "", "", "", "", "", "", "", "", ""])
+        sequence_value = self._next_photo_sequence_value()
+        placeholder_metadata = {"SourceFile": str(path)}
+        ratio_text = self._format_ratio_display(_parse_ratio_value(current_settings.get("ratio")))
+        item.setText(PHOTO_COL_SEQ, str(sequence_value))
+        item.setTextAlignment(PHOTO_COL_SEQ, int(Qt.AlignmentFlag.AlignCenter))
+        item.setToolTip(PHOTO_COL_SEQ, str(sequence_value))
+        item.setText(PHOTO_COL_NAME, path.name)
+        item.setText(PHOTO_COL_CAPTURE_TIME, "-")
+        item.setText(PHOTO_COL_TITLE, "-")
+        item.setText(PHOTO_COL_RATIO, ratio_text)
+        item.setText(PHOTO_COL_RATING, "-")
+        item.setText(PHOTO_COL_SHUTTER, "-")
+        item.setText(PHOTO_COL_ISO, "-")
+        item.setText(PHOTO_COL_APERTURE, "-")
+        item.setData(PHOTO_COL_SEQ, PHOTO_LIST_SORT_ROLE, (0, sequence_value))
+        item.setData(PHOTO_COL_NAME, PHOTO_LIST_SORT_ROLE, (0, path.name.casefold()))
+        item.setData(PHOTO_COL_CAPTURE_TIME, PHOTO_LIST_SORT_ROLE, (1, 0.0))
+        item.setData(PHOTO_COL_TITLE, PHOTO_LIST_SORT_ROLE, (1, ""))
+        item.setData(
+            PHOTO_COL_RATIO,
+            PHOTO_LIST_SORT_ROLE,
+            (0, float(_parse_ratio_value(current_settings.get("ratio"))))
+            if _parse_ratio_value(current_settings.get("ratio")) is not None else (1, 0.0),
+        )
+        item.setData(PHOTO_COL_RATING, PHOTO_LIST_SORT_ROLE, (1, 0))
+        item.setData(PHOTO_COL_SHUTTER, PHOTO_LIST_SORT_ROLE, (1, 0.0))
+        item.setData(PHOTO_COL_ISO, PHOTO_LIST_SORT_ROLE, (1, 0))
+        item.setData(PHOTO_COL_APERTURE, PHOTO_LIST_SORT_ROLE, (1, 0.0))
+        item.setData(PHOTO_COL_ROW, PHOTO_LIST_PATH_ROLE, str(path))
+        item.setData(
+            PHOTO_COL_ROW,
+            PHOTO_LIST_PHOTO_INFO_ROLE,
+            _template_context.ensure_editor_photo_info(
+                path,
+                raw_metadata=placeholder_metadata,
+                sidecar_path="",
+                crop_box=current_settings.get("crop_box"),
+                editor_row_number=sequence_value,
+            ),
+        )
+        item.setData(PHOTO_COL_ROW, PHOTO_LIST_SEQUENCE_ROLE, sequence_value)
+        item.setData(PHOTO_COL_ROW, PHOTO_LIST_DISPLAY_ROW_ROLE, sequence_value)
+        item.setData(PHOTO_COL_ROW, PHOTO_LIST_SORT_ROLE, (0, sequence_value))
+        item.setToolTip(PHOTO_COL_NAME, str(path))
+        item.setToolTip(PHOTO_COL_RATIO, ratio_text)
+        item.setToolTip(PHOTO_COL_ROW, "")
+        item.setTextAlignment(PHOTO_COL_ROW, int(Qt.AlignmentFlag.AlignCenter))
+        item.setTextAlignment(PHOTO_COL_CAPTURE_TIME, int(Qt.AlignmentFlag.AlignCenter))
+        item.setTextAlignment(PHOTO_COL_RATIO, int(Qt.AlignmentFlag.AlignCenter))
+        item.setTextAlignment(PHOTO_COL_RATING, int(Qt.AlignmentFlag.AlignCenter))
+        item.setTextAlignment(PHOTO_COL_SHUTTER, int(Qt.AlignmentFlag.AlignCenter))
+        item.setTextAlignment(PHOTO_COL_ISO, int(Qt.AlignmentFlag.AlignCenter))
+        item.setTextAlignment(PHOTO_COL_APERTURE, int(Qt.AlignmentFlag.AlignCenter))
+        self.photo_list.addTopLevelItem(item)
+        self._remember_photo_item(path, item)
+        self.photo_list_metadata_cache[key] = placeholder_metadata
+        self._photo_list_metadata_pending_keys.add(key)
+        return (True, item)
+
+    def _begin_received_photo_import(self) -> None:
+        if self._received_photo_import_default_settings is not None:
+            return
+        self._received_photo_import_existing_keys = {_path_key(path) for path in self._list_photo_paths()}
+        self._received_photo_import_default_settings = self._build_current_render_settings()
+        self.photo_list.setSortingEnabled(False)
+
+    def _finish_received_photo_import(self) -> None:
+        if self._received_photo_import_timer.isActive():
+            self._received_photo_import_timer.stop()
+        add_count = int(self._received_photo_import_added)
+        total_auto_added_report_db_count = int(self._received_photo_import_auto_report_db_count)
+        last_added_item = self._received_photo_import_last_added_item
+        added_paths = list(self._received_photo_import_added_paths)
+        completion_callbacks = list(self._received_photo_import_completion_callbacks)
+        progress_total = max(self._received_photo_import_total, self._received_photo_import_processed)
+
+        if self._received_photo_import_select_last_added and last_added_item is not None:
+            self.photo_list.setCurrentItem(last_added_item)
+        elif self.photo_list.currentItem() is None and self.photo_list.topLevelItemCount() > 0:
+            first_item = self.photo_list.topLevelItem(0)
+            if first_item is not None:
+                self.photo_list.setCurrentItem(first_item)
+
+        self.photo_list.setSortingEnabled(True)
+        self.photo_list.resort()
+        self.photo_list.refresh_row_numbers()
+        if added_paths:
+            self._restart_photo_list_metadata_loader()
+
+        if progress_total > 0:
+            self._emit_received_photo_import_progress(
+                "imported",
+                progress_total,
+                progress_total,
+                message=f"已完成导入 {progress_total} 张照片。",
+            )
+            self._schedule_receive_progress_reset()
+
+        self._reset_received_photo_import_state()
+        for callback in completion_callbacks:
+            try:
+                callback()
+            except Exception:
+                pass
+
+        if add_count == 0 and total_auto_added_report_db_count == 0:
+            self._set_status("没有新增照片。")
+            return
+        if add_count > 0 and total_auto_added_report_db_count > 0:
+            self._set_status(f"已添加 {add_count} 张照片，并自动添加 {total_auto_added_report_db_count} 个 report.db。")
+            return
+        if add_count > 0:
+            self._set_status(f"已添加 {add_count} 张照片。")
+            return
+        self._set_status(f"没有新增照片，已自动添加 {total_auto_added_report_db_count} 个 report.db。")
+
+    def _process_received_photo_import_batch(self) -> None:
+        pending_paths = self._received_photo_import_pending_paths
+        if not pending_paths:
+            if self._received_photo_import_timer.isActive():
+                self._received_photo_import_timer.stop()
+            self._finish_received_photo_import()
+            return
+        self._begin_received_photo_import()
+        default_settings = self._received_photo_import_default_settings or self._build_current_render_settings()
+        existing_keys = self._received_photo_import_existing_keys
+        tick_t0 = time.perf_counter()
+        processed = 0
+        self.photo_list.setUpdatesEnabled(False)
+        try:
+            while pending_paths:
+                path = pending_paths.popleft()
+                self._received_photo_import_processed += 1
+                processed += 1
+                added, item = self._append_photo_path_to_list(
+                    path,
+                    existing_keys=existing_keys,
+                    default_settings=default_settings,
+                )
+                if added:
+                    self._received_photo_import_added += 1
+                    self._received_photo_import_last_added_item = item
+                    self._received_photo_import_added_paths.append(path)
+                if processed >= _RECEIVED_PHOTO_IMPORT_BATCH_MAX:
+                    break
+                if (
+                    processed >= _RECEIVED_PHOTO_IMPORT_BATCH_MIN
+                    and (time.perf_counter() - tick_t0) >= _RECEIVED_PHOTO_IMPORT_BATCH_BUDGET_S
+                ):
+                    break
+        finally:
+            self.photo_list.setUpdatesEnabled(True)
+            self.photo_list.update()
+
+        total = max(self._received_photo_import_total, self._received_photo_import_processed)
+        self._emit_received_photo_import_progress(
+            "importing",
+            self._received_photo_import_processed,
+            total,
+            message=f"正在导入接收照片 {self._received_photo_import_processed}/{total} ...",
+        )
+        if pending_paths:
+            return
+        self._finish_received_photo_import()
+
+    def _enqueue_received_photo_paths(
+        self,
+        paths: Iterable[Path],
+        *,
+        pre_added_report_db_count: int = 0,
+        select_last_added: bool = False,
+        on_complete: Callable[[], None] | None = None,
+        progress_callback: Callable[[dict[str, Any]], None] | None = None,
+    ) -> None:
+        valid_paths = self._filter_supported_photo_paths(paths)
+        if not valid_paths and pre_added_report_db_count <= 0:
+            if callable(on_complete):
+                try:
+                    on_complete()
+                except Exception:
+                    pass
+            self._set_status("没有新增照片。")
+            return
+        for path in valid_paths:
+            self._received_photo_import_pending_paths.append(path)
+        self._received_photo_import_total += len(valid_paths)
+        self._received_photo_import_auto_report_db_count += max(0, int(pre_added_report_db_count))
+        self._received_photo_import_select_last_added = self._received_photo_import_select_last_added or select_last_added
+        if callable(on_complete):
+            self._received_photo_import_completion_callbacks.append(on_complete)
+        if callable(progress_callback):
+            self._received_photo_import_progress_callbacks.append(progress_callback)
+        if self._received_photo_import_total > 0:
+            self._emit_received_photo_import_progress(
+                "import_pending",
+                self._received_photo_import_processed,
+                self._received_photo_import_total,
+                message=f"准备导入 {self._received_photo_import_total} 张照片...",
+            )
+        if valid_paths and not self._received_photo_import_timer.isActive():
+            self._received_photo_import_timer.start()
+            return
+        if (
+            not valid_paths
+            and not self._received_photo_import_pending_paths
+            and not self._received_photo_import_timer.isActive()
+        ):
+            self._finish_received_photo_import()
+
+    def _add_photo_paths(
+        self,
+        paths: Iterable[Path],
+        *,
+        select_last_added: bool = False,
+        pre_added_report_db_count: int = 0,
+    ) -> None:
+        valid_paths = self._filter_supported_photo_paths(paths)
         auto_added_report_db_count = self._auto_add_report_db_paths_for_photos(valid_paths)
         total_auto_added_report_db_count = max(0, int(pre_added_report_db_count)) + auto_added_report_db_count
 
@@ -2408,41 +2745,21 @@ class BirdStampEditorWindow(QMainWindow, _BirdStampCropMixin, _BirdStampRenderer
         add_count = 0
         last_added_item: QTreeWidgetItem | None = None
         added_paths: list[Path] = []
-
-        for path in valid_paths:
-            key = _path_key(path)
-            if key in existing_keys:
-                continue
-            existing_keys.add(key)
-
-            current_settings = self._photo_override_settings_from_snapshot(default_settings)
-            self.photo_render_overrides[key] = current_settings
-            item = PhotoListItem(["", "", "", "", "", "", "", "", "", ""])
-            sequence_value = self._next_photo_sequence_value()
-            item.setData(PHOTO_COL_SEQ, PHOTO_LIST_SORT_ROLE, (0, sequence_value))
-            item.setData(PHOTO_COL_ROW, PHOTO_LIST_PATH_ROLE, str(path))
-            item.setData(
-                PHOTO_COL_ROW,
-                PHOTO_LIST_PHOTO_INFO_ROLE,
-                _template_context.ensure_editor_photo_info(path, crop_box=current_settings.get("crop_box")),
-            )
-            item.setData(PHOTO_COL_ROW, PHOTO_LIST_SEQUENCE_ROLE, sequence_value)
-            item.setData(PHOTO_COL_ROW, PHOTO_LIST_SORT_ROLE, (0, sequence_value))
-            item.setToolTip(PHOTO_COL_ROW, "")
-            item.setTextAlignment(PHOTO_COL_ROW, int(Qt.AlignmentFlag.AlignCenter))
-            self.photo_list.addTopLevelItem(item)
-            self._remember_photo_item(path, item)
-            self.photo_list_metadata_cache[key] = {"SourceFile": str(path)}
-            self._photo_list_metadata_pending_keys.add(key)
-            self._update_photo_list_item_display(
-                path,
-                raw_metadata=self.photo_list_metadata_cache[key],
-                settings=current_settings,
-                resort=False,
-            )
-            add_count += 1
-            last_added_item = item
-            added_paths.append(path)
+        self.photo_list.setSortingEnabled(False)
+        try:
+            for path in valid_paths:
+                added, item = self._append_photo_path_to_list(
+                    path,
+                    existing_keys=existing_keys,
+                    default_settings=default_settings,
+                )
+                if not added:
+                    continue
+                add_count += 1
+                last_added_item = item
+                added_paths.append(path)
+        finally:
+            self.photo_list.setSortingEnabled(True)
 
         if add_count == 0 and total_auto_added_report_db_count == 0:
             self._set_status("没有新增照片。")
@@ -2468,17 +2785,29 @@ class BirdStampEditorWindow(QMainWindow, _BirdStampCropMixin, _BirdStampRenderer
             return
         self._set_status(f"没有新增照片，已自动添加 {total_auto_added_report_db_count} 个 report.db。")
 
-    def _add_received_photo_paths(self, paths: Iterable[Path]) -> None:
-        """处理外部 received 文件：先补充 report.db，再沿用现有加图逻辑。"""
+    def _add_received_photo_paths(
+        self,
+        paths: Iterable[Path],
+        on_complete: Callable[[], None] | None = None,
+        progress_callback: Callable[[dict[str, Any]], None] | None = None,
+    ) -> None:
+        """处理外部 received 文件：先补充 report.db，再按时间片分批导入。"""
         pending_paths = list(paths)
         pre_added_report_db_count = self._auto_add_report_db_paths_for_received_files(pending_paths)
-        self._add_photo_paths(
+        self._enqueue_received_photo_paths(
             pending_paths,
             select_last_added=True,
             pre_added_report_db_count=pre_added_report_db_count,
+            on_complete=on_complete,
+            progress_callback=progress_callback,
         )
 
-    def add_received_file_paths(self, paths: Iterable[str | Path]) -> None:
+    def add_received_file_paths(
+        self,
+        paths: Iterable[str | Path],
+        on_complete: Callable[[], None] | None = None,
+        progress_callback: Callable[[dict[str, Any]], None] | None = None,
+    ) -> None:
         """
         统一处理 argv / socket / FileOpen 三种入口收到的文件路径，并加入照片列表。
         可在任意线程调用；内部通过 QTimer.singleShot 投递到主线程执行。
@@ -2486,16 +2815,53 @@ class BirdStampEditorWindow(QMainWindow, _BirdStampCropMixin, _BirdStampRenderer
         normalized_paths = normalize_file_paths(paths)
         if not normalized_paths:
             return
+        preview_paths = normalized_paths[:3]
         _log.info(
-            "received file list count=%s, scheduling add to photo list: %s",
+            "received file list count=%s, scheduling batch add to photo list preview=%s",
             len(normalized_paths),
-            normalized_paths,
+            preview_paths,
         )
         path_objs = [Path(path_text) for path_text in normalized_paths]
         QTimer.singleShot(
             0,
-            lambda pending_paths=path_objs: self._add_received_photo_paths(pending_paths),
+            lambda pending_paths=path_objs, completion_callback=on_complete, progress_cb=progress_callback: self._add_received_photo_paths(
+                pending_paths,
+                on_complete=completion_callback,
+                progress_callback=progress_cb,
+            ),
         )
+
+    def update_receive_transfer_progress(self, payload: dict[str, Any] | None) -> None:
+        progress_payload = dict(payload or {})
+        QTimer.singleShot(0, lambda current_payload=progress_payload: self._apply_receive_transfer_progress(current_payload))
+
+    def _apply_receive_transfer_progress(self, payload: dict[str, Any]) -> None:
+        phase = str(payload.get("phase") or "").strip().lower()
+        try:
+            total = max(0, int(payload.get("total") or 0))
+        except Exception:
+            total = 0
+        try:
+            current = max(0, int(payload.get("current") or 0))
+        except Exception:
+            current = 0
+        message = str(payload.get("message") or "").strip()
+        if phase == "receiving" and total > 0:
+            self._set_receive_progress("接收", current, total)
+            self._set_status(message or f"正在热接收照片 {current}/{total} ...")
+            return
+        if phase == "received" and total > 0 and not self._received_photo_import_pending_paths:
+            self._set_receive_progress("接收", current or total, total)
+            self._set_status(message or f"热接收完成，准备导入 {current or total} 张照片。")
+            return
+        if phase in {"import_pending", "importing", "imported", "completed"} and total > 0:
+            self._set_receive_progress("导入", current, total)
+            self._set_status(message or f"正在导入接收照片 {current}/{total} ...")
+            return
+        if phase == "cancelled":
+            self._set_status(message or "热接收已取消。")
+            if not self._received_photo_import_pending_paths and not self._received_photo_import_timer.isActive():
+                self._schedule_receive_progress_reset()
 
     def _remove_selected_photos(self) -> None:
         selected_items = self.photo_list.selectedItems()
@@ -2525,6 +2891,7 @@ class BirdStampEditorWindow(QMainWindow, _BirdStampCropMixin, _BirdStampRenderer
                 self._stop_photo_list_metadata_loader(wait=False, reset_progress=True)
 
         if self.photo_list.topLevelItemCount() == 0:
+            self._next_photo_sequence_number = 0
             self.placeholder_path = None
             self.current_path = None
             self.current_photo_info = None
@@ -2538,6 +2905,7 @@ class BirdStampEditorWindow(QMainWindow, _BirdStampCropMixin, _BirdStampRenderer
         self._set_status(f"已删除 {len(selected_items)} 项。")
 
     def _clear_photos(self) -> None:
+        self._stop_received_photo_import(reset_progress=True)
         self._stop_photo_list_metadata_loader(wait=False, reset_progress=True)
         self.photo_list.clear()
         self.raw_metadata_cache.clear()
@@ -2546,6 +2914,7 @@ class BirdStampEditorWindow(QMainWindow, _BirdStampCropMixin, _BirdStampRenderer
         self._photo_list_metadata_pending_keys.clear()
         self.photo_render_overrides.clear()
         self._bird_box_cache.clear()
+        self._next_photo_sequence_number = 0
         self.placeholder_path = None
         self.current_path = None
         self.current_photo_info = None
@@ -3003,14 +3372,29 @@ def launch_gui(
     window = BirdStampEditorWindow()
     _log.info("editor window created")
 
-    def on_files_received(paths: Iterable[str | Path]) -> None:
-        window.add_received_file_paths(paths)
+    def on_files_received(
+        paths: Iterable[str | Path],
+        on_complete: Callable[[], None] | None = None,
+        on_progress: Callable[[dict[str, Any]], None] | None = None,
+    ) -> None:
+        window.add_received_file_paths(
+            paths,
+            on_complete=on_complete,
+            progress_callback=on_progress,
+        )
+
+    def on_transfer_progress(payload: dict[str, Any]) -> None:
+        window.update_receive_transfer_progress(payload)
 
     install_file_open_handler(app, on_files_received)
     _log.info("FileOpen handler installed")
 
     # 热接收：单例 IPC，其它进程通过 send_file_list_to_running_app 发来文件列表时加入本窗口照片列表
-    receiver = SingleInstanceReceiver(SEND_TO_APP_ID, on_files_received)
+    receiver = SingleInstanceReceiver(
+        SEND_TO_APP_ID,
+        on_files_received,
+        on_transfer_progress=on_transfer_progress,
+    )
     if receiver.start():
         window._send_to_app_receiver = receiver  # 保持引用，避免被回收；退出时可选 stop()
         _log.info("single instance receiver started")
