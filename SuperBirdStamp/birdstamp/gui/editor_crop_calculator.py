@@ -296,9 +296,9 @@ class _BirdStampCropMixin:
 
     def _selected_output_suffix(self) -> str:
         value = str(self.output_format_combo.currentData() or "jpg").strip().lower()
-        supported = [suffix for suffix, _label in OUTPUT_FORMAT_OPTIONS if suffix in {"jpg", "jpeg", "png"}]
+        supported = [suffix for suffix, _label in OUTPUT_FORMAT_OPTIONS if suffix in {"jpg", "jpeg", "png", "gif"}]
         if not supported:
-            supported = ["jpg", "png"]
+            supported = ["jpg", "png", "gif"]
         if value in supported:
             return value
         return supported[0]

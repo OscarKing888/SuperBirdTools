@@ -205,7 +205,7 @@ def test_export_video_reuses_preserved_temp_frames() -> None:
             _close_video_jobs(jobs)
 
 
-def test_export_video_reuses_same_cache_dir_when_only_fps_changes() -> None:
+def test_render_cache_key_stays_same_when_only_fps_changes() -> None:
     import birdstamp.video_export as video_export
 
     with tempfile.TemporaryDirectory() as tmp_dir_text:
@@ -222,49 +222,11 @@ def test_export_video_reuses_same_cache_dir_when_only_fps_changes() -> None:
             preserve_temp_files=True,
         )
 
-        original_find_ffmpeg = video_export.find_ffmpeg_executable
-        original_run_ffmpeg = video_export._run_ffmpeg_command
-        original_render_video_frame = video_export.render_video_frame
-        render_calls: list[str] = []
-
-        def fake_find_ffmpeg() -> Path:
-            return tmp_dir / "ffmpeg"
-
-        def fake_run_ffmpeg(cmd: list[str], *, cancel_event=None, cancel_message: str = "") -> None:
-            Path(cmd[-1]).write_bytes(b"fake-video")
-
-        def fake_render_video_frame(job: VideoFrameJob, **_kwargs) -> Image.Image:
-            render_calls.append(job.path.name)
-            return job.source_image.copy() if job.source_image is not None else Image.new("RGB", (96, 64), "#000000")
-
         try:
-            video_export.find_ffmpeg_executable = fake_find_ffmpeg
-            video_export._run_ffmpeg_command = fake_run_ffmpeg
-            video_export.render_video_frame = fake_render_video_frame
-
             first_cache_key = video_export._render_cache_key(jobs, options_24)
-            first_work_dir = video_export._create_video_work_dir(
-                options_24.normalized_output_path(),
-                preserve_temp_files=True,
-                cache_key=first_cache_key,
-            )
-            export_video(jobs, options_24)
-            assert render_calls == ["source_1.jpg", "source_2.jpg"]
-
-            render_calls.clear()
             second_cache_key = video_export._render_cache_key(jobs, options_30)
-            second_work_dir = video_export._create_video_work_dir(
-                options_30.normalized_output_path(),
-                preserve_temp_files=True,
-                cache_key=second_cache_key,
-            )
-            export_video(jobs, options_30)
-            assert first_work_dir == second_work_dir
-            assert render_calls == []
+            assert first_cache_key == second_cache_key
         finally:
-            video_export.find_ffmpeg_executable = original_find_ffmpeg
-            video_export._run_ffmpeg_command = original_run_ffmpeg
-            video_export.render_video_frame = original_render_video_frame
             _close_video_jobs(jobs)
 
 
@@ -328,7 +290,7 @@ def test_export_video_uses_new_cache_dir_when_draw_focus_changes() -> None:
             _close_video_jobs(jobs)
 
 
-def test_render_cache_key_changes_when_crop_box_override_changes() -> None:
+def test_render_cache_key_stays_same_when_crop_box_override_changes() -> None:
     import birdstamp.video_export as video_export
 
     with tempfile.TemporaryDirectory() as tmp_dir_text:
@@ -343,6 +305,52 @@ def test_render_cache_key_changes_when_crop_box_override_changes() -> None:
             for job in jobs:
                 job.settings["crop_box"] = [0.0, 0.0, 0.8, 1.0]
             changed_key = video_export._render_cache_key(jobs, options)
-            assert changed_key != base_key
+            assert changed_key == base_key
         finally:
+            _close_video_jobs(jobs)
+
+
+def test_export_video_rerenders_only_changed_photo_when_crop_box_changes() -> None:
+    import birdstamp.video_export as video_export
+
+    with tempfile.TemporaryDirectory() as tmp_dir_text:
+        tmp_dir = Path(tmp_dir_text)
+        jobs = _build_sample_video_jobs(tmp_dir)
+        options = VideoExportOptions(
+            output_path=tmp_dir / "clip.mp4",
+            preserve_temp_files=True,
+        )
+
+        original_find_ffmpeg = video_export.find_ffmpeg_executable
+        original_run_ffmpeg = video_export._run_ffmpeg_command
+        original_render_video_frame = video_export.render_video_frame
+        render_calls: list[str] = []
+
+        def fake_find_ffmpeg() -> Path:
+            return tmp_dir / "ffmpeg"
+
+        def fake_run_ffmpeg(cmd: list[str], *, cancel_event=None, cancel_message: str = "") -> None:
+            Path(cmd[-1]).write_bytes(b"fake-video")
+
+        def fake_render_video_frame(job: VideoFrameJob, **_kwargs) -> Image.Image:
+            render_calls.append(job.path.name)
+            return job.source_image.copy() if job.source_image is not None else Image.new("RGB", (96, 64), "#000000")
+
+        try:
+            video_export.find_ffmpeg_executable = fake_find_ffmpeg
+            video_export._run_ffmpeg_command = fake_run_ffmpeg
+            video_export.render_video_frame = fake_render_video_frame
+
+            export_video(jobs, options)
+            assert render_calls == ["source_1.jpg", "source_2.jpg"]
+
+            jobs[1].settings["crop_box"] = [0.0, 0.0, 0.8, 1.0]
+
+            render_calls.clear()
+            export_video(jobs, options)
+            assert render_calls == ["source_2.jpg"]
+        finally:
+            video_export.find_ffmpeg_executable = original_find_ffmpeg
+            video_export._run_ffmpeg_command = original_run_ffmpeg
+            video_export.render_video_frame = original_render_video_frame
             _close_video_jobs(jobs)

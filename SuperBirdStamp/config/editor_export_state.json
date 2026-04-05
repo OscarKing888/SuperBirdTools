@@ -1,5 +1,11 @@
 {
   "last_image_output_dir": "/Users/oscar/Pictures/2026-3-11-快门测试",
   "last_video_output_dir": "/Users/oscar/Pictures",
-  "last_batch_output_dir": "/Users/oscar/Pictures/2026-3-11-快门测试/untitled folder"
+  "last_batch_output_dir": "/Users/oscar/Pictures/2026-3-11-快门测试/untitled folder",
+  "image_output_format": "png",
+  "gif_fps": 6.0,
+  "gif_loop": 0,
+  "gif_keep_frame_images": true,
+  "gif_scale_factors": [],
+  "last_workspace_dir": "/private/var/folders/p2/2rvq_nqj6j16q26hpn77y9200000gn/T/tmp_8tjc_xn"
 }

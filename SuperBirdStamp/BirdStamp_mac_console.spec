@@ -79,6 +79,7 @@ a = Analysis(
         "PIL.TiffImagePlugin",
         "PIL.JpegImagePlugin",
         "PIL.PngImagePlugin",
+        "PIL.GifImagePlugin",
         "PIL.WebPImagePlugin",
         "rawpy",
         "pillow_heif",

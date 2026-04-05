@@ -131,7 +131,9 @@ from birdstamp.gui.editor_photo_list import (
     PhotoListWidget,
 )
 from birdstamp.gui.editor_collapsible import CollapsibleSection
+from birdstamp.gui.editor_gif_panel import GifExportPanel
 from birdstamp.gui.editor_video_panel import VideoExportPanel, VideoExportRequest, VideoExportWorker
+from birdstamp.gui.editor_workspace import _BirdStampWorkspaceMixin
 from birdstamp.gui.editor_crop_calculator import _BirdStampCropMixin
 from birdstamp.gui.editor_renderer import _BirdStampRendererMixin
 from birdstamp.gui.editor_exporter import _BirdStampExporterMixin
@@ -426,7 +428,13 @@ def _load_birdstamp_about_images() -> list[dict]:
 
 # PreviewCanvas and PhotoListWidget now live in editor_preview_canvas.py / editor_photo_list.py
 
-class BirdStampEditorWindow(QMainWindow, _BirdStampCropMixin, _BirdStampRendererMixin, _BirdStampExporterMixin):
+class BirdStampEditorWindow(
+    QMainWindow,
+    _BirdStampCropMixin,
+    _BirdStampRendererMixin,
+    _BirdStampExporterMixin,
+    _BirdStampWorkspaceMixin,
+):
     def __init__(
         self,
         startup_file: Path | None = None,
@@ -454,6 +462,8 @@ class BirdStampEditorWindow(QMainWindow, _BirdStampCropMixin, _BirdStampRenderer
         self._original_mode_signature: str | None = None
         self._bird_box_cache: dict[str, tuple[float, float, float, float] | None] = {}
         self.photo_render_overrides: dict[str, dict[str, Any]] = {}
+        self._photo_export_dirty_keys: set[str] = set()
+        self._last_global_export_settings: dict[str, bool] = {}
         self._crop_padding_state: dict[str, Any] = {
             "top": _DEFAULT_CROP_PADDING_PX,
             "bottom": _DEFAULT_CROP_PADDING_PX,
@@ -495,11 +505,13 @@ class BirdStampEditorWindow(QMainWindow, _BirdStampCropMixin, _BirdStampRenderer
         self._pending_preview_fit_reset: bool = False
         self._video_export_worker: VideoExportWorker | None = None
         self._video_export_started_at: float | None = None
+        self._pending_video_export_dirty_keys: set[str] = set()
         self._image_export_progress_token: int = 0
         self._image_export_active_worker_count: int = 0
         self._image_export_last_output_dir: Path | None = self._load_image_export_last_output_dir()
         self._batch_export_last_output_dir: Path | None = self._load_batch_export_last_output_dir()
         self._video_export_last_output_dir: Path | None = self._load_video_export_last_output_dir()
+        self._workspace_path: Path | None = None
         # 占位图路径标记：非 None 时表示当前预览的是默认占位图而非用户照片
         self.placeholder_path: Path | None = None
 
@@ -513,14 +525,17 @@ class BirdStampEditorWindow(QMainWindow, _BirdStampCropMixin, _BirdStampRenderer
         self._received_photo_import_timer.setSingleShot(False)
         self._received_photo_import_timer.setInterval(0)
         self._received_photo_import_timer.timeout.connect(self._process_received_photo_import_batch)
+        self._init_workspace_autosave()
 
         self._setup_ui()
+        self._apply_image_export_preferences_from_state()
+        self._last_global_export_settings = self._current_global_export_settings()
         self._setup_shortcuts()
+        self._setup_menu_bar()
         self._apply_system_adaptive_style()
         self._reload_template_combo(preferred="default")
         self._set_status("就绪。请添加照片并选择模板。")
         self._show_placeholder_preview()
-        self._start_bird_detector_preload()
 
         # 冷启动或「发送到本应用」传入的文件列表：加入照片列表
         files_to_add: list[Path] = []
@@ -530,6 +545,10 @@ class BirdStampEditorWindow(QMainWindow, _BirdStampCropMixin, _BirdStampRenderer
             files_to_add = [startup_file]
         if files_to_add:
             self._add_photo_paths(files_to_add)
+        else:
+            self._restore_autosave_workspace_on_startup()
+
+        self._start_bird_detector_preload()
 
         # 初始化 report.db 行解析器（无缓存时返回 None）
         self._update_report_db_row_resolver()
@@ -620,6 +639,7 @@ class BirdStampEditorWindow(QMainWindow, _BirdStampCropMixin, _BirdStampRenderer
             added += 1
         if added:
             self._rebuild_report_db_cache()
+            self._schedule_workspace_autosave()
 
     def _auto_add_report_db_paths_for_photos(self, paths: Iterable[Path]) -> int:
         """根据照片所在目录自动发现 report.db，并加入当前列表。"""
@@ -688,13 +708,20 @@ class BirdStampEditorWindow(QMainWindow, _BirdStampCropMixin, _BirdStampRenderer
             return
         self._report_db_entries = [p for p in self._report_db_entries if p not in paths_to_remove]
         self._rebuild_report_db_cache()
+        self._schedule_workspace_autosave()
 
-    def _clear_report_dbs(self) -> None:
+    def _clear_report_dbs_state(self, *, status_message: str | None = None) -> None:
         """清空所有 report.db 记录与缓存。"""
         self.report_db_list.clear()
         self._report_db_entries.clear()
         self._report_db_cache.clear()
         self._update_report_db_row_resolver()
+        self._schedule_workspace_autosave()
+        if status_message is not None:
+            self._set_status(status_message)
+
+    def _clear_report_dbs(self) -> None:
+        self._clear_report_dbs_state(status_message="已清空 report.db 列表。")
 
     def _setup_ui(self) -> None:
         root = QWidget()
@@ -785,23 +812,23 @@ class BirdStampEditorWindow(QMainWindow, _BirdStampCropMixin, _BirdStampRenderer
         photos_layout.setContentsMargins(0, 0, 0, 0)
         photos_layout.setSpacing(6)
 
-        photo_btn_row = QHBoxLayout()
+        photo_manage_row = QHBoxLayout()
         add_files_btn = QPushButton("添加照片")
         add_files_btn.clicked.connect(self._pick_files)
-        photo_btn_row.addWidget(add_files_btn)
+        photo_manage_row.addWidget(add_files_btn)
 
         add_dir_btn = QPushButton("添加目录")
         add_dir_btn.clicked.connect(self._pick_directory)
-        photo_btn_row.addWidget(add_dir_btn)
+        photo_manage_row.addWidget(add_dir_btn)
 
         remove_btn = QPushButton("删除所选")
         remove_btn.clicked.connect(self._remove_selected_photos)
-        photo_btn_row.addWidget(remove_btn)
+        photo_manage_row.addWidget(remove_btn)
 
         clear_btn = QPushButton("清空")
         clear_btn.clicked.connect(self._clear_photos)
-        photo_btn_row.addWidget(clear_btn)
-        photos_layout.addLayout(photo_btn_row)
+        photo_manage_row.addWidget(clear_btn)
+        photos_layout.addLayout(photo_manage_row)
 
         self.photo_list_progress = QProgressBar()
         self.photo_list_progress.setMinimum(0)
@@ -827,6 +854,8 @@ class BirdStampEditorWindow(QMainWindow, _BirdStampCropMixin, _BirdStampRenderer
         self.photo_list.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         self.photo_list.pathsDropped.connect(self._add_photo_paths)
         self.photo_list.currentItemChanged.connect(self._on_photo_selected)
+        self.photo_list.itemSelectionChanged.connect(self._on_workspace_state_changed)
+        self.photo_list.header().sortIndicatorChanged.connect(self._on_workspace_state_changed)
         self.photo_list.setMinimumHeight(240)
         self.photo_list.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Expanding)
         photos_layout.addWidget(self.photo_list, stretch=1)
@@ -976,7 +1005,7 @@ class BirdStampEditorWindow(QMainWindow, _BirdStampCropMixin, _BirdStampRenderer
         if self.output_format_combo.count() == 0:
             self.output_format_combo.addItem("PNG", "png")
             self.output_format_combo.addItem("JPG", "jpg")
-        self.output_format_combo.currentIndexChanged.connect(self._on_output_settings_changed)
+        self.output_format_combo.currentIndexChanged.connect(self._on_image_export_format_changed)
         image_export_form.addRow("输出格式", self.output_format_combo)
 
         self.max_edge_combo = QComboBox()
@@ -1007,6 +1036,10 @@ class BirdStampEditorWindow(QMainWindow, _BirdStampCropMixin, _BirdStampRenderer
         export_btn_row.addWidget(self.export_batch_btn)
         image_export_form.addRow("", export_btn_row)
         image_export_layout.addLayout(image_export_form)
+
+        self.gif_export_panel = GifExportPanel()
+        self.gif_export_panel.optionsChanged.connect(self._on_image_export_preferences_changed)
+        image_export_layout.addWidget(self.gif_export_panel)
 
         self.image_export_progress = QProgressBar()
         self.image_export_progress.setMinimum(0)
@@ -1138,31 +1171,63 @@ class BirdStampEditorWindow(QMainWindow, _BirdStampCropMixin, _BirdStampRenderer
             canvas.crop_box_changed.connect(self._on_canvas_crop_box_changed)
         if hasattr(self.preview_label, "display_scale_percent_changed"):
             self.preview_label.display_scale_percent_changed.connect(self._sync_preview_scale_combo)
+            self.preview_label.display_scale_percent_changed.connect(self._on_workspace_state_changed)
         self._sync_preview_scale_combo(self.preview_label.current_display_scale_percent())
         right_layout.addWidget(self.preview_label, stretch=1)
 
         return right_panel
 
     def _setup_shortcuts(self) -> None:
-        action_add = QAction(self)
-        action_add.setShortcut(QKeySequence.StandardKey.Open)
-        action_add.triggered.connect(self._pick_files)
-        self.addAction(action_add)
+        self.action_add_files = QAction("添加照片...", self)
+        self.action_add_files.setShortcut(QKeySequence.StandardKey.Open)
+        self.action_add_files.triggered.connect(self._pick_files)
+        self.addAction(self.action_add_files)
 
-        action_preview = QAction(self)
-        action_preview.setShortcut(QKeySequence("Ctrl+R"))
-        action_preview.triggered.connect(self.render_preview)
-        self.addAction(action_preview)
+        self.action_add_directory = QAction("添加目录...", self)
+        self.action_add_directory.triggered.connect(self._pick_directory)
+        self.addAction(self.action_add_directory)
 
-        action_export_current = QAction(self)
-        action_export_current.setShortcut(QKeySequence("Ctrl+E"))
-        action_export_current.triggered.connect(self.export_current)
-        self.addAction(action_export_current)
+        self.action_load_workspace = QAction("加载工作区...", self)
+        self.action_load_workspace.setShortcut(QKeySequence("Ctrl+Shift+O"))
+        self.action_load_workspace.triggered.connect(self.load_workspace)
+        self.addAction(self.action_load_workspace)
 
-        action_export_all = QAction(self)
-        action_export_all.setShortcut(QKeySequence("Ctrl+Shift+E"))
-        action_export_all.triggered.connect(self.export_all)
-        self.addAction(action_export_all)
+        self.action_save_workspace = QAction("保存工作区", self)
+        self.action_save_workspace.setShortcut(QKeySequence.StandardKey.Save)
+        self.action_save_workspace.triggered.connect(self.save_workspace)
+        self.addAction(self.action_save_workspace)
+
+        self.action_save_workspace_as = QAction("工作区另存为...", self)
+        self.action_save_workspace_as.setShortcut(QKeySequence.StandardKey.SaveAs)
+        self.action_save_workspace_as.triggered.connect(self.save_workspace_as)
+        self.addAction(self.action_save_workspace_as)
+
+        self.action_preview = QAction("刷新预览", self)
+        self.action_preview.setShortcut(QKeySequence("Ctrl+R"))
+        self.action_preview.triggered.connect(self.render_preview)
+        self.addAction(self.action_preview)
+
+        self.action_export_current = QAction("导出当前", self)
+        self.action_export_current.setShortcut(QKeySequence("Ctrl+E"))
+        self.action_export_current.triggered.connect(self.export_current)
+        self.addAction(self.action_export_current)
+
+        self.action_export_all = QAction("批量导出", self)
+        self.action_export_all.setShortcut(QKeySequence("Ctrl+Shift+E"))
+        self.action_export_all.triggered.connect(self.export_all)
+        self.addAction(self.action_export_all)
+
+    def _setup_menu_bar(self) -> None:
+        menu_bar = self.menuBar()
+        menu_bar.clear()
+
+        file_menu = menu_bar.addMenu("文件")
+        file_menu.addAction(self.action_add_files)
+        file_menu.addAction(self.action_add_directory)
+        file_menu.addSeparator()
+        file_menu.addAction(self.action_load_workspace)
+        file_menu.addAction(self.action_save_workspace)
+        file_menu.addAction(self.action_save_workspace_as)
 
     def _apply_system_adaptive_style(self) -> None:
         palette = self.palette()
@@ -1308,11 +1373,14 @@ class BirdStampEditorWindow(QMainWindow, _BirdStampCropMixin, _BirdStampRenderer
             "last_video_output_dir": last_output_dir,
         }
 
-    def _load_remembered_output_dir(self, key: str) -> Path | None:
+    def _load_editor_export_state_value(self, key: str, default: Any = None) -> Any:
         raw = self._load_editor_export_state_raw()
         if not isinstance(raw, dict):
-            return None
-        dir_text = str(raw.get(key) or "").strip()
+            return default
+        return raw.get(key, default)
+
+    def _load_remembered_output_dir(self, key: str) -> Path | None:
+        dir_text = str(self._load_editor_export_state_value(key, "") or "").strip()
         if not dir_text:
             return None
         try:
@@ -1321,19 +1389,23 @@ class BirdStampEditorWindow(QMainWindow, _BirdStampCropMixin, _BirdStampRenderer
             return None
         return path if path.is_dir() else None
 
-    def _save_remembered_output_dir(self, key: str, directory: Path) -> None:
-        try:
-            target_dir = directory.expanduser().resolve(strict=False)
-        except Exception:
-            target_dir = Path(directory)
+    def _save_editor_export_state_value(self, key: str, value: Any) -> None:
         state_path = self._editor_export_state_path()
         payload = self._load_editor_export_state_raw()
-        payload[key] = str(target_dir)
+        payload[key] = value
         try:
             state_path.parent.mkdir(parents=True, exist_ok=True)
             state_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
         except Exception as exc:
             _log.warning("save export state failed: key=%s err=%s", key, exc)
+
+    def _save_remembered_output_dir(self, key: str, directory: Path) -> None:
+        try:
+            target_dir = directory.expanduser().resolve(strict=False)
+        except Exception:
+            target_dir = Path(directory)
+        self._save_editor_export_state_value(key, str(target_dir))
+        self._schedule_workspace_autosave()
 
     def _load_video_export_last_output_dir(self) -> Path | None:
         return self._load_remembered_output_dir("last_video_output_dir")
@@ -1352,6 +1424,72 @@ class BirdStampEditorWindow(QMainWindow, _BirdStampCropMixin, _BirdStampRenderer
 
     def _save_batch_export_last_output_dir(self, directory: Path) -> None:
         self._save_remembered_output_dir("last_batch_output_dir", directory)
+
+    def _apply_image_export_preferences_from_state(self) -> None:
+        output_format = str(self._load_editor_export_state_value("image_output_format", "") or "").strip().lower()
+        if output_format:
+            format_index = self.output_format_combo.findData(output_format)
+            if format_index >= 0:
+                self.output_format_combo.blockSignals(True)
+                try:
+                    self.output_format_combo.setCurrentIndex(format_index)
+                finally:
+                    self.output_format_combo.blockSignals(False)
+
+        gif_fps = self._load_editor_export_state_value("gif_fps", None)
+        gif_loop = self._load_editor_export_state_value("gif_loop", None)
+        gif_keep_frames = self._load_editor_export_state_value("gif_keep_frame_images", None)
+        raw_scales = self._load_editor_export_state_value("gif_scale_factors", None)
+        scale_factors: list[float] | None = None
+        if isinstance(raw_scales, list):
+            scale_factors = []
+            for item in raw_scales:
+                try:
+                    scale = float(item)
+                except Exception:
+                    continue
+                if scale > 0:
+                    scale_factors.append(scale)
+        try:
+            gif_fps_value = float(gif_fps) if gif_fps is not None else None
+        except Exception:
+            gif_fps_value = None
+        try:
+            gif_loop_value = int(gif_loop) if gif_loop is not None else None
+        except Exception:
+            gif_loop_value = None
+        keep_frame_images_value: bool | None
+        if gif_keep_frames is None:
+            keep_frame_images_value = None
+        elif isinstance(gif_keep_frames, bool):
+            keep_frame_images_value = gif_keep_frames
+        else:
+            keep_frame_images_value = str(gif_keep_frames).strip().lower() not in {"0", "false", "no", "off", ""}
+        self.gif_export_panel.set_state(
+            fps=gif_fps_value,
+            loop=gif_loop_value,
+            keep_frame_images=keep_frame_images_value,
+            scale_factors=scale_factors,
+        )
+        self._refresh_image_export_action_states()
+
+    def _save_image_export_preferences(self) -> None:
+        gif_request = self.gif_export_panel.current_request()
+        self._save_editor_export_state_value("image_output_format", self._selected_output_suffix())
+        self._save_editor_export_state_value("gif_fps", gif_request.fps)
+        self._save_editor_export_state_value("gif_loop", gif_request.loop)
+        self._save_editor_export_state_value("gif_keep_frame_images", gif_request.keep_frame_images)
+        self._save_editor_export_state_value("gif_scale_factors", list(gif_request.scale_factors))
+
+    def _on_image_export_format_changed(self, *_args: Any) -> None:
+        self._refresh_image_export_action_states()
+        self._save_image_export_preferences()
+        self._schedule_workspace_autosave()
+
+    def _on_image_export_preferences_changed(self) -> None:
+        self._save_image_export_preferences()
+        self._refresh_image_export_action_states()
+        self._schedule_workspace_autosave()
 
     def _confirm_video_output_overwrite(self, output_path: Path) -> bool:
         if not output_path.exists():
@@ -1388,16 +1526,23 @@ class BirdStampEditorWindow(QMainWindow, _BirdStampCropMixin, _BirdStampRenderer
             event.ignore()
             return
         self._stop_photo_list_metadata_loader(wait=True, reset_progress=True)
+        self._autosave_workspace_now()
         super().closeEvent(event)
 
     def _on_preview_toolbar_toggled(self, _checked: bool) -> None:
         self._refresh_preview_label(preserve_view=True)
+        self._schedule_workspace_autosave()
 
     def _on_preview_grid_mode_changed(self, _index: int) -> None:
         self._apply_preview_overlay_options_from_ui()
+        self._schedule_workspace_autosave()
 
     def _on_preview_grid_line_width_changed(self, _index: int) -> None:
         self._apply_preview_overlay_options_from_ui()
+        self._schedule_workspace_autosave()
+
+    def _on_workspace_state_changed(self, *_args: Any) -> None:
+        self._schedule_workspace_autosave()
 
     def _on_preview_scale_preset_activated(self, index: int) -> None:
         percent = self.preview_scale_combo.itemData(index)
@@ -1515,6 +1660,7 @@ class BirdStampEditorWindow(QMainWindow, _BirdStampCropMixin, _BirdStampRenderer
         alpha = max(0, min(255, int(value)))
         self.crop_effect_alpha_value_label.setText(str(alpha))
         self._apply_preview_overlay_options_from_ui()
+        self._schedule_workspace_autosave()
 
     def _on_ratio_changed(self, *_args: Any) -> None:
         """裁切比例变更：使当前裁切框与新区比例一致（按中心约束），再走 settings 流程。"""
@@ -1543,15 +1689,59 @@ class BirdStampEditorWindow(QMainWindow, _BirdStampCropMixin, _BirdStampRenderer
         """当前预览是否为占位默认图（不是用户加载的真实照片）。"""
         return self.placeholder_path is not None and self.current_path == self.placeholder_path
 
+    def _current_global_export_settings(self) -> dict[str, bool]:
+        return {
+            "draw_banner": bool(self.draw_banner_check.isChecked()),
+            "draw_text": bool(self.draw_text_check.isChecked()),
+            "draw_focus": bool(self.draw_focus_check.isChecked()),
+        }
+
+    def _refresh_global_export_settings_snapshot(self) -> bool:
+        current = self._current_global_export_settings()
+        previous = dict(getattr(self, "_last_global_export_settings", {}) or {})
+        self._last_global_export_settings = current
+        return current != previous
+
+    def _mark_photo_export_dirty(self, path: Path | None) -> None:
+        if path is None:
+            return
+        self._photo_export_dirty_keys.add(_path_key(path))
+
+    def _mark_photo_exports_dirty(self, paths: Iterable[Path]) -> None:
+        for path in paths:
+            self._mark_photo_export_dirty(path)
+
+    def _mark_all_photo_exports_dirty(self) -> None:
+        self._mark_photo_exports_dirty(self._list_photo_paths())
+
+    def _clear_photo_export_dirty(self, paths: Iterable[Path]) -> None:
+        for path in paths:
+            try:
+                self._photo_export_dirty_keys.discard(_path_key(path))
+            except Exception:
+                continue
+
+    def _dirty_photo_path_keys(self, paths: Iterable[Path] | None = None) -> set[str]:
+        if paths is None:
+            return set(self._photo_export_dirty_keys)
+        return {_path_key(path) for path in paths if _path_key(path) in self._photo_export_dirty_keys}
+
     def _on_output_settings_changed(self, *_args: Any) -> None:
+        global_changed = self._refresh_global_export_settings_snapshot()
+        if global_changed:
+            self._mark_all_photo_exports_dirty()
         if self.current_path is not None and not self._is_placeholder_active():
             key = _path_key(self.current_path)
             snapshot = self._photo_override_settings_from_snapshot(self._build_current_render_settings())
+            previous_snapshot = self.photo_render_overrides.get(key)
             self._set_photo_crop_box_for_path(self.current_path, snapshot.get("crop_box"))
             self.photo_render_overrides[key] = snapshot
+            if not global_changed and previous_snapshot != snapshot:
+                self._mark_photo_export_dirty(self.current_path)
             self._update_photo_list_item_display(self.current_path, settings=snapshot)
             self._invalidate_original_mode_cache()
         self._preview_debounce_timer.start()
+        self._schedule_workspace_autosave()
 
     def _start_bird_detector_preload(self) -> None:
         if self._bird_detector_preload_started:
@@ -1632,6 +1822,7 @@ class BirdStampEditorWindow(QMainWindow, _BirdStampCropMixin, _BirdStampRenderer
             self._on_output_settings_changed()
         else:
             self.render_preview()
+            self._schedule_workspace_autosave()
 
     def _apply_template_crop_padding_to_main_output(self) -> None:
         p = self.current_template_payload
@@ -1688,6 +1879,7 @@ class BirdStampEditorWindow(QMainWindow, _BirdStampCropMixin, _BirdStampRenderer
             self._on_output_settings_changed()
         else:
             self.render_preview()
+            self._schedule_workspace_autosave()
 
     def _open_template_manager(self) -> None:
         from app_common.log import get_logger
@@ -1709,6 +1901,7 @@ class BirdStampEditorWindow(QMainWindow, _BirdStampCropMixin, _BirdStampRenderer
             settings = self._render_settings_for_path(self.current_path, prefer_current_ui=False)
             self._apply_render_settings_to_ui(settings)
             self.render_preview()
+        self._schedule_workspace_autosave()
 
     def _pick_files(self) -> None:
         ext_pattern = " ".join(f"*{ext}" for ext in sorted(SUPPORTED_EXTENSIONS))
@@ -2511,6 +2704,7 @@ class BirdStampEditorWindow(QMainWindow, _BirdStampCropMixin, _BirdStampRenderer
         *,
         existing_keys: set[str],
         default_settings: dict[str, Any],
+        sequence_value: int | None = None,
     ) -> tuple[bool, QTreeWidgetItem | None]:
         key = _path_key(path)
         if key in existing_keys:
@@ -2519,8 +2713,10 @@ class BirdStampEditorWindow(QMainWindow, _BirdStampCropMixin, _BirdStampRenderer
 
         current_settings = self._photo_override_settings_from_snapshot(default_settings)
         self.photo_render_overrides[key] = current_settings
+        self._photo_export_dirty_keys.add(key)
         item = PhotoListItem(["", "", "", "", "", "", "", "", "", ""])
-        sequence_value = self._next_photo_sequence_value()
+        if sequence_value is None or sequence_value <= 0:
+            sequence_value = self._next_photo_sequence_value()
         placeholder_metadata = {"SourceFile": str(path)}
         ratio_text = self._format_ratio_display(_parse_ratio_value(current_settings.get("ratio")))
         item.setText(PHOTO_COL_SEQ, str(sequence_value))
@@ -2608,6 +2804,7 @@ class BirdStampEditorWindow(QMainWindow, _BirdStampCropMixin, _BirdStampRenderer
         self.photo_list.refresh_row_numbers()
         if added_paths:
             self._restart_photo_list_metadata_loader()
+        self._schedule_workspace_autosave()
 
         if progress_total > 0:
             self._emit_received_photo_import_progress(
@@ -2776,6 +2973,7 @@ class BirdStampEditorWindow(QMainWindow, _BirdStampCropMixin, _BirdStampRenderer
         self.photo_list.refresh_row_numbers()
         if added_paths:
             self._restart_photo_list_metadata_loader()
+        self._schedule_workspace_autosave()
 
         if add_count > 0 and total_auto_added_report_db_count > 0:
             self._set_status(f"已添加 {add_count} 张照片，并自动添加 {total_auto_added_report_db_count} 个 report.db。")
@@ -2882,6 +3080,7 @@ class BirdStampEditorWindow(QMainWindow, _BirdStampCropMixin, _BirdStampRenderer
         for key in removed_keys:
             self.raw_metadata_cache.pop(key, None)
             self.photo_render_overrides.pop(key, None)
+            self._photo_export_dirty_keys.discard(key)
         if removed_keys:
             self._bird_box_cache.clear()
             self.photo_list.refresh_row_numbers()
@@ -2902,9 +3101,10 @@ class BirdStampEditorWindow(QMainWindow, _BirdStampCropMixin, _BirdStampRenderer
             self.last_rendered = None
             self._show_placeholder_preview()
 
+        self._schedule_workspace_autosave()
         self._set_status(f"已删除 {len(selected_items)} 项。")
 
-    def _clear_photos(self) -> None:
+    def _clear_photos_state(self, *, status_message: str | None = None) -> None:
         self._stop_received_photo_import(reset_progress=True)
         self._stop_photo_list_metadata_loader(wait=False, reset_progress=True)
         self.photo_list.clear()
@@ -2913,6 +3113,7 @@ class BirdStampEditorWindow(QMainWindow, _BirdStampCropMixin, _BirdStampRenderer
         self._photo_item_map.clear()
         self._photo_list_metadata_pending_keys.clear()
         self.photo_render_overrides.clear()
+        self._photo_export_dirty_keys.clear()
         self._bird_box_cache.clear()
         self._next_photo_sequence_number = 0
         self.placeholder_path = None
@@ -2924,7 +3125,12 @@ class BirdStampEditorWindow(QMainWindow, _BirdStampCropMixin, _BirdStampRenderer
         self.current_file_label.setText("当前照片: 未选择")
         self.last_rendered = None
         self._show_placeholder_preview()
-        self._set_status("已清空照片列表。")
+        self._schedule_workspace_autosave()
+        if status_message is not None:
+            self._set_status(status_message)
+
+    def _clear_photos(self) -> None:
+        self._clear_photos_state(status_message="已清空照片列表。")
 
     def _on_photo_selected(self, current: QTreeWidgetItem | None, _previous: QTreeWidgetItem | None) -> None:
         if not current:
@@ -3162,6 +3368,9 @@ class BirdStampEditorWindow(QMainWindow, _BirdStampCropMixin, _BirdStampRenderer
 
     def _on_video_export_succeeded(self, output_path_text: str) -> None:
         output_path = Path(output_path_text)
+        if self._pending_video_export_dirty_keys:
+            self._photo_export_dirty_keys.difference_update(self._pending_video_export_dirty_keys)
+            self._pending_video_export_dirty_keys.clear()
         elapsed = self._consume_video_export_elapsed_time()
         timing_text = (
             f" | 视频生成耗时 {self._format_export_elapsed_time(elapsed)}"
@@ -3174,6 +3383,7 @@ class BirdStampEditorWindow(QMainWindow, _BirdStampCropMixin, _BirdStampRenderer
         self._cleanup_video_export_worker()
 
     def _on_video_export_cancelled(self, message: str) -> None:
+        self._pending_video_export_dirty_keys.clear()
         cancel_text = str(message or "").strip() or "视频导出已中断。"
         elapsed = self._consume_video_export_elapsed_time()
         if elapsed is not None:
@@ -3184,6 +3394,7 @@ class BirdStampEditorWindow(QMainWindow, _BirdStampCropMixin, _BirdStampRenderer
         QMessageBox.information(self, "视频导出已中断", cancel_text)
 
     def _on_video_export_failed(self, message: str) -> None:
+        self._pending_video_export_dirty_keys.clear()
         error_text = str(message or "").strip() or "未知错误"
         elapsed = self._consume_video_export_elapsed_time()
         status_text = f"视频导出失败: {error_text}"
@@ -3265,10 +3476,14 @@ class BirdStampEditorWindow(QMainWindow, _BirdStampCropMixin, _BirdStampRenderer
             self._show_error("视频导出参数无效", str(exc))
             return
 
+        dirty_path_keys = self._dirty_photo_path_keys(paths)
+        self._pending_video_export_dirty_keys = set(dirty_path_keys)
+
         worker = VideoExportWorker(
             jobs=jobs,
             options=options,
             template_paths=dict(self.template_paths),
+            dirty_path_keys=dirty_path_keys,
             parent=self,
         )
         worker.progressTextChanged.connect(self._on_video_export_progress)
@@ -3322,8 +3537,11 @@ class BirdStampEditorWindow(QMainWindow, _BirdStampCropMixin, _BirdStampRenderer
         snapshot = self._photo_override_settings_from_snapshot(self._build_current_render_settings())
         for path in targets:
             normalized = self._clone_render_settings(snapshot)
+            previous_snapshot = self.photo_render_overrides.get(_path_key(path))
             self.photo_render_overrides[_path_key(path)] = normalized
             self._set_photo_crop_box_for_path(path, normalized.get("crop_box"))
+            if previous_snapshot != normalized:
+                self._mark_photo_export_dirty(path)
             self._update_photo_list_item_display(path, settings=normalized)
 
         if self.current_path is not None:
@@ -3331,6 +3549,7 @@ class BirdStampEditorWindow(QMainWindow, _BirdStampCropMixin, _BirdStampRenderer
             if any(_path_key(path) == current_key for path in targets):
                 self.render_preview()
 
+        self._schedule_workspace_autosave()
         self._set_status(f"已将当前裁切重载设置应用到 {len(targets)} 张照片。")
 
     def _apply_current_settings_to_all_photos(self) -> None:
@@ -3342,12 +3561,16 @@ class BirdStampEditorWindow(QMainWindow, _BirdStampCropMixin, _BirdStampRenderer
         snapshot = self._photo_override_settings_from_snapshot(self._build_current_render_settings())
         for path in targets:
             normalized = self._clone_render_settings(snapshot)
+            previous_snapshot = self.photo_render_overrides.get(_path_key(path))
             self.photo_render_overrides[_path_key(path)] = normalized
             self._set_photo_crop_box_for_path(path, normalized.get("crop_box"))
+            if previous_snapshot != normalized:
+                self._mark_photo_export_dirty(path)
             self._update_photo_list_item_display(path, settings=normalized)
 
         if self.current_path is not None:
             self.render_preview()
+        self._schedule_workspace_autosave()
         self._set_status(f"已将当前裁切重载设置应用到全部 {len(targets)} 张照片。")
 
 

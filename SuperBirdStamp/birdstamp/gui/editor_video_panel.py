@@ -165,7 +165,7 @@ class VideoExportPanel(QGroupBox):
         self.preserve_temp_files_check = QCheckBox("保留临时文件")
         self.preserve_temp_files_check.setChecked(True)
         self.preserve_temp_files_check.setToolTip(
-            "保留并复用已渲染的视频帧；只有影响帧图像内容的参数变化时才会切换到新的缓存目录。"
+            "保留并复用导出缓存；全局导出开关会切换缓存桶，单张模板或裁切变化只重做对应帧。"
         )
         form.addRow("帧缓存", self.preserve_temp_files_check)
 
@@ -194,7 +194,7 @@ class VideoExportPanel(QGroupBox):
         root.addLayout(form)
 
         self.hint_label = QLabel(
-            "按当前文件列表顺序生成视频，需要 ffmpeg；勾选“保留临时文件”后，FPS/编码参数会复用已有帧，影响图像内容的参数变化则会切换到新的缓存目录。"
+            "按当前文件列表顺序生成视频，需要 ffmpeg；勾选“保留临时文件”后，FPS/编码参数会复用已有缓存，全局导出开关变化会切换缓存桶，单张模板或裁切变化只重做对应帧。"
         )
         self.hint_label.setStyleSheet("color: #7A7A7A; font-size: 11px;")
         self.hint_label.setWordWrap(True)
@@ -272,6 +272,127 @@ class VideoExportPanel(QGroupBox):
             preserve_temp_files=bool(self.preserve_temp_files_check.isChecked()),
         )
 
+    def current_state(self) -> dict[str, int | float | str | bool]:
+        frame_data = self.current_frame_size_data()
+        return {
+            "container": str(self.container_combo.currentData() or DEFAULT_VIDEO_CONTAINER),
+            "codec": str(self.codec_combo.currentData() or DEFAULT_VIDEO_CODEC),
+            "fps_text": str(self.fps_combo.currentText() or "").strip(),
+            "frame_size_mode": str(frame_data.get("mode") or DEFAULT_VIDEO_FRAME_SIZE_MODE).strip().lower(),
+            "frame_size_width": int(frame_data.get("width") or 0),
+            "frame_size_height": int(frame_data.get("height") or 0),
+            "orientation": self.current_orientation(),
+            "custom_width": int(self.frame_width_spin.value()),
+            "custom_height": int(self.frame_height_spin.value()),
+            "preset": str(self.preset_combo.currentData() or DEFAULT_VIDEO_PRESET),
+            "crf": int(self.crf_spin.value()),
+            "preserve_temp_files": bool(self.preserve_temp_files_check.isChecked()),
+        }
+
+    def set_state(self, state: dict[str, object] | None) -> None:
+        if not isinstance(state, dict):
+            return
+
+        widgets = (
+            self.container_combo,
+            self.codec_combo,
+            self.fps_combo,
+            self.frame_size_combo,
+            self.orientation_combo,
+            self.frame_width_spin,
+            self.frame_height_spin,
+            self.preset_combo,
+            self.crf_spin,
+            self.preserve_temp_files_check,
+        )
+        previous_blocks: list[tuple[QWidget, bool]] = []
+        for widget in widgets:
+            previous_blocks.append((widget, bool(widget.blockSignals(True))))
+        try:
+            container = str(state.get("container") or "").strip().lower()
+            idx = self.container_combo.findData(container)
+            if idx >= 0:
+                self.container_combo.setCurrentIndex(idx)
+
+            codec = str(state.get("codec") or "").strip().lower()
+            idx = self.codec_combo.findData(codec)
+            if idx >= 0:
+                self.codec_combo.setCurrentIndex(idx)
+
+            fps_text = str(state.get("fps_text") or "").strip()
+            if fps_text:
+                self.fps_combo.setCurrentText(fps_text)
+
+            target_mode = str(state.get("frame_size_mode") or "").strip().lower() or DEFAULT_VIDEO_FRAME_SIZE_MODE
+            try:
+                target_frame_width = int(state.get("frame_size_width") or 0)
+            except Exception:
+                target_frame_width = 0
+            try:
+                target_frame_height = int(state.get("frame_size_height") or 0)
+            except Exception:
+                target_frame_height = 0
+
+            frame_index = -1
+            for idx in range(self.frame_size_combo.count()):
+                data = self.frame_size_combo.itemData(idx) or {}
+                item_mode = str(data.get("mode") or "").strip().lower()
+                item_width = int(data.get("width") or 0)
+                item_height = int(data.get("height") or 0)
+                if item_mode != target_mode:
+                    continue
+                if target_mode != "preset":
+                    frame_index = idx
+                    break
+                if item_width == target_frame_width and item_height == target_frame_height:
+                    frame_index = idx
+                    break
+                if frame_index < 0:
+                    frame_index = idx
+            if frame_index >= 0:
+                self.frame_size_combo.setCurrentIndex(frame_index)
+
+            orientation = str(state.get("orientation") or "").strip().lower()
+            idx = self.orientation_combo.findData(orientation)
+            if idx >= 0:
+                self.orientation_combo.setCurrentIndex(idx)
+
+            self._sync_frame_size_state()
+
+            try:
+                custom_width = int(state.get("custom_width") or 0)
+            except Exception:
+                custom_width = 0
+            try:
+                custom_height = int(state.get("custom_height") or 0)
+            except Exception:
+                custom_height = 0
+            if custom_width > 0:
+                self.frame_width_spin.setValue(custom_width)
+            if custom_height > 0:
+                self.frame_height_spin.setValue(custom_height)
+
+            preset = str(state.get("preset") or "").strip().lower()
+            idx = self.preset_combo.findData(preset)
+            if idx >= 0:
+                self.preset_combo.setCurrentIndex(idx)
+
+            try:
+                crf = int(state.get("crf"))
+            except Exception:
+                crf = None
+            if crf is not None:
+                self.crf_spin.setValue(max(self.crf_spin.minimum(), min(self.crf_spin.maximum(), crf)))
+
+            preserve_temp_files = state.get("preserve_temp_files")
+            if preserve_temp_files is not None:
+                self.preserve_temp_files_check.setChecked(bool(preserve_temp_files))
+        finally:
+            for widget, old_block in reversed(previous_blocks):
+                widget.blockSignals(old_block)
+
+        self._sync_frame_size_state()
+
     def set_busy(self, busy: bool, *, status_text: str | None = None) -> None:
         self._busy = busy
         self.container_combo.setEnabled(not busy)
@@ -317,12 +438,14 @@ class VideoExportWorker(QThread):
         jobs: list[VideoFrameJob],
         options: VideoExportOptions,
         template_paths: dict[str, Path] | None = None,
+        dirty_path_keys: set[str] | None = None,
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
         self._jobs = jobs
         self._options = options
         self._template_paths = template_paths or {}
+        self._dirty_path_keys = set(dirty_path_keys or set())
         self._cancel_event = threading.Event()
 
     def cancel(self) -> None:
@@ -334,6 +457,7 @@ class VideoExportWorker(QThread):
                 self._jobs,
                 self._options,
                 template_paths=self._template_paths,
+                dirty_path_keys=self._dirty_path_keys,
                 progress_callback=lambda progress: self.progressTextChanged.emit(progress.message),
                 cancel_event=self._cancel_event,
             )

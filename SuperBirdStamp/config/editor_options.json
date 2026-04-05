@@ -19,8 +19,17 @@
   "max_long_edge_options": [0, 1920, 2560, 3840],
   "output_format_options": [
     {"suffix": "png", "label": "PNG"},
-    {"suffix": "jpg", "label": "JPG"}
+    {"suffix": "jpg", "label": "JPG"},
+    {"suffix": "gif", "label": "GIF"}
   ],
+  "gif_fps_options": [2, 4, 6, 8, 10, 12],
+  "gif_scale_options": [
+    {"label": "1/2", "value": 0.5},
+    {"label": "1/4", "value": 0.25},
+    {"label": "1/8", "value": 0.125}
+  ],
+  "default_gif_fps": 6,
+  "default_gif_loop": 0,
   "video_container_options": [
     {"suffix": "mp4", "label": "MP4"},
     {"suffix": "mov", "label": "MOV"}
