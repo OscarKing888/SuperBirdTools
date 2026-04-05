@@ -11,11 +11,21 @@ Follow `ai_rules/AI_CODING_RULES.md` as the project baseline.
 - For packaged-only CUDA issues, first suspect packaging/runtime differences.
 - In Windows PyInstaller spec for Torch/CUDA, keep `upx=False` unless explicitly re-validated.
 
+## Current Workspace
+
+- Current repository root: `/Users/oscar/Pictures/SuperApps/SuperBirdTools`
+- Shared development virtual environment: `/Users/oscar/Pictures/SuperApps/SuperBirdTools/.venv`
+- On macOS, prefer repo-root interpreter `/Users/oscar/Pictures/SuperApps/SuperBirdTools/.venv/bin/python3`
+- On Windows 64-bit, prefer the repo-root interpreter `<repo>\.venv\Scripts\python.exe`; for this project that means `SuperBirdTools\.venv\Scripts\python.exe` under the Windows checkout path
+- Unless a script explicitly requires an app subdirectory, run commands from the repository root above
+
 ## Monorepo Environment
 
-- `SuperBirdTools/.venv` is the preferred shared development virtual environment for this monorepo.
-- Use `python init_dev.py` from repo root to initialize the shared `.venv` and fan out to app-level initialization.
+- `.venv` is the preferred shared development virtual environment for this monorepo.
+- Use `python init_dev.py` from `/Users/oscar/Pictures/SuperApps/SuperBirdTools` to initialize the shared `.venv` and fan out to app-level initialization.
+- Root `init_dev.py` creates or reuses `/Users/oscar/Pictures/SuperApps/SuperBirdTools/.venv`, then re-executes inside that environment before calling app-level setup scripts.
 - `SuperViewer/init_dev.py` installs only SuperViewer dependencies.
+- `SuperViewer/init_dev.py` and `SuperBirdStamp/init_dev.py` reuse the repo-root `.venv` when running inside this monorepo; only fall back to an app-local `.venv` when used outside the monorepo.
 - `SuperBirdStamp/init_dev.py` installs SuperBirdStamp dependencies and then prepares app-specific assets such as `yolo11n.pt` and ffmpeg.
 - Downloaded development assets should not be added to git unless the user explicitly asks for that workflow.
 
@@ -33,7 +43,7 @@ Follow `ai_rules/AI_CODING_RULES.md` as the project baseline.
 - Run `py -3 -m py_compile` on changed Python files.
 - For metadata changes: write + read-back verification with Chinese sample values.
 - For `.spec` changes: packaged startup smoke test.
-- For `init_dev.py` changes: run at least a `--dry-run` verification from repo root.
+- For `init_dev.py` changes: run at least `python init_dev.py --dry-run` from `/Users/oscar/Pictures/SuperApps/SuperBirdTools`.
 - For `build_all.*` changes: verify the final repo-root `dist/` layout matches the intended multi-app output.
 
 ## Protected Preview Overlay Flow

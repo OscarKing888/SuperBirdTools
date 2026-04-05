@@ -129,12 +129,14 @@ class PhotoListWidget(FileListPanel):
 
     pathsDropped = pyqtSignal(list)
     currentItemChanged = pyqtSignal(object, object)  # (QTreeWidgetItem | None, QTreeWidgetItem | None)
+    itemSelectionChanged = pyqtSignal()
 
     def __init__(self) -> None:
         super().__init__()
         self._configure_editor_compat_view()
         self._install_drop_event_filters()
         self._tree_widget.currentItemChanged.connect(self._emit_current_item_changed)
+        self._tree_widget.itemSelectionChanged.connect(self.itemSelectionChanged.emit)
 
     # ------------------------------------------------------------------
     # Compatibility setup
