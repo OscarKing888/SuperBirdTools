@@ -141,6 +141,7 @@ from birdstamp.video_export import (
     VideoFrameJob,
     ffmpeg_install_script_path,
     find_ffmpeg_executable,
+    prepare_uniform_auto_crop_plans,
     preferred_ffmpeg_binary_path,
 )
 from app_common.report_db import (
@@ -1071,6 +1072,15 @@ class BirdStampEditorWindow(
         overlay_row_layout.addWidget(self.draw_focus_check)
         overlay_row_layout.addStretch()
         global_export_form.addRow("叠加信息", overlay_row_widget)
+
+        self.uniform_auto_crop_check = QCheckBox("批量统一自动裁切尺寸")
+        self.uniform_auto_crop_check.setToolTip(
+            "导出多张图片/GIF/视频前预计算自动裁切，并按同一比例组取最大裁切视野。"
+        )
+        self.uniform_auto_crop_check.setChecked(False)
+        self.uniform_auto_crop_check.toggled.connect(self._on_output_settings_changed)
+        self.uniform_auto_crop_check.toggled.connect(self._save_image_export_preferences)
+        global_export_form.addRow("自动裁切", self.uniform_auto_crop_check)
         export_root.addWidget(global_export_group)
 
         image_export_group = QGroupBox("图片导出")
@@ -1519,6 +1529,19 @@ class BirdStampEditorWindow(
                 finally:
                     self.output_format_combo.blockSignals(False)
 
+        uniform_auto_crop = self._load_editor_export_state_value("uniform_auto_crop", None)
+        if uniform_auto_crop is not None and hasattr(self, "uniform_auto_crop_check"):
+            enabled = (
+                uniform_auto_crop
+                if isinstance(uniform_auto_crop, bool)
+                else str(uniform_auto_crop).strip().lower() not in {"0", "false", "no", "off", ""}
+            )
+            self.uniform_auto_crop_check.blockSignals(True)
+            try:
+                self.uniform_auto_crop_check.setChecked(bool(enabled))
+            finally:
+                self.uniform_auto_crop_check.blockSignals(False)
+
         gif_fps = self._load_editor_export_state_value("gif_fps", None)
         gif_loop = self._load_editor_export_state_value("gif_loop", None)
         gif_keep_frames = self._load_editor_export_state_value("gif_keep_frame_images", None)
@@ -1563,6 +1586,8 @@ class BirdStampEditorWindow(
         self._save_editor_export_state_value("gif_loop", gif_request.loop)
         self._save_editor_export_state_value("gif_keep_frame_images", gif_request.keep_frame_images)
         self._save_editor_export_state_value("gif_scale_factors", list(gif_request.scale_factors))
+        if hasattr(self, "uniform_auto_crop_check"):
+            self._save_editor_export_state_value("uniform_auto_crop", bool(self.uniform_auto_crop_check.isChecked()))
 
     def _on_image_export_format_changed(self, *_args: Any) -> None:
         self._refresh_image_export_action_states()
@@ -1813,6 +1838,7 @@ class BirdStampEditorWindow(
             "draw_banner": bool(self.draw_banner_check.isChecked()),
             "draw_text": bool(self.draw_text_check.isChecked()),
             "draw_focus": bool(self.draw_focus_check.isChecked()),
+            "uniform_auto_crop": bool(self.uniform_auto_crop_check.isChecked()),
         }
 
     def _refresh_global_export_settings_snapshot(self) -> bool:
@@ -3582,6 +3608,15 @@ class BirdStampEditorWindow(
             )
             if callable(progress_callback):
                 progress_callback(index, total)
+        if _parse_bool_value(current_render_settings.get("uniform_auto_crop"), False):
+            if callable(progress_callback):
+                progress_callback(0, total)
+            prepare_uniform_auto_crop_plans(
+                jobs,
+                bird_box_cache=self._bird_box_cache,
+                bird_box_lock=None,
+                progress_callback=progress_callback,
+            )
         return jobs
 
     def _cleanup_video_export_worker(self) -> None:

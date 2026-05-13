@@ -362,12 +362,15 @@ class _BirdStampRendererMixin:
         center_mode = self._selected_center_mode()
         custom_center = getattr(self, "_custom_center", None)
         padding = self._crop_padding_state_for_render()
+        uniform_auto_crop_check = getattr(self, "uniform_auto_crop_check", None)
         return {
             "template_name": template_name,
             "template_payload": _deep_copy_payload(template_payload),
             "draw_banner": bool(self.draw_banner_check.isChecked()),
             "draw_text": bool(self.draw_text_check.isChecked()),
             "draw_focus": bool(self.draw_focus_check.isChecked()),
+            "uniform_auto_crop": bool(uniform_auto_crop_check.isChecked())
+            if uniform_auto_crop_check is not None else False,
             "ratio": self._selected_ratio(),
             "center_mode": center_mode,
             "max_long_edge": self._selected_max_long_edge(),
@@ -387,6 +390,7 @@ class _BirdStampRendererMixin:
         normalized.pop("draw_banner", None)
         normalized.pop("draw_text", None)
         normalized.pop("draw_focus", None)
+        normalized.pop("uniform_auto_crop", None)
         return normalized
 
     def _clone_render_settings(self, settings: dict[str, Any]) -> dict[str, Any]:
@@ -419,6 +423,7 @@ class _BirdStampRendererMixin:
             "draw_banner": _parse_bool_value(settings.get("draw_banner"), True),
             "draw_text": _parse_bool_value(settings.get("draw_text"), True),
             "draw_focus": _parse_bool_value(settings.get("draw_focus"), False),
+            "uniform_auto_crop": _parse_bool_value(settings.get("uniform_auto_crop"), False),
             "ratio": ratio,
             "center_mode": _normalize_center_mode(settings.get("center_mode")),
             "max_long_edge": max_long_edge,
@@ -461,6 +466,8 @@ class _BirdStampRendererMixin:
                 settings["crop_box"] = None
         if "center_mode" in raw:
             settings["center_mode"] = _normalize_center_mode(raw.get("center_mode"))
+        if "uniform_auto_crop" in raw:
+            settings["uniform_auto_crop"] = _parse_bool_value(raw.get("uniform_auto_crop"), False)
 
         if "custom_center_x" in raw:
             try:

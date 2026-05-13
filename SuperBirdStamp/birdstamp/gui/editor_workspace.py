@@ -213,7 +213,7 @@ class _BirdStampWorkspaceMixin:
             return
         widgets_state = _block_widget_signals(
             self.output_format_combo,
-            self.gif_export_panel.fps_combo,
+            self.gif_export_panel.fps_spin,
             self.gif_export_panel.loop_spin,
             self.gif_export_panel.keep_frames_check,
             *[check for _scale, check in getattr(self.gif_export_panel, "_scale_checks", [])],
@@ -389,11 +389,13 @@ class _BirdStampWorkspaceMixin:
             self.draw_banner_check,
             self.draw_text_check,
             self.draw_focus_check,
+            self.uniform_auto_crop_check,
         )
         try:
             self.draw_banner_check.setChecked(bool(state.get("draw_banner", True)))
             self.draw_text_check.setChecked(bool(state.get("draw_text", True)))
             self.draw_focus_check.setChecked(bool(state.get("draw_focus", False)))
+            self.uniform_auto_crop_check.setChecked(bool(state.get("uniform_auto_crop", False)))
         finally:
             _restore_widget_signals(widgets_state)
         self._last_global_export_settings = self._current_global_export_settings()

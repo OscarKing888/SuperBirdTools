@@ -13,7 +13,7 @@ DEFAULT_GIF_BACKGROUND_COLOR = "#000000"
 @dataclass(slots=True)
 class GifExportOptions:
     output_path: Path
-    fps: float = 6.0
+    fps: float = 24.0
     loop: int = 0
     scale_factors: tuple[float, ...] = ()
     background_color: str = DEFAULT_GIF_BACKGROUND_COLOR

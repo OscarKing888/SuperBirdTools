@@ -12,7 +12,7 @@ FRAME_CACHE_MANIFEST_VERSION = 1
 FRAME_CACHE_ROOT_NAME = "birdstamp_export_cache"
 SOURCE_FRAME_BUCKET_KIND = "rendered_source_frames"
 VIDEO_FRAME_BUCKET_KIND = "video_frames"
-SOURCE_FRAME_CACHE_VERSION = 1
+SOURCE_FRAME_CACHE_VERSION = 2
 VIDEO_FRAME_CACHE_VERSION = 1
 
 
@@ -62,6 +62,7 @@ def global_export_settings_from_settings(settings: dict[str, Any] | None) -> dic
         "draw_banner": _parse_bool_value(raw.get("draw_banner"), True),
         "draw_text": _parse_bool_value(raw.get("draw_text"), True),
         "draw_focus": _parse_bool_value(raw.get("draw_focus"), False),
+        "uniform_auto_crop": _parse_bool_value(raw.get("uniform_auto_crop"), False),
     }
 
 

@@ -5,7 +5,6 @@ from dataclasses import dataclass
 from PyQt6.QtCore import pyqtSignal
 from PyQt6.QtWidgets import (
     QCheckBox,
-    QComboBox,
     QFormLayout,
     QGroupBox,
     QHBoxLayout,
@@ -17,7 +16,6 @@ from PyQt6.QtWidgets import (
 
 from birdstamp.gui import editor_options
 
-GIF_FPS_OPTIONS = editor_options.GIF_FPS_OPTIONS
 GIF_SCALE_OPTIONS = editor_options.GIF_SCALE_OPTIONS
 DEFAULT_GIF_FPS = editor_options.DEFAULT_GIF_FPS
 DEFAULT_GIF_LOOP = editor_options.DEFAULT_GIF_LOOP
@@ -51,17 +49,12 @@ class GifExportPanel(QGroupBox):
         form.setHorizontalSpacing(10)
         form.setVerticalSpacing(6)
 
-        self.fps_combo = QComboBox()
-        self.fps_combo.setEditable(True)
-        for value in GIF_FPS_OPTIONS:
-            text = f"{float(value):.3f}".rstrip("0").rstrip(".")
-            self.fps_combo.addItem(text, float(value))
-        self.fps_combo.setCurrentText(f"{DEFAULT_GIF_FPS:.3f}".rstrip("0").rstrip("."))
-        self.fps_combo.currentIndexChanged.connect(self.optionsChanged.emit)
-        line_edit = self.fps_combo.lineEdit()
-        if line_edit is not None:
-            line_edit.editingFinished.connect(self.optionsChanged.emit)
-        form.addRow("FPS", self.fps_combo)
+        self.fps_spin = QSpinBox()
+        self.fps_spin.setRange(1, 240)
+        self.fps_spin.setSingleStep(1)
+        self.fps_spin.setValue(max(1, int(round(float(DEFAULT_GIF_FPS)))))
+        self.fps_spin.valueChanged.connect(lambda _value: self.optionsChanged.emit())
+        form.addRow("FPS", self.fps_spin)
 
         self.loop_spin = QSpinBox()
         self.loop_spin.setRange(0, 9999)
@@ -96,12 +89,7 @@ class GifExportPanel(QGroupBox):
         root.addWidget(hint_label)
 
     def current_request(self) -> GifExportRequest:
-        fps_text = str(self.fps_combo.currentText() or "").strip()
-        try:
-            fps = float(fps_text or DEFAULT_GIF_FPS)
-        except Exception:
-            fps = float(DEFAULT_GIF_FPS)
-        fps = max(0.1, fps)
+        fps = float(max(1, int(self.fps_spin.value())))
 
         scales: list[float] = []
         for scale, check in self._scale_checks:
@@ -123,14 +111,14 @@ class GifExportPanel(QGroupBox):
         keep_frame_images: bool | None = None,
         scale_factors: list[float] | tuple[float, ...] | None = None,
     ) -> None:
-        self.fps_combo.blockSignals(True)
+        self.fps_spin.blockSignals(True)
         self.loop_spin.blockSignals(True)
         self.keep_frames_check.blockSignals(True)
         for _scale, check in self._scale_checks:
             check.blockSignals(True)
         try:
             if fps is not None:
-                self.fps_combo.setCurrentText(f"{float(fps):.3f}".rstrip("0").rstrip("."))
+                self.fps_spin.setValue(max(1, min(240, int(round(float(fps))))))
             if loop is not None:
                 self.loop_spin.setValue(max(0, int(loop)))
             if keep_frame_images is not None:
@@ -144,4 +132,4 @@ class GifExportPanel(QGroupBox):
                 check.blockSignals(False)
             self.keep_frames_check.blockSignals(False)
             self.loop_spin.blockSignals(False)
-            self.fps_combo.blockSignals(False)
+            self.fps_spin.blockSignals(False)

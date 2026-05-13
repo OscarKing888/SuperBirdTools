@@ -22,7 +22,6 @@ from PyQt6.QtWidgets import QApplication, QFileDialog, QMessageBox
 from birdstamp.export_frame_cache import (
     SOURCE_FRAME_BUCKET_KIND,
     build_source_frame_bucket_key,
-    build_source_frame_signature,
     create_frame_cache_plan,
     frame_output_path as _cache_frame_output_path,
     global_export_settings_from_settings,
@@ -39,7 +38,12 @@ from birdstamp.gif_export import (
     build_gif_variant_output_paths,
     export_gif,
 )
-from birdstamp.video_export import VideoFrameJob, render_video_frame, resolve_video_render_workers
+from birdstamp.video_export import (
+    VideoFrameJob,
+    render_video_frame,
+    resolve_video_render_workers,
+    source_frame_signature_for_job,
+)
 
 OUTPUT_FORMAT_OPTIONS = editor_options.OUTPUT_FORMAT_OPTIONS
 _IMAGE_EXPORT_PROGRESS_HIDE_DELAY_MS = 600
@@ -410,7 +414,7 @@ class _BirdStampExporterMixin:
 
         for index, job in enumerate(jobs, start=1):
             source_signature = path_signature(job.path)
-            frame_signature = build_source_frame_signature(render_settings=job.settings)
+            frame_signature = source_frame_signature_for_job(job)
             reusable_path = reusable_frame_path(
                 cache_plan,
                 manifest,

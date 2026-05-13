@@ -68,6 +68,7 @@ _normalize_center_mode = editor_core.normalize_center_mode
 _resize_fit = editor_core.resize_fit
 _pad_image = editor_core.pad_image
 _crop_image_by_normalized_box = editor_core.crop_image_by_normalized_box
+_compute_crop_output_size = editor_core.compute_crop_output_size
 _compute_ratio_crop_box = editor_core.compute_ratio_crop_box
 _draw_focus_box_overlay = editor_core.draw_focus_box_overlay
 _expand_unit_box_to_unclamped_pixels = editor_core.expand_unit_box_to_unclamped_pixels
@@ -103,6 +104,7 @@ class VideoFrameJob:
     metadata_context: dict[str, str]
     photo_info: _template_context.PhotoInfo | None = None
     source_image: Image.Image | None = None
+    crop_plan: tuple[tuple[float, float, float, float] | None, tuple[int, int, int, int]] | None = None
 
 
 @dataclass(slots=True)
@@ -384,8 +386,60 @@ def _sanitize_video_work_name(text: str, *, max_length: int = 64) -> str:
     return sanitized or "video"
 
 
+def _normalize_precomputed_crop_plan(
+    crop_plan: Any,
+) -> tuple[tuple[float, float, float, float] | None, tuple[int, int, int, int]] | None:
+    if not isinstance(crop_plan, (list, tuple)) or len(crop_plan) != 2:
+        return None
+    raw_box, raw_pad = crop_plan
+    crop_box: tuple[float, float, float, float] | None = None
+    if raw_box is not None:
+        if not isinstance(raw_box, (list, tuple)) or len(raw_box) != 4:
+            return None
+        try:
+            normalized_box = _normalize_unit_box(
+                (
+                    float(raw_box[0]),
+                    float(raw_box[1]),
+                    float(raw_box[2]),
+                    float(raw_box[3]),
+                )
+            )
+        except Exception:
+            return None
+        if normalized_box is None:
+            return None
+        crop_box = normalized_box
+    if not isinstance(raw_pad, (list, tuple)) or len(raw_pad) != 4:
+        return None
+    try:
+        outer_pad = tuple(max(0, int(value)) for value in raw_pad)
+    except Exception:
+        return None
+    return (crop_box, (outer_pad[0], outer_pad[1], outer_pad[2], outer_pad[3]))
+
+
+def _serialize_crop_plan(crop_plan: Any) -> dict[str, Any] | None:
+    normalized = _normalize_precomputed_crop_plan(crop_plan)
+    if normalized is None:
+        return None
+    crop_box, outer_pad = normalized
+    return {
+        "crop_box": [round(float(value), 10) for value in crop_box] if crop_box is not None else None,
+        "outer_pad": [int(value) for value in outer_pad],
+    }
+
+
+def source_frame_signature_for_job(job: VideoFrameJob) -> str:
+    render_settings = _clone_render_settings(job.settings)
+    crop_payload = _serialize_crop_plan(job.crop_plan)
+    if crop_payload is not None:
+        render_settings["_precomputed_crop_plan"] = crop_payload
+    return build_source_frame_signature(render_settings=render_settings)
+
+
 def _source_frame_signature_for_job(job: VideoFrameJob) -> str:
-    return build_source_frame_signature(render_settings=_clone_render_settings(job.settings))
+    return source_frame_signature_for_job(job)
 
 
 def _video_frame_signature_for_source(
@@ -440,6 +494,7 @@ def _clone_render_settings(settings: dict[str, Any]) -> dict[str, Any]:
         "draw_banner": _parse_bool_value(settings.get("draw_banner"), True),
         "draw_text": _parse_bool_value(settings.get("draw_text"), True),
         "draw_focus": _parse_bool_value(settings.get("draw_focus"), False),
+        "uniform_auto_crop": _parse_bool_value(settings.get("uniform_auto_crop"), False),
         "ratio": ratio,
         "center_mode": _normalize_center_mode(settings.get("center_mode") or _DEFAULT_TEMPLATE_CENTER_MODE),
         "max_long_edge": max_long_edge,
@@ -625,6 +680,208 @@ def _compute_auto_bird_crop_plan(
     return (crop_box, (outer_top, outer_bottom, outer_left, outer_right))
 
 
+def _crop_plan_center_in_source_pixels(
+    *,
+    source_width: int,
+    source_height: int,
+    crop_plan: tuple[tuple[float, float, float, float] | None, tuple[int, int, int, int]],
+) -> tuple[float, float] | None:
+    if source_width <= 0 or source_height <= 0:
+        return None
+    crop_box, outer_pad = crop_plan
+    top, bottom, left, right = outer_pad
+    padded_width = source_width + max(0, int(left)) + max(0, int(right))
+    padded_height = source_height + max(0, int(top)) + max(0, int(bottom))
+    if padded_width <= 0 or padded_height <= 0:
+        return None
+    box = _normalize_unit_box(crop_box) or (0.0, 0.0, 1.0, 1.0)
+    crop_left = box[0] * padded_width
+    crop_top = box[1] * padded_height
+    crop_right = box[2] * padded_width
+    crop_bottom = box[3] * padded_height
+    return (
+        ((crop_left + crop_right) * 0.5) - max(0, int(left)),
+        ((crop_top + crop_bottom) * 0.5) - max(0, int(top)),
+    )
+
+
+def _compute_fixed_size_crop_plan(
+    *,
+    source_width: int,
+    source_height: int,
+    center: tuple[float, float],
+    crop_width: int,
+    crop_height: int,
+) -> tuple[tuple[float, float, float, float], tuple[int, int, int, int]]:
+    target_width = max(1, int(crop_width))
+    target_height = max(1, int(crop_height))
+    center_x = float(center[0])
+    center_y = float(center[1])
+    crop_left = int(round(center_x - target_width * 0.5))
+    crop_top = int(round(center_y - target_height * 0.5))
+    crop_right = crop_left + target_width
+    crop_bottom = crop_top + target_height
+
+    outer_left = max(0, -crop_left)
+    outer_top = max(0, -crop_top)
+    outer_right = max(0, crop_right - source_width)
+    outer_bottom = max(0, crop_bottom - source_height)
+
+    padded_width = source_width + outer_left + outer_right
+    padded_height = source_height + outer_top + outer_bottom
+    if padded_width <= 0 or padded_height <= 0:
+        return ((0.0, 0.0, 1.0, 1.0), (0, 0, 0, 0))
+
+    normalized = (
+        (crop_left + outer_left) / float(padded_width),
+        (crop_top + outer_top) / float(padded_height),
+        (crop_right + outer_left) / float(padded_width),
+        (crop_bottom + outer_top) / float(padded_height),
+    )
+    return (
+        _normalize_unit_box(normalized) or (0.0, 0.0, 1.0, 1.0),
+        (outer_top, outer_bottom, outer_left, outer_right),
+    )
+
+
+def _uniform_crop_group_key(settings: dict[str, Any]) -> tuple[str, int] | None:
+    if not _parse_bool_value(settings.get("uniform_auto_crop"), False):
+        return None
+    ratio = _parse_ratio_value(settings.get("ratio"))
+    if ratio is None or _is_ratio_free(ratio) or _is_ratio_no_crop(ratio):
+        return None
+    if _crop_box_has_effect(settings.get("crop_box")):
+        return None
+    try:
+        max_long_edge = max(0, int(settings.get("max_long_edge") or 0))
+    except Exception:
+        max_long_edge = 0
+    return (f"{float(ratio):.8f}", max_long_edge)
+
+
+def _resolve_uniform_group_target_size(
+    *,
+    ratio_text: str,
+    sizes: list[tuple[int, int]],
+) -> tuple[int, int] | None:
+    if not sizes:
+        return None
+    try:
+        ratio = float(ratio_text)
+    except Exception:
+        return None
+    if ratio <= 0:
+        return None
+    width = max(1, max(int(size[0]) for size in sizes))
+    height = max(1, max(int(size[1]) for size in sizes))
+    if width / float(height) < ratio:
+        width = max(width, int(math.ceil(height * ratio)))
+    else:
+        height = max(height, int(math.ceil(width / ratio)))
+    return (width, height)
+
+
+def _open_job_image_for_crop_plan(job: VideoFrameJob) -> tuple[Image.Image, bool]:
+    if job.source_image is not None:
+        return (job.source_image, False)
+    return (decode_image(job.path, decoder="auto"), True)
+
+
+def prepare_uniform_auto_crop_plans(
+    jobs: list[VideoFrameJob],
+    *,
+    bird_box_cache: dict[str, tuple[float, float, float, float] | None] | None = None,
+    bird_box_lock: threading.Lock | None = None,
+    progress_callback: Callable[[int, int], None] | None = None,
+    cancel_event: threading.Event | None = None,
+) -> int:
+    """Precompute crop plans and expand eligible auto crops to one size per ratio group."""
+    total = len(jobs)
+    if total <= 0:
+        return 0
+    if not any(_parse_bool_value(job.settings.get("uniform_auto_crop"), False) for job in jobs):
+        return 0
+
+    cache = bird_box_cache if isinstance(bird_box_cache, dict) else {}
+    candidates: list[dict[str, Any]] = []
+    grouped_sizes: dict[tuple[str, int], list[tuple[int, int]]] = {}
+    prepared = 0
+
+    for index, job in enumerate(jobs, start=1):
+        _raise_if_cancel_requested(cancel_event, message="视频导出已中断，正在停止统一裁切预计算。")
+        settings = _clone_render_settings(job.settings)
+        if not _parse_bool_value(settings.get("uniform_auto_crop"), False):
+            if callable(progress_callback):
+                progress_callback(index, total)
+            continue
+
+        image, close_image = _open_job_image_for_crop_plan(job)
+        try:
+            crop_plan = _compute_crop_plan_for_image(
+                path=job.path,
+                image=image,
+                raw_metadata=dict(job.raw_metadata or {}),
+                settings=settings,
+                bird_box_cache=cache,
+                bird_box_lock=bird_box_lock,
+            )
+            job.crop_plan = crop_plan
+            prepared += 1
+            group_key = _uniform_crop_group_key(settings)
+            crop_size = _compute_crop_output_size(
+                image.width,
+                image.height,
+                crop_plan[0],
+                crop_plan[1],
+            )
+            center = _crop_plan_center_in_source_pixels(
+                source_width=image.width,
+                source_height=image.height,
+                crop_plan=crop_plan,
+            )
+            if group_key is not None and crop_size is not None and center is not None:
+                candidates.append(
+                    {
+                        "job": job,
+                        "group_key": group_key,
+                        "source_width": image.width,
+                        "source_height": image.height,
+                        "center": center,
+                        "crop_size": crop_size,
+                    }
+                )
+                grouped_sizes.setdefault(group_key, []).append(crop_size)
+        finally:
+            if close_image:
+                try:
+                    image.close()
+                except Exception:
+                    pass
+        if callable(progress_callback):
+            progress_callback(index, total)
+
+    target_sizes = {
+        group_key: _resolve_uniform_group_target_size(
+            ratio_text=group_key[0],
+            sizes=sizes,
+        )
+        for group_key, sizes in grouped_sizes.items()
+    }
+    for candidate in candidates:
+        target_size = target_sizes.get(candidate["group_key"])
+        if target_size is None:
+            continue
+        job = candidate["job"]
+        job.crop_plan = _compute_fixed_size_crop_plan(
+            source_width=int(candidate["source_width"]),
+            source_height=int(candidate["source_height"]),
+            center=candidate["center"],
+            crop_width=target_size[0],
+            crop_height=target_size[1],
+        )
+    return prepared
+
+
 def _compute_crop_plan_for_image(
     *,
     path: Path | None,
@@ -736,14 +993,18 @@ def render_video_frame(
     else:
         image = decode_image(job.path, decoder="auto")
 
-    crop_box, outer_pad = _compute_crop_plan_for_image(
-        path=job.path,
-        image=image,
-        raw_metadata=raw_metadata,
-        settings=settings,
-        bird_box_cache=cache,
-        bird_box_lock=bird_box_lock,
-    )
+    precomputed_crop_plan = _normalize_precomputed_crop_plan(job.crop_plan)
+    if precomputed_crop_plan is None:
+        crop_box, outer_pad = _compute_crop_plan_for_image(
+            path=job.path,
+            image=image,
+            raw_metadata=raw_metadata,
+            settings=settings,
+            bird_box_cache=cache,
+            bird_box_lock=bird_box_lock,
+        )
+    else:
+        crop_box, outer_pad = precomputed_crop_plan
     processed = _build_processed_image(
         image,
         raw_metadata,
@@ -1100,6 +1361,35 @@ def _ensure_source_frame_cache(
     dirty_path_keys: set[str],
 ) -> tuple[str, Any, list[Path]]:
     total = len(jobs)
+    if any(
+        _parse_bool_value(job.settings.get("uniform_auto_crop"), False)
+        and _normalize_precomputed_crop_plan(job.crop_plan) is None
+        for job in jobs
+    ):
+        _emit_progress(
+            progress_callback,
+            phase="prepare",
+            current=0,
+            total=total,
+            message=f"正在预计算统一自动裁切尺寸，共 {total} 张。",
+        )
+
+        def _on_prepare_progress(current: int, total_count: int) -> None:
+            _emit_progress(
+                progress_callback,
+                phase="prepare",
+                current=current,
+                total=total_count,
+                message=f"正在预计算统一自动裁切尺寸 {current}/{total_count}",
+            )
+
+        prepare_uniform_auto_crop_plans(
+            jobs,
+            bird_box_cache=bird_box_cache,
+            bird_box_lock=bird_box_lock,
+            progress_callback=_on_prepare_progress,
+            cancel_event=cancel_event,
+        )
     source_bucket_key = _render_cache_key(jobs, options)
     source_plan = create_frame_cache_plan(
         output_path,
@@ -1926,10 +2216,12 @@ __all__ = [
     "ffmpeg_install_script_path",
     "find_ffmpeg_executable",
     "normalize_frame_size",
+    "prepare_uniform_auto_crop_plans",
     "preferred_ffmpeg_binary_path",
     "preferred_ffmpeg_tool_dir",
     "render_video_frame",
     "resolve_target_frame_size",
     "resolve_video_render_workers",
+    "source_frame_signature_for_job",
     "validate_video_export_options",
 ]

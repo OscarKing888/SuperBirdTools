@@ -15,9 +15,8 @@ _FALLBACK_STYLE_OPTIONS = ("normal",)
 _FALLBACK_RATIO_OPTIONS: list[tuple[str, float | None | str]] = [("原比例", None), ("不裁切", RATIO_NO_CROP)]
 _FALLBACK_MAX_LONG_EDGE_OPTIONS = [0]
 _FALLBACK_OUTPUT_FORMAT_OPTIONS: list[tuple[str, str]] = [("png", "PNG"), ("jpg", "JPG")]
-_FALLBACK_GIF_FPS_OPTIONS = [2.0, 4.0, 6.0, 8.0, 10.0, 12.0]
 _FALLBACK_GIF_SCALE_OPTIONS: list[tuple[str, float]] = [("1/2", 0.5), ("1/4", 0.25), ("1/8", 0.125)]
-_FALLBACK_DEFAULT_GIF_FPS = 6.0
+_FALLBACK_DEFAULT_GIF_FPS = 24.0
 _FALLBACK_DEFAULT_GIF_LOOP = 0
 _FALLBACK_VIDEO_CONTAINER_OPTIONS: list[tuple[str, str]] = [("mp4", "MP4"), ("mov", "MOV")]
 _FALLBACK_VIDEO_CODEC_OPTIONS: list[tuple[str, str]] = [("h264", "H.264 / libx264"), ("h265", "H.265 / libx265")]
@@ -243,7 +242,6 @@ def load_editor_options() -> dict[str, Any]:
     ratio_options = _normalize_ratio_options(raw.get("ratio_options"))
     max_long_edge_options = _normalize_max_edges(raw.get("max_long_edge_options"))
     output_format_options = _normalize_output_formats(raw.get("output_format_options"), _FALLBACK_OUTPUT_FORMAT_OPTIONS)
-    gif_fps_options = _normalize_numeric_list(raw.get("gif_fps_options"), _FALLBACK_GIF_FPS_OPTIONS)
     gif_scale_options = _normalize_labeled_numeric_values(raw.get("gif_scale_options"), _FALLBACK_GIF_SCALE_OPTIONS)
     video_container_options = _normalize_output_formats(raw.get("video_container_options"), _FALLBACK_VIDEO_CONTAINER_OPTIONS)
     video_codec_options = _normalize_labeled_values(raw.get("video_codec_options"), _FALLBACK_VIDEO_CODEC_OPTIONS)
@@ -338,7 +336,6 @@ def load_editor_options() -> dict[str, Any]:
         "ratio_options": ratio_options,
         "max_long_edge_options": max_long_edge_options,
         "output_format_options": output_format_options,
-        "gif_fps_options": gif_fps_options,
         "gif_scale_options": gif_scale_options,
         "default_gif_fps": default_gif_fps,
         "default_gif_loop": default_gif_loop,
@@ -369,7 +366,6 @@ STYLE_OPTIONS: tuple[str, ...] = _EDITOR_OPTIONS["style_options"]
 RATIO_OPTIONS: list[tuple[str, float | None | str]] = _EDITOR_OPTIONS["ratio_options"]
 MAX_LONG_EDGE_OPTIONS: list[int] = _EDITOR_OPTIONS["max_long_edge_options"]
 OUTPUT_FORMAT_OPTIONS: list[tuple[str, str]] = _EDITOR_OPTIONS["output_format_options"]
-GIF_FPS_OPTIONS: list[float] = _EDITOR_OPTIONS["gif_fps_options"]
 GIF_SCALE_OPTIONS: list[tuple[str, float]] = _EDITOR_OPTIONS["gif_scale_options"]
 DEFAULT_GIF_FPS: float = _EDITOR_OPTIONS["default_gif_fps"]
 DEFAULT_GIF_LOOP: int = _EDITOR_OPTIONS["default_gif_loop"]
