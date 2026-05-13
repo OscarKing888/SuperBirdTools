@@ -7,11 +7,12 @@ from typing import Any
 
 from birdstamp.config import resolve_bundled_path
 
-# Sentinel for "free aspect ratio" in crop (no ratio lock when dragging 9-grid).
+# Sentinel for "no crop" and "free aspect ratio" crop modes.
+RATIO_NO_CROP = "no_crop"
 RATIO_FREE = "free"
 
 _FALLBACK_STYLE_OPTIONS = ("normal",)
-_FALLBACK_RATIO_OPTIONS: list[tuple[str, float | None]] = [("原比例", None)]
+_FALLBACK_RATIO_OPTIONS: list[tuple[str, float | None | str]] = [("原比例", None), ("不裁切", RATIO_NO_CROP)]
 _FALLBACK_MAX_LONG_EDGE_OPTIONS = [0]
 _FALLBACK_OUTPUT_FORMAT_OPTIONS: list[tuple[str, str]] = [("png", "PNG"), ("jpg", "JPG")]
 _FALLBACK_GIF_FPS_OPTIONS = [2.0, 4.0, 6.0, 8.0, 10.0, 12.0]
@@ -78,9 +79,16 @@ def _normalize_ratio_options(value: Any) -> list[tuple[str, float | None | str]]
         ratio: float | None | str
         if ratio_raw is None:
             ratio = None
-        elif isinstance(ratio_raw, str) and str(ratio_raw).strip().lower() == "free":
-            ratio = RATIO_FREE
         else:
+            if isinstance(ratio_raw, str):
+                ratio_text = str(ratio_raw).strip().lower()
+                if ratio_text in {"no_crop", "no-crop", "nocrop"}:
+                    items.append((label, RATIO_NO_CROP))
+                    continue
+                if ratio_text == "free":
+                    items.append((label, RATIO_FREE))
+                    continue
+                ratio_raw = ratio_text
             try:
                 ratio = float(ratio_raw)
             except Exception:

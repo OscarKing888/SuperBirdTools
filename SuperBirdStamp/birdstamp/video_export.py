@@ -59,6 +59,7 @@ _safe_color = editor_utils.safe_color
 _path_key = editor_utils.path_key
 _parse_ratio_value = editor_core.parse_ratio_value
 _is_ratio_free = editor_core.is_ratio_free
+_is_ratio_no_crop = editor_core.is_ratio_no_crop
 _crop_box_has_effect = editor_core.crop_box_has_effect
 _crop_plan_from_override = editor_core._crop_plan_from_override
 _parse_bool_value = editor_core.parse_bool_value
@@ -634,6 +635,8 @@ def _compute_crop_plan_for_image(
     bird_box_lock: threading.Lock | None = None,
 ) -> tuple[tuple[float, float, float, float] | None, tuple[int, int, int, int]]:
     ratio = _parse_ratio_value(settings.get("ratio"))
+    if _is_ratio_no_crop(ratio):
+        return (None, (0, 0, 0, 0))
     crop_box_raw = settings.get("crop_box")
     if crop_box_raw is not None and isinstance(crop_box_raw, (list, tuple)) and len(crop_box_raw) == 4:
         try:

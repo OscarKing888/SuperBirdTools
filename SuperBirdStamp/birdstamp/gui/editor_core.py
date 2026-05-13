@@ -22,8 +22,9 @@ from app_common.focus_calc import (
 from birdstamp.config import resolve_bundled_path
 
 try:
-    from birdstamp.gui.editor_options import RATIO_FREE
+    from birdstamp.gui.editor_options import RATIO_FREE, RATIO_NO_CROP
 except ImportError:
+    RATIO_NO_CROP = "no_crop"
     RATIO_FREE = "free"  # fallback when GUI not available (e.g. CLI)
 
 # Center mode constants (used by CLI and GUI)
@@ -779,9 +780,13 @@ def pad_image(
 
 
 def parse_ratio_value(value: Any) -> float | None | str:
-    """Return ratio as float, None (original aspect), or RATIO_FREE (no aspect lock)."""
+    """Return ratio as float, None (original aspect), RATIO_NO_CROP, or RATIO_FREE."""
     if value is None:
         return None
+    if value is RATIO_NO_CROP or (
+        isinstance(value, str) and str(value).strip().lower() in {"no_crop", "no-crop", "nocrop"}
+    ):
+        return RATIO_NO_CROP
     if value is RATIO_FREE or (isinstance(value, str) and str(value).strip().lower() == "free"):
         return RATIO_FREE
     try:
@@ -796,6 +801,11 @@ def parse_ratio_value(value: Any) -> float | None | str:
 def is_ratio_free(ratio: Any) -> bool:
     """True when ratio is the free-aspect sentinel (no constraint on 9-grid crop)."""
     return ratio is RATIO_FREE or ratio == RATIO_FREE
+
+
+def is_ratio_no_crop(ratio: Any) -> bool:
+    """True when the ratio selector should bypass all crop boxes and padding."""
+    return ratio is RATIO_NO_CROP or ratio == RATIO_NO_CROP
 
 
 def parse_bool_value(value: Any, default: bool = False) -> bool:
@@ -961,9 +971,10 @@ def constrain_box_to_ratio(
     request outer padding and fill the extra area later.
 
     In normalized space (r-l)/(b-t) must equal ratio*height/width so that (r-l)*width/((b-t)*height)=ratio.
-    When ratio is None, use image aspect. When ratio is RATIO_FREE, return box unchanged.
+    When ratio is None, use image aspect. When ratio is RATIO_FREE or
+    RATIO_NO_CROP, return box unchanged.
     """
-    if is_ratio_free(ratio) or width <= 0 or height <= 0:
+    if is_ratio_no_crop(ratio) or is_ratio_free(ratio) or width <= 0 or height <= 0:
         return normalize_extended_unit_box(box) or box
     # Pixel aspect R = (r-l)*W / ((b-t)*H) => (r-l)/(b-t) = R*H/W in normalized space.
     pixel_ratio = float(ratio) if ratio is not None and ratio > 0 else width / float(height)
@@ -1278,10 +1289,14 @@ def compute_crop_plan(
     Returns the normalised crop box (0-1 coordinates) and the outer padding
     (top, bottom, left, right) in pixels that must be added to the image *before*
     applying the crop. Matches ``_BirdStampCropCalculatorMixin._compute_crop_plan_for_image``.
+    When ratio is RATIO_NO_CROP, returns (None, (0,0,0,0)) before considering
+    crop_box_override so stored crop boxes are ignored.
     When crop_box_override is provided and effective, it is used and outer_pad is derived from it.
     When ratio is RATIO_FREE and no override, returns (None, (0,0,0,0)).
     """
     w, h = image.size
+    if is_ratio_no_crop(ratio):
+        return (None, (0, 0, 0, 0))
     if crop_box_override is not None and crop_box_has_effect(crop_box_override):
         box_norm, outer_pad = _crop_plan_from_override(w, h, crop_box_override)
         return (box_norm, outer_pad)
@@ -1362,7 +1377,7 @@ def apply_full_crop(
     image: Image.Image,
     raw_metadata: dict[str, Any],
     *,
-    ratio: float | None,
+    ratio: float | None | str,
     center_mode: str,
     camera_type: CameraFocusType | str | None = None,
     inner_top: int = 0,
@@ -1403,7 +1418,7 @@ def apply_editor_crop(
     *,
     source_path: Path,
     raw_metadata: dict[str, Any],
-    ratio: float | None,
+    ratio: float | None | str,
     center_mode: str,
     camera_type: CameraFocusType | str | None = None,
     crop_padding_px: int = DEFAULT_CROP_PADDING_PX,
@@ -1414,6 +1429,9 @@ def apply_editor_crop(
     w, h = image.width, image.height
     if w <= 0 or h <= 0:
         return image
+    ratio = parse_ratio_value(ratio)
+    if is_ratio_no_crop(ratio) or is_ratio_free(ratio) or ratio is None:
+        return resize_fit(image, max_long_edge) if max_long_edge > 0 else image
     center_mode = normalize_center_mode(center_mode)
     anchor: tuple[float, float] = (0.5, 0.5)
     keep_box: tuple[float, float, float, float] | None = None

@@ -141,6 +141,8 @@ def render(
         from birdstamp.gui.editor_utils import build_metadata_context
         from birdstamp.gui.editor_core import (
             apply_editor_crop,
+            is_ratio_free as _is_ratio_free,
+            is_ratio_no_crop as _is_ratio_no_crop,
             parse_bool_value as _parse_bool,
             parse_ratio_value as _parse_ratio,
             resize_fit,
@@ -211,7 +213,7 @@ def render(
             tpl_max_edge = max(0, int(template_payload.get("max_long_edge") or 0))
             effective_max_edge = max_edge_val if max_edge_val > 0 else tpl_max_edge
 
-            if tpl_ratio is not None:
+            if tpl_ratio is not None and not _is_ratio_no_crop(tpl_ratio) and not _is_ratio_free(tpl_ratio):
                 image = apply_editor_crop(
                     image,
                     source_path=source,

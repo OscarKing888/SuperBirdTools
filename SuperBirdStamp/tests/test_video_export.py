@@ -158,6 +158,38 @@ def test_render_video_frame_applies_crop_box_override(tmp_path) -> None:
         source_image.close()
 
 
+def test_render_video_frame_no_crop_ignores_crop_box_override(tmp_path) -> None:
+    source_path = tmp_path / "source.jpg"
+    source_image = Image.new("RGB", (100, 50), "#FF0000")
+    for x in range(50, 100):
+        for y in range(50):
+            source_image.putpixel((x, y), (0, 0, 255))
+    source_image.save(source_path)
+
+    job = VideoFrameJob(
+        path=source_path,
+        settings={
+            "draw_banner": False,
+            "draw_text": False,
+            "draw_focus": False,
+            "ratio": "no_crop",
+            "crop_box": [0.0, 0.0, 0.5, 1.0],
+        },
+        raw_metadata={"SourceFile": str(source_path)},
+        metadata_context={},
+        source_image=source_image,
+    )
+
+    rendered = render_video_frame(job)
+    try:
+        assert rendered.size == (100, 50)
+        assert rendered.getpixel((10, 25)) == (255, 0, 0)
+        assert rendered.getpixel((75, 25)) == (0, 0, 255)
+    finally:
+        rendered.close()
+        source_image.close()
+
+
 def test_export_video_reuses_preserved_temp_frames() -> None:
     import birdstamp.video_export as video_export
 

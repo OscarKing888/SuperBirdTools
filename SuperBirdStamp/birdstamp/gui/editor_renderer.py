@@ -36,6 +36,7 @@ _normalize_center_mode              = editor_core.normalize_center_mode
 _parse_bool_value                   = editor_core.parse_bool_value
 _parse_ratio_value                  = editor_core.parse_ratio_value
 _is_ratio_free                      = editor_core.is_ratio_free
+_is_ratio_no_crop                   = editor_core.is_ratio_no_crop
 _parse_padding_value                = editor_core.parse_padding_value
 _pad_image                          = editor_core.pad_image
 _resize_fit                         = editor_core.resize_fit
@@ -54,6 +55,7 @@ _DEFAULT_TEMPLATE_MAX_LONG_EDGE     = editor_template.DEFAULT_TEMPLATE_MAX_LONG_
 _DEFAULT_CROP_PADDING_PX            = editor_core.DEFAULT_CROP_PADDING_PX
 _CENTER_MODE_CUSTOM                 = editor_core.CENTER_MODE_CUSTOM
 RATIO_FREE                          = editor_options.RATIO_FREE
+RATIO_NO_CROP                       = editor_options.RATIO_NO_CROP
 OUTPUT_FORMAT_OPTIONS               = editor_options.OUTPUT_FORMAT_OPTIONS
 
 
@@ -117,8 +119,9 @@ class _BirdStampRendererMixin:
             canvas.set_crop_edit_mode(crop_edit.isChecked() if crop_edit else False)
         if hasattr(canvas, "set_crop_ratio_constraint"):
             r = self._selected_ratio()
+            ratio_constraint = float(r) if isinstance(r, (int, float)) and not isinstance(r, bool) else None
             canvas.set_crop_ratio_constraint(
-                r if (r is not None and not _is_ratio_free(r)) else None,
+                ratio_constraint,
                 _is_ratio_free(r),
             )
 
@@ -510,13 +513,17 @@ class _BirdStampRendererMixin:
             data = self.ratio_combo.itemData(idx)
             if data is None and ratio is None:
                 return idx
+            if data is RATIO_NO_CROP or data == RATIO_NO_CROP:
+                if _is_ratio_no_crop(ratio):
+                    return idx
+                continue
             if data is RATIO_FREE or data == RATIO_FREE:
                 if ratio is RATIO_FREE or ratio == RATIO_FREE:
                     return idx
                 continue
             if data is None or ratio is None:
                 continue
-            if ratio is RATIO_FREE or ratio == RATIO_FREE:
+            if _is_ratio_no_crop(ratio) or ratio is RATIO_FREE or ratio == RATIO_FREE:
                 continue
             try:
                 if abs(float(data) - float(ratio)) <= 0.0001:

@@ -23,6 +23,7 @@ _compute_ratio_crop_box             = editor_core.compute_ratio_crop_box
 _crop_box_has_effect                = editor_core.crop_box_has_effect
 _crop_plan_from_override            = editor_core._crop_plan_from_override
 _is_ratio_free                      = editor_core.is_ratio_free
+_is_ratio_no_crop                   = editor_core.is_ratio_no_crop
 _normalize_unit_box                 = editor_core.normalize_unit_box
 _box_center                         = editor_core.box_center
 _expand_unit_box_to_unclamped_pixels = editor_core.expand_unit_box_to_unclamped_pixels
@@ -35,7 +36,6 @@ _CENTER_MODE_BIRD                   = editor_core.CENTER_MODE_BIRD
 _CENTER_MODE_FOCUS                  = editor_core.CENTER_MODE_FOCUS
 _CENTER_MODE_IMAGE                  = editor_core.CENTER_MODE_IMAGE
 _CENTER_MODE_CUSTOM                 = editor_core.CENTER_MODE_CUSTOM
-RATIO_FREE                          = editor_options.RATIO_FREE
 OUTPUT_FORMAT_OPTIONS               = editor_options.OUTPUT_FORMAT_OPTIONS
 
 
@@ -205,6 +205,8 @@ class _BirdStampCropMixin:
         settings: dict[str, Any],
     ) -> tuple[tuple[float, float, float, float] | None, tuple[int, int, int, int]]:
         ratio = _parse_ratio_value(settings.get("ratio"))
+        if _is_ratio_no_crop(ratio):
+            return (None, (0, 0, 0, 0))
         crop_box_raw = settings.get("crop_box")
         if crop_box_raw is not None and isinstance(crop_box_raw, (list, tuple)) and len(crop_box_raw) == 4:
             try:
@@ -277,15 +279,7 @@ class _BirdStampCropMixin:
         )
 
     def _selected_ratio(self) -> float | None | str:
-        value = self.ratio_combo.currentData()
-        if value is None:
-            return None
-        if value is RATIO_FREE or value == RATIO_FREE:
-            return RATIO_FREE
-        try:
-            return float(value)
-        except Exception:
-            return None
+        return _parse_ratio_value(self.ratio_combo.currentData())
 
     def _selected_max_long_edge(self) -> int:
         value = self.max_edge_combo.currentData()

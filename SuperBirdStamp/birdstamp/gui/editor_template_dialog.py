@@ -64,6 +64,7 @@ from birdstamp.gui.editor_preview_canvas import (
 # ---------------------------------------------------------------------------
 RATIO_OPTIONS = editor_options.RATIO_OPTIONS
 RATIO_FREE = editor_options.RATIO_FREE
+RATIO_NO_CROP = editor_options.RATIO_NO_CROP
 MAX_LONG_EDGE_OPTIONS = editor_options.MAX_LONG_EDGE_OPTIONS
 COLOR_PRESETS = editor_options.COLOR_PRESETS
 TAG_OPTIONS = editor_options.TAG_OPTIONS
@@ -104,6 +105,7 @@ _normalize_center_mode = editor_core.normalize_center_mode
 _parse_bool_value = editor_core.parse_bool_value
 _parse_ratio_value = editor_core.parse_ratio_value
 _is_ratio_free = editor_core.is_ratio_free
+_is_ratio_no_crop = editor_core.is_ratio_no_crop
 _parse_padding_value = editor_core.parse_padding_value
 _compute_crop_plan = editor_core.compute_crop_plan
 _constrain_box_to_ratio = editor_core.constrain_box_to_ratio
@@ -1365,13 +1367,17 @@ class TemplateManagerDialog(QDialog):
             data = self.template_ratio_combo.itemData(idx)
             if data is None and ratio is None:
                 return idx
+            if data is RATIO_NO_CROP or data == RATIO_NO_CROP:
+                if _is_ratio_no_crop(ratio):
+                    return idx
+                continue
             if data is RATIO_FREE or data == RATIO_FREE:
                 if ratio is RATIO_FREE or ratio == RATIO_FREE:
                     return idx
                 continue
             if data is None or ratio is None:
                 continue
-            if ratio is RATIO_FREE or ratio == RATIO_FREE:
+            if _is_ratio_no_crop(ratio) or ratio is RATIO_FREE or ratio == RATIO_FREE:
                 continue
             try:
                 if abs(float(data) - float(ratio)) <= 0.0001:
@@ -1392,7 +1398,7 @@ class TemplateManagerDialog(QDialog):
             return
         ratio = _parse_ratio_value(self.template_ratio_combo.currentData())
         self.current_payload["ratio"] = ratio
-        if not _is_ratio_free(ratio):
+        if not _is_ratio_no_crop(ratio) and not _is_ratio_free(ratio):
             cb = self.current_payload.get("crop_box")
             img = self._preview_source_image or self.placeholder
             if cb is not None and isinstance(cb, (list, tuple)) and len(cb) == 4 and img is not None:
@@ -2150,8 +2156,9 @@ class TemplateManagerDialog(QDialog):
             canvas.set_crop_edit_mode(self.crop_edit_mode_check.isChecked())
         if hasattr(canvas, "set_crop_ratio_constraint"):
             r = _parse_ratio_value(self.template_ratio_combo.currentData())
+            ratio_constraint = float(r) if isinstance(r, (int, float)) and not isinstance(r, bool) else None
             canvas.set_crop_ratio_constraint(
-                r if (r is not None and not _is_ratio_free(r)) else None,
+                ratio_constraint,
                 _is_ratio_free(r),
             )
 
@@ -2229,7 +2236,12 @@ class TemplateManagerDialog(QDialog):
 
             crop_box_override = None
             cb_raw = self.current_payload.get("crop_box")
-            if cb_raw is not None and isinstance(cb_raw, (list, tuple)) and len(cb_raw) == 4:
+            if (
+                not _is_ratio_no_crop(ratio)
+                and cb_raw is not None
+                and isinstance(cb_raw, (list, tuple))
+                and len(cb_raw) == 4
+            ):
                 try:
                     crop_box_override = (float(cb_raw[0]), float(cb_raw[1]), float(cb_raw[2]), float(cb_raw[3]))
                 except (TypeError, ValueError):

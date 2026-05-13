@@ -12,7 +12,6 @@ import xml.etree.ElementTree as ET
 from collections import defaultdict, deque
 from datetime import datetime
 from functools import lru_cache
-from importlib import resources
 from pathlib import Path
 from typing import Any, Callable, Iterable
 
@@ -232,6 +231,7 @@ _compute_ratio_crop_box = editor_core.compute_ratio_crop_box
 _crop_box_has_effect = editor_core.crop_box_has_effect
 _constrain_box_to_ratio = editor_core.constrain_box_to_ratio
 _is_ratio_free = editor_core.is_ratio_free
+_is_ratio_no_crop = editor_core.is_ratio_no_crop
 _crop_image_by_normalized_box = editor_core.crop_image_by_normalized_box
 _detect_primary_bird_box = editor_core.detect_primary_bird_box
 _load_sidecar_xmp_metadata = editor_core.load_sidecar_xmp_metadata
@@ -288,11 +288,9 @@ class _ReportDBListWidget(QListWidget):
 
 def _app_icon_paths() -> tuple[Path, Path]:
     """返回 (窗口用图标路径, AppInfoBar 用 PNG 路径)。窗口优先 .ico/.icns，否则 .png。"""
-    try:
-        with resources.as_file(resources.files("icons")) as res:
-            icon_dir = Path(res)
-    except Exception:
-        icon_dir = Path(__file__).resolve().parent / "icons"
+    icon_dir = resolve_bundled_path("icons")
+    if not icon_dir.is_dir():
+        icon_dir = Path(__file__).resolve().parents[2] / "icons"
     png_path = icon_dir / "app_icon.png"
     ico_path = icon_dir / "app_icon.ico"
     icns_path = icon_dir / "app_icon.icns"
@@ -1666,7 +1664,8 @@ class BirdStampEditorWindow(
         """裁切比例变更：使当前裁切框与新区比例一致（按中心约束），再走 settings 流程。"""
         new_ratio = self._selected_ratio()
         if (
-            not _is_ratio_free(new_ratio)
+            not _is_ratio_no_crop(new_ratio)
+            and not _is_ratio_free(new_ratio)
             and self._crop_box_override is not None
             and self.current_source_image is not None
         ):
@@ -1925,17 +1924,27 @@ class BirdStampEditorWindow(
             return
         self._add_photo_paths(found)
 
-    def _format_ratio_display(self, ratio: float | None) -> str:
+    def _format_ratio_display(self, ratio: Any) -> str:
         parsed = _parse_ratio_value(ratio)
-        if parsed is None:
-            return "原比例"
         idx = self._ratio_combo_index_for_value(parsed)
         if idx >= 0:
             label = str(self.ratio_combo.itemText(idx) or "").strip()
             if label:
                 return label
+        if _is_ratio_no_crop(parsed):
+            return "不裁切"
+        if _is_ratio_free(parsed):
+            return "自由"
+        if parsed is None:
+            return "原比例"
         text = f"{parsed:.4f}".rstrip("0").rstrip(".")
         return text or "原比例"
+
+    def _ratio_sort_key(self, ratio: Any) -> tuple[int, float | str]:
+        parsed = _parse_ratio_value(ratio)
+        if isinstance(parsed, (int, float)) and not isinstance(parsed, bool):
+            return (0, float(parsed))
+        return (1, self._format_ratio_display(parsed))
 
     def _parse_display_capture_datetime(self, value: Any) -> datetime | None:
         if value is None:
@@ -2660,7 +2669,7 @@ class BirdStampEditorWindow(
         item.setData(
             PHOTO_COL_RATIO,
             PHOTO_LIST_SORT_ROLE,
-            (0, float(ratio_value)) if ratio_value is not None else (1, 0.0),
+            self._ratio_sort_key(ratio_value),
         )
         item.setData(
             PHOTO_COL_RATING,
@@ -2737,8 +2746,7 @@ class BirdStampEditorWindow(
         item.setData(
             PHOTO_COL_RATIO,
             PHOTO_LIST_SORT_ROLE,
-            (0, float(_parse_ratio_value(current_settings.get("ratio"))))
-            if _parse_ratio_value(current_settings.get("ratio")) is not None else (1, 0.0),
+            self._ratio_sort_key(current_settings.get("ratio")),
         )
         item.setData(PHOTO_COL_RATING, PHOTO_LIST_SORT_ROLE, (1, 0))
         item.setData(PHOTO_COL_SHUTTER, PHOTO_LIST_SORT_ROLE, (1, 0.0))
