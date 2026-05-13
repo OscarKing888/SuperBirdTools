@@ -13,21 +13,35 @@ Follow `ai_rules/AI_CODING_RULES.md` as the project baseline.
 
 ## Current Workspace
 
-- Current repository root: `/Users/oscar/Pictures/SuperApps/SuperBirdTools`
-- Shared development virtual environment: `/Users/oscar/Pictures/SuperApps/SuperBirdTools/.venv`
-- On macOS, prefer repo-root interpreter `/Users/oscar/Pictures/SuperApps/SuperBirdTools/.venv/bin/python3`
-- On Windows 64-bit, prefer the repo-root interpreter `<repo>\.venv\Scripts\python.exe`; for this project that means `SuperBirdTools\.venv\Scripts\python.exe` under the Windows checkout path
-- Unless a script explicitly requires an app subdirectory, run commands from the repository root above
+- Current Windows checkout root: `E:\SuperApps\SuperBirdTools`
+- Current macOS checkout root: `/Users/oscar/Pictures/SuperApps/SuperBirdTools`
+- Shared development virtual environment: `<repo>/.venv`
+- On Windows 64-bit, use the repo-root interpreter `E:\SuperApps\SuperBirdTools\.venv\Scripts\python.exe`
+- On macOS, use the repo-root interpreter `/Users/oscar/Pictures/SuperApps/SuperBirdTools/.venv/bin/python3`
+- Unless a script explicitly requires an app subdirectory, run commands from the repository root above.
+- Treat `<repo>` as the active checkout root for Codex file links and commands. In this Windows checkout, prefer paths under `E:\SuperApps\SuperBirdTools`.
 
 ## Monorepo Environment
 
 - `.venv` is the preferred shared development virtual environment for this monorepo.
-- Use `python init_dev.py` from `/Users/oscar/Pictures/SuperApps/SuperBirdTools` to initialize the shared `.venv` and fan out to app-level initialization.
-- Root `init_dev.py` creates or reuses `/Users/oscar/Pictures/SuperApps/SuperBirdTools/.venv`, then re-executes inside that environment before calling app-level setup scripts.
+- Use the repo-root `.venv` for normal app execution, `py_compile`, smoke checks, tests, PyInstaller invocations, and ad-hoc Python probes.
+- Do not use `py -3`, global `python`, or another activated environment for validation when `.venv` exists. On Windows in particular, `py -3` may resolve to a global Python without project dependencies such as PIL/PyQt/pytest.
+- Use `python init_dev.py` only for first-time/bootstrap initialization when `.venv` does not exist or needs repair; otherwise invoke scripts through the repo `.venv` interpreter.
+- Root `init_dev.py` creates or reuses `<repo>/.venv`, then re-executes inside that environment before calling app-level setup scripts.
 - `SuperViewer/init_dev.py` installs only SuperViewer dependencies.
 - `SuperViewer/init_dev.py` and `SuperBirdStamp/init_dev.py` reuse the repo-root `.venv` when running inside this monorepo; only fall back to an app-local `.venv` when used outside the monorepo.
 - `SuperBirdStamp/init_dev.py` installs SuperBirdStamp dependencies and then prepares app-specific assets such as `yolo11n.pt` and ffmpeg.
 - Downloaded development assets should not be added to git unless the user explicitly asks for that workflow.
+
+## Windows / PowerShell Command Rules
+
+- The default Windows shell is PowerShell. Do not use bash heredoc syntax such as `python - <<'PY'`; PowerShell treats `<` as a redirection operator and fails before Python starts.
+- For inline Python in PowerShell, pipe a here-string into the repo `.venv` interpreter:
+  `@' ... '@ | .\.venv\Scripts\python.exe -`
+- Keep command working directory at the repo root unless the command requires an app subdirectory.
+- If pytest is missing from `.venv`, report that pytest is unavailable instead of retrying with global Python. Direct `py_compile` and focused Python assertions are acceptable fallback validation.
+- Remove runtime autosave artifacts created during GUI smoke checks, such as `SuperBirdStamp/config/editor_autosave.birdstamp-workspace.json`, unless the user explicitly asks to keep them.
+- After GUI/template smoke checks, inspect `SuperBirdStamp/config/editor_export_state.json` and `SuperBirdStamp/config/templates/*.json` for unintended runtime state changes. Do not leave accidental config/template mutations in the diff; if a change might be user-authored, report it instead of silently reverting it.
 
 ## Packaging Layout
 
@@ -37,13 +51,16 @@ Follow `ai_rules/AI_CODING_RULES.md` as the project baseline.
 - On macOS, aggregate size reduction is implemented via post-build hardlink deduplication; do not describe this as true cross-bundle shared runtime.
 - On Windows, `build_all.bat` should prefer the merged spec workflow (`build_all_win_merged.spec`) so shared runtime files are referenced instead of duplicated when possible.
 - Windows merged build outputs must be distributed together; do not assume one merged app directory is independently relocatable.
+- When invoking PyInstaller directly on Windows, use `.\.venv\Scripts\python.exe -m PyInstaller ...`; for normal full builds prefer `.\build_all.bat` so the merged spec and repo-root `dist/` / `build/` layout are used consistently.
 
 ## Validation Minimum
 
-- Run `py -3 -m py_compile` on changed Python files.
+- These validation interpreter rules override older `py -3` examples in `ai_rules/AI_CODING_RULES.md`.
+- Run `<repo>\.venv\Scripts\python.exe -m py_compile ...` on changed Python files on Windows.
+- Run `<repo>/.venv/bin/python3 -m py_compile ...` on changed Python files on macOS.
 - For metadata changes: write + read-back verification with Chinese sample values.
 - For `.spec` changes: packaged startup smoke test.
-- For `init_dev.py` changes: run at least `python init_dev.py --dry-run` from `/Users/oscar/Pictures/SuperApps/SuperBirdTools`.
+- For `init_dev.py` changes: run at least `.venv\Scripts\python.exe init_dev.py --dry-run` on Windows or `.venv/bin/python3 init_dev.py --dry-run` on macOS from the repo root when `.venv` exists.
 - For `build_all.*` changes: verify the final repo-root `dist/` layout matches the intended multi-app output.
 
 ## Protected Preview Overlay Flow
@@ -58,4 +75,4 @@ Follow `ai_rules/AI_CODING_RULES.md` as the project baseline.
   - Overlay export path still includes active composition grids.
 
 ## New Feature: GUI Options
-- Keep new GUI options feature reading from json config file @birdstamp/gui/resources/editor_options.json.
+- Keep new GUI options feature reading from `SuperBirdStamp/config/editor_options.json` via `birdstamp.config.resolve_bundled_path("config", "editor_options.json")`.
