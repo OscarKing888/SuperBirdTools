@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Any, Callable, Iterable
 
 from PIL import Image, ImageColor, ImageDraw, ImageOps
-from PyQt6.QtCore import QEvent, QPoint, QPointF, QRect, QRectF, Qt, QTimer, pyqtSignal
+from PyQt6.QtCore import QEvent, QPoint, QPointF, QRect, QRectF, Qt, QThread, QTimer, pyqtSignal
 from PyQt6.QtGui import (
     QAction,
     QColor,
@@ -80,7 +80,6 @@ import birdstamp
 from birdstamp.config import get_app_resource_dir, get_config_path, resolve_bundled_path
 from birdstamp.constants import SEND_TO_APP_ID, SUPPORTED_EXTENSIONS
 from birdstamp.decoders.image_decoder import decode_image
-from birdstamp.discover import discover_inputs
 from app_common.exif_io import (
     extract_many,
     extract_many_with_xmp_priority,
@@ -321,6 +320,85 @@ _BIRDSTAMP_DEFAULT_PRODUCT_NAME = "极速鸟框"
 _BIRDSTAMP_DEFAULT_SUBTITLE = "鸟类照片智能裁切与模板叠加"
 
 
+class _PhotoInputDiscoveryWorker(QThread):
+    paths_ready = pyqtSignal(object)
+    progress_updated = pyqtSignal(int)
+    finished_discovery = pyqtSignal(int)
+
+    def __init__(self, inputs: Iterable[Path], *, batch_size: int = 256, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._inputs = [Path(path) for path in inputs]
+        self._batch_size = max(1, int(batch_size))
+        self._stop_requested = False
+
+    def stop(self) -> None:
+        self._stop_requested = True
+        self.requestInterruption()
+
+    def _should_stop(self) -> bool:
+        return self._stop_requested or self.isInterruptionRequested()
+
+    def _iter_supported_directory(self, directory: Path) -> Iterable[Path]:
+        stack = [directory]
+        while stack and not self._should_stop():
+            current = stack.pop()
+            try:
+                with os.scandir(current) as iterator:
+                    entries = list(iterator)
+            except OSError:
+                continue
+            entries.sort(key=lambda entry: entry.name.casefold())
+            for entry in entries:
+                if self._should_stop():
+                    return
+                try:
+                    if entry.is_dir(follow_symlinks=False):
+                        stack.append(Path(entry.path))
+                    elif entry.is_file(follow_symlinks=False):
+                        path = Path(entry.path)
+                        if path.suffix.lower() in SUPPORTED_EXTENSIONS:
+                            yield path
+                except OSError:
+                    continue
+
+    def _iter_supported_inputs(self) -> Iterable[Path]:
+        for raw_path in self._inputs:
+            if self._should_stop():
+                return
+            try:
+                path = raw_path.resolve(strict=False)
+            except OSError:
+                path = raw_path
+            if path.is_file() and path.suffix.lower() in SUPPORTED_EXTENSIONS:
+                yield path
+            elif path.is_dir():
+                yield from self._iter_supported_directory(path)
+
+    def run(self) -> None:  # type: ignore[override]
+        batch: list[Path] = []
+        seen: set[str] = set()
+        found_count = 0
+        try:
+            for path in self._iter_supported_inputs():
+                if self._should_stop():
+                    break
+                key = _path_key(path)
+                if key in seen:
+                    continue
+                seen.add(key)
+                batch.append(path)
+                found_count += 1
+                if len(batch) >= self._batch_size:
+                    self.paths_ready.emit(batch)
+                    self.progress_updated.emit(found_count)
+                    batch = []
+            if batch and not self._should_stop():
+                self.paths_ready.emit(batch)
+        finally:
+            self.progress_updated.emit(found_count)
+            self.finished_discovery.emit(found_count)
+
+
 def _sanitize_about_display_text(value: Any) -> str:
     text = str(value or "").replace("\x00", " ").strip()
     if not text:
@@ -500,6 +578,8 @@ class BirdStampEditorWindow(
         self._received_photo_import_existing_keys: set[str] = set()
         self._received_photo_import_default_settings: dict[str, Any] | None = None
         self._received_photo_import_select_last_added: bool = False
+        self._photo_input_discovery_workers: list[_PhotoInputDiscoveryWorker] = []
+        self._photo_input_discovery_import_options: dict[int, dict[str, Any]] = {}
         self._receive_progress_reset_token: int = 0
         self._pending_preview_fit_reset: bool = False
         self._video_export_worker: VideoExportWorker | None = None
@@ -1528,6 +1608,7 @@ class BirdStampEditorWindow(
             QMessageBox.information(self, "视频导出进行中", "请先中断当前视频导出，或等待导出完成后再关闭窗口。")
             event.ignore()
             return
+        self._stop_photo_input_discovery_workers(wait=True)
         self._stop_photo_list_metadata_loader(wait=True, reset_progress=True)
         self._autosave_workspace_now()
         super().closeEvent(event)
@@ -1957,11 +2038,7 @@ class BirdStampEditorWindow(
         folder = QFileDialog.getExistingDirectory(self, "选择目录", "")
         if not folder:
             return
-        found = discover_inputs(Path(folder), recursive=True)
-        if not found:
-            QMessageBox.information(self, "添加目录", "目录中没有支持的图片文件")
-            return
-        self._add_photo_paths(found)
+        self._add_photo_paths([Path(folder)])
 
     def _format_ratio_display(self, ratio: Any) -> str:
         parsed = _parse_ratio_value(ratio)
@@ -2569,7 +2646,6 @@ class BirdStampEditorWindow(
                 settings=settings,
                 resort=False,
             )
-        self.photo_list.refresh_row_numbers()
 
     def _on_photo_list_metadata_batch_ready(self, batch: dict[str, dict[str, Any]]) -> None:
         if self.sender() is not self._photo_list_metadata_loader:
@@ -2822,6 +2898,132 @@ class BirdStampEditorWindow(
         self._photo_list_metadata_pending_keys.add(key)
         return (True, item)
 
+    @staticmethod
+    def _split_photo_input_paths(paths: Iterable[Path]) -> tuple[list[Path], list[Path]]:
+        file_paths: list[Path] = []
+        directory_paths: list[Path] = []
+        seen_files: set[str] = set()
+        seen_directories: set[str] = set()
+        for incoming in paths:
+            try:
+                path = incoming if isinstance(incoming, Path) else Path(str(incoming))
+                path = path.resolve(strict=False)
+            except Exception:
+                continue
+            if path.is_dir():
+                key = _path_key(path)
+                if key not in seen_directories:
+                    seen_directories.add(key)
+                    directory_paths.append(path)
+                continue
+            if not path.is_file() or path.suffix.lower() not in SUPPORTED_EXTENSIONS:
+                continue
+            key = _path_key(path)
+            if key in seen_files:
+                continue
+            seen_files.add(key)
+            file_paths.append(path)
+        return (file_paths, directory_paths)
+
+    def _start_photo_input_discovery(
+        self,
+        directory_paths: Iterable[Path],
+        *,
+        select_last_added: bool = False,
+        pre_added_report_db_count: int = 0,
+    ) -> None:
+        directories = list(directory_paths)
+        if not directories:
+            return
+        worker = _PhotoInputDiscoveryWorker(directories, parent=self)
+        worker_id = id(worker)
+        self._photo_input_discovery_workers.append(worker)
+        self._photo_input_discovery_import_options[worker_id] = {
+            "select_last_added": bool(select_last_added),
+            "pre_added_report_db_count": max(0, int(pre_added_report_db_count)),
+        }
+        worker.paths_ready.connect(self._on_photo_input_discovery_paths_ready)
+        worker.progress_updated.connect(self._on_photo_input_discovery_progress)
+        worker.finished_discovery.connect(
+            lambda found_count, active_worker=worker: self._on_photo_input_discovery_finished(active_worker, found_count)
+        )
+        worker.finished.connect(worker.deleteLater)
+        worker.start()
+        self._set_status(f"正在扫描 {len(directories)} 个目录...")
+
+    def _stop_photo_input_discovery_workers(self, *, wait: bool = False) -> None:
+        workers = list(self._photo_input_discovery_workers)
+        self._photo_input_discovery_workers.clear()
+        self._photo_input_discovery_import_options.clear()
+        for worker in workers:
+            try:
+                worker.paths_ready.disconnect(self._on_photo_input_discovery_paths_ready)
+            except Exception:
+                pass
+            try:
+                worker.progress_updated.disconnect(self._on_photo_input_discovery_progress)
+            except Exception:
+                pass
+            worker.stop()
+        if wait:
+            for worker in workers:
+                if worker.isRunning():
+                    worker.wait(3000)
+
+    def _on_photo_input_discovery_paths_ready(self, paths: object) -> None:
+        sender = self.sender()
+        if isinstance(sender, _PhotoInputDiscoveryWorker) and sender not in self._photo_input_discovery_workers:
+            return
+        path_batch = [Path(path) for path in paths] if isinstance(paths, list) else []
+        if not path_batch:
+            return
+        options = self._photo_input_discovery_import_options.get(id(sender), {}) if sender is not None else {}
+        pre_added_report_db_count = max(0, int(options.get("pre_added_report_db_count") or 0))
+        if options:
+            options["pre_added_report_db_count"] = 0
+        auto_added_report_db_count = self._auto_add_report_db_paths_for_photos(path_batch)
+        self._enqueue_received_photo_paths(
+            path_batch,
+            select_last_added=bool(options.get("select_last_added")),
+            pre_added_report_db_count=pre_added_report_db_count + auto_added_report_db_count,
+        )
+
+    def _on_photo_input_discovery_progress(self, found_count: int) -> None:
+        sender = self.sender()
+        if isinstance(sender, _PhotoInputDiscoveryWorker) and sender not in self._photo_input_discovery_workers:
+            return
+        if found_count > 0 and not self._received_photo_import_pending_paths and not self._received_photo_import_timer.isActive():
+            self._set_status(f"正在扫描目录，已发现 {found_count} 张照片...")
+
+    def _on_photo_input_discovery_finished(self, worker: _PhotoInputDiscoveryWorker, found_count: int) -> None:
+        worker_id = id(worker)
+        was_active = worker in self._photo_input_discovery_workers
+        options = self._photo_input_discovery_import_options.pop(worker_id, {})
+        if not was_active and not options:
+            return
+        if was_active:
+            self._photo_input_discovery_workers.remove(worker)
+        pre_added_report_db_count = max(0, int(options.get("pre_added_report_db_count") or 0))
+        if pre_added_report_db_count > 0:
+            self._enqueue_received_photo_paths([], pre_added_report_db_count=pre_added_report_db_count)
+        if self._photo_input_discovery_workers:
+            return
+        if self._received_photo_import_pending_paths:
+            if not self._received_photo_import_timer.isActive():
+                self._received_photo_import_timer.start()
+            return
+        if self._received_photo_import_timer.isActive():
+            return
+        if (
+            self._received_photo_import_default_settings is not None
+            or self._received_photo_import_total > 0
+            or self._received_photo_import_auto_report_db_count > 0
+        ):
+            self._finish_received_photo_import()
+            return
+        if found_count == 0:
+            self._set_status("目录中没有支持的图片文件。")
+
     def _begin_received_photo_import(self) -> None:
         if self._received_photo_import_default_settings is not None:
             return
@@ -2885,6 +3087,8 @@ class BirdStampEditorWindow(
         if not pending_paths:
             if self._received_photo_import_timer.isActive():
                 self._received_photo_import_timer.stop()
+            if self._photo_input_discovery_workers:
+                return
             self._finish_received_photo_import()
             return
         self._begin_received_photo_import()
@@ -2926,6 +3130,10 @@ class BirdStampEditorWindow(
             message=f"正在导入接收照片 {self._received_photo_import_processed}/{total} ...",
         )
         if pending_paths:
+            return
+        if self._photo_input_discovery_workers:
+            if self._received_photo_import_timer.isActive():
+                self._received_photo_import_timer.stop()
             return
         self._finish_received_photo_import()
 
@@ -2971,6 +3179,8 @@ class BirdStampEditorWindow(
             and not self._received_photo_import_pending_paths
             and not self._received_photo_import_timer.isActive()
         ):
+            if self._photo_input_discovery_workers:
+                return
             self._finish_received_photo_import()
 
     def _add_photo_paths(
@@ -2980,55 +3190,32 @@ class BirdStampEditorWindow(
         select_last_added: bool = False,
         pre_added_report_db_count: int = 0,
     ) -> None:
-        valid_paths = self._filter_supported_photo_paths(paths)
-        auto_added_report_db_count = self._auto_add_report_db_paths_for_photos(valid_paths)
-        total_auto_added_report_db_count = max(0, int(pre_added_report_db_count)) + auto_added_report_db_count
+        file_paths, directory_paths = self._split_photo_input_paths(paths)
+        base_report_db_count = max(0, int(pre_added_report_db_count))
 
-        existing_keys = {_path_key(path) for path in self._list_photo_paths()}
-        default_settings = self._build_current_render_settings()
-        add_count = 0
-        last_added_item: QTreeWidgetItem | None = None
-        added_paths: list[Path] = []
-        self.photo_list.setSortingEnabled(False)
-        try:
-            for path in valid_paths:
-                added, item = self._append_photo_path_to_list(
-                    path,
-                    existing_keys=existing_keys,
-                    default_settings=default_settings,
-                )
-                if not added:
-                    continue
-                add_count += 1
-                last_added_item = item
-                added_paths.append(path)
-        finally:
-            self.photo_list.setSortingEnabled(True)
+        if file_paths:
+            auto_added_report_db_count = self._auto_add_report_db_paths_for_photos(file_paths)
+            self._enqueue_received_photo_paths(
+                file_paths,
+                select_last_added=select_last_added,
+                pre_added_report_db_count=base_report_db_count + auto_added_report_db_count,
+            )
+            base_report_db_count = 0
 
-        if add_count == 0 and total_auto_added_report_db_count == 0:
-            self._set_status("没有新增照片。")
+        if directory_paths:
+            self._start_photo_input_discovery(
+                directory_paths,
+                select_last_added=select_last_added,
+                pre_added_report_db_count=base_report_db_count,
+            )
             return
 
-        if select_last_added and last_added_item is not None:
-            self.photo_list.setCurrentItem(last_added_item)
-        elif self.photo_list.currentItem() is None and self.photo_list.topLevelItemCount() > 0:
-            first_item = self.photo_list.topLevelItem(0)
-            if first_item is not None:
-                self.photo_list.setCurrentItem(first_item)
-
-        self.photo_list.resort()
-        self.photo_list.refresh_row_numbers()
-        if added_paths:
-            self._restart_photo_list_metadata_loader()
-        self._schedule_workspace_autosave()
-
-        if add_count > 0 and total_auto_added_report_db_count > 0:
-            self._set_status(f"已添加 {add_count} 张照片，并自动添加 {total_auto_added_report_db_count} 个 report.db。")
-            return
-        if add_count > 0:
-            self._set_status(f"已添加 {add_count} 张照片。")
-            return
-        self._set_status(f"没有新增照片，已自动添加 {total_auto_added_report_db_count} 个 report.db。")
+        if not file_paths:
+            self._enqueue_received_photo_paths(
+                [],
+                select_last_added=select_last_added,
+                pre_added_report_db_count=base_report_db_count,
+            )
 
     def _add_received_photo_paths(
         self,
@@ -3152,6 +3339,7 @@ class BirdStampEditorWindow(
         self._set_status(f"已删除 {len(selected_items)} 项。")
 
     def _clear_photos_state(self, *, status_message: str | None = None) -> None:
+        self._stop_photo_input_discovery_workers(wait=True)
         self._stop_received_photo_import(reset_progress=True)
         self._stop_photo_list_metadata_loader(wait=False, reset_progress=True)
         self.photo_list.clear()

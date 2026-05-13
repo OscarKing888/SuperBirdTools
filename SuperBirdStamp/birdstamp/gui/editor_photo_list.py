@@ -18,7 +18,6 @@ from PyQt6.QtWidgets import (
 
 from app_common.file_browser import FileListPanel
 from birdstamp.constants import SUPPORTED_EXTENSIONS
-from birdstamp.discover import discover_inputs
 from birdstamp.gui import template_context as _template_context
 from birdstamp.gui.editor_utils import path_key as _path_key
 
@@ -305,7 +304,7 @@ class PhotoListWidget(FileListPanel):
             if path.is_file() and path.suffix.lower() in SUPPORTED_EXTENSIONS:
                 incoming.append(path)
             elif path.is_dir():
-                incoming.extend(discover_inputs(path, recursive=True))
+                incoming.append(path)
 
         deduped: list[Path] = []
         seen: set[str] = set()
