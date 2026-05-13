@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Any
 
 from PIL import Image
-from PyQt6.QtCore import Qt, pyqtSignal
+from PyQt6.QtCore import QEvent, Qt, pyqtSignal
 from PyQt6.QtGui import QColor, QImage, QIntValidator, QLinearGradient, QPainter, QPixmap
 from PyQt6.QtWidgets import (
     QCheckBox,
@@ -22,6 +22,7 @@ from PyQt6.QtWidgets import (
     QDialog,
     QDoubleSpinBox,
     QFormLayout,
+    QFrame,
     QGridLayout,
     QGroupBox,
     QHBoxLayout,
@@ -149,14 +150,170 @@ def _pil_to_qpixmap(image: Image.Image) -> QPixmap:
     return QPixmap.fromImage(q_image.copy())
 
 
-class _LazyLoadComboBox(QComboBox):
-    """在展开下拉前发出信号，用于首次懒加载数据。"""
+class _FilterableComboBox(QComboBox):
+    """下拉列表顶部内置过滤框，适合长字段/字体列表。"""
 
     popupAboutToShow = pyqtSignal()
 
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._filter_placeholder_text = "过滤..."
+        self._filter_popup: QFrame | None = None
+        self._filter_popup_filter: QLineEdit | None = None
+        self._filter_popup_list: QListWidget | None = None
+
+    def setFilterPlaceholderText(self, text: str) -> None:
+        self._filter_placeholder_text = str(text or "").strip() or "过滤..."
+
+    def hidePopup(self) -> None:  # type: ignore[override]
+        popup = self._filter_popup
+        if popup is not None:
+            self._filter_popup = None
+            self._filter_popup_filter = None
+            self._filter_popup_list = None
+            popup.hide()
+            popup.deleteLater()
+            return
+        super().hidePopup()
+
     def showPopup(self) -> None:  # type: ignore[override]
         self.popupAboutToShow.emit()
-        super().showPopup()
+        self.hidePopup()
+
+        popup = QFrame(self, Qt.WindowType.Popup)
+        popup.setFrameShape(QFrame.Shape.StyledPanel)
+        popup.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        popup.setObjectName("filterableComboPopup")
+
+        layout = QVBoxLayout(popup)
+        layout.setContentsMargins(6, 6, 6, 6)
+        layout.setSpacing(4)
+
+        filter_edit = QLineEdit(popup)
+        filter_edit.setClearButtonEnabled(True)
+        filter_edit.setPlaceholderText(self._filter_placeholder_text)
+        filter_edit.setObjectName("filterableComboFilterEdit")
+        layout.addWidget(filter_edit)
+
+        list_widget = QListWidget(popup)
+        list_widget.setUniformItemSizes(True)
+        list_widget.setObjectName("filterableComboList")
+        layout.addWidget(list_widget)
+
+        source_items = [
+            (idx, str(self.itemText(idx) or ""), self.itemData(idx))
+            for idx in range(self.count())
+        ]
+
+        def _matches(text: str, data: Any, query: str) -> bool:
+            query_parts = [
+                part for part in str(query or "").strip().lower().split()
+                if part
+            ]
+            if not query_parts:
+                return True
+            haystack = f"{text} {data}".lower()
+            return all(part in haystack for part in query_parts)
+
+        def _refresh_list(query: str = "") -> None:
+            current_combo_index = self.currentIndex()
+            list_widget.blockSignals(True)
+            try:
+                list_widget.clear()
+                selected_row = 0
+                for combo_index, text, data in source_items:
+                    if not _matches(text, data, query):
+                        continue
+                    item = QListWidgetItem(text)
+                    item.setData(Qt.ItemDataRole.UserRole, combo_index)
+                    if text:
+                        item.setToolTip(text)
+                    list_widget.addItem(item)
+                    if combo_index == current_combo_index:
+                        selected_row = list_widget.count() - 1
+
+                if list_widget.count() == 0:
+                    empty_item = QListWidgetItem("无匹配结果")
+                    empty_item.setFlags(empty_item.flags() & ~Qt.ItemFlag.ItemIsEnabled)
+                    list_widget.addItem(empty_item)
+                    selected_row = -1
+
+                if selected_row >= 0:
+                    list_widget.setCurrentRow(selected_row)
+                    current_item = list_widget.item(selected_row)
+                    if current_item is not None:
+                        list_widget.scrollToItem(current_item)
+            finally:
+                list_widget.blockSignals(False)
+
+        def _choose_item(item: QListWidgetItem | None = None) -> None:
+            chosen = item or list_widget.currentItem()
+            if chosen is None:
+                return
+            combo_index = chosen.data(Qt.ItemDataRole.UserRole)
+            if combo_index is None:
+                return
+            try:
+                self.setCurrentIndex(int(combo_index))
+            except Exception:
+                return
+            self.hidePopup()
+
+        filter_edit.textChanged.connect(_refresh_list)
+        filter_edit.returnPressed.connect(lambda: _choose_item())
+        list_widget.itemClicked.connect(_choose_item)
+        list_widget.itemActivated.connect(_choose_item)
+        popup.destroyed.connect(self._clear_filter_popup_refs)
+        filter_edit.installEventFilter(self)
+        list_widget.installEventFilter(self)
+
+        _refresh_list("")
+        self._filter_popup = popup
+        self._filter_popup_filter = filter_edit
+        self._filter_popup_list = list_widget
+
+        text_width = max(
+            (list_widget.fontMetrics().horizontalAdvance(text) for _idx, text, _data in source_items),
+            default=0,
+        )
+        popup_width = max(self.width(), min(max(text_width + 72, 260), 760))
+        visible_rows = max(6, min(max(self.maxVisibleItems(), 8), 24))
+        row_height = max(list_widget.sizeHintForRow(0), list_widget.fontMetrics().height() + 8)
+        popup_height = filter_edit.sizeHint().height() + row_height * visible_rows + 24
+        popup.resize(popup_width, popup_height)
+        popup.move(self.mapToGlobal(self.rect().bottomLeft()))
+        popup.show()
+        filter_edit.setFocus(Qt.FocusReason.PopupFocusReason)
+
+    def _clear_filter_popup_refs(self, *_args: Any) -> None:
+        self._filter_popup = None
+        self._filter_popup_filter = None
+        self._filter_popup_list = None
+
+    def eventFilter(self, watched: Any, event: Any) -> bool:  # type: ignore[override]
+        if event.type() == QEvent.Type.KeyPress and self._filter_popup is not None:
+            key = event.key()
+            if key == Qt.Key.Key_Escape:
+                self.hidePopup()
+                return True
+            if watched is self._filter_popup_filter and key in {
+                Qt.Key.Key_Down,
+                Qt.Key.Key_PageDown,
+            }:
+                if self._filter_popup_list is not None:
+                    if self._filter_popup_list.currentRow() < 0 and self._filter_popup_list.count() > 0:
+                        self._filter_popup_list.setCurrentRow(0)
+                    self._filter_popup_list.setFocus(Qt.FocusReason.TabFocusReason)
+                return True
+            if (
+                watched is self._filter_popup_list
+                and key == Qt.Key.Key_Up
+                and self._filter_popup_list.currentRow() <= 0
+            ):
+                if self._filter_popup_filter is not None:
+                    self._filter_popup_filter.setFocus(Qt.FocusReason.TabFocusReason)
+                return True
+        return super().eventFilter(watched, event)
 
 
 # ---------------------------------------------------------------------------
@@ -1170,19 +1327,14 @@ class TemplateManagerDialog(QDialog):
         form = QFormLayout(group)
         _configure_form_layout(form)
 
-        self._field_fallback_combo = QComboBox()
+        self._field_fallback_combo = _FilterableComboBox()
         self._field_fallback_combo.setEditable(True)
         self._field_fallback_combo.setInsertPolicy(QComboBox.InsertPolicy.NoInsert)
+        self._field_fallback_combo.setMaxVisibleItems(18)
+        self._field_fallback_combo.setFilterPlaceholderText("过滤字段，如：光圈 / ISO / rating / row")
         self._field_fallback_combo.addItem("（空）", ("", ""))
-        for data_source, key, display_label in _get_template_context_field_options():
-            source_name = _template_context.template_source_display_name(data_source)
-            display_core = str(display_label or key or "").strip()
-            display_prefix = f"{source_name}:" if source_name else ""
-            if display_core and str(key or "").strip() and display_core != str(key or "").strip():
-                display_text = f"{display_prefix}{display_core} ({key})"
-            else:
-                display_text = f"{display_prefix}{key}"
-            self._field_fallback_combo.addItem(display_text, (data_source, key))
+        for display_text, item_data in self._build_field_fallback_combo_items():
+            self._field_fallback_combo.addItem(display_text, item_data)
         self._field_fallback_combo.setCurrentIndex(0)
         if self._field_fallback_combo.lineEdit():
             self._field_fallback_combo.lineEdit().setPlaceholderText("选择统一 meta/编辑器字段，可输入自定义占位符")
@@ -1219,13 +1371,9 @@ class TemplateManagerDialog(QDialog):
 
         form.addRow("文本颜色", self._build_field_color_row())
 
-        self.field_font_filter_edit = QLineEdit()
-        self.field_font_filter_edit.setPlaceholderText("过滤字体，如：微软雅黑 / PingFang / Arial")
-        self.field_font_filter_edit.textChanged.connect(self._on_field_font_filter_changed)
-        form.addRow("字体过滤", self.field_font_filter_edit)
-
-        self.field_font_combo = _LazyLoadComboBox()
+        self.field_font_combo = _FilterableComboBox()
         self.field_font_combo.setMaxVisibleItems(24)
+        self.field_font_combo.setFilterPlaceholderText("过滤字体，如：微软雅黑 / PingFang / Arial")
         self.field_font_combo.currentIndexChanged.connect(self._apply_field_changes)
         self.field_font_combo.popupAboutToShow.connect(self._ensure_field_font_choices_loaded)
         self.field_font_combo.setToolTip("首次展开时加载支持中文的字体列表")
@@ -1233,7 +1381,6 @@ class TemplateManagerDialog(QDialog):
         # 首次展开下拉时再加载字体列表，避免打开模板管理对话框时卡顿
         self._field_font_all_choices = []
         self._rebuild_field_font_combo(
-            filter_text="",
             preferred_font_type=_DEFAULT_TEMPLATE_FONT_TYPE,
         )
 
@@ -1534,24 +1681,6 @@ class TemplateManagerDialog(QDialog):
     # Font helpers
     # ------------------------------------------------------------------
 
-    def _filtered_field_font_choices(self, filter_text: str) -> list[tuple[str, str]]:
-        all_choices = self._field_font_all_choices or [("自动(系统默认)", _DEFAULT_TEMPLATE_FONT_TYPE)]
-        query = str(filter_text or "").strip().lower()
-        if not query:
-            return list(all_choices)
-
-        filtered: list[tuple[str, str]] = []
-        for label, font_type in all_choices:
-            if font_type == _DEFAULT_TEMPLATE_FONT_TYPE:
-                filtered.append((label, font_type))
-                continue
-            haystack = f"{label} {font_type}".lower()
-            if query in haystack:
-                filtered.append((label, font_type))
-        if not filtered:
-            filtered.append(("自动(系统默认)", _DEFAULT_TEMPLATE_FONT_TYPE))
-        return filtered
-
     def _field_font_combo_index_for_value(self, value: Any) -> int:
         target = _normalize_template_font_type(value)
         for idx in range(self.field_font_combo.count()):
@@ -1575,17 +1704,12 @@ class TemplateManagerDialog(QDialog):
         preferred = _normalize_template_font_type(
             self.field_font_combo.currentData() if hasattr(self, "field_font_combo") else None
         )
-        filter_text = (
-            self.field_font_filter_edit.text()
-            if hasattr(self, "field_font_filter_edit") else ""
-        )
         self._rebuild_field_font_combo(
-            filter_text=filter_text,
             preferred_font_type=preferred or _DEFAULT_TEMPLATE_FONT_TYPE,
         )
 
-    def _rebuild_field_font_combo(self, *, filter_text: str, preferred_font_type: Any) -> None:
-        choices = self._filtered_field_font_choices(filter_text)
+    def _rebuild_field_font_combo(self, *, preferred_font_type: Any) -> None:
+        choices = self._field_font_all_choices or [("自动(系统默认)", _DEFAULT_TEMPLATE_FONT_TYPE)]
         target = _normalize_template_font_type(preferred_font_type)
         self.field_font_combo.blockSignals(True)
         try:
@@ -1604,20 +1728,9 @@ class TemplateManagerDialog(QDialog):
         finally:
             self.field_font_combo.blockSignals(False)
 
-    def _on_field_font_filter_changed(self, *_args: Any) -> None:
-        if not self._field_font_choices_loaded:
-            return
-        preferred = _normalize_template_font_type(self.field_font_combo.currentData())
-        self._rebuild_field_font_combo(
-            filter_text=self.field_font_filter_edit.text(),
-            preferred_font_type=preferred,
-        )
-
     def _set_field_font_combo_value(self, value: Any) -> None:
         normalized = _normalize_template_font_type(value)
-        filter_text = self.field_font_filter_edit.text() if hasattr(self, "field_font_filter_edit") else ""
         self._rebuild_field_font_combo(
-            filter_text=filter_text,
             preferred_font_type=normalized,
         )
 
@@ -1804,6 +1917,20 @@ class TemplateManagerDialog(QDialog):
     # ------------------------------------------------------------------
     # Field list / editor
     # ------------------------------------------------------------------
+
+    def _build_field_fallback_combo_items(self) -> list[tuple[str, tuple[str, str]]]:
+        items: list[tuple[str, tuple[str, str]]] = []
+        for data_source, key, display_label in _get_template_context_field_options():
+            source_name = _template_context.template_source_display_name(data_source)
+            display_core = str(display_label or key or "").strip()
+            display_prefix = f"{source_name}:" if source_name else ""
+            if display_core and str(key or "").strip() and display_core != str(key or "").strip():
+                display_text = f"{display_prefix}{display_core} ({key})"
+            else:
+                display_text = f"{display_prefix}{key}"
+            item_data = (str(data_source or "").strip().lower(), str(key or "").strip())
+            items.append((display_text, item_data))
+        return items
 
     def _fallback_combo_index_for_value(self, data_source: str, key: str) -> int:
         combo = self._field_fallback_combo
@@ -2081,12 +2208,11 @@ class TemplateManagerDialog(QDialog):
             return
 
         fields.pop(idx)
-        if not fields:
-            fields.append(_normalize_template_field({}, 0))
         self.current_payload["fields"] = fields
 
         self._populate_field_list(fields)
-        self.field_list.setCurrentRow(max(0, idx - 1))
+        if fields:
+            self.field_list.setCurrentRow(min(max(0, idx - 1), len(fields) - 1))
         self._save_current_template()
         self._refresh_preview()
 

@@ -1,0 +1,21 @@
+{
+  "name": "鸟体中心-GIF",
+  "ratio": 1.0,
+  "banner_color": "#ffffff",
+  "draw_banner_background": false,
+  "banner_background_style": "gradient_bottom",
+  "banner_gradient_height_pct": 25.0,
+  "banner_gradient_top_color": "#000000",
+  "banner_gradient_top_opacity_pct": 0.0,
+  "banner_gradient_bottom_color": "#000000",
+  "banner_gradient_bottom_opacity_pct": 80.0,
+  "center_mode": "bird",
+  "auto_crop_by_bird": true,
+  "max_long_edge": 0,
+  "crop_padding_top": 64,
+  "crop_padding_bottom": 64,
+  "crop_padding_left": 64,
+  "crop_padding_right": 64,
+  "crop_padding_fill": "#000000",
+  "fields": []
+}

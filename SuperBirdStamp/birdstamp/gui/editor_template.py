@@ -310,7 +310,7 @@ def _normalize_template_payload(payload: dict[str, Any], fallback_name: str) -> 
         for index, item in enumerate(fields_raw):
             if isinstance(item, dict):
                 fields.append(_normalize_template_field(item, index=index))
-    if not fields:
+    else:
         fields.append(_default_template_field())
     ratio = _parse_ratio_value(payload.get("ratio"))
     banner_color = normalize_template_banner_color(payload.get("banner_color"))

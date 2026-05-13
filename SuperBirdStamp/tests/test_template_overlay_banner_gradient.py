@@ -3,6 +3,7 @@ from PIL import Image
 from birdstamp.gui.editor_template import (
     _resolve_template_field_text,
     default_template_payload,
+    normalize_template_payload,
     render_template_overlay,
 )
 from birdstamp.gui.template_context import PhotoInfo, build_template_context_provider
@@ -49,3 +50,12 @@ def test_template_field_text_falls_back_to_provider_caption_when_empty() -> None
     provider = build_template_context_provider("exif", "EXIF:Model", display_label="机身型号")
 
     assert _resolve_template_field_text(provider, photo) == "机身型号"
+
+
+def test_template_payload_allows_explicit_empty_fields() -> None:
+    payload = default_template_payload(name="empty-fields")
+    payload["fields"] = []
+
+    normalized = normalize_template_payload(payload, fallback_name="empty-fields")
+
+    assert normalized["fields"] == []
