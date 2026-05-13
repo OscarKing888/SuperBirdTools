@@ -39,6 +39,14 @@ def _parse_bool_value(value: Any, default: bool) -> bool:
     return bool(default)
 
 
+def _parse_int_range(value: Any, default: int, minimum: int, maximum: int) -> int:
+    try:
+        parsed = int(round(float(value)))
+    except Exception:
+        parsed = int(default)
+    return max(int(minimum), min(int(maximum), parsed))
+
+
 def normalized_path_text(path: Path) -> str:
     try:
         resolved = path.resolve(strict=False)
@@ -56,13 +64,16 @@ def path_signature(path: Path) -> str:
         return normalized
 
 
-def global_export_settings_from_settings(settings: dict[str, Any] | None) -> dict[str, bool]:
+def global_export_settings_from_settings(settings: dict[str, Any] | None) -> dict[str, Any]:
     raw = settings if isinstance(settings, dict) else {}
+    uniform_auto_crop = _parse_bool_value(raw.get("uniform_auto_crop"), False)
     return {
         "draw_banner": _parse_bool_value(raw.get("draw_banner"), True),
         "draw_text": _parse_bool_value(raw.get("draw_text"), True),
         "draw_focus": _parse_bool_value(raw.get("draw_focus"), False),
-        "uniform_auto_crop": _parse_bool_value(raw.get("uniform_auto_crop"), False),
+        "uniform_auto_crop": uniform_auto_crop,
+        "auto_crop_stabilization": _parse_int_range(raw.get("auto_crop_stabilization"), 0, 0, 100)
+        if uniform_auto_crop else 0,
     }
 
 

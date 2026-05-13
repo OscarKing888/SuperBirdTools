@@ -367,7 +367,7 @@ def _source_signature(path: Path) -> str:
     return path_signature(path)
 
 
-def _global_export_settings_from_jobs(jobs: list[VideoFrameJob]) -> dict[str, bool]:
+def _global_export_settings_from_jobs(jobs: list[VideoFrameJob]) -> dict[str, Any]:
     if not jobs:
         return global_export_settings_from_settings({})
     return global_export_settings_from_settings(jobs[0].settings)
@@ -455,6 +455,14 @@ def _video_frame_signature_for_source(
     )
 
 
+def _parse_percent_setting(value: Any, default: int = 0) -> int:
+    try:
+        parsed = int(round(float(value)))
+    except Exception:
+        parsed = int(default)
+    return max(0, min(100, parsed))
+
+
 def _clone_render_settings(settings: dict[str, Any]) -> dict[str, Any]:
     template_name = str(settings.get("template_name") or "default").strip() or "default"
     template_payload_raw = settings.get("template_payload")
@@ -488,13 +496,16 @@ def _clone_render_settings(settings: dict[str, Any]) -> dict[str, Any]:
                 crop_box = [float(value) for value in normalized_crop_box]
         except Exception:
             crop_box = None
+    uniform_auto_crop = _parse_bool_value(settings.get("uniform_auto_crop"), False)
     return {
         "template_name": template_name,
         "template_payload": _deep_copy_payload(template_payload),
         "draw_banner": _parse_bool_value(settings.get("draw_banner"), True),
         "draw_text": _parse_bool_value(settings.get("draw_text"), True),
         "draw_focus": _parse_bool_value(settings.get("draw_focus"), False),
-        "uniform_auto_crop": _parse_bool_value(settings.get("uniform_auto_crop"), False),
+        "uniform_auto_crop": uniform_auto_crop,
+        "auto_crop_stabilization": _parse_percent_setting(settings.get("auto_crop_stabilization"), 0)
+        if uniform_auto_crop else 0,
         "ratio": ratio,
         "center_mode": _normalize_center_mode(settings.get("center_mode") or _DEFAULT_TEMPLATE_CENTER_MODE),
         "max_long_edge": max_long_edge,
@@ -781,6 +792,37 @@ def _resolve_uniform_group_target_size(
     return (width, height)
 
 
+def _median_float(values: list[float]) -> float | None:
+    if not values:
+        return None
+    ordered = sorted(float(value) for value in values)
+    mid = len(ordered) // 2
+    if len(ordered) % 2:
+        return ordered[mid]
+    return (ordered[mid - 1] + ordered[mid]) * 0.5
+
+
+def _apply_auto_crop_stabilization(candidates: list[dict[str, Any]], strength: int) -> None:
+    """Blend per-frame crop centers toward the group median to reduce visible jitter."""
+    if len(candidates) <= 1:
+        return
+    blend = _parse_percent_setting(strength, 0) / 100.0
+    if blend <= 0:
+        return
+    center_x = _median_float([float(candidate["center_norm"][0]) for candidate in candidates])
+    center_y = _median_float([float(candidate["center_norm"][1]) for candidate in candidates])
+    if center_x is None or center_y is None:
+        return
+    for candidate in candidates:
+        raw_x, raw_y = candidate["center_norm"]
+        stable_x = float(raw_x) * (1.0 - blend) + center_x * blend
+        stable_y = float(raw_y) * (1.0 - blend) + center_y * blend
+        candidate["stable_center"] = (
+            stable_x * float(candidate["source_width"]),
+            stable_y * float(candidate["source_height"]),
+        )
+
+
 def _open_job_image_for_crop_plan(job: VideoFrameJob) -> tuple[Image.Image, bool]:
     if job.source_image is not None:
         return (job.source_image, False)
@@ -804,6 +846,7 @@ def prepare_uniform_auto_crop_plans(
 
     cache = bird_box_cache if isinstance(bird_box_cache, dict) else {}
     candidates: list[dict[str, Any]] = []
+    grouped_candidates: dict[tuple[str, int], list[dict[str, Any]]] = {}
     grouped_sizes: dict[tuple[str, int], list[tuple[int, int]]] = {}
     prepared = 0
 
@@ -840,16 +883,21 @@ def prepare_uniform_auto_crop_plans(
                 crop_plan=crop_plan,
             )
             if group_key is not None and crop_size is not None and center is not None:
-                candidates.append(
-                    {
-                        "job": job,
-                        "group_key": group_key,
-                        "source_width": image.width,
-                        "source_height": image.height,
-                        "center": center,
-                        "crop_size": crop_size,
-                    }
-                )
+                candidate = {
+                    "job": job,
+                    "group_key": group_key,
+                    "source_width": image.width,
+                    "source_height": image.height,
+                    "center": center,
+                    "center_norm": (
+                        center[0] / float(max(1, image.width)),
+                        center[1] / float(max(1, image.height)),
+                    ),
+                    "crop_size": crop_size,
+                    "stabilization": _parse_percent_setting(settings.get("auto_crop_stabilization"), 0),
+                }
+                candidates.append(candidate)
+                grouped_candidates.setdefault(group_key, []).append(candidate)
                 grouped_sizes.setdefault(group_key, []).append(crop_size)
         finally:
             if close_image:
@@ -867,15 +915,19 @@ def prepare_uniform_auto_crop_plans(
         )
         for group_key, sizes in grouped_sizes.items()
     }
+    for group_candidates in grouped_candidates.values():
+        strength = max(int(candidate.get("stabilization", 0)) for candidate in group_candidates)
+        _apply_auto_crop_stabilization(group_candidates, strength)
     for candidate in candidates:
         target_size = target_sizes.get(candidate["group_key"])
         if target_size is None:
             continue
         job = candidate["job"]
+        center = candidate.get("stable_center", candidate["center"])
         job.crop_plan = _compute_fixed_size_crop_plan(
             source_width=int(candidate["source_width"]),
             source_height=int(candidate["source_height"]),
-            center=candidate["center"],
+            center=center,
             crop_width=target_size[0],
             crop_height=target_size[1],
         )

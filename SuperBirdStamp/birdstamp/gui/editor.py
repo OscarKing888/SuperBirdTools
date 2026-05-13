@@ -59,6 +59,7 @@ from PyQt6.QtWidgets import (
     QScrollArea,
     QSizePolicy,
     QSlider,
+    QSpinBox,
     QSplitter,
     QTreeWidget,
     QTreeWidgetItem,
@@ -541,7 +542,7 @@ class BirdStampEditorWindow(
         self._bird_box_cache: dict[str, tuple[float, float, float, float] | None] = {}
         self.photo_render_overrides: dict[str, dict[str, Any]] = {}
         self._photo_export_dirty_keys: set[str] = set()
-        self._last_global_export_settings: dict[str, bool] = {}
+        self._last_global_export_settings: dict[str, Any] = {}
         self._crop_padding_state: dict[str, Any] = {
             "top": _DEFAULT_CROP_PADDING_PX,
             "bottom": _DEFAULT_CROP_PADDING_PX,
@@ -1080,7 +1081,26 @@ class BirdStampEditorWindow(
         self.uniform_auto_crop_check.setChecked(False)
         self.uniform_auto_crop_check.toggled.connect(self._on_output_settings_changed)
         self.uniform_auto_crop_check.toggled.connect(self._save_image_export_preferences)
-        global_export_form.addRow("自动裁切", self.uniform_auto_crop_check)
+        self.auto_crop_stabilization_spin = QSpinBox()
+        self.auto_crop_stabilization_spin.setRange(0, 100)
+        self.auto_crop_stabilization_spin.setSuffix("%")
+        self.auto_crop_stabilization_spin.setToolTip(
+            "0 为关闭；数值越高，批量自动裁切中心越接近稳定中位点，GIF/视频抖动越少。"
+        )
+        self.auto_crop_stabilization_spin.setValue(0)
+        self.auto_crop_stabilization_spin.setEnabled(False)
+        self.auto_crop_stabilization_spin.valueChanged.connect(lambda _value: self._on_output_settings_changed())
+        self.auto_crop_stabilization_spin.valueChanged.connect(lambda _value: self._save_image_export_preferences())
+        self.uniform_auto_crop_check.toggled.connect(self.auto_crop_stabilization_spin.setEnabled)
+        auto_crop_row_widget = QWidget()
+        auto_crop_row_layout = QHBoxLayout(auto_crop_row_widget)
+        auto_crop_row_layout.setContentsMargins(0, 0, 0, 0)
+        auto_crop_row_layout.setSpacing(10)
+        auto_crop_row_layout.addWidget(self.uniform_auto_crop_check)
+        auto_crop_row_layout.addWidget(QLabel("防抖"))
+        auto_crop_row_layout.addWidget(self.auto_crop_stabilization_spin)
+        auto_crop_row_layout.addStretch()
+        global_export_form.addRow("自动裁切", auto_crop_row_widget)
         export_root.addWidget(global_export_group)
 
         image_export_group = QGroupBox("图片导出")
@@ -1541,6 +1561,21 @@ class BirdStampEditorWindow(
                 self.uniform_auto_crop_check.setChecked(bool(enabled))
             finally:
                 self.uniform_auto_crop_check.blockSignals(False)
+            if hasattr(self, "auto_crop_stabilization_spin"):
+                self.auto_crop_stabilization_spin.setEnabled(bool(self.uniform_auto_crop_check.isChecked()))
+
+        auto_crop_stabilization = self._load_editor_export_state_value("auto_crop_stabilization", None)
+        if auto_crop_stabilization is not None and hasattr(self, "auto_crop_stabilization_spin"):
+            try:
+                stabilization_value = int(round(float(auto_crop_stabilization)))
+            except Exception:
+                stabilization_value = 0
+            self.auto_crop_stabilization_spin.blockSignals(True)
+            try:
+                self.auto_crop_stabilization_spin.setValue(max(0, min(100, stabilization_value)))
+                self.auto_crop_stabilization_spin.setEnabled(bool(self.uniform_auto_crop_check.isChecked()))
+            finally:
+                self.auto_crop_stabilization_spin.blockSignals(False)
 
         gif_fps = self._load_editor_export_state_value("gif_fps", None)
         gif_loop = self._load_editor_export_state_value("gif_loop", None)
@@ -1588,6 +1623,11 @@ class BirdStampEditorWindow(
         self._save_editor_export_state_value("gif_scale_factors", list(gif_request.scale_factors))
         if hasattr(self, "uniform_auto_crop_check"):
             self._save_editor_export_state_value("uniform_auto_crop", bool(self.uniform_auto_crop_check.isChecked()))
+        if hasattr(self, "auto_crop_stabilization_spin"):
+            self._save_editor_export_state_value(
+                "auto_crop_stabilization",
+                int(self.auto_crop_stabilization_spin.value()),
+            )
 
     def _on_image_export_format_changed(self, *_args: Any) -> None:
         self._refresh_image_export_action_states()
@@ -1833,12 +1873,13 @@ class BirdStampEditorWindow(
         """当前预览是否为占位默认图（不是用户加载的真实照片）。"""
         return self.placeholder_path is not None and self.current_path == self.placeholder_path
 
-    def _current_global_export_settings(self) -> dict[str, bool]:
+    def _current_global_export_settings(self) -> dict[str, Any]:
         return {
             "draw_banner": bool(self.draw_banner_check.isChecked()),
             "draw_text": bool(self.draw_text_check.isChecked()),
             "draw_focus": bool(self.draw_focus_check.isChecked()),
             "uniform_auto_crop": bool(self.uniform_auto_crop_check.isChecked()),
+            "auto_crop_stabilization": int(self.auto_crop_stabilization_spin.value()),
         }
 
     def _refresh_global_export_settings_snapshot(self) -> bool:

@@ -363,6 +363,7 @@ class _BirdStampRendererMixin:
         custom_center = getattr(self, "_custom_center", None)
         padding = self._crop_padding_state_for_render()
         uniform_auto_crop_check = getattr(self, "uniform_auto_crop_check", None)
+        auto_crop_stabilization_spin = getattr(self, "auto_crop_stabilization_spin", None)
         return {
             "template_name": template_name,
             "template_payload": _deep_copy_payload(template_payload),
@@ -371,6 +372,8 @@ class _BirdStampRendererMixin:
             "draw_focus": bool(self.draw_focus_check.isChecked()),
             "uniform_auto_crop": bool(uniform_auto_crop_check.isChecked())
             if uniform_auto_crop_check is not None else False,
+            "auto_crop_stabilization": int(auto_crop_stabilization_spin.value())
+            if auto_crop_stabilization_spin is not None else 0,
             "ratio": self._selected_ratio(),
             "center_mode": center_mode,
             "max_long_edge": self._selected_max_long_edge(),
@@ -391,6 +394,7 @@ class _BirdStampRendererMixin:
         normalized.pop("draw_text", None)
         normalized.pop("draw_focus", None)
         normalized.pop("uniform_auto_crop", None)
+        normalized.pop("auto_crop_stabilization", None)
         return normalized
 
     def _clone_render_settings(self, settings: dict[str, Any]) -> dict[str, Any]:
@@ -414,6 +418,14 @@ class _BirdStampRendererMixin:
             return _parse_padding_value(settings.get(key, _DEFAULT_CROP_PADDING_PX), _DEFAULT_CROP_PADDING_PX)
 
         fill = _safe_color(str(settings.get("crop_padding_fill", "#FFFFFF")), "#FFFFFF")
+        try:
+            auto_crop_stabilization = int(round(float(settings.get("auto_crop_stabilization", 0))))
+        except Exception:
+            auto_crop_stabilization = 0
+        auto_crop_stabilization = max(0, min(100, auto_crop_stabilization))
+        uniform_auto_crop = _parse_bool_value(settings.get("uniform_auto_crop"), False)
+        if not uniform_auto_crop:
+            auto_crop_stabilization = 0
 
         custom_center_x = settings.get("custom_center_x")
         custom_center_y = settings.get("custom_center_y")
@@ -423,7 +435,8 @@ class _BirdStampRendererMixin:
             "draw_banner": _parse_bool_value(settings.get("draw_banner"), True),
             "draw_text": _parse_bool_value(settings.get("draw_text"), True),
             "draw_focus": _parse_bool_value(settings.get("draw_focus"), False),
-            "uniform_auto_crop": _parse_bool_value(settings.get("uniform_auto_crop"), False),
+            "uniform_auto_crop": uniform_auto_crop,
+            "auto_crop_stabilization": auto_crop_stabilization,
             "ratio": ratio,
             "center_mode": _normalize_center_mode(settings.get("center_mode")),
             "max_long_edge": max_long_edge,
@@ -468,6 +481,12 @@ class _BirdStampRendererMixin:
             settings["center_mode"] = _normalize_center_mode(raw.get("center_mode"))
         if "uniform_auto_crop" in raw:
             settings["uniform_auto_crop"] = _parse_bool_value(raw.get("uniform_auto_crop"), False)
+        if "auto_crop_stabilization" in raw:
+            try:
+                stabilization = int(round(float(raw.get("auto_crop_stabilization"))))
+            except Exception:
+                stabilization = int(settings.get("auto_crop_stabilization", 0))
+            settings["auto_crop_stabilization"] = max(0, min(100, stabilization))
 
         if "custom_center_x" in raw:
             try:
@@ -495,6 +514,8 @@ class _BirdStampRendererMixin:
                 settings[key] = _parse_pad(key)
         if "crop_padding_fill" in raw:
             settings["crop_padding_fill"] = _safe_color(str(raw.get("crop_padding_fill", "#FFFFFF")), "#FFFFFF")
+        if not _parse_bool_value(settings.get("uniform_auto_crop"), False):
+            settings["auto_crop_stabilization"] = 0
         return settings
 
     def _render_settings_for_path(self, path: Path | None, *, prefer_current_ui: bool) -> dict[str, Any]:
