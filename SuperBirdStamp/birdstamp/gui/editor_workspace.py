@@ -390,7 +390,7 @@ class _BirdStampWorkspaceMixin:
             self.draw_text_check,
             self.draw_focus_check,
             self.uniform_auto_crop_check,
-            self.auto_crop_stabilization_spin,
+            self.auto_crop_stabilization_slider,
         )
         try:
             self.draw_banner_check.setChecked(bool(state.get("draw_banner", True)))
@@ -401,8 +401,12 @@ class _BirdStampWorkspaceMixin:
                 stabilization = int(round(float(state.get("auto_crop_stabilization", 0))))
             except Exception:
                 stabilization = 0
-            self.auto_crop_stabilization_spin.setValue(max(0, min(100, stabilization)))
-            self.auto_crop_stabilization_spin.setEnabled(bool(self.uniform_auto_crop_check.isChecked()))
+            stabilization = max(0, min(100, stabilization))
+            enabled = bool(self.uniform_auto_crop_check.isChecked())
+            self.auto_crop_stabilization_slider.setValue(stabilization)
+            self.auto_crop_stabilization_slider.setEnabled(enabled)
+            self.auto_crop_stabilization_value_label.setText(f"{stabilization}%")
+            self.auto_crop_stabilization_value_label.setEnabled(enabled)
         finally:
             _restore_widget_signals(widgets_state)
         self._last_global_export_settings = self._current_global_export_settings()

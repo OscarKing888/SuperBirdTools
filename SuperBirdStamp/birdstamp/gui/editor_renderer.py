@@ -363,7 +363,7 @@ class _BirdStampRendererMixin:
         custom_center = getattr(self, "_custom_center", None)
         padding = self._crop_padding_state_for_render()
         uniform_auto_crop_check = getattr(self, "uniform_auto_crop_check", None)
-        auto_crop_stabilization_spin = getattr(self, "auto_crop_stabilization_spin", None)
+        auto_crop_stabilization_slider = getattr(self, "auto_crop_stabilization_slider", None)
         return {
             "template_name": template_name,
             "template_payload": _deep_copy_payload(template_payload),
@@ -372,8 +372,8 @@ class _BirdStampRendererMixin:
             "draw_focus": bool(self.draw_focus_check.isChecked()),
             "uniform_auto_crop": bool(uniform_auto_crop_check.isChecked())
             if uniform_auto_crop_check is not None else False,
-            "auto_crop_stabilization": int(auto_crop_stabilization_spin.value())
-            if auto_crop_stabilization_spin is not None else 0,
+            "auto_crop_stabilization": int(auto_crop_stabilization_slider.value())
+            if auto_crop_stabilization_slider is not None else 0,
             "ratio": self._selected_ratio(),
             "center_mode": center_mode,
             "max_long_edge": self._selected_max_long_edge(),

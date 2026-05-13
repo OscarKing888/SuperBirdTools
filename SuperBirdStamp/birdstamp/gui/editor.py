@@ -59,7 +59,6 @@ from PyQt6.QtWidgets import (
     QScrollArea,
     QSizePolicy,
     QSlider,
-    QSpinBox,
     QSplitter,
     QTreeWidget,
     QTreeWidgetItem,
@@ -177,6 +176,30 @@ _PREVIEW_GRID_MODE_ITEMS = editor_utils.PREVIEW_GRID_MODE_ITEMS
 _PREVIEW_GRID_MODE_COMBO_WIDTH = editor_utils.PREVIEW_GRID_MODE_COMBO_WIDTH
 _PREVIEW_GRID_LINE_WIDTH_COMBO_WIDTH = editor_utils.PREVIEW_GRID_LINE_WIDTH_COMBO_WIDTH
 _PREVIEW_SCALE_COMBO_WIDTH = 96
+_GIF_AUTO_FPS_METADATA_TAGS = [
+    "-ExifIFD:DateTimeOriginal",
+    "-EXIF:DateTimeOriginal",
+    "-XMP-exif:DateTimeOriginal",
+    "-DateTimeOriginal",
+    "-Composite:SubSecDateTimeOriginal",
+    "-SubSecDateTimeOriginal",
+    "-ExifIFD:CreateDate",
+    "-EXIF:CreateDate",
+    "-XMP-xmp:CreateDate",
+    "-CreateDate",
+    "-Composite:SubSecCreateDate",
+    "-SubSecCreateDate",
+    "-ExifIFD:SubSecTimeOriginal",
+    "-EXIF:SubSecTimeOriginal",
+    "-XMP-exif:SubSecTimeOriginal",
+    "-SubSecTimeOriginal",
+    "-ExifIFD:SubSecTimeDigitized",
+    "-EXIF:SubSecTimeDigitized",
+    "-SubSecTimeDigitized",
+    "-ExifIFD:SubSecTime",
+    "-EXIF:SubSecTime",
+    "-SubSecTime",
+]
 _build_color_preview_swatch = editor_utils.build_color_preview_swatch
 _set_color_preview_swatch = editor_utils.set_color_preview_swatch
 _configure_form_layout = editor_utils.configure_form_layout
@@ -1081,24 +1104,35 @@ class BirdStampEditorWindow(
         self.uniform_auto_crop_check.setChecked(False)
         self.uniform_auto_crop_check.toggled.connect(self._on_output_settings_changed)
         self.uniform_auto_crop_check.toggled.connect(self._save_image_export_preferences)
-        self.auto_crop_stabilization_spin = QSpinBox()
-        self.auto_crop_stabilization_spin.setRange(0, 100)
-        self.auto_crop_stabilization_spin.setSuffix("%")
-        self.auto_crop_stabilization_spin.setToolTip(
+        self.auto_crop_stabilization_slider = QSlider(Qt.Orientation.Horizontal)
+        self.auto_crop_stabilization_slider.setRange(0, 100)
+        self.auto_crop_stabilization_slider.setSingleStep(5)
+        self.auto_crop_stabilization_slider.setPageStep(10)
+        self.auto_crop_stabilization_slider.setTickPosition(QSlider.TickPosition.TicksBelow)
+        self.auto_crop_stabilization_slider.setTickInterval(25)
+        self.auto_crop_stabilization_slider.setToolTip(
             "0 为关闭；数值越高，批量自动裁切中心越接近稳定中位点，GIF/视频抖动越少。"
         )
-        self.auto_crop_stabilization_spin.setValue(0)
-        self.auto_crop_stabilization_spin.setEnabled(False)
-        self.auto_crop_stabilization_spin.valueChanged.connect(lambda _value: self._on_output_settings_changed())
-        self.auto_crop_stabilization_spin.valueChanged.connect(lambda _value: self._save_image_export_preferences())
-        self.uniform_auto_crop_check.toggled.connect(self.auto_crop_stabilization_spin.setEnabled)
+        self.auto_crop_stabilization_slider.setValue(0)
+        self.auto_crop_stabilization_slider.setEnabled(False)
+        self.auto_crop_stabilization_value_label = QLabel("0%")
+        self.auto_crop_stabilization_value_label.setMinimumWidth(36)
+        self.auto_crop_stabilization_value_label.setEnabled(False)
+        self.auto_crop_stabilization_slider.valueChanged.connect(
+            lambda value: self.auto_crop_stabilization_value_label.setText(f"{int(value)}%")
+        )
+        self.auto_crop_stabilization_slider.valueChanged.connect(lambda _value: self._on_output_settings_changed())
+        self.auto_crop_stabilization_slider.valueChanged.connect(lambda _value: self._save_image_export_preferences())
+        self.uniform_auto_crop_check.toggled.connect(self.auto_crop_stabilization_slider.setEnabled)
+        self.uniform_auto_crop_check.toggled.connect(self.auto_crop_stabilization_value_label.setEnabled)
         auto_crop_row_widget = QWidget()
         auto_crop_row_layout = QHBoxLayout(auto_crop_row_widget)
         auto_crop_row_layout.setContentsMargins(0, 0, 0, 0)
         auto_crop_row_layout.setSpacing(10)
         auto_crop_row_layout.addWidget(self.uniform_auto_crop_check)
         auto_crop_row_layout.addWidget(QLabel("防抖"))
-        auto_crop_row_layout.addWidget(self.auto_crop_stabilization_spin)
+        auto_crop_row_layout.addWidget(self.auto_crop_stabilization_slider, 1)
+        auto_crop_row_layout.addWidget(self.auto_crop_stabilization_value_label)
         auto_crop_row_layout.addStretch()
         global_export_form.addRow("自动裁切", auto_crop_row_widget)
         export_root.addWidget(global_export_group)
@@ -1152,6 +1186,7 @@ class BirdStampEditorWindow(
 
         self.gif_export_panel = GifExportPanel()
         self.gif_export_panel.optionsChanged.connect(self._on_image_export_preferences_changed)
+        self.gif_export_panel.autoFpsRequested.connect(self._on_gif_auto_fps_requested)
         image_export_layout.addWidget(self.gif_export_panel)
 
         self.image_export_progress = QProgressBar()
@@ -1561,21 +1596,27 @@ class BirdStampEditorWindow(
                 self.uniform_auto_crop_check.setChecked(bool(enabled))
             finally:
                 self.uniform_auto_crop_check.blockSignals(False)
-            if hasattr(self, "auto_crop_stabilization_spin"):
-                self.auto_crop_stabilization_spin.setEnabled(bool(self.uniform_auto_crop_check.isChecked()))
+            if hasattr(self, "auto_crop_stabilization_slider"):
+                enabled = bool(self.uniform_auto_crop_check.isChecked())
+                self.auto_crop_stabilization_slider.setEnabled(enabled)
+                self.auto_crop_stabilization_value_label.setEnabled(enabled)
 
         auto_crop_stabilization = self._load_editor_export_state_value("auto_crop_stabilization", None)
-        if auto_crop_stabilization is not None and hasattr(self, "auto_crop_stabilization_spin"):
+        if auto_crop_stabilization is not None and hasattr(self, "auto_crop_stabilization_slider"):
             try:
                 stabilization_value = int(round(float(auto_crop_stabilization)))
             except Exception:
                 stabilization_value = 0
-            self.auto_crop_stabilization_spin.blockSignals(True)
+            self.auto_crop_stabilization_slider.blockSignals(True)
             try:
-                self.auto_crop_stabilization_spin.setValue(max(0, min(100, stabilization_value)))
-                self.auto_crop_stabilization_spin.setEnabled(bool(self.uniform_auto_crop_check.isChecked()))
+                value = max(0, min(100, stabilization_value))
+                enabled = bool(self.uniform_auto_crop_check.isChecked())
+                self.auto_crop_stabilization_slider.setValue(value)
+                self.auto_crop_stabilization_slider.setEnabled(enabled)
+                self.auto_crop_stabilization_value_label.setText(f"{value}%")
+                self.auto_crop_stabilization_value_label.setEnabled(enabled)
             finally:
-                self.auto_crop_stabilization_spin.blockSignals(False)
+                self.auto_crop_stabilization_slider.blockSignals(False)
 
         gif_fps = self._load_editor_export_state_value("gif_fps", None)
         gif_loop = self._load_editor_export_state_value("gif_loop", None)
@@ -1623,10 +1664,10 @@ class BirdStampEditorWindow(
         self._save_editor_export_state_value("gif_scale_factors", list(gif_request.scale_factors))
         if hasattr(self, "uniform_auto_crop_check"):
             self._save_editor_export_state_value("uniform_auto_crop", bool(self.uniform_auto_crop_check.isChecked()))
-        if hasattr(self, "auto_crop_stabilization_spin"):
+        if hasattr(self, "auto_crop_stabilization_slider"):
             self._save_editor_export_state_value(
                 "auto_crop_stabilization",
-                int(self.auto_crop_stabilization_spin.value()),
+                int(self.auto_crop_stabilization_slider.value()),
             )
 
     def _on_image_export_format_changed(self, *_args: Any) -> None:
@@ -1638,6 +1679,221 @@ class BirdStampEditorWindow(
         self._save_image_export_preferences()
         self._refresh_image_export_action_states()
         self._schedule_workspace_autosave()
+
+    @staticmethod
+    def _metadata_lookup_value(raw_metadata: dict[str, Any], candidates: Iterable[str]) -> Any:
+        if not isinstance(raw_metadata, dict):
+            return None
+        lookup: dict[str, Any] = {}
+        for key, value in raw_metadata.items():
+            text = str(key or "").strip()
+            if not text:
+                continue
+            lookup.setdefault(text.lower(), value)
+            lookup.setdefault(text.rsplit(":", 1)[-1].lower(), value)
+        for candidate in candidates:
+            text = str(candidate or "").strip().lower()
+            if not text:
+                continue
+            for key in (text, text.rsplit(":", 1)[-1]):
+                value = lookup.get(key)
+                if value not in (None, "", " "):
+                    return value
+        return None
+
+    def _parse_gif_auto_fps_datetime_value(self, value: Any) -> datetime | None:
+        if value is None:
+            return None
+        if isinstance(value, datetime):
+            return value
+        if isinstance(value, (list, tuple)):
+            for item in value:
+                parsed = self._parse_gif_auto_fps_datetime_value(item)
+                if parsed is not None:
+                    return parsed
+            return None
+        if isinstance(value, dict):
+            for item in value.values():
+                parsed = self._parse_gif_auto_fps_datetime_value(item)
+                if parsed is not None:
+                    return parsed
+            return None
+
+        text = _clean_text(value) or str(value).strip()
+        if not text:
+            return None
+        normalized = text.replace("T", " ").strip()
+        for pattern in (
+            "%Y:%m:%d %H:%M:%S.%f%z",
+            "%Y:%m:%d %H:%M:%S.%f",
+            "%Y:%m:%d %H:%M:%S%z",
+            "%Y:%m:%d %H:%M:%S",
+            "%Y-%m-%d %H:%M:%S.%f%z",
+            "%Y-%m-%d %H:%M:%S.%f",
+            "%Y-%m-%d %H:%M:%S%z",
+            "%Y-%m-%d %H:%M:%S",
+            "%Y-%m-%d %H:%M",
+        ):
+            try:
+                return datetime.strptime(normalized, pattern)
+            except ValueError:
+                continue
+        try:
+            return datetime.fromisoformat(text)
+        except Exception:
+            return None
+
+    def _parse_gif_auto_fps_subsecond(self, value: Any) -> int | None:
+        if value is None:
+            return None
+        if isinstance(value, (list, tuple)):
+            for item in value:
+                parsed = self._parse_gif_auto_fps_subsecond(item)
+                if parsed is not None:
+                    return parsed
+            return None
+        if isinstance(value, dict):
+            for item in value.values():
+                parsed = self._parse_gif_auto_fps_subsecond(item)
+                if parsed is not None:
+                    return parsed
+            return None
+        text = _clean_text(value) or str(value).strip()
+        if not text:
+            return None
+        if "." in text:
+            text = text.split(".", 1)[1]
+        digits = re.sub(r"\D+", "", text)
+        if not digits:
+            return None
+        return int(digits[:6].ljust(6, "0"))
+
+    def _extract_gif_auto_fps_capture_datetime(self, raw_metadata: dict[str, Any]) -> datetime | None:
+        composite_value = self._metadata_lookup_value(
+            raw_metadata,
+            (
+                "Composite:SubSecDateTimeOriginal",
+                "SubSecDateTimeOriginal",
+                "Composite:SubSecCreateDate",
+                "SubSecCreateDate",
+            ),
+        )
+        dt = self._parse_gif_auto_fps_datetime_value(composite_value)
+        if dt is not None:
+            return dt
+
+        base_value = self._metadata_lookup_value(
+            raw_metadata,
+            (
+                "EXIF:DateTimeOriginal",
+                "ExifIFD:DateTimeOriginal",
+                "XMP-exif:DateTimeOriginal",
+                "DateTimeOriginal",
+                "EXIF:CreateDate",
+                "ExifIFD:CreateDate",
+                "XMP-xmp:CreateDate",
+                "CreateDate",
+            ),
+        )
+        dt = self._parse_gif_auto_fps_datetime_value(base_value)
+        if dt is None:
+            return None
+        subsecond = self._parse_gif_auto_fps_subsecond(
+            self._metadata_lookup_value(
+                raw_metadata,
+                (
+                    "EXIF:SubSecTimeOriginal",
+                    "ExifIFD:SubSecTimeOriginal",
+                    "XMP-exif:SubSecTimeOriginal",
+                    "SubSecTimeOriginal",
+                    "EXIF:SubSecTimeDigitized",
+                    "ExifIFD:SubSecTimeDigitized",
+                    "SubSecTimeDigitized",
+                    "EXIF:SubSecTime",
+                    "ExifIFD:SubSecTime",
+                    "SubSecTime",
+                ),
+            )
+        )
+        return dt.replace(microsecond=subsecond) if subsecond is not None else dt
+
+    def _load_gif_auto_fps_metadata(self, paths: list[Path]) -> dict[str, dict[str, Any]]:
+        metadata_by_key: dict[str, dict[str, Any]] = {
+            _path_key(path): dict(self._photo_list_display_metadata_for_path(path))
+            for path in paths
+        }
+        try:
+            raw_batch = read_batch_metadata(
+                [str(path.resolve(strict=False)) for path in paths],
+                tags=_GIF_AUTO_FPS_METADATA_TAGS,
+            )
+        except Exception as exc:
+            _log.warning("[_load_gif_auto_fps_metadata] metadata read failed: %s", exc)
+            raw_batch = {}
+
+        batch_by_key: dict[str, dict[str, Any]] = {}
+        for raw_path, raw_metadata in (raw_batch or {}).items():
+            if not isinstance(raw_metadata, dict):
+                continue
+            try:
+                key = _path_key(Path(raw_path))
+            except Exception:
+                continue
+            batch_by_key[key] = dict(raw_metadata)
+
+        for path in paths:
+            key = _path_key(path)
+            merged = dict(metadata_by_key.get(key) or {"SourceFile": str(path)})
+            merged.update(batch_by_key.get(key) or {})
+            metadata_by_key[key] = merged
+            if key in self.raw_metadata_cache:
+                self.raw_metadata_cache[key] = dict(merged)
+            else:
+                self.photo_list_metadata_cache[key] = dict(merged)
+        return metadata_by_key
+
+    def _on_gif_auto_fps_requested(self) -> None:
+        paths = self._list_photo_paths()
+        if len(paths) < 2:
+            self._show_error("无法计算 FPS", "当前照片列表至少需要 2 张照片。")
+            return
+
+        metadata_by_key = self._load_gif_auto_fps_metadata(paths)
+        timestamps: list[float] = []
+        for path in paths:
+            dt = self._extract_gif_auto_fps_capture_datetime(metadata_by_key.get(_path_key(path), {}))
+            if dt is None:
+                continue
+            try:
+                timestamps.append(float(dt.timestamp()))
+            except Exception:
+                continue
+        timestamps.sort()
+        intervals = [
+            right - left
+            for left, right in zip(timestamps, timestamps[1:])
+            if right > left
+        ]
+        if not intervals:
+            self._show_error(
+                "无法计算 FPS",
+                "当前照片缺少可区分的拍摄时间。连拍序列通常需要 EXIF 亚秒时间才能自动计算 FPS。",
+            )
+            return
+        intervals.sort()
+        mid = len(intervals) // 2
+        median_interval = intervals[mid] if len(intervals) % 2 else (intervals[mid - 1] + intervals[mid]) * 0.5
+        if median_interval <= 0:
+            self._show_error("无法计算 FPS", "拍摄时间间隔无效。")
+            return
+
+        fps = 1.0 / median_interval
+        fps_value = max(1, min(240, int(round(fps))))
+        self.gif_export_panel.set_state(fps=fps_value)
+        self._save_image_export_preferences()
+        self._set_status(
+            f"已根据 {len(timestamps)} 张照片的拍摄时间计算 GIF FPS：{fps_value}（原始 {fps:.2f}）。"
+        )
 
     def _confirm_video_output_overwrite(self, output_path: Path) -> bool:
         if not output_path.exists():
@@ -1879,7 +2135,7 @@ class BirdStampEditorWindow(
             "draw_text": bool(self.draw_text_check.isChecked()),
             "draw_focus": bool(self.draw_focus_check.isChecked()),
             "uniform_auto_crop": bool(self.uniform_auto_crop_check.isChecked()),
-            "auto_crop_stabilization": int(self.auto_crop_stabilization_spin.value()),
+            "auto_crop_stabilization": int(self.auto_crop_stabilization_slider.value()),
         }
 
     def _refresh_global_export_settings_snapshot(self) -> bool:

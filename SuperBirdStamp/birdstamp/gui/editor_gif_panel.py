@@ -9,6 +9,7 @@ from PyQt6.QtWidgets import (
     QGroupBox,
     QHBoxLayout,
     QLabel,
+    QPushButton,
     QSpinBox,
     QVBoxLayout,
     QWidget,
@@ -33,6 +34,7 @@ class GifExportPanel(QGroupBox):
     """GIF 导出参数面板。"""
 
     optionsChanged = pyqtSignal()
+    autoFpsRequested = pyqtSignal()
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__("GIF 选项", parent)
@@ -54,7 +56,17 @@ class GifExportPanel(QGroupBox):
         self.fps_spin.setSingleStep(1)
         self.fps_spin.setValue(max(1, int(round(float(DEFAULT_GIF_FPS)))))
         self.fps_spin.valueChanged.connect(lambda _value: self.optionsChanged.emit())
-        form.addRow("FPS", self.fps_spin)
+        self.auto_fps_button = QPushButton("Auto")
+        self.auto_fps_button.setToolTip("根据当前照片列表的拍摄时间自动计算 FPS。")
+        self.auto_fps_button.clicked.connect(self.autoFpsRequested.emit)
+        fps_widget = QWidget()
+        fps_layout = QHBoxLayout(fps_widget)
+        fps_layout.setContentsMargins(0, 0, 0, 0)
+        fps_layout.setSpacing(8)
+        fps_layout.addWidget(self.fps_spin)
+        fps_layout.addWidget(self.auto_fps_button)
+        fps_layout.addStretch(1)
+        form.addRow("FPS", fps_widget)
 
         self.loop_spin = QSpinBox()
         self.loop_spin.setRange(0, 9999)
