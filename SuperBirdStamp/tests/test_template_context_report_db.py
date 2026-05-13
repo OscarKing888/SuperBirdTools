@@ -4,13 +4,19 @@ import tempfile
 
 from birdstamp.gui.template_context import (
     AutoProxyTemplateContextProvider,
+    EditorPhotoInfo,
+    MISSING_TEMPLATE_TEXT,
     PhotoInfo,
+    TEMPLATE_SOURCE_AUTO,
+    TEMPLATE_SOURCE_EDITOR,
     TEMPLATE_SOURCE_EXIF,
     TEMPLATE_SOURCE_FROM_FILE,
     TEMPLATE_SOURCE_REPORT_DB,
     build_template_context,
     build_template_context_provider,
+    canonical_meta_field_key,
     get_template_context_field_options,
+    normalize_template_selector_option,
     report_db_lookup_keys_for_path,
     report_db_lookup_keys_for_value,
     set_report_db_row_resolver,
@@ -101,24 +107,59 @@ def test_template_context_provider_supports_all_text_sources() -> None:
 def test_template_context_field_options_come_from_provider_definitions() -> None:
     options = get_template_context_field_options()
 
-    assert ("report_db", "bird_species_cn", "鸟种中文名") in options
-    assert ("from_file", "title", "标题") in options
-    assert ("from_file", "file_created_time", "创建时间") in options
-    assert ("from_file", "file_modified_time", "修改时间") in options
-    assert ("from_file", "content_created_time", "内容创建时间") in options
-    assert ("from_file", "device_model", "设备型号") in options
-    assert ("from_file", "resolution_dpi", "分辨率") in options
-    assert ("from_file", "iso", "ISO感光度") in options
-    assert ("from_file", "flash", "闪光灯") in options
-    assert ("from_file", "white_balance", "白平衡") in options
-    assert ("from_file", "creator_tool", "内容创作者") in options
-    assert ("from_file", "file_size", "文件大小") in options
-    assert ("from_file", "author", "作者") in options
-    assert ("exif", "EXIF:Model", "机身型号 (EXIF)") in options
-    assert not any(
-        data_source == "from_file" and key in {"bird", "{bird}"}
-        for data_source, key, _display_label in options
+    assert ("auto", "aperture", "光圈") in options
+    assert ("auto", "aesthetic", "美学评分") in options
+    assert ("auto", "rating", "星级") in options
+    assert ("auto", "pick", "标记") in options
+    assert ("auto", "title", "标题") in options
+    assert ("auto", "file_created_time", "创建时间") in options
+    assert ("auto", "file_modified_time", "修改时间") in options
+    assert ("auto", "content_created_time", "内容创建时间") in options
+    assert ("auto", "camera_model", "相机型号") in options
+    assert ("auto", "resolution_dpi", "分辨率") in options
+    assert ("auto", "flash", "闪光灯") in options
+    assert ("auto", "white_balance", "白平衡") in options
+    assert ("auto", "creator_tool", "内容创作者") in options
+    assert ("auto", "file_size", "文件大小") in options
+    assert ("auto", "author", "作者") in options
+    assert ("editor", "row_number", "列表编号") in options
+    assert all(
+        data_source in {"auto", "editor"}
+        for data_source, _key, _display_label in options
     )
+    assert not any(
+        data_source in {"report_db", "from_file", "exif"}
+        for data_source, _key, _display_label in options
+    )
+
+
+def test_legacy_source_keys_map_to_canonical_meta_fields() -> None:
+    assert canonical_meta_field_key("EXIF:Model") == "camera_model"
+    assert canonical_meta_field_key("EXIF:LensModel") == "lens_model"
+    assert canonical_meta_field_key("EXIF:ExposureTime") == "shutter_speed"
+    assert canonical_meta_field_key("report.adj_sharpness") == "sharpness"
+    assert canonical_meta_field_key("report.adj_topiq") == "aesthetic"
+    assert canonical_meta_field_key("{capture_text}") == "capture_text"
+
+
+def test_selector_options_keep_editor_provider_as_exception() -> None:
+    assert normalize_template_selector_option("auto", "EXIF:Model") == ("auto", "camera_model")
+    assert normalize_template_selector_option("exif", "EXIF:LensModel") == ("auto", "lens_model")
+    assert normalize_template_selector_option("report_db", "report.adj_topiq") == ("auto", "aesthetic")
+    assert normalize_template_selector_option("auto", "bird") == ("auto", "bird_species_cn")
+    assert normalize_template_selector_option("auto", "row_number") == ("editor", "row_number")
+    assert normalize_template_selector_option("editor", "editor.index") == ("editor", "row_number")
+
+
+def test_auto_proxy_and_editor_provider_both_support_editor_row_number() -> None:
+    photo = EditorPhotoInfo.from_path("/tmp/sample.jpg", editor_row_number=7)
+    auto_provider = build_template_context_provider(TEMPLATE_SOURCE_AUTO, "row_number")
+    editor_provider = build_template_context_provider(TEMPLATE_SOURCE_EDITOR, "editor.index")
+    context = build_template_context(photo)
+
+    assert auto_provider.get_text_content(photo) == "7"
+    assert editor_provider.get_text_content(photo) == "7"
+    assert context["row_number"] == "7"
 
 
 def test_from_file_provider_exposes_photo_file_info_fields() -> None:
@@ -222,9 +263,122 @@ def test_auto_proxy_maps_bird_species_cn_to_exif_title_when_report_db_missing() 
     assert provider.get_text_content(photo) == "黑脸琵鹭"
 
 
+def test_auto_proxy_prefers_report_db_then_exif_then_from_file() -> None:
+    photo = PhotoInfo.from_path(
+        "/tmp/sample.jpg",
+        raw_metadata={
+            "XMP-dc:Title": "EXIF鸟名",
+            "EXIF:ExposureTime": "1/2000",
+            "EXIF:ISO": 800,
+            "EXIF:FNumber": 8,
+            "XMP-xmp:Rating": 5,
+            "XMP:City": "0.91",
+            "XMP:State": "0.88",
+        },
+    )
+    row = {
+        "filename": "sample",
+        "bird_species_cn": "Report鸟名",
+        "shutter_speed": "1/1250",
+        "iso": 400,
+        "aperture": "5.6",
+        "rating": 3,
+        "pick": 1,
+        "adj_sharpness": 0.96,
+        "adj_topiq": 0.93,
+    }
+
+    def _resolver(path: Path) -> dict | None:
+        if path.name == "sample.jpg":
+            return dict(row)
+        return None
+
+    set_report_db_row_resolver(_resolver)
+    try:
+        bird_provider = build_template_context_provider(TEMPLATE_SOURCE_AUTO, "bird_species_cn")
+        shutter_provider = build_template_context_provider(TEMPLATE_SOURCE_AUTO, "shutter_speed")
+        iso_provider = build_template_context_provider(TEMPLATE_SOURCE_AUTO, "iso")
+        aperture_provider = build_template_context_provider(TEMPLATE_SOURCE_AUTO, "aperture")
+        rating_provider = build_template_context_provider(TEMPLATE_SOURCE_AUTO, "rating")
+        pick_provider = build_template_context_provider(TEMPLATE_SOURCE_AUTO, "pick")
+        sharpness_provider = build_template_context_provider(TEMPLATE_SOURCE_AUTO, "sharpness")
+        aesthetic_provider = build_template_context_provider(TEMPLATE_SOURCE_AUTO, "aesthetic")
+        context = build_template_context(photo)
+
+        assert bird_provider.get_text_content(photo) == "Report鸟名"
+        assert shutter_provider.get_text_content(photo) == "1/1250"
+        assert iso_provider.get_iso_text(photo) == "400"
+        assert aperture_provider.get_aperture_text(photo) == "5.6"
+        assert rating_provider.get_rating_text(photo) == "3"
+        assert pick_provider.get_flag_text(photo) == "1"
+        assert sharpness_provider.get_sharpness_text(photo) == "0.96"
+        assert aesthetic_provider.get_aesthetic_text(photo) == "0.93"
+        assert context["bird_species_cn"] == "Report鸟名"
+        assert context["bird"] == "Report鸟名"
+        assert context["shutter_speed"] == "1/1250"
+        assert context["iso"] == "400"
+        assert context["rating"] == "3"
+        assert context["filename"] == "sample.jpg"
+        assert context["report.filename"] == "sample"
+    finally:
+        set_report_db_row_resolver(None)
+
+
+def test_exif_provider_prefers_sidecar_xmp_before_embedded_exif() -> None:
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        path = Path(tmp_dir) / "sample.jpg"
+        path.write_bytes(b"x")
+        xmp_path = Path(tmp_dir) / "sample.xmp"
+        xmp_path.write_text(
+            """<?xml version="1.0" encoding="UTF-8"?>
+<x:xmpmeta xmlns:x="adobe:ns:meta/">
+  <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+    <rdf:Description
+      rdf:about=""
+      xmlns:tiff="http://ns.adobe.com/tiff/1.0/"
+      tiff:Model="Sidecar Camera">
+      <dc:title xmlns:dc="http://purl.org/dc/elements/1.1/">
+        <rdf:Alt>
+          <rdf:li xml:lang="x-default">Sidecar Title</rdf:li>
+        </rdf:Alt>
+      </dc:title>
+    </rdf:Description>
+  </rdf:RDF>
+</x:xmpmeta>
+""",
+            encoding="utf-8",
+        )
+        photo = PhotoInfo.from_path(
+            path,
+            raw_metadata={
+                "EXIF:Model": "Embedded Camera",
+                "XMP-dc:Title": "Embedded Title",
+            },
+        )
+
+        canonical_provider = build_template_context_provider("exif", "camera_model")
+        direct_provider = build_template_context_provider("exif", "EXIF:Model")
+        auto_title_provider = build_template_context_provider("auto", "title")
+
+        assert canonical_provider.get_text_content(photo) == "Sidecar Camera"
+        assert direct_provider.get_text_content(photo) == "Sidecar Camera"
+        assert auto_title_provider.get_text_content(photo) == "Sidecar Title"
+
+
+def test_auto_proxy_returns_na_when_all_sources_are_missing() -> None:
+    photo = PhotoInfo.from_path(
+        "/tmp/sample.jpg",
+        raw_metadata={"SourceFile": "/tmp/sample.jpg"},
+    )
+    provider = build_template_context_provider("auto", "not_a_real_meta_field")
+
+    assert provider.get_text_content(photo) == MISSING_TEMPLATE_TEXT
+
+
 def test_auto_proxy_route_definitions_are_loaded_from_resource_json() -> None:
     routes = AutoProxyTemplateContextProvider.route_definitions()
 
     assert "bird_species_cn" in routes
-    assert routes["bird_species_cn"][0].provider_id == "exif"
-    assert "XMP-dc:Title" in routes["bird_species_cn"][0].candidate_keys
+    assert routes["bird_species_cn"][0].provider_id == "report_db"
+    assert routes["bird_species_cn"][1].provider_id == "exif"
+    assert "XMP-dc:Title" in routes["bird_species_cn"][1].candidate_keys

@@ -1177,18 +1177,19 @@ class TemplateManagerDialog(QDialog):
         for data_source, key, display_label in _get_template_context_field_options():
             source_name = _template_context.template_source_display_name(data_source)
             display_core = str(display_label or key or "").strip()
+            display_prefix = f"{source_name}:" if source_name else ""
             if display_core and str(key or "").strip() and display_core != str(key or "").strip():
-                display_text = f"{source_name}:{display_core} ({key})"
+                display_text = f"{display_prefix}{display_core} ({key})"
             else:
-                display_text = f"{source_name}:{key}"
+                display_text = f"{display_prefix}{key}"
             self._field_fallback_combo.addItem(display_text, (data_source, key))
         self._field_fallback_combo.setCurrentIndex(0)
         if self._field_fallback_combo.lineEdit():
-            self._field_fallback_combo.lineEdit().setPlaceholderText("选数据源与字段，可输入自定义占位符")
+            self._field_fallback_combo.lineEdit().setPlaceholderText("选择统一 meta/编辑器字段，可输入自定义占位符")
         self.field_fallback_edit = self._field_fallback_combo.lineEdit()
         self._field_fallback_combo.currentIndexChanged.connect(self._on_fallback_var_selected)
         self.field_fallback_edit.textChanged.connect(self._apply_field_changes)
-        form.addRow("数据源/字段", self._field_fallback_combo)
+        form.addRow("字段", self._field_fallback_combo)
 
         self.field_align_h_combo = QComboBox()
         self.field_align_h_combo.addItems(list(ALIGN_OPTIONS_HORIZONTAL))
@@ -1806,8 +1807,7 @@ class TemplateManagerDialog(QDialog):
 
     def _fallback_combo_index_for_value(self, data_source: str, key: str) -> int:
         combo = self._field_fallback_combo
-        target_source = str(data_source or "").strip().lower()
-        target_key = str(key or "").strip()
+        target_source, target_key = _template_context.normalize_template_selector_option(data_source, key)
         for idx in range(combo.count()):
             item_data = combo.itemData(idx)
             if not isinstance(item_data, (list, tuple)) or len(item_data) < 2:
@@ -1815,29 +1815,6 @@ class TemplateManagerDialog(QDialog):
             item_source = str(item_data[0] or "").strip().lower()
             item_key = str(item_data[1] or "").strip()
             if item_source == target_source and item_key == target_key:
-                return idx
-            if (
-                item_source == _template_context.TEMPLATE_SOURCE_AUTO
-                and item_key == target_key
-                and target_source in {
-                    _template_context.TEMPLATE_SOURCE_AUTO,
-                    _template_context.TEMPLATE_SOURCE_EDITOR,
-                    _template_context.TEMPLATE_SOURCE_EXIF,
-                    _template_context.TEMPLATE_SOURCE_FROM_FILE,
-                    _template_context.TEMPLATE_SOURCE_REPORT_DB,
-                }
-            ):
-                return idx
-            if (
-                target_source == _template_context.TEMPLATE_SOURCE_AUTO
-                and item_key == target_key
-                and item_source in {
-                    _template_context.TEMPLATE_SOURCE_EDITOR,
-                    _template_context.TEMPLATE_SOURCE_EXIF,
-                    _template_context.TEMPLATE_SOURCE_FROM_FILE,
-                    _template_context.TEMPLATE_SOURCE_REPORT_DB,
-                }
-            ):
                 return idx
         return -1
 
@@ -1990,6 +1967,7 @@ class TemplateManagerDialog(QDialog):
             matched = -1
             ds = _template_context.normalize_template_source_type(data_source)
             key = (source_key or "").strip() or (fallback or "").strip()
+            selector_source, selector_key = _template_context.normalize_template_selector_option(ds, key)
             if ds and key:
                 for i in range(combo.count()):
                     item_data = combo.itemData(i)
@@ -1999,29 +1977,7 @@ class TemplateManagerDialog(QDialog):
                         if item_source == ds and item_key == key:
                             matched = i
                             break
-                        if (
-                            item_source == _template_context.TEMPLATE_SOURCE_AUTO
-                            and item_key == key
-                            and ds in {
-                                _template_context.TEMPLATE_SOURCE_AUTO,
-                                _template_context.TEMPLATE_SOURCE_EDITOR,
-                                _template_context.TEMPLATE_SOURCE_EXIF,
-                                _template_context.TEMPLATE_SOURCE_FROM_FILE,
-                                _template_context.TEMPLATE_SOURCE_REPORT_DB,
-                            }
-                        ):
-                            matched = i
-                            break
-                        if (
-                            ds == _template_context.TEMPLATE_SOURCE_AUTO
-                            and item_key == key
-                            and item_source in {
-                                _template_context.TEMPLATE_SOURCE_EDITOR,
-                                _template_context.TEMPLATE_SOURCE_EXIF,
-                                _template_context.TEMPLATE_SOURCE_FROM_FILE,
-                                _template_context.TEMPLATE_SOURCE_REPORT_DB,
-                            }
-                        ):
+                        if item_source == selector_source and item_key == selector_key:
                             matched = i
                             break
             elif not (fallback or "").strip():

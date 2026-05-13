@@ -2175,7 +2175,7 @@ class BirdStampEditorWindow(
                 source_key,
             )
             text = str(provider.get_text_content(photo_info) or "").strip()
-            if text:
+            if text and text.upper() != _template_context.MISSING_TEMPLATE_TEXT:
                 return text
         return ""
 
