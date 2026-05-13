@@ -140,9 +140,10 @@ def render(
         )
         from birdstamp.gui.editor_utils import build_metadata_context
         from birdstamp.gui.editor_core import (
-            apply_editor_crop,
+            apply_full_crop,
             is_ratio_free as _is_ratio_free,
             is_ratio_no_crop as _is_ratio_no_crop,
+            parse_padding_value as _parse_padding,
             parse_bool_value as _parse_bool,
             parse_ratio_value as _parse_ratio,
             resize_fit,
@@ -214,13 +215,15 @@ def render(
             effective_max_edge = max_edge_val if max_edge_val > 0 else tpl_max_edge
 
             if tpl_ratio is not None and not _is_ratio_no_crop(tpl_ratio) and not _is_ratio_free(tpl_ratio):
-                image = apply_editor_crop(
+                image = apply_full_crop(
                     image,
-                    source_path=source,
                     raw_metadata=raw_meta,
                     ratio=tpl_ratio,
                     center_mode=tpl_center,
-                    crop_padding_px=0,   # 模板的 crop_padding_* 是鸟检测内缩偏移，不是外边距
+                    inner_top=_parse_padding(template_payload.get("crop_padding_top"), 0),
+                    inner_bottom=_parse_padding(template_payload.get("crop_padding_bottom"), 0),
+                    inner_left=_parse_padding(template_payload.get("crop_padding_left"), 0),
+                    inner_right=_parse_padding(template_payload.get("crop_padding_right"), 0),
                     max_long_edge=effective_max_edge,
                     fill_color=tpl_fill,
                 )

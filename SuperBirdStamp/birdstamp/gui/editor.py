@@ -97,6 +97,7 @@ from birdstamp.gui import editor_template
 from birdstamp.gui import editor_utils
 from birdstamp.gui import template_context as _template_context
 from birdstamp.gui.editor_template_dialog import (
+    _CropPaddingEditorWidget,
     _GradientBarWidget,  # noqa: F401  (re-exported for compat)
     _GradientEditorWidget,  # noqa: F401
     TemplateManagerDialog,
@@ -929,6 +930,10 @@ class BirdStampEditorWindow(
         self.center_mode_combo.currentIndexChanged.connect(self._on_crop_settings_changed)
         override_form.addRow("裁切中心", self.center_mode_combo)
 
+        self.crop_padding_editor = _CropPaddingEditorWidget()
+        self.crop_padding_editor.changed.connect(self._on_crop_padding_editor_changed)
+        override_form.addRow("留边", self.crop_padding_editor)
+
         override_btn_row = QHBoxLayout()
         reset_override_btn = QPushButton("重置为模板值")
         reset_override_btn.setToolTip(
@@ -1609,6 +1614,40 @@ class BirdStampEditorWindow(
         if fill is not None:
             state["fill"] = _safe_color(str(fill), "#FFFFFF")
         self._crop_padding_state = state
+        self._sync_crop_padding_editor_from_state()
+
+    def _sync_crop_padding_editor_from_state(self) -> None:
+        editor = getattr(self, "crop_padding_editor", None)
+        if editor is None or not hasattr(editor, "set_values"):
+            return
+        state = self._get_crop_padding_state()
+        try:
+            editor.set_values(
+                top=state["top"],
+                bottom=state["bottom"],
+                left=state["left"],
+                right=state["right"],
+                fill=state["fill"],
+            )
+        except Exception:
+            return
+
+    def _on_crop_padding_editor_changed(self) -> None:
+        editor = getattr(self, "crop_padding_editor", None)
+        if editor is None or not hasattr(editor, "get_values"):
+            return
+        try:
+            values = editor.get_values()
+        except Exception:
+            return
+        self._set_crop_padding_state(
+            top=values.get("crop_padding_top"),
+            bottom=values.get("crop_padding_bottom"),
+            left=values.get("crop_padding_left"),
+            right=values.get("crop_padding_right"),
+            fill=values.get("crop_padding_fill"),
+        )
+        self._on_crop_settings_changed()
 
     def _update_crop_padding_from_box(
         self,
@@ -3582,6 +3621,24 @@ class BirdStampEditorWindow(
         self._set_status(f"已将当前裁切重载设置应用到全部 {len(targets)} 张照片。")
 
 
+def _ensure_positive_qt_application_font(app: Any) -> None:
+    try:
+        font = app.font()
+        if font.pointSize() > 0:
+            return
+        pixel_size = font.pixelSize()
+        if pixel_size > 0:
+            screen = QGuiApplication.primaryScreen()
+            dpi = float(screen.logicalDotsPerInchY()) if screen is not None else 96.0
+            point_size = max(1, int(round(pixel_size * 72.0 / max(1.0, dpi))))
+        else:
+            point_size = 10
+        font.setPointSize(point_size)
+        app.setFont(font)
+    except Exception as exc:
+        _log.debug("qt application font normalization skipped: %s", exc)
+
+
 def launch_gui(
     startup_file: Path | None = None,
     startup_files: list[Path] | None = None,
@@ -3592,6 +3649,7 @@ def launch_gui(
         [str(path) for path in (startup_files or [])],
     )
     app = ensure_file_open_aware_application(sys.argv)
+    _ensure_positive_qt_application_font(app)
     about_info = _load_birdstamp_about_info()
     app_name = _birdstamp_product_name(about_info)
     if hasattr(app, "setApplicationName"):

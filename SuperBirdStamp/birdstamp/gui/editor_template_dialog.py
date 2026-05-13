@@ -492,9 +492,27 @@ class _CropPaddingEditorWidget(QWidget):
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
+        self._blocking = False
+
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(4)
+
+        uniform_row = QHBoxLayout()
+        uniform_row.setSpacing(4)
+        uniform_row.addWidget(QLabel("四边"))
+        self.uniform_spin = QComboBox()
+        self.uniform_spin.setEditable(True)
+        self.uniform_spin.setInsertPolicy(QComboBox.InsertPolicy.NoInsert)
+        self.uniform_spin.addItems([str(value) for value in self._COMMON_PADDING_VALUES])
+        self.uniform_spin.setCurrentText(str(_DEFAULT_CROP_PADDING_PX))
+        uniform_line_edit = self.uniform_spin.lineEdit()
+        if uniform_line_edit is not None:
+            uniform_line_edit.setValidator(QIntValidator(-9999, 9999, self.uniform_spin))
+            uniform_line_edit.setPlaceholderText("输入统一留边(px)")
+        self.uniform_spin.currentTextChanged.connect(self._on_uniform_padding_changed)
+        uniform_row.addWidget(self.uniform_spin, stretch=1)
+        layout.addLayout(uniform_row)
 
         grid_widget = QWidget()
         grid = QGridLayout(grid_widget)
@@ -569,8 +587,6 @@ class _CropPaddingEditorWidget(QWidget):
         fill_row.addWidget(screen_btn)
         layout.addLayout(fill_row)
 
-        self._blocking = False
-
     @staticmethod
     def _format_padding_text(value: int) -> str:
         return str(int(value))
@@ -607,6 +623,7 @@ class _CropPaddingEditorWidget(QWidget):
 
     def _sync_combo(self, combo: QComboBox, value: int) -> None:
         self._set_combo_value(combo, value)
+        self._sync_uniform_from_edges()
         self._emit_changed()
 
     def _on_padding_combo_changed(self, combo: QComboBox) -> None:
@@ -621,6 +638,43 @@ class _CropPaddingEditorWidget(QWidget):
         slider = slider_map.get(combo)
         if slider is not None:
             self._sync_slider(slider, value)
+        self._sync_uniform_from_edges()
+        self._emit_changed()
+
+    def _edge_padding_values(self) -> tuple[int, int, int, int]:
+        return (
+            self._parse_padding_text(self.top_spin.currentText()),
+            self._parse_padding_text(self.bottom_spin.currentText()),
+            self._parse_padding_text(self.left_spin.currentText()),
+            self._parse_padding_text(self.right_spin.currentText()),
+        )
+
+    def _sync_uniform_from_edges(self) -> None:
+        values = self._edge_padding_values()
+        text = self._format_padding_text(values[0]) if values.count(values[0]) == len(values) else ""
+        self.uniform_spin.blockSignals(True)
+        try:
+            self.uniform_spin.setCurrentText(text)
+        finally:
+            self.uniform_spin.blockSignals(False)
+
+    def _on_uniform_padding_changed(self, value_text: str) -> None:
+        if self._blocking:
+            return
+        value = self._parse_padding_text(value_text)
+        self._blocking = True
+        try:
+            self._set_combo_value(self.uniform_spin, value)
+            for combo, slider in (
+                (self.top_spin, self.top_slider),
+                (self.bottom_spin, self.bottom_slider),
+                (self.left_spin, self.left_slider),
+                (self.right_spin, self.right_slider),
+            ):
+                self._set_combo_value(combo, value)
+                self._sync_slider(slider, value)
+        finally:
+            self._blocking = False
         self._emit_changed()
 
     def _on_fill_combo_changed(self, *_: Any) -> None:
@@ -676,6 +730,14 @@ class _CropPaddingEditorWidget(QWidget):
                 finally:
                     combo.blockSignals(False)
                     slider.blockSignals(False)
+            self.uniform_spin.blockSignals(True)
+            try:
+                if top == bottom == left == right:
+                    self.uniform_spin.setCurrentText(self._format_padding_text(top))
+                else:
+                    self.uniform_spin.setCurrentText("")
+            finally:
+                self.uniform_spin.blockSignals(False)
             self.fill_combo.blockSignals(True)
             try:
                 self._set_fill_value(fill)
@@ -998,6 +1060,10 @@ class TemplateManagerDialog(QDialog):
         self.template_center_mode_combo.addItem("自定义", _CENTER_MODE_CUSTOM)
         self.template_center_mode_combo.currentIndexChanged.connect(self._on_tmpl_center_mode_changed)
         form.addRow("裁切中心", self.template_center_mode_combo)
+
+        self.crop_padding_editor = _CropPaddingEditorWidget()
+        self.crop_padding_editor.changed.connect(self._on_template_crop_padding_changed)
+        form.addRow("留边", self.crop_padding_editor)
 
         self.template_max_long_edge_combo = QComboBox()
         seen_edges: set[int] = set()
@@ -1331,6 +1397,13 @@ class TemplateManagerDialog(QDialog):
             self._set_tmpl_max_long_edge_value(
                 int(payload.get("max_long_edge") or _DEFAULT_TEMPLATE_MAX_LONG_EDGE)
             )
+            self.crop_padding_editor.set_values(
+                top=_parse_padding_value(payload.get("crop_padding_top"), _DEFAULT_CROP_PADDING_PX),
+                bottom=_parse_padding_value(payload.get("crop_padding_bottom"), _DEFAULT_CROP_PADDING_PX),
+                left=_parse_padding_value(payload.get("crop_padding_left"), _DEFAULT_CROP_PADDING_PX),
+                right=_parse_padding_value(payload.get("crop_padding_right"), _DEFAULT_CROP_PADDING_PX),
+                fill=_safe_color(str(payload.get("crop_padding_fill", "#FFFFFF")), "#FFFFFF"),
+            )
             self._set_template_banner_color_value(payload.get("banner_color"))
             self._set_template_draw_banner_background_value(payload.get("draw_banner_background"))
             self._set_banner_bg_style_value(payload.get("banner_background_style"))
@@ -1448,6 +1521,13 @@ class TemplateManagerDialog(QDialog):
             edge = 0
         self.current_payload["max_long_edge"] = edge
         self._save_current_template()
+
+    def _on_template_crop_padding_changed(self) -> None:
+        if self._updating or not self.current_payload:
+            return
+        self.current_payload.update(self.crop_padding_editor.get_values())
+        self._save_current_template()
+        self._refresh_preview()
 
     # ------------------------------------------------------------------
     # Font helpers
