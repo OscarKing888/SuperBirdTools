@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import tempfile
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -69,7 +70,34 @@ def resolve_workspace_path(
     workspace_path: Path | str | None = None,
 ) -> Path | None:
     if isinstance(raw, (str, Path)):
-        return _normalize_path(raw)
+        text = str(raw).strip()
+        if not text:
+            return None
+        try:
+            raw_path = Path(text).expanduser()
+        except Exception:
+            return _normalize_path(text)
+        if raw_path.is_absolute():
+            return _normalize_path(raw_path)
+
+        workspace_dir = _workspace_dir(workspace_path)
+        relative_candidate: Path | None = None
+        if workspace_dir is not None:
+            try:
+                relative_candidate = (workspace_dir / raw_path).resolve(strict=False)
+            except Exception:
+                relative_candidate = None
+        cwd_candidate = _normalize_path(raw_path)
+
+        for candidate in (relative_candidate, cwd_candidate):
+            if candidate is None:
+                continue
+            try:
+                if candidate.exists():
+                    return candidate
+            except Exception:
+                continue
+        return relative_candidate or cwd_candidate
     if not isinstance(raw, dict):
         return None
 
@@ -146,14 +174,30 @@ def write_workspace_json(path: Path | str, payload: dict[str, Any]) -> Path:
     document = dict(payload)
     document["app"] = WORKSPACE_APP_NAME
     document["workspace_version"] = WORKSPACE_SCHEMA_VERSION
-    document["saved_at"] = str(document.get("saved_at") or datetime.now().astimezone().isoformat())
+    document["saved_at"] = datetime.now().astimezone().isoformat()
+    text = json.dumps(document, ensure_ascii=False, indent=2) + "\n"
 
+    tmp_path: Path | None = None
     try:
         workspace_path.parent.mkdir(parents=True, exist_ok=True)
-        workspace_path.write_text(
-            json.dumps(document, ensure_ascii=False, indent=2),
+        with tempfile.NamedTemporaryFile(
+            "w",
             encoding="utf-8",
-        )
+            dir=workspace_path.parent,
+            prefix=f".{workspace_path.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as tmp_file:
+            tmp_path = Path(tmp_file.name)
+            tmp_file.write(text)
+            tmp_file.flush()
+            os.fsync(tmp_file.fileno())
+        os.replace(tmp_path, workspace_path)
     except Exception as exc:
+        if tmp_path is not None:
+            try:
+                tmp_path.unlink(missing_ok=True)
+            except Exception:
+                pass
         raise WorkspaceFormatError(f"写入工作区失败: {exc}") from exc
     return workspace_path

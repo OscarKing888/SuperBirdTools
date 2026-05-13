@@ -1891,6 +1891,7 @@ class BirdStampEditorWindow(
         fps_value = max(1, min(240, int(round(fps))))
         self.gif_export_panel.set_state(fps=fps_value)
         self._save_image_export_preferences()
+        self._schedule_workspace_autosave()
         self._set_status(
             f"已根据 {len(timestamps)} 张照片的拍摄时间计算 GIF FPS：{fps_value}（原始 {fps:.2f}）。"
         )

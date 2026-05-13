@@ -463,6 +463,14 @@ class _BirdStampWorkspaceMixin:
                 fallback=self._build_current_render_settings(),
             )
             global_export_state = editor_state.get("global_export_settings")
+            if not isinstance(global_export_state, dict):
+                global_export_state = {
+                    "draw_banner": current_render_settings.get("draw_banner"),
+                    "draw_text": current_render_settings.get("draw_text"),
+                    "draw_focus": current_render_settings.get("draw_focus"),
+                    "uniform_auto_crop": current_render_settings.get("uniform_auto_crop"),
+                    "auto_crop_stabilization": current_render_settings.get("auto_crop_stabilization"),
+                }
             image_export_state = editor_state.get("image_export")
             video_export_state = editor_state.get("video_export")
             preview_state = editor_state.get("preview")
@@ -534,7 +542,7 @@ class _BirdStampWorkspaceMixin:
             if added_paths:
                 self._restart_photo_list_metadata_loader()
 
-            self._apply_workspace_global_export_state(global_export_state if isinstance(global_export_state, dict) else {})
+            self._apply_workspace_global_export_state(global_export_state)
             self._apply_workspace_image_export_state(image_export_state if isinstance(image_export_state, dict) else {}, workspace_path)
             self._apply_workspace_video_export_state(video_export_state if isinstance(video_export_state, dict) else {}, workspace_path)
             preview_scale_percent = self._apply_workspace_preview_state(
