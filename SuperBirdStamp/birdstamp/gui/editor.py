@@ -685,7 +685,7 @@ class BirdStampEditorWindow(
         if files_to_add:
             self._add_photo_paths(files_to_add)
         else:
-            self._restore_autosave_workspace_on_startup()
+            self._restore_startup_workspace()
 
         self._start_bird_detector_preload()
 

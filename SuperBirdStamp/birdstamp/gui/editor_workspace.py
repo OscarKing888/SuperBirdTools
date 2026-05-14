@@ -31,6 +31,7 @@ from birdstamp.workspace import (
 _WORKSPACE_AUTOSAVE_FILE_NAME = f"editor_autosave{WORKSPACE_FILE_EXTENSION}"
 _WORKSPACE_AUTOSAVE_INTERVAL_MS = 1200
 _workspace_log = get_logger("birdstamp.workspace")
+_LAST_WORKSPACE_PATH_KEY = "last_workspace_path"
 _PIPELINE_STAGE_ENABLED_VALUE_KEYS = (
     STAGE_TEMPLATE_CROP_ENABLED_KEY,
     STAGE_RESIZE_LIMIT_ENABLED_KEY,
@@ -118,6 +119,9 @@ class _BirdStampWorkspaceMixin:
         except WorkspaceFormatError as exc:
             _workspace_log.warning("workspace autosave restore skipped: %s", exc)
             return False
+        if not self._workspace_payload_has_session_content(payload):
+            _workspace_log.info("workspace autosave restore skipped: empty session")
+            return False
         try:
             self._restore_workspace_payload(
                 payload,
@@ -131,11 +135,87 @@ class _BirdStampWorkspaceMixin:
             return False
         return True
 
+    def _workspace_payload_has_session_content(self, payload: dict[str, Any]) -> bool:
+        if not isinstance(payload, dict):
+            return False
+        photos = payload.get("photos")
+        if isinstance(photos, list) and photos:
+            return True
+        report_databases = payload.get("report_databases")
+        return isinstance(report_databases, list) and bool(report_databases)
+
+    def _restore_startup_workspace(self) -> bool:
+        if self._restore_autosave_workspace_on_startup():
+            return True
+        return self._restore_last_workspace_on_startup()
+
     def _load_workspace_last_dir(self) -> Path | None:
         return self._load_remembered_output_dir("last_workspace_dir")
 
     def _save_workspace_last_dir(self, directory: Path) -> None:
         self._save_remembered_output_dir("last_workspace_dir", directory)
+
+    def _load_workspace_last_path(self) -> Path | None:
+        raw = str(self._load_editor_export_state_value(_LAST_WORKSPACE_PATH_KEY, "") or "").strip()
+        if not raw:
+            return self._discover_workspace_path_from_last_dir()
+        try:
+            path = Path(raw).expanduser().resolve(strict=False)
+        except Exception:
+            return self._discover_workspace_path_from_last_dir()
+        return path if path.is_file() else self._discover_workspace_path_from_last_dir()
+
+    def _discover_workspace_path_from_last_dir(self) -> Path | None:
+        last_dir = self._load_workspace_last_dir()
+        if not isinstance(last_dir, Path) or not last_dir.is_dir():
+            return None
+        try:
+            candidates = [
+                path for path in last_dir.glob(f"*{WORKSPACE_FILE_EXTENSION}")
+                if path.is_file()
+            ]
+        except Exception:
+            return None
+        if not candidates:
+            return None
+
+        def _mtime(path: Path) -> float:
+            try:
+                return path.stat().st_mtime
+            except Exception:
+                return 0.0
+
+        return max(candidates, key=_mtime)
+
+    def _save_workspace_last_path(self, workspace_path: Path) -> None:
+        try:
+            target = workspace_path.expanduser().resolve(strict=False)
+        except Exception:
+            target = Path(workspace_path)
+        self._save_editor_export_state_value(_LAST_WORKSPACE_PATH_KEY, str(target))
+        self._save_workspace_last_dir(target.parent)
+
+    def _restore_last_workspace_on_startup(self) -> bool:
+        workspace_path = self._load_workspace_last_path()
+        if workspace_path is None:
+            return False
+        try:
+            payload = read_workspace_json(workspace_path)
+        except WorkspaceFormatError as exc:
+            _workspace_log.warning("last workspace restore skipped: %s", exc)
+            return False
+        try:
+            self._restore_workspace_payload(
+                payload,
+                workspace_path,
+                status_label="已恢复上次工作区",
+                mark_as_current_workspace=True,
+                autosave_after_restore=False,
+            )
+        except Exception as exc:
+            _workspace_log.warning("last workspace restore failed: %s", exc)
+            return False
+        return True
 
     def _workspace_dialog_filter(self) -> str:
         return (
@@ -629,7 +709,7 @@ class _BirdStampWorkspaceMixin:
 
             if mark_as_current_workspace:
                 self._workspace_path = workspace_path
-                self._save_workspace_last_dir(workspace_path.parent)
+                self._save_workspace_last_path(workspace_path)
             else:
                 self._workspace_path = None
 
@@ -690,7 +770,7 @@ class _BirdStampWorkspaceMixin:
             self._show_error("保存工作区失败", str(exc))
             return
         self._workspace_path = written_path
-        self._save_workspace_last_dir(written_path.parent)
+        self._save_workspace_last_path(written_path)
         self._set_status(f"工作区已保存：{written_path}")
 
     def load_workspace(self) -> None:
