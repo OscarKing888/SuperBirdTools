@@ -3,9 +3,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 import threading
+from typing import Callable
 
 from PyQt6.QtCore import QThread, pyqtSignal
 from PyQt6.QtWidgets import (
+    QButtonGroup,
     QCheckBox,
     QComboBox,
     QFormLayout,
@@ -13,6 +15,7 @@ from PyQt6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QPushButton,
+    QRadioButton,
     QSizePolicy,
     QSpinBox,
     QVBoxLayout,
@@ -57,6 +60,7 @@ class VideoExportPanel(QGroupBox):
 
     exportRequested = pyqtSignal(object)
     cancelRequested = pyqtSignal()
+    autoFpsRequested = pyqtSignal()
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__("视频导出", parent)
@@ -73,19 +77,27 @@ class VideoExportPanel(QGroupBox):
         form.setHorizontalSpacing(10)
         form.setVerticalSpacing(6)
 
-        self.container_combo = QComboBox()
-        for suffix, label in VIDEO_CONTAINER_OPTIONS:
-            self.container_combo.addItem(label, suffix)
-        container_index = self.container_combo.findData(DEFAULT_VIDEO_CONTAINER)
-        self.container_combo.setCurrentIndex(max(0, container_index))
-        form.addRow("容器", self.container_combo)
+        (
+            self.container_widget,
+            self.container_button_group,
+            self.container_buttons,
+        ) = self._build_radio_group(
+            [(label, suffix) for suffix, label in VIDEO_CONTAINER_OPTIONS],
+            DEFAULT_VIDEO_CONTAINER,
+            property_name="container",
+        )
+        form.addRow("容器", self.container_widget)
 
-        self.codec_combo = QComboBox()
-        for label, value in VIDEO_CODEC_OPTIONS:
-            self.codec_combo.addItem(label, value)
-        codec_index = self.codec_combo.findData(DEFAULT_VIDEO_CODEC)
-        self.codec_combo.setCurrentIndex(max(0, codec_index))
-        form.addRow("编码器", self.codec_combo)
+        (
+            self.codec_widget,
+            self.codec_button_group,
+            self.codec_buttons,
+        ) = self._build_radio_group(
+            VIDEO_CODEC_OPTIONS,
+            DEFAULT_VIDEO_CODEC,
+            property_name="codec",
+        )
+        form.addRow("编码器", self.codec_widget)
 
         self.fps_combo = QComboBox()
         self.fps_combo.setEditable(True)
@@ -93,7 +105,16 @@ class VideoExportPanel(QGroupBox):
             text = f"{float(value):.3f}".rstrip("0").rstrip(".")
             self.fps_combo.addItem(text, float(value))
         self.fps_combo.setCurrentText(f"{DEFAULT_VIDEO_FPS:.3f}".rstrip("0").rstrip("."))
-        form.addRow("FPS", self.fps_combo)
+        self.auto_fps_button = QPushButton("Auto")
+        self.auto_fps_button.setToolTip("根据当前照片列表的拍摄时间自动计算 FPS。")
+        self.auto_fps_button.clicked.connect(self.autoFpsRequested.emit)
+        fps_widget = QWidget()
+        fps_layout = QHBoxLayout(fps_widget)
+        fps_layout.setContentsMargins(0, 0, 0, 0)
+        fps_layout.setSpacing(8)
+        fps_layout.addWidget(self.fps_combo, stretch=1)
+        fps_layout.addWidget(self.auto_fps_button)
+        form.addRow("FPS", fps_widget)
 
         self.frame_size_combo = QComboBox()
         for item in VIDEO_FRAME_SIZE_OPTIONS:
@@ -113,13 +134,17 @@ class VideoExportPanel(QGroupBox):
         self.frame_size_combo.currentIndexChanged.connect(self._sync_frame_size_state)
         form.addRow("尺寸", self.frame_size_combo)
 
-        self.orientation_combo = QComboBox()
-        for label, value in VIDEO_ORIENTATION_OPTIONS:
-            self.orientation_combo.addItem(label, value)
-        orientation_index = self.orientation_combo.findData(DEFAULT_VIDEO_ORIENTATION)
-        self.orientation_combo.setCurrentIndex(max(0, orientation_index))
-        self.orientation_combo.currentIndexChanged.connect(self._sync_frame_size_state)
-        form.addRow("方向", self.orientation_combo)
+        (
+            self.orientation_widget,
+            self.orientation_button_group,
+            self.orientation_buttons,
+        ) = self._build_radio_group(
+            VIDEO_ORIENTATION_OPTIONS,
+            DEFAULT_VIDEO_ORIENTATION,
+            property_name="orientation",
+            on_changed=self._sync_frame_size_state,
+        )
+        form.addRow("方向", self.orientation_widget)
 
         custom_size_widget = QWidget()
         custom_size_layout = QHBoxLayout(custom_size_widget)
@@ -147,12 +172,16 @@ class VideoExportPanel(QGroupBox):
         preset_layout.setContentsMargins(0, 0, 0, 0)
         preset_layout.setSpacing(6)
 
-        self.preset_combo = QComboBox()
-        for label, value in VIDEO_PRESET_OPTIONS:
-            self.preset_combo.addItem(label, value)
-        preset_index = self.preset_combo.findData(DEFAULT_VIDEO_PRESET)
-        self.preset_combo.setCurrentIndex(max(0, preset_index))
-        preset_layout.addWidget(self.preset_combo, stretch=1)
+        (
+            self.preset_widget,
+            self.preset_button_group,
+            self.preset_buttons,
+        ) = self._build_radio_group(
+            VIDEO_PRESET_OPTIONS,
+            DEFAULT_VIDEO_PRESET,
+            property_name="preset",
+        )
+        preset_layout.addWidget(self.preset_widget, stretch=1)
 
         self.crf_spin = QSpinBox()
         self.crf_spin.setRange(0, 51)
@@ -207,15 +236,76 @@ class VideoExportPanel(QGroupBox):
 
         self._sync_frame_size_state()
 
+    def _build_radio_group(
+        self,
+        items: list[tuple[str, str]],
+        default_value: str,
+        *,
+        property_name: str,
+        on_changed: Callable[[], None] | None = None,
+    ) -> tuple[QWidget, QButtonGroup, dict[str, QRadioButton]]:
+        widget = QWidget()
+        layout = QHBoxLayout(widget)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(10)
+
+        group = QButtonGroup(self)
+        group.setExclusive(True)
+        buttons: dict[str, QRadioButton] = {}
+        for label, value in items:
+            normalized = self._normalize_choice_value(value)
+            if not normalized or normalized in buttons:
+                continue
+            radio = QRadioButton(str(label))
+            radio.setProperty(property_name, normalized)
+            group.addButton(radio)
+            buttons[normalized] = radio
+            layout.addWidget(radio)
+        layout.addStretch(1)
+        self._set_radio_group_value(buttons, default_value)
+        if callable(on_changed):
+            for radio in buttons.values():
+                radio.toggled.connect(lambda checked, _slot=on_changed: _slot() if checked else None)
+        return widget, group, buttons
+
+    @staticmethod
+    def _normalize_choice_value(value: object) -> str:
+        return str(value or "").strip().lower()
+
+    def _radio_group_value(self, buttons: dict[str, QRadioButton], default_value: str) -> str:
+        for value, button in buttons.items():
+            try:
+                if button.isChecked():
+                    return self._normalize_choice_value(value)
+            except Exception:
+                continue
+        return self._normalize_choice_value(default_value)
+
+    def _set_radio_group_value(
+        self,
+        buttons: dict[str, QRadioButton],
+        value: object,
+        *,
+        fallback_to_first: bool = True,
+    ) -> bool:
+        normalized = self._normalize_choice_value(value)
+        target = buttons.get(normalized)
+        if target is None and fallback_to_first and buttons:
+            target = next(iter(buttons.values()))
+        if target is None:
+            return False
+        target.setChecked(True)
+        return True
+
     def _sync_frame_size_state(self) -> None:
         data = self.current_frame_size_data()
         mode = str(data.get("mode") or "auto").strip().lower()
         width, height = self._resolved_preset_size(data)
 
         is_custom = mode == "custom"
-        self.orientation_combo.setEnabled(mode == "preset")
-        self.frame_width_spin.setEnabled(is_custom)
-        self.frame_height_spin.setEnabled(is_custom)
+        self.orientation_widget.setEnabled((not self._busy) and mode == "preset")
+        self.frame_width_spin.setEnabled((not self._busy) and is_custom)
+        self.frame_height_spin.setEnabled((not self._busy) and is_custom)
 
         if mode == "preset" and width > 0 and height > 0:
             self.frame_width_spin.setValue(width)
@@ -226,7 +316,10 @@ class VideoExportPanel(QGroupBox):
         return data if isinstance(data, dict) else {"mode": "auto", "width": 0, "height": 0}
 
     def current_orientation(self) -> str:
-        return str(self.orientation_combo.currentData() or DEFAULT_VIDEO_ORIENTATION).strip().lower() or DEFAULT_VIDEO_ORIENTATION
+        return (
+            self._radio_group_value(self.orientation_buttons, DEFAULT_VIDEO_ORIENTATION)
+            or DEFAULT_VIDEO_ORIENTATION
+        )
 
     def _resolved_preset_size(self, data: dict[str, int | str] | None = None) -> tuple[int, int]:
         frame_data = data if isinstance(data, dict) else self.current_frame_size_data()
@@ -261,10 +354,10 @@ class VideoExportPanel(QGroupBox):
             height = 0
 
         return VideoExportRequest(
-            container=str(self.container_combo.currentData() or DEFAULT_VIDEO_CONTAINER),
-            codec=str(self.codec_combo.currentData() or DEFAULT_VIDEO_CODEC),
+            container=self._radio_group_value(self.container_buttons, DEFAULT_VIDEO_CONTAINER),
+            codec=self._radio_group_value(self.codec_buttons, DEFAULT_VIDEO_CODEC),
             fps=fps,
-            preset=str(self.preset_combo.currentData() or DEFAULT_VIDEO_PRESET),
+            preset=self._radio_group_value(self.preset_buttons, DEFAULT_VIDEO_PRESET),
             crf=int(self.crf_spin.value()),
             frame_size_mode=mode,
             frame_width=width,
@@ -275,8 +368,8 @@ class VideoExportPanel(QGroupBox):
     def current_state(self) -> dict[str, int | float | str | bool]:
         frame_data = self.current_frame_size_data()
         return {
-            "container": str(self.container_combo.currentData() or DEFAULT_VIDEO_CONTAINER),
-            "codec": str(self.codec_combo.currentData() or DEFAULT_VIDEO_CODEC),
+            "container": self._radio_group_value(self.container_buttons, DEFAULT_VIDEO_CONTAINER),
+            "codec": self._radio_group_value(self.codec_buttons, DEFAULT_VIDEO_CODEC),
             "fps_text": str(self.fps_combo.currentText() or "").strip(),
             "frame_size_mode": str(frame_data.get("mode") or DEFAULT_VIDEO_FRAME_SIZE_MODE).strip().lower(),
             "frame_size_width": int(frame_data.get("width") or 0),
@@ -284,40 +377,41 @@ class VideoExportPanel(QGroupBox):
             "orientation": self.current_orientation(),
             "custom_width": int(self.frame_width_spin.value()),
             "custom_height": int(self.frame_height_spin.value()),
-            "preset": str(self.preset_combo.currentData() or DEFAULT_VIDEO_PRESET),
+            "preset": self._radio_group_value(self.preset_buttons, DEFAULT_VIDEO_PRESET),
             "crf": int(self.crf_spin.value()),
             "preserve_temp_files": bool(self.preserve_temp_files_check.isChecked()),
         }
+
+    def set_fps(self, fps: float) -> None:
+        fps_value = max(1.0, min(240.0, float(fps)))
+        fps_text = f"{fps_value:.3f}".rstrip("0").rstrip(".")
+        self.fps_combo.setCurrentText(fps_text)
 
     def set_state(self, state: dict[str, object] | None) -> None:
         if not isinstance(state, dict):
             return
 
-        widgets = (
-            self.container_combo,
-            self.codec_combo,
+        widgets = [
             self.fps_combo,
             self.frame_size_combo,
-            self.orientation_combo,
             self.frame_width_spin,
             self.frame_height_spin,
-            self.preset_combo,
             self.crf_spin,
             self.preserve_temp_files_check,
-        )
+            *self.container_buttons.values(),
+            *self.codec_buttons.values(),
+            *self.orientation_buttons.values(),
+            *self.preset_buttons.values(),
+        ]
         previous_blocks: list[tuple[QWidget, bool]] = []
         for widget in widgets:
             previous_blocks.append((widget, bool(widget.blockSignals(True))))
         try:
             container = str(state.get("container") or "").strip().lower()
-            idx = self.container_combo.findData(container)
-            if idx >= 0:
-                self.container_combo.setCurrentIndex(idx)
+            self._set_radio_group_value(self.container_buttons, container, fallback_to_first=False)
 
             codec = str(state.get("codec") or "").strip().lower()
-            idx = self.codec_combo.findData(codec)
-            if idx >= 0:
-                self.codec_combo.setCurrentIndex(idx)
+            self._set_radio_group_value(self.codec_buttons, codec, fallback_to_first=False)
 
             fps_text = str(state.get("fps_text") or "").strip()
             if fps_text:
@@ -353,9 +447,7 @@ class VideoExportPanel(QGroupBox):
                 self.frame_size_combo.setCurrentIndex(frame_index)
 
             orientation = str(state.get("orientation") or "").strip().lower()
-            idx = self.orientation_combo.findData(orientation)
-            if idx >= 0:
-                self.orientation_combo.setCurrentIndex(idx)
+            self._set_radio_group_value(self.orientation_buttons, orientation, fallback_to_first=False)
 
             self._sync_frame_size_state()
 
@@ -373,9 +465,7 @@ class VideoExportPanel(QGroupBox):
                 self.frame_height_spin.setValue(custom_height)
 
             preset = str(state.get("preset") or "").strip().lower()
-            idx = self.preset_combo.findData(preset)
-            if idx >= 0:
-                self.preset_combo.setCurrentIndex(idx)
+            self._set_radio_group_value(self.preset_buttons, preset, fallback_to_first=False)
 
             try:
                 crf = int(state.get("crf"))
@@ -395,14 +485,15 @@ class VideoExportPanel(QGroupBox):
 
     def set_busy(self, busy: bool, *, status_text: str | None = None) -> None:
         self._busy = busy
-        self.container_combo.setEnabled(not busy)
-        self.codec_combo.setEnabled(not busy)
+        self.container_widget.setEnabled(not busy)
+        self.codec_widget.setEnabled(not busy)
         self.fps_combo.setEnabled(not busy)
+        self.auto_fps_button.setEnabled(not busy)
         self.frame_size_combo.setEnabled(not busy)
-        self.orientation_combo.setEnabled(not busy and str(self.current_frame_size_data().get("mode") or "") == "preset")
+        self.orientation_widget.setEnabled(not busy and str(self.current_frame_size_data().get("mode") or "") == "preset")
         self.frame_width_spin.setEnabled(not busy and str(self.current_frame_size_data().get("mode") or "") == "custom")
         self.frame_height_spin.setEnabled(not busy and str(self.current_frame_size_data().get("mode") or "") == "custom")
-        self.preset_combo.setEnabled(not busy)
+        self.preset_widget.setEnabled(not busy)
         self.crf_spin.setEnabled(not busy)
         self.preserve_temp_files_check.setEnabled(not busy)
         self.export_button.setEnabled(not busy)

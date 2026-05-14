@@ -17,7 +17,7 @@
     {"label": "不裁切", "value": "no_crop"},
     {"label": "自由", "value": "free"}
   ],
-  "max_long_edge_options": [0, 1920, 2560, 3840],
+  "max_long_edge_options": [0, 32, 64, 128, 512, 1024, 720, 1080, 1920, 2560, 3840],
   "output_format_options": [
     {"suffix": "png", "label": "PNG"},
     {"suffix": "jpg", "label": "JPG"},

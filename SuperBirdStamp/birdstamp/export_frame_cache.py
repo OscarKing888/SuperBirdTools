@@ -14,6 +14,18 @@ SOURCE_FRAME_BUCKET_KIND = "rendered_source_frames"
 VIDEO_FRAME_BUCKET_KIND = "video_frames"
 SOURCE_FRAME_CACHE_VERSION = 2
 VIDEO_FRAME_CACHE_VERSION = 1
+_DEFAULT_PIPELINE_STAGE_ORDER = (
+    "template_crop",
+    "resize_limit",
+    "template_overlay",
+    "focus_overlay",
+)
+_PIPELINE_STAGE_ENABLED_KEYS = (
+    "stage_template_crop_enabled",
+    "stage_resize_limit_enabled",
+    "stage_template_overlay_enabled",
+    "stage_focus_overlay_enabled",
+)
 
 
 def stable_json_dumps(value: Any) -> str:
@@ -67,10 +79,30 @@ def path_signature(path: Path) -> str:
 def global_export_settings_from_settings(settings: dict[str, Any] | None) -> dict[str, Any]:
     raw = settings if isinstance(settings, dict) else {}
     uniform_auto_crop = _parse_bool_value(raw.get("uniform_auto_crop"), False)
+    raw_stage_order = raw.get("pipeline_stage_order")
+    stage_order: list[str] = []
+    if isinstance(raw_stage_order, (list, tuple)):
+        for item in raw_stage_order:
+            stage_id = str(item or "").strip()
+            if stage_id in _DEFAULT_PIPELINE_STAGE_ORDER and stage_id not in stage_order:
+                stage_order.append(stage_id)
+    if "template_crop" in stage_order:
+        stage_order.remove("template_crop")
+    stage_order.insert(0, "template_crop")
+    for stage_id in _DEFAULT_PIPELINE_STAGE_ORDER:
+        if stage_id not in stage_order:
+            stage_order.append(stage_id)
+    stage_enabled = {
+        key: _parse_bool_value(raw.get(key), True)
+        for key in _PIPELINE_STAGE_ENABLED_KEYS
+    }
+    stage_enabled["stage_template_crop_enabled"] = True
     return {
         "draw_banner": _parse_bool_value(raw.get("draw_banner"), True),
         "draw_text": _parse_bool_value(raw.get("draw_text"), True),
         "draw_focus": _parse_bool_value(raw.get("draw_focus"), False),
+        "pipeline_stage_order": stage_order,
+        **stage_enabled,
         "uniform_auto_crop": uniform_auto_crop,
         "auto_crop_stabilization": _parse_int_range(raw.get("auto_crop_stabilization"), 0, 0, 100)
         if uniform_auto_crop else 0,

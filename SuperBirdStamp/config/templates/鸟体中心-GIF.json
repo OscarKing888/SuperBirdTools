@@ -17,5 +17,25 @@
   "crop_padding_left": 64,
   "crop_padding_right": 64,
   "crop_padding_fill": "#000000",
-  "fields": []
+  "fields": [
+    {
+      "name": "鸟种中文名 (bird_species_cn)",
+      "tag": "EXIF:Model",
+      "fallback": "",
+      "data_source": "auto",
+      "report_field": "",
+      "text_source": {
+        "type": "auto",
+        "key": "bird_species_cn"
+      },
+      "align_horizontal": "left",
+      "align_vertical": "bottom",
+      "x_offset_pct": 0.0,
+      "y_offset_pct": -2.0,
+      "color": "#ff9300",
+      "font_size": 64,
+      "font_type": "/System/Library/Fonts/Supplemental/Songti.ttc",
+      "style": "bold"
+    }
+  ]
 }

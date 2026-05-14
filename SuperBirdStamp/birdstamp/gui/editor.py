@@ -35,6 +35,7 @@ from PyQt6.QtGui import (
 )
 from PyQt6.QtWidgets import (
     QAbstractItemView,
+    QButtonGroup,
     QCheckBox,
     QComboBox,
     QDialog,
@@ -54,6 +55,7 @@ from PyQt6.QtWidgets import (
     QMenu,
     QMessageBox,
     QPushButton,
+    QRadioButton,
     QProgressBar,
     QHeaderView,
     QScrollArea,
@@ -137,10 +139,27 @@ from birdstamp.gui.editor_crop_calculator import _BirdStampCropMixin
 from birdstamp.gui.editor_renderer import _BirdStampRendererMixin
 from birdstamp.gui.editor_exporter import _BirdStampExporterMixin
 from birdstamp.video_export import (
+    DEFAULT_EXPORT_STAGE_ID,
+    EXPORT_STAGE_GIF_ID,
+    EXPORT_STAGE_ID_KEY,
+    PIPELINE_STAGE_ENABLED_KEY,
+    PIPELINE_STAGE_ORDER_KEY,
+    STAGE_FOCUS_OVERLAY_ENABLED_KEY,
+    STAGE_FOCUS_OVERLAY_ID,
+    STAGE_RESIZE_LIMIT_ENABLED_KEY,
+    STAGE_RESIZE_LIMIT_ID,
+    STAGE_TEMPLATE_CROP_ENABLED_KEY,
+    STAGE_TEMPLATE_CROP_ID,
+    STAGE_TEMPLATE_OVERLAY_ENABLED_KEY,
+    STAGE_TEMPLATE_OVERLAY_ID,
     VideoExportOptions,
     VideoFrameJob,
+    build_default_image_proc_pipeline,
+    build_image_proc_export_stages,
     ffmpeg_install_script_path,
     find_ffmpeg_executable,
+    normalize_export_stage_id,
+    normalize_pipeline_stage_order,
     prepare_uniform_auto_crop_plans,
     preferred_ffmpeg_binary_path,
 )
@@ -343,6 +362,18 @@ _ABOUT_CFG_FILENAME = "about.cfg"
 _BIRDSTAMP_DEFAULT_APP_NAME = "极速鸟框 - 鸟类照片智能裁切与模板叠加工具"
 _BIRDSTAMP_DEFAULT_PRODUCT_NAME = "极速鸟框"
 _BIRDSTAMP_DEFAULT_SUBTITLE = "鸟类照片智能裁切与模板叠加"
+_PIPELINE_STAGE_ENABLED_KEYS = {
+    STAGE_TEMPLATE_CROP_ID: STAGE_TEMPLATE_CROP_ENABLED_KEY,
+    STAGE_RESIZE_LIMIT_ID: STAGE_RESIZE_LIMIT_ENABLED_KEY,
+    STAGE_TEMPLATE_OVERLAY_ID: STAGE_TEMPLATE_OVERLAY_ENABLED_KEY,
+    STAGE_FOCUS_OVERLAY_ID: STAGE_FOCUS_OVERLAY_ENABLED_KEY,
+}
+_CENTER_MODE_RADIO_ITEMS = (
+    ("鸟体", _CENTER_MODE_BIRD),
+    ("焦点", _CENTER_MODE_FOCUS),
+    ("图像中心", _CENTER_MODE_IMAGE),
+    ("自定义", _CENTER_MODE_CUSTOM),
+)
 
 
 class _PhotoInputDiscoveryWorker(QThread):
@@ -566,6 +597,10 @@ class BirdStampEditorWindow(
         self.photo_render_overrides: dict[str, dict[str, Any]] = {}
         self._photo_export_dirty_keys: set[str] = set()
         self._last_global_export_settings: dict[str, Any] = {}
+        self._pipeline_stage_enabled: dict[str, bool] = {
+            stage_id: True
+            for stage_id in normalize_pipeline_stage_order(None)
+        }
         self._crop_padding_state: dict[str, Any] = {
             "top": _DEFAULT_CROP_PADDING_PX,
             "bottom": _DEFAULT_CROP_PADDING_PX,
@@ -996,78 +1031,60 @@ class BirdStampEditorWindow(
         _template_context.set_report_db_row_resolver(_resolver)
 
     def _setup_ui_template_output_actions(self, left_layout: QVBoxLayout) -> None:
-        """构建左侧「模板」「模板选项重载」「导出」分组 UI。"""
-        template_section_content = QWidget()
-        template_section_layout = QVBoxLayout(template_section_content)
-        template_section_layout.setContentsMargins(0, 0, 0, 0)
-        template_section_layout.setSpacing(10)
-
-        # ── 模板 ─────────────────────────────────────────────────────────────
-        template_content = QWidget()
-        template_layout = QHBoxLayout(template_content)
-        template_layout.setContentsMargins(0, 0, 0, 0)
-
+        """构建左侧「处理管线」「导出」分组 UI。"""
         self.template_combo = QComboBox()
         self.template_combo.currentTextChanged.connect(self._on_template_changed)
-        template_layout.addWidget(self.template_combo, stretch=1)
 
-        manage_template_btn = QPushButton("模板管理")
-        manage_template_btn.clicked.connect(self._open_template_manager)
-        template_layout.addWidget(manage_template_btn)
-        template_section_layout.addWidget(template_content)
-
-        # ── 模板选项重载（可滚动） ─────────────────────────────────────────
-        override_content = QWidget()
-        override_form = QFormLayout(override_content)
-        _configure_form_layout(override_form)
+        self.manage_template_btn = QPushButton("模板管理")
+        self.manage_template_btn.clicked.connect(self._open_template_manager)
 
         self.ratio_combo = QComboBox()
         for label, ratio in RATIO_OPTIONS:
             self.ratio_combo.addItem(label, ratio)
         self.ratio_combo.currentIndexChanged.connect(self._on_ratio_changed)
-        override_form.addRow("裁切比例", self.ratio_combo)
 
-        self.center_mode_combo = QComboBox()
-        self.center_mode_combo.addItem("鸟体", _CENTER_MODE_BIRD)
-        self.center_mode_combo.addItem("焦点", _CENTER_MODE_FOCUS)
-        self.center_mode_combo.addItem("图像中心", _CENTER_MODE_IMAGE)
-        self.center_mode_combo.addItem("自定义", _CENTER_MODE_CUSTOM)
-        self.center_mode_combo.currentIndexChanged.connect(self._on_crop_settings_changed)
-        override_form.addRow("裁切中心", self.center_mode_combo)
+        self.center_mode_widget = QWidget()
+        center_mode_layout = QHBoxLayout(self.center_mode_widget)
+        center_mode_layout.setContentsMargins(0, 0, 0, 0)
+        center_mode_layout.setSpacing(10)
+        self.center_mode_button_group = QButtonGroup(self)
+        self.center_mode_button_group.setExclusive(True)
+        self.center_mode_buttons: dict[str, QRadioButton] = {}
+        for label, mode in _CENTER_MODE_RADIO_ITEMS:
+            radio = QRadioButton(label)
+            radio.setProperty("center_mode", mode)
+            radio.toggled.connect(
+                lambda checked, _mode=mode: self._on_crop_settings_changed()
+                if checked else None
+            )
+            self.center_mode_button_group.addButton(radio)
+            self.center_mode_buttons[mode] = radio
+            center_mode_layout.addWidget(radio)
+        center_mode_layout.addStretch(1)
+        self._set_center_mode_value(_DEFAULT_TEMPLATE_CENTER_MODE, emit_changed=False)
 
         self.crop_padding_editor = _CropPaddingEditorWidget()
         self.crop_padding_editor.changed.connect(self._on_crop_padding_editor_changed)
-        override_form.addRow("留边", self.crop_padding_editor)
 
-        override_btn_row = QHBoxLayout()
-        reset_override_btn = QPushButton("重置为模板值")
-        reset_override_btn.setToolTip(
+        self.reset_override_btn = QPushButton("重置为模板值")
+        self.reset_override_btn.setToolTip(
             "<b>重置为模板值</b><br>"
             "将「裁切比例」「裁切中心」以及当前模板<br>"
             "记录的裁剪框默认值恢复为<br>"
             "当前所选模板中存储的默认值。<br>"
             "<i>适合撤销手动调整、快速回到模板初始状态。</i>"
         )
-        reset_override_btn.clicked.connect(self._reset_template_overrides)
-        override_btn_row.addWidget(reset_override_btn)
+        self.reset_override_btn.clicked.connect(self._reset_template_overrides)
         self.apply_all_btn = QPushButton("全部应用")
         self.apply_all_btn.setToolTip(
             "<b>全部应用</b><br>"
-            "将当前「模板选项重载」中的所有设置<br>"
+            "将当前「模板裁切」中的所有设置<br>"
             "批量覆盖到已加载的每张照片，<br>"
             "包括裁切比例、中心模式以及<br>"
             "当前照片上调整过的裁剪框。<br>"
             "<i>仅影响本次会话的照片列表，不修改模板文件。</i>"
         )
         self.apply_all_btn.clicked.connect(self._apply_current_settings_to_all_photos)
-        override_btn_row.addWidget(self.apply_all_btn)
-        override_form.addRow("", override_btn_row)
-
-        template_section_layout.addWidget(override_content)
-
-        template_section = CollapsibleSection("模板与重载", expanded=True)
-        template_section.set_content_widget(template_section_content)
-        left_layout.addWidget(template_section)
 
         # ── 导出设置 ───────────────────────────────────────────────────────
         export_content = QWidget()
@@ -1075,9 +1092,6 @@ class BirdStampEditorWindow(
         export_root.setContentsMargins(0, 0, 0, 0)
         export_root.setSpacing(8)
 
-        global_export_group = QGroupBox("全局导出设置")
-        global_export_form = QFormLayout(global_export_group)
-        _configure_form_layout(global_export_form)
         self.draw_banner_check = QCheckBox("Banner 底")
         self.draw_banner_check.setChecked(True)
         self.draw_banner_check.toggled.connect(self._on_output_settings_changed)
@@ -1087,15 +1101,6 @@ class BirdStampEditorWindow(
         self.draw_focus_check = QCheckBox("焦点")
         self.draw_focus_check.setChecked(False)
         self.draw_focus_check.toggled.connect(self._on_output_settings_changed)
-        overlay_row_widget = QWidget()
-        overlay_row_layout = QHBoxLayout(overlay_row_widget)
-        overlay_row_layout.setContentsMargins(0, 0, 0, 0)
-        overlay_row_layout.setSpacing(10)
-        overlay_row_layout.addWidget(self.draw_banner_check)
-        overlay_row_layout.addWidget(self.draw_text_check)
-        overlay_row_layout.addWidget(self.draw_focus_check)
-        overlay_row_layout.addStretch()
-        global_export_form.addRow("叠加信息", overlay_row_widget)
 
         self.uniform_auto_crop_check = QCheckBox("批量统一自动裁切尺寸")
         self.uniform_auto_crop_check.setToolTip(
@@ -1125,35 +1130,6 @@ class BirdStampEditorWindow(
         self.auto_crop_stabilization_slider.valueChanged.connect(lambda _value: self._save_image_export_preferences())
         self.uniform_auto_crop_check.toggled.connect(self.auto_crop_stabilization_slider.setEnabled)
         self.uniform_auto_crop_check.toggled.connect(self.auto_crop_stabilization_value_label.setEnabled)
-        auto_crop_row_widget = QWidget()
-        auto_crop_row_layout = QHBoxLayout(auto_crop_row_widget)
-        auto_crop_row_layout.setContentsMargins(0, 0, 0, 0)
-        auto_crop_row_layout.setSpacing(10)
-        auto_crop_row_layout.addWidget(self.uniform_auto_crop_check)
-        auto_crop_row_layout.addWidget(QLabel("防抖"))
-        auto_crop_row_layout.addWidget(self.auto_crop_stabilization_slider, 1)
-        auto_crop_row_layout.addWidget(self.auto_crop_stabilization_value_label)
-        auto_crop_row_layout.addStretch()
-        global_export_form.addRow("自动裁切", auto_crop_row_widget)
-        export_root.addWidget(global_export_group)
-
-        image_export_group = QGroupBox("图片导出")
-        image_export_layout = QVBoxLayout(image_export_group)
-        image_export_layout.setContentsMargins(8, 8, 8, 8)
-        image_export_layout.setSpacing(6)
-
-        image_export_form = QFormLayout()
-        image_export_form.setContentsMargins(0, 0, 0, 0)
-        _configure_form_layout(image_export_form)
-
-        self.output_format_combo = QComboBox()
-        for suffix, label in OUTPUT_FORMAT_OPTIONS:
-            self.output_format_combo.addItem(label, suffix)
-        if self.output_format_combo.count() == 0:
-            self.output_format_combo.addItem("PNG", "png")
-            self.output_format_combo.addItem("JPG", "jpg")
-        self.output_format_combo.currentIndexChanged.connect(self._on_image_export_format_changed)
-        image_export_form.addRow("输出格式", self.output_format_combo)
 
         self.max_edge_combo = QComboBox()
         seen_edges: set[int] = set()
@@ -1170,7 +1146,112 @@ class BirdStampEditorWindow(
             self.max_edge_combo.addItem("不限制", 0)
         self.max_edge_combo.setCurrentIndex(0)
         self.max_edge_combo.currentIndexChanged.connect(self._on_output_settings_changed)
-        image_export_form.addRow("最大长边", self.max_edge_combo)
+
+        pipeline_group = QGroupBox("处理管线")
+        pipeline_layout = QVBoxLayout(pipeline_group)
+        pipeline_layout.setContentsMargins(8, 8, 8, 8)
+        pipeline_layout.setSpacing(8)
+
+        pipeline_order_row = QHBoxLayout()
+        pipeline_order_row.setContentsMargins(0, 0, 0, 0)
+        pipeline_order_row.setSpacing(6)
+        self.pipeline_stage_list = QListWidget()
+        self.pipeline_stage_list.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self.pipeline_stage_list.setDragDropMode(QAbstractItemView.DragDropMode.NoDragDrop)
+        self.pipeline_stage_list.setFixedHeight(104)
+        self.pipeline_stage_list.currentRowChanged.connect(lambda _row: self._refresh_pipeline_stage_move_buttons())
+        self.pipeline_stage_list.itemChanged.connect(self._on_pipeline_stage_item_changed)
+        pipeline_order_row.addWidget(self.pipeline_stage_list, 1)
+        pipeline_btn_col = QVBoxLayout()
+        pipeline_btn_col.setContentsMargins(0, 0, 0, 0)
+        pipeline_btn_col.setSpacing(6)
+        self.pipeline_stage_up_btn = QPushButton("上移")
+        self.pipeline_stage_up_btn.clicked.connect(lambda: self._move_pipeline_stage(-1))
+        self.pipeline_stage_down_btn = QPushButton("下移")
+        self.pipeline_stage_down_btn.clicked.connect(lambda: self._move_pipeline_stage(1))
+        pipeline_btn_col.addWidget(self.pipeline_stage_up_btn)
+        pipeline_btn_col.addWidget(self.pipeline_stage_down_btn)
+        pipeline_btn_col.addStretch()
+        pipeline_order_row.addLayout(pipeline_btn_col)
+        pipeline_layout.addLayout(pipeline_order_row)
+
+        self.pipeline_stage_options_layout = QVBoxLayout()
+        self.pipeline_stage_options_layout.setContentsMargins(0, 0, 0, 0)
+        self.pipeline_stage_options_layout.setSpacing(6)
+        pipeline_layout.addLayout(self.pipeline_stage_options_layout)
+
+        self._setup_pipeline_stage_option_groups()
+        self._set_pipeline_stage_order(normalize_pipeline_stage_order(None), save=False, mark_dirty=False)
+        export_root.addWidget(pipeline_group)
+
+        export_stage_group = QGroupBox("导出 Stage")
+        export_stage_form = QFormLayout(export_stage_group)
+        _configure_form_layout(export_stage_form)
+        export_stage_widget = QWidget()
+        export_stage_layout = QHBoxLayout(export_stage_widget)
+        export_stage_layout.setContentsMargins(0, 0, 0, 0)
+        export_stage_layout.setSpacing(10)
+        self.export_stage_button_group = QButtonGroup(self)
+        self.export_stage_button_group.setExclusive(True)
+        self.export_stage_buttons: dict[str, QRadioButton] = {}
+        for stage in build_image_proc_export_stages():
+            radio = QRadioButton(stage.label)
+            radio.setProperty("stage_id", stage.stage_id)
+            radio.toggled.connect(
+                lambda checked, _stage_id=stage.stage_id: self._on_export_stage_changed()
+                if checked else None
+            )
+            self.export_stage_button_group.addButton(radio)
+            self.export_stage_buttons[stage.stage_id] = radio
+            export_stage_layout.addWidget(radio)
+        export_stage_layout.addStretch(1)
+        export_stage_form.addRow("输出", export_stage_widget)
+        self._set_selected_export_stage_id(DEFAULT_EXPORT_STAGE_ID, save=False)
+        export_root.addWidget(export_stage_group)
+
+        image_export_group = QGroupBox("图片导出")
+        self.image_export_group = image_export_group
+        image_export_layout = QVBoxLayout(image_export_group)
+        image_export_layout.setContentsMargins(8, 8, 8, 8)
+        image_export_layout.setSpacing(6)
+
+        image_export_form = QFormLayout()
+        image_export_form.setContentsMargins(0, 0, 0, 0)
+        _configure_form_layout(image_export_form)
+
+        output_format_widget = QWidget()
+        output_format_layout = QHBoxLayout(output_format_widget)
+        output_format_layout.setContentsMargins(0, 0, 0, 0)
+        output_format_layout.setSpacing(10)
+        self.output_format_button_group = QButtonGroup(self)
+        self.output_format_button_group.setExclusive(True)
+        self.output_format_buttons: dict[str, QRadioButton] = {}
+        for suffix, label in OUTPUT_FORMAT_OPTIONS:
+            if suffix == "gif":
+                continue
+            radio = QRadioButton(label)
+            radio.setProperty("output_suffix", suffix)
+            radio.toggled.connect(
+                lambda checked, _suffix=suffix: self._on_image_export_format_changed()
+                if checked else None
+            )
+            self.output_format_button_group.addButton(radio)
+            self.output_format_buttons[str(suffix).strip().lower()] = radio
+            output_format_layout.addWidget(radio)
+        if not self.output_format_buttons:
+            for suffix, label in (("png", "PNG"), ("jpg", "JPG")):
+                radio = QRadioButton(label)
+                radio.setProperty("output_suffix", suffix)
+                radio.toggled.connect(
+                    lambda checked, _suffix=suffix: self._on_image_export_format_changed()
+                    if checked else None
+                )
+                self.output_format_button_group.addButton(radio)
+                self.output_format_buttons[suffix] = radio
+                output_format_layout.addWidget(radio)
+        output_format_layout.addStretch(1)
+        image_export_form.addRow("输出格式", output_format_widget)
+        self._set_selected_output_suffix("png", save=False)
 
         export_btn_row = QHBoxLayout()
         export_btn_row.setContentsMargins(0, 0, 0, 0)
@@ -1203,6 +1284,7 @@ class BirdStampEditorWindow(
         self.video_export_panel = VideoExportPanel()
         self.video_export_panel.exportRequested.connect(self._start_video_export)
         self.video_export_panel.cancelRequested.connect(self._cancel_video_export)
+        self.video_export_panel.autoFpsRequested.connect(self._on_video_auto_fps_requested)
         ffmpeg_path = find_ffmpeg_executable()
         if ffmpeg_path is not None:
             self.video_export_panel.set_status_text(f"ffmpeg: {ffmpeg_path}")
@@ -1219,6 +1301,436 @@ class BirdStampEditorWindow(
         export_section = CollapsibleSection("导出", expanded=True)
         export_section.set_content_widget(export_content)
         left_layout.addWidget(export_section)
+
+    def _center_mode_button_value(self) -> str:
+        buttons = getattr(self, "center_mode_buttons", None)
+        if isinstance(buttons, dict):
+            for mode, button in buttons.items():
+                try:
+                    if button.isChecked():
+                        return _normalize_center_mode(mode)
+                except Exception:
+                    continue
+        combo = getattr(self, "center_mode_combo", None)
+        if combo is not None:
+            return _normalize_center_mode(combo.currentData())
+        return _normalize_center_mode(_DEFAULT_TEMPLATE_CENTER_MODE)
+
+    def _set_center_mode_value(self, value: Any, *, emit_changed: bool) -> None:
+        mode = _normalize_center_mode(value)
+        buttons = getattr(self, "center_mode_buttons", None)
+        if isinstance(buttons, dict) and buttons:
+            target = buttons.get(mode) or buttons.get(_DEFAULT_TEMPLATE_CENTER_MODE)
+            if target is not None:
+                changed = not target.isChecked()
+                previous_states: list[tuple[QRadioButton, bool]] = []
+                for button in buttons.values():
+                    try:
+                        previous_states.append((button, bool(button.blockSignals(True))))
+                    except Exception:
+                        continue
+                try:
+                    target.setChecked(True)
+                finally:
+                    for button, old_state in reversed(previous_states):
+                        button.blockSignals(old_state)
+                if emit_changed and changed:
+                    self._on_crop_settings_changed()
+                return
+        combo = getattr(self, "center_mode_combo", None)
+        if combo is not None:
+            idx = combo.findData(mode)
+            if idx >= 0:
+                old_blocked = bool(combo.blockSignals(not emit_changed))
+                try:
+                    combo.setCurrentIndex(idx)
+                finally:
+                    if not emit_changed:
+                        combo.blockSignals(old_blocked)
+
+    def _setup_pipeline_stage_option_groups(self) -> None:
+        descriptors = {
+            descriptor.stage_id: descriptor
+            for descriptor in build_default_image_proc_pipeline().ui_descriptors()
+        }
+        self._pipeline_stage_labels = {
+            stage_id: descriptors.get(stage_id).label if descriptors.get(stage_id) is not None else stage_id
+            for stage_id in normalize_pipeline_stage_order(None)
+        }
+
+        self._pipeline_stage_option_groups: dict[str, QGroupBox] = {}
+
+        template_group = QGroupBox()
+        template_form = QFormLayout(template_group)
+        _configure_form_layout(template_form)
+        template_row_widget = QWidget()
+        template_row_layout = QHBoxLayout(template_row_widget)
+        template_row_layout.setContentsMargins(0, 0, 0, 0)
+        template_row_layout.setSpacing(6)
+        template_row_layout.addWidget(self.template_combo, 1)
+        template_row_layout.addWidget(self.manage_template_btn)
+        template_form.addRow("模板", template_row_widget)
+        template_form.addRow("裁切比例", self.ratio_combo)
+        template_form.addRow("裁切中心", self.center_mode_widget)
+        template_form.addRow("留边", self.crop_padding_editor)
+        template_hint = QLabel("这些参数仍会作为当前模板重载参与预览、批量应用和导出。")
+        template_hint.setWordWrap(True)
+        template_form.addRow("说明", template_hint)
+        override_btn_widget = QWidget()
+        override_btn_layout = QHBoxLayout(override_btn_widget)
+        override_btn_layout.setContentsMargins(0, 0, 0, 0)
+        override_btn_layout.setSpacing(6)
+        override_btn_layout.addWidget(self.reset_override_btn)
+        override_btn_layout.addWidget(self.apply_all_btn)
+        override_btn_layout.addStretch()
+        template_form.addRow("重载", override_btn_widget)
+        auto_crop_row_widget = QWidget()
+        auto_crop_row_layout = QHBoxLayout(auto_crop_row_widget)
+        auto_crop_row_layout.setContentsMargins(0, 0, 0, 0)
+        auto_crop_row_layout.setSpacing(10)
+        auto_crop_row_layout.addWidget(self.uniform_auto_crop_check)
+        auto_crop_row_layout.addWidget(QLabel("防抖"))
+        auto_crop_row_layout.addWidget(self.auto_crop_stabilization_slider, 1)
+        auto_crop_row_layout.addWidget(self.auto_crop_stabilization_value_label)
+        auto_crop_row_layout.addStretch()
+        template_form.addRow("批量预计算", auto_crop_row_widget)
+        self._pipeline_stage_option_groups["template_crop"] = template_group
+
+        resize_group = QGroupBox()
+        resize_form = QFormLayout(resize_group)
+        _configure_form_layout(resize_form)
+        resize_form.addRow("最大长边", self.max_edge_combo)
+        self._pipeline_stage_option_groups["resize_limit"] = resize_group
+
+        overlay_group = QGroupBox()
+        overlay_form = QFormLayout(overlay_group)
+        _configure_form_layout(overlay_form)
+        overlay_row_widget = QWidget()
+        overlay_row_layout = QHBoxLayout(overlay_row_widget)
+        overlay_row_layout.setContentsMargins(0, 0, 0, 0)
+        overlay_row_layout.setSpacing(10)
+        overlay_row_layout.addWidget(self.draw_banner_check)
+        overlay_row_layout.addWidget(self.draw_text_check)
+        overlay_row_layout.addStretch()
+        overlay_form.addRow("叠加信息", overlay_row_widget)
+        self._pipeline_stage_option_groups["template_overlay"] = overlay_group
+
+        focus_group = QGroupBox()
+        focus_form = QFormLayout(focus_group)
+        _configure_form_layout(focus_form)
+        focus_form.addRow("焦点框", self.draw_focus_check)
+        self._pipeline_stage_option_groups["focus_overlay"] = focus_group
+
+    def _pipeline_stage_label(self, stage_id: str) -> str:
+        labels = getattr(self, "_pipeline_stage_labels", {}) or {}
+        return str(labels.get(stage_id) or stage_id)
+
+    def _default_pipeline_stage_enabled_map(self) -> dict[str, bool]:
+        return {
+            stage_id: True
+            for stage_id in normalize_pipeline_stage_order(None)
+        }
+
+    def _is_required_pipeline_stage(self, stage_id: str) -> bool:
+        return str(stage_id or "").strip() == STAGE_TEMPLATE_CROP_ID
+
+    def _current_pipeline_stage_order(self) -> tuple[str, ...]:
+        stage_list = getattr(self, "pipeline_stage_list", None)
+        if stage_list is None:
+            return normalize_pipeline_stage_order(getattr(self, "_pipeline_stage_order", None))
+        values: list[str] = []
+        for index in range(stage_list.count()):
+            item = stage_list.item(index)
+            if item is None:
+                continue
+            stage_id = str(item.data(Qt.ItemDataRole.UserRole) or "").strip()
+            if stage_id:
+                values.append(stage_id)
+        return normalize_pipeline_stage_order(values)
+
+    def _current_pipeline_stage_enabled_map(self) -> dict[str, bool]:
+        enabled = self._default_pipeline_stage_enabled_map()
+        stored = getattr(self, "_pipeline_stage_enabled", None)
+        if isinstance(stored, dict):
+            for stage_id in enabled:
+                if stage_id in stored:
+                    enabled[stage_id] = bool(stored[stage_id])
+
+        stage_list = getattr(self, "pipeline_stage_list", None)
+        if stage_list is not None:
+            for index in range(stage_list.count()):
+                item = stage_list.item(index)
+                if item is None:
+                    continue
+                stage_id = str(item.data(Qt.ItemDataRole.UserRole) or "").strip()
+                if stage_id in enabled:
+                    enabled[stage_id] = item.checkState() == Qt.CheckState.Checked
+        enabled[STAGE_TEMPLATE_CROP_ID] = True
+        return enabled
+
+    def _is_pipeline_stage_enabled(self, stage_id: str) -> bool:
+        stage_id = str(stage_id or "").strip()
+        if self._is_required_pipeline_stage(stage_id):
+            return True
+        if stage_id not in _PIPELINE_STAGE_ENABLED_KEYS:
+            return True
+        return bool(self._current_pipeline_stage_enabled_map().get(stage_id, True))
+
+    def _set_pipeline_stage_enabled_map(
+        self,
+        raw: Any,
+        *,
+        save: bool,
+        mark_dirty: bool,
+    ) -> None:
+        enabled = self._default_pipeline_stage_enabled_map()
+        source: Any = raw
+        if isinstance(raw, dict) and isinstance(raw.get(PIPELINE_STAGE_ENABLED_KEY), dict):
+            source = raw.get(PIPELINE_STAGE_ENABLED_KEY)
+        if isinstance(source, dict):
+            for stage_id, enabled_key in _PIPELINE_STAGE_ENABLED_KEYS.items():
+                if stage_id in source:
+                    enabled[stage_id] = _parse_bool_value(source.get(stage_id), True)
+                elif enabled_key in source:
+                    enabled[stage_id] = _parse_bool_value(source.get(enabled_key), True)
+        enabled[STAGE_TEMPLATE_CROP_ID] = True
+
+        self._pipeline_stage_enabled = enabled
+        stage_list = getattr(self, "pipeline_stage_list", None)
+        if stage_list is not None:
+            old_blocked = bool(stage_list.blockSignals(True))
+            try:
+                for index in range(stage_list.count()):
+                    item = stage_list.item(index)
+                    if item is None:
+                        continue
+                    stage_id = str(item.data(Qt.ItemDataRole.UserRole) or "").strip()
+                    if stage_id in enabled:
+                        item.setCheckState(
+                            Qt.CheckState.Checked if enabled[stage_id] else Qt.CheckState.Unchecked
+                        )
+            finally:
+                stage_list.blockSignals(old_blocked)
+        self._sync_pipeline_stage_option_group_order()
+        if save:
+            self._save_image_export_preferences()
+        if mark_dirty:
+            self._on_output_settings_changed()
+
+    def _set_pipeline_stage_order(
+        self,
+        order: Any,
+        *,
+        save: bool,
+        mark_dirty: bool,
+    ) -> None:
+        normalized = normalize_pipeline_stage_order(order)
+        enabled = self._current_pipeline_stage_enabled_map()
+        self._pipeline_stage_order = normalized
+        stage_list = getattr(self, "pipeline_stage_list", None)
+        if stage_list is not None:
+            current_stage = None
+            current_item = stage_list.currentItem()
+            if current_item is not None:
+                current_stage = str(current_item.data(Qt.ItemDataRole.UserRole) or "").strip()
+            stage_list.blockSignals(True)
+            try:
+                stage_list.clear()
+                for stage_id in normalized:
+                    item = QListWidgetItem(self._pipeline_stage_label(stage_id))
+                    item.setData(Qt.ItemDataRole.UserRole, stage_id)
+                    flags = item.flags() | Qt.ItemFlag.ItemIsUserCheckable
+                    if self._is_required_pipeline_stage(stage_id):
+                        flags &= ~Qt.ItemFlag.ItemIsUserCheckable
+                        item.setToolTip("模板裁切是必选 Stage，始终执行。")
+                    item.setFlags(flags)
+                    item.setCheckState(
+                        Qt.CheckState.Checked if enabled.get(stage_id, True) else Qt.CheckState.Unchecked
+                    )
+                    stage_list.addItem(item)
+                selected_index = normalized.index(current_stage) if current_stage in normalized else 0
+                if stage_list.count() > 0:
+                    stage_list.setCurrentRow(selected_index)
+            finally:
+                stage_list.blockSignals(False)
+            self._pipeline_stage_enabled = self._current_pipeline_stage_enabled_map()
+            self._refresh_pipeline_stage_move_buttons()
+        self._sync_pipeline_stage_option_group_order()
+        if save:
+            self._save_image_export_preferences()
+        if mark_dirty:
+            self._on_output_settings_changed()
+
+    def _sync_pipeline_stage_option_group_order(self) -> None:
+        layout = getattr(self, "pipeline_stage_options_layout", None)
+        groups = getattr(self, "_pipeline_stage_option_groups", {}) or {}
+        if layout is None:
+            return
+        while layout.count():
+            item = layout.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                widget.setParent(None)
+                widget.hide()
+        visible_index = 0
+        for stage_id in self._current_pipeline_stage_order():
+            group = groups.get(stage_id)
+            if group is None:
+                continue
+            if not self._is_pipeline_stage_enabled(stage_id):
+                group.hide()
+                continue
+            visible_index += 1
+            group.setTitle(f"{visible_index}. {self._pipeline_stage_label(stage_id)}")
+            group.show()
+            layout.addWidget(group)
+
+    def _refresh_pipeline_stage_move_buttons(self) -> None:
+        stage_list = getattr(self, "pipeline_stage_list", None)
+        up_btn = getattr(self, "pipeline_stage_up_btn", None)
+        down_btn = getattr(self, "pipeline_stage_down_btn", None)
+        row = stage_list.currentRow() if stage_list is not None else -1
+        count = stage_list.count() if stage_list is not None else 0
+        if up_btn is not None:
+            up_btn.setEnabled(row > 1)
+        if down_btn is not None:
+            down_btn.setEnabled(row > 0 and row < count - 1)
+
+    def _on_pipeline_stage_item_changed(self, item: QListWidgetItem) -> None:
+        stage_id = str(item.data(Qt.ItemDataRole.UserRole) or "").strip()
+        if stage_id not in _PIPELINE_STAGE_ENABLED_KEYS:
+            return
+        if self._is_required_pipeline_stage(stage_id):
+            stage_list = getattr(self, "pipeline_stage_list", None)
+            old_blocked = bool(stage_list.blockSignals(True)) if stage_list is not None else False
+            try:
+                item.setCheckState(Qt.CheckState.Checked)
+            finally:
+                if stage_list is not None:
+                    stage_list.blockSignals(old_blocked)
+            self._pipeline_stage_enabled = self._current_pipeline_stage_enabled_map()
+            self._sync_pipeline_stage_option_group_order()
+            return
+        enabled = item.checkState() == Qt.CheckState.Checked
+        current = self._current_pipeline_stage_enabled_map()
+        current[stage_id] = enabled
+        self._pipeline_stage_enabled = current
+        self._sync_pipeline_stage_option_group_order()
+        self._save_image_export_preferences()
+        self._on_output_settings_changed()
+
+    def _move_pipeline_stage(self, direction: int) -> None:
+        stage_list = getattr(self, "pipeline_stage_list", None)
+        if stage_list is None:
+            return
+        current_row = stage_list.currentRow()
+        if current_row <= 0:
+            return
+        target_row = current_row + int(direction)
+        if target_row <= 0 or target_row >= stage_list.count():
+            return
+        order = list(self._current_pipeline_stage_order())
+        order[current_row], order[target_row] = order[target_row], order[current_row]
+        self._set_pipeline_stage_order(order, save=True, mark_dirty=True)
+        stage_list.setCurrentRow(target_row)
+
+    def _selected_export_stage_id(self) -> str:
+        buttons = getattr(self, "export_stage_buttons", None)
+        if isinstance(buttons, dict):
+            for stage_id, button in buttons.items():
+                try:
+                    if button.isChecked():
+                        return normalize_export_stage_id(stage_id)
+                except Exception:
+                    continue
+        combo = getattr(self, "export_stage_combo", None)
+        if combo is None:
+            return DEFAULT_EXPORT_STAGE_ID
+        return normalize_export_stage_id(combo.currentData())
+
+    def _set_selected_export_stage_id(self, stage_id: Any, *, save: bool) -> None:
+        normalized = normalize_export_stage_id(stage_id)
+        buttons = getattr(self, "export_stage_buttons", None)
+        if isinstance(buttons, dict) and buttons:
+            target = buttons.get(normalized) or buttons.get(DEFAULT_EXPORT_STAGE_ID)
+            if target is not None:
+                changed = not target.isChecked()
+                previous_states: list[tuple[QRadioButton, bool]] = []
+                for button in buttons.values():
+                    try:
+                        previous_states.append((button, bool(button.blockSignals(True))))
+                    except Exception:
+                        continue
+                try:
+                    target.setChecked(True)
+                finally:
+                    for button, old_state in reversed(previous_states):
+                        button.blockSignals(old_state)
+                if changed:
+                    self._refresh_image_export_action_states()
+        combo = getattr(self, "export_stage_combo", None)
+        if combo is not None:
+            index = combo.findData(normalized)
+            if index < 0:
+                index = combo.findData(DEFAULT_EXPORT_STAGE_ID)
+            if index >= 0:
+                combo.blockSignals(True)
+                try:
+                    combo.setCurrentIndex(index)
+                finally:
+                    combo.blockSignals(False)
+        if save:
+            self._save_image_export_preferences()
+        self._refresh_image_export_action_states()
+
+    def _on_export_stage_changed(self, *_args: Any) -> None:
+        self._refresh_image_export_action_states()
+        self._save_image_export_preferences()
+        self._schedule_workspace_autosave()
+
+    def _normalize_output_suffix(self, value: Any) -> str:
+        suffix = str(value or "").strip().lower()
+        if suffix == "jpeg":
+            suffix = "jpg"
+        buttons = getattr(self, "output_format_buttons", None)
+        if isinstance(buttons, dict) and buttons:
+            if suffix in buttons:
+                return suffix
+            return "png" if "png" in buttons else next(iter(buttons))
+        supported = [item_suffix for item_suffix, _label in OUTPUT_FORMAT_OPTIONS if item_suffix in {"jpg", "jpeg", "png"}]
+        if suffix in supported:
+            return suffix
+        return supported[0] if supported else "png"
+
+    def _set_selected_output_suffix(self, suffix: Any, *, save: bool) -> None:
+        normalized = self._normalize_output_suffix(suffix)
+        buttons = getattr(self, "output_format_buttons", None)
+        if isinstance(buttons, dict) and buttons:
+            target = buttons.get(normalized)
+            if target is not None:
+                previous_states: list[tuple[QRadioButton, bool]] = []
+                for button in buttons.values():
+                    try:
+                        previous_states.append((button, bool(button.blockSignals(True))))
+                    except Exception:
+                        continue
+                try:
+                    target.setChecked(True)
+                finally:
+                    for button, old_state in reversed(previous_states):
+                        button.blockSignals(old_state)
+        combo = getattr(self, "output_format_combo", None)
+        if combo is not None:
+            index = combo.findData(normalized)
+            if index >= 0:
+                combo.blockSignals(True)
+                try:
+                    combo.setCurrentIndex(index)
+                finally:
+                    combo.blockSignals(False)
+        if save:
+            self._save_image_export_preferences()
+        self._refresh_image_export_action_states()
 
     def _setup_ui_preview_panel(self) -> QWidget:
         """构建右侧「预览区」UI，返回该面板 QWidget。"""
@@ -1575,14 +2087,24 @@ class BirdStampEditorWindow(
 
     def _apply_image_export_preferences_from_state(self) -> None:
         output_format = str(self._load_editor_export_state_value("image_output_format", "") or "").strip().lower()
+        selected_export_stage = self._load_editor_export_state_value(EXPORT_STAGE_ID_KEY, None)
+        if selected_export_stage is None and output_format == "gif":
+            selected_export_stage = EXPORT_STAGE_GIF_ID
+        self._set_selected_export_stage_id(selected_export_stage or DEFAULT_EXPORT_STAGE_ID, save=False)
+
+        pipeline_stage_enabled = self._load_editor_export_state_value(PIPELINE_STAGE_ENABLED_KEY, None)
+        if pipeline_stage_enabled is None:
+            pipeline_stage_enabled = {
+                key: self._load_editor_export_state_value(key, None)
+                for key in _PIPELINE_STAGE_ENABLED_KEYS.values()
+            }
+        self._set_pipeline_stage_enabled_map(pipeline_stage_enabled, save=False, mark_dirty=False)
+
+        pipeline_stage_order = self._load_editor_export_state_value(PIPELINE_STAGE_ORDER_KEY, None)
+        self._set_pipeline_stage_order(pipeline_stage_order, save=False, mark_dirty=False)
+
         if output_format:
-            format_index = self.output_format_combo.findData(output_format)
-            if format_index >= 0:
-                self.output_format_combo.blockSignals(True)
-                try:
-                    self.output_format_combo.setCurrentIndex(format_index)
-                finally:
-                    self.output_format_combo.blockSignals(False)
+            self._set_selected_output_suffix(output_format, save=False)
 
         uniform_auto_crop = self._load_editor_export_state_value("uniform_auto_crop", None)
         if uniform_auto_crop is not None and hasattr(self, "uniform_auto_crop_check"):
@@ -1658,6 +2180,12 @@ class BirdStampEditorWindow(
     def _save_image_export_preferences(self) -> None:
         gif_request = self.gif_export_panel.current_request()
         self._save_editor_export_state_value("image_output_format", self._selected_output_suffix())
+        self._save_editor_export_state_value(EXPORT_STAGE_ID_KEY, self._selected_export_stage_id())
+        self._save_editor_export_state_value(PIPELINE_STAGE_ORDER_KEY, list(self._current_pipeline_stage_order()))
+        stage_enabled = self._current_pipeline_stage_enabled_map()
+        self._save_editor_export_state_value(PIPELINE_STAGE_ENABLED_KEY, dict(stage_enabled))
+        for stage_id, enabled_key in _PIPELINE_STAGE_ENABLED_KEYS.items():
+            self._save_editor_export_state_value(enabled_key, bool(stage_enabled.get(stage_id, True)))
         self._save_editor_export_state_value("gif_fps", gif_request.fps)
         self._save_editor_export_state_value("gif_loop", gif_request.loop)
         self._save_editor_export_state_value("gif_keep_frame_images", gif_request.keep_frame_images)
@@ -1852,11 +2380,11 @@ class BirdStampEditorWindow(
                 self.photo_list_metadata_cache[key] = dict(merged)
         return metadata_by_key
 
-    def _on_gif_auto_fps_requested(self) -> None:
+    def _calculate_auto_fps_from_photo_capture_times(self) -> tuple[int, float, int] | None:
         paths = self._list_photo_paths()
         if len(paths) < 2:
             self._show_error("无法计算 FPS", "当前照片列表至少需要 2 张照片。")
-            return
+            return None
 
         metadata_by_key = self._load_gif_auto_fps_metadata(paths)
         timestamps: list[float] = []
@@ -1879,21 +2407,39 @@ class BirdStampEditorWindow(
                 "无法计算 FPS",
                 "当前照片缺少可区分的拍摄时间。连拍序列通常需要 EXIF 亚秒时间才能自动计算 FPS。",
             )
-            return
+            return None
         intervals.sort()
         mid = len(intervals) // 2
         median_interval = intervals[mid] if len(intervals) % 2 else (intervals[mid - 1] + intervals[mid]) * 0.5
         if median_interval <= 0:
             self._show_error("无法计算 FPS", "拍摄时间间隔无效。")
-            return
+            return None
 
         fps = 1.0 / median_interval
         fps_value = max(1, min(240, int(round(fps))))
+        return (fps_value, fps, len(timestamps))
+
+    def _on_gif_auto_fps_requested(self) -> None:
+        result = self._calculate_auto_fps_from_photo_capture_times()
+        if result is None:
+            return
+        fps_value, fps, timestamp_count = result
         self.gif_export_panel.set_state(fps=fps_value)
         self._save_image_export_preferences()
         self._schedule_workspace_autosave()
         self._set_status(
-            f"已根据 {len(timestamps)} 张照片的拍摄时间计算 GIF FPS：{fps_value}（原始 {fps:.2f}）。"
+            f"已根据 {timestamp_count} 张照片的拍摄时间计算 GIF FPS：{fps_value}（原始 {fps:.2f}）。"
+        )
+
+    def _on_video_auto_fps_requested(self) -> None:
+        result = self._calculate_auto_fps_from_photo_capture_times()
+        if result is None:
+            return
+        fps_value, fps, timestamp_count = result
+        self.video_export_panel.set_fps(fps_value)
+        self._schedule_workspace_autosave()
+        self._set_status(
+            f"已根据 {timestamp_count} 张照片的拍摄时间计算视频 FPS：{fps_value}（原始 {fps:.2f}）。"
         )
 
     def _confirm_video_output_overwrite(self, output_path: Path) -> bool:
@@ -2084,14 +2630,7 @@ class BirdStampEditorWindow(
         cy = float((box[1] + box[3]) * 0.5)
         self._custom_center = (cx, cy)
         # 切换中心模式到自定义
-        for idx in range(self.center_mode_combo.count()):
-            if self.center_mode_combo.itemData(idx) == _CENTER_MODE_CUSTOM:
-                self.center_mode_combo.blockSignals(True)
-                try:
-                    self.center_mode_combo.setCurrentIndex(idx)
-                finally:
-                    self.center_mode_combo.blockSignals(False)
-                break
+        self._set_center_mode_value(_CENTER_MODE_CUSTOM, emit_changed=False)
 
     def _on_preview_scale_mode_toggled(self, _checked: bool) -> None:
         self._refresh_preview_label(preserve_view=True)
@@ -2131,10 +2670,17 @@ class BirdStampEditorWindow(
         return self.placeholder_path is not None and self.current_path == self.placeholder_path
 
     def _current_global_export_settings(self) -> dict[str, Any]:
+        stage_enabled = self._current_pipeline_stage_enabled_map()
         return {
             "draw_banner": bool(self.draw_banner_check.isChecked()),
             "draw_text": bool(self.draw_text_check.isChecked()),
             "draw_focus": bool(self.draw_focus_check.isChecked()),
+            PIPELINE_STAGE_ORDER_KEY: list(self._current_pipeline_stage_order()),
+            PIPELINE_STAGE_ENABLED_KEY: dict(stage_enabled),
+            STAGE_TEMPLATE_CROP_ENABLED_KEY: bool(stage_enabled.get(STAGE_TEMPLATE_CROP_ID, True)),
+            STAGE_RESIZE_LIMIT_ENABLED_KEY: bool(stage_enabled.get(STAGE_RESIZE_LIMIT_ID, True)),
+            STAGE_TEMPLATE_OVERLAY_ENABLED_KEY: bool(stage_enabled.get(STAGE_TEMPLATE_OVERLAY_ID, True)),
+            STAGE_FOCUS_OVERLAY_ENABLED_KEY: bool(stage_enabled.get(STAGE_FOCUS_OVERLAY_ID, True)),
             "uniform_auto_crop": bool(self.uniform_auto_crop_check.isChecked()),
             "auto_crop_stabilization": int(self.auto_crop_stabilization_slider.value()),
         }
@@ -2255,7 +2801,7 @@ class BirdStampEditorWindow(
             self.ratio_combo.blockSignals(False)
 
     def _reset_template_overrides(self) -> None:
-        """将模板选项重载区的所有选项恢复为当前模板中存储的值。"""
+        """将模板裁切 Stage 的所有选项恢复为当前模板中存储的值。"""
         self._apply_template_ratio_to_main_output()
         self._apply_template_output_settings_to_main_output()
         self._apply_template_crop_padding_to_main_output()
@@ -2290,13 +2836,7 @@ class BirdStampEditorWindow(
         p = self.current_template_payload
 
         center = _normalize_center_mode(p.get("center_mode", _DEFAULT_TEMPLATE_CENTER_MODE))
-        center_idx = self.center_mode_combo.findData(center)
-        if center_idx >= 0:
-            self.center_mode_combo.blockSignals(True)
-            try:
-                self.center_mode_combo.setCurrentIndex(center_idx)
-            finally:
-                self.center_mode_combo.blockSignals(False)
+        self._set_center_mode_value(center, emit_changed=False)
 
         try:
             max_edge = max(0, int(p.get("max_long_edge") or _DEFAULT_TEMPLATE_MAX_LONG_EDGE))
@@ -3902,6 +4442,7 @@ class BirdStampEditorWindow(
                     metadata_context=metadata_context,
                     photo_info=photo_info,
                     source_image=source_image,
+                    source_paths=tuple(paths),
                 )
             )
             if callable(progress_callback):

@@ -20,6 +20,21 @@ from app_common.preview_canvas import (
 from birdstamp.decoders.image_decoder import decode_image
 from birdstamp.gui import editor_core, editor_options, editor_template, editor_utils, template_context as _template_context
 from birdstamp.gui.editor_preview_canvas import EditorPreviewOverlayOptions, EditorPreviewOverlayState
+from birdstamp.video_export import (
+    DEFAULT_EXPORT_STAGE_ID,
+    EXPORT_STAGE_ID_KEY,
+    PIPELINE_STAGE_ORDER_KEY,
+    STAGE_FOCUS_OVERLAY_ENABLED_KEY,
+    STAGE_FOCUS_OVERLAY_ID,
+    STAGE_RESIZE_LIMIT_ENABLED_KEY,
+    STAGE_RESIZE_LIMIT_ID,
+    STAGE_TEMPLATE_CROP_ENABLED_KEY,
+    STAGE_TEMPLATE_CROP_ID,
+    STAGE_TEMPLATE_OVERLAY_ENABLED_KEY,
+    STAGE_TEMPLATE_OVERLAY_ID,
+    normalize_export_stage_id,
+    normalize_pipeline_stage_order,
+)
 
 _pil_to_qpixmap                     = editor_utils.pil_to_qpixmap
 _path_key                           = editor_utils.path_key
@@ -349,7 +364,14 @@ class _BirdStampRendererMixin:
         )
 
     def _selected_center_mode(self) -> str:
-        return _normalize_center_mode(self.center_mode_combo.currentData())
+        getter = getattr(self, "_center_mode_button_value", None)
+        if callable(getter):
+            try:
+                return _normalize_center_mode(getter())
+            except Exception:
+                pass
+        combo = getattr(self, "center_mode_combo", None)
+        return _normalize_center_mode(combo.currentData() if combo is not None else _DEFAULT_TEMPLATE_CENTER_MODE)
 
     def _should_draw_template_overlay(self, settings: dict[str, Any]) -> bool:
         draw_banner = _parse_bool_value(settings.get("draw_banner"), True)
@@ -364,12 +386,35 @@ class _BirdStampRendererMixin:
         padding = self._crop_padding_state_for_render()
         uniform_auto_crop_check = getattr(self, "uniform_auto_crop_check", None)
         auto_crop_stabilization_slider = getattr(self, "auto_crop_stabilization_slider", None)
+        pipeline_stage_order_getter = getattr(self, "_current_pipeline_stage_order", None)
+        pipeline_stage_order = (
+            pipeline_stage_order_getter()
+            if callable(pipeline_stage_order_getter) else normalize_pipeline_stage_order(None)
+        )
+        export_stage_getter = getattr(self, "_selected_export_stage_id", None)
+        export_stage_id = export_stage_getter() if callable(export_stage_getter) else DEFAULT_EXPORT_STAGE_ID
+        stage_enabled_getter = getattr(self, "_is_pipeline_stage_enabled", None)
+
+        def _stage_enabled(stage_id: str) -> bool:
+            if callable(stage_enabled_getter):
+                try:
+                    return bool(stage_enabled_getter(stage_id))
+                except Exception:
+                    return True
+            return True
+
         return {
             "template_name": template_name,
             "template_payload": _deep_copy_payload(template_payload),
             "draw_banner": bool(self.draw_banner_check.isChecked()),
             "draw_text": bool(self.draw_text_check.isChecked()),
             "draw_focus": bool(self.draw_focus_check.isChecked()),
+            STAGE_TEMPLATE_CROP_ENABLED_KEY: _stage_enabled(STAGE_TEMPLATE_CROP_ID),
+            STAGE_RESIZE_LIMIT_ENABLED_KEY: _stage_enabled(STAGE_RESIZE_LIMIT_ID),
+            STAGE_TEMPLATE_OVERLAY_ENABLED_KEY: _stage_enabled(STAGE_TEMPLATE_OVERLAY_ID),
+            STAGE_FOCUS_OVERLAY_ENABLED_KEY: _stage_enabled(STAGE_FOCUS_OVERLAY_ID),
+            PIPELINE_STAGE_ORDER_KEY: list(normalize_pipeline_stage_order(pipeline_stage_order)),
+            EXPORT_STAGE_ID_KEY: normalize_export_stage_id(export_stage_id),
             "uniform_auto_crop": bool(uniform_auto_crop_check.isChecked())
             if uniform_auto_crop_check is not None else False,
             "auto_crop_stabilization": int(auto_crop_stabilization_slider.value())
@@ -393,6 +438,12 @@ class _BirdStampRendererMixin:
         normalized.pop("draw_banner", None)
         normalized.pop("draw_text", None)
         normalized.pop("draw_focus", None)
+        normalized.pop(STAGE_TEMPLATE_CROP_ENABLED_KEY, None)
+        normalized.pop(STAGE_RESIZE_LIMIT_ENABLED_KEY, None)
+        normalized.pop(STAGE_TEMPLATE_OVERLAY_ENABLED_KEY, None)
+        normalized.pop(STAGE_FOCUS_OVERLAY_ENABLED_KEY, None)
+        normalized.pop(PIPELINE_STAGE_ORDER_KEY, None)
+        normalized.pop(EXPORT_STAGE_ID_KEY, None)
         normalized.pop("uniform_auto_crop", None)
         normalized.pop("auto_crop_stabilization", None)
         return normalized
@@ -435,6 +486,12 @@ class _BirdStampRendererMixin:
             "draw_banner": _parse_bool_value(settings.get("draw_banner"), True),
             "draw_text": _parse_bool_value(settings.get("draw_text"), True),
             "draw_focus": _parse_bool_value(settings.get("draw_focus"), False),
+            STAGE_TEMPLATE_CROP_ENABLED_KEY: _parse_bool_value(settings.get(STAGE_TEMPLATE_CROP_ENABLED_KEY), True),
+            STAGE_RESIZE_LIMIT_ENABLED_KEY: _parse_bool_value(settings.get(STAGE_RESIZE_LIMIT_ENABLED_KEY), True),
+            STAGE_TEMPLATE_OVERLAY_ENABLED_KEY: _parse_bool_value(settings.get(STAGE_TEMPLATE_OVERLAY_ENABLED_KEY), True),
+            STAGE_FOCUS_OVERLAY_ENABLED_KEY: _parse_bool_value(settings.get(STAGE_FOCUS_OVERLAY_ENABLED_KEY), True),
+            PIPELINE_STAGE_ORDER_KEY: list(normalize_pipeline_stage_order(settings.get(PIPELINE_STAGE_ORDER_KEY))),
+            EXPORT_STAGE_ID_KEY: normalize_export_stage_id(settings.get(EXPORT_STAGE_ID_KEY)),
             "uniform_auto_crop": uniform_auto_crop,
             "auto_crop_stabilization": auto_crop_stabilization,
             "ratio": ratio,
@@ -487,6 +544,19 @@ class _BirdStampRendererMixin:
             except Exception:
                 stabilization = int(settings.get("auto_crop_stabilization", 0))
             settings["auto_crop_stabilization"] = max(0, min(100, stabilization))
+
+        for key in (
+            STAGE_TEMPLATE_CROP_ENABLED_KEY,
+            STAGE_RESIZE_LIMIT_ENABLED_KEY,
+            STAGE_TEMPLATE_OVERLAY_ENABLED_KEY,
+            STAGE_FOCUS_OVERLAY_ENABLED_KEY,
+        ):
+            if key in raw:
+                settings[key] = _parse_bool_value(raw.get(key), True)
+        if PIPELINE_STAGE_ORDER_KEY in raw:
+            settings[PIPELINE_STAGE_ORDER_KEY] = list(normalize_pipeline_stage_order(raw.get(PIPELINE_STAGE_ORDER_KEY)))
+        if EXPORT_STAGE_ID_KEY in raw:
+            settings[EXPORT_STAGE_ID_KEY] = normalize_export_stage_id(raw.get(EXPORT_STAGE_ID_KEY))
 
         if "custom_center_x" in raw:
             try:
@@ -575,9 +645,16 @@ class _BirdStampRendererMixin:
 
         widgets_to_block = [
             self.template_combo,
-            self.ratio_combo, self.center_mode_combo,
+            self.ratio_combo,
             self.max_edge_combo,
         ]
+        center_buttons = getattr(self, "center_mode_buttons", {}) or {}
+        if isinstance(center_buttons, dict):
+            widgets_to_block.extend(center_buttons.values())
+        else:
+            combo = getattr(self, "center_mode_combo", None)
+            if combo is not None:
+                widgets_to_block.append(combo)
         for w in widgets_to_block:
             w.blockSignals(True)
         try:
@@ -589,9 +666,14 @@ class _BirdStampRendererMixin:
             if ratio_idx >= 0:
                 self.ratio_combo.setCurrentIndex(ratio_idx)
 
-            center_idx = self.center_mode_combo.findData(normalized["center_mode"])
-            if center_idx >= 0:
-                self.center_mode_combo.setCurrentIndex(center_idx)
+            center_setter = getattr(self, "_set_center_mode_value", None)
+            if callable(center_setter):
+                center_setter(normalized["center_mode"], emit_changed=False)
+            else:
+                combo = getattr(self, "center_mode_combo", None)
+                center_idx = combo.findData(normalized["center_mode"]) if combo is not None else -1
+                if center_idx >= 0:
+                    combo.setCurrentIndex(center_idx)
 
             max_edge_idx = self._ensure_max_edge_option(int(normalized["max_long_edge"]))
             if max_edge_idx >= 0:

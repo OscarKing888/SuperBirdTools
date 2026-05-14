@@ -593,7 +593,16 @@ def transform_source_box_after_crop_padding(
     source_px = normalized_box_to_pixel_box(source_box, source_width, source_height)
     if source_px is None:
         return None
-    crop_px = normalized_box_to_pixel_box(crop_box, source_width, source_height, fallback_full=True)
+    pad_top = max(0, int(pt))
+    pad_bottom = max(0, int(pb))
+    pad_left = max(0, int(pl))
+    pad_right = max(0, int(pr))
+    padded_w = source_width + pad_left + pad_right
+    padded_h = source_height + pad_top + pad_bottom
+    if padded_w <= 0 or padded_h <= 0:
+        return None
+    # 裁切管线是先补边再裁切；crop_box 因此必须按补边后的尺寸解释。
+    crop_px = normalized_box_to_pixel_box(crop_box, padded_w, padded_h, fallback_full=True)
     if crop_px is None:
         return None
     crop_left, crop_top, crop_right, crop_bottom = crop_px
@@ -601,25 +610,21 @@ def transform_source_box_after_crop_padding(
     crop_h = crop_bottom - crop_top
     if crop_w <= 0 or crop_h <= 0:
         return None
-    pad_top = max(0, int(pt))
-    pad_bottom = max(0, int(pb))
-    pad_left = max(0, int(pl))
-    pad_right = max(0, int(pr))
-    padded_w = crop_w + pad_left + pad_right
-    padded_h = crop_h + pad_top + pad_bottom
-    if padded_w <= 0 or padded_h <= 0:
-        return None
     src_left, src_top, src_right, src_bottom = source_px
-    clipped_left = max(crop_left, min(crop_right, src_left))
-    clipped_top = max(crop_top, min(crop_bottom, src_top))
-    clipped_right = max(crop_left, min(crop_right, src_right))
-    clipped_bottom = max(crop_top, min(crop_bottom, src_bottom))
+    padded_left = src_left + pad_left
+    padded_top = src_top + pad_top
+    padded_right = src_right + pad_left
+    padded_bottom = src_bottom + pad_top
+    clipped_left = max(crop_left, min(crop_right, padded_left))
+    clipped_top = max(crop_top, min(crop_bottom, padded_top))
+    clipped_right = max(crop_left, min(crop_right, padded_right))
+    clipped_bottom = max(crop_top, min(crop_bottom, padded_bottom))
     if clipped_right <= clipped_left or clipped_bottom <= clipped_top:
         return None
-    mapped_left = (pad_left + (clipped_left - crop_left)) / float(padded_w)
-    mapped_top = (pad_top + (clipped_top - crop_top)) / float(padded_h)
-    mapped_right = (pad_left + (clipped_right - crop_left)) / float(padded_w)
-    mapped_bottom = (pad_top + (clipped_bottom - crop_top)) / float(padded_h)
+    mapped_left = (clipped_left - crop_left) / float(crop_w)
+    mapped_top = (clipped_top - crop_top) / float(crop_h)
+    mapped_right = (clipped_right - crop_left) / float(crop_w)
+    mapped_bottom = (clipped_bottom - crop_top) / float(crop_h)
     left_n = clamp01(mapped_left)
     top_n = clamp01(mapped_top)
     right_n = clamp01(mapped_right)

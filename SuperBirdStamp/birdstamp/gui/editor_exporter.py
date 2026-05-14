@@ -39,6 +39,8 @@ from birdstamp.gif_export import (
     export_gif,
 )
 from birdstamp.video_export import (
+    EXPORT_STAGE_GIF_ID,
+    EXPORT_STAGE_VIDEO_ID,
     VideoFrameJob,
     render_video_frame,
     resolve_video_render_workers,
@@ -59,7 +61,12 @@ class _BirdStampExporterMixin:
     """Mixin: export_current, export_all, _save_image."""
 
     def _is_gif_output_selected(self) -> bool:
-        return self._selected_output_suffix() == "gif"
+        getter = getattr(self, "_selected_export_stage_id", None)
+        return callable(getter) and getter() == EXPORT_STAGE_GIF_ID
+
+    def _is_video_output_selected(self) -> bool:
+        getter = getattr(self, "_selected_export_stage_id", None)
+        return callable(getter) and getter() == EXPORT_STAGE_VIDEO_ID
 
     def _format_export_elapsed_time(self, elapsed_seconds: float) -> str:
         seconds = max(0.0, float(elapsed_seconds or 0.0))
@@ -115,7 +122,7 @@ class _BirdStampExporterMixin:
 
     def _set_image_export_busy(self, busy: bool) -> None:
         self._image_export_is_busy = bool(busy)
-        for attr_name in ("output_format_combo", "max_edge_combo", "gif_export_panel"):
+        for attr_name in ("pipeline_stage_list", "gif_export_panel"):
             widget = getattr(self, attr_name, None)
             if widget is None:
                 continue
@@ -123,25 +130,45 @@ class _BirdStampExporterMixin:
                 widget.setEnabled(not busy)
             except Exception:
                 pass
+        for buttons_name in ("output_format_buttons", "export_stage_buttons"):
+            buttons = getattr(self, buttons_name, None)
+            if not isinstance(buttons, dict):
+                continue
+            for button in buttons.values():
+                try:
+                    button.setEnabled(not busy)
+                except Exception:
+                    pass
         self._refresh_image_export_action_states()
 
     def _refresh_image_export_action_states(self) -> None:
         busy = bool(getattr(self, "_image_export_is_busy", False))
         is_gif = self._is_gif_output_selected()
+        is_video = self._is_video_output_selected()
 
         export_current_btn = getattr(self, "export_current_btn", None)
         if export_current_btn is not None:
             try:
-                export_current_btn.setEnabled((not busy) and (not is_gif))
-                export_current_btn.setToolTip("GIF 仅支持按当前照片列表导出。" if is_gif else "")
+                export_current_btn.setEnabled((not busy) and (not is_gif) and (not is_video))
+                if is_video:
+                    export_current_btn.setToolTip("视频导出使用视频导出面板。")
+                else:
+                    export_current_btn.setToolTip("GIF 仅支持按当前照片列表导出。" if is_gif else "")
             except Exception:
                 pass
 
         export_batch_btn = getattr(self, "export_batch_btn", None)
         if export_batch_btn is not None:
             try:
-                export_batch_btn.setEnabled(not busy)
+                export_batch_btn.setEnabled((not busy) and (not is_video))
                 export_batch_btn.setText("导出 GIF" if is_gif else "批量导出")
+            except Exception:
+                pass
+
+        image_export_group = getattr(self, "image_export_group", None)
+        if image_export_group is not None:
+            try:
+                image_export_group.setVisible(not is_video)
             except Exception:
                 pass
 
@@ -149,6 +176,13 @@ class _BirdStampExporterMixin:
         if gif_export_panel is not None:
             try:
                 gif_export_panel.setVisible(is_gif)
+            except Exception:
+                pass
+
+        video_export_panel = getattr(self, "video_export_panel", None)
+        if video_export_panel is not None:
+            try:
+                video_export_panel.setVisible(is_video)
             except Exception:
                 pass
 
@@ -240,6 +274,9 @@ class _BirdStampExporterMixin:
         if not self.current_path or self._is_placeholder_active():
             self._set_status("没有可导出的照片。")
             return
+        if self._is_video_output_selected():
+            self._set_status("视频导出使用视频导出面板。")
+            return
         if self._is_gif_output_selected():
             self._set_status("GIF 仅支持按当前照片列表导出。")
             return
@@ -279,6 +316,14 @@ class _BirdStampExporterMixin:
         paths = self._list_photo_paths()
         if not paths:
             self._set_status("照片列表为空。")
+            return
+
+        if self._is_video_output_selected():
+            panel = getattr(self, "video_export_panel", None)
+            if panel is None:
+                self._set_status("视频导出面板不可用。")
+                return
+            self._start_video_export(panel.current_request())
             return
 
         if self._is_gif_output_selected():

@@ -17,6 +17,7 @@ from PIL import Image
 from PyQt6.QtCore import QEvent, Qt, pyqtSignal
 from PyQt6.QtGui import QColor, QImage, QIntValidator, QLinearGradient, QPainter, QPixmap
 from PyQt6.QtWidgets import (
+    QButtonGroup,
     QCheckBox,
     QComboBox,
     QDialog,
@@ -34,6 +35,7 @@ from PyQt6.QtWidgets import (
     QMenu,
     QMessageBox,
     QPushButton,
+    QRadioButton,
     QScrollArea,
     QSlider,
     QSizePolicy,
@@ -100,6 +102,12 @@ _CENTER_MODE_BIRD = editor_core.CENTER_MODE_BIRD
 _CENTER_MODE_FOCUS = editor_core.CENTER_MODE_FOCUS
 _CENTER_MODE_IMAGE = editor_core.CENTER_MODE_IMAGE
 _CENTER_MODE_CUSTOM = editor_core.CENTER_MODE_CUSTOM
+_CENTER_MODE_RADIO_ITEMS = (
+    ("鸟体", _CENTER_MODE_BIRD),
+    ("焦点", _CENTER_MODE_FOCUS),
+    ("图像中心", _CENTER_MODE_IMAGE),
+    ("自定义", _CENTER_MODE_CUSTOM),
+)
 
 _DEFAULT_CROP_PADDING_PX = editor_core.DEFAULT_CROP_PADDING_PX
 _normalize_center_mode = editor_core.normalize_center_mode
@@ -1210,13 +1218,25 @@ class TemplateManagerDialog(QDialog):
         self.template_ratio_combo.currentIndexChanged.connect(self._on_template_ratio_changed)
         form.addRow("裁切比例", self.template_ratio_combo)
 
-        self.template_center_mode_combo = QComboBox()
-        self.template_center_mode_combo.addItem("鸟体", _CENTER_MODE_BIRD)
-        self.template_center_mode_combo.addItem("焦点", _CENTER_MODE_FOCUS)
-        self.template_center_mode_combo.addItem("图像中心", _CENTER_MODE_IMAGE)
-        self.template_center_mode_combo.addItem("自定义", _CENTER_MODE_CUSTOM)
-        self.template_center_mode_combo.currentIndexChanged.connect(self._on_tmpl_center_mode_changed)
-        form.addRow("裁切中心", self.template_center_mode_combo)
+        self.template_center_mode_widget = QWidget()
+        template_center_mode_layout = QHBoxLayout(self.template_center_mode_widget)
+        template_center_mode_layout.setContentsMargins(0, 0, 0, 0)
+        template_center_mode_layout.setSpacing(10)
+        self.template_center_mode_button_group = QButtonGroup(self)
+        self.template_center_mode_button_group.setExclusive(True)
+        self.template_center_mode_buttons: dict[str, QRadioButton] = {}
+        for label, mode in _CENTER_MODE_RADIO_ITEMS:
+            radio = QRadioButton(label)
+            radio.setProperty("center_mode", mode)
+            radio.toggled.connect(
+                lambda checked, _mode=mode: self._on_tmpl_center_mode_changed()
+                if checked else None
+            )
+            self.template_center_mode_button_group.addButton(radio)
+            self.template_center_mode_buttons[mode] = radio
+            template_center_mode_layout.addWidget(radio)
+        template_center_mode_layout.addStretch(1)
+        form.addRow("裁切中心", self.template_center_mode_widget)
 
         self.crop_padding_editor = _CropPaddingEditorWidget()
         self.crop_padding_editor.changed.connect(self._on_template_crop_padding_changed)
@@ -1636,15 +1656,49 @@ class TemplateManagerDialog(QDialog):
 
     def _set_tmpl_center_mode_value(self, value: Any) -> None:
         mode = _normalize_center_mode(value)
-        for idx in range(self.template_center_mode_combo.count()):
-            if self.template_center_mode_combo.itemData(idx) == mode:
-                self.template_center_mode_combo.setCurrentIndex(idx)
+        buttons = getattr(self, "template_center_mode_buttons", None)
+        if isinstance(buttons, dict) and buttons:
+            target = buttons.get(mode) or buttons.get(_DEFAULT_TEMPLATE_CENTER_MODE)
+            if target is None:
                 return
+            previous_states: list[tuple[QRadioButton, bool]] = []
+            for button in buttons.values():
+                try:
+                    previous_states.append((button, bool(button.blockSignals(True))))
+                except Exception:
+                    continue
+            try:
+                target.setChecked(True)
+            finally:
+                for button, old_state in reversed(previous_states):
+                    button.blockSignals(old_state)
+            return
+        combo = getattr(self, "template_center_mode_combo", None)
+        if combo is None:
+            return
+        for idx in range(combo.count()):
+            if combo.itemData(idx) == mode:
+                combo.setCurrentIndex(idx)
+                return
+
+    def _tmpl_center_mode_value(self) -> str:
+        buttons = getattr(self, "template_center_mode_buttons", None)
+        if isinstance(buttons, dict):
+            for mode, button in buttons.items():
+                try:
+                    if button.isChecked():
+                        return _normalize_center_mode(mode)
+                except Exception:
+                    continue
+        combo = getattr(self, "template_center_mode_combo", None)
+        if combo is not None:
+            return _normalize_center_mode(combo.currentData())
+        return _normalize_center_mode(_DEFAULT_TEMPLATE_CENTER_MODE)
 
     def _on_tmpl_center_mode_changed(self, *_args: Any) -> None:
         if self._updating or not self.current_payload:
             return
-        center_mode = str(self.template_center_mode_combo.currentData() or _DEFAULT_TEMPLATE_CENTER_MODE)
+        center_mode = self._tmpl_center_mode_value()
         self.current_payload["center_mode"] = center_mode
         self.current_payload["auto_crop_by_bird"] = True  # 固定为根据鸟体计算
         self._save_current_template()

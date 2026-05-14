@@ -11,6 +11,14 @@ from app_common.log import get_logger
 from birdstamp.config import get_config_path
 from birdstamp.constants import SUPPORTED_EXTENSIONS
 from birdstamp.gui.editor_photo_list import PHOTO_COL_ROW, PHOTO_COL_SEQ, PHOTO_LIST_PATH_ROLE, PHOTO_LIST_SEQUENCE_ROLE
+from birdstamp.video_export import (
+    PIPELINE_STAGE_ENABLED_KEY,
+    PIPELINE_STAGE_ORDER_KEY,
+    STAGE_FOCUS_OVERLAY_ENABLED_KEY,
+    STAGE_RESIZE_LIMIT_ENABLED_KEY,
+    STAGE_TEMPLATE_CROP_ENABLED_KEY,
+    STAGE_TEMPLATE_OVERLAY_ENABLED_KEY,
+)
 from birdstamp.workspace import (
     WORKSPACE_FILE_EXTENSION,
     WorkspaceFormatError,
@@ -23,6 +31,12 @@ from birdstamp.workspace import (
 _WORKSPACE_AUTOSAVE_FILE_NAME = f"editor_autosave{WORKSPACE_FILE_EXTENSION}"
 _WORKSPACE_AUTOSAVE_INTERVAL_MS = 1200
 _workspace_log = get_logger("birdstamp.workspace")
+_PIPELINE_STAGE_ENABLED_VALUE_KEYS = (
+    STAGE_TEMPLATE_CROP_ENABLED_KEY,
+    STAGE_RESIZE_LIMIT_ENABLED_KEY,
+    STAGE_TEMPLATE_OVERLAY_ENABLED_KEY,
+    STAGE_FOCUS_OVERLAY_ENABLED_KEY,
+)
 
 
 def _block_widget_signals(*widgets: object) -> list[tuple[object, bool]]:
@@ -194,6 +208,9 @@ class _BirdStampWorkspaceMixin:
         gif_request = self.gif_export_panel.current_request()
         return {
             "output_format": self._selected_output_suffix(),
+            "selected_export_stage_id": self._selected_export_stage_id(),
+            PIPELINE_STAGE_ORDER_KEY: list(self._current_pipeline_stage_order()),
+            PIPELINE_STAGE_ENABLED_KEY: dict(self._current_pipeline_stage_enabled_map()),
             "gif_fps": gif_request.fps,
             "gif_loop": gif_request.loop,
             "gif_keep_frame_images": gif_request.keep_frame_images,
@@ -211,8 +228,9 @@ class _BirdStampWorkspaceMixin:
     def _apply_workspace_image_export_state(self, state: dict[str, Any], workspace_path: Path) -> None:
         if not isinstance(state, dict):
             return
+        output_format_buttons = getattr(self, "output_format_buttons", {}) or {}
         widgets_state = _block_widget_signals(
-            self.output_format_combo,
+            *list(output_format_buttons.values()),
             self.gif_export_panel.fps_spin,
             self.gif_export_panel.loop_spin,
             self.gif_export_panel.keep_frames_check,
@@ -220,10 +238,25 @@ class _BirdStampWorkspaceMixin:
         )
         try:
             output_format = str(state.get("output_format") or "").strip().lower()
+            selected_export_stage = state.get("selected_export_stage_id")
+            if selected_export_stage is None and output_format == "gif":
+                selected_export_stage = "export_gif"
+            setter = getattr(self, "_set_selected_export_stage_id", None)
+            if callable(setter):
+                setter(selected_export_stage or "export_png", save=False)
+            enabled_state = state.get(PIPELINE_STAGE_ENABLED_KEY)
+            if enabled_state is None and any(key in state for key in _PIPELINE_STAGE_ENABLED_VALUE_KEYS):
+                enabled_state = state
+            enabled_setter = getattr(self, "_set_pipeline_stage_enabled_map", None)
+            if callable(enabled_setter) and enabled_state is not None:
+                enabled_setter(enabled_state, save=False, mark_dirty=False)
+            order_setter = getattr(self, "_set_pipeline_stage_order", None)
+            if callable(order_setter):
+                order_setter(state.get(PIPELINE_STAGE_ORDER_KEY), save=False, mark_dirty=False)
             if output_format:
-                format_index = self.output_format_combo.findData(output_format)
-                if format_index >= 0:
-                    self.output_format_combo.setCurrentIndex(format_index)
+                suffix_setter = getattr(self, "_set_selected_output_suffix", None)
+                if callable(suffix_setter):
+                    suffix_setter(output_format, save=False)
             self.gif_export_panel.set_state(
                 fps=state.get("gif_fps"),
                 loop=state.get("gif_loop"),
@@ -407,6 +440,12 @@ class _BirdStampWorkspaceMixin:
             self.auto_crop_stabilization_slider.setEnabled(enabled)
             self.auto_crop_stabilization_value_label.setText(f"{stabilization}%")
             self.auto_crop_stabilization_value_label.setEnabled(enabled)
+            enabled_setter = getattr(self, "_set_pipeline_stage_enabled_map", None)
+            if callable(enabled_setter):
+                enabled_setter(state.get(PIPELINE_STAGE_ENABLED_KEY, state), save=False, mark_dirty=False)
+            order_setter = getattr(self, "_set_pipeline_stage_order", None)
+            if callable(order_setter):
+                order_setter(state.get(PIPELINE_STAGE_ORDER_KEY), save=False, mark_dirty=False)
         finally:
             _restore_widget_signals(widgets_state)
         self._last_global_export_settings = self._current_global_export_settings()
@@ -468,6 +507,8 @@ class _BirdStampWorkspaceMixin:
                     "draw_banner": current_render_settings.get("draw_banner"),
                     "draw_text": current_render_settings.get("draw_text"),
                     "draw_focus": current_render_settings.get("draw_focus"),
+                    PIPELINE_STAGE_ORDER_KEY: current_render_settings.get(PIPELINE_STAGE_ORDER_KEY),
+                    PIPELINE_STAGE_ENABLED_KEY: current_render_settings,
                     "uniform_auto_crop": current_render_settings.get("uniform_auto_crop"),
                     "auto_crop_stabilization": current_render_settings.get("auto_crop_stabilization"),
                 }

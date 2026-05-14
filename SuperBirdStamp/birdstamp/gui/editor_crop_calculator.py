@@ -289,10 +289,22 @@ class _BirdStampCropMixin:
             return 0
 
     def _selected_output_suffix(self) -> str:
-        value = str(self.output_format_combo.currentData() or "jpg").strip().lower()
-        supported = [suffix for suffix, _label in OUTPUT_FORMAT_OPTIONS if suffix in {"jpg", "jpeg", "png", "gif"}]
+        buttons = getattr(self, "output_format_buttons", None)
+        if isinstance(buttons, dict):
+            for suffix, button in buttons.items():
+                try:
+                    if button.isChecked():
+                        value = str(suffix or "").strip().lower()
+                        return "jpg" if value == "jpeg" else value
+                except Exception:
+                    continue
+        combo = getattr(self, "output_format_combo", None)
+        value = str(combo.currentData() if combo is not None else "jpg").strip().lower()
+        if value == "jpeg":
+            value = "jpg"
+        supported = [suffix for suffix, _label in OUTPUT_FORMAT_OPTIONS if suffix in {"jpg", "jpeg", "png"}]
         if not supported:
-            supported = ["jpg", "png", "gif"]
+            supported = ["jpg", "png"]
         if value in supported:
             return value
         return supported[0]

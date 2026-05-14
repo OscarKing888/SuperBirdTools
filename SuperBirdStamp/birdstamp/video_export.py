@@ -14,7 +14,7 @@ import time
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Mapping
 
 from PIL import Image, ImageColor
 
@@ -39,6 +39,14 @@ from birdstamp.export_frame_cache import (
     write_frame_manifest,
 )
 from birdstamp.gui import editor_core, editor_template, editor_utils, template_context as _template_context
+from birdstamp.image_pipeline import (
+    ImageProcContext,
+    ImageProcExportStage,
+    ImageProcOptionChoice,
+    ImageProcOptionSpec,
+    ImageProcPipeline,
+    ImageProcStage,
+)
 from birdstamp.subprocess_utils import decode_subprocess_output
 
 _log = get_logger("video_export")
@@ -93,6 +101,28 @@ _deep_copy_payload = editor_template.deep_copy_payload
 _load_template_payload = editor_template.load_template_payload
 _render_template_overlay = editor_template.render_template_overlay
 
+STAGE_TEMPLATE_CROP_ENABLED_KEY = "stage_template_crop_enabled"
+STAGE_RESIZE_LIMIT_ENABLED_KEY = "stage_resize_limit_enabled"
+STAGE_TEMPLATE_OVERLAY_ENABLED_KEY = "stage_template_overlay_enabled"
+STAGE_FOCUS_OVERLAY_ENABLED_KEY = "stage_focus_overlay_enabled"
+PIPELINE_STAGE_ORDER_KEY = "pipeline_stage_order"
+PIPELINE_STAGE_ENABLED_KEY = "pipeline_stage_enabled"
+EXPORT_STAGE_ID_KEY = "selected_export_stage_id"
+STAGE_TEMPLATE_CROP_ID = "template_crop"
+STAGE_RESIZE_LIMIT_ID = "resize_limit"
+STAGE_TEMPLATE_OVERLAY_ID = "template_overlay"
+STAGE_FOCUS_OVERLAY_ID = "focus_overlay"
+DEFAULT_PIPELINE_STAGE_ORDER = (
+    STAGE_TEMPLATE_CROP_ID,
+    STAGE_RESIZE_LIMIT_ID,
+    STAGE_TEMPLATE_OVERLAY_ID,
+    STAGE_FOCUS_OVERLAY_ID,
+)
+EXPORT_STAGE_PNG_ID = "export_png"
+EXPORT_STAGE_GIF_ID = "export_gif"
+EXPORT_STAGE_VIDEO_ID = "export_video"
+DEFAULT_EXPORT_STAGE_ID = EXPORT_STAGE_PNG_ID
+
 
 @dataclass(slots=True)
 class VideoFrameJob:
@@ -105,6 +135,7 @@ class VideoFrameJob:
     photo_info: _template_context.PhotoInfo | None = None
     source_image: Image.Image | None = None
     crop_plan: tuple[tuple[float, float, float, float] | None, tuple[int, int, int, int]] | None = None
+    source_paths: tuple[Path, ...] = ()
 
 
 @dataclass(slots=True)
@@ -463,6 +494,33 @@ def _parse_percent_setting(value: Any, default: int = 0) -> int:
     return max(0, min(100, parsed))
 
 
+def normalize_pipeline_stage_order(value: Any) -> tuple[str, ...]:
+    known = set(DEFAULT_PIPELINE_STAGE_ORDER)
+    ordered: list[str] = []
+    if isinstance(value, (list, tuple)):
+        raw_items = value
+    else:
+        raw_items = []
+    for item in raw_items:
+        stage_id = str(item or "").strip()
+        if stage_id in known and stage_id not in ordered:
+            ordered.append(stage_id)
+    if STAGE_TEMPLATE_CROP_ID in ordered:
+        ordered.remove(STAGE_TEMPLATE_CROP_ID)
+    ordered.insert(0, STAGE_TEMPLATE_CROP_ID)
+    for stage_id in DEFAULT_PIPELINE_STAGE_ORDER:
+        if stage_id not in ordered:
+            ordered.append(stage_id)
+    return tuple(ordered)
+
+
+def normalize_export_stage_id(value: Any) -> str:
+    stage_id = str(value or "").strip()
+    if stage_id in {EXPORT_STAGE_PNG_ID, EXPORT_STAGE_GIF_ID, EXPORT_STAGE_VIDEO_ID}:
+        return stage_id
+    return DEFAULT_EXPORT_STAGE_ID
+
+
 def _clone_render_settings(settings: dict[str, Any]) -> dict[str, Any]:
     template_name = str(settings.get("template_name") or "default").strip() or "default"
     template_payload_raw = settings.get("template_payload")
@@ -503,6 +561,12 @@ def _clone_render_settings(settings: dict[str, Any]) -> dict[str, Any]:
         "draw_banner": _parse_bool_value(settings.get("draw_banner"), True),
         "draw_text": _parse_bool_value(settings.get("draw_text"), True),
         "draw_focus": _parse_bool_value(settings.get("draw_focus"), False),
+        STAGE_TEMPLATE_CROP_ENABLED_KEY: _parse_bool_value(settings.get(STAGE_TEMPLATE_CROP_ENABLED_KEY), True),
+        STAGE_RESIZE_LIMIT_ENABLED_KEY: _parse_bool_value(settings.get(STAGE_RESIZE_LIMIT_ENABLED_KEY), True),
+        STAGE_TEMPLATE_OVERLAY_ENABLED_KEY: _parse_bool_value(settings.get(STAGE_TEMPLATE_OVERLAY_ENABLED_KEY), True),
+        STAGE_FOCUS_OVERLAY_ENABLED_KEY: _parse_bool_value(settings.get(STAGE_FOCUS_OVERLAY_ENABLED_KEY), True),
+        PIPELINE_STAGE_ORDER_KEY: list(normalize_pipeline_stage_order(settings.get(PIPELINE_STAGE_ORDER_KEY))),
+        EXPORT_STAGE_ID_KEY: normalize_export_stage_id(settings.get(EXPORT_STAGE_ID_KEY)),
         "uniform_auto_crop": uniform_auto_crop,
         "auto_crop_stabilization": _parse_percent_setting(settings.get("auto_crop_stabilization"), 0)
         if uniform_auto_crop else 0,
@@ -547,6 +611,252 @@ def _resolve_template_payload_for_render(
         except Exception as exc:
             _log.warning("template reload failed: name=%s path=%s err=%s", template_name, template_path, exc)
     return payload
+
+
+class TemplateCropStage(ImageProcStage):
+    stage_id = STAGE_TEMPLATE_CROP_ID
+    label = "模板裁切"
+    description = "根据模板比例、中心模式、照片级裁切框与留边设置生成裁切后的图像。"
+    enabled_option_key = None
+    enabled_by_default = True
+
+    def parameter_options(self) -> tuple[ImageProcOptionSpec, ...]:
+        return (
+            ImageProcOptionSpec(
+                key="template_name",
+                label="模板",
+                value_type="template",
+                default="default",
+                description="用于裁切参数、模板字段和照片级重载的当前模板。",
+            ),
+            ImageProcOptionSpec(
+                key="ratio",
+                label="裁切比例",
+                value_type="ratio",
+                default=None,
+                description="模板裁切比例；原比例、不裁切和自由比例由现有 ratio 选项表达。",
+            ),
+            ImageProcOptionSpec(
+                key="center_mode",
+                label="中心模式",
+                value_type="choice",
+                default=_DEFAULT_TEMPLATE_CENTER_MODE,
+                choices=(
+                    ImageProcOptionChoice("图像中心", _CENTER_MODE_IMAGE),
+                    ImageProcOptionChoice("焦点中心", _CENTER_MODE_FOCUS),
+                    ImageProcOptionChoice("鸟体中心", _CENTER_MODE_BIRD),
+                    ImageProcOptionChoice("自定义", _CENTER_MODE_CUSTOM),
+                ),
+            ),
+            ImageProcOptionSpec(key="crop_padding_top", label="上留边", value_type="int", default=0),
+            ImageProcOptionSpec(key="crop_padding_bottom", label="下留边", value_type="int", default=0),
+            ImageProcOptionSpec(key="crop_padding_left", label="左留边", value_type="int", default=0),
+            ImageProcOptionSpec(key="crop_padding_right", label="右留边", value_type="int", default=0),
+            ImageProcOptionSpec(key="crop_padding_fill", label="留边颜色", value_type="color", default="#FFFFFF"),
+        )
+
+    def process(self, context: ImageProcContext) -> ImageProcContext:
+        settings = _clone_render_settings(context.settings)
+        raw_metadata = dict(context.raw_metadata or {})
+        precomputed_crop_plan = _normalize_precomputed_crop_plan(context.crop_plan)
+        if precomputed_crop_plan is None:
+            precomputed_crop_plan = _normalize_precomputed_crop_plan(context.precomputed.get("crop_plan"))
+
+        if precomputed_crop_plan is None:
+            crop_box, outer_pad = _compute_crop_plan_for_image(
+                path=context.source_path,
+                image=context.image,
+                raw_metadata=raw_metadata,
+                settings=settings,
+                bird_box_cache=_context_bird_box_cache(context),
+                bird_box_lock=context.bird_box_lock,
+            )
+        else:
+            crop_box, outer_pad = precomputed_crop_plan
+
+        context.crop_plan = (crop_box, outer_pad)
+        context.crop_box = crop_box
+        context.outer_pad = outer_pad
+        context.precomputed["crop_plan"] = (crop_box, outer_pad)
+
+        top, bottom, left, right = outer_pad
+        image = context.image
+        if top or bottom or left or right:
+            fill = str(settings.get("crop_padding_fill") or "#FFFFFF").strip() or "#FFFFFF"
+            image = _pad_image(image, top=top, bottom=bottom, left=left, right=right, fill=fill)
+        context.image = _crop_image_by_normalized_box(image, crop_box)
+        return context
+
+
+class ResizeLimitStage(ImageProcStage):
+    stage_id = STAGE_RESIZE_LIMIT_ID
+    label = "尺寸限制"
+    description = "在裁切后按最长边限制缩放图像。"
+    enabled_option_key = STAGE_RESIZE_LIMIT_ENABLED_KEY
+    enabled_by_default = True
+
+    def parameter_options(self) -> tuple[ImageProcOptionSpec, ...]:
+        return (
+            ImageProcOptionSpec(
+                key="max_long_edge",
+                label="最长边",
+                value_type="int",
+                default=_DEFAULT_TEMPLATE_MAX_LONG_EDGE,
+                minimum=0,
+            ),
+        )
+
+    def process(self, context: ImageProcContext) -> ImageProcContext:
+        settings = _clone_render_settings(context.settings)
+        context.image = _resize_fit(context.image, max(0, int(settings.get("max_long_edge") or 0)))
+        return context
+
+
+class TemplateOverlayStage(ImageProcStage):
+    stage_id = STAGE_TEMPLATE_OVERLAY_ID
+    label = "模板叠加"
+    description = "绘制 Banner 背景和模板文字字段。"
+    enabled_option_key = STAGE_TEMPLATE_OVERLAY_ENABLED_KEY
+    enabled_by_default = True
+
+    def parameter_options(self) -> tuple[ImageProcOptionSpec, ...]:
+        return (
+            ImageProcOptionSpec(key="draw_banner", label="Banner 底", value_type="bool", default=True),
+            ImageProcOptionSpec(key="draw_text", label="文本", value_type="bool", default=True),
+        )
+
+    def is_enabled(self, settings: Mapping[str, Any]) -> bool:
+        return super().is_enabled(settings) and _should_draw_template_overlay(dict(settings))
+
+    def process(self, context: ImageProcContext) -> ImageProcContext:
+        settings = _clone_render_settings(context.settings)
+        template_payload = _resolve_template_payload_for_render(settings, context.template_paths)
+        raw_metadata = dict(context.raw_metadata or {})
+        photo_source = context.photo_info or context.source_path or "."
+        photo_info = _template_context.ensure_photo_info(photo_source, raw_metadata=raw_metadata)
+        metadata_context = dict(context.metadata_context or {}) or _build_metadata_context(photo_info, raw_metadata)
+        context.image = _render_template_overlay(
+            context.image,
+            raw_metadata=raw_metadata,
+            metadata_context=metadata_context,
+            photo_info=photo_info,
+            template_payload=template_payload,
+            draw_banner=_parse_bool_value(settings.get("draw_banner"), True),
+            draw_text=_parse_bool_value(settings.get("draw_text"), True),
+        )
+        context.photo_info = photo_info
+        context.metadata_context = metadata_context
+        return context
+
+
+class FocusOverlayStage(ImageProcStage):
+    stage_id = STAGE_FOCUS_OVERLAY_ID
+    label = "焦点框"
+    description = "根据原图元数据和裁切计划绘制对焦框。"
+    enabled_option_key = STAGE_FOCUS_OVERLAY_ENABLED_KEY
+    enabled_by_default = True
+
+    def parameter_options(self) -> tuple[ImageProcOptionSpec, ...]:
+        return (
+            ImageProcOptionSpec(key="draw_focus", label="焦点", value_type="bool", default=False),
+        )
+
+    def is_enabled(self, settings: Mapping[str, Any]) -> bool:
+        return super().is_enabled(settings) and _parse_bool_value(settings.get("draw_focus"), False)
+
+    def process(self, context: ImageProcContext) -> ImageProcContext:
+        raw_metadata = dict(context.raw_metadata or {})
+        source_width, source_height = context.source_size or (context.image.width, context.image.height)
+        focus_box = _resolve_focus_box_after_processing(
+            raw_metadata,
+            source_width=source_width,
+            source_height=source_height,
+            crop_box=context.crop_box,
+            outer_pad=context.outer_pad,
+            apply_ratio_crop=True,
+            camera_type=_resolve_focus_camera_type_from_metadata(raw_metadata),
+        )
+        if focus_box is not None:
+            context.image = _draw_focus_box_overlay(context.image, focus_box)
+        return context
+
+
+def _context_bird_box_cache(
+    context: ImageProcContext,
+) -> dict[str, tuple[float, float, float, float] | None]:
+    if isinstance(context.bird_box_cache, dict):
+        return context.bird_box_cache
+    return {}
+
+
+class PngExportStage(ImageProcExportStage):
+    stage_id = EXPORT_STAGE_PNG_ID
+    export_kind = "image"
+    label = "PNG / JPG 图片导出"
+    description = "将处理后的单帧图像写入 PNG 或 JPG 文件。"
+
+    def parameter_options(self) -> tuple[ImageProcOptionSpec, ...]:
+        return (
+            ImageProcOptionSpec(
+                key="image_output_format",
+                label="输出格式",
+                value_type="choice",
+                default="png",
+                choices=(
+                    ImageProcOptionChoice("PNG", "png"),
+                    ImageProcOptionChoice("JPG", "jpg"),
+                ),
+            ),
+        )
+
+
+class GifExportStage(ImageProcExportStage):
+    stage_id = EXPORT_STAGE_GIF_ID
+    export_kind = "gif"
+    label = "GIF 导出"
+    description = "将处理后的图片序列合成为 GIF。"
+
+    def parameter_options(self) -> tuple[ImageProcOptionSpec, ...]:
+        return (
+            ImageProcOptionSpec(key="gif_fps", label="FPS", value_type="float", default=24.0, minimum=0.1),
+            ImageProcOptionSpec(key="gif_loop", label="循环次数", value_type="int", default=0, minimum=0),
+        )
+
+
+class VideoProcExportStage(ImageProcExportStage):
+    stage_id = EXPORT_STAGE_VIDEO_ID
+    export_kind = "video"
+    label = "视频导出"
+    description = "将处理后的图片序列编码为 MP4 或 MOV 视频。"
+
+    def parameter_options(self) -> tuple[ImageProcOptionSpec, ...]:
+        return (
+            ImageProcOptionSpec(key="video_container", label="格式", value_type="choice", default="mp4"),
+            ImageProcOptionSpec(key="video_fps", label="FPS", value_type="float", default=25.0, minimum=0.1),
+        )
+
+
+_PROCESS_STAGE_CLASSES: dict[str, type[ImageProcStage]] = {
+    STAGE_TEMPLATE_CROP_ID: TemplateCropStage,
+    STAGE_RESIZE_LIMIT_ID: ResizeLimitStage,
+    STAGE_TEMPLATE_OVERLAY_ID: TemplateOverlayStage,
+    STAGE_FOCUS_OVERLAY_ID: FocusOverlayStage,
+}
+
+
+def build_default_image_proc_pipeline(stage_order: Any = None) -> ImageProcPipeline:
+    return ImageProcPipeline(
+        _PROCESS_STAGE_CLASSES[stage_id]()
+        for stage_id in normalize_pipeline_stage_order(stage_order)
+    )
+
+
+def build_image_proc_export_stages() -> tuple[ImageProcExportStage, ...]:
+    return (
+        PngExportStage(),
+        GifExportStage(),
+        VideoProcExportStage(),
+    )
 
 
 def _resolve_bird_box_for_image(
@@ -1046,56 +1356,22 @@ def render_video_frame(
         image = decode_image(job.path, decoder="auto")
 
     precomputed_crop_plan = _normalize_precomputed_crop_plan(job.crop_plan)
-    if precomputed_crop_plan is None:
-        crop_box, outer_pad = _compute_crop_plan_for_image(
-            path=job.path,
-            image=image,
-            raw_metadata=raw_metadata,
-            settings=settings,
-            bird_box_cache=cache,
-            bird_box_lock=bird_box_lock,
-        )
-    else:
-        crop_box, outer_pad = precomputed_crop_plan
-    processed = _build_processed_image(
-        image,
-        raw_metadata,
+    context = ImageProcContext(
+        image=image,
         settings=settings,
         source_path=job.path,
+        source_paths=tuple(job.source_paths or (job.path,)),
+        raw_metadata=raw_metadata,
+        metadata_context=dict(job.metadata_context or {}),
+        photo_info=job.photo_info,
+        template_paths=dict(template_paths or {}),
+        precomputed={"crop_plan": precomputed_crop_plan} if precomputed_crop_plan is not None else {},
+        crop_plan=precomputed_crop_plan,
         bird_box_cache=cache,
         bird_box_lock=bird_box_lock,
-        crop_plan=(crop_box, outer_pad),
     )
-    rendered: Image.Image
-    if _should_draw_template_overlay(settings):
-        template_payload = _resolve_template_payload_for_render(settings, template_paths)
-        photo_info = _template_context.ensure_photo_info(job.photo_info or job.path, raw_metadata=raw_metadata)
-        metadata_context = dict(job.metadata_context or {}) or _build_metadata_context(photo_info, raw_metadata)
-        rendered = _render_template_overlay(
-            processed,
-            raw_metadata=raw_metadata,
-            metadata_context=metadata_context,
-            photo_info=photo_info,
-            template_payload=template_payload,
-            draw_banner=_parse_bool_value(settings.get("draw_banner"), True),
-            draw_text=_parse_bool_value(settings.get("draw_text"), True),
-        )
-    else:
-        rendered = processed.convert("RGB")
-
-    if _parse_bool_value(settings.get("draw_focus"), False):
-        focus_box = _resolve_focus_box_after_processing(
-            raw_metadata,
-            source_width=image.width,
-            source_height=image.height,
-            crop_box=crop_box,
-            outer_pad=outer_pad,
-            apply_ratio_crop=True,
-            camera_type=_resolve_focus_camera_type_from_metadata(raw_metadata),
-        )
-        if focus_box is not None:
-            rendered = _draw_focus_box_overlay(rendered, focus_box)
-    return rendered.convert("RGB")
+    rendered_context = build_default_image_proc_pipeline(settings.get(PIPELINE_STAGE_ORDER_KEY)).process(context)
+    return rendered_context.image.convert("RGB")
 
 
 def _ensure_even_size(width: int, height: int) -> tuple[int, int]:
@@ -2258,16 +2534,43 @@ def export_video(
 
 __all__ = [
     "DEFAULT_VIDEO_BACKGROUND_COLOR",
+    "DEFAULT_EXPORT_STAGE_ID",
+    "DEFAULT_PIPELINE_STAGE_ORDER",
+    "EXPORT_STAGE_GIF_ID",
+    "EXPORT_STAGE_ID_KEY",
+    "EXPORT_STAGE_PNG_ID",
+    "EXPORT_STAGE_VIDEO_ID",
     "FFMPEG_ENV_VAR",
+    "FocusOverlayStage",
+    "GifExportStage",
+    "PIPELINE_STAGE_ORDER_KEY",
+    "PIPELINE_STAGE_ENABLED_KEY",
+    "PngExportStage",
+    "ResizeLimitStage",
+    "STAGE_FOCUS_OVERLAY_ENABLED_KEY",
+    "STAGE_FOCUS_OVERLAY_ID",
+    "STAGE_RESIZE_LIMIT_ENABLED_KEY",
+    "STAGE_RESIZE_LIMIT_ID",
+    "STAGE_TEMPLATE_CROP_ENABLED_KEY",
+    "STAGE_TEMPLATE_CROP_ID",
+    "STAGE_TEMPLATE_OVERLAY_ENABLED_KEY",
+    "STAGE_TEMPLATE_OVERLAY_ID",
+    "TemplateCropStage",
+    "TemplateOverlayStage",
     "VideoExportCancelledError",
     "VideoExportOptions",
     "VideoExportProgress",
     "VideoFrameJob",
+    "VideoProcExportStage",
+    "build_default_image_proc_pipeline",
+    "build_image_proc_export_stages",
     "build_ffmpeg_command",
     "export_video",
     "ffmpeg_install_script_path",
     "find_ffmpeg_executable",
     "normalize_frame_size",
+    "normalize_export_stage_id",
+    "normalize_pipeline_stage_order",
     "prepare_uniform_auto_crop_plans",
     "preferred_ffmpeg_binary_path",
     "preferred_ffmpeg_tool_dir",
