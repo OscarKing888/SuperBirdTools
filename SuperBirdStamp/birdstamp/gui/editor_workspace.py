@@ -502,6 +502,7 @@ class _BirdStampWorkspaceMixin:
             self.draw_banner_check,
             self.draw_text_check,
             self.draw_focus_check,
+            self.max_edge_combo,
             self.uniform_auto_crop_check,
             self.auto_crop_stabilization_slider,
         )
@@ -509,6 +510,19 @@ class _BirdStampWorkspaceMixin:
             self.draw_banner_check.setChecked(bool(state.get("draw_banner", True)))
             self.draw_text_check.setChecked(bool(state.get("draw_text", True)))
             self.draw_focus_check.setChecked(bool(state.get("draw_focus", False)))
+            if "max_long_edge" in state:
+                try:
+                    max_long_edge = max(0, int(state.get("max_long_edge") or 0))
+                except Exception:
+                    max_long_edge = 0
+                ensure_option = getattr(self, "_ensure_max_edge_option", None)
+                max_edge_idx = (
+                    ensure_option(max_long_edge)
+                    if callable(ensure_option)
+                    else self.max_edge_combo.findData(max_long_edge)
+                )
+                if max_edge_idx >= 0:
+                    self.max_edge_combo.setCurrentIndex(max_edge_idx)
             self.uniform_auto_crop_check.setChecked(bool(state.get("uniform_auto_crop", False)))
             try:
                 stabilization = int(round(float(state.get("auto_crop_stabilization", 0))))
@@ -589,6 +603,7 @@ class _BirdStampWorkspaceMixin:
                     "draw_focus": current_render_settings.get("draw_focus"),
                     PIPELINE_STAGE_ORDER_KEY: current_render_settings.get(PIPELINE_STAGE_ORDER_KEY),
                     PIPELINE_STAGE_ENABLED_KEY: current_render_settings,
+                    "max_long_edge": current_render_settings.get("max_long_edge"),
                     "uniform_auto_crop": current_render_settings.get("uniform_auto_crop"),
                     "auto_crop_stabilization": current_render_settings.get("auto_crop_stabilization"),
                 }

@@ -165,17 +165,64 @@ class _BirdStampRendererMixin:
         draw_overlay = f"{self.draw_banner_check.isChecked()}|{self.draw_text_check.isChecked()}|{self.draw_focus_check.isChecked()}"
         r = self._selected_ratio()
         cm = self._selected_center_mode()
+        max_edge = self._selected_max_long_edge()
+        stage_order = list(normalize_pipeline_stage_order(getattr(self, "_pipeline_stage_order", None)))
+        stage_enabled_getter = getattr(self, "_current_pipeline_stage_enabled_map", None)
+        stage_enabled = stage_enabled_getter() if callable(stage_enabled_getter) else {}
         padding = self._crop_padding_state_for_render()
         return (
             f"{base}|{template_name}|{draw_overlay}|{r}|{cm}|"
+            f"{max_edge}|{stage_order}|{stage_enabled}|"
             f"{padding['top']}_{padding['bottom']}_{padding['left']}_{padding['right']}|{padding['fill']}"
         )
 
     def _preview_render_settings(self, settings: dict[str, Any]) -> dict[str, Any]:
-        """预览固定按原图尺寸渲染，避免 Banner 在预览阶段被二次缩放。"""
-        preview_settings = self._clone_render_settings(settings)
-        preview_settings["max_long_edge"] = 0
-        return preview_settings
+        """预览使用当前管线设置，但保留完整画布用于裁切框编辑。"""
+        return self._clone_render_settings(settings)
+
+    def _is_preview_stage_enabled(self, settings: dict[str, Any], stage_id: str) -> bool:
+        if stage_id == STAGE_TEMPLATE_CROP_ID:
+            return True
+        enabled_keys = {
+            STAGE_RESIZE_LIMIT_ID: STAGE_RESIZE_LIMIT_ENABLED_KEY,
+            STAGE_TEMPLATE_OVERLAY_ID: STAGE_TEMPLATE_OVERLAY_ENABLED_KEY,
+            STAGE_FOCUS_OVERLAY_ID: STAGE_FOCUS_OVERLAY_ENABLED_KEY,
+        }
+        key = enabled_keys.get(stage_id)
+        if key is None:
+            return True
+        return _parse_bool_value(settings.get(key), True)
+
+    def _resize_fit_size(self, size: tuple[int, int], max_long_edge: int) -> tuple[int, int]:
+        width, height = max(1, int(size[0])), max(1, int(size[1]))
+        edge = max(0, int(max_long_edge))
+        if edge <= 0:
+            return (width, height)
+        long_edge = max(width, height)
+        if long_edge <= edge:
+            return (width, height)
+        scale = edge / float(long_edge)
+        return (max(1, int(round(width * scale))), max(1, int(round(height * scale))))
+
+    def _preview_pipeline_output_size(
+        self,
+        *,
+        source_size: tuple[int, int],
+        crop_box: tuple[float, float, float, float] | None,
+        outer_pad: tuple[int, int, int, int],
+        settings: dict[str, Any],
+    ) -> tuple[int, int] | None:
+        crop_size = _compute_crop_output_size(
+            int(source_size[0]),
+            int(source_size[1]),
+            crop_box,
+            outer_pad,
+        )
+        if crop_size is None:
+            return None
+        if not self._is_preview_stage_enabled(settings, STAGE_RESIZE_LIMIT_ID):
+            return crop_size
+        return self._resize_fit_size(crop_size, max(0, int(settings.get("max_long_edge") or 0)))
 
     def _load_original_mode_pixmap(self) -> QPixmap | None:
         if self.current_path is None or self.current_source_image is None:
@@ -374,6 +421,8 @@ class _BirdStampRendererMixin:
         return _normalize_center_mode(combo.currentData() if combo is not None else _DEFAULT_TEMPLATE_CENTER_MODE)
 
     def _should_draw_template_overlay(self, settings: dict[str, Any]) -> bool:
+        if not self._is_preview_stage_enabled(settings, STAGE_TEMPLATE_OVERLAY_ID):
+            return False
         draw_banner = _parse_bool_value(settings.get("draw_banner"), True)
         draw_text = _parse_bool_value(settings.get("draw_text"), True)
         return draw_banner or draw_text
@@ -444,6 +493,7 @@ class _BirdStampRendererMixin:
         normalized.pop(STAGE_FOCUS_OVERLAY_ENABLED_KEY, None)
         normalized.pop(PIPELINE_STAGE_ORDER_KEY, None)
         normalized.pop(EXPORT_STAGE_ID_KEY, None)
+        normalized.pop("max_long_edge", None)
         normalized.pop("uniform_auto_crop", None)
         normalized.pop("auto_crop_stabilization", None)
         return normalized
@@ -793,8 +843,9 @@ class _BirdStampRendererMixin:
         if apply_ratio_crop:
             image = _crop_image_by_normalized_box(image, crop_box)
 
-        max_long_edge = max(0, int(settings.get("max_long_edge") or 0))
-        image = _resize_fit(image, max_long_edge)
+        if self._is_preview_stage_enabled(settings, STAGE_RESIZE_LIMIT_ID):
+            max_long_edge = max(0, int(settings.get("max_long_edge") or 0))
+            image = _resize_fit(image, max_long_edge)
         return image
 
     def _render_focus_box_for_image(
@@ -808,6 +859,8 @@ class _BirdStampRendererMixin:
         outer_pad: tuple[int, int, int, int],
         apply_ratio_crop: bool,
     ) -> Image.Image:
+        if not self._is_preview_stage_enabled(settings, STAGE_FOCUS_OVERLAY_ID):
+            return image
         if not _parse_bool_value(settings.get("draw_focus"), False):
             return image
         focus_box = _resolve_focus_box_after_processing(
@@ -822,6 +875,65 @@ class _BirdStampRendererMixin:
         if focus_box is None:
             return image
         return _draw_focus_box_overlay(image, focus_box)
+
+    def _render_preview_pipeline_image(
+        self,
+        image: Image.Image,
+        raw_metadata: dict[str, Any],
+        *,
+        settings: dict[str, Any],
+        source_image: Image.Image,
+        crop_box: tuple[float, float, float, float] | None,
+        outer_pad: tuple[int, int, int, int],
+    ) -> Image.Image:
+        """按当前管线渲染预览，同时保留未裁切画布上的裁切框语义。"""
+        padded = False
+        for stage_id in normalize_pipeline_stage_order(settings.get(PIPELINE_STAGE_ORDER_KEY)):
+            if stage_id == STAGE_TEMPLATE_CROP_ID:
+                if padded:
+                    continue
+                top, bottom, left, right = outer_pad
+                if top or bottom or left or right:
+                    fill = str(settings.get("crop_padding_fill") or "#FFFFFF").strip() or "#FFFFFF"
+                    image = _pad_image(image, top=top, bottom=bottom, left=left, right=right, fill=fill)
+                padded = True
+                continue
+
+            if not self._is_preview_stage_enabled(settings, stage_id):
+                continue
+
+            if stage_id == STAGE_RESIZE_LIMIT_ID:
+                image = _resize_fit(image, max(0, int(settings.get("max_long_edge") or 0)))
+                continue
+
+            if stage_id == STAGE_TEMPLATE_OVERLAY_ID:
+                image = self._render_overlay_for_preview_frame(
+                    preview_base=image,
+                    raw_metadata=raw_metadata,
+                    metadata_context=dict(self.current_metadata_context),
+                    photo_info=self.current_photo_info,
+                    settings=settings,
+                    crop_box=crop_box,
+                )
+                continue
+
+            if stage_id == STAGE_FOCUS_OVERLAY_ID:
+                image = self._render_focus_box_for_image(
+                    image,
+                    raw_metadata=raw_metadata,
+                    source_image=source_image,
+                    settings=settings,
+                    crop_box=crop_box,
+                    outer_pad=outer_pad,
+                    apply_ratio_crop=False,
+                )
+
+        if not padded:
+            top, bottom, left, right = outer_pad
+            if top or bottom or left or right:
+                fill = str(settings.get("crop_padding_fill") or "#FFFFFF").strip() or "#FFFFFF"
+                image = _pad_image(image, top=top, bottom=bottom, left=left, right=right, fill=fill)
+        return image
 
     def _render_for_path(self, path: Path, *, prefer_current_ui: bool) -> Image.Image:
         settings = self._render_settings_for_path(path, prefer_current_ui=prefer_current_ui)
@@ -896,31 +1008,14 @@ class _BirdStampRendererMixin:
                 raw_metadata=raw_metadata,
                 settings=preview_settings,
             )
-            # 预览保持完整画面，仅通过“显示裁切效果”遮罩提示最终裁切范围。
-            processed = self._build_processed_image(
+            # 预览保留完整画布用于裁切框编辑，但其它 stage 按管线顺序渲染。
+            rendered = self._render_preview_pipeline_image(
                 source_image,
                 raw_metadata,
                 settings=preview_settings,
-                source_path=self.current_path,
-                apply_ratio_crop=False,
-                crop_plan=(crop_box, outer_pad),
-            )
-            rendered = self._render_overlay_for_preview_frame(
-                preview_base=processed,
-                raw_metadata=raw_metadata,
-                metadata_context=dict(self.current_metadata_context),
-                photo_info=self.current_photo_info,
-                settings=preview_settings,
-                crop_box=crop_box,
-            )
-            rendered = self._render_focus_box_for_image(
-                rendered,
-                raw_metadata=raw_metadata,
                 source_image=self.current_source_image,
-                settings=preview_settings,
                 crop_box=crop_box,
                 outer_pad=outer_pad,
-                apply_ratio_crop=False,
             )
         except Exception as exc:
             self._preview_crop_size = None
@@ -930,11 +1025,11 @@ class _BirdStampRendererMixin:
             return
 
         self.last_rendered = rendered
-        self._preview_crop_size = _compute_crop_output_size(
-            self.current_source_image.width,
-            self.current_source_image.height,
-            crop_box,
-            outer_pad,
+        self._preview_crop_size = self._preview_pipeline_output_size(
+            source_size=(self.current_source_image.width, self.current_source_image.height),
+            crop_box=crop_box,
+            outer_pad=outer_pad,
+            settings=preview_settings,
         )
         pad_top, pad_bottom, pad_left, pad_right = outer_pad
         focus_camera_type = _resolve_focus_camera_type_from_metadata(raw_metadata)
@@ -965,8 +1060,12 @@ class _BirdStampRendererMixin:
             pl=pad_left,
             pr=pad_right,
         )
+        focus_stage_draws = (
+            self._is_preview_stage_enabled(preview_settings, STAGE_FOCUS_OVERLAY_ID)
+            and _parse_bool_value(preview_settings.get("draw_focus"), False)
+        )
         self.preview_overlay_state = EditorPreviewOverlayState(
-            focus_box=None if _parse_bool_value(preview_settings.get("draw_focus"), False) else preview_focus_box,
+            focus_box=None if focus_stage_draws else preview_focus_box,
             bird_box=preview_bird_box,
             crop_effect_box=crop_box,
         )
@@ -975,9 +1074,11 @@ class _BirdStampRendererMixin:
         fit_reset = self._pending_preview_fit_reset
         self._pending_preview_fit_reset = False
         self._refresh_preview_label(reset_view=True, force_fit=fit_reset)
+        output_size = self._preview_crop_size
+        output_text = f" | 输出 {output_size[0]}x{output_size[1]}" if output_size is not None else ""
         if pad_top or pad_bottom or pad_left or pad_right:
             self._set_status(
-                f"预览完成: {rendered.width}x{rendered.height} | 外填充 上{pad_top}px 下{pad_bottom}px 左{pad_left}px 右{pad_right}px"
+                f"预览完成: {rendered.width}x{rendered.height}{output_text} | 外填充 上{pad_top}px 下{pad_bottom}px 左{pad_left}px 右{pad_right}px"
             )
         else:
-            self._set_status(f"预览完成: {rendered.width}x{rendered.height}")
+            self._set_status(f"预览完成: {rendered.width}x{rendered.height}{output_text}")

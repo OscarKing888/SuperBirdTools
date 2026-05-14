@@ -79,6 +79,10 @@ def path_signature(path: Path) -> str:
 def global_export_settings_from_settings(settings: dict[str, Any] | None) -> dict[str, Any]:
     raw = settings if isinstance(settings, dict) else {}
     uniform_auto_crop = _parse_bool_value(raw.get("uniform_auto_crop"), False)
+    try:
+        max_long_edge = max(0, int(raw.get("max_long_edge") or 0))
+    except Exception:
+        max_long_edge = 0
     raw_stage_order = raw.get("pipeline_stage_order")
     stage_order: list[str] = []
     if isinstance(raw_stage_order, (list, tuple)):
@@ -103,6 +107,7 @@ def global_export_settings_from_settings(settings: dict[str, Any] | None) -> dic
         "draw_focus": _parse_bool_value(raw.get("draw_focus"), False),
         "pipeline_stage_order": stage_order,
         **stage_enabled,
+        "max_long_edge": max_long_edge,
         "uniform_auto_crop": uniform_auto_crop,
         "auto_crop_stabilization": _parse_int_range(raw.get("auto_crop_stabilization"), 0, 0, 100)
         if uniform_auto_crop else 0,

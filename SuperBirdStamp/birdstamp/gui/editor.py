@@ -2681,6 +2681,7 @@ class BirdStampEditorWindow(
             STAGE_RESIZE_LIMIT_ENABLED_KEY: bool(stage_enabled.get(STAGE_RESIZE_LIMIT_ID, True)),
             STAGE_TEMPLATE_OVERLAY_ENABLED_KEY: bool(stage_enabled.get(STAGE_TEMPLATE_OVERLAY_ID, True)),
             STAGE_FOCUS_OVERLAY_ENABLED_KEY: bool(stage_enabled.get(STAGE_FOCUS_OVERLAY_ID, True)),
+            "max_long_edge": self._selected_max_long_edge(),
             "uniform_auto_crop": bool(self.uniform_auto_crop_check.isChecked()),
             "auto_crop_stabilization": int(self.auto_crop_stabilization_slider.value()),
         }
@@ -4411,6 +4412,7 @@ class BirdStampEditorWindow(
         export_draw_banner = _parse_bool_value(current_render_settings.get("draw_banner"), True)
         export_draw_text = _parse_bool_value(current_render_settings.get("draw_text"), True)
         export_draw_focus = _parse_bool_value(current_render_settings.get("draw_focus"), False)
+        export_max_long_edge = max(0, int(current_render_settings.get("max_long_edge") or 0))
         total = len(paths)
         metadata_by_key = self._load_raw_metadata_batch(paths)
         if callable(progress_callback):
@@ -4424,11 +4426,11 @@ class BirdStampEditorWindow(
                 settings = self._clone_render_settings(current_render_settings)
             else:
                 settings = self._clone_render_settings(self._render_settings_for_path(path, prefer_current_ui=False))
-            # 导出图像时，叠加信息的三个总开关统一跟随当前界面状态，
-            # 但仍保留每张照片各自的模板/裁切重载。
+            # 导出图像时，全局导出开关跟随当前界面；每张照片只保留模板/裁切重载。
             settings["draw_banner"] = export_draw_banner
             settings["draw_text"] = export_draw_text
             settings["draw_focus"] = export_draw_focus
+            settings["max_long_edge"] = export_max_long_edge
 
             source_image = None
             if self.current_source_image is not None and is_current_path:

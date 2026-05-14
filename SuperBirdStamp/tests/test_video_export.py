@@ -4,6 +4,8 @@ from typing import Any
 
 from PIL import Image
 
+from birdstamp.export_frame_cache import build_source_frame_bucket_key, global_export_settings_from_settings
+from birdstamp.gui.editor_renderer import _BirdStampRendererMixin
 from birdstamp.gui.editor_core import draw_focus_box_overlay
 from birdstamp.video_export import (
     _compute_auto_bird_crop_plan,
@@ -48,6 +50,36 @@ def _close_video_jobs(jobs: list[VideoFrameJob]) -> None:
     for job in jobs:
         if job.source_image is not None:
             job.source_image.close()
+
+
+def test_global_export_settings_include_resize_limit_for_cache_key() -> None:
+    base = {
+        "draw_banner": False,
+        "draw_text": False,
+        "draw_focus": False,
+        "max_long_edge": 720,
+    }
+
+    normalized = global_export_settings_from_settings(base)
+
+    assert normalized["max_long_edge"] == 720
+    assert build_source_frame_bucket_key(global_export_settings=base) != build_source_frame_bucket_key(
+        global_export_settings={**base, "max_long_edge": 1080}
+    )
+
+
+def test_photo_override_settings_exclude_global_resize_limit() -> None:
+    settings = {
+        "draw_banner": False,
+        "draw_text": False,
+        "draw_focus": False,
+        "max_long_edge": 720,
+        "ratio": "no_crop",
+    }
+
+    override = _BirdStampRendererMixin()._photo_override_settings_from_snapshot(settings)
+
+    assert "max_long_edge" not in override
 
 
 def test_resolve_target_frame_size_auto_rounds_to_even() -> None:

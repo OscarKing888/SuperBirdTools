@@ -1,13 +1,13 @@
 {
   "last_image_output_dir": "/Users/oscar/Pictures/2026-3-11-快门测试",
   "last_video_output_dir": "/Users/oscar/Pictures/gif/untitled folder 4",
-  "last_batch_output_dir": "/Users/oscar/Pictures/gif/untitled folder 5",
+  "last_batch_output_dir": "/Users/oscar/Pictures/gif/untitled folder 9",
   "image_output_format": "png",
-  "gif_fps": 20.0,
+  "gif_fps": 10.0,
   "gif_loop": 0,
   "gif_keep_frame_images": true,
   "gif_scale_factors": [
-    0.125
+    0.25
   ],
   "last_workspace_dir": "/private/var/folders/p2/2rvq_nqj6j16q26hpn77y9200000gn/T/tmp_8tjc_xn",
   "uniform_auto_crop": true,
@@ -22,11 +22,11 @@
   "pipeline_stage_enabled": {
     "template_crop": true,
     "resize_limit": true,
-    "template_overlay": true,
+    "template_overlay": false,
     "focus_overlay": true
   },
   "stage_template_crop_enabled": true,
   "stage_resize_limit_enabled": true,
-  "stage_template_overlay_enabled": true,
+  "stage_template_overlay_enabled": false,
   "stage_focus_overlay_enabled": true
 }
