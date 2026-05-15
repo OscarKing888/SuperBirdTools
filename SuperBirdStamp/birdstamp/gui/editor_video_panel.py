@@ -78,7 +78,7 @@ class VideoExportPanel(QGroupBox):
         form.setVerticalSpacing(6)
 
         (
-            self.container_widget,
+            self.video_format_widget,
             self.container_button_group,
             self.container_buttons,
         ) = self._build_radio_group(
@@ -86,7 +86,7 @@ class VideoExportPanel(QGroupBox):
             DEFAULT_VIDEO_CONTAINER,
             property_name="container",
         )
-        form.addRow("容器", self.container_widget)
+        form.addRow("视频格式", self.video_format_widget)
 
         (
             self.codec_widget,
@@ -485,7 +485,7 @@ class VideoExportPanel(QGroupBox):
 
     def set_busy(self, busy: bool, *, status_text: str | None = None) -> None:
         self._busy = busy
-        self.container_widget.setEnabled(not busy)
+        self.video_format_widget.setEnabled(not busy)
         self.codec_widget.setEnabled(not busy)
         self.fps_combo.setEnabled(not busy)
         self.auto_fps_button.setEnabled(not busy)
