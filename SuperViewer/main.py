@@ -30,7 +30,7 @@ from app_common.exif_io import (
     read_xmp_sidecar,
     extract_metadata_with_xmp_priority,
 )
-from app_common.file_browser import DirectoryBrowserWidget, FileListPanel
+from app_common.file_browser import DirectoryBrowserWidget
 from app_common.focus_calc import (
     extract_focus_box,
     resolve_focus_camera_type_from_metadata,
@@ -130,6 +130,7 @@ try:
     from .superviewer.preview_panel import PreviewPanel
     from .superviewer.exif_table import ExifTable
     from .superviewer.super_viewer_user_options_dialog import SuperViewerUserOptionsDialog
+    from .superviewer.tagged_file_list import SuperViewerTaggedFileListPanel
     from .superviewer import qt_compat
     from .superviewer.qt_compat import (
         QAction,
@@ -219,6 +220,7 @@ except ImportError:
     from superviewer.preview_panel import PreviewPanel
     from superviewer.exif_table import ExifTable
     from superviewer.super_viewer_user_options_dialog import SuperViewerUserOptionsDialog
+    from superviewer.tagged_file_list import SuperViewerTaggedFileListPanel
     from superviewer import qt_compat
     from superviewer.qt_compat import (
         QAction,
@@ -319,7 +321,7 @@ class MainWindow(QMainWindow):
         splitter.addWidget(self._dir_browser)
 
         # ── 面板 2：图像文件列表 ──
-        self._file_list = FileListPanel()
+        self._file_list = SuperViewerTaggedFileListPanel()
         self._file_list.setMinimumWidth(520)
         splitter.addWidget(self._file_list)
 
@@ -1243,6 +1245,10 @@ class MainWindow(QMainWindow):
     def closeEvent(self, event) -> None:  # type: ignore[override]
         self._stop_focus_loader()
         self._stop_focus_preload()
+        try:
+            self._file_list.close_tag_store()
+        except Exception:
+            pass
         super().closeEvent(event)
 
 

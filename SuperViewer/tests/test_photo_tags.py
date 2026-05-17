@@ -1,0 +1,79 @@
+from __future__ import annotations
+
+from pathlib import Path
+
+from app_common.exif_io.photo_meta import PhotoMetaDataXMP
+from SuperViewer.superviewer.photo_tags import PhotoTagConfig, PhotoTagSidecarStore
+
+
+def test_photo_tag_config_loads_utf8_lines_and_dedupes(tmp_path: Path) -> None:
+    cfg = tmp_path / "tags.cfg"
+    cfg.write_text("窝\n打架\n\n打架\n捕食\n", encoding="utf-8")
+
+    assert PhotoTagConfig(cfg).load() == ["窝", "打架", "捕食"]
+
+
+def test_xmp_subject_roundtrip_preserves_multiple_tags(tmp_path: Path) -> None:
+    photo_path = tmp_path / "img001.jpg"
+    photo_path.write_bytes(b"not an image")
+
+    metadata = PhotoMetaDataXMP()
+
+    assert metadata.write_subjects(str(photo_path), ["打架", "捕食", "打架"])
+    assert metadata.read_subjects(str(photo_path)) == ["打架", "捕食"]
+    assert (tmp_path / "img001.xmp").is_file()
+
+    flat = metadata.read(str(photo_path))
+    assert flat.get("XMP-dc:subject") == "打架; 捕食"
+    assert flat.get("XMP-dc:Subject") == "打架; 捕食"
+
+
+def test_xmp_write_accepts_subject_field_alias(tmp_path: Path) -> None:
+    photo_path = tmp_path / "img001.jpg"
+    photo_path.write_bytes(b"not an image")
+
+    metadata = PhotoMetaDataXMP()
+
+    assert metadata.write(str(photo_path), {"XMP-dc:Subject": "打架; 捕食"})
+    assert metadata.read_subjects(str(photo_path)) == ["打架", "捕食"]
+
+
+def test_store_persists_multiple_tags_per_photo_in_sidecar(tmp_path: Path) -> None:
+    photo_path = tmp_path / "img001.jpg"
+    photo_path.write_bytes(b"not an image")
+
+    store = PhotoTagSidecarStore()
+    store.set_tag_for_paths([str(photo_path)], "打架", True)
+    store.set_tag_for_paths([str(photo_path)], "捕食", True)
+    assert store.get_tags(str(photo_path)) == {"打架", "捕食"}
+
+    store.set_tag_for_paths([str(photo_path)], "打架", False)
+    assert store.get_tags(str(photo_path)) == {"捕食"}
+
+
+def test_store_loads_and_filters_configured_tags(tmp_path: Path) -> None:
+    p1 = tmp_path / "a.jpg"
+    p2 = tmp_path / "b.jpg"
+    p1.write_bytes(b"")
+    p2.write_bytes(b"")
+
+    store = PhotoTagSidecarStore()
+    store.set_tag_for_paths([str(p1), str(p2)], "同框", True)
+    store.set_tag_for_paths([str(p2)], "踩背", True)
+
+    tags = store.load_tags_for_paths([str(p1), str(p2)], allowed_tags=["同框"])
+    assert tags[str(p1)] == {"同框"}
+    assert tags[str(p2)] == {"同框"}
+
+
+def test_clear_configured_tags_preserves_unrelated_xmp_subjects(tmp_path: Path) -> None:
+    photo_path = tmp_path / "img001.jpg"
+    photo_path.write_bytes(b"not an image")
+
+    metadata = PhotoMetaDataXMP()
+    assert metadata.write_subjects(str(photo_path), ["Lightroom", "打架", "捕食"])
+
+    store = PhotoTagSidecarStore(metadata)
+    store.clear_tags_for_paths([str(photo_path)], allowed_tags=["打架", "捕食"])
+
+    assert metadata.read_subjects(str(photo_path)) == ["Lightroom"]

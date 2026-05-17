@@ -40,6 +40,7 @@ def collect_tree(source: Path, dest: str) -> list[tuple[str, str]]:
 
 datas: list[tuple[str, str]] = []
 datas.extend(collect_tree(APP_ROOT / "super_viewer.cfg", "."))
+datas.extend(collect_tree(APP_ROOT / "tags.cfg", "."))
 datas.extend(collect_tree(APP_ROOT / "icons", "icons"))
 datas.extend(collect_tree(APP_COMMON_ROOT / "about_dialog" / "about.cfg", "app_common/about_dialog"))
 datas.extend(collect_tree(APP_COMMON_ROOT / "about_dialog" / "images", "app_common/about_dialog/images"))
