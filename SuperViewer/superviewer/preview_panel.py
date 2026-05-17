@@ -45,6 +45,7 @@ class PreviewPanel(QWidget):
         self.setAcceptDrops(True)
         self._current_path = None
         self._preview_resolution: tuple[int, int] | None = None
+        self._photo_exposure: tuple[str, str, str] = ("", "", "")
         self._show_focus_enabled = True
         self._keep_view_on_switch = bool(get_keep_view_on_switch())
         self._composition_grid_mode = normalize_preview_composition_grid_mode("none")
@@ -58,12 +59,13 @@ class PreviewPanel(QWidget):
         if hasattr(self._canvas, "display_scale_percent_changed"):
             self._canvas.display_scale_percent_changed.connect(self._on_canvas_display_scale_percent_changed)
         layout.addWidget(self._canvas, stretch=1)
-        self._preview_status_label = QLabel("当前预览分辨率: - | 当前缩放: -")
+        self._preview_status_label = QLabel("当前预览分辨率: - | 当前缩放: - | 快门: - | 光圈: - | ISO: -")
         self._preview_status_label.setStyleSheet("color: #aaa; font-size: 12px;")
         layout.addWidget(self._preview_status_label)
 
     def set_image(self, path: str):
         self._current_path = path
+        self._photo_exposure = ("", "", "")
         self.set_focus_box(None)
         pix = _load_preview_pixmap_for_canvas(path)
         if pix is not None and not pix.isNull():
@@ -83,8 +85,13 @@ class PreviewPanel(QWidget):
 
     def clear_image(self):
         self._current_path = None
+        self._photo_exposure = ("", "", "")
         self._canvas.set_source_pixmap(None)
         self._set_preview_status_text(None, None)
+
+    def set_photo_exposure(self, shutter: str = "", aperture: str = "", iso: str = "") -> None:
+        self._photo_exposure = (str(shutter or ""), str(aperture or ""), str(iso or ""))
+        self._refresh_preview_status_text()
 
     def set_keep_view_on_switch(self, enabled: bool) -> None:
         self._keep_view_on_switch = bool(enabled)
@@ -149,7 +156,11 @@ class PreviewPanel(QWidget):
         else:
             resolution_text = f"{self._preview_resolution[0]}x{self._preview_resolution[1]}"
         scale_text = format_preview_scale_percent(self.current_display_scale_percent())
-        self._preview_status_label.setText(f"当前预览分辨率: {resolution_text} | 当前缩放: {scale_text}")
+        shutter, aperture, iso = self._photo_exposure
+        self._preview_status_label.setText(
+            f"当前预览分辨率: {resolution_text} | 当前缩放: {scale_text} | "
+            f"快门: {shutter or '-'} | 光圈: {aperture or '-'} | ISO: {iso or '-'}"
+        )
 
     def _on_canvas_display_scale_percent_changed(self, scale_percent: object) -> None:
         self._refresh_preview_status_text()

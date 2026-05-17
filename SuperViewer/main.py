@@ -589,6 +589,16 @@ class MainWindow(QMainWindow):
     def _set_current_preview_source_path(self, path: str) -> None:
         self._current_preview_source_path = os.path.normpath(path) if path else ""
 
+    def _update_preview_photo_exposure(self, path: str, *, allow_slow_read: bool = False) -> None:
+        try:
+            shutter, aperture, iso = self._file_list.get_photo_exposure_settings_for_path(
+                path,
+                allow_slow_read=allow_slow_read,
+            )
+        except Exception:
+            shutter, aperture, iso = "", "", ""
+        self.preview_panel.set_photo_exposure(shutter, aperture, iso)
+
     def _store_reusable_focus_cache_entry(
         self,
         source_path: str,
@@ -742,6 +752,7 @@ class MainWindow(QMainWindow):
         _log.info("[_on_file_selected_from_list] source=%r preview=%r", path, preview_path)
         self._set_current_preview_source_path(path)
         self.preview_panel.set_image(preview_path)
+        self._update_preview_photo_exposure(path)
         self.on_image_loaded(path)
 
     def _on_file_fast_preview_requested(self, path: str):
@@ -750,6 +761,7 @@ class MainWindow(QMainWindow):
         _log.info("[_on_file_fast_preview_requested] source=%r preview=%r", path, preview_path)
         self._set_current_preview_source_path(path)
         self.preview_panel.set_image(preview_path)
+        self._update_preview_photo_exposure(path)
         self._update_preview_focus_box(path, allow_async_load=self.check_show_focus.isChecked())
 
     @staticmethod
@@ -1036,6 +1048,7 @@ class MainWindow(QMainWindow):
         self.file_label.setToolTip(path)
         self._update_preview_focus_box(path)
         rows = self._load_metadata_rows_for_current_path(path, tag_label_chinese=load_tag_label_chinese_from_settings())
+        self._update_preview_photo_exposure(path, allow_slow_read=True)
         if not rows:
             _log.info("[on_image_loaded] EXIF 查询 未查到 path=%r", path)
             QMessageBox.information(
