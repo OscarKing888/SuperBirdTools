@@ -89,6 +89,28 @@ class SuperViewerTaggedFileListPanel(FileListPanel):
     def close_tag_store(self) -> None:
         self._photo_tag_store.close()
 
+    def available_photo_tags(self) -> list[str]:
+        """Return the current configured SuperViewer tag vocabulary."""
+        self._load_tag_config_if_changed()
+        return list(self._available_tags)
+
+    def photo_tags_for_path(self, path: str) -> set[str]:
+        """Return configured tags currently assigned to *path*."""
+        self._load_tag_config_if_changed()
+        if not path:
+            return set()
+        return self._tags_for_path(path)
+
+    def set_photo_tag_for_paths(self, paths: Iterable[str], tag: str, enabled: bool) -> None:
+        """Set or unset one configured tag for one or more photo paths."""
+        self._load_tag_config_if_changed()
+        self._set_tag_for_paths(_norm_paths(paths), tag, enabled)
+
+    def clear_photo_tags_for_paths(self, paths: Iterable[str]) -> None:
+        """Clear all configured tags for one or more photo paths."""
+        self._load_tag_config_if_changed()
+        self._clear_tags_for_paths(_norm_paths(paths))
+
     def load_directory(
         self,
         path: str,

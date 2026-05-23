@@ -77,28 +77,22 @@ try:
         PIEXIF_WRITABLE_EXTENSIONS,
         apply_tag_priority,
         format_exif_value,
-        get_tag_name,
-        get_tag_name_for_exiftool_key,
         get_tag_type,
         load_all_exif,
         load_display_description,
         load_display_title,
-        load_exif_tag_names_zh_from_settings,
         load_exif_piexif,
         load_hyperfocal_coc_mm_from_settings,
-        load_tag_label_chinese_from_settings,
         load_tag_priority_from_settings,
         load_preview_grid_mode_from_settings,
         load_preview_grid_line_width_from_settings,
         merge_report_metadata_rows,
-        save_tag_label_chinese_to_settings,
         save_preview_grid_mode_to_settings,
         save_preview_grid_line_width_to_settings,
         _format_exception_message,
         _normalize_meta_edit_text,
         _parse_value_back,
     )
-    from .superviewer.exif_tag_order_dialog import ExifTagOrderDialog
     from .superviewer.focus_box_loader import FocusBoxLoader
     from .superviewer.focus_cache_preload_worker import FOCUS_PRELOAD_BATCH_SIZE, FocusCachePreloadWorker
     from .superviewer.focus_preview_loader import (
@@ -128,7 +122,11 @@ try:
     )
     from .superviewer.photo_preview_memory_entry import PhotoPreviewMemoryEntry
     from .superviewer.preview_panel import PreviewPanel
-    from .superviewer.exif_table import ExifTable
+    from .superviewer.image_info_tabs import (
+        ImageInfoTabPanel_EXIF,
+        ImageInfoTabPanel_Tags,
+        ImageInfoTabWidget,
+    )
     from .superviewer.super_viewer_user_options_dialog import SuperViewerUserOptionsDialog
     from .superviewer.tagged_file_list import SuperViewerTaggedFileListPanel
     from .superviewer import qt_compat
@@ -140,17 +138,14 @@ try:
         QComboBox,
         QDialog,
         QFileDialog,
-        QGroupBox,
         QHBoxLayout,
         QIcon,
         QLabel,
-        QLineEdit,
         QMainWindow,
         QMessageBox,
         QPalette,
         QPainter,
         QPen,
-        QPushButton,
         QPixmap,
         QSplitter,
         QTimer,
@@ -167,28 +162,22 @@ except ImportError:
         PIEXIF_WRITABLE_EXTENSIONS,
         apply_tag_priority,
         format_exif_value,
-        get_tag_name,
-        get_tag_name_for_exiftool_key,
         get_tag_type,
         load_all_exif,
         load_display_description,
         load_display_title,
-        load_exif_tag_names_zh_from_settings,
         load_exif_piexif,
         load_hyperfocal_coc_mm_from_settings,
-        load_tag_label_chinese_from_settings,
         load_tag_priority_from_settings,
         load_preview_grid_mode_from_settings,
         load_preview_grid_line_width_from_settings,
         merge_report_metadata_rows,
-        save_tag_label_chinese_to_settings,
         save_preview_grid_mode_to_settings,
         save_preview_grid_line_width_to_settings,
         _format_exception_message,
         _normalize_meta_edit_text,
         _parse_value_back,
     )
-    from superviewer.exif_tag_order_dialog import ExifTagOrderDialog
     from superviewer.focus_box_loader import FocusBoxLoader
     from superviewer.focus_cache_preload_worker import FOCUS_PRELOAD_BATCH_SIZE, FocusCachePreloadWorker
     from superviewer.focus_preview_loader import (
@@ -218,7 +207,11 @@ except ImportError:
     )
     from superviewer.photo_preview_memory_entry import PhotoPreviewMemoryEntry
     from superviewer.preview_panel import PreviewPanel
-    from superviewer.exif_table import ExifTable
+    from superviewer.image_info_tabs import (
+        ImageInfoTabPanel_EXIF,
+        ImageInfoTabPanel_Tags,
+        ImageInfoTabWidget,
+    )
     from superviewer.super_viewer_user_options_dialog import SuperViewerUserOptionsDialog
     from superviewer.tagged_file_list import SuperViewerTaggedFileListPanel
     from superviewer import qt_compat
@@ -230,17 +223,14 @@ except ImportError:
         QComboBox,
         QDialog,
         QFileDialog,
-        QGroupBox,
         QHBoxLayout,
         QIcon,
         QLabel,
-        QLineEdit,
         QMainWindow,
         QMessageBox,
         QPalette,
         QPainter,
         QPen,
-        QPushButton,
         QPixmap,
         QSplitter,
         QTimer,
@@ -312,7 +302,7 @@ class MainWindow(QMainWindow):
         layout.setSpacing(8)
         layout.setContentsMargins(8, 8, 8, 8)
 
-        # 主分割器：目录树 | 文件列表 | 图片预览 | EXIF 表格
+        # 主分割器：目录树 | 文件列表 | 图片预览 | 元信息 Tab
         splitter = QSplitter(_Horizontal)
 
         # ── 面板 1：目录浏览器 ──
@@ -416,33 +406,28 @@ class MainWindow(QMainWindow):
         left_layout.addWidget(self.preview_panel, stretch=1)
         splitter.addWidget(left_widget)
 
-        # ── 面板 4：EXIF 表格 ──
-        group = QGroupBox("元信息")
-        group.setStyleSheet("QGroupBox { font-weight: bold; }")
-        group_layout = QVBoxLayout(group)
-        top_row = QHBoxLayout()
-        self.exif_filter = QLineEdit()
-        self.exif_filter.setPlaceholderText("按分组、标签或值过滤…")
-        self.exif_filter.setClearButtonEnabled(True)
-        self.exif_filter.setStyleSheet("QLineEdit { padding: 6px; font-size: 13px; }")
-        self.exif_filter.textChanged.connect(self._on_exif_filter_changed)
-        top_row.addWidget(self.exif_filter)
-        self.check_tag_chinese = QCheckBox("中文标签")
-        self.check_tag_chinese.setChecked(load_tag_label_chinese_from_settings())
-        self.check_tag_chinese.setToolTip("勾选显示汉字标签名，否则显示英文")
-        self.check_tag_chinese.toggled.connect(self._on_tag_label_lang_toggled)
-        top_row.addWidget(self.check_tag_chinese)
-        self.btn_config_order = QPushButton("配置显示顺序")
-        self.btn_config_order.setToolTip("设置优先显示的 EXIF 标签及顺序")
-        self.btn_config_order.clicked.connect(self._open_tag_order_config)
-        top_row.addWidget(self.btn_config_order)
-        group_layout.addLayout(top_row)
-        self.exif_table = ExifTable(self)
-        self.exif_table.set_save_callback(self._save_exif_value)
-        group_layout.addWidget(self.exif_table)
-        splitter.addWidget(group)
+        # ── 面板 4：可扩展元信息 Tab ──
+        self.image_info_tabs = ImageInfoTabWidget(self)
+        self.image_info_tabs.setMinimumWidth(300)
+        self.exif_info_panel = ImageInfoTabPanel_EXIF(
+            self._load_metadata_rows_for_current_path,
+            self._save_exif_value,
+            self.image_info_tabs,
+        )
+        self.tags_info_panel = ImageInfoTabPanel_Tags(
+            self._file_list.available_photo_tags,
+            self._file_list.photo_tags_for_path,
+            self._file_list.set_photo_tag_for_paths,
+            self._file_list.clear_photo_tags_for_paths,
+            self.image_info_tabs,
+        )
 
-        # 各面板初始宽度：目录树 200 | 文件列表 320 | 预览 380 | EXIF 320
+        self.image_info_tabs.add_info_panel(self.tags_info_panel)
+        self.image_info_tabs.add_info_panel(self.exif_info_panel)
+        self.image_info_tabs.on_photo_selected("")
+        splitter.addWidget(self.image_info_tabs)
+
+        # 各面板初始宽度：目录树 200 | 文件列表 320 | 预览 380 | 元信息 320
         splitter.setSizes([220, 680, 520, 340])
         layout.addWidget(splitter)
 
@@ -939,39 +924,6 @@ class MainWindow(QMainWindow):
     def _sync_preview_scale_combo(self, scale_percent: object) -> None:
         sync_preview_scale_preset_combo(self.combo_preview_scale, scale_percent)
 
-    def _on_exif_filter_changed(self, text: str):
-        self.exif_table.set_filter_text(text)
-
-    def _on_tag_label_lang_toggled(self, checked: bool):
-        save_tag_label_chinese_to_settings(checked)
-        rows = self.exif_table.get_all_rows()
-        if not rows:
-            return
-        names_zh = load_exif_tag_names_zh_from_settings() if checked else None
-        new_rows = []
-        for r in rows:
-            if r[0] is not None and r[1] is not None:
-                name = get_tag_name(r[0], r[1], use_chinese=checked, names_zh=names_zh)
-            else:
-                exiftool_key = r[6] if len(r) > 6 else None
-                tag_name_raw = (exiftool_key.split(":", 1)[1] if exiftool_key and ":" in exiftool_key else None) or r[3]
-                name = (
-                    get_tag_name_for_exiftool_key(exiftool_key, tag_name_raw, checked, names_zh)
-                    if exiftool_key
-                    else r[3]
-                )
-            exiftool_key = r[6] if len(r) > 6 else None
-            new_rows.append((r[0], r[1], r[2], name, r[4], r[5], exiftool_key))
-        self.exif_table.set_exif(new_rows)
-
-    def _open_tag_order_config(self):
-        use_chinese = load_tag_label_chinese_from_settings()
-        d = ExifTagOrderDialog(self, use_chinese=use_chinese)
-        if d.exec():
-            if self._current_exif_path and os.path.isfile(self._current_exif_path):
-                rows = self._load_metadata_rows_for_current_path(self._current_exif_path, tag_label_chinese=use_chinese)
-                self.exif_table.set_exif(rows)
-
     def _save_exif_value(self, ifd_name: str, tag_id, new_val: str, raw_value, exiftool_key=None):
         """将编辑后的 EXIF 值写回文件。有 exiftool 时优先用 exiftool 写入（兼容性更好）。"""
         path = self._current_exif_path
@@ -1033,8 +985,7 @@ class MainWindow(QMainWindow):
                         raise
             else:
                 raise RuntimeError("未找到 exiftool，无法写入该格式。请配置 exiftools_win/exiftools_mac 或将其加入 PATH。")
-            rows = self._load_metadata_rows_for_current_path(path, tag_label_chinese=load_tag_label_chinese_from_settings())
-            self.exif_table.set_exif(rows)
+            self.exif_info_panel.refresh_current_photo()
             QMessageBox.information(self, "已保存", "EXIF 已写入文件。")
         except Exception as e:
             QMessageBox.critical(self, "保存失败", _format_exception_message(e))
@@ -1047,7 +998,8 @@ class MainWindow(QMainWindow):
         self.file_label.setText(path)
         self.file_label.setToolTip(path)
         self._update_preview_focus_box(path)
-        rows = self._load_metadata_rows_for_current_path(path, tag_label_chinese=load_tag_label_chinese_from_settings())
+        self.image_info_tabs.on_photo_selected(path)
+        rows = self.exif_info_panel.last_rows()
         self._update_preview_photo_exposure(path, allow_slow_read=True)
         if not rows:
             _log.info("[on_image_loaded] EXIF 查询 未查到 path=%r", path)
@@ -1056,7 +1008,6 @@ class MainWindow(QMainWindow):
                 "无 EXIF",
                 "该图片未包含 EXIF 信息或格式暂不支持。\n支持格式：JPEG、WebP、TIFF（piexif）；HEIC/HEIF/HIF（可选 pillow-heif）；各家相机 RAW（CR2/NEF/ARW/DNG 等，可选 exifread）；其他格式会尝试用 Pillow 读取。",
             )
-        self.exif_table.set_exif(rows)
 
     def _update_preview_focus_box(self, path: str, *, allow_async_load: bool = True) -> None:
         """
