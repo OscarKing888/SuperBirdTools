@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 from app_common.exif_io.photo_meta import PhotoMetaDataXMP
+from app_common.exif_io.writer import read_batch_metadata
 from SuperViewer.superviewer.photo_tags import PhotoTagConfig, PhotoTagSidecarStore
 
 
@@ -36,6 +38,37 @@ def test_xmp_write_accepts_subject_field_alias(tmp_path: Path) -> None:
 
     assert metadata.write(str(photo_path), {"XMP-dc:Subject": "打架; 捕食"})
     assert metadata.read_subjects(str(photo_path)) == ["打架", "捕食"]
+
+
+def test_xmp_rating_pick_read_as_normalized_fields(tmp_path: Path) -> None:
+    photo_path = tmp_path / "img001.jpg"
+    photo_path.write_bytes(b"not an image")
+
+    metadata = PhotoMetaDataXMP()
+
+    assert metadata.write(str(photo_path), {"XMP-xmp:Rating": 3, "XMP-xmpDM:pick": 1})
+    flat = metadata.read(str(photo_path))
+
+    assert flat.get("XMP-xmp:Rating") == "3"
+    assert flat.get("rating") == 3
+    assert flat.get("XMP-xmpDM:pick") == "1"
+    assert flat.get("pick") == 1
+
+
+def test_xmp_write_invalidates_batch_metadata_cache(tmp_path: Path) -> None:
+    photo_path = tmp_path / "img001.jpg"
+    photo_path.write_bytes(b"not an image")
+    norm_path = os.path.normpath(str(photo_path))
+
+    metadata = PhotoMetaDataXMP()
+    before = read_batch_metadata([str(photo_path)]).get(norm_path, {})
+    assert before.get("XMP-xmp:Rating") in (None, "")
+
+    assert metadata.write(str(photo_path), {"XMP-xmp:Rating": 4})
+    after = read_batch_metadata([str(photo_path)]).get(norm_path, {})
+
+    assert after.get("XMP-xmp:Rating") == "4"
+    assert after.get("rating") == 4
 
 
 def test_store_persists_multiple_tags_per_photo_in_sidecar(tmp_path: Path) -> None:
