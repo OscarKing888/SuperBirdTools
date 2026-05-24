@@ -12,6 +12,7 @@ from app_common.log import get_logger
 from .paths_settings import _get_app_dir, _get_resource_path
 from .photo_tags import PhotoTagConfig, PhotoTagSidecarStore
 from .qt_compat import QHBoxLayout, QLabel, QToolButton
+from .tag_menu import add_filterable_tag_actions
 
 
 _log = get_logger("superviewer.tagged_file_list")
@@ -284,13 +285,14 @@ class SuperViewerTaggedFileListPanel(FileListPanel):
             return
 
         tag_sets = [self._tags_for_path(path) for path in norm_paths]
-        for tag in self._available_tags:
-            act = tag_menu.addAction(tag)
-            act.setCheckable(True)
-            act.setChecked(bool(tag_sets) and all(tag in tags for tags in tag_sets))
-            act.triggered.connect(
-                lambda checked=False, t=tag, p=list(norm_paths): self._set_tag_for_paths(p, t, bool(checked))
-            )
+        target_paths = list(norm_paths)
+        add_filterable_tag_actions(
+            tag_menu,
+            self._available_tags,
+            lambda tag, checked=False, p=target_paths: self._set_tag_for_paths(p, tag, bool(checked)),
+            checkable=True,
+            checked_provider=lambda tag: bool(tag_sets) and all(tag in tags for tags in tag_sets),
+        )
 
         tag_menu.addSeparator()
         act_clear = tag_menu.addAction("清除所有TAG")

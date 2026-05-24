@@ -43,6 +43,7 @@ try:
         QStyledItemDelegate,
         QStackedWidget,
         QSlider,
+        QWidgetAction,
     )
     from PyQt6.QtCore import Qt, QMimeData, QSize, QDir, QThread, QTimer, pyqtSignal, QModelIndex, QRect
     from PyQt6.QtGui import (
@@ -101,6 +102,7 @@ except ImportError:
         QStyledItemDelegate,
         QStackedWidget,
         QSlider,
+        QWidgetAction,
     )
     from PyQt5.QtCore import Qt, QMimeData, QSize, QDir, QThread, QTimer, pyqtSignal, QModelIndex, QRect
     from PyQt5.QtGui import (

@@ -17,10 +17,13 @@ from pathlib import Path
 from app_common import show_about_dialog, load_about_images, load_about_info, AppInfoBar
 from app_common.log import get_logger
 from app_common.exif_io import (
+    PhotoMetaDataXMP,
     run_exiftool_json,
     _get_exiftool_tag_target,
+    find_xmp_sidecar,
     read_xmp_sidecar,
     extract_metadata_with_xmp_priority,
+    write_meta_with_exiftool,
 )
 from app_common.file_browser import DirectoryBrowserWidget
 from app_common.preview_canvas import (
@@ -79,6 +82,7 @@ try:
     )
     from .superviewer.preview_panel import PreviewPanel
     from .superviewer.image_info_tabs import (
+        ImageInfoTabPanel_ImageInfo,
         ImageInfoTabPanel_Tags,
         ImageInfoTabWidget,
     )
@@ -131,6 +135,7 @@ except ImportError:
     )
     from superviewer.preview_panel import PreviewPanel
     from superviewer.image_info_tabs import (
+        ImageInfoTabPanel_ImageInfo,
         ImageInfoTabPanel_Tags,
         ImageInfoTabWidget,
     )
@@ -315,6 +320,15 @@ class MainWindow(QMainWindow):
         # ── 面板 4：可扩展元信息 Tab ──
         self.image_info_tabs = ImageInfoTabWidget(self)
         self.image_info_tabs.setMinimumWidth(300)
+        self.image_info_panel = ImageInfoTabPanel_ImageInfo(
+            self._file_list.available_photo_tags,
+            self._file_list.photo_tags_for_path,
+            self._file_list.set_photo_tag_for_paths,
+            self._rename_photo_from_info_panel,
+            metadata_provider=lambda path: self._file_list.get_photo_metadata_for_path(path, allow_slow_read=True),
+            comment_save_callback=self._save_photo_comment_from_info_panel,
+            parent=self.image_info_tabs,
+        )
         self.tags_info_panel = ImageInfoTabPanel_Tags(
             self._file_list.available_photo_tags,
             self._file_list.photo_tags_for_path,
@@ -323,6 +337,7 @@ class MainWindow(QMainWindow):
             self.image_info_tabs,
         )
 
+        self.image_info_tabs.add_info_panel(self.image_info_panel)
         self.image_info_tabs.add_info_panel(self.tags_info_panel)
         self.image_info_tabs.on_photo_selected("")
         splitter.addWidget(self.image_info_tabs)
@@ -494,6 +509,131 @@ class MainWindow(QMainWindow):
 
     def _sync_preview_scale_combo(self, scale_percent: object) -> None:
         sync_preview_scale_preset_combo(self.combo_preview_scale, scale_percent)
+
+    @staticmethod
+    def _same_filesystem_key(path_a: str | os.PathLike, path_b: str | os.PathLike) -> bool:
+        return os.path.normcase(os.path.abspath(os.path.normpath(os.fspath(path_a)))) == os.path.normcase(
+            os.path.abspath(os.path.normpath(os.fspath(path_b)))
+        )
+
+    @staticmethod
+    def _case_safe_rename_path(source: Path, target: Path) -> None:
+        source_text = os.path.normpath(str(source))
+        target_text = os.path.normpath(str(target))
+        if source_text == target_text:
+            return
+        if MainWindow._same_filesystem_key(source_text, target_text):
+            for idx in range(1000):
+                tmp = source.with_name(f".{source.name}.rename-{os.getpid()}-{idx}.tmp")
+                if not tmp.exists():
+                    break
+            else:
+                raise RuntimeError("无法创建临时重命名路径。")
+            os.rename(source_text, str(tmp))
+            os.rename(str(tmp), target_text)
+            return
+        os.rename(source_text, target_text)
+
+    @staticmethod
+    def _rename_target_path(source_path: str, requested_name: str) -> Path:
+        source = Path(source_path)
+        clean_name = str(requested_name or "").strip()
+        if not clean_name:
+            raise ValueError("文件名不能为空。")
+        invalid_chars = set('<>:"/\\|?*')
+        if any(ch in invalid_chars for ch in clean_name):
+            raise ValueError('文件名不能包含 <>:"/\\|?* 等字符。')
+        if clean_name in (".", ".."):
+            raise ValueError("文件名无效。")
+        name_path = Path(clean_name)
+        target_name = clean_name if name_path.suffix else f"{clean_name}{source.suffix}"
+        return source.with_name(target_name)
+
+    def _rename_photo_from_info_panel(self, path: str, requested_name: str) -> str:
+        source_path = os.path.normpath(os.path.abspath(path)) if path else ""
+        if not source_path or not os.path.isfile(source_path):
+            raise FileNotFoundError("当前图片不存在，无法重命名。")
+
+        source = Path(source_path)
+        target = self._rename_target_path(source_path, requested_name)
+        target_path = os.path.normpath(os.path.abspath(str(target)))
+        if source_path == target_path:
+            return source_path
+
+        same_photo_key = self._same_filesystem_key(source_path, target_path)
+        if not same_photo_key and os.path.exists(target_path):
+            raise FileExistsError(f"目标文件已存在：{target_path}")
+
+        sidecar_source = find_xmp_sidecar(source_path)
+        sidecar_target: Path | None = None
+        if sidecar_source and os.path.isfile(sidecar_source):
+            sidecar_suffix = Path(sidecar_source).suffix or ".xmp"
+            sidecar_target = Path(target_path).with_suffix(sidecar_suffix)
+            sidecar_target_text = os.path.normpath(os.path.abspath(str(sidecar_target)))
+            if (
+                not self._same_filesystem_key(sidecar_source, sidecar_target_text)
+                and os.path.exists(sidecar_target_text)
+            ):
+                raise FileExistsError(f"目标 sidecar 已存在：{sidecar_target_text}")
+
+        renamed_photo = False
+        try:
+            self._case_safe_rename_path(source, Path(target_path))
+            renamed_photo = True
+            if sidecar_source and sidecar_target is not None:
+                self._case_safe_rename_path(Path(sidecar_source), sidecar_target)
+        except Exception:
+            if renamed_photo and os.path.exists(target_path) and not os.path.exists(source_path):
+                try:
+                    self._case_safe_rename_path(Path(target_path), source)
+                except Exception:
+                    pass
+            raise
+
+        self._current_exif_path = target_path
+        self.file_label.setText(target_path)
+        self.file_label.setToolTip(target_path)
+        self.preview_panel.set_image(target_path)
+        self._update_preview_photo_exposure(target_path, allow_slow_read=True)
+
+        current_dir = self._file_list.get_current_dir() or str(Path(target_path).parent)
+        self._file_list.set_pending_selection([target_path], current_path=target_path, apply_immediately=False)
+        self._file_list.load_directory(current_dir, force_reload=True)
+        return target_path
+
+    def _save_photo_comment_from_info_panel(self, path: str, comment: str) -> bool:
+        source_path = os.path.normpath(os.path.abspath(path)) if path else ""
+        if not source_path or not os.path.isfile(source_path):
+            raise FileNotFoundError("当前图片不存在，无法保存注释。")
+
+        text = str(comment or "").strip()
+        exif_error: Exception | None = None
+        try:
+            write_meta_with_exiftool(source_path, "Description", text)
+            saved = True
+        except Exception as exc:
+            exif_error = exc
+            saved = False
+
+        if not saved:
+            xmp = PhotoMetaDataXMP()
+            saved = bool(xmp.write(source_path, {"XMP-dc:Description": text}))
+            if not saved:
+                detail = f"\n{exif_error}" if exif_error else ""
+                raise RuntimeError(f"无法写入 EXIF 注释，也无法写入 sidecar。{detail}")
+
+        self._file_list.sync_metadata_edit_for_path(
+            source_path,
+            meta_updates={
+                "Description": text,
+                "XMP-dc:Description": text,
+                "XMP:Description": text,
+                "IFD0:XPComment": text,
+                "IFD0:ImageDescription": text,
+                "EXIF:UserComment": text,
+            },
+        )
+        return True
 
     def on_image_loaded(self, path: str):
         """图片被拖入或选择后调用。"""
