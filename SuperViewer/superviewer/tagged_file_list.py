@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Iterable
 
 from app_common.file_browser import FileListPanel
+from app_common.file_browser._browser_core import _thumb_disk_cache_path
 from app_common.log import get_logger
 from app_common.exif_io import PhotoMetaDataXMP
 
@@ -174,8 +175,27 @@ class SuperViewerTaggedFileListPanel(FileListPanel):
         )
 
     def resolve_preview_path(self, path: str, prefer_fast_preview: bool = False) -> str:
-        """SuperViewer 直接预览原始文件，不使用 report.db 派生预览图。"""
-        return os.path.normpath(path) if path else ""
+        """SuperViewer 正常预览原图；方向键 fast preview 优先使用当前缩略图尺寸缓存。"""
+        norm_path = os.path.normpath(path) if path else ""
+        if not norm_path or not prefer_fast_preview:
+            return norm_path
+        source_path = self._get_actual_path_for_display(norm_path) or norm_path
+        if not source_path or not os.path.isfile(source_path):
+            return norm_path
+        try:
+            mtime = float(os.path.getmtime(source_path))
+        except Exception:
+            mtime = 0.0
+        thumb_path = _thumb_disk_cache_path(source_path, mtime, self._thumb_size)
+        if thumb_path and os.path.isfile(thumb_path):
+            _log.info(
+                "[resolve_preview_path] fast source=%r thumb_disk=%r size=%s",
+                norm_path,
+                thumb_path,
+                self._thumb_size,
+            )
+            return thumb_path
+        return norm_path
 
     def _resolve_rating_write_source(
         self,
