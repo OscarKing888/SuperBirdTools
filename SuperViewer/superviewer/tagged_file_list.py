@@ -12,7 +12,7 @@ from app_common.exif_io import PhotoMetaDataXMP
 
 from .paths_settings import _get_app_dir, _get_resource_path
 from .photo_tags import PhotoTagConfig, PhotoTagSidecarStore
-from .qt_compat import QHBoxLayout, QLabel, QToolButton
+from .qt_compat import QHBoxLayout, QLabel, QMenu, QToolButton
 from .tag_menu import add_filterable_tag_actions
 
 
@@ -29,6 +29,22 @@ _TAG_FILTER_BUTTON_STYLE = (
     "background: rgba(80, 150, 120, 120); border: 1px solid #5fb68e; color: #ffffff;"
     "}"
 )
+_TAG_FILTER_CLEAR_BUTTON_STYLE = (
+    "QToolButton {"
+    "font-size: 11px; padding: 1px 7px; min-width: 38px; "
+    "border-radius: 9px; border: 1px solid rgba(180, 110, 110, 120); "
+    "background: rgba(180, 80, 80, 28); color: #e3c4c4;"
+    "}"
+    "QToolButton:hover { background: rgba(180, 80, 80, 52); color: #ffffff; }"
+)
+_TAG_FILTER_INLINE_LIMIT = 8
+
+
+def _exec_menu(menu: QMenu, pos) -> None:
+    if hasattr(menu, "exec"):
+        menu.exec(pos)
+    else:
+        menu.exec_(pos)  # type: ignore[attr-defined]
 
 
 def _default_tag_config_path() -> str:
@@ -84,6 +100,8 @@ class SuperViewerTaggedFileListPanel(FileListPanel):
         self._available_tags: list[str] = []
         self._active_tag_filters: set[str] = set()
         self._tag_filter_buttons: dict[str, QToolButton] = {}
+        self._tag_filter_menu_button: QToolButton | None = None
+        self._tag_filter_clear_button: QToolButton | None = None
         self._photo_tag_store = tag_store or PhotoTagSidecarStore()
         self._photo_tag_cache: dict[str, set[str]] = {}
         self._tag_filter_bar: QHBoxLayout | None = None
@@ -207,7 +225,7 @@ class SuperViewerTaggedFileListPanel(FileListPanel):
         if not self._active_tag_filters:
             return True
         tags = self._photo_tag_cache.get(os.path.normpath(path), set())
-        return self._active_tag_filters.issubset(tags)
+        return bool(self._active_tag_filters.intersection(tags))
 
     def _add_species_menu_actions(self, menu, primary_path: str | None, paths: list[str]) -> None:
         # SuperViewer 已切到原始目录 + sidecar 模式，不再暴露 report.db 鸟种菜单。
@@ -244,8 +262,10 @@ class SuperViewerTaggedFileListPanel(FileListPanel):
             return
         self._clear_tag_filter_bar()
         self._tag_filter_buttons = {}
+        self._tag_filter_menu_button = None
+        self._tag_filter_clear_button = None
 
-        title = QLabel("TAG:")
+        title = QLabel("标签过滤:")
         title.setStyleSheet("color: #aaa; font-size: 11px;")
         layout.addWidget(title)
 
@@ -256,18 +276,95 @@ class SuperViewerTaggedFileListPanel(FileListPanel):
             layout.addStretch()
             return
 
-        for tag in self._available_tags:
-            btn = QToolButton()
-            btn.setText(tag)
-            btn.setToolTip(f"只显示包含 TAG「{tag}」的照片")
-            btn.setCheckable(True)
-            btn.setChecked(tag in self._active_tag_filters)
-            btn.setAutoRaise(False)
-            btn.setStyleSheet(_TAG_FILTER_BUTTON_STYLE)
-            btn.clicked.connect(lambda checked=False, t=tag: self._on_tag_filter_toggled(t, bool(checked)))
+        inline_tags = self._inline_tag_filter_tags()
+        for tag in inline_tags:
+            btn = self._create_tag_filter_button(tag)
             self._tag_filter_buttons[tag] = btn
             layout.addWidget(btn)
+
+        if len(inline_tags) < len(self._available_tags):
+            more_btn = QToolButton()
+            more_btn.setAutoRaise(False)
+            more_btn.setStyleSheet(_TAG_FILTER_BUTTON_STYLE)
+            more_btn.clicked.connect(lambda checked=False, b=more_btn: self._show_tag_filter_menu(b))
+            self._tag_filter_menu_button = more_btn
+            layout.addWidget(more_btn)
+
+        clear_btn = QToolButton()
+        clear_btn.setText("清除")
+        clear_btn.setToolTip("清除所有标签过滤")
+        clear_btn.setAutoRaise(False)
+        clear_btn.setStyleSheet(_TAG_FILTER_CLEAR_BUTTON_STYLE)
+        clear_btn.clicked.connect(lambda checked=False: self._clear_tag_filters())
+        self._tag_filter_clear_button = clear_btn
+        layout.addWidget(clear_btn)
         layout.addStretch()
+        self._sync_tag_filter_widgets()
+
+    def _inline_tag_filter_tags(self) -> list[str]:
+        """Return compact inline tags; full tag set lives in the filterable menu."""
+        inline: list[str] = []
+        for tag in self._available_tags:
+            if tag in self._active_tag_filters:
+                inline.append(tag)
+                if len(inline) >= _TAG_FILTER_INLINE_LIMIT:
+                    return inline
+        for tag in self._available_tags:
+            if tag in self._active_tag_filters or tag in inline:
+                continue
+            inline.append(tag)
+            if len(inline) >= _TAG_FILTER_INLINE_LIMIT:
+                break
+        return inline
+
+    def _create_tag_filter_button(self, tag: str) -> QToolButton:
+        btn = QToolButton()
+        btn.setText(tag)
+        btn.setToolTip(f"只显示包含 TAG「{tag}」的照片")
+        btn.setCheckable(True)
+        btn.setChecked(tag in self._active_tag_filters)
+        btn.setAutoRaise(False)
+        btn.setStyleSheet(_TAG_FILTER_BUTTON_STYLE)
+        btn.clicked.connect(lambda checked=False, t=tag: self._on_tag_filter_toggled(t, bool(checked)))
+        return btn
+
+    def _sync_tag_filter_widgets(self) -> None:
+        for key, btn in self._tag_filter_buttons.items():
+            btn.setChecked(key in self._active_tag_filters)
+        active_count = len(self._active_tag_filters)
+        menu_button = self._tag_filter_menu_button
+        if menu_button is not None:
+            hidden_count = max(0, len(self._available_tags) - len(self._tag_filter_buttons))
+            if active_count:
+                menu_button.setText(f"全部标签({active_count})")
+            else:
+                menu_button.setText(f"更多({hidden_count})")
+            menu_button.setToolTip(
+                f"打开全部 {len(self._available_tags)} 个标签，可输入过滤文本后勾选过滤"
+            )
+        clear_button = self._tag_filter_clear_button
+        if clear_button is not None:
+            clear_button.setVisible(bool(active_count))
+
+    def _show_tag_filter_menu(self, button: QToolButton) -> None:
+        self._load_tag_config_if_changed()
+        if not self._available_tags:
+            return
+        menu = QMenu(self)
+        add_filterable_tag_actions(
+            menu,
+            self._available_tags,
+            lambda tag, checked=False: self._on_tag_filter_toggled(tag, bool(checked)),
+            checkable=True,
+            checked_provider=lambda tag: tag in self._active_tag_filters,
+            filter_placeholder="过滤标签",
+            no_match_text="没有匹配的标签",
+        )
+        menu.addSeparator()
+        clear_action = menu.addAction("清除标签过滤")
+        clear_action.setEnabled(bool(self._active_tag_filters))
+        clear_action.triggered.connect(lambda checked=False: self._clear_tag_filters())
+        _exec_menu(menu, button.mapToGlobal(button.rect().bottomLeft()))
 
     def _load_tag_config_if_changed(self, *, force: bool = False) -> bool:
         signature = _config_signature(self._tag_config.path)
@@ -316,8 +413,19 @@ class SuperViewerTaggedFileListPanel(FileListPanel):
             self._active_tag_filters.add(tag)
         else:
             self._active_tag_filters.discard(tag)
-        for key, btn in self._tag_filter_buttons.items():
-            btn.setChecked(key in self._active_tag_filters)
+        current_inline = set(self._tag_filter_buttons)
+        desired_inline = set(self._inline_tag_filter_tags())
+        if current_inline != desired_inline:
+            self._rebuild_tag_filter_bar()
+        else:
+            self._sync_tag_filter_widgets()
+        self._refresh_filter_scope()
+
+    def _clear_tag_filters(self) -> None:
+        if not self._active_tag_filters:
+            return
+        self._active_tag_filters.clear()
+        self._rebuild_tag_filter_bar()
         self._refresh_filter_scope()
 
     def _add_photo_tag_menu_actions(self, menu, paths: list[str]) -> None:
