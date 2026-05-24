@@ -18,12 +18,7 @@ from app_common import show_about_dialog, load_about_images, load_about_info, Ap
 from app_common.log import get_logger
 from app_common.exif_io import (
     PhotoMetaDataXMP,
-    run_exiftool_json,
-    _get_exiftool_tag_target,
     find_xmp_sidecar,
-    read_xmp_sidecar,
-    extract_metadata_with_xmp_priority,
-    write_meta_with_exiftool,
 )
 from app_common.file_browser import DirectoryBrowserWidget
 from app_common.preview_canvas import (
@@ -34,7 +29,6 @@ from app_common.preview_canvas import (
     normalize_preview_composition_grid_mode,
     sync_preview_scale_preset_combo,
 )
-from app_common.report_db import PHOTO_COLUMNS, find_report_root, ReportDB
 from app_common.send_to_app import (
     ensure_file_open_aware_application,
     get_initial_file_list_from_argv,
@@ -381,17 +375,15 @@ class MainWindow(QMainWindow):
 
     def _on_file_selected_from_list(self, path: str):
         """文件列表中选中图像文件，触发预览和元信息刷新（等同于拖放）。"""
-        preview_path = self._file_list.resolve_preview_path(path)
-        _log.info("[_on_file_selected_from_list] source=%r preview=%r", path, preview_path)
-        self.preview_panel.set_image(preview_path)
+        _log.info("[_on_file_selected_from_list] source=%r", path)
+        self.preview_panel.set_image(path)
         self._update_preview_photo_exposure(path)
         self.on_image_loaded(path)
 
     def _on_file_fast_preview_requested(self, path: str):
-        """连续方向键长按时，优先用小缩略图刷新 PreviewCanvas。"""
-        preview_path = self._file_list.resolve_preview_path(path, prefer_fast_preview=True)
-        _log.info("[_on_file_fast_preview_requested] source=%r preview=%r", path, preview_path)
-        self.preview_panel.set_image(preview_path)
+        """连续方向键长按时直接预览原始文件，不再切到 report 派生预览图。"""
+        _log.info("[_on_file_fast_preview_requested] source=%r", path)
+        self.preview_panel.set_image(path)
         self._update_preview_photo_exposure(path)
 
     def _init_menu_bar(self):
@@ -607,20 +599,10 @@ class MainWindow(QMainWindow):
             raise FileNotFoundError("当前图片不存在，无法保存注释。")
 
         text = str(comment or "").strip()
-        exif_error: Exception | None = None
-        try:
-            write_meta_with_exiftool(source_path, "Description", text)
-            saved = True
-        except Exception as exc:
-            exif_error = exc
-            saved = False
-
+        xmp = PhotoMetaDataXMP()
+        saved = bool(xmp.write(source_path, {"XMP-dc:Description": text}))
         if not saved:
-            xmp = PhotoMetaDataXMP()
-            saved = bool(xmp.write(source_path, {"XMP-dc:Description": text}))
-            if not saved:
-                detail = f"\n{exif_error}" if exif_error else ""
-                raise RuntimeError(f"无法写入 EXIF 注释，也无法写入 sidecar。{detail}")
+            raise RuntimeError("无法写入 sidecar 注释。")
 
         self._file_list.sync_metadata_edit_for_path(
             source_path,

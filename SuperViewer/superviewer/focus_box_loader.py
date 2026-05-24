@@ -9,8 +9,6 @@ from app_common.log import get_logger
 
 from .focus_preview_loader import (
     _load_focus_box_for_preview,
-    _load_focus_box_from_report_db,
-    _resolve_focus_report_fallback_ref_size,
 )
 from .qt_compat import QThread, pyqtSignal
 
@@ -106,24 +104,5 @@ class FocusBoxLoader(QThread):
                 return
 
         fallback_used_path = self._source_path or self._preview_path
-        fallback_box = None
-        if fallback_used_path and os.path.isfile(fallback_used_path):
-            fallback_ref_size, fallback_size_independent = _resolve_focus_report_fallback_ref_size(
-                fallback_used_path,
-                fallback=(self._width, self._height),
-            )
-            fallback_box = _load_focus_box_from_report_db(
-                fallback_used_path,
-                self._width,
-                self._height,
-                ref_size=fallback_ref_size,
-            )
-            _log.info(
-                "[FocusBoxLoader.run] report fallback request_id=%s path=%r ref_size=%s focus_box=%r",
-                self._request_id,
-                fallback_used_path,
-                fallback_ref_size,
-                fallback_box,
-            )
-            self._result_size_independent = bool(fallback_size_independent)
-        self.focus_loaded.emit(self._request_id, fallback_box, fallback_used_path)
+        self._result_size_independent = False
+        self.focus_loaded.emit(self._request_id, None, fallback_used_path)

@@ -8,6 +8,7 @@ from typing import Iterable
 
 from app_common.file_browser import FileListPanel
 from app_common.log import get_logger
+from app_common.exif_io import PhotoMetaDataXMP
 
 from .paths_settings import _get_app_dir, _get_resource_path
 from .photo_tags import PhotoTagConfig, PhotoTagSidecarStore
@@ -67,6 +68,9 @@ def _norm_paths(paths: Iterable[str]) -> list[str]:
 
 class SuperViewerTaggedFileListPanel(FileListPanel):
     """FileListPanel extension that adds configured custom tags."""
+
+    use_report_db = False
+    use_preview_cache = False
 
     def __init__(
         self,
@@ -144,12 +148,55 @@ class SuperViewerTaggedFileListPanel(FileListPanel):
         super()._apply_directory_listing_result(
             path,
             files,
-            report_cache,
-            full_report_cache,
+            {},
+            None,
             recursive=recursive,
-            report_row_by_path=report_row_by_path,
+            report_row_by_path={},
             from_cache=from_cache,
         )
+
+    def resolve_preview_path(self, path: str, prefer_fast_preview: bool = False) -> str:
+        """SuperViewer 直接预览原始文件，不使用 report.db 派生预览图。"""
+        return os.path.normpath(path) if path else ""
+
+    def _resolve_rating_write_source(
+        self,
+        path: str,
+        *,
+        report_db_available: bool,
+    ) -> str:
+        return "xmp_sidecar"
+
+    def _apply_rating_state_via_exif(
+        self,
+        paths: list[str],
+        *,
+        rating: int | None = None,
+        pick: int | None = None,
+    ) -> list[str]:
+        fields: dict[str, int] = {}
+        if rating is not None:
+            fields["XMP-xmp:Rating"] = max(0, min(5, int(rating)))
+        if pick is not None:
+            fields["XMP-xmpDM:pick"] = max(-1, min(1, int(pick)))
+        if not fields:
+            return []
+        updated_paths: list[str] = []
+        xmp = PhotoMetaDataXMP()
+        for path in self._unique_norm_paths(paths):
+            if not path:
+                continue
+            try:
+                ok = xmp.write(path, fields)
+            except Exception as exc:
+                _log.warning("[_apply_rating_state_via_sidecar] source=%r failed: %s", path, exc)
+                continue
+            if not ok:
+                _log.warning("[_apply_rating_state_via_sidecar] source=%r write returned False", path)
+                continue
+            self._apply_rating_state_to_meta_cache(path, rating=rating, pick=pick)
+            updated_paths.append(path)
+        return updated_paths
 
     def _has_any_filter(self) -> bool:
         return super()._has_any_filter() or bool(self._active_tag_filters)
@@ -163,7 +210,8 @@ class SuperViewerTaggedFileListPanel(FileListPanel):
         return self._active_tag_filters.issubset(tags)
 
     def _add_species_menu_actions(self, menu, primary_path: str | None, paths: list[str]) -> None:
-        super()._add_species_menu_actions(menu, primary_path, paths)
+        # SuperViewer 已切到原始目录 + sidecar 模式，不再暴露 report.db 鸟种菜单。
+        return
 
     def _install_tag_filter_bar(self) -> None:
         if not getattr(self, "_create_filter_bar", True):

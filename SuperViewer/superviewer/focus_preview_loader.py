@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-焦点框提取与预览图加载：扩展名常量、预览 QPixmap、焦点元数据与 report.db 保底。
+焦点框提取与预览图加载：扩展名常量、预览 QPixmap 与焦点元数据。
 可依赖 paths_settings、exif_helpers、app_common、qt_compat，不依赖 SuperViewer 类模块。
 """
 
@@ -24,7 +24,6 @@ from app_common.focus_calc import (
     resolve_focus_display_orientation,
 )
 from app_common.log import get_logger
-from app_common.report_db import find_report_root, ReportDB
 
 from .exif_helpers import (
     HEIF_EXTENSIONS,
@@ -576,68 +575,19 @@ def _load_focus_box_from_report_db(
     raw_metadata: dict | None = None,
     camera_type=None,
 ) -> tuple[float, float, float, float] | None:
-    """从 report.db 的 focus_x、focus_y 构造焦点框（保底）。"""
-    if width <= 0 or height <= 0:
-        return None
-    try:
-        directory = str(Path(path).parent)
-        stem = Path(path).stem
-        if not stem:
-            return None
-        report_root = find_report_root(directory)
-        if not report_root:
-            return None
-        db = ReportDB.open_if_exists(report_root)
-        if not db:
-            return None
-        try:
-            row = db.get_photo(stem)
-        finally:
-            db.close()
-        if not row:
-            return None
-        fx, fy = row.get("focus_x"), row.get("focus_y")
-        if fx is None or fy is None:
-            return None
-        fx, fy = float(fx), float(fy)
-        ref_w = float(ref_size[0]) if ref_size and len(ref_size) > 0 and int(ref_size[0]) > 0 else float(width)
-        ref_h = float(ref_size[1]) if ref_size and len(ref_size) > 1 and int(ref_size[1]) > 0 else float(height)
-        if ref_w <= 0 or ref_h <= 0:
-            return None
-        if fx <= 1.0 and fy <= 1.0:
-            cx, cy = fx, fy
-        else:
-            cx = max(0.0, min(1.0, fx / ref_w))
-            cy = max(0.0, min(1.0, fy / ref_h))
-        span_x = 128.0 / ref_w
-        span_y = 128.0 / ref_h
-        box = _focus_box_from_center_and_span(cx, cy, span_x, span_y)
-        orientation = _resolve_focus_display_orientation_for_path(
-            path, raw_metadata, camera_type=camera_type,
-        )
-        _log.info(
-            "[_load_focus_box_from_report_db] path=%r focus=(%s,%s) ref_size=%sx%s orientation=%s box=%r",
-            path, fx, fy, int(ref_w), int(ref_h), orientation, box,
-        )
-        return _transform_focus_box_by_orientation(box, orientation)
-    except Exception:
-        _log.exception("[_load_focus_box_from_report_db] path=%r", path)
-        return None
+    """兼容旧调用；SuperViewer sidecar 模式不再从 report.db 读取焦点框。"""
+    return None
 
 
 def _load_focus_box_for_preview(path: str, width: int, height: int, *, allow_report_db_fallback: bool = True):
     """用 focus_calc + exiftool 元数据提取焦点框，返回归一化坐标 (l,t,r,b)。"""
+    _ = allow_report_db_fallback  # 保留参数兼容旧调用；report.db fallback 已停用。
     if width <= 0 or height <= 0:
         return None
 
     raw_metadata = _load_focus_metadata_for_path(path)
     if raw_metadata is None:
         _log.info("[_load_focus_box_for_preview] no metadata path=%r", path)
-        if allow_report_db_fallback:
-            focus_box = _load_focus_box_from_report_db(path, width, height)
-            if focus_box is not None:
-                _log.info("[_load_focus_box_for_preview] fallback report_db path=%r focus_box=%r", path, focus_box)
-            return focus_box
         return None
 
     focus_width, focus_height = _resolve_focus_calc_image_size(raw_metadata, fallback=(width, height))
@@ -650,16 +600,6 @@ def _load_focus_box_for_preview(path: str, width: int, height: int, *, allow_rep
             camera_type=camera_type,
         )
         if focus_box is None:
-            if allow_report_db_fallback:
-                focus_box = _load_focus_box_from_report_db(
-                    path, width, height,
-                    ref_size=(focus_width, focus_height),
-                    raw_metadata=raw_metadata,
-                    camera_type=camera_type,
-                )
-                if focus_box is not None:
-                    _log.info("[_load_focus_box_for_preview] fallback report_db path=%r focus_box=%r", path, focus_box)
-                    return focus_box
             _log.info(
                 "[_load_focus_box_for_preview] focus_calc none path=%r camera_type=%s calc_size=%sx%s",
                 path, str(getattr(camera_type, "value", camera_type)), focus_width, focus_height,
@@ -676,16 +616,6 @@ def _load_focus_box_for_preview(path: str, width: int, height: int, *, allow_rep
         return mapped_box
     except Exception:
         _log.exception("[_load_focus_box_for_preview] failed path=%r", path)
-        if allow_report_db_fallback:
-            focus_box = _load_focus_box_from_report_db(
-                path, width, height,
-                ref_size=(focus_width, focus_height),
-                raw_metadata=raw_metadata,
-                camera_type=camera_type,
-            )
-            if focus_box is not None:
-                _log.info("[_load_focus_box_for_preview] fallback report_db after exception path=%r", path)
-            return focus_box
         return None
 
 
