@@ -1,9 +1,8 @@
 # -*- coding: utf-8 -*-
-"""预览区：内嵌 PreviewCanvas，拖放、点击选图、set_image 与构图线。"""
+"""预览区：内嵌 PreviewCanvas，提供 set_image 与构图线。"""
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
 
 from app_common.preview_canvas import (
@@ -16,32 +15,26 @@ from app_common.preview_canvas import (
 from app_common.superviewer_user_options import get_keep_view_on_switch
 
 from .focus_preview_loader import (
-    IMAGE_EXTENSIONS,
-    RAW_EXTENSIONS,
     _load_preview_pixmap_for_canvas,
 )
 from .qt_compat import (
-    QDragEnterEvent,
-    QDropEvent,
-    QFileDialog,
     QLabel,
     QPixmap,
     QVBoxLayout,
     QWidget,
-    _LeftButton,
     pyqtSignal,
 )
 
 
 class PreviewPanel(QWidget):
-    """预览区：内嵌 app_common.preview_canvas.PreviewCanvas，提供拖放、点击选图及 set_image 等接口。"""
+    """预览区：内嵌 app_common.preview_canvas.PreviewCanvas，提供 set_image 等接口。"""
 
     display_scale_percent_changed = pyqtSignal(object)
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setMinimumSize(320, 240)
-        self.setAcceptDrops(True)
+        self.setAcceptDrops(False)
         self._current_path = None
         self._preview_resolution: tuple[int, int] | None = None
         self._photo_exposure: tuple[str, str, str] = ("", "", "")
@@ -51,7 +44,7 @@ class PreviewPanel(QWidget):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(4)
-        self._canvas = PreviewCanvas(self, placeholder_text="将图片拖入或点击选择")
+        self._canvas = PreviewCanvas(self, placeholder_text="未选择图片")
         if hasattr(self._canvas, "set_keep_view_on_switch"):
             self._canvas.set_keep_view_on_switch(self._keep_view_on_switch)
         if hasattr(self._canvas, "display_scale_percent_changed"):
@@ -167,40 +160,3 @@ class PreviewPanel(QWidget):
             options.composition_grid_line_width = self._composition_grid_line_width
         self._canvas.apply_overlay_options(options)
         self._canvas.update()
-
-    def mousePressEvent(self, event):
-        if event.button() == _LeftButton:
-            std_exts = " ".join(
-                f"*{e}" for e in (".jpg", ".jpeg", ".png", ".webp", ".tiff", ".tif", ".heic", ".heif", ".hif")
-            )
-            raw_exts = " ".join(f"*{e}" for e in RAW_EXTENSIONS)
-            path, _ = QFileDialog.getOpenFileName(
-                self,
-                "选择图片",
-                os.path.expanduser("~"),
-                f"图片 ({std_exts});;RAW ({raw_exts});;全部 (*.*)",
-            )
-            if path:
-                self.set_image(path)
-                if self.parent() and hasattr(self.parent(), "on_image_loaded"):
-                    self.parent().on_image_loaded(path)
-        super().mousePressEvent(event)
-
-    def dragEnterEvent(self, event: QDragEnterEvent):
-        if event.mimeData().hasUrls():
-            urls = event.mimeData().urls()
-            if urls:
-                path = urls[0].toLocalFile()
-                if path and Path(path).suffix.lower() in IMAGE_EXTENSIONS:
-                    event.acceptProposedAction()
-
-    def dropEvent(self, event: QDropEvent):
-        if event.mimeData().hasUrls():
-            urls = event.mimeData().urls()
-            if urls:
-                path = urls[0].toLocalFile()
-                if path and os.path.isfile(path):
-                    self.set_image(path)
-                    if self.parent() and hasattr(self.parent(), "on_image_loaded"):
-                        self.parent().on_image_loaded(path)
-        event.acceptProposedAction()
