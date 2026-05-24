@@ -118,7 +118,7 @@ def _metadata_comment(metadata: dict) -> str:
 class ImageInfoTabPanel_ImageInfo(ImageInfoTabPanel):
     """Image preview, filename, tags, and basic file information tab."""
 
-    tab_title = "信息"
+    tab_title = "图片信息"
 
     def __init__(
         self,
