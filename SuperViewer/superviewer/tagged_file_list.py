@@ -387,6 +387,7 @@ class SuperViewerTaggedFileListPanel(FileListPanel):
         except Exception as exc:
             _log.warning("[_refresh_photo_tag_cache] failed paths=%s: %s", len(norm_paths), exc)
         self._photo_tag_cache = cache
+        self._sync_photo_tags_to_meta_cache(norm_paths)
 
     def _update_photo_tag_cache_for_paths(self, paths: Iterable[str]) -> None:
         norm_paths = _norm_paths(paths)
@@ -399,6 +400,20 @@ class SuperViewerTaggedFileListPanel(FileListPanel):
             fresh = {}
         for path in norm_paths:
             self._photo_tag_cache[path] = set(fresh.get(path, set()))
+        self._sync_photo_tags_to_meta_cache(norm_paths)
+
+    def _sync_photo_tags_to_meta_cache(self, paths: Iterable[str]) -> None:
+        order = {tag: i for i, tag in enumerate(self._available_tags)}
+        for path in _norm_paths(paths):
+            tags = sorted(
+                self._photo_tag_cache.get(path, set()),
+                key=lambda tag: (order.get(tag, len(order)), tag),
+            )
+            meta = self._meta_cache.get(path)
+            if not isinstance(meta, dict):
+                meta = {}
+                self._meta_cache[path] = meta
+            meta["tags"] = tags
 
     def _tags_for_path(self, path: str) -> set[str]:
         norm = os.path.normpath(path)
@@ -462,6 +477,7 @@ class SuperViewerTaggedFileListPanel(FileListPanel):
             _log.warning("[_set_tag_for_paths] failed tag=%r enabled=%s paths=%s: %s", tag, enabled, len(paths), exc)
             return
         self._update_photo_tag_cache_for_paths(paths)
+        self._refresh_metadata_state_for_paths(paths)
         if self._active_tag_filters:
             self._apply_filter()
 
@@ -472,5 +488,6 @@ class SuperViewerTaggedFileListPanel(FileListPanel):
             _log.warning("[_clear_tags_for_paths] failed paths=%s: %s", len(paths), exc)
             return
         self._update_photo_tag_cache_for_paths(paths)
+        self._refresh_metadata_state_for_paths(paths)
         if self._active_tag_filters:
             self._apply_filter()
