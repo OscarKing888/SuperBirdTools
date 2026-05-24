@@ -163,8 +163,6 @@ class SuperViewerTaggedFileListPanel(FileListPanel):
 
     def _add_species_menu_actions(self, menu, primary_path: str | None, paths: list[str]) -> None:
         super()._add_species_menu_actions(menu, primary_path, paths)
-        menu.addSeparator()
-        self._add_photo_tag_menu_actions(menu, paths)
 
     def _install_tag_filter_bar(self) -> None:
         if not getattr(self, "_create_filter_bar", True):

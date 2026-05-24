@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""预览区：内嵌 PreviewCanvas，拖放、点击选图、set_image、焦点框与构图线。"""
+"""预览区：内嵌 PreviewCanvas，拖放、点击选图、set_image 与构图线。"""
 
 from __future__ import annotations
 
@@ -9,7 +9,6 @@ from pathlib import Path
 from app_common.preview_canvas import (
     PreviewCanvas,
     PreviewOverlayOptions,
-    PreviewOverlayState,
     format_preview_scale_percent,
     normalize_preview_composition_grid_line_width,
     normalize_preview_composition_grid_mode,
@@ -46,7 +45,6 @@ class PreviewPanel(QWidget):
         self._current_path = None
         self._preview_resolution: tuple[int, int] | None = None
         self._photo_exposure: tuple[str, str, str] = ("", "", "")
-        self._show_focus_enabled = True
         self._keep_view_on_switch = bool(get_keep_view_on_switch())
         self._composition_grid_mode = normalize_preview_composition_grid_mode("none")
         self._composition_grid_line_width = normalize_preview_composition_grid_line_width(1)
@@ -66,7 +64,6 @@ class PreviewPanel(QWidget):
     def set_image(self, path: str):
         self._current_path = path
         self._photo_exposure = ("", "", "")
-        self.set_focus_box(None)
         pix = _load_preview_pixmap_for_canvas(path)
         if pix is not None and not pix.isNull():
             if self._keep_view_on_switch:
@@ -97,13 +94,6 @@ class PreviewPanel(QWidget):
         self._keep_view_on_switch = bool(enabled)
         if hasattr(self._canvas, "set_keep_view_on_switch"):
             self._canvas.set_keep_view_on_switch(self._keep_view_on_switch)
-
-    def set_focus_box(self, focus_box):
-        self._canvas.apply_overlay_state(PreviewOverlayState(focus_box=focus_box))
-
-    def set_show_focus_enabled(self, enabled: bool):
-        self._show_focus_enabled = bool(enabled)
-        self._apply_overlay_options()
 
     @property
     def canvas(self) -> PreviewCanvas:
@@ -170,7 +160,7 @@ class PreviewPanel(QWidget):
         return self._current_path
 
     def _apply_overlay_options(self) -> None:
-        options = PreviewOverlayOptions(show_focus_box=self._show_focus_enabled)
+        options = PreviewOverlayOptions(show_focus_box=False)
         if hasattr(options, "composition_grid_mode"):
             options.composition_grid_mode = self._composition_grid_mode
         if hasattr(options, "composition_grid_line_width"):
