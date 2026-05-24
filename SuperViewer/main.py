@@ -12,6 +12,7 @@ import shutil
 import re
 import subprocess
 import tempfile
+import time as _time
 from pathlib import Path
 
 from app_common import show_about_dialog, load_about_images, load_about_info, AppInfoBar
@@ -321,6 +322,7 @@ class MainWindow(QMainWindow):
             self._rename_photo_from_info_panel,
             metadata_provider=lambda path: self._file_list.get_photo_metadata_for_path(path, allow_slow_read=True),
             comment_save_callback=self._save_photo_comment_from_info_panel,
+            preview_pixmap_provider=self.preview_panel.source_pixmap_for_path,
             parent=self.image_info_tabs,
         )
         self.tags_info_panel = ImageInfoTabPanel_Tags(
@@ -363,28 +365,37 @@ class MainWindow(QMainWindow):
         except Exception:
             pass
 
-    def _update_preview_photo_exposure(self, path: str, *, allow_slow_read: bool = False) -> None:
-        try:
-            shutter, aperture, iso = self._file_list.get_photo_exposure_settings_for_path(
-                path,
-                allow_slow_read=allow_slow_read,
-            )
-        except Exception:
-            shutter, aperture, iso = "", "", ""
-        self.preview_panel.set_photo_exposure(shutter, aperture, iso)
-
     def _on_file_selected_from_list(self, path: str):
         """文件列表中选中图像文件，触发预览和元信息刷新（等同于拖放）。"""
-        _log.info("[_on_file_selected_from_list] source=%r", path)
+        t0 = _time.perf_counter()
+        _log.info("[PERF][image_switch][main] START source=%r", path)
+        preview_t0 = _time.perf_counter()
         self.preview_panel.set_image(path)
-        self._update_preview_photo_exposure(path)
+        preview_ms = (_time.perf_counter() - preview_t0) * 1000.0
+        info_t0 = _time.perf_counter()
         self.on_image_loaded(path)
+        info_ms = (_time.perf_counter() - info_t0) * 1000.0
+        _log.info(
+            "[PERF][image_switch][main] END source=%r preview_ms=%.1f info_ms=%.1f total_ms=%.1f",
+            path,
+            preview_ms,
+            info_ms,
+            (_time.perf_counter() - t0) * 1000.0,
+        )
 
     def _on_file_fast_preview_requested(self, path: str):
         """连续方向键长按时直接预览原始文件，不再切到 report 派生预览图。"""
-        _log.info("[_on_file_fast_preview_requested] source=%r", path)
+        t0 = _time.perf_counter()
+        _log.info("[PERF][fast_preview][main] START source=%r", path)
+        preview_t0 = _time.perf_counter()
         self.preview_panel.set_image(path)
-        self._update_preview_photo_exposure(path)
+        preview_ms = (_time.perf_counter() - preview_t0) * 1000.0
+        _log.info(
+            "[PERF][fast_preview][main] END source=%r preview_ms=%.1f total_ms=%.1f",
+            path,
+            preview_ms,
+            (_time.perf_counter() - t0) * 1000.0,
+        )
 
     def _init_menu_bar(self):
         file_menu = self.menuBar().addMenu("文件")
@@ -586,7 +597,6 @@ class MainWindow(QMainWindow):
         self.file_label.setText(target_path)
         self.file_label.setToolTip(target_path)
         self.preview_panel.set_image(target_path)
-        self._update_preview_photo_exposure(target_path, allow_slow_read=True)
 
         current_dir = self._file_list.get_current_dir() or str(Path(target_path).parent)
         self._file_list.set_pending_selection([target_path], current_path=target_path, apply_immediately=False)
@@ -619,12 +629,23 @@ class MainWindow(QMainWindow):
 
     def on_image_loaded(self, path: str):
         """图片被拖入或选择后调用。"""
-        _log.info("[on_image_loaded] 选中照片 path=%r", path)
+        t0 = _time.perf_counter()
+        _log.info("[PERF][image_switch][info] START path=%r", path)
         self._current_exif_path = path
+        label_t0 = _time.perf_counter()
         self.file_label.setText(path)
         self.file_label.setToolTip(path)
+        label_ms = (_time.perf_counter() - label_t0) * 1000.0
+        tabs_t0 = _time.perf_counter()
         self.image_info_tabs.on_photo_selected(path)
-        self._update_preview_photo_exposure(path, allow_slow_read=True)
+        tabs_ms = (_time.perf_counter() - tabs_t0) * 1000.0
+        _log.info(
+            "[PERF][image_switch][info] END path=%r label_ms=%.1f tabs_ms=%.1f total_ms=%.1f",
+            path,
+            label_ms,
+            tabs_ms,
+            (_time.perf_counter() - t0) * 1000.0,
+        )
 
     def closeEvent(self, event) -> None:  # type: ignore[override]
         try:

@@ -31,7 +31,7 @@ from .exif_helpers import (
     RAW_EXTENSIONS,
     load_exif_heic,
 )
-from .qt_compat import QImage, QPixmap, QTransform, _SmoothTransformation
+from .qt_compat import QImage, QImageReader, QPixmap, QTransform, _SmoothTransformation
 
 try:
     import exifread
@@ -128,6 +128,25 @@ def _load_preview_pixmap_with_orientation(path: str) -> QPixmap | None:
         return None
 
 
+def _load_standard_pixmap_qt(path: str) -> QPixmap | None:
+    """用 Qt 图片插件加载常规图片，并让 Qt 处理 EXIF 方向。"""
+    if not path or Path(path).suffix.lower() in RAW_EXTENSIONS:
+        return None
+    try:
+        reader = QImageReader(path)
+        try:
+            reader.setAutoTransform(True)
+        except Exception:
+            pass
+        qimg = reader.read()
+        if qimg.isNull():
+            return None
+        pix = QPixmap.fromImage(qimg)
+        return pix if not pix.isNull() else None
+    except Exception:
+        return None
+
+
 def _load_raw_full_as_pixmap(path: str) -> QPixmap | None:
     """使用 rawpy 解码 RAW 为完整原图并转为 QPixmap（应用 EXIF 方向）。"""
     if rawpy is None or Path(path).suffix.lower() not in RAW_EXTENSIONS:
@@ -181,8 +200,11 @@ def get_raw_thumbnail(path: str) -> bytes | None:
 
 def _load_preview_pixmap_for_canvas(path: str) -> QPixmap | None:
     """加载预览用 QPixmap（原图，含方向修正），供 PreviewPanel 使用。"""
-    pix = _load_preview_pixmap_with_orientation(path)
     is_raw = Path(path).suffix.lower() in RAW_EXTENSIONS
+    pix = None if is_raw else _load_standard_pixmap_qt(path)
+    if pix is not None and not pix.isNull():
+        return pix
+    pix = _load_preview_pixmap_with_orientation(path)
     if (pix is None or pix.isNull()) and is_raw:
         pix = _load_raw_full_as_pixmap(path)
     if (pix is None or pix.isNull()) and is_raw:

@@ -3,8 +3,11 @@
 
 from __future__ import annotations
 
+import time as _time
+import os
 from pathlib import Path
 
+from app_common.log import get_logger
 from app_common.preview_canvas import (
     PreviewCanvas,
     PreviewOverlayOptions,
@@ -26,6 +29,9 @@ from .qt_compat import (
 )
 
 
+_log = get_logger("superviewer.preview_panel")
+
+
 class PreviewPanel(QWidget):
     """预览区：内嵌 app_common.preview_canvas.PreviewCanvas，提供 set_image 等接口。"""
 
@@ -37,7 +43,6 @@ class PreviewPanel(QWidget):
         self.setAcceptDrops(False)
         self._current_path = None
         self._preview_resolution: tuple[int, int] | None = None
-        self._photo_exposure: tuple[str, str, str] = ("", "", "")
         self._keep_view_on_switch = bool(get_keep_view_on_switch())
         self._composition_grid_mode = normalize_preview_composition_grid_mode("none")
         self._composition_grid_line_width = normalize_preview_composition_grid_line_width(1)
@@ -50,15 +55,20 @@ class PreviewPanel(QWidget):
         if hasattr(self._canvas, "display_scale_percent_changed"):
             self._canvas.display_scale_percent_changed.connect(self._on_canvas_display_scale_percent_changed)
         layout.addWidget(self._canvas, stretch=1)
-        self._preview_status_label = QLabel("当前预览分辨率: - | 当前缩放: - | 快门: - | 光圈: - | ISO: -")
+        self._preview_status_label = QLabel("当前预览分辨率: - | 当前缩放: -")
         self._preview_status_label.setStyleSheet("color: #aaa; font-size: 12px;")
         layout.addWidget(self._preview_status_label)
 
     def set_image(self, path: str):
+        t0 = _time.perf_counter()
         self._current_path = path
-        self._photo_exposure = ("", "", "")
+        load_t0 = _time.perf_counter()
         pix = _load_preview_pixmap_for_canvas(path)
+        load_ms = (_time.perf_counter() - load_t0) * 1000.0
+        canvas_ms = 0.0
+        status_ms = 0.0
         if pix is not None and not pix.isNull():
+            canvas_t0 = _time.perf_counter()
             if self._keep_view_on_switch:
                 self._canvas.set_source_pixmap(
                     pix,
@@ -67,21 +77,33 @@ class PreviewPanel(QWidget):
                 )
             else:
                 self._canvas.set_source_pixmap(pix, reset_view=True)
+            canvas_ms = (_time.perf_counter() - canvas_t0) * 1000.0
+            status_t0 = _time.perf_counter()
             self._set_preview_status_text(pix.width(), pix.height())
+            status_ms = (_time.perf_counter() - status_t0) * 1000.0
         else:
+            canvas_t0 = _time.perf_counter()
             self._canvas.set_source_pixmap(None)
             self._canvas.setText(f"无法预览\n{Path(path).name}")
+            canvas_ms = (_time.perf_counter() - canvas_t0) * 1000.0
+            status_t0 = _time.perf_counter()
             self._set_preview_status_text(None, None)
+            status_ms = (_time.perf_counter() - status_t0) * 1000.0
+        _log.info(
+            "[PERF][image_switch][preview_panel.set_image] path=%r ok=%s size=%s load_ms=%.1f canvas_ms=%.1f status_ms=%.1f total_ms=%.1f",
+            path,
+            bool(pix is not None and not pix.isNull()),
+            (pix.width(), pix.height()) if pix is not None and not pix.isNull() else None,
+            load_ms,
+            canvas_ms,
+            status_ms,
+            (_time.perf_counter() - t0) * 1000.0,
+        )
 
     def clear_image(self):
         self._current_path = None
-        self._photo_exposure = ("", "", "")
         self._canvas.set_source_pixmap(None)
         self._set_preview_status_text(None, None)
-
-    def set_photo_exposure(self, shutter: str = "", aperture: str = "", iso: str = "") -> None:
-        self._photo_exposure = (str(shutter or ""), str(aperture or ""), str(iso or ""))
-        self._refresh_preview_status_text()
 
     def set_keep_view_on_switch(self, enabled: bool) -> None:
         self._keep_view_on_switch = bool(enabled)
@@ -139,11 +161,7 @@ class PreviewPanel(QWidget):
         else:
             resolution_text = f"{self._preview_resolution[0]}x{self._preview_resolution[1]}"
         scale_text = format_preview_scale_percent(self.current_display_scale_percent())
-        shutter, aperture, iso = self._photo_exposure
-        self._preview_status_label.setText(
-            f"当前预览分辨率: {resolution_text} | 当前缩放: {scale_text} | "
-            f"快门: {shutter or '-'} | 光圈: {aperture or '-'} | ISO: {iso or '-'}"
-        )
+        self._preview_status_label.setText(f"当前预览分辨率: {resolution_text} | 当前缩放: {scale_text}")
 
     def _on_canvas_display_scale_percent_changed(self, scale_percent: object) -> None:
         self._refresh_preview_status_text()
@@ -151,6 +169,23 @@ class PreviewPanel(QWidget):
 
     def current_path(self):
         return self._current_path
+
+    def source_pixmap_for_path(self, path: str) -> QPixmap | None:
+        """返回当前预览已经加载的同路径源图，供右侧信息面板复用，避免重复解码。"""
+        if not path or not self._current_path:
+            return None
+        try:
+            requested = os.path.normcase(os.path.normpath(path))
+            current = os.path.normcase(os.path.normpath(str(self._current_path)))
+        except Exception:
+            requested = str(path)
+            current = str(self._current_path)
+        if requested != current:
+            return None
+        pixmap = getattr(self._canvas, "_source_pixmap", None)
+        if pixmap is None or pixmap.isNull():
+            return None
+        return pixmap
 
     def _apply_overlay_options(self) -> None:
         options = PreviewOverlayOptions(show_focus_box=False)

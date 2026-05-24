@@ -49,6 +49,7 @@ try:
     from PyQt6.QtGui import (
         QPixmap,
         QImage,
+        QImageReader,
         QTransform,
         QDragEnterEvent,
         QDropEvent,
@@ -108,6 +109,7 @@ except ImportError:
     from PyQt5.QtGui import (
         QPixmap,
         QImage,
+        QImageReader,
         QTransform,
         QDragEnterEvent,
         QDropEvent,

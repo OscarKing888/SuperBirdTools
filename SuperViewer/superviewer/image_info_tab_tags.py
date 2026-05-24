@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import os
+import time as _time
 from pathlib import Path
 from typing import Callable
+
+from app_common.log import get_logger
 
 from .image_info_tab_base import ImageInfoTabPanel
 from .qt_compat import (
@@ -17,6 +20,9 @@ from .qt_compat import (
     QVBoxLayout,
     QWidget,
 )
+
+
+_log = get_logger("superviewer.image_info_tab_tags")
 
 
 class ImageInfoTabPanel_Tags(ImageInfoTabPanel):
@@ -74,22 +80,32 @@ class ImageInfoTabPanel_Tags(ImageInfoTabPanel):
         layout.addWidget(scroll, stretch=1)
 
     def refresh_ui(self) -> set[str]:
+        t0 = _time.perf_counter()
         path = self.current_photo_path()
+        available_t0 = _time.perf_counter()
         available = self._load_available_tags()
+        available_ms = (_time.perf_counter() - available_t0) * 1000.0
+        rebuild_ms = 0.0
         if available != self._available_tags:
             self._available_tags = available
+            rebuild_t0 = _time.perf_counter()
             self._rebuild_tag_checkboxes()
+            rebuild_ms = (_time.perf_counter() - rebuild_t0) * 1000.0
 
         has_file = bool(path and os.path.isfile(path))
+        current_tags_ms = 0.0
         if has_file:
             self.photo_label.setText(Path(path).name)
             self.photo_label.setToolTip(path)
+            current_tags_t0 = _time.perf_counter()
             current_tags = self._load_current_tags(path)
+            current_tags_ms = (_time.perf_counter() - current_tags_t0) * 1000.0
         else:
             self.photo_label.setText("未选择图片")
             self.photo_label.setToolTip("")
             current_tags = set()
 
+        checkbox_t0 = _time.perf_counter()
         self._updating = True
         try:
             for tag, check in self._tag_checks.items():
@@ -98,7 +114,9 @@ class ImageInfoTabPanel_Tags(ImageInfoTabPanel):
             self.btn_clear.setEnabled(has_file and bool(current_tags))
         finally:
             self._updating = False
+        checkbox_ms = (_time.perf_counter() - checkbox_t0) * 1000.0
 
+        empty_t0 = _time.perf_counter()
         if not available:
             self.empty_label.setText("tags.cfg 未配置")
             self.empty_label.show()
@@ -107,6 +125,20 @@ class ImageInfoTabPanel_Tags(ImageInfoTabPanel):
             self.empty_label.show()
         else:
             self.empty_label.hide()
+        empty_ms = (_time.perf_counter() - empty_t0) * 1000.0
+        _log.info(
+            "[PERF][image_switch][ImageInfoTabPanel_Tags.refresh_ui] path=%r has_file=%s available=%s checked=%s available_ms=%.1f rebuild_ms=%.1f current_tags_ms=%.1f checkbox_ms=%.1f empty_ms=%.1f total_ms=%.1f",
+            path,
+            has_file,
+            len(available),
+            len(current_tags),
+            available_ms,
+            rebuild_ms,
+            current_tags_ms,
+            checkbox_ms,
+            empty_ms,
+            (_time.perf_counter() - t0) * 1000.0,
+        )
         return set(current_tags)
 
     def _load_available_tags(self) -> list[str]:
@@ -124,6 +156,7 @@ class ImageInfoTabPanel_Tags(ImageInfoTabPanel):
             return set()
 
     def _rebuild_tag_checkboxes(self) -> None:
+        t0 = _time.perf_counter()
         while self.tag_layout.count():
             item = self.tag_layout.takeAt(0)
             widget = item.widget()
@@ -137,6 +170,11 @@ class ImageInfoTabPanel_Tags(ImageInfoTabPanel):
             self._tag_checks[tag] = check
             self.tag_layout.addWidget(check)
         self.tag_layout.addStretch(1)
+        _log.info(
+            "[PERF][image_switch][ImageInfoTabPanel_Tags._rebuild_tag_checkboxes] available=%s total_ms=%.1f",
+            len(self._available_tags),
+            (_time.perf_counter() - t0) * 1000.0,
+        )
 
     def _on_tag_toggled(self, tag: str, checked: bool) -> None:
         if self._updating:
