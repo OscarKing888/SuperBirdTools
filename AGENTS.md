@@ -89,6 +89,7 @@ Follow `ai_rules/AI_CODING_RULES.md` as the project baseline.
 
 - Treat the nearest `.superpicky` directory as the per-library state root. When switching to a directory under a different `.superpicky` root, reload `tags.cfg` from that root and replace the active tag set.
 - Persistent thumbnail files belong under `.superpicky/thumb_cache/<size>/` with size-specific directories such as `128`, `256`, and `512`. Do not silently move these caches back to `%LOCALAPPDATA%` except as an explicit fallback when no `.superpicky` root exists.
+- Legacy `.superpicky/cache/thumb_cache_<size>/` thumbnail caches may be read/migrated for compatibility, but new persistent thumbnail writes must continue to use `.superpicky/thumb_cache/<size>/`.
 - Sidecar collaborative edit journals belong under `.superpicky/sidecar_edits/` using collision-resistant hashed path names. Do not write `*.superpicky-edits` directories beside image/XMP source files; legacy sibling edit directories may be read/migrated/cleaned for compatibility.
 - Deleting files through `move_to_trash` should default to `.superpicky/deleted/`, preserving the original path relative to the `.superpicky` root. Related sidecar files such as `.xmp` must move with the image into the matching deleted path.
 - File reveal/open actions must use the real selected image path, especially for mapped network drives and UNC-backed libraries. Avoid deriving reveal paths from stale report/cache paths when an existing local/mapped file path is available.
