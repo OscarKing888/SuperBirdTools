@@ -5,7 +5,11 @@ from pathlib import Path
 
 from app_common.exif_io.photo_meta import PhotoMetaDataXMP
 from app_common.exif_io.writer import read_batch_metadata
-from SuperViewer.superviewer.photo_tags import PhotoTagConfig, PhotoTagSidecarStore
+from SuperViewer.superviewer.photo_tags import (
+    PhotoTagConfig,
+    PhotoTagSidecarStore,
+    find_superpicky_tag_config_path,
+)
 
 
 def test_photo_tag_config_loads_utf8_lines_and_dedupes(tmp_path: Path) -> None:
@@ -13,6 +17,26 @@ def test_photo_tag_config_loads_utf8_lines_and_dedupes(tmp_path: Path) -> None:
     cfg.write_text("窝\n打架\n\n打架\n捕食\n", encoding="utf-8")
 
     assert PhotoTagConfig(cfg).load() == ["窝", "打架", "捕食"]
+
+
+def test_photo_tag_config_path_comes_from_nearest_superpicky(tmp_path: Path) -> None:
+    root = tmp_path / "root"
+    leaf = root / "nested" / "leaf"
+    superpicky = root / ".superpicky"
+    leaf.mkdir(parents=True)
+    superpicky.mkdir()
+    (superpicky / "tags.cfg").write_text("alpha\nbeta\n", encoding="utf-8")
+
+    assert find_superpicky_tag_config_path(leaf) == superpicky / "tags.cfg"
+    assert PhotoTagConfig(find_superpicky_tag_config_path(leaf)).load() == ["alpha", "beta"]
+
+    nested_superpicky = leaf / ".superpicky"
+    nested_superpicky.mkdir()
+    assert find_superpicky_tag_config_path(leaf) == nested_superpicky / "tags.cfg"
+    assert find_superpicky_tag_config_path(nested_superpicky) == nested_superpicky / "tags.cfg"
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    assert find_superpicky_tag_config_path(outside, max_levels=0) is None
 
 
 def test_xmp_subject_roundtrip_preserves_multiple_tags(tmp_path: Path) -> None:

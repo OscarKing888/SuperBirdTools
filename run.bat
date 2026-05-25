@@ -20,6 +20,6 @@ if exist "%PYTHONW_EXE%" (
 cd /d "%ROOT_DIR%"
 
 start "SuperViewer" "%GUI_PYTHON%" -m SuperViewer.entry
-start "SuperBirdStamp" "%GUI_PYTHON%" -m SuperBirdStamp.entry
+::start "SuperBirdStamp" "%GUI_PYTHON%" -m SuperBirdStamp.entry
 
 endlocal

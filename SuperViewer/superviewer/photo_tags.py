@@ -18,6 +18,9 @@ from app_common.log import get_logger
 
 _log = get_logger("superviewer.photo_tags")
 
+SUPERPICKY_DIRNAME = ".superpicky"
+PHOTO_TAG_CONFIG_FILENAME = "tags.cfg"
+
 
 def _normalise_path(path: str | os.PathLike[str]) -> str:
     return os.path.normpath(os.fspath(path))
@@ -48,6 +51,33 @@ def _normalise_paths(paths: Iterable[str]) -> list[str]:
         seen.add(key)
         result.append(norm)
     return result
+
+
+def find_superpicky_tag_config_path(
+    path: str | os.PathLike[str] | None,
+    *,
+    max_levels: int | None = None,
+) -> Path | None:
+    """Return the nearest parent .superpicky/tags.cfg path for *path*."""
+    if not path:
+        return None
+    candidate = os.path.normpath(os.fspath(path))
+    if os.path.basename(candidate) == SUPERPICKY_DIRNAME and os.path.isdir(candidate):
+        return Path(candidate) / PHOTO_TAG_CONFIG_FILENAME
+
+    depth = 0
+    while candidate:
+        if max_levels is not None and depth > max_levels:
+            break
+        superpicky_dir = os.path.join(candidate, SUPERPICKY_DIRNAME)
+        if os.path.isdir(superpicky_dir):
+            return Path(superpicky_dir) / PHOTO_TAG_CONFIG_FILENAME
+        parent = os.path.dirname(candidate)
+        if parent == candidate:
+            break
+        candidate = parent
+        depth += 1
+    return None
 
 
 class PhotoTagConfig:

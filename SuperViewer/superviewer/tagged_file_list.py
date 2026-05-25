@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import os
-from pathlib import Path
 from typing import Iterable
 
 from app_common.file_browser import FileListPanel
@@ -11,8 +10,7 @@ from app_common.file_browser._browser_core import _thumb_disk_cache_path
 from app_common.log import get_logger
 from app_common.exif_io import PhotoMetaDataXMP
 
-from .paths_settings import _get_app_dir, _get_resource_path
-from .photo_tags import PhotoTagConfig, PhotoTagSidecarStore
+from .photo_tags import PhotoTagConfig, PhotoTagSidecarStore, find_superpicky_tag_config_path
 from .qt_compat import QHBoxLayout, QLabel, QMenu, QToolButton
 from .tag_menu import add_filterable_tag_actions
 
@@ -48,24 +46,15 @@ def _exec_menu(menu: QMenu, pos) -> None:
         menu.exec_(pos)  # type: ignore[attr-defined]
 
 
-def _default_tag_config_path() -> str:
-    resource_path = _get_resource_path("tags.cfg")
-    if resource_path:
-        return resource_path
-    source_path = Path(__file__).resolve().parents[1] / "tags.cfg"
-    if source_path.is_file():
-        return str(source_path)
-    return os.path.join(_get_app_dir(), "tags.cfg")
-
-
-def _config_signature(path: Path | None) -> tuple[int, int] | None:
+def _config_signature(path: os.PathLike[str] | None) -> tuple[str, int, int] | None:
     if path is None:
         return None
+    path_key = os.path.normcase(os.path.abspath(os.fspath(path)))
     try:
-        stat = path.stat()
+        stat = os.stat(path_key)
     except OSError:
-        return None
-    return int(stat.st_mtime_ns), int(stat.st_size)
+        return path_key, -1, -1
+    return path_key, int(stat.st_mtime_ns), int(stat.st_size)
 
 
 def _norm_paths(paths: Iterable[str]) -> list[str]:
@@ -96,8 +85,10 @@ class SuperViewerTaggedFileListPanel(FileListPanel):
         tag_config_path: str | os.PathLike[str] | None = None,
         tag_store: PhotoTagSidecarStore | None = None,
     ) -> None:
-        self._tag_config = PhotoTagConfig(tag_config_path or _default_tag_config_path())
-        self._tag_config_signature: tuple[int, int] | None = None
+        self._static_tag_config_path = os.fspath(tag_config_path) if tag_config_path else None
+        self._tag_config = PhotoTagConfig(self._static_tag_config_path)
+        self._tag_config_signature: tuple[str, int, int] | None = None
+        self._tag_config_scope_key = ""
         self._available_tags: list[str] = []
         self._active_tag_filters: set[str] = set()
         self._tag_filter_buttons: dict[str, QToolButton] = {}
@@ -135,6 +126,23 @@ class SuperViewerTaggedFileListPanel(FileListPanel):
         self._load_tag_config_if_changed()
         self._clear_tags_for_paths(_norm_paths(paths))
 
+    def _set_tag_config_directory(self, path: str | os.PathLike[str] | None) -> bool:
+        if self._static_tag_config_path:
+            scope_key = os.path.normcase(os.path.abspath(self._static_tag_config_path))
+            config_path = self._static_tag_config_path
+        else:
+            config_path_obj = find_superpicky_tag_config_path(path)
+            config_path = os.fspath(config_path_obj) if config_path_obj is not None else None
+            scope_dir = os.path.dirname(config_path) if config_path else ""
+            scope_key = os.path.normcase(os.path.abspath(scope_dir)) if scope_dir else ""
+        current_path = os.fspath(self._tag_config.path) if self._tag_config.path is not None else None
+        if scope_key == self._tag_config_scope_key and config_path == current_path:
+            return False
+        self._tag_config_scope_key = scope_key
+        self._tag_config = PhotoTagConfig(config_path)
+        self._tag_config_signature = None
+        return True
+
     def load_directory(
         self,
         path: str,
@@ -143,7 +151,8 @@ class SuperViewerTaggedFileListPanel(FileListPanel):
         preserve_meta_cache: bool = False,
         reuse_cached_listing: bool = False,
     ) -> None:
-        self._load_tag_config_if_changed()
+        tag_config_scope_changed = self._set_tag_config_directory(path)
+        self._load_tag_config_if_changed(force=tag_config_scope_changed)
         self._photo_tag_cache = {}
         super().load_directory(
             path,

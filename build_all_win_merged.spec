@@ -44,7 +44,6 @@ def collect_tree(source: Path, dest: str) -> list[tuple[str, str]]:
 # --------------------------------------------------------------------------- #
 superviewer_datas = [
     *collect_tree(SUPERVIEWER_ROOT / "super_viewer.cfg", "."),
-    *collect_tree(SUPERVIEWER_ROOT / "tags.cfg", "."),
     *collect_tree(SUPERVIEWER_ROOT / "icons", "icons"),
     *collect_tree(APP_COMMON_ROOT / "about_dialog" / "about.cfg", "app_common/about_dialog"),
     *collect_tree(APP_COMMON_ROOT / "about_dialog" / "images", "app_common/about_dialog/images"),
