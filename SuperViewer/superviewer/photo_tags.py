@@ -170,14 +170,14 @@ class PhotoTagSidecarStore:
                     if clean_tag in subject_set:
                         updated += 1
                         continue
-                    new_subjects = subjects + [clean_tag]
+                    if self._metadata.add_subjects(path, [clean_tag]):
+                        updated += 1
                 else:
                     if clean_tag not in subject_set:
                         updated += 1
                         continue
-                    new_subjects = [value for value in subjects if value != clean_tag]
-                if self._metadata.write_subjects(path, new_subjects):
-                    updated += 1
+                    if self._metadata.remove_subjects(path, [clean_tag]):
+                        updated += 1
         return updated
 
     def clear_tags_for_paths(
@@ -204,6 +204,10 @@ class PhotoTagSidecarStore:
                 if new_subjects == subjects:
                     updated += 1
                     continue
-                if self._metadata.write_subjects(path, new_subjects):
+                if remove_all:
+                    saved = self._metadata.write_subjects(path, [])
+                else:
+                    saved = self._metadata.remove_subjects(path, remove_tags)
+                if saved:
                     updated += 1
         return updated

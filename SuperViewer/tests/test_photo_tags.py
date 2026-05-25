@@ -4,6 +4,7 @@ import os
 from pathlib import Path
 
 from app_common.exif_io.photo_meta import PhotoMetaDataXMP
+from app_common.exif_io.xmp_sidecar_edits import edit_dir_for, sidecar_sha256, write_edit_file
 from app_common.exif_io.writer import read_batch_metadata
 from SuperViewer.superviewer.photo_tags import (
     PhotoTagConfig,
@@ -52,6 +53,31 @@ def test_xmp_subject_roundtrip_preserves_multiple_tags(tmp_path: Path) -> None:
     flat = metadata.read(str(photo_path))
     assert flat.get("XMP-dc:subject") == "打架; 捕食"
     assert flat.get("XMP-dc:Subject") == "打架; 捕食"
+
+
+def test_pending_sidecar_edits_merge_and_compact_on_read(tmp_path: Path) -> None:
+    photo_path = tmp_path / "img001.jpg"
+    photo_path.write_bytes(b"not an image")
+    metadata = PhotoMetaDataXMP()
+
+    assert metadata.write_subjects(str(photo_path), ["base"])
+    sidecar_path = tmp_path / "img001.xmp"
+    assert write_edit_file(
+        sidecar_path,
+        photo_path,
+        [{"field": "subject", "op": "add", "values": ["alpha"]}],
+        base_hash=sidecar_sha256(sidecar_path),
+    )
+    assert write_edit_file(
+        sidecar_path,
+        photo_path,
+        [{"field": "subject", "op": "add", "values": ["beta"]}],
+        base_hash=sidecar_sha256(sidecar_path),
+    )
+
+    assert metadata.read_subjects(str(photo_path)) == ["base", "alpha", "beta"]
+    assert not list(edit_dir_for(sidecar_path).glob("*.json"))
+    assert metadata.read(str(photo_path)).get("XMP-dc:subject") == "base; alpha; beta"
 
 
 def test_xmp_write_accepts_subject_field_alias(tmp_path: Path) -> None:
