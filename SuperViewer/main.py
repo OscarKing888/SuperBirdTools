@@ -15,7 +15,7 @@ import tempfile
 import time as _time
 from pathlib import Path
 
-from app_common import show_about_dialog, load_about_images, load_about_info, AppInfoBar
+from app_common import show_about_dialog, load_about_images, load_about_info
 from app_common.log import get_logger
 from app_common.exif_io import (
     PhotoMetaDataXMP,
@@ -200,7 +200,6 @@ class MainWindow(QMainWindow):
     def __init__(self, initial_received_files=None):
         super().__init__()
         info = load_about_info(_get_config_resource_path())
-        product_name = _get_product_display_name(info)
         self.setWindowTitle(_build_main_window_title(info))
         self.setMinimumSize(900, 600)
         self.resize(1500, 960)
@@ -238,16 +237,6 @@ class MainWindow(QMainWindow):
         left_widget = QWidget()
         left_layout = QVBoxLayout(left_widget)
         left_layout.setContentsMargins(0, 0, 0, 0)
-
-        app_info_path = _get_resource_path("icons/app_icon.png") or _get_app_icon_path()
-        app_info_widget = AppInfoBar(
-            self,
-            title=product_name,
-            subtitle="慧眼选鸟结果快速浏览筛选工具",
-            icon_path=app_info_path,
-            on_about_clicked=self._show_about_dialog,
-        )
-        #left_layout.addWidget(app_info_widget)
 
         self.file_label = QLabel("未选择图片")
         self.file_label.setStyleSheet("color: #aaa; font-size: 12px;")
