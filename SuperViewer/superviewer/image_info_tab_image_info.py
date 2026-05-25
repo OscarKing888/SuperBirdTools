@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Callable
 
 from app_common.log import get_logger
+from app_common.perf_probe import perf_log
 
 from .image_info_tab_base import ImageInfoTabPanel
 from .qt_compat import (
@@ -248,7 +249,8 @@ class ImageInfoTabPanel_ImageInfo(ImageInfoTabPanel):
         info = self._load_basic_info(path if has_file else "", metadata=metadata)
         self._set_basic_info(info)
         basic_ms = (_time.perf_counter() - basic_t0) * 1000.0
-        _log.info(
+        perf_log(
+            _log,
             "[PERF][image_switch][ImageInfoTabPanel_ImageInfo.refresh_ui] path=%r has_file=%s metadata_ms=%.1f fields_ms=%.1f preview_ms=%.1f tags_ms=%.1f basic_ms=%.1f total_ms=%.1f",
             path,
             has_file,
@@ -320,7 +322,8 @@ class ImageInfoTabPanel_ImageInfo(ImageInfoTabPanel):
         update_t0 = _time.perf_counter()
         self._update_preview_pixmap()
         update_ms = (_time.perf_counter() - update_t0) * 1000.0
-        _log.info(
+        perf_log(
+            _log,
             "[PERF][image_switch][ImageInfoTabPanel_ImageInfo._load_preview] path=%r ok=%s provider_hit=%s size=%s provider_ms=%.1f qpixmap_ms=%.1f update_ms=%.1f total_ms=%.1f",
             path,
             bool(self._preview_pixmap is not None and not self._preview_pixmap.isNull()),
@@ -337,7 +340,8 @@ class ImageInfoTabPanel_ImageInfo(ImageInfoTabPanel):
         if self._preview_pixmap is None or self._preview_pixmap.isNull():
             self.preview_label.setPixmap(QPixmap())
             self.preview_label.setText("未选择图片" if not self.current_photo_path() else "无法预览")
-            _log.info(
+            perf_log(
+                _log,
                 "[PERF][image_switch][ImageInfoTabPanel_ImageInfo._update_preview_pixmap] empty=True total_ms=%.1f",
                 (_time.perf_counter() - t0) * 1000.0,
             )
@@ -356,7 +360,8 @@ class ImageInfoTabPanel_ImageInfo(ImageInfoTabPanel):
         self.preview_label.setText("")
         self.preview_label.setPixmap(scaled)
         apply_ms = (_time.perf_counter() - apply_t0) * 1000.0
-        _log.info(
+        perf_log(
+            _log,
             "[PERF][image_switch][ImageInfoTabPanel_ImageInfo._update_preview_pixmap] empty=False target=%s scaled=%s scale_ms=%.1f apply_ms=%.1f total_ms=%.1f",
             (target_w, target_h),
             (scaled.width(), scaled.height()),

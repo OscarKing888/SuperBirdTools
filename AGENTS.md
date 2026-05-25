@@ -74,6 +74,28 @@ Follow `ai_rules/AI_CODING_RULES.md` as the project baseline.
   - SuperBirdStamp grid selector options visible + selected grid rendered only within crop bounds.
   - Overlay export path still includes active composition grids.
 
+## SuperViewer File Browser / Performance
+
+- SuperViewer image selection must keep the two-stage preview path in `SuperViewer/superviewer/preview_panel.py`: first show a small cached thumbnail on the preview canvas synchronously, then load the original image asynchronously and replace it only if the request token still matches the current image.
+- Do not reintroduce synchronous full-size image decoding on the UI thread for normal selection, keyboard fast preview, filter restore, or rating/tag metadata refresh. Large JPGs such as 8616x5760 files previously cost roughly 550-600 ms per selection when decoded synchronously.
+- `PreviewPanel.set_image()` should prefer existing `.superpicky/thumb_cache/<size>` thumbnails (`512`, `256`, then `128`) for the first-frame preview and fall back to a small generated thumbnail only when cache misses. Same-path `set_image()` calls should short-circuit instead of reloading.
+- Fast keyboard navigation should call the preview path with `load_full=False`; the full-size image should load only after the final committed selection. Background full-preview workers must use token/path checks before updating the canvas.
+- Overlay export paths (`render_source_pixmap_with_overlays()` / `save_source_pixmap_with_overlays()`) must still force or wait for the full-resolution image before exporting, so two-stage preview does not reduce export resolution.
+- Performance diagnostics are controlled by `app_common.perf_probe` and the SuperViewer `perf_probes_enabled` user option / `SuperViewer_PERF_PROBES` environment variable. Probe logging, old `[PERF]` image-switch logs, `[STAT][_meta_apply]`, and thumbnail `[THUMB_PROFILE]` diagnostics should stay off by default and must not add steady-state UI overhead when disabled.
+- `run.bat` sets `APP_COMMON_LOG_FILE` to `logs/SuperViewer.log` for reproducible local diagnosis. Keep this logging route usable when adjusting startup scripts.
+- Thumbnail profile logging (`SuperViewer_THUMB_PROFILE`) should default off. If it is enabled, keep logs scoped to diagnosis and avoid excessive per-item logging in hot paths.
+
+## SuperViewer `.superpicky` Data Layout
+
+- Treat the nearest `.superpicky` directory as the per-library state root. When switching to a directory under a different `.superpicky` root, reload `tags.cfg` from that root and replace the active tag set.
+- Persistent thumbnail files belong under `.superpicky/thumb_cache/<size>/` with size-specific directories such as `128`, `256`, and `512`. Do not silently move these caches back to `%LOCALAPPDATA%` except as an explicit fallback when no `.superpicky` root exists.
+- Sidecar collaborative edit journals belong under `.superpicky/sidecar_edits/` using collision-resistant hashed path names. Do not write `*.superpicky-edits` directories beside image/XMP source files; legacy sibling edit directories may be read/migrated/cleaned for compatibility.
+- Deleting files through `move_to_trash` should default to `.superpicky/deleted/`, preserving the original path relative to the `.superpicky` root. Related sidecar files such as `.xmp` must move with the image into the matching deleted path.
+- File reveal/open actions must use the real selected image path, especially for mapped network drives and UNC-backed libraries. Avoid deriving reveal paths from stale report/cache paths when an existing local/mapped file path is available.
+- On Windows, `reveal_in_file_manager()` must keep Explorer file selection formatted as `explorer.exe /select,"<path>"`. Do not change it back to `subprocess.Popen(["explorer.exe", f"/select,{path}"])`; Explorer can misparse that form when the filename/path contains spaces and open the wrong location.
+- Metadata reads must continue to load sidecar `dc:description` / comment fields correctly. Metadata writes containing non-ASCII text should preserve the existing UTF-8 temp-file redirection rule from the mandatory constraints.
+- The file-name filter currently means file name plus comment. Keep filtering over both filename and sidecar/comment metadata, and preserve the recursive scope switch when any filter requires looking beyond the current shallow directory listing.
+
 ## New Feature: GUI Options
 - Keep new GUI options feature reading from `SuperBirdStamp/config/editor_options.json` via `birdstamp.config.resolve_bundled_path("config", "editor_options.json")`.
 

@@ -17,6 +17,7 @@ from pathlib import Path
 
 from app_common import show_about_dialog, load_about_images, load_about_info
 from app_common.log import get_logger
+from app_common.perf_probe import elapsed_ms, perf_counter, perf_log
 from app_common.exif_io import (
     PhotoMetaDataXMP,
     find_xmp_sidecar,
@@ -44,6 +45,7 @@ from app_common.superviewer_user_options import (
     USER_OPTIONS_FILENAME,
     PERSISTENT_THUMB_SIZE_LEVELS,
     KEY_NAVIGATION_FPS_OPTIONS,
+    KEY_PERF_PROBES_ENABLED,
     get_user_options_path,
     get_runtime_user_options,
     get_keep_view_on_switch,
@@ -357,33 +359,52 @@ class MainWindow(QMainWindow):
     def _on_file_selected_from_list(self, path: str):
         """文件列表中选中图像文件，触发预览和元信息刷新（等同于拖放）。"""
         t0 = _time.perf_counter()
-        _log.info("[PERF][image_switch][main] START source=%r", path)
+        probe_t0 = perf_counter()
+        perf_log(_log, "[PERF][image_switch][main] START source=%r", path)
         preview_t0 = _time.perf_counter()
         self.preview_panel.set_image(path)
         preview_ms = (_time.perf_counter() - preview_t0) * 1000.0
         info_t0 = _time.perf_counter()
         self.on_image_loaded(path)
         info_ms = (_time.perf_counter() - info_t0) * 1000.0
-        _log.info(
+        perf_log(
+            _log,
             "[PERF][image_switch][main] END source=%r preview_ms=%.1f info_ms=%.1f total_ms=%.1f",
             path,
             preview_ms,
             info_ms,
             (_time.perf_counter() - t0) * 1000.0,
         )
+        perf_log(
+            _log,
+            "[image.switch.main] source=%r preview_ms=%.1f info_ms=%.1f total_ms=%.1f",
+            path,
+            preview_ms,
+            info_ms,
+            elapsed_ms(probe_t0),
+        )
 
     def _on_file_fast_preview_requested(self, path: str):
         """连续方向键长按时直接预览原始文件，不再切到 report 派生预览图。"""
         t0 = _time.perf_counter()
-        _log.info("[PERF][fast_preview][main] START source=%r", path)
+        probe_t0 = perf_counter()
+        perf_log(_log, "[PERF][fast_preview][main] START source=%r", path)
         preview_t0 = _time.perf_counter()
-        self.preview_panel.set_image(path)
+        self.preview_panel.set_image(path, load_full=False)
         preview_ms = (_time.perf_counter() - preview_t0) * 1000.0
-        _log.info(
+        perf_log(
+            _log,
             "[PERF][fast_preview][main] END source=%r preview_ms=%.1f total_ms=%.1f",
             path,
             preview_ms,
             (_time.perf_counter() - t0) * 1000.0,
+        )
+        perf_log(
+            _log,
+            "[image.fast_preview] source=%r preview_ms=%.1f total_ms=%.1f",
+            path,
+            preview_ms,
+            elapsed_ms(probe_t0),
         )
 
     def _init_menu_bar(self):
@@ -405,6 +426,13 @@ class MainWindow(QMainWindow):
         user_options_act = QAction("用户选项...", self)
         user_options_act.triggered.connect(self._open_user_options_dialog)
         settings_menu.addAction(user_options_act)
+        perf_probe_act = QAction("性能探针日志", self)
+        perf_probe_act.setCheckable(True)
+        perf_probe_act.setChecked(bool(get_runtime_user_options().get(KEY_PERF_PROBES_ENABLED, 0)))
+        perf_probe_act.setToolTip("开启后在日志中记录图片切换、过滤、标星、标签写入等关键路径耗时。")
+        perf_probe_act.triggered.connect(self._set_perf_probes_enabled)
+        self._perf_probe_action = perf_probe_act
+        settings_menu.addAction(perf_probe_act)
 
         help_menu = self.menuBar().addMenu("帮助")
         about_action = QAction("关于...", self)
@@ -437,6 +465,7 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "保存失败", f"无法写入用户选项：\n{exc}")
             return
         apply_runtime_user_options(normalized)
+        self._sync_perf_probe_action()
         self._file_list.apply_user_options()
         self.preview_panel.set_keep_view_on_switch(
             bool(normalized.get("keep_view_on_switch", 1))
@@ -446,6 +475,30 @@ class MainWindow(QMainWindow):
             "已保存",
             f"用户选项已保存到：\n{get_user_options_path()}",
         )
+
+    def _sync_perf_probe_action(self) -> None:
+        action = getattr(self, "_perf_probe_action", None)
+        if action is None:
+            return
+        try:
+            action.blockSignals(True)
+            action.setChecked(bool(get_runtime_user_options().get(KEY_PERF_PROBES_ENABLED, 0)))
+        finally:
+            action.blockSignals(False)
+
+    def _set_perf_probes_enabled(self, checked: bool) -> None:
+        options = get_runtime_user_options()
+        options[KEY_PERF_PROBES_ENABLED] = int(bool(checked))
+        try:
+            normalized = save_user_options(options)
+        except Exception as exc:
+            QMessageBox.warning(self, "保存失败", f"无法写入性能探针选项：\n{exc}")
+            self._sync_perf_probe_action()
+            return
+        apply_runtime_user_options(normalized)
+        self._sync_perf_probe_action()
+        self._file_list.apply_user_options()
+        _log.info("[PERF_PROBE] enabled=%s config=%r", bool(normalized.get(KEY_PERF_PROBES_ENABLED, 0)), get_user_options_path())
 
     def _on_received_file_list(self, paths: list) -> None:
         """由单例 IPC 或启动时传入的文件列表回调（在主线程执行）。"""
@@ -619,7 +672,8 @@ class MainWindow(QMainWindow):
     def on_image_loaded(self, path: str):
         """图片被拖入或选择后调用。"""
         t0 = _time.perf_counter()
-        _log.info("[PERF][image_switch][info] START path=%r", path)
+        probe_t0 = perf_counter()
+        perf_log(_log, "[PERF][image_switch][info] START path=%r", path)
         self._current_exif_path = path
         label_t0 = _time.perf_counter()
         self.file_label.setText(path)
@@ -628,17 +682,30 @@ class MainWindow(QMainWindow):
         tabs_t0 = _time.perf_counter()
         self.image_info_tabs.on_photo_selected(path)
         tabs_ms = (_time.perf_counter() - tabs_t0) * 1000.0
-        _log.info(
+        perf_log(
+            _log,
             "[PERF][image_switch][info] END path=%r label_ms=%.1f tabs_ms=%.1f total_ms=%.1f",
             path,
             label_ms,
             tabs_ms,
             (_time.perf_counter() - t0) * 1000.0,
         )
+        perf_log(
+            _log,
+            "[image.info] path=%r label_ms=%.1f tabs_ms=%.1f total_ms=%.1f",
+            path,
+            label_ms,
+            tabs_ms,
+            elapsed_ms(probe_t0),
+        )
 
     def closeEvent(self, event) -> None:  # type: ignore[override]
         try:
             self._file_list.close_tag_store()
+        except Exception:
+            pass
+        try:
+            self.preview_panel.shutdown()
         except Exception:
             pass
         super().closeEvent(event)

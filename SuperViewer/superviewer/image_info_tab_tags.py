@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Callable
 
 from app_common.log import get_logger
+from app_common.perf_probe import perf_log
 
 from .image_info_tab_base import ImageInfoTabPanel
 from .qt_compat import (
@@ -126,7 +127,8 @@ class ImageInfoTabPanel_Tags(ImageInfoTabPanel):
         else:
             self.empty_label.hide()
         empty_ms = (_time.perf_counter() - empty_t0) * 1000.0
-        _log.info(
+        perf_log(
+            _log,
             "[PERF][image_switch][ImageInfoTabPanel_Tags.refresh_ui] path=%r has_file=%s available=%s checked=%s available_ms=%.1f rebuild_ms=%.1f current_tags_ms=%.1f checkbox_ms=%.1f empty_ms=%.1f total_ms=%.1f",
             path,
             has_file,
@@ -170,7 +172,8 @@ class ImageInfoTabPanel_Tags(ImageInfoTabPanel):
             self._tag_checks[tag] = check
             self.tag_layout.addWidget(check)
         self.tag_layout.addStretch(1)
-        _log.info(
+        perf_log(
+            _log,
             "[PERF][image_switch][ImageInfoTabPanel_Tags._rebuild_tag_checkboxes] available=%s total_ms=%.1f",
             len(self._available_tags),
             (_time.perf_counter() - t0) * 1000.0,

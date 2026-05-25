@@ -7,6 +7,7 @@ from typing import Iterable
 
 from app_common.file_browser import FileListPanel
 from app_common.file_browser._browser_core import _thumb_disk_cache_path
+from app_common.perf_probe import elapsed_ms, perf_counter, perf_log
 from app_common.log import get_logger
 from app_common.exif_io import PhotoMetaDataXMP
 
@@ -228,8 +229,10 @@ class SuperViewerTaggedFileListPanel(FileListPanel):
             fields["XMP-xmpDM:pick"] = max(-1, min(1, int(pick)))
         if not fields:
             return []
+        probe_t0 = perf_counter()
         updated_paths: list[str] = []
         xmp = PhotoMetaDataXMP()
+        write_count = 0
         for path in self._unique_norm_paths(paths):
             if not path:
                 continue
@@ -241,8 +244,19 @@ class SuperViewerTaggedFileListPanel(FileListPanel):
             if not ok:
                 _log.warning("[_apply_rating_state_via_sidecar] source=%r write returned False", path)
                 continue
+            write_count += 1
             self._apply_rating_state_to_meta_cache(path, rating=rating, pick=pick)
             updated_paths.append(path)
+        perf_log(
+            _log,
+            "[rating.sidecar] selected=%s writes=%s updated=%s rating=%r pick=%r total_ms=%.1f",
+            len(paths),
+            write_count,
+            len(updated_paths),
+            rating,
+            pick,
+            elapsed_ms(probe_t0),
+        )
         return updated_paths
 
     def _has_any_filter(self) -> bool:
@@ -500,23 +514,65 @@ class SuperViewerTaggedFileListPanel(FileListPanel):
         act_clear.triggered.connect(lambda checked=False, p=list(norm_paths): self._clear_tags_for_paths(p))
 
     def _set_tag_for_paths(self, paths: list[str], tag: str, enabled: bool) -> None:
+        probe_t0 = perf_counter()
         try:
+            write_t0 = perf_counter()
             self._photo_tag_store.set_tag_for_paths(paths, tag, enabled, allowed_tags=self._available_tags)
+            write_ms = elapsed_ms(write_t0)
         except Exception as exc:
             _log.warning("[_set_tag_for_paths] failed tag=%r enabled=%s paths=%s: %s", tag, enabled, len(paths), exc)
             return
+        cache_t0 = perf_counter()
         self._update_photo_tag_cache_for_paths(paths)
+        cache_ms = elapsed_ms(cache_t0)
+        refresh_t0 = perf_counter()
         self._refresh_metadata_state_for_paths(paths)
+        refresh_ms = elapsed_ms(refresh_t0)
+        filter_ms = 0.0
         if self._active_tag_filters:
+            filter_t0 = perf_counter()
             self._apply_filter()
+            filter_ms = elapsed_ms(filter_t0)
+        perf_log(
+            _log,
+            "[tag.write] action=set enabled=%s tag=%r paths=%s write_ms=%.1f cache_ms=%.1f refresh_ms=%.1f filter_ms=%.1f total_ms=%.1f",
+            enabled,
+            tag,
+            len(paths),
+            write_ms,
+            cache_ms,
+            refresh_ms,
+            filter_ms,
+            elapsed_ms(probe_t0),
+        )
 
     def _clear_tags_for_paths(self, paths: list[str]) -> None:
+        probe_t0 = perf_counter()
         try:
+            write_t0 = perf_counter()
             self._photo_tag_store.clear_tags_for_paths(paths, allowed_tags=self._available_tags)
+            write_ms = elapsed_ms(write_t0)
         except Exception as exc:
             _log.warning("[_clear_tags_for_paths] failed paths=%s: %s", len(paths), exc)
             return
+        cache_t0 = perf_counter()
         self._update_photo_tag_cache_for_paths(paths)
+        cache_ms = elapsed_ms(cache_t0)
+        refresh_t0 = perf_counter()
         self._refresh_metadata_state_for_paths(paths)
+        refresh_ms = elapsed_ms(refresh_t0)
+        filter_ms = 0.0
         if self._active_tag_filters:
+            filter_t0 = perf_counter()
             self._apply_filter()
+            filter_ms = elapsed_ms(filter_t0)
+        perf_log(
+            _log,
+            "[tag.write] action=clear paths=%s write_ms=%.1f cache_ms=%.1f refresh_ms=%.1f filter_ms=%.1f total_ms=%.1f",
+            len(paths),
+            write_ms,
+            cache_ms,
+            refresh_ms,
+            filter_ms,
+            elapsed_ms(probe_t0),
+        )

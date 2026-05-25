@@ -7,6 +7,7 @@ import os
 
 from app_common.superviewer_user_options import (
     KEY_NAVIGATION_FPS_OPTIONS,
+    KEY_PERF_PROBES_ENABLED,
     PERSISTENT_THUMB_SIZE_LEVELS,
     USER_OPTIONS_FILENAME,
     get_runtime_user_options,
@@ -102,6 +103,14 @@ class SuperViewerUserOptionsDialog(QDialog):
         grid.addWidget(self._chk_keep_view, row, 1)
         grid.addWidget(QLabel("默认开启"), row, 2)
 
+        row += 1
+        grid.addWidget(QLabel("性能探针日志"), row, 0)
+        self._chk_perf_probes = QCheckBox(self)
+        self._chk_perf_probes.setChecked(bool(opts.get(KEY_PERF_PROBES_ENABLED, 0)))
+        self._chk_perf_probes.setToolTip("开启后在日志中记录图片切换、过滤、标星、标签写入等关键路径耗时。")
+        grid.addWidget(self._chk_perf_probes, row, 1)
+        grid.addWidget(QLabel("默认关闭"), row, 2)
+
         layout.addLayout(grid)
 
         note = QLabel("缩略视图会根据当前缩略图大小自动匹配最合适的一档预览图。")
@@ -128,4 +137,5 @@ class SuperViewerUserOptionsDialog(QDialog):
             "persistent_thumb_max_size": int(self._combo_persistent_thumb_size.currentData()),
             "key_navigation_fps": int(self._combo_key_navigation_fps.currentData()),
             "keep_view_on_switch": int(self._chk_keep_view.isChecked()),
+            KEY_PERF_PROBES_ENABLED: int(self._chk_perf_probes.isChecked()),
         }
