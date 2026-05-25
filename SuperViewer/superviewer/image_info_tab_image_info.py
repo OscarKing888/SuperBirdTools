@@ -103,6 +103,7 @@ def _metadata_text_value(value) -> str:
 
 def _metadata_comment(metadata: dict) -> str:
     for key in (
+        "comment",
         "Description",
         "XMP-dc:Description",
         "XMP-dc:description",

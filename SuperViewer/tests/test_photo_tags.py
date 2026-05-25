@@ -4,7 +4,12 @@ import os
 from pathlib import Path
 
 from app_common.exif_io.photo_meta import PhotoMetaDataXMP
-from app_common.exif_io.xmp_sidecar_edits import edit_dir_for, sidecar_sha256, write_edit_file
+from app_common.exif_io.xmp_sidecar_edits import (
+    edit_dir_for,
+    legacy_edit_dir_for,
+    sidecar_sha256,
+    write_edit_file,
+)
 from app_common.exif_io.writer import read_batch_metadata
 from SuperViewer.superviewer.photo_tags import (
     PhotoTagConfig,
@@ -78,6 +83,36 @@ def test_pending_sidecar_edits_merge_and_compact_on_read(tmp_path: Path) -> None
     assert metadata.read_subjects(str(photo_path)) == ["base", "alpha", "beta"]
     assert not list(edit_dir_for(sidecar_path).glob("*.json"))
     assert metadata.read(str(photo_path)).get("XMP-dc:subject") == "base; alpha; beta"
+
+
+def test_sidecar_edit_dir_lives_under_superpicky_and_disambiguates_same_names(tmp_path: Path) -> None:
+    root = tmp_path / "library"
+    superpicky = root / ".superpicky"
+    first_dir = root / "day1"
+    second_dir = root / "day2"
+    first_dir.mkdir(parents=True)
+    second_dir.mkdir(parents=True)
+    superpicky.mkdir()
+    first_sidecar = first_dir / "DSC06705.xmp"
+    second_sidecar = second_dir / "DSC06705.xmp"
+
+    first_edit_dir = edit_dir_for(first_sidecar)
+    second_edit_dir = edit_dir_for(second_sidecar)
+
+    assert os.path.commonpath([str(superpicky), str(first_edit_dir)]) == str(superpicky)
+    assert os.path.commonpath([str(superpicky), str(second_edit_dir)]) == str(superpicky)
+    assert first_edit_dir.parts[-3] == "sidecar_edits"
+    assert second_edit_dir.parts[-3] == "sidecar_edits"
+    assert first_edit_dir != second_edit_dir
+    assert legacy_edit_dir_for(first_sidecar) == first_dir / "DSC06705.xmp.superpicky-edits"
+
+    assert write_edit_file(
+        first_sidecar,
+        first_dir / "DSC06705.jpg",
+        [{"field": "subject", "op": "add", "values": ["alpha"]}],
+    )
+    assert list(first_edit_dir.glob("*.json"))
+    assert not legacy_edit_dir_for(first_sidecar).exists()
 
 
 def test_xmp_write_accepts_subject_field_alias(tmp_path: Path) -> None:
