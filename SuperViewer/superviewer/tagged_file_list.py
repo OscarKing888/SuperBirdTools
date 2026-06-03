@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import threading
 from typing import Iterable
 
 from app_common.file_browser import FileListPanel
@@ -12,7 +13,7 @@ from app_common.log import get_logger
 from app_common.exif_io import PhotoMetaDataXMP
 
 from .photo_tags import PhotoTagConfig, PhotoTagSidecarStore, find_superpicky_tag_config_path
-from .qt_compat import QHBoxLayout, QLabel, QMenu, QToolButton
+from .qt_compat import QHBoxLayout, QLabel, QMenu, QThread, QTimer, QToolButton, pyqtSignal
 from .tag_menu import add_filterable_tag_actions
 
 
@@ -38,6 +39,8 @@ _TAG_FILTER_CLEAR_BUTTON_STYLE = (
     "QToolButton:hover { background: rgba(180, 80, 80, 52); color: #ffffff; }"
 )
 _TAG_FILTER_INLINE_LIMIT = 8
+_PHOTO_TAG_CACHE_BATCH_SIZE = 256
+_PHOTO_TAG_FILTER_REFRESH_MS = 750
 
 
 def _exec_menu(menu: QMenu, pos) -> None:
@@ -73,6 +76,79 @@ def _norm_paths(paths: Iterable[str]) -> list[str]:
     return out
 
 
+class PhotoTagCacheWorker(QThread):
+    """Load configured photo tags in small batches off the UI thread."""
+
+    batch_ready = pyqtSignal(object)
+    progress_updated = pyqtSignal(int, int)
+    finished_summary = pyqtSignal(int, int)
+
+    def __init__(
+        self,
+        paths: Iterable[str],
+        *,
+        allowed_tags: Iterable[str],
+        batch_size: int = _PHOTO_TAG_CACHE_BATCH_SIZE,
+    ) -> None:
+        super().__init__()
+        self._paths = paths if isinstance(paths, list) else list(paths or [])
+        self._allowed_tags = list(allowed_tags or [])
+        self._batch_size = max(1, int(batch_size or _PHOTO_TAG_CACHE_BATCH_SIZE))
+        self._stop_event = threading.Event()
+
+    def stop(self) -> None:
+        self._stop_event.set()
+        self.requestInterruption()
+
+    def _stopped(self) -> bool:
+        return self._stop_event.is_set() or self.isInterruptionRequested()
+
+    def run(self) -> None:
+        paths = _norm_paths(self._paths)
+        total = len(paths)
+        processed = 0
+        if total <= 0 or self._stopped():
+            self.finished_summary.emit(0, total)
+            return
+
+        store = PhotoTagSidecarStore()
+        started_at = perf_counter()
+        try:
+            self.progress_updated.emit(0, total)
+            for start in range(0, total, self._batch_size):
+                if self._stopped():
+                    break
+                batch_paths = paths[start : start + self._batch_size]
+                try:
+                    fresh = store.load_tags_for_paths(batch_paths, allowed_tags=self._allowed_tags)
+                except Exception as exc:
+                    _log.warning(
+                        "[PhotoTagCacheWorker.run] batch failed start=%s size=%s: %s",
+                        start,
+                        len(batch_paths),
+                        exc,
+                    )
+                    fresh = {}
+                payload = {path: set(fresh.get(path, set())) for path in batch_paths}
+                processed += len(batch_paths)
+                if not self._stopped():
+                    self.batch_ready.emit(payload)
+                    self.progress_updated.emit(min(processed, total), total)
+        finally:
+            try:
+                store.close()
+            except Exception:
+                pass
+            _log.info(
+                "[PhotoTagCacheWorker.run] END processed=%s total=%s elapsed_ms=%.1f stopped=%s",
+                processed,
+                total,
+                elapsed_ms(started_at),
+                self._stopped(),
+            )
+            self.finished_summary.emit(processed, total)
+
+
 class SuperViewerTaggedFileListPanel(FileListPanel):
     """FileListPanel extension that adds configured custom tags."""
 
@@ -97,13 +173,23 @@ class SuperViewerTaggedFileListPanel(FileListPanel):
         self._tag_filter_clear_button: QToolButton | None = None
         self._photo_tag_store = tag_store or PhotoTagSidecarStore()
         self._photo_tag_cache: dict[str, set[str]] = {}
+        self._photo_tag_loader: PhotoTagCacheWorker | None = None
+        self._photo_tag_cache_complete = False
+        self._photo_tag_cache_done = 0
+        self._photo_tag_cache_total = 0
+        self._photo_tag_filter_refresh_timer: QTimer | None = None
         self._tag_filter_bar: QHBoxLayout | None = None
         super().__init__(parent)
         self._load_tag_config_if_changed(force=True)
         self._install_tag_filter_bar()
 
     def close_tag_store(self) -> None:
+        self._stop_photo_tag_cache_loader()
         self._photo_tag_store.close()
+
+    def _stop_all_loaders(self) -> None:
+        self._stop_photo_tag_cache_loader()
+        super()._stop_all_loaders()
 
     def available_photo_tags(self) -> list[str]:
         """Return the current configured SuperViewer tag vocabulary."""
@@ -155,6 +241,10 @@ class SuperViewerTaggedFileListPanel(FileListPanel):
         tag_config_scope_changed = self._set_tag_config_directory(path)
         self._load_tag_config_if_changed(force=tag_config_scope_changed)
         self._photo_tag_cache = {}
+        self._photo_tag_cache_complete = False
+        self._photo_tag_cache_done = 0
+        self._photo_tag_cache_total = 0
+        self._stop_photo_tag_cache_loader()
         super().load_directory(
             path,
             force_reload=force_reload,
@@ -173,7 +263,8 @@ class SuperViewerTaggedFileListPanel(FileListPanel):
         report_row_by_path: dict | None = None,
         from_cache: bool = False,
     ) -> None:
-        self._refresh_photo_tag_cache(files)
+        apply_t0 = perf_counter()
+        self._probe_log("photo_tag_cache.deferred", files=len(files), active_filters=bool(self._active_tag_filters))
         super()._apply_directory_listing_result(
             path,
             files,
@@ -183,6 +274,8 @@ class SuperViewerTaggedFileListPanel(FileListPanel):
             report_row_by_path={},
             from_cache=from_cache,
         )
+        self._start_photo_tag_cache_loader_if_needed(files, reason="directory_listing")
+        self._probe_log("photo_tag_cache.after_listing", files=len(files), elapsed_ms=elapsed_ms(apply_t0))
 
     def resolve_preview_path(self, path: str, prefer_fast_preview: bool = False) -> str:
         """SuperViewer 正常预览原图；方向键 fast preview 优先使用当前缩略图尺寸缓存。"""
@@ -267,8 +360,16 @@ class SuperViewerTaggedFileListPanel(FileListPanel):
             return False
         if not self._active_tag_filters:
             return True
-        tags = self._photo_tag_cache.get(os.path.normpath(path), set())
+        norm = os.path.normpath(path)
+        tags = self._photo_tag_cache.get(norm)
+        if tags is None:
+            tags = self._photo_tags_from_meta_cache(norm)
         return bool(self._active_tag_filters.intersection(tags))
+
+    def _refresh_filter_scope(self) -> None:
+        if self._active_tag_filters:
+            self._start_photo_tag_cache_loader_if_needed(self._all_files, reason="tag_filter")
+        super()._refresh_filter_scope()
 
     def _add_species_menu_actions(self, menu, primary_path: str | None, paths: list[str]) -> None:
         # SuperViewer 已切到原始目录 + sidecar 模式，不再暴露 report.db 鸟种菜单。
@@ -417,10 +518,175 @@ class SuperViewerTaggedFileListPanel(FileListPanel):
         new_tags = self._tag_config.load()
         if new_tags == self._available_tags and not force:
             return False
+        if new_tags != self._available_tags:
+            self._stop_photo_tag_cache_loader()
+            self._photo_tag_cache = {}
+            self._photo_tag_cache_complete = False
+            self._photo_tag_cache_done = 0
+            self._photo_tag_cache_total = 0
         self._available_tags = new_tags
         self._active_tag_filters.intersection_update(new_tags)
         self._rebuild_tag_filter_bar()
         return True
+
+    def _ensure_photo_tag_filter_refresh_timer(self) -> None:
+        if self._photo_tag_filter_refresh_timer is not None:
+            return
+        timer = QTimer(self)
+        timer.setSingleShot(True)
+        timer.timeout.connect(self._flush_photo_tag_filter_refresh)
+        self._photo_tag_filter_refresh_timer = timer
+
+    def _stop_photo_tag_cache_loader(self) -> None:
+        timer = self._photo_tag_filter_refresh_timer
+        if timer is not None and timer.isActive():
+            timer.stop()
+        worker = self._photo_tag_loader
+        self._photo_tag_loader = None
+        if worker is None:
+            return
+        try:
+            worker.stop()
+        except Exception:
+            pass
+        try:
+            if worker.isRunning():
+                if worker not in self._pending_loaders:
+                    self._pending_loaders.append(worker)
+                worker.finished.connect(
+                    lambda ldr=worker: (
+                        self._pending_loaders.remove(ldr)
+                        if ldr in self._pending_loaders else None
+                    )
+                )
+            else:
+                worker.deleteLater()
+        except Exception:
+            pass
+
+    def _photo_tags_from_meta_cache(self, path: str) -> set[str]:
+        norm = os.path.normpath(path) if path else ""
+        meta = self._meta_cache.get(norm)
+        if not isinstance(meta, dict):
+            return set()
+        values: list[str] = []
+        raw = meta.get("tags")
+        if isinstance(raw, (list, tuple, set)):
+            values.extend(str(tag or "").strip() for tag in raw)
+        elif raw:
+            values.extend(part.strip() for part in str(raw).replace(";", ",").split(","))
+        return {tag for tag in values if tag}
+
+    def _seed_photo_tag_cache_from_meta(self, paths: Iterable[str]) -> int:
+        allowed = set(self._available_tags)
+        if not allowed:
+            return 0
+        seeded = 0
+        for path in _norm_paths(paths):
+            if path in self._photo_tag_cache:
+                continue
+            tags = self._photo_tags_from_meta_cache(path).intersection(allowed)
+            if not tags:
+                continue
+            self._photo_tag_cache[path] = tags
+            seeded += 1
+        return seeded
+
+    def _start_photo_tag_cache_loader_if_needed(self, paths: Iterable[str], *, reason: str) -> None:
+        if not self._active_tag_filters or not self._available_tags:
+            return
+        if self._photo_tag_cache_complete:
+            return
+        worker = self._photo_tag_loader
+        if worker is not None and worker.isRunning():
+            return
+        path_list = paths if isinstance(paths, list) else list(paths or [])
+        if not path_list:
+            return
+        seeded = self._seed_photo_tag_cache_from_meta(path_list)
+        self._photo_tag_cache_done = 0
+        self._photo_tag_cache_total = len(path_list)
+        self._show_meta_progress_status("正在读取照片标签", value=0, total=len(path_list))
+        self._probe_log("photo_tag_cache.start", files=len(path_list), seeded=seeded, reason=reason)
+
+        worker = PhotoTagCacheWorker(path_list, allowed_tags=self._available_tags)
+        self._photo_tag_loader = worker
+        worker.batch_ready.connect(
+            lambda batch, ldr=worker: self._on_photo_tag_cache_batch_ready(ldr, batch)
+        )
+        worker.progress_updated.connect(
+            lambda done, total, ldr=worker: self._on_photo_tag_cache_progress(ldr, done, total)
+        )
+        worker.finished_summary.connect(
+            lambda done, total, ldr=worker: self._on_photo_tag_cache_finished(ldr, done, total)
+        )
+        worker.finished.connect(lambda ldr=worker: ldr.deleteLater())
+        worker.start()
+
+    def _on_photo_tag_cache_batch_ready(self, worker: PhotoTagCacheWorker, batch: dict[str, set[str]]) -> None:
+        if worker is not self._photo_tag_loader or not batch:
+            return
+        for path, tags in batch.items():
+            self._photo_tag_cache[os.path.normpath(path)] = set(tags or set())
+        self._sync_photo_tags_to_meta_cache(batch.keys())
+        self._schedule_photo_tag_filter_refresh()
+
+    def _on_photo_tag_cache_progress(self, worker: PhotoTagCacheWorker, done: int, total: int) -> None:
+        if worker is not self._photo_tag_loader:
+            return
+        self._photo_tag_cache_done = max(0, int(done or 0))
+        self._photo_tag_cache_total = max(0, int(total or 0))
+        self._show_meta_progress_status(
+            "正在读取照片标签",
+            value=self._photo_tag_cache_done,
+            total=self._photo_tag_cache_total,
+        )
+        self._probe_log(
+            "photo_tag_cache.progress",
+            done=self._photo_tag_cache_done,
+            total=self._photo_tag_cache_total,
+        )
+
+    def _schedule_photo_tag_filter_refresh(self) -> None:
+        if not self._active_tag_filters:
+            return
+        self._ensure_photo_tag_filter_refresh_timer()
+        timer = self._photo_tag_filter_refresh_timer
+        if timer is None or timer.isActive():
+            return
+        timer.start(_PHOTO_TAG_FILTER_REFRESH_MS)
+
+    def _flush_photo_tag_filter_refresh(self) -> None:
+        if not self._active_tag_filters:
+            return
+        self._probe_log("photo_tag_cache.filter_refresh", cached=len(self._photo_tag_cache))
+        self._apply_filter()
+
+    def _on_photo_tag_cache_finished(self, worker: PhotoTagCacheWorker, done: int, total: int) -> None:
+        if worker is not self._photo_tag_loader:
+            return
+        self._photo_tag_loader = None
+        self._photo_tag_cache_done = max(0, int(done or 0))
+        self._photo_tag_cache_total = max(0, int(total or 0))
+        self._photo_tag_cache_complete = self._photo_tag_cache_total > 0 and self._photo_tag_cache_done >= self._photo_tag_cache_total
+        timer = self._photo_tag_filter_refresh_timer
+        if timer is not None and timer.isActive():
+            timer.stop()
+        if self._active_tag_filters:
+            self._apply_filter()
+        if self._photo_tag_cache_total:
+            self._show_meta_progress_status(
+                "照片标签读取完成",
+                value=self._photo_tag_cache_total,
+                total=self._photo_tag_cache_total,
+            )
+            QTimer.singleShot(400, self._meta_progress.hide)
+        self._probe_log(
+            "photo_tag_cache.done",
+            done=self._photo_tag_cache_done,
+            total=self._photo_tag_cache_total,
+            complete=bool(self._photo_tag_cache_complete),
+        )
 
     def _refresh_photo_tag_cache(self, paths: Iterable[str]) -> None:
         norm_paths = _norm_paths(paths)

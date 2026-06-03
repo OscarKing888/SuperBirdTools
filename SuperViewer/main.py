@@ -242,6 +242,11 @@ class MainWindow(QMainWindow):
         self._file_list.setMinimumWidth(520)
         splitter.addWidget(self._file_list)
 
+        self._pending_dir_browser_sync_file_path = ""
+        self._dir_browser_sync_timer = QTimer(self)
+        self._dir_browser_sync_timer.setSingleShot(True)
+        self._dir_browser_sync_timer.timeout.connect(self._sync_directory_browser_to_pending_file)
+
         # 连接目录选择 → 文件列表加载
         self._dir_browser.directory_selected.connect(self._on_directory_selected)
         # 连接文件列表选中 → 预览 + 元信息刷新
@@ -369,11 +374,32 @@ class MainWindow(QMainWindow):
         except Exception:
             pass
 
+    def _sync_directory_browser_to_file_selection(self, path: str) -> None:
+        display_path = self._file_list.get_selected_display_path()
+        target_path = display_path or path
+        if not target_path:
+            return
+        self._pending_dir_browser_sync_file_path = os.path.normpath(str(target_path))
+        if self._dir_browser_sync_timer.isActive():
+            self._dir_browser_sync_timer.stop()
+        self._dir_browser_sync_timer.start(0)
+
+    def _sync_directory_browser_to_pending_file(self) -> None:
+        target_path = self._pending_dir_browser_sync_file_path
+        self._pending_dir_browser_sync_file_path = ""
+        if not target_path:
+            return
+        try:
+            self._dir_browser.select_file_parent_directory(target_path, emit_signal=False)
+        except Exception as exc:
+            _log.debug("[dir_browser.sync] failed path=%r: %s", target_path, exc)
+
     def _on_file_selected_from_list(self, path: str):
         """文件列表中选中图像文件，触发预览和元信息刷新（等同于拖放）。"""
         t0 = _time.perf_counter()
         probe_t0 = perf_counter()
         perf_log(_log, "[PERF][image_switch][main] START source=%r", path)
+        self._sync_directory_browser_to_file_selection(path)
         preview_t0 = _time.perf_counter()
         self.preview_panel.set_image(path)
         preview_ms = (_time.perf_counter() - preview_t0) * 1000.0
