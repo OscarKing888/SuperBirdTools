@@ -7,8 +7,11 @@ import time as _time
 import os
 from pathlib import Path
 
+from PIL import Image, ImageOps
+
 from app_common import thumb_stream
 from app_common.file_browser._browser_core import _load_thumbnail_image, _read_thumb_from_disk_cache
+from app_common.image_formats import HEIF_EXTENSIONS, RAW_EXTENSIONS
 from app_common.log import get_logger
 from app_common.perf_probe import perf_log
 from app_common.preview_canvas import (
@@ -21,6 +24,7 @@ from app_common.preview_canvas import (
 from app_common.superviewer_user_options import get_keep_view_on_switch
 
 from .focus_preview_loader import (
+    _get_orientation_from_file,
     _load_preview_pixmap_for_canvas,
 )
 from .qt_compat import (
@@ -40,6 +44,31 @@ _log = get_logger("superviewer.preview_panel")
 _QUICK_PREVIEW_SIZE = 512
 _QUICK_PREVIEW_FALLBACK_SIZE = 128
 _FULL_PREVIEW_DELAY_MS = 80
+_HEIF_PIL_OPENER_REGISTERED = False
+
+
+def _qimage_rgb888_format():
+    fmt_container = getattr(QImage, "Format", QImage)
+    fmt = getattr(fmt_container, "Format_RGB888", None)
+    if fmt is None:
+        fmt = getattr(QImage, "Format_RGB888")
+    return fmt
+
+
+def _register_heif_pil_opener() -> bool:
+    global _HEIF_PIL_OPENER_REGISTERED
+    if _HEIF_PIL_OPENER_REGISTERED:
+        return True
+    try:
+        from pillow_heif import register_heif_opener
+    except ImportError:
+        return False
+    try:
+        register_heif_opener()
+        _HEIF_PIL_OPENER_REGISTERED = True
+        return True
+    except Exception:
+        return False
 
 
 def _qimage_from_rgb_result(result) -> QImage | None:
@@ -51,11 +80,7 @@ def _qimage_from_rgb_result(result) -> QImage | None:
         h = int(h)
         if w <= 0 or h <= 0:
             return None
-        fmt_container = getattr(QImage, "Format", QImage)
-        fmt = getattr(fmt_container, "Format_RGB888", None)
-        if fmt is None:
-            fmt = getattr(QImage, "Format_RGB888")
-        qimg = QImage(bytes(data), w, h, w * 3, fmt).copy()
+        qimg = QImage(bytes(data), w, h, w * 3, _qimage_rgb888_format()).copy()
         return qimg if not qimg.isNull() else None
     except Exception:
         return None
@@ -87,21 +112,148 @@ def _load_quick_preview_pixmap(path: str, target_size: int) -> QPixmap | None:
     return pix if not pix.isNull() else None
 
 
+def _qimage_pixel_count(qimg: QImage | None) -> int:
+    if qimg is None or qimg.isNull():
+        return 0
+    try:
+        return max(0, int(qimg.width())) * max(0, int(qimg.height()))
+    except Exception:
+        return 0
+
+
+def _qsize_pixel_count(size) -> int:
+    try:
+        if size is None or not size.isValid():
+            return 0
+        return max(0, int(size.width())) * max(0, int(size.height()))
+    except Exception:
+        return 0
+
+
+def _apply_orientation_to_pil_image(img: Image.Image, orientation: int) -> Image.Image:
+    try:
+        orientation = int(orientation or 1)
+    except Exception:
+        orientation = 1
+    method = {
+        2: Image.Transpose.FLIP_LEFT_RIGHT,
+        3: Image.Transpose.ROTATE_180,
+        4: Image.Transpose.FLIP_TOP_BOTTOM,
+        5: Image.Transpose.TRANSPOSE,
+        6: Image.Transpose.ROTATE_270,
+        7: Image.Transpose.TRANSVERSE,
+        8: Image.Transpose.ROTATE_90,
+    }.get(orientation)
+    return img.transpose(method) if method is not None else img
+
+
+def _qimage_from_pil_image(img: Image.Image) -> QImage | None:
+    try:
+        if img.mode == "P":
+            img = img.convert("RGBA")
+        if img.mode in ("RGBA", "LA"):
+            bg = Image.new("RGB", img.size, (45, 45, 45))
+            try:
+                alpha = img.split()[-1]
+                bg.paste(img.convert("RGB"), mask=alpha)
+            except Exception:
+                bg.paste(img.convert("RGB"))
+            img = bg
+        elif img.mode != "RGB":
+            img = img.convert("RGB")
+        w, h = img.size
+        if w <= 0 or h <= 0:
+            return None
+        data = img.tobytes("raw", "RGB")
+        qimg = QImage(data, int(w), int(h), int(w) * 3, _qimage_rgb888_format()).copy()
+        return qimg if not qimg.isNull() else None
+    except Exception:
+        return None
+
+
+def _load_full_preview_qimage_raw(path: str) -> QImage | None:
+    if not path or not os.path.isfile(path) or Path(path).suffix.lower() not in RAW_EXTENSIONS:
+        return None
+    try:
+        import rawpy
+    except Exception:
+        return None
+    try:
+        with rawpy.imread(path) as raw:
+            rgb = raw.postprocess(
+                use_camera_wb=True,
+                no_auto_bright=False,
+                output_bps=8,
+            )
+        img = Image.fromarray(rgb).convert("RGB")
+        img = _apply_orientation_to_pil_image(img, _get_orientation_from_file(path))
+        return _qimage_from_pil_image(img)
+    except Exception:
+        return None
+
+
+def _load_full_preview_qimage_pil(path: str) -> QImage | None:
+    if not path or not os.path.isfile(path):
+        return None
+    if Path(path).suffix.lower() in HEIF_EXTENSIONS:
+        _register_heif_pil_opener()
+    try:
+        with Image.open(path) as img:
+            try:
+                img = ImageOps.exif_transpose(img)
+            except Exception:
+                pass
+            return _qimage_from_pil_image(img)
+    except Exception:
+        return None
+
+
 def _load_full_preview_qimage(path: str) -> QImage | None:
     if not path or not os.path.isfile(path):
         return None
+    ext = Path(path).suffix.lower()
+    qt_qimg = None
+    expected_pixels = 0
+
+    if ext in RAW_EXTENSIONS:
+        raw_qimg = _load_full_preview_qimage_raw(path)
+        if raw_qimg is not None and not raw_qimg.isNull():
+            return raw_qimg
+
+    if ext in HEIF_EXTENSIONS:
+        pil_qimg = _load_full_preview_qimage_pil(path)
+        if pil_qimg is not None and not pil_qimg.isNull():
+            return pil_qimg
+
     try:
         reader = QImageReader(path)
         try:
             reader.setAutoTransform(True)
         except Exception:
             pass
+        try:
+            expected_pixels = _qsize_pixel_count(reader.size())
+        except Exception:
+            expected_pixels = 0
         qimg = reader.read()
         if qimg is not None and not qimg.isNull():
-            return qimg.copy()
+            qt_qimg = qimg.copy()
     except Exception:
         pass
-    return None
+
+    qt_pixels = _qimage_pixel_count(qt_qimg)
+    should_try_pil = qt_pixels <= 0 or (
+        expected_pixels > 0 and qt_pixels < int(expected_pixels * 0.9)
+    )
+    if should_try_pil:
+        pil_qimg = _load_full_preview_qimage_pil(path)
+        if (
+            pil_qimg is not None
+            and not pil_qimg.isNull()
+            and _qimage_pixel_count(pil_qimg) >= qt_pixels
+        ):
+            return pil_qimg
+    return qt_qimg if qt_pixels > 0 else None
 
 
 class _FullPreviewLoader(QThread):

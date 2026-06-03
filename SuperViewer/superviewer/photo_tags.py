@@ -1,9 +1,9 @@
 # -*- coding: utf-8 -*-
 """Custom per-photo tags for SuperViewer.
 
-Tags are configured by a UTF-8 text file and persisted as XMP sidecar
-``dc:subject`` values.  The store only manages tags from the configured
-SuperViewer vocabulary; unrelated XMP keywords are preserved.
+Tags are configured by a UTF-8 text file and persisted as SuperViewer JSON
+sidecar subject values.  Existing XMP sidecar subjects remain readable as
+fallback data, but new writes go to JSON sidecars.
 """
 from __future__ import annotations
 
@@ -12,7 +12,7 @@ import threading
 from pathlib import Path
 from typing import Iterable
 
-from app_common.exif_io.photo_meta import PhotoMetaDataXMP
+from app_common.exif_io.photo_meta import PhotoMetaData, PhotoMetaDataJSON, PhotoMetaDataXMP
 from app_common.log import get_logger
 
 
@@ -107,10 +107,10 @@ class PhotoTagConfig:
 
 
 class PhotoTagSidecarStore:
-    """XMP sidecar-backed many-to-many photo/tag store."""
+    """JSON sidecar-backed many-to-many photo/tag store."""
 
-    def __init__(self, metadata: PhotoMetaDataXMP | None = None) -> None:
-        self._metadata = metadata or PhotoMetaDataXMP()
+    def __init__(self, metadata: PhotoMetaData | None = None) -> None:
+        self._metadata = metadata or PhotoMetaDataJSON(fallback=PhotoMetaDataXMP())
         self._lock = threading.RLock()
 
     def close(self) -> None:

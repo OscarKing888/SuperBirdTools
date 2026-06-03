@@ -10,7 +10,7 @@ from app_common.file_browser import FileListPanel
 from app_common.file_browser._browser_core import _thumb_disk_cache_path
 from app_common.perf_probe import elapsed_ms, perf_counter, perf_log
 from app_common.log import get_logger
-from app_common.exif_io import PhotoMetaDataXMP
+from app_common.exif_io import PhotoMetaDataJSON
 
 from .photo_tags import PhotoTagConfig, PhotoTagSidecarStore, find_superpicky_tag_config_path
 from .qt_compat import QHBoxLayout, QLabel, QMenu, QThread, QTimer, QToolButton, pyqtSignal
@@ -306,7 +306,7 @@ class SuperViewerTaggedFileListPanel(FileListPanel):
         *,
         report_db_available: bool,
     ) -> str:
-        return "xmp_sidecar"
+        return "json_sidecar"
 
     def _apply_rating_state_via_exif(
         self,
@@ -324,13 +324,13 @@ class SuperViewerTaggedFileListPanel(FileListPanel):
             return []
         probe_t0 = perf_counter()
         updated_paths: list[str] = []
-        xmp = PhotoMetaDataXMP()
+        json_meta = PhotoMetaDataJSON()
         write_count = 0
         for path in self._unique_norm_paths(paths):
             if not path:
                 continue
             try:
-                ok = xmp.write(path, fields)
+                ok = json_meta.write(path, fields)
             except Exception as exc:
                 _log.warning("[_apply_rating_state_via_sidecar] source=%r failed: %s", path, exc)
                 continue

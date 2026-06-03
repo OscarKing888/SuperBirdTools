@@ -19,8 +19,10 @@ from app_common import show_about_dialog, load_about_images, load_about_info
 from app_common.log import get_logger
 from app_common.perf_probe import elapsed_ms, perf_counter, perf_log
 from app_common.exif_io import (
-    PhotoMetaDataXMP,
+    PhotoMetaDataJSON,
+    find_json_sidecar,
     find_xmp_sidecar,
+    json_sidecar_path_for,
 )
 from app_common.file_browser import DirectoryBrowserWidget
 from app_common.image_formats import IMAGE_EXTENSIONS, RAW_EXTENSIONS
@@ -648,24 +650,36 @@ class MainWindow(QMainWindow):
         if not same_photo_key and os.path.exists(target_path):
             raise FileExistsError(f"目标文件已存在：{target_path}")
 
-        sidecar_source = find_xmp_sidecar(source_path)
-        sidecar_target: Path | None = None
-        if sidecar_source and os.path.isfile(sidecar_source):
-            sidecar_suffix = Path(sidecar_source).suffix or ".xmp"
-            sidecar_target = Path(target_path).with_suffix(sidecar_suffix)
+        sidecar_pairs: list[tuple[Path, Path]] = []
+        xmp_sidecar_source = find_xmp_sidecar(source_path)
+        json_sidecar_source = find_json_sidecar(source_path)
+        seen_sidecars: set[str] = set()
+        for sidecar_source in (xmp_sidecar_source, json_sidecar_source):
+            if not sidecar_source or not os.path.isfile(sidecar_source):
+                continue
+            sidecar_key = os.path.normcase(os.path.normpath(os.path.abspath(sidecar_source)))
+            if sidecar_key in seen_sidecars:
+                continue
+            seen_sidecars.add(sidecar_key)
+            if sidecar_source == json_sidecar_source:
+                sidecar_target = json_sidecar_path_for(target_path)
+            else:
+                sidecar_suffix = Path(sidecar_source).suffix or ".xmp"
+                sidecar_target = Path(target_path).with_suffix(sidecar_suffix)
             sidecar_target_text = os.path.normpath(os.path.abspath(str(sidecar_target)))
             if (
                 not self._same_filesystem_key(sidecar_source, sidecar_target_text)
                 and os.path.exists(sidecar_target_text)
             ):
                 raise FileExistsError(f"目标 sidecar 已存在：{sidecar_target_text}")
+            sidecar_pairs.append((Path(sidecar_source), Path(sidecar_target_text)))
 
         renamed_photo = False
         try:
             self._case_safe_rename_path(source, Path(target_path))
             renamed_photo = True
-            if sidecar_source and sidecar_target is not None:
-                self._case_safe_rename_path(Path(sidecar_source), sidecar_target)
+            for sidecar_source, sidecar_target in sidecar_pairs:
+                self._case_safe_rename_path(sidecar_source, sidecar_target)
         except Exception:
             if renamed_photo and os.path.exists(target_path) and not os.path.exists(source_path):
                 try:
@@ -690,8 +704,8 @@ class MainWindow(QMainWindow):
             raise FileNotFoundError("当前图片不存在，无法保存注释。")
 
         text = str(comment or "").strip()
-        xmp = PhotoMetaDataXMP()
-        saved = bool(xmp.write(source_path, {"XMP-dc:Description": text}))
+        json_meta = PhotoMetaDataJSON()
+        saved = bool(json_meta.write(source_path, {"XMP-dc:Description": text}))
         if not saved:
             raise RuntimeError("无法写入 sidecar 注释。")
 

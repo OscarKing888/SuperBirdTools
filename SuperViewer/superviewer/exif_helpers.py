@@ -18,6 +18,8 @@ from PIL.ExifTags import TAGS as PIL_TAGS
 from app_common.exif_io import (
     _get_exiftool_tag_target,
     get_exiftool_executable_path,
+    json_sidecar_to_flat_dict,
+    read_json_sidecar,
     read_xmp_sidecar,
     run_exiftool_json,
 )
