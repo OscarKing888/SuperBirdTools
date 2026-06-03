@@ -68,7 +68,8 @@ This document defines project-level rules for any coding assistant (Codex, Claud
 
 When editing Python code, run at least:
 
-- `py -3 -m py_compile <changed_python_files>`
+- Windows: `<repo>\.venv\Scripts\python.exe -m py_compile <changed_python_files>`
+- macOS: `<repo>/.venv/bin/python3 -m py_compile <changed_python_files>`
 
 When changing metadata write logic:
 
@@ -118,13 +119,25 @@ These areas have repeatedly regressed during feature work. Treat them as protect
   - Preview rendering may use `temp_jpeg_path`.
   - Metadata, EXIF, focus extraction, copy/reveal actions, and sidecar logic must continue to resolve against source-file semantics.
   - Do not assume preview JPEG carries the same metadata as the source file.
+- SuperViewer two-stage preview:
+  - First-frame preview may use thumbnails, but the final committed selection must attempt asynchronous full-size decode.
+  - Fast keyboard navigation must keep using `load_full=False` and must not start HIF/RAW/PSD full decodes in the hot path.
+  - HIF/HEIC/HEIF full preview should keep the Pillow/`pillow-heif` fallback; RAW full preview should keep the `rawpy` fallback in the background worker.
 - Focus extraction pipeline:
   - Focus extraction is format-dependent.
   - HIF/HEIF/HEIC and RAW cannot share a single metadata acquisition path blindly.
   - `report.db.focus_x/focus_y` is only a fallback, not the primary source when file metadata is available.
+- SuperViewer JSON/XMP sidecars:
+  - JSON sidecars use `<image filename>.superviewer.json` and coexist with legacy XMP sidecars.
+  - Metadata reads and filters must continue to honor comment/title data from supported sidecar sources.
+  - Copy, duplicate, delete, and trash operations must keep sibling `.xmp` and `.superviewer.json` files paired with the source image.
 - List vs thumbnail mode:
   - List mode must not do thumbnail work.
   - Thumbnail mode must avoid full-list thumbnail churn and only load what the viewport needs.
+- Recursive directory browsing:
+  - Recursive image discovery for large directories must run off the GUI thread and report progress.
+  - Applying large scan results, metadata/tag cache data, or thumbnail jobs must be incremental or queued, not a single GUI-thread blocking pass.
+  - Directory switches should prioritize new thumbnail work without canceling already queued previous work.
 - Filtering:
   - Filtering must happen at the data-source layer, not by repeatedly hiding/showing existing view items.
   - Tree/list/thumbnail views must be rebuilt from the same filtered dataset to avoid divergence and flicker.
