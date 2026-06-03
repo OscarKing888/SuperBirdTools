@@ -7,7 +7,7 @@ from pathlib import Path
 
 from PIL import Image, ImageOps
 
-from birdstamp.constants import HEIF_EXTENSIONS, RAW_EXTENSIONS, STANDARD_EXTENSIONS
+from birdstamp.constants import HEIF_EXTENSIONS, PIL_EXTENSIONS, RAW_EXTENSIONS
 from birdstamp.subprocess_utils import decode_subprocess_output
 
 _HEIF_REGISTERED = False
@@ -97,7 +97,7 @@ def _decode_raw(path: Path, decoder: str) -> Image.Image:
 
 def decode_image(path: Path, decoder: str = "auto") -> Image.Image:
     ext = path.suffix.lower()
-    if ext in STANDARD_EXTENSIONS:
+    if ext in PIL_EXTENSIONS:
         return _decode_standard(path)
     if ext in HEIF_EXTENSIONS:
         if not _register_heif_opener():

@@ -26,6 +26,7 @@ from app_common.preview_canvas import (
     normalize_preview_composition_grid_line_width,
     normalize_preview_composition_grid_mode,
 )
+from app_common.image_formats import HEIF_EXTENSIONS, IMAGE_EXTENSIONS, RAW_EXTENSIONS
 from app_common.report_db import PHOTO_COLUMNS
 
 from .paths_settings import _load_settings, _sanitize_display_string, _save_settings
@@ -41,20 +42,6 @@ try:
 except ImportError:
     pillow_heif = None
 
-# 支持的图片扩展名（含各家相机 RAW 与 HEIC/HEIF）
-IMAGE_EXTENSIONS = (
-    ".jpg", ".jpeg", ".png", ".webp", ".tiff", ".tif",
-    ".heic", ".heif", ".hif",
-    ".cr2", ".cr3", ".crw", ".nef", ".nrw", ".arw", ".srf", ".sr2",
-    ".rw2", ".raw", ".orf", ".ori", ".raf", ".dng", ".pef", ".ptx",
-    ".x3f", ".rwl", ".3fr", ".dcr", ".kdc", ".mef", ".mrw", ".rwz",
-)
-IMAGE_EXTENSIONS = tuple(dict.fromkeys(e.lower() for e in IMAGE_EXTENSIONS))
-RAW_EXTENSIONS = frozenset(
-    e for e in IMAGE_EXTENSIONS
-    if e not in (".jpg", ".jpeg", ".png", ".webp", ".tiff", ".tif", ".heic", ".heif", ".hif")
-)
-HEIF_EXTENSIONS = frozenset({".heic", ".heif", ".hif"})
 PIEXIF_WRITABLE_EXTENSIONS = frozenset({".jpg", ".jpeg", ".jpe", ".webp", ".tif", ".tiff"})
 
 EXIFTOOL_IFD_GROUP_MAP = {

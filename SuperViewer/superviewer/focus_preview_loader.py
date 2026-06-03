@@ -23,6 +23,7 @@ from app_common.focus_calc import (
     resolve_focus_camera_type_from_metadata,
     resolve_focus_display_orientation,
 )
+from app_common.image_formats import IMAGE_EXTENSIONS
 from app_common.log import get_logger
 
 from .exif_helpers import (
@@ -44,17 +45,6 @@ except ImportError:
     rawpy = None
 
 _log = get_logger("focus_preview_loader")
-
-# Re-export for scripts / main re-exports
-IMAGE_EXTENSIONS = (
-    ".jpg", ".jpeg", ".png", ".webp", ".tiff", ".tif",
-    ".heic", ".heif", ".hif",
-    ".cr2", ".cr3", ".crw", ".nef", ".nrw", ".arw", ".srf", ".sr2",
-    ".rw2", ".raw", ".orf", ".ori", ".raf", ".dng", ".pef", ".ptx",
-    ".x3f", ".rwl", ".3fr", ".dcr", ".kdc", ".mef", ".mrw", ".rwz",
-)
-IMAGE_EXTENSIONS = tuple(dict.fromkeys(e.lower() for e in IMAGE_EXTENSIONS))
-
 
 def _get_orientation_from_file(path: str) -> int:
     """从文件中读取 EXIF Orientation 值 (1–8)。先 piexif 再 exifread，返回 1 表示正常。"""

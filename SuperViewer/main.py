@@ -23,6 +23,7 @@ from app_common.exif_io import (
     find_xmp_sidecar,
 )
 from app_common.file_browser import DirectoryBrowserWidget
+from app_common.image_formats import IMAGE_EXTENSIONS, RAW_EXTENSIONS
 from app_common.preview_canvas import (
     PREVIEW_COMPOSITION_GRID_LINE_WIDTHS,
     PREVIEW_COMPOSITION_GRID_MODES,
@@ -77,6 +78,12 @@ try:
         load_last_selected_directory_from_settings,
         save_last_selected_directory_to_settings,
     )
+    from .superviewer.focus_preview_loader import (
+        _load_exifread_metadata_for_focus,
+        _load_focus_box_for_preview,
+        _load_preview_pixmap_for_canvas,
+        _resolve_focus_calc_image_size,
+    )
     from .superviewer.preview_panel import PreviewPanel
     from .superviewer.image_info_tabs import (
         ImageInfoTabPanel_ImageInfo,
@@ -129,6 +136,12 @@ except ImportError:
         _get_resource_path,
         load_last_selected_directory_from_settings,
         save_last_selected_directory_to_settings,
+    )
+    from superviewer.focus_preview_loader import (
+        _load_exifread_metadata_for_focus,
+        _load_focus_box_for_preview,
+        _load_preview_pixmap_for_canvas,
+        _resolve_focus_calc_image_size,
     )
     from superviewer.preview_panel import PreviewPanel
     from superviewer.image_info_tabs import (
