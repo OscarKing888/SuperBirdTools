@@ -1,4 +1,4 @@
 [submodule "app_common"]
 	path = app_common
 	url = https://github.com/OscarKing888/SuperAppCommonLib.git
-	branch = main
+	branch = res_mgr
