@@ -15,6 +15,7 @@ from SuperViewer.superviewer.photo_tags import (
     PhotoTagConfig,
     PhotoTagSidecarStore,
     find_superpicky_tag_config_path,
+    photo_tag_filter_matches,
 )
 
 
@@ -43,6 +44,21 @@ def test_photo_tag_config_path_comes_from_nearest_superpicky(tmp_path: Path) -> 
     outside = tmp_path / "outside"
     outside.mkdir()
     assert find_superpicky_tag_config_path(outside, max_levels=0) is None
+
+
+def test_photo_tag_filter_exact_match_requires_equal_tag() -> None:
+    assert photo_tag_filter_matches(["鸟"], ["鸟"])
+    assert not photo_tag_filter_matches(["鸟"], ["水鸟"])
+
+
+def test_photo_tag_filter_partial_match_allows_substring() -> None:
+    assert photo_tag_filter_matches(["鸟"], ["水鸟"], partial_match=True)
+
+
+def test_photo_tag_filter_multiple_filters_use_any_match() -> None:
+    assert photo_tag_filter_matches(["鸟", "猛禽"], ["猛禽"])
+    assert photo_tag_filter_matches(["鸟", "猛禽"], ["猛禽类"], partial_match=True)
+    assert not photo_tag_filter_matches(["鸟", "猛禽"], ["昆虫"])
 
 
 def test_xmp_subject_roundtrip_preserves_multiple_tags(tmp_path: Path) -> None:

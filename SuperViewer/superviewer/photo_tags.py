@@ -53,6 +53,31 @@ def _normalise_paths(paths: Iterable[str]) -> list[str]:
     return result
 
 
+def photo_tag_filter_matches(
+    selected_filters: Iterable[str],
+    photo_tags: Iterable[str],
+    *,
+    partial_match: bool = False,
+) -> bool:
+    """Return whether a photo's tags satisfy selected tag filters."""
+    filters = _normalise_tags(selected_filters)
+    if not filters:
+        return True
+    tags = _normalise_tags(photo_tags)
+    if not tags:
+        return False
+
+    if partial_match:
+        tag_values = [tag.casefold() for tag in tags]
+        return any(
+            needle in value
+            for needle in (filter_tag.casefold() for filter_tag in filters)
+            for value in tag_values
+        )
+
+    return bool(set(filters).intersection(tags))
+
+
 def find_superpicky_tag_config_path(
     path: str | os.PathLike[str] | None,
     *,

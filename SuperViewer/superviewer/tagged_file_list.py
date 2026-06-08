@@ -12,7 +12,12 @@ from app_common.perf_probe import elapsed_ms, perf_counter, perf_log
 from app_common.log import get_logger
 from app_common.exif_io import PhotoMetaDataJSON
 
-from .photo_tags import PhotoTagConfig, PhotoTagSidecarStore, find_superpicky_tag_config_path
+from .photo_tags import (
+    PhotoTagConfig,
+    PhotoTagSidecarStore,
+    find_superpicky_tag_config_path,
+    photo_tag_filter_matches,
+)
 from .qt_compat import QHBoxLayout, QLabel, QMenu, QThread, QTimer, QToolButton, pyqtSignal
 from .tag_menu import add_filterable_tag_actions
 
@@ -168,7 +173,9 @@ class SuperViewerTaggedFileListPanel(FileListPanel):
         self._tag_config_scope_key = ""
         self._available_tags: list[str] = []
         self._active_tag_filters: set[str] = set()
+        self._tag_filter_partial_match: bool = False
         self._tag_filter_buttons: dict[str, QToolButton] = {}
+        self._tag_filter_match_mode_button: QToolButton | None = None
         self._tag_filter_menu_button: QToolButton | None = None
         self._tag_filter_clear_button: QToolButton | None = None
         self._photo_tag_store = tag_store or PhotoTagSidecarStore()
@@ -364,7 +371,11 @@ class SuperViewerTaggedFileListPanel(FileListPanel):
         tags = self._photo_tag_cache.get(norm)
         if tags is None:
             tags = self._photo_tags_from_meta_cache(norm)
-        return bool(self._active_tag_filters.intersection(tags))
+        return photo_tag_filter_matches(
+            self._active_tag_filters,
+            tags,
+            partial_match=self._tag_filter_partial_match,
+        )
 
     def _refresh_filter_scope(self) -> None:
         if self._active_tag_filters:
@@ -406,6 +417,7 @@ class SuperViewerTaggedFileListPanel(FileListPanel):
             return
         self._clear_tag_filter_bar()
         self._tag_filter_buttons = {}
+        self._tag_filter_match_mode_button = None
         self._tag_filter_menu_button = None
         self._tag_filter_clear_button = None
 
@@ -413,11 +425,21 @@ class SuperViewerTaggedFileListPanel(FileListPanel):
         title.setStyleSheet("color: #aaa; font-size: 11px;")
         layout.addWidget(title)
 
+        match_mode_btn = QToolButton()
+        match_mode_btn.setCheckable(True)
+        match_mode_btn.setChecked(self._tag_filter_partial_match)
+        match_mode_btn.setAutoRaise(False)
+        match_mode_btn.setStyleSheet(_TAG_FILTER_BUTTON_STYLE)
+        match_mode_btn.clicked.connect(self._on_tag_match_mode_toggled)
+        self._tag_filter_match_mode_button = match_mode_btn
+        layout.addWidget(match_mode_btn)
+
         if not self._available_tags:
             empty = QLabel("tags.cfg 未配置")
             empty.setStyleSheet("color: #777; font-size: 11px;")
             layout.addWidget(empty)
             layout.addStretch()
+            self._sync_tag_filter_widgets()
             return
 
         inline_tags = self._inline_tag_filter_tags()
@@ -464,13 +486,18 @@ class SuperViewerTaggedFileListPanel(FileListPanel):
     def _create_tag_filter_button(self, tag: str) -> QToolButton:
         btn = QToolButton()
         btn.setText(tag)
-        btn.setToolTip(f"只显示包含 TAG「{tag}」的照片")
+        btn.setToolTip(self._tag_filter_button_tooltip(tag))
         btn.setCheckable(True)
         btn.setChecked(tag in self._active_tag_filters)
         btn.setAutoRaise(False)
         btn.setStyleSheet(_TAG_FILTER_BUTTON_STYLE)
         btn.clicked.connect(lambda checked=False, t=tag: self._on_tag_filter_toggled(t, bool(checked)))
         return btn
+
+    def _tag_filter_button_tooltip(self, tag: str) -> str:
+        if self._tag_filter_partial_match:
+            return f"只显示标签部分匹配「{tag}」的照片"
+        return f"只显示标签完全匹配「{tag}」的照片"
 
     def _sync_tag_filter_widgets(self) -> None:
         for key, btn in self._tag_filter_buttons.items():
@@ -489,6 +516,17 @@ class SuperViewerTaggedFileListPanel(FileListPanel):
         clear_button = self._tag_filter_clear_button
         if clear_button is not None:
             clear_button.setVisible(bool(active_count))
+        mode_button = self._tag_filter_match_mode_button
+        if mode_button is not None:
+            if self._tag_filter_partial_match:
+                mode_button.setText("部分匹配")
+                mode_button.setToolTip("当前标签过滤使用部分匹配：选中「鸟」可匹配「水鸟」等标签。")
+            else:
+                mode_button.setText("完全匹配")
+                mode_button.setToolTip("当前标签过滤使用完全匹配：选中标签必须与照片标签相同。")
+            mode_button.setChecked(self._tag_filter_partial_match)
+        for tag, btn in self._tag_filter_buttons.items():
+            btn.setToolTip(self._tag_filter_button_tooltip(tag))
 
     def _show_tag_filter_menu(self, button: QToolButton) -> None:
         self._load_tag_config_if_changed()
@@ -744,6 +782,16 @@ class SuperViewerTaggedFileListPanel(FileListPanel):
         else:
             self._sync_tag_filter_widgets()
         self._refresh_filter_scope()
+
+    def _on_tag_match_mode_toggled(self, checked: bool) -> None:
+        partial_match = bool(checked)
+        if self._tag_filter_partial_match == partial_match:
+            self._sync_tag_filter_widgets()
+            return
+        self._tag_filter_partial_match = partial_match
+        self._sync_tag_filter_widgets()
+        if self._active_tag_filters:
+            self._refresh_filter_scope()
 
     def _clear_tag_filters(self) -> None:
         if not self._active_tag_filters:

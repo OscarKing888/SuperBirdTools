@@ -110,12 +110,17 @@ try:
         QPalette,
         QPainter,
         QPen,
+        QPoint,
         QPixmap,
+        QPolygon,
         QSplitter,
+        QSplitterHandle,
+        QSize,
         QTimer,
         QVBoxLayout,
         QWidget,
         _Horizontal,
+        _LeftButton,
     )
 except ImportError:
     from superviewer.exif_helpers import (
@@ -169,12 +174,17 @@ except ImportError:
         QPalette,
         QPainter,
         QPen,
+        QPoint,
         QPixmap,
+        QPolygon,
         QSplitter,
+        QSplitterHandle,
+        QSize,
         QTimer,
         QVBoxLayout,
         QWidget,
         _Horizontal,
+        _LeftButton,
     )
 
 PREVIEW_GRID_MODE_ITEMS = (
@@ -213,6 +223,194 @@ def _build_preview_grid_line_width_icon(width: int) -> QIcon:
 
 _log = get_logger("main")
 
+
+class TriangleToggleSplitterHandle(QSplitterHandle):
+    """Splitter handle rendered as a click-only triangular toggle."""
+
+    def __init__(self, orientation, splitter: "TriangleToggleSplitter") -> None:
+        super().__init__(orientation, splitter)
+        self._pressed = False
+        self.setMouseTracking(True)
+        self._sync_tooltip()
+
+    def sizeHint(self) -> QSize:
+        if self.orientation() == _Horizontal:
+            return QSize(18, 42)
+        return QSize(42, 18)
+
+    def minimumSizeHint(self) -> QSize:
+        return self.sizeHint()
+
+    def enterEvent(self, event) -> None:
+        self.update()
+        self._sync_tooltip()
+        super().enterEvent(event)
+
+    def leaveEvent(self, event) -> None:
+        self.update()
+        super().leaveEvent(event)
+
+    def mousePressEvent(self, event) -> None:
+        if event.button() == _LeftButton:
+            self._pressed = True
+            event.accept()
+            self.update()
+            return
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event) -> None:
+        if self._pressed:
+            event.accept()
+            return
+        super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event) -> None:
+        if self._pressed and event.button() == _LeftButton:
+            self._pressed = False
+            pos = self._event_pos(event)
+            if self.rect().contains(pos):
+                splitter = self.splitter()
+                if isinstance(splitter, TriangleToggleSplitter):
+                    splitter.toggle_left_panel_for_handle(self)
+            event.accept()
+            self.update()
+            return
+        self._pressed = False
+        super().mouseReleaseEvent(event)
+
+    def paintEvent(self, event) -> None:
+        self._sync_tooltip()
+        painter = QPainter(self)
+        try:
+            try:
+                painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+            except Exception:
+                pass
+            hover = self.underMouse() or self._pressed
+            painter.fillRect(self.rect(), QColor(255, 255, 255, 28 if hover else 12))
+            color = QColor(220, 225, 230, 230 if hover else 168)
+            painter.setPen(QPen(color, 1))
+            painter.setBrush(color)
+            painter.drawPolygon(self._triangle_polygon())
+        finally:
+            painter.end()
+
+    def _event_pos(self, event) -> QPoint:
+        try:
+            return event.position().toPoint()
+        except Exception:
+            return event.pos()
+
+    def _triangle_polygon(self) -> QPolygon:
+        rect = self.rect()
+        cx = rect.width() // 2
+        cy = rect.height() // 2
+        splitter = self.splitter()
+        collapsed = (
+            isinstance(splitter, TriangleToggleSplitter)
+            and splitter.is_left_panel_collapsed_for_handle(self)
+        )
+        if self.orientation() == _Horizontal:
+            if collapsed:
+                points = [QPoint(cx - 4, cy - 8), QPoint(cx - 4, cy + 8), QPoint(cx + 5, cy)]
+            else:
+                points = [QPoint(cx + 4, cy - 8), QPoint(cx + 4, cy + 8), QPoint(cx - 5, cy)]
+        elif collapsed:
+            points = [QPoint(cx - 8, cy - 4), QPoint(cx + 8, cy - 4), QPoint(cx, cy + 5)]
+        else:
+            points = [QPoint(cx - 8, cy + 4), QPoint(cx + 8, cy + 4), QPoint(cx, cy - 5)]
+        return QPolygon(points)
+
+    def _sync_tooltip(self) -> None:
+        splitter = self.splitter()
+        if not isinstance(splitter, TriangleToggleSplitter):
+            return
+        index = splitter.left_panel_index_for_handle(self)
+        if index < 0:
+            self.setToolTip("")
+            return
+        action = "展开" if splitter.is_panel_collapsed(index) else "折叠"
+        self.setToolTip(f"{action}左侧面板")
+
+
+class TriangleToggleSplitter(QSplitter):
+    """Horizontal splitter whose handles act as triangular panel toggles."""
+
+    def __init__(self, orientation, parent=None) -> None:
+        super().__init__(orientation, parent)
+        self._toggle_restore_sizes: dict[int, list[int]] = {}
+        self.setHandleWidth(18)
+
+    def createHandle(self) -> QSplitterHandle:
+        return TriangleToggleSplitterHandle(self.orientation(), self)
+
+    def left_panel_index_for_handle(self, handle: QSplitterHandle) -> int:
+        handle_index = self._handle_index(handle)
+        if handle_index <= 0:
+            return -1
+        return handle_index - 1
+
+    def is_left_panel_collapsed_for_handle(self, handle: QSplitterHandle) -> bool:
+        index = self.left_panel_index_for_handle(handle)
+        return index >= 0 and self.is_panel_collapsed(index)
+
+    def is_panel_collapsed(self, index: int) -> bool:
+        sizes = self.sizes()
+        return 0 <= index < len(sizes) and sizes[index] <= 1
+
+    def toggle_left_panel_for_handle(self, handle: QSplitterHandle) -> None:
+        index = self.left_panel_index_for_handle(handle)
+        if index < 0:
+            return
+        if self.is_panel_collapsed(index):
+            self._expand_panel(index)
+        else:
+            self._collapse_panel(index)
+        self._refresh_handles()
+
+    def _handle_index(self, handle: QSplitterHandle) -> int:
+        for index in range(1, self.count()):
+            if self.handle(index) is handle:
+                return index
+        return -1
+
+    def _collapse_panel(self, index: int) -> None:
+        sizes = self.sizes()
+        if not (0 <= index < len(sizes)) or sizes[index] <= 1:
+            return
+        self._toggle_restore_sizes[index] = list(sizes)
+        collapsed_width = sizes[index]
+        sizes[index] = 0
+        target = index + 1 if index + 1 < len(sizes) else index - 1
+        if 0 <= target < len(sizes):
+            sizes[target] += collapsed_width
+        self.setSizes(sizes)
+
+    def _expand_panel(self, index: int) -> None:
+        restore_sizes = self._toggle_restore_sizes.get(index)
+        if restore_sizes and len(restore_sizes) == self.count() and restore_sizes[index] > 1:
+            self.setSizes(restore_sizes)
+            return
+
+        sizes = self.sizes()
+        if not (0 <= index < len(sizes)):
+            return
+        target = index + 1 if index + 1 < len(sizes) else index - 1
+        width = max(180, self.widget(index).minimumSizeHint().width(), self.widget(index).sizeHint().width())
+        if 0 <= target < len(sizes):
+            width = min(width, max(1, sizes[target] - 80))
+            sizes[target] = max(1, sizes[target] - width)
+        sizes[index] = max(1, width)
+        self.setSizes(sizes)
+
+    def _refresh_handles(self) -> None:
+        for index in range(1, self.count()):
+            handle = self.handle(index)
+            if isinstance(handle, TriangleToggleSplitterHandle):
+                handle._sync_tooltip()
+            handle.update()
+
+
 class MainWindow(QMainWindow):
     def __init__(self, initial_received_files=None):
         super().__init__()
@@ -232,7 +430,7 @@ class MainWindow(QMainWindow):
         layout.setContentsMargins(8, 8, 8, 8)
 
         # 主分割器：目录树 | 文件列表 | 图片预览 | 元信息 Tab
-        splitter = QSplitter(_Horizontal)
+        splitter = TriangleToggleSplitter(_Horizontal)
 
         # ── 面板 1：目录浏览器 ──
         self._dir_browser = DirectoryBrowserWidget()
