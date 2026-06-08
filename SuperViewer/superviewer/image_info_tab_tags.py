@@ -9,6 +9,11 @@ from typing import Callable
 
 from app_common.log import get_logger
 from app_common.perf_probe import perf_log
+from app_common.file_browser._permissions import (
+    clear_readonly_label,
+    mark_write_action_disabled,
+    superpicky_root_write_disabled_tooltip,
+)
 
 from .image_info_tab_base import ImageInfoTabPanel
 from .qt_compat import (
@@ -37,16 +42,29 @@ class ImageInfoTabPanel_Tags(ImageInfoTabPanel):
         tags_for_path_provider: Callable[[str], set[str]],
         set_tag_callback: Callable[[list[str], str, bool], None],
         clear_tags_callback: Callable[[list[str]], None],
+        write_enabled_provider: Callable[[], bool] | None = None,
         parent=None,
     ) -> None:
         self._available_tags_provider = available_tags_provider
         self._tags_for_path_provider = tags_for_path_provider
         self._set_tag_callback = set_tag_callback
         self._clear_tags_callback = clear_tags_callback
+        self._write_enabled_provider = write_enabled_provider
         self._tag_checks: dict[str, QCheckBox] = {}
         self._available_tags: list[str] = []
         self._updating = False
         super().__init__(parent)
+
+    def _writes_allowed(self) -> bool:
+        if self._write_enabled_provider is None:
+            return True
+        try:
+            return bool(self._write_enabled_provider())
+        except Exception:
+            return False
+
+    def _write_disabled_tooltip(self, action: str = "写入操作") -> str:
+        return superpicky_root_write_disabled_tooltip(action)
 
     def create_ui(self) -> None:
         layout = QVBoxLayout(self)
@@ -107,12 +125,19 @@ class ImageInfoTabPanel_Tags(ImageInfoTabPanel):
             current_tags = set()
 
         checkbox_t0 = _time.perf_counter()
+        can_write = has_file and self._writes_allowed()
+        disabled_tip = self._write_disabled_tooltip("编辑标签") if has_file and not can_write else ""
+        self.btn_clear.setText(clear_readonly_label(self.btn_clear.text()))
         self._updating = True
         try:
             for tag, check in self._tag_checks.items():
-                check.setEnabled(has_file)
+                check.setEnabled(can_write)
+                check.setToolTip(disabled_tip if has_file and not can_write else f"为当前照片设置 TAG「{tag}」")
                 check.setChecked(tag in current_tags)
-            self.btn_clear.setEnabled(has_file and bool(current_tags))
+            self.btn_clear.setEnabled(can_write and bool(current_tags))
+            self.btn_clear.setToolTip(disabled_tip if has_file and not can_write else "")
+            if has_file and not can_write:
+                mark_write_action_disabled(self.btn_clear, disabled_tip)
         finally:
             self._updating = False
         checkbox_ms = (_time.perf_counter() - checkbox_t0) * 1000.0
@@ -185,6 +210,10 @@ class ImageInfoTabPanel_Tags(ImageInfoTabPanel):
         path = self.current_photo_path()
         if not path or not os.path.isfile(path):
             return
+        if not self._writes_allowed():
+            QMessageBox.warning(self, "目录只读", self._write_disabled_tooltip("保存标签"))
+            self.refresh_current_photo()
+            return
         try:
             self._set_tag_callback([path], tag, checked)
         except Exception as exc:
@@ -194,6 +223,10 @@ class ImageInfoTabPanel_Tags(ImageInfoTabPanel):
     def _clear_current_photo_tags(self) -> None:
         path = self.current_photo_path()
         if not path or not os.path.isfile(path):
+            return
+        if not self._writes_allowed():
+            QMessageBox.warning(self, "目录只读", self._write_disabled_tooltip("清除标签"))
+            self.refresh_current_photo()
             return
         try:
             self._clear_tags_callback([path])

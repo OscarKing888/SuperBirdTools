@@ -8,6 +8,7 @@ from typing import Iterable
 
 from app_common.file_browser import FileListPanel
 from app_common.file_browser._browser_core import _thumb_disk_cache_path
+from app_common.file_browser._permissions import mark_write_action_disabled
 from app_common.perf_probe import elapsed_ms, perf_counter, perf_log
 from app_common.log import get_logger
 from app_common.exif_io import PhotoMetaDataJSON
@@ -212,11 +213,15 @@ class SuperViewerTaggedFileListPanel(FileListPanel):
 
     def set_photo_tag_for_paths(self, paths: Iterable[str], tag: str, enabled: bool) -> None:
         """Set or unset one configured tag for one or more photo paths."""
+        if not self._file_writes_allowed("保存标签", warn=True):
+            return
         self._load_tag_config_if_changed()
         self._set_tag_for_paths(_norm_paths(paths), tag, enabled)
 
     def clear_photo_tags_for_paths(self, paths: Iterable[str]) -> None:
         """Clear all configured tags for one or more photo paths."""
+        if not self._file_writes_allowed("清除标签", warn=True):
+            return
         self._load_tag_config_if_changed()
         self._clear_tags_for_paths(_norm_paths(paths))
 
@@ -322,6 +327,8 @@ class SuperViewerTaggedFileListPanel(FileListPanel):
         rating: int | None = None,
         pick: int | None = None,
     ) -> list[str]:
+        if not self._file_writes_allowed("修改评级"):
+            return []
         fields: dict[str, int] = {}
         if rating is not None:
             fields["XMP-xmp:Rating"] = max(0, min(5, int(rating)))
@@ -804,7 +811,14 @@ class SuperViewerTaggedFileListPanel(FileListPanel):
         self._load_tag_config_if_changed()
         tag_menu = menu.addMenu("打标签")
         norm_paths = _norm_paths(paths)
-        tag_menu.setEnabled(bool(norm_paths))
+        writes_allowed = self._file_writes_allowed("保存标签")
+        tag_menu.setEnabled(bool(norm_paths) and writes_allowed)
+        if not writes_allowed:
+            mark_write_action_disabled(
+                tag_menu.menuAction(),
+                self.file_writes_disabled_tooltip("保存标签"),
+            )
+            return
         if not norm_paths:
             return
         if not self._available_tags:
@@ -824,10 +838,12 @@ class SuperViewerTaggedFileListPanel(FileListPanel):
 
         tag_menu.addSeparator()
         act_clear = tag_menu.addAction("清除所有TAG")
-        act_clear.setEnabled(any(tag_sets))
+        act_clear.setEnabled(any(tag_sets) and writes_allowed)
         act_clear.triggered.connect(lambda checked=False, p=list(norm_paths): self._clear_tags_for_paths(p))
 
     def _set_tag_for_paths(self, paths: list[str], tag: str, enabled: bool) -> None:
+        if not self._file_writes_allowed("保存标签", warn=True):
+            return
         probe_t0 = perf_counter()
         try:
             write_t0 = perf_counter()
@@ -861,6 +877,8 @@ class SuperViewerTaggedFileListPanel(FileListPanel):
         )
 
     def _clear_tags_for_paths(self, paths: list[str]) -> None:
+        if not self._file_writes_allowed("清除标签", warn=True):
+            return
         probe_t0 = perf_counter()
         try:
             write_t0 = perf_counter()
