@@ -13,6 +13,7 @@ from app_common.file_browser._permissions import (
     clear_readonly_label,
     mark_write_action_disabled,
     superpicky_root_write_disabled_tooltip,
+    superpicky_sidecar_write_disabled_tooltip,
 )
 
 from .image_info_tab_base import ImageInfoTabPanel
@@ -140,7 +141,9 @@ class ImageInfoTabPanel_ImageInfo(ImageInfoTabPanel):
         metadata_provider: Callable[[str], dict] | None = None,
         comment_save_callback: Callable[[str, str], bool] | None = None,
         preview_pixmap_provider: Callable[[str], QPixmap | None] | None = None,
-        write_enabled_provider: Callable[[], bool] | None = None,
+        write_enabled_provider: Callable[..., bool] | None = None,
+        write_disabled_tooltip_provider: Callable[..., str] | None = None,
+        tag_write_enabled_provider: Callable[[], bool] | None = None,
         parent=None,
     ) -> None:
         self._available_tags_provider = available_tags_provider
@@ -151,6 +154,8 @@ class ImageInfoTabPanel_ImageInfo(ImageInfoTabPanel):
         self._comment_save_callback = comment_save_callback
         self._preview_pixmap_provider = preview_pixmap_provider
         self._write_enabled_provider = write_enabled_provider
+        self._write_disabled_tooltip_provider = write_disabled_tooltip_provider
+        self._tag_write_enabled_provider = tag_write_enabled_provider
         self._preview_pixmap: QPixmap | None = None
         self._current_tags: set[str] = set()
         self._current_comment = ""
@@ -158,16 +163,46 @@ class ImageInfoTabPanel_ImageInfo(ImageInfoTabPanel):
         self._updating_name = False
         super().__init__(parent)
 
-    def _writes_allowed(self) -> bool:
+    def _writes_allowed(self, path: str | None = None) -> bool:
         if self._write_enabled_provider is None:
             return True
         try:
+            if path:
+                return bool(self._write_enabled_provider(path))
             return bool(self._write_enabled_provider())
+        except TypeError:
+            try:
+                return bool(self._write_enabled_provider())
+            except Exception:
+                return False
         except Exception:
             return False
 
-    def _write_disabled_tooltip(self, action: str = "写入操作") -> str:
+    def _write_disabled_tooltip(self, action: str = "写入操作", path: str | None = None) -> str:
+        if self._write_disabled_tooltip_provider is not None:
+            try:
+                if path:
+                    return str(self._write_disabled_tooltip_provider(action, path))
+                return str(self._write_disabled_tooltip_provider(action))
+            except TypeError:
+                try:
+                    return str(self._write_disabled_tooltip_provider(action))
+                except Exception:
+                    pass
+            except Exception:
+                pass
         return superpicky_root_write_disabled_tooltip(action)
+
+    def _tag_writes_allowed(self) -> bool:
+        if self._tag_write_enabled_provider is None:
+            return self._writes_allowed()
+        try:
+            return bool(self._tag_write_enabled_provider())
+        except Exception:
+            return False
+
+    def _tag_write_disabled_tooltip(self, action: str = "写入操作") -> str:
+        return superpicky_sidecar_write_disabled_tooltip(action)
 
     def create_ui(self) -> None:
         outer = QVBoxLayout(self)
@@ -236,10 +271,10 @@ class ImageInfoTabPanel_ImageInfo(ImageInfoTabPanel):
         metadata = self._load_metadata(path) if has_file else {}
         metadata_ms = (_time.perf_counter() - metadata_t0) * 1000.0
         comment = _metadata_comment(metadata)
-        can_write = has_file and self._writes_allowed()
+        can_write = has_file and self._writes_allowed(path)
         self.comment_edit.setEnabled(can_write)
         self.filename_edit.setEnabled(can_write)
-        disabled_tip = "" if can_write else self._write_disabled_tooltip("编辑图片信息")
+        disabled_tip = "" if can_write else self._write_disabled_tooltip("编辑图片信息", path)
         self.comment_edit.setToolTip(disabled_tip if has_file and not can_write else comment)
         self.filename_edit.setToolTip(disabled_tip if has_file and not can_write else path if has_file else "")
 
@@ -419,13 +454,13 @@ class ImageInfoTabPanel_ImageInfo(ImageInfoTabPanel):
         self._clear_tag_layout()
         path = self.current_photo_path()
         has_file = bool(path and os.path.isfile(path))
-        can_write = has_file and self._writes_allowed()
+        can_write = has_file and self._tag_writes_allowed()
         tags = sorted(self._current_tags)
         if not tags:
             btn = self._make_add_tag_button("＋ 添加标签")
             btn.setEnabled(can_write)
             if has_file and not can_write:
-                mark_write_action_disabled(btn, self._write_disabled_tooltip("添加标签"))
+                mark_write_action_disabled(btn, self._tag_write_disabled_tooltip("添加标签"))
             self.tags_layout.addWidget(btn, stretch=1)
             return
 
@@ -436,7 +471,7 @@ class ImageInfoTabPanel_ImageInfo(ImageInfoTabPanel):
         btn_add.setFixedWidth(32)
         btn_add.setEnabled(can_write)
         if has_file and not can_write:
-            btn_add.setToolTip(self._write_disabled_tooltip("添加标签"))
+            btn_add.setToolTip(self._tag_write_disabled_tooltip("添加标签"))
         self.tags_layout.addWidget(btn_add)
         self.tags_layout.addStretch(1)
 
@@ -454,10 +489,10 @@ class ImageInfoTabPanel_ImageInfo(ImageInfoTabPanel):
         btn = QToolButton(chip)
         btn.setText("×")
         btn.setToolTip(f"删除标签「{tag}」")
-        can_write = bool(self.current_photo_path() and os.path.isfile(self.current_photo_path()) and self._writes_allowed())
+        can_write = bool(self.current_photo_path() and os.path.isfile(self.current_photo_path()) and self._tag_writes_allowed())
         btn.setEnabled(can_write)
         if not can_write:
-            btn.setToolTip(self._write_disabled_tooltip("删除标签"))
+            btn.setToolTip(self._tag_write_disabled_tooltip("删除标签"))
         btn.setAutoRaise(True)
         btn.setStyleSheet("QToolButton { color: #aaa; border: none; font-size: 14px; }")
         btn.clicked.connect(lambda checked=False, t=tag: self._set_current_tag(t, False))
@@ -482,8 +517,8 @@ class ImageInfoTabPanel_ImageInfo(ImageInfoTabPanel):
         path = self.current_photo_path()
         if not path or not os.path.isfile(path):
             return
-        if not self._writes_allowed():
-            QMessageBox.warning(self, "目录只读", self._write_disabled_tooltip("添加标签"))
+        if not self._tag_writes_allowed():
+            QMessageBox.warning(self, "sidecar 只读", self._tag_write_disabled_tooltip("添加标签"))
             return
         available = self._load_available_tags()
         addable = [tag for tag in available if tag not in self._current_tags]
@@ -506,8 +541,8 @@ class ImageInfoTabPanel_ImageInfo(ImageInfoTabPanel):
         path = self.current_photo_path()
         if not path or not os.path.isfile(path):
             return
-        if not self._writes_allowed():
-            QMessageBox.warning(self, "目录只读", self._write_disabled_tooltip("保存标签"))
+        if not self._tag_writes_allowed():
+            QMessageBox.warning(self, "sidecar 只读", self._tag_write_disabled_tooltip("保存标签"))
             self.refresh_current_photo()
             return
         try:
@@ -523,8 +558,8 @@ class ImageInfoTabPanel_ImageInfo(ImageInfoTabPanel):
         path = self.current_photo_path()
         if not path or not os.path.isfile(path):
             return
-        if not self._writes_allowed():
-            QMessageBox.warning(self, "目录只读", self._write_disabled_tooltip("保存注释"))
+        if not self._writes_allowed(path):
+            QMessageBox.warning(self, "目录只读", self._write_disabled_tooltip("保存注释", path))
             self.refresh_current_photo()
             return
         comment = self.comment_edit.text().strip()
@@ -553,8 +588,8 @@ class ImageInfoTabPanel_ImageInfo(ImageInfoTabPanel):
         path = self.current_photo_path()
         if not path or not os.path.isfile(path):
             return
-        if not self._writes_allowed():
-            QMessageBox.warning(self, "目录只读", self._write_disabled_tooltip("重命名"))
+        if not self._writes_allowed(path):
+            QMessageBox.warning(self, "目录只读", self._write_disabled_tooltip("重命名", path))
             self.refresh_current_photo()
             return
         requested_name = self.filename_edit.text().strip()

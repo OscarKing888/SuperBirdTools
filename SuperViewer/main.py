@@ -533,6 +533,8 @@ class MainWindow(QMainWindow):
             comment_save_callback=self._save_photo_comment_from_info_panel,
             preview_pixmap_provider=self.preview_panel.source_pixmap_for_path,
             write_enabled_provider=self._file_writes_allowed,
+            write_disabled_tooltip_provider=self._file_writes_disabled_message,
+            tag_write_enabled_provider=self._sidecar_writes_allowed,
             parent=self.image_info_tabs,
         )
         self.tags_info_panel = ImageInfoTabPanel_Tags(
@@ -540,7 +542,7 @@ class MainWindow(QMainWindow):
             self._file_list.photo_tags_for_path,
             self._file_list.set_photo_tag_for_paths,
             self._file_list.clear_photo_tags_for_paths,
-            self._file_writes_allowed,
+            self._sidecar_writes_allowed,
             self.image_info_tabs,
         )
 
@@ -835,25 +837,42 @@ class MainWindow(QMainWindow):
         target_name = clean_name if name_path.suffix else f"{clean_name}{source.suffix}"
         return source.with_name(target_name)
 
-    def _file_writes_allowed(self) -> bool:
+    def _file_writes_allowed(self, path: str | None = None) -> bool:
         file_list = getattr(self, "_file_list", None)
         if file_list is None:
             return True
+        if path:
+            checker = getattr(file_list, "file_operation_paths_allowed", None)
+            if callable(checker):
+                return bool(checker([path]))
         checker = getattr(file_list, "file_writes_allowed", None)
         if callable(checker):
             return bool(checker())
         return True
 
-    def _file_writes_disabled_message(self, action: str = "写入操作") -> str:
+    def _sidecar_writes_allowed(self) -> bool:
         file_list = getattr(self, "_file_list", None)
+        if file_list is None:
+            return True
+        checker = getattr(file_list, "sidecar_writes_allowed", None)
+        if callable(checker):
+            return bool(checker())
+        return self._file_writes_allowed()
+
+    def _file_writes_disabled_message(self, action: str = "写入操作", path: str | None = None) -> str:
+        file_list = getattr(self, "_file_list", None)
+        if path:
+            path_getter = getattr(file_list, "file_operation_paths_disabled_tooltip", None)
+            if callable(path_getter):
+                return str(path_getter([path], action))
         getter = getattr(file_list, "file_writes_disabled_tooltip", None)
         if callable(getter):
             return str(getter(action))
         return f"{action}已禁用：当前目录无写入权限。"
 
     def _rename_photo_from_info_panel(self, path: str, requested_name: str) -> str:
-        if not self._file_writes_allowed():
-            raise PermissionError(self._file_writes_disabled_message("重命名"))
+        if not self._file_writes_allowed(path):
+            raise PermissionError(self._file_writes_disabled_message("重命名", path))
         source_path = os.path.normpath(os.path.abspath(path)) if path else ""
         if not source_path or not os.path.isfile(source_path):
             raise FileNotFoundError("当前图片不存在，无法重命名。")
@@ -917,8 +936,8 @@ class MainWindow(QMainWindow):
         return target_path
 
     def _save_photo_comment_from_info_panel(self, path: str, comment: str) -> bool:
-        if not self._file_writes_allowed():
-            raise PermissionError(self._file_writes_disabled_message("保存注释"))
+        if not self._file_writes_allowed(path):
+            raise PermissionError(self._file_writes_disabled_message("保存注释", path))
         source_path = os.path.normpath(os.path.abspath(path)) if path else ""
         if not source_path or not os.path.isfile(source_path):
             raise FileNotFoundError("当前图片不存在，无法保存注释。")

@@ -12,7 +12,7 @@ from app_common.perf_probe import perf_log
 from app_common.file_browser._permissions import (
     clear_readonly_label,
     mark_write_action_disabled,
-    superpicky_root_write_disabled_tooltip,
+    superpicky_sidecar_write_disabled_tooltip,
 )
 
 from .image_info_tab_base import ImageInfoTabPanel
@@ -64,7 +64,7 @@ class ImageInfoTabPanel_Tags(ImageInfoTabPanel):
             return False
 
     def _write_disabled_tooltip(self, action: str = "写入操作") -> str:
-        return superpicky_root_write_disabled_tooltip(action)
+        return superpicky_sidecar_write_disabled_tooltip(action)
 
     def create_ui(self) -> None:
         layout = QVBoxLayout(self)
@@ -211,7 +211,7 @@ class ImageInfoTabPanel_Tags(ImageInfoTabPanel):
         if not path or not os.path.isfile(path):
             return
         if not self._writes_allowed():
-            QMessageBox.warning(self, "目录只读", self._write_disabled_tooltip("保存标签"))
+            QMessageBox.warning(self, "sidecar 只读", self._write_disabled_tooltip("保存标签"))
             self.refresh_current_photo()
             return
         try:
@@ -225,7 +225,7 @@ class ImageInfoTabPanel_Tags(ImageInfoTabPanel):
         if not path or not os.path.isfile(path):
             return
         if not self._writes_allowed():
-            QMessageBox.warning(self, "目录只读", self._write_disabled_tooltip("清除标签"))
+            QMessageBox.warning(self, "sidecar 只读", self._write_disabled_tooltip("清除标签"))
             self.refresh_current_photo()
             return
         try:

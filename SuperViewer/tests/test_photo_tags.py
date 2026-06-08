@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
+from app_common.exif_io.json_sidecar import JSON_SIDECAR_SUFFIX, json_sidecar_path_for
 from app_common.exif_io.photo_meta import PhotoMetaDataXMP
 from app_common.exif_io.xmp_sidecar_edits import (
     edit_dir_for,
@@ -183,6 +184,23 @@ def test_store_persists_multiple_tags_per_photo_in_sidecar(tmp_path: Path) -> No
 
     store.set_tag_for_paths([str(photo_path)], "打架", False)
     assert store.get_tags(str(photo_path)) == {"捕食"}
+
+
+def test_store_persists_tags_to_central_json_sidecar_under_superpicky(tmp_path: Path) -> None:
+    root = tmp_path / "library"
+    photo_dir = root / "day1"
+    photo_dir.mkdir(parents=True)
+    (root / ".superpicky").mkdir()
+    photo_path = photo_dir / "img001.jpg"
+    photo_path.write_bytes(b"not an image")
+
+    store = PhotoTagSidecarStore()
+    store.set_tag_for_paths([str(photo_path)], "alpha", True)
+
+    expected = root / ".superpicky" / "metadata" / "day1" / f"img001.jpg{JSON_SIDECAR_SUFFIX}"
+    assert json_sidecar_path_for(str(photo_path)) == expected
+    assert expected.is_file()
+    assert store.get_tags(str(photo_path)) == {"alpha"}
 
 
 def test_store_loads_and_filters_configured_tags(tmp_path: Path) -> None:
