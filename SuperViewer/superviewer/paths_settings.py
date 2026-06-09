@@ -14,6 +14,7 @@ CONFIG_FILENAME = "super_viewer.cfg"
 LAST_SELECTED_DIRECTORY_FILENAME = "last_selected_directory.txt"
 LEGACY_LAST_FOLDER_FILENAME = ".last_folder.txt"
 USER_STATE_DIRNAME = "SuperViewer"
+MAIN_SPLITTER_STATE_KEY = "main_splitter_state"
 APP_ICON_CANDIDATES = (
     os.path.join("icons", "app_icon.png"),
     os.path.join("icons", "app_icon.ico"),
@@ -203,6 +204,24 @@ def save_last_selected_directory_to_settings(path: str) -> None:
     save_last_folder_to_file(path)
     if os.path.isfile(_get_config_path()):
         _save_settings(_load_settings())
+
+
+def load_main_splitter_state_from_settings() -> dict | None:
+    """Load the saved main-window splitter sizes/collapse state."""
+    state = _load_settings().get(MAIN_SPLITTER_STATE_KEY)
+    if isinstance(state, dict):
+        return dict(state)
+    return None
+
+
+def save_main_splitter_state_to_settings(state: dict | None) -> None:
+    """Save the main-window splitter sizes/collapse state."""
+    data = _load_settings()
+    if isinstance(state, dict):
+        data[MAIN_SPLITTER_STATE_KEY] = state
+    else:
+        data.pop(MAIN_SPLITTER_STATE_KEY, None)
+    _save_settings(data)
 
 
 def _build_windows_app_id(app_name: str) -> str:

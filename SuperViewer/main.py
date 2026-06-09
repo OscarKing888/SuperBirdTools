@@ -77,7 +77,9 @@ try:
         _get_config_resource_path,
         _get_product_display_name,
         _get_resource_path,
+        load_main_splitter_state_from_settings,
         load_last_selected_directory_from_settings,
+        save_main_splitter_state_to_settings,
         save_last_selected_directory_to_settings,
     )
     from .superviewer.focus_preview_loader import (
@@ -119,6 +121,7 @@ try:
         QTimer,
         QVBoxLayout,
         QWidget,
+        pyqtSignal,
         _Horizontal,
         _LeftButton,
     )
@@ -141,7 +144,9 @@ except ImportError:
         _get_config_resource_path,
         _get_product_display_name,
         _get_resource_path,
+        load_main_splitter_state_from_settings,
         load_last_selected_directory_from_settings,
+        save_main_splitter_state_to_settings,
         save_last_selected_directory_to_settings,
     )
     from superviewer.focus_preview_loader import (
@@ -183,6 +188,7 @@ except ImportError:
         QTimer,
         QVBoxLayout,
         QWidget,
+        pyqtSignal,
         _Horizontal,
         _LeftButton,
     )
@@ -225,11 +231,13 @@ _log = get_logger("main")
 
 
 class TriangleToggleSplitterHandle(QSplitterHandle):
-    """Splitter handle rendered as a click-only triangular toggle."""
+    """Splitter handle rendered as a triangular click toggle that also drags."""
 
     def __init__(self, orientation, splitter: "TriangleToggleSplitter") -> None:
         super().__init__(orientation, splitter)
         self._pressed = False
+        self._dragging = False
+        self._press_pos: QPoint | None = None
         self.setMouseTracking(True)
         self._sync_tooltip()
 
@@ -253,29 +261,53 @@ class TriangleToggleSplitterHandle(QSplitterHandle):
     def mousePressEvent(self, event) -> None:
         if event.button() == _LeftButton:
             self._pressed = True
-            event.accept()
+            self._dragging = False
+            self._press_pos = self._event_pos(event)
+            super().mousePressEvent(event)
             self.update()
             return
         super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event) -> None:
         if self._pressed:
+            pos = self._event_pos(event)
+            if not self._dragging and self._press_pos is not None:
+                try:
+                    moved = (pos - self._press_pos).manhattanLength()
+                except Exception:
+                    moved = abs(pos.x() - self._press_pos.x()) + abs(pos.y() - self._press_pos.y())
+                if moved >= self._drag_threshold():
+                    self._dragging = True
+            if self._dragging:
+                super().mouseMoveEvent(event)
+                self.update()
+                return
             event.accept()
             return
         super().mouseMoveEvent(event)
 
     def mouseReleaseEvent(self, event) -> None:
         if self._pressed and event.button() == _LeftButton:
+            was_dragging = self._dragging
             self._pressed = False
+            self._dragging = False
+            self._press_pos = None
+            if was_dragging:
+                super().mouseReleaseEvent(event)
+                self.update()
+                return
             pos = self._event_pos(event)
+            super().mouseReleaseEvent(event)
             if self.rect().contains(pos):
                 splitter = self.splitter()
                 if isinstance(splitter, TriangleToggleSplitter):
-                    splitter.toggle_left_panel_for_handle(self)
+                    splitter.toggle_panel_for_handle(self)
             event.accept()
             self.update()
             return
         self._pressed = False
+        self._dragging = False
+        self._press_pos = None
         super().mouseReleaseEvent(event)
 
     def paintEvent(self, event) -> None:
@@ -301,6 +333,12 @@ class TriangleToggleSplitterHandle(QSplitterHandle):
         except Exception:
             return event.pos()
 
+    def _drag_threshold(self) -> int:
+        try:
+            return max(1, int(QApplication.startDragDistance()))
+        except Exception:
+            return 4
+
     def _triangle_polygon(self) -> QPolygon:
         rect = self.rect()
         cx = rect.width() // 2
@@ -308,37 +346,54 @@ class TriangleToggleSplitterHandle(QSplitterHandle):
         splitter = self.splitter()
         collapsed = (
             isinstance(splitter, TriangleToggleSplitter)
-            and splitter.is_left_panel_collapsed_for_handle(self)
+            and splitter.is_target_panel_collapsed_for_handle(self)
         )
+        side = splitter.target_panel_side_for_handle(self) if isinstance(splitter, TriangleToggleSplitter) else "left"
         if self.orientation() == _Horizontal:
-            if collapsed:
+            if side == "right":
+                if collapsed:
+                    points = [QPoint(cx + 4, cy - 8), QPoint(cx + 4, cy + 8), QPoint(cx - 5, cy)]
+                else:
+                    points = [QPoint(cx - 4, cy - 8), QPoint(cx - 4, cy + 8), QPoint(cx + 5, cy)]
+            elif collapsed:
                 points = [QPoint(cx - 4, cy - 8), QPoint(cx - 4, cy + 8), QPoint(cx + 5, cy)]
             else:
                 points = [QPoint(cx + 4, cy - 8), QPoint(cx + 4, cy + 8), QPoint(cx - 5, cy)]
-        elif collapsed:
-            points = [QPoint(cx - 8, cy - 4), QPoint(cx + 8, cy - 4), QPoint(cx, cy + 5)]
         else:
-            points = [QPoint(cx - 8, cy + 4), QPoint(cx + 8, cy + 4), QPoint(cx, cy - 5)]
+            if side == "bottom":
+                if collapsed:
+                    points = [QPoint(cx - 8, cy + 4), QPoint(cx + 8, cy + 4), QPoint(cx, cy - 5)]
+                else:
+                    points = [QPoint(cx - 8, cy - 4), QPoint(cx + 8, cy - 4), QPoint(cx, cy + 5)]
+            elif collapsed:
+                points = [QPoint(cx - 8, cy - 4), QPoint(cx + 8, cy - 4), QPoint(cx, cy + 5)]
+            else:
+                points = [QPoint(cx - 8, cy + 4), QPoint(cx + 8, cy + 4), QPoint(cx, cy - 5)]
         return QPolygon(points)
 
     def _sync_tooltip(self) -> None:
         splitter = self.splitter()
         if not isinstance(splitter, TriangleToggleSplitter):
             return
-        index = splitter.left_panel_index_for_handle(self)
+        index = splitter.target_panel_index_for_handle(self)
         if index < 0:
             self.setToolTip("")
             return
         action = "展开" if splitter.is_panel_collapsed(index) else "折叠"
-        self.setToolTip(f"{action}左侧面板")
+        side = splitter.target_panel_side_for_handle(self)
+        side_text = "右侧" if side in ("right", "bottom") else "左侧"
+        self.setToolTip(f"{action}{side_text}面板")
 
 
 class TriangleToggleSplitter(QSplitter):
     """Horizontal splitter whose handles act as triangular panel toggles."""
 
+    stateChanged = pyqtSignal()
+
     def __init__(self, orientation, parent=None) -> None:
         super().__init__(orientation, parent)
         self._toggle_restore_sizes: dict[int, list[int]] = {}
+        self._toggle_target_by_handle_index: dict[int, int] = {}
         self.setHandleWidth(18)
 
     def createHandle(self) -> QSplitterHandle:
@@ -350,23 +405,59 @@ class TriangleToggleSplitter(QSplitter):
             return -1
         return handle_index - 1
 
+    def set_handle_toggle_target(self, handle_index: int, panel_index: int) -> None:
+        handle_index = int(handle_index)
+        panel_index = int(panel_index)
+        if handle_index <= 0 or not (0 <= panel_index < self.count()):
+            return
+        if panel_index not in (handle_index - 1, handle_index):
+            return
+        self._toggle_target_by_handle_index[handle_index] = panel_index
+        self._refresh_handles()
+
+    def target_panel_index_for_handle(self, handle: QSplitterHandle) -> int:
+        handle_index = self._handle_index(handle)
+        if handle_index <= 0:
+            return -1
+        target = self._toggle_target_by_handle_index.get(handle_index)
+        if target is not None and 0 <= target < self.count():
+            return target
+        return handle_index - 1
+
+    def target_panel_side_for_handle(self, handle: QSplitterHandle) -> str:
+        handle_index = self._handle_index(handle)
+        target_index = self.target_panel_index_for_handle(handle)
+        if self.orientation() == _Horizontal:
+            return "right" if target_index == handle_index else "left"
+        return "bottom" if target_index == handle_index else "top"
+
     def is_left_panel_collapsed_for_handle(self, handle: QSplitterHandle) -> bool:
         index = self.left_panel_index_for_handle(handle)
+        return index >= 0 and self.is_panel_collapsed(index)
+
+    def is_target_panel_collapsed_for_handle(self, handle: QSplitterHandle) -> bool:
+        index = self.target_panel_index_for_handle(handle)
         return index >= 0 and self.is_panel_collapsed(index)
 
     def is_panel_collapsed(self, index: int) -> bool:
         sizes = self.sizes()
         return 0 <= index < len(sizes) and sizes[index] <= 1
 
-    def toggle_left_panel_for_handle(self, handle: QSplitterHandle) -> None:
-        index = self.left_panel_index_for_handle(handle)
+    def toggle_panel_for_handle(self, handle: QSplitterHandle) -> None:
+        index = self.target_panel_index_for_handle(handle)
         if index < 0:
             return
+        changed = False
         if self.is_panel_collapsed(index):
-            self._expand_panel(index)
+            changed = self._expand_panel(index)
         else:
-            self._collapse_panel(index)
-        self._refresh_handles()
+            changed = self._collapse_panel(index)
+        if changed:
+            self._refresh_handles()
+            self.stateChanged.emit()
+
+    def toggle_left_panel_for_handle(self, handle: QSplitterHandle) -> None:
+        self.toggle_panel_for_handle(handle)
 
     def _handle_index(self, handle: QSplitterHandle) -> int:
         for index in range(1, self.count()):
@@ -374,10 +465,63 @@ class TriangleToggleSplitter(QSplitter):
                 return index
         return -1
 
-    def _collapse_panel(self, index: int) -> None:
+    def export_panel_state(self) -> dict:
+        """Return a JSON-serializable snapshot of splitter sizes and toggle restore data."""
+        count = self.count()
+        restore_sizes: dict[str, list[int]] = {}
+        for panel_index, sizes in sorted(self._toggle_restore_sizes.items()):
+            normalized = self._coerce_size_list(sizes, count)
+            if normalized and 0 <= panel_index < count and normalized[panel_index] > 1:
+                restore_sizes[str(panel_index)] = normalized
+        return {
+            "version": 1,
+            "panel_count": count,
+            "orientation": "horizontal" if self.orientation() == _Horizontal else "vertical",
+            "sizes": self._coerce_size_list(self.sizes(), count),
+            "restore_sizes": restore_sizes,
+        }
+
+    def restore_panel_state(self, state: dict | None) -> bool:
+        """Restore a state produced by export_panel_state()."""
+        if not isinstance(state, dict):
+            return False
+        count = self.count()
+        sizes = self._coerce_size_list(state.get("sizes"), count)
+        if not sizes or sum(sizes) <= 0:
+            return False
+        restore_sizes: dict[int, list[int]] = {}
+        raw_restore_sizes = state.get("restore_sizes")
+        if isinstance(raw_restore_sizes, dict):
+            for raw_index, raw_sizes in raw_restore_sizes.items():
+                try:
+                    panel_index = int(raw_index)
+                except (TypeError, ValueError):
+                    continue
+                normalized = self._coerce_size_list(raw_sizes, count)
+                if normalized and 0 <= panel_index < count and normalized[panel_index] > 1:
+                    restore_sizes[panel_index] = normalized
+        self._toggle_restore_sizes = restore_sizes
+        self.setSizes(sizes)
+        self._refresh_handles()
+        return True
+
+    @staticmethod
+    def _coerce_size_list(value, count: int) -> list[int]:
+        if not isinstance(value, (list, tuple)) or len(value) != count:
+            return []
+        sizes: list[int] = []
+        for item in value:
+            try:
+                number = int(item)
+            except (TypeError, ValueError):
+                return []
+            sizes.append(max(0, number))
+        return sizes
+
+    def _collapse_panel(self, index: int) -> bool:
         sizes = self.sizes()
         if not (0 <= index < len(sizes)) or sizes[index] <= 1:
-            return
+            return False
         self._toggle_restore_sizes[index] = list(sizes)
         collapsed_width = sizes[index]
         sizes[index] = 0
@@ -385,16 +529,17 @@ class TriangleToggleSplitter(QSplitter):
         if 0 <= target < len(sizes):
             sizes[target] += collapsed_width
         self.setSizes(sizes)
+        return True
 
-    def _expand_panel(self, index: int) -> None:
+    def _expand_panel(self, index: int) -> bool:
         restore_sizes = self._toggle_restore_sizes.get(index)
         if restore_sizes and len(restore_sizes) == self.count() and restore_sizes[index] > 1:
             self.setSizes(restore_sizes)
-            return
+            return True
 
         sizes = self.sizes()
         if not (0 <= index < len(sizes)):
-            return
+            return False
         target = index + 1 if index + 1 < len(sizes) else index - 1
         width = max(180, self.widget(index).minimumSizeHint().width(), self.widget(index).sizeHint().width())
         if 0 <= target < len(sizes):
@@ -402,6 +547,7 @@ class TriangleToggleSplitter(QSplitter):
             sizes[target] = max(1, sizes[target] - width)
         sizes[index] = max(1, width)
         self.setSizes(sizes)
+        return True
 
     def _refresh_handles(self) -> None:
         for index in range(1, self.count()):
@@ -419,6 +565,10 @@ class MainWindow(QMainWindow):
         self.setMinimumSize(900, 600)
         self.resize(1500, 960)
         self._init_menu_bar()
+        self._main_splitter: TriangleToggleSplitter | None = None
+        self._main_splitter_state_save_timer = QTimer(self)
+        self._main_splitter_state_save_timer.setSingleShot(True)
+        self._main_splitter_state_save_timer.timeout.connect(self._save_main_splitter_state)
         icon_path = _get_app_icon_path()
         if icon_path:
             self.setWindowIcon(QIcon(icon_path))
@@ -431,6 +581,7 @@ class MainWindow(QMainWindow):
 
         # 主分割器：目录树 | 文件列表 | 图片预览 | 元信息 Tab
         splitter = TriangleToggleSplitter(_Horizontal)
+        self._main_splitter = splitter
 
         # ── 面板 1：目录浏览器 ──
         self._dir_browser = DirectoryBrowserWidget()
@@ -550,9 +701,13 @@ class MainWindow(QMainWindow):
         self.image_info_tabs.add_info_panel(self.tags_info_panel)
         self.image_info_tabs.on_photo_selected("")
         splitter.addWidget(self.image_info_tabs)
+        splitter.set_handle_toggle_target(3, 3)
 
         # 各面板初始宽度：目录树 200 | 文件列表 320 | 预览 380 | 元信息 320
-        splitter.setSizes([220, 680, 520, 340])
+        if not splitter.restore_panel_state(load_main_splitter_state_from_settings()):
+            splitter.setSizes([220, 680, 520, 340])
+        splitter.splitterMoved.connect(self._queue_save_main_splitter_state)
+        splitter.stateChanged.connect(self._queue_save_main_splitter_state)
         layout.addWidget(splitter)
 
         self._current_exif_path = None
@@ -575,6 +730,21 @@ class MainWindow(QMainWindow):
             return
         try:
             self._dir_browser.select_directory(last_dir, emit_signal=True)
+        except Exception:
+            pass
+
+    def _queue_save_main_splitter_state(self, *_args) -> None:
+        try:
+            self._main_splitter_state_save_timer.start(250)
+        except Exception:
+            self._save_main_splitter_state()
+
+    def _save_main_splitter_state(self) -> None:
+        splitter = getattr(self, "_main_splitter", None)
+        if not isinstance(splitter, TriangleToggleSplitter):
+            return
+        try:
+            save_main_splitter_state_to_settings(splitter.export_panel_state())
         except Exception:
             pass
 
@@ -992,6 +1162,12 @@ class MainWindow(QMainWindow):
         )
 
     def closeEvent(self, event) -> None:  # type: ignore[override]
+        try:
+            if self._main_splitter_state_save_timer.isActive():
+                self._main_splitter_state_save_timer.stop()
+            self._save_main_splitter_state()
+        except Exception:
+            pass
         try:
             self._file_list.close_tag_store()
         except Exception:
