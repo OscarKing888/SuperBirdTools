@@ -44,6 +44,7 @@ _log = get_logger("superviewer.preview_panel")
 _QUICK_PREVIEW_SIZE = 512
 _QUICK_PREVIEW_FALLBACK_SIZE = 128
 _FULL_PREVIEW_DELAY_MS = 80
+_DIRECT_ORIGINAL_PREVIEW_MAX_PIXELS = 40 * 1024 * 1024 # 40M
 _HEIF_PIL_OPENER_REGISTERED = False
 
 
@@ -110,6 +111,37 @@ def _load_quick_preview_pixmap(path: str, target_size: int) -> QPixmap | None:
         return None
     pix = QPixmap.fromImage(qimg)
     return pix if not pix.isNull() else None
+
+
+def _preview_source_pixel_count(path: str) -> int:
+    if not path or not os.path.isfile(path):
+        return 0
+    if Path(path).suffix.lower() in RAW_EXTENSIONS:
+        return 0
+    try:
+        reader = QImageReader(path)
+        try:
+            reader.setAutoTransform(True)
+        except Exception:
+            pass
+        pixels = _qsize_pixel_count(reader.size())
+        if pixels > 0:
+            return pixels
+    except Exception:
+        pass
+    if Path(path).suffix.lower() in HEIF_EXTENSIONS:
+        _register_heif_pil_opener()
+    try:
+        with Image.open(path) as img:
+            width, height = img.size
+            return max(0, int(width)) * max(0, int(height))
+    except Exception:
+        return 0
+
+
+def _should_load_original_immediately(path: str) -> bool:
+    pixels = _preview_source_pixel_count(path)
+    return 0 < pixels <= _DIRECT_ORIGINAL_PREVIEW_MAX_PIXELS
 
 
 def _qimage_pixel_count(qimg: QImage | None) -> int:
@@ -318,7 +350,8 @@ class PreviewPanel(QWidget):
             if load_full and not self._full_preview_loaded and not self._full_preview_timer.isActive():
                 loader = self._full_preview_loader
                 if loader is None or not loader.isRunning():
-                    self._full_preview_timer.start(_FULL_PREVIEW_DELAY_MS)
+                    if not self._try_set_direct_original_preview(norm_path):
+                        self._full_preview_timer.start(_FULL_PREVIEW_DELAY_MS)
             perf_log(
                 _log,
                 "[PERF][image_switch][preview_panel.set_image] path=%r same_path=1 full_loaded=%s total_ms=%.1f",
@@ -334,11 +367,19 @@ class PreviewPanel(QWidget):
         self._cancel_pending_full_preview()
         load_t0 = _time.perf_counter()
         target_size = _quick_preview_target_size(self._canvas)
-        pix = _load_quick_preview_pixmap(path, target_size)
+        pix = None
+        direct_original = False
+        if load_full:
+            direct_original = self._try_set_direct_original_preview(norm_path)
+        if not direct_original:
+            pix = _load_quick_preview_pixmap(path, target_size)
         load_ms = (_time.perf_counter() - load_t0) * 1000.0
         canvas_ms = 0.0
         status_ms = 0.0
-        if pix is not None and not pix.isNull():
+        if direct_original:
+            canvas_ms = 0.0
+            status_ms = 0.0
+        elif pix is not None and not pix.isNull():
             canvas_t0 = _time.perf_counter()
             self._set_canvas_pixmap(pix)
             canvas_ms = (_time.perf_counter() - canvas_t0) * 1000.0
@@ -353,13 +394,14 @@ class PreviewPanel(QWidget):
             status_t0 = _time.perf_counter()
             self._set_preview_status_text(None, None)
             status_ms = (_time.perf_counter() - status_t0) * 1000.0
-        if load_full and path:
+        if load_full and path and not direct_original:
             self._full_preview_timer.start(_FULL_PREVIEW_DELAY_MS)
         perf_log(
             _log,
-            "[PERF][image_switch][preview_panel.set_image] path=%r token=%s quick_ok=%s quick_size=%s target=%s load_ms=%.1f canvas_ms=%.1f status_ms=%.1f total_ms=%.1f",
+            "[PERF][image_switch][preview_panel.set_image] path=%r token=%s direct_original=%s quick_ok=%s quick_size=%s target=%s load_ms=%.1f canvas_ms=%.1f status_ms=%.1f total_ms=%.1f",
             path,
             token,
+            direct_original,
             bool(pix is not None and not pix.isNull()),
             (pix.width(), pix.height()) if pix is not None and not pix.isNull() else None,
             target_size,
@@ -390,6 +432,31 @@ class PreviewPanel(QWidget):
     def _has_canvas_pixmap(self) -> bool:
         pixmap = getattr(self._canvas, "_source_pixmap", None)
         return bool(pixmap is not None and not pixmap.isNull())
+
+    def _try_set_direct_original_preview(self, path: str) -> bool:
+        if not _should_load_original_immediately(path):
+            return False
+        load_t0 = _time.perf_counter()
+        qimg = _load_full_preview_qimage(path)
+        load_ms = (_time.perf_counter() - load_t0) * 1000.0
+        if qimg is None or qimg.isNull():
+            return False
+        pix = QPixmap.fromImage(qimg)
+        if pix.isNull():
+            return False
+        apply_t0 = _time.perf_counter()
+        self._set_canvas_pixmap(pix)
+        self._set_preview_status_text(pix.width(), pix.height())
+        self._full_preview_loaded = True
+        perf_log(
+            _log,
+            "[preview.direct_original] path=%r size=%s load_ms=%.1f apply_ms=%.1f",
+            path,
+            (pix.width(), pix.height()),
+            load_ms,
+            (_time.perf_counter() - apply_t0) * 1000.0,
+        )
+        return True
 
     def _is_current_path(self, path: str) -> bool:
         if not path or not self._current_path:

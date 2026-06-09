@@ -56,10 +56,17 @@ def test_photo_tag_filter_partial_match_allows_substring() -> None:
     assert photo_tag_filter_matches(["鸟"], ["水鸟"], partial_match=True)
 
 
-def test_photo_tag_filter_multiple_filters_use_any_match() -> None:
-    assert photo_tag_filter_matches(["鸟", "猛禽"], ["猛禽"])
-    assert photo_tag_filter_matches(["鸟", "猛禽"], ["猛禽类"], partial_match=True)
+def test_photo_tag_filter_exact_multiple_filters_require_all_matches() -> None:
+    assert photo_tag_filter_matches(["标签1", "标签2"], ["标签1", "标签2"])
+    assert photo_tag_filter_matches(["标签1", "标签2"], ["标签1", "标签2", "标签3"])
+    assert not photo_tag_filter_matches(["标签1", "标签2"], ["标签1", "标签3"])
     assert not photo_tag_filter_matches(["鸟", "猛禽"], ["昆虫"])
+
+
+def test_photo_tag_filter_partial_multiple_filters_accept_any_match() -> None:
+    assert photo_tag_filter_matches(["鸟", "猛禽"], ["水鸟"], partial_match=True)
+    assert photo_tag_filter_matches(["鸟", "猛禽"], ["猛禽类"], partial_match=True)
+    assert not photo_tag_filter_matches(["鸟", "猛禽"], ["昆虫"], partial_match=True)
 
 
 def test_xmp_subject_roundtrip_preserves_multiple_tags(tmp_path: Path) -> None:

@@ -75,7 +75,8 @@ def photo_tag_filter_matches(
             for value in tag_values
         )
 
-    return bool(set(filters).intersection(tags))
+    tag_set = set(tags)
+    return all(filter_tag in tag_set for filter_tag in filters)
 
 
 def find_superpicky_tag_config_path(
