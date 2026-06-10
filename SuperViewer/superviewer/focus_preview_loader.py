@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
-焦点框提取与预览图加载：扩展名常量、预览 QPixmap、焦点元数据与 report.db 保底。
-可依赖 paths_settings、exif_helpers、app_common、qt_compat，不依赖 SuperViewer 类模块。
+Focus box extraction and preview image loading, including report.db fallback.
+This module depends on paths_settings, exif_helpers, app_common, and qt_compat.
 """
 
 from __future__ import annotations
@@ -23,8 +23,9 @@ from app_common.focus_calc import (
     resolve_focus_camera_type_from_metadata,
     resolve_focus_display_orientation,
 )
+from app_common.image_formats import IMAGE_EXTENSIONS
 from app_common.log import get_logger
-from app_common.report_db import find_report_root, ReportDB
+from app_common.report_db import ReportDB, find_report_root
 
 from .exif_helpers import (
     HEIF_EXTENSIONS,
@@ -32,7 +33,7 @@ from .exif_helpers import (
     RAW_EXTENSIONS,
     load_exif_heic,
 )
-from .qt_compat import QImage, QPixmap, QTransform, _SmoothTransformation
+from .qt_compat import QImage, QImageReader, QPixmap, QTransform, _SmoothTransformation
 
 try:
     import exifread
@@ -45,17 +46,6 @@ except ImportError:
     rawpy = None
 
 _log = get_logger("focus_preview_loader")
-
-# Re-export for scripts / main re-exports
-IMAGE_EXTENSIONS = (
-    ".jpg", ".jpeg", ".png", ".webp", ".tiff", ".tif",
-    ".heic", ".heif", ".hif",
-    ".cr2", ".cr3", ".crw", ".nef", ".nrw", ".arw", ".srf", ".sr2",
-    ".rw2", ".raw", ".orf", ".ori", ".raf", ".dng", ".pef", ".ptx",
-    ".x3f", ".rwl", ".3fr", ".dcr", ".kdc", ".mef", ".mrw", ".rwz",
-)
-IMAGE_EXTENSIONS = tuple(dict.fromkeys(e.lower() for e in IMAGE_EXTENSIONS))
-
 
 def _get_orientation_from_file(path: str) -> int:
     """从文件中读取 EXIF Orientation 值 (1–8)。先 piexif 再 exifread，返回 1 表示正常。"""
@@ -129,6 +119,25 @@ def _load_preview_pixmap_with_orientation(path: str) -> QPixmap | None:
         return None
 
 
+def _load_standard_pixmap_qt(path: str) -> QPixmap | None:
+    """用 Qt 图片插件加载常规图片，并让 Qt 处理 EXIF 方向。"""
+    if not path or Path(path).suffix.lower() in RAW_EXTENSIONS:
+        return None
+    try:
+        reader = QImageReader(path)
+        try:
+            reader.setAutoTransform(True)
+        except Exception:
+            pass
+        qimg = reader.read()
+        if qimg.isNull():
+            return None
+        pix = QPixmap.fromImage(qimg)
+        return pix if not pix.isNull() else None
+    except Exception:
+        return None
+
+
 def _load_raw_full_as_pixmap(path: str) -> QPixmap | None:
     """使用 rawpy 解码 RAW 为完整原图并转为 QPixmap（应用 EXIF 方向）。"""
     if rawpy is None or Path(path).suffix.lower() not in RAW_EXTENSIONS:
@@ -182,8 +191,11 @@ def get_raw_thumbnail(path: str) -> bytes | None:
 
 def _load_preview_pixmap_for_canvas(path: str) -> QPixmap | None:
     """加载预览用 QPixmap（原图，含方向修正），供 PreviewPanel 使用。"""
-    pix = _load_preview_pixmap_with_orientation(path)
     is_raw = Path(path).suffix.lower() in RAW_EXTENSIONS
+    pix = None if is_raw else _load_standard_pixmap_qt(path)
+    if pix is not None and not pix.isNull():
+        return pix
+    pix = _load_preview_pixmap_with_orientation(path)
     if (pix is None or pix.isNull()) and is_raw:
         pix = _load_raw_full_as_pixmap(path)
     if (pix is None or pix.isNull()) and is_raw:
@@ -576,7 +588,7 @@ def _load_focus_box_from_report_db(
     raw_metadata: dict | None = None,
     camera_type=None,
 ) -> tuple[float, float, float, float] | None:
-    """从 report.db 的 focus_x、focus_y 构造焦点框（保底）。"""
+    """Build a fallback focus box from report.db focus_x/focus_y values."""
     if width <= 0 or height <= 0:
         return None
     try:
@@ -652,7 +664,9 @@ def _load_focus_box_for_preview(path: str, width: int, height: int, *, allow_rep
         if focus_box is None:
             if allow_report_db_fallback:
                 focus_box = _load_focus_box_from_report_db(
-                    path, width, height,
+                    path,
+                    width,
+                    height,
                     ref_size=(focus_width, focus_height),
                     raw_metadata=raw_metadata,
                     camera_type=camera_type,
@@ -678,7 +692,9 @@ def _load_focus_box_for_preview(path: str, width: int, height: int, *, allow_rep
         _log.exception("[_load_focus_box_for_preview] failed path=%r", path)
         if allow_report_db_fallback:
             focus_box = _load_focus_box_from_report_db(
-                path, width, height,
+                path,
+                width,
+                height,
                 ref_size=(focus_width, focus_height),
                 raw_metadata=raw_metadata,
                 camera_type=camera_type,

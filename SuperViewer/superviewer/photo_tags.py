@@ -18,6 +18,9 @@ from app_common.log import get_logger
 
 _log = get_logger("superviewer.photo_tags")
 
+SUPERPICKY_DIRNAME = ".superpicky"
+PHOTO_TAG_CONFIG_FILENAME = "tags.cfg"
+
 
 def _normalise_path(path: str | os.PathLike[str]) -> str:
     return os.path.normpath(os.fspath(path))
@@ -48,6 +51,59 @@ def _normalise_paths(paths: Iterable[str]) -> list[str]:
         seen.add(key)
         result.append(norm)
     return result
+
+
+def photo_tag_filter_matches(
+    selected_filters: Iterable[str],
+    photo_tags: Iterable[str],
+    *,
+    partial_match: bool = False,
+) -> bool:
+    """Return whether a photo's tags satisfy selected tag filters."""
+    filters = _normalise_tags(selected_filters)
+    if not filters:
+        return True
+    tags = _normalise_tags(photo_tags)
+    if not tags:
+        return False
+
+    if partial_match:
+        tag_values = [tag.casefold() for tag in tags]
+        return any(
+            needle in value
+            for needle in (filter_tag.casefold() for filter_tag in filters)
+            for value in tag_values
+        )
+
+    tag_set = set(tags)
+    return all(filter_tag in tag_set for filter_tag in filters)
+
+
+def find_superpicky_tag_config_path(
+    path: str | os.PathLike[str] | None,
+    *,
+    max_levels: int | None = None,
+) -> Path | None:
+    """Return the nearest parent .superpicky/tags.cfg path for *path*."""
+    if not path:
+        return None
+    candidate = os.path.normpath(os.fspath(path))
+    if os.path.basename(candidate) == SUPERPICKY_DIRNAME and os.path.isdir(candidate):
+        return Path(candidate) / PHOTO_TAG_CONFIG_FILENAME
+
+    depth = 0
+    while candidate:
+        if max_levels is not None and depth > max_levels:
+            break
+        superpicky_dir = os.path.join(candidate, SUPERPICKY_DIRNAME)
+        if os.path.isdir(superpicky_dir):
+            return Path(superpicky_dir) / PHOTO_TAG_CONFIG_FILENAME
+        parent = os.path.dirname(candidate)
+        if parent == candidate:
+            break
+        candidate = parent
+        depth += 1
+    return None
 
 
 class PhotoTagConfig:
@@ -140,14 +196,14 @@ class PhotoTagSidecarStore:
                     if clean_tag in subject_set:
                         updated += 1
                         continue
-                    new_subjects = subjects + [clean_tag]
+                    if self._metadata.add_subjects(path, [clean_tag]):
+                        updated += 1
                 else:
                     if clean_tag not in subject_set:
                         updated += 1
                         continue
-                    new_subjects = [value for value in subjects if value != clean_tag]
-                if self._metadata.write_subjects(path, new_subjects):
-                    updated += 1
+                    if self._metadata.remove_subjects(path, [clean_tag]):
+                        updated += 1
         return updated
 
     def clear_tags_for_paths(
@@ -174,6 +230,10 @@ class PhotoTagSidecarStore:
                 if new_subjects == subjects:
                     updated += 1
                     continue
-                if self._metadata.write_subjects(path, new_subjects):
+                if remove_all:
+                    saved = self._metadata.write_subjects(path, [])
+                else:
+                    saved = self._metadata.remove_subjects(path, remove_tags)
+                if saved:
                     updated += 1
         return updated

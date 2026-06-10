@@ -24,6 +24,7 @@ try:
         QTableWidget,
         QTableWidgetItem,
         QSplitter,
+        QSplitterHandle,
         QFrame,
         QFileDialog,
         QMessageBox,
@@ -43,11 +44,13 @@ try:
         QStyledItemDelegate,
         QStackedWidget,
         QSlider,
+        QWidgetAction,
     )
-    from PyQt6.QtCore import Qt, QMimeData, QSize, QDir, QThread, QTimer, pyqtSignal, QModelIndex, QRect
+    from PyQt6.QtCore import Qt, QMimeData, QSize, QDir, QThread, QTimer, pyqtSignal, QModelIndex, QRect, QPoint
     from PyQt6.QtGui import (
         QPixmap,
         QImage,
+        QImageReader,
         QTransform,
         QDragEnterEvent,
         QDropEvent,
@@ -60,6 +63,7 @@ try:
         QPainter,
         QBrush,
         QPen,
+        QPolygon,
     )
 except ImportError:
     from PyQt5.QtWidgets import (
@@ -81,6 +85,7 @@ except ImportError:
         QTableWidget,
         QTableWidgetItem,
         QSplitter,
+        QSplitterHandle,
         QFrame,
         QFileDialog,
         QMessageBox,
@@ -101,11 +106,13 @@ except ImportError:
         QStyledItemDelegate,
         QStackedWidget,
         QSlider,
+        QWidgetAction,
     )
-    from PyQt5.QtCore import Qt, QMimeData, QSize, QDir, QThread, QTimer, pyqtSignal, QModelIndex, QRect
+    from PyQt5.QtCore import Qt, QMimeData, QSize, QDir, QThread, QTimer, pyqtSignal, QModelIndex, QRect, QPoint
     from PyQt5.QtGui import (
         QPixmap,
         QImage,
+        QImageReader,
         QTransform,
         QDragEnterEvent,
         QDropEvent,
@@ -117,6 +124,7 @@ except ImportError:
         QPainter,
         QBrush,
         QPen,
+        QPolygon,
     )
 
 # PyQt5/6 枚举兼容
