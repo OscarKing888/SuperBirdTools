@@ -15,12 +15,17 @@ import tempfile
 import time as _time
 from pathlib import Path
 
+import piexif
+
 from app_common import show_about_dialog, load_about_images, load_about_info
 from app_common.log import get_logger
 from app_common.perf_probe import elapsed_ms, perf_counter, perf_log
 from app_common.exif_io import (
     PhotoMetaDataXMP,
     find_xmp_sidecar,
+    get_exiftool_executable_path,
+    write_exif_with_exiftool,
+    write_exif_with_exiftool_by_key,
 )
 from app_common.file_browser import DirectoryBrowserWidget
 from app_common.image_formats import IMAGE_EXTENSIONS, RAW_EXTENSIONS
@@ -58,14 +63,26 @@ from app_common.superviewer_user_options import (
 # 开发时从包内相对导入，打包后 entry/main 作为顶层脚本无父包，改用绝对导入 superviewer
 try:
     from .superviewer.exif_helpers import (
+        META_DESCRIPTION_TAG_ID,
+        META_IFD_NAME,
+        META_TITLE_TAG_ID,
+        PIEXIF_WRITABLE_EXTENSIONS,
+        apply_tag_priority,
+        format_exif_value,
+        get_tag_type,
+        load_all_exif,
         load_display_description,
         load_display_title,
         load_exif_piexif,
         load_hyperfocal_coc_mm_from_settings,
+        load_tag_priority_from_settings,
         load_preview_grid_mode_from_settings,
         load_preview_grid_line_width_from_settings,
         save_preview_grid_mode_to_settings,
         save_preview_grid_line_width_to_settings,
+        _format_exception_message,
+        _normalize_meta_edit_text,
+        _parse_value_back,
     )
     from .superviewer.paths_settings import (
         _build_main_window_title,
@@ -88,6 +105,7 @@ try:
     )
     from .superviewer.preview_panel import PreviewPanel
     from .superviewer.image_info_tabs import (
+        ImageInfoTabPanel_EXIF,
         ImageInfoTabPanel_ImageInfo,
         ImageInfoTabPanel_Tags,
         ImageInfoTabWidget,
@@ -125,14 +143,26 @@ try:
     )
 except ImportError:
     from superviewer.exif_helpers import (
+        META_DESCRIPTION_TAG_ID,
+        META_IFD_NAME,
+        META_TITLE_TAG_ID,
+        PIEXIF_WRITABLE_EXTENSIONS,
+        apply_tag_priority,
+        format_exif_value,
+        get_tag_type,
+        load_all_exif,
         load_display_description,
         load_display_title,
         load_exif_piexif,
         load_hyperfocal_coc_mm_from_settings,
+        load_tag_priority_from_settings,
         load_preview_grid_mode_from_settings,
         load_preview_grid_line_width_from_settings,
         save_preview_grid_mode_to_settings,
         save_preview_grid_line_width_to_settings,
+        _format_exception_message,
+        _normalize_meta_edit_text,
+        _parse_value_back,
     )
     from superviewer.paths_settings import (
         _build_main_window_title,
@@ -155,6 +185,7 @@ except ImportError:
     )
     from superviewer.preview_panel import PreviewPanel
     from superviewer.image_info_tabs import (
+        ImageInfoTabPanel_EXIF,
         ImageInfoTabPanel_ImageInfo,
         ImageInfoTabPanel_Tags,
         ImageInfoTabWidget,
@@ -694,9 +725,15 @@ class MainWindow(QMainWindow):
             self._sidecar_writes_allowed,
             self.image_info_tabs,
         )
+        self.exif_info_panel = ImageInfoTabPanel_EXIF(
+            self._load_metadata_rows_for_current_path,
+            self._save_exif_value,
+            self.image_info_tabs,
+        )
 
         self.image_info_tabs.add_info_panel(self.image_info_panel)
         self.image_info_tabs.add_info_panel(self.tags_info_panel)
+        self.image_info_tabs.add_info_panel(self.exif_info_panel)
         self.image_info_tabs.on_photo_selected("")
         splitter.addWidget(self.image_info_tabs)
         splitter.set_handle_toggle_target(3, 3)
@@ -965,6 +1002,105 @@ class MainWindow(QMainWindow):
 
     def _sync_preview_scale_combo(self, scale_percent: object) -> None:
         sync_preview_scale_preset_combo(self.combo_preview_scale, scale_percent)
+
+    def _load_metadata_rows_for_current_path(self, path: str, tag_label_chinese: bool) -> list[tuple]:
+        rows = load_all_exif(path, tag_label_chinese=tag_label_chinese)
+        return apply_tag_priority(rows, load_tag_priority_from_settings())
+
+    def _sync_metadata_after_exif_save(self, path: str, meta_tag_id: str, value: str) -> None:
+        meta_updates: dict[str, str] = {}
+        if meta_tag_id == META_TITLE_TAG_ID:
+            meta_updates.update({
+                "title": value,
+                "XMP-dc:Title": value,
+                "IFD0:XPTitle": value,
+                "IFD0:DocumentName": value,
+            })
+        elif meta_tag_id == META_DESCRIPTION_TAG_ID:
+            meta_updates.update({
+                "Description": value,
+                "XMP-dc:Description": value,
+                "XMP:Description": value,
+                "IFD0:XPComment": value,
+                "IFD0:ImageDescription": value,
+                "EXIF:UserComment": value,
+            })
+        if not meta_updates:
+            return
+        try:
+            self._file_list.sync_metadata_edit_for_path(path, meta_updates=meta_updates)
+        except Exception:
+            _log.exception("[_sync_metadata_after_exif_save] path=%r meta_tag_id=%r", path, meta_tag_id)
+
+    def _write_xmp_meta_value(self, path: str, meta_tag_id: str, value: str) -> bool:
+        xmp_meta = PhotoMetaDataXMP()
+        if meta_tag_id == META_DESCRIPTION_TAG_ID:
+            return bool(xmp_meta.write_description(path, value))
+        if meta_tag_id == META_TITLE_TAG_ID:
+            return bool(xmp_meta.write(path, {"XMP-dc:Title": value}))
+        return False
+
+    def _save_exif_value(self, ifd_name: str, tag_id, new_val: str, raw_value, exiftool_key=None):
+        """Write an edited EXIF-table value back to the current image."""
+        path = self._current_exif_path
+        if not path or not os.path.isfile(path):
+            QMessageBox.warning(self, "无法保存", "未选择图片或文件不存在。")
+            return
+        ext = Path(path).suffix.lower()
+        has_exiftool = bool(get_exiftool_executable_path())
+        try:
+            if ifd_name == META_IFD_NAME and str(tag_id) in (META_TITLE_TAG_ID, META_DESCRIPTION_TAG_ID):
+                meta_tag_id = str(tag_id)
+                new_text = _normalize_meta_edit_text(new_val)
+                old_text = _normalize_meta_edit_text(raw_value if raw_value is not None else "")
+                if new_text == old_text:
+                    QMessageBox.information(self, "未变更", "输入内容与当前值一致，未执行写入。")
+                    return
+                if not self._write_xmp_meta_value(path, meta_tag_id, new_text):
+                    raise RuntimeError("无法写入 XMP sidecar。")
+                self._sync_metadata_after_exif_save(path, meta_tag_id, new_text)
+            elif has_exiftool:
+                if exiftool_key:
+                    write_exif_with_exiftool_by_key(path, exiftool_key, new_val)
+                elif ifd_name is not None and tag_id is not None:
+                    write_exif_with_exiftool(path, ifd_name, tag_id, new_val, raw_value)
+                else:
+                    raise RuntimeError("无法写入该标签。")
+            elif ext in PIEXIF_WRITABLE_EXTENSIONS and ifd_name is not None and tag_id is not None:
+                if tag_id == 37510:
+                    new_raw = b"ASCII\x00\x00\x00" + new_val.encode("utf-8")
+                else:
+                    new_raw = _parse_value_back(new_val, raw_value)
+                if new_raw == raw_value:
+                    QMessageBox.information(self, "未变更", "输入内容解析后与原值一致，未执行写入。")
+                    return
+                try:
+                    data = piexif.load(path)
+                    if ifd_name not in data or not isinstance(data[ifd_name], dict):
+                        data[ifd_name] = {}
+                    data[ifd_name][tag_id] = new_raw
+                    exif_bytes = piexif.dump(data)
+                    piexif.insert(exif_bytes, path)
+                    verify_data = piexif.load(path)
+                    verify_ifd = verify_data.get(ifd_name)
+                    verify_raw = verify_ifd.get(tag_id) if isinstance(verify_ifd, dict) else None
+                    if verify_raw != new_raw:
+                        tag_type = get_tag_type(ifd_name, tag_id)
+                        old_fmt = format_exif_value(new_raw, expected_type=tag_type)
+                        new_fmt = format_exif_value(verify_raw, expected_type=tag_type)
+                        if old_fmt != new_fmt:
+                            raise RuntimeError("写入后校验失败：文件中的值与目标值不一致。")
+                except Exception as exc:
+                    if type(exc).__name__ == "InvalidImageDataError" and get_exiftool_executable_path():
+                        write_exif_with_exiftool(path, ifd_name, tag_id, new_val, raw_value)
+                    else:
+                        raise
+            else:
+                raise RuntimeError("未找到 exiftool，无法写入该格式。请配置 exiftools_win/exiftools_mac 或将其加入 PATH。")
+            self.exif_info_panel.refresh_current_photo()
+            QMessageBox.information(self, "已保存", "元数据已写入。")
+        except Exception as exc:
+            QMessageBox.critical(self, "保存失败", _format_exception_message(exc))
 
     @staticmethod
     def _same_filesystem_key(path_a: str | os.PathLike, path_b: str | os.PathLike) -> bool:
