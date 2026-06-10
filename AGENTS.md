@@ -13,13 +13,13 @@ Follow `ai_rules/AI_CODING_RULES.md` as the project baseline.
 
 ## Current Workspace
 
-- Current Windows checkout root: `E:\SuperApps\SuperBirdTools`
+- Current Windows checkout root: `E:\SuperApps\SBT\SuperBirdTools`
 - Current macOS checkout root: `/Users/oscar/Pictures/SuperApps/SuperBirdTools`
 - Shared development virtual environment: `<repo>/.venv`
-- On Windows 64-bit, use the repo-root interpreter `E:\SuperApps\SuperBirdTools\.venv\Scripts\python.exe`
+- On Windows 64-bit, use the repo-root interpreter `E:\SuperApps\SBT\SuperBirdTools\.venv\Scripts\python.exe`
 - On macOS, use the repo-root interpreter `/Users/oscar/Pictures/SuperApps/SuperBirdTools/.venv/bin/python3`
 - Unless a script explicitly requires an app subdirectory, run commands from the repository root above.
-- Treat `<repo>` as the active checkout root for Codex file links and commands. In this Windows checkout, prefer paths under `E:\SuperApps\SuperBirdTools`.
+- Treat `<repo>` as the active checkout root for Codex file links and commands. In this Windows checkout, prefer paths under `E:\SuperApps\SBT\SuperBirdTools`.
 
 ## Monorepo Environment
 
