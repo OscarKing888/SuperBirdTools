@@ -17,6 +17,7 @@ from app_common.perf_probe import perf_log
 from app_common.preview_canvas import (
     PreviewCanvas,
     PreviewOverlayOptions,
+    PreviewOverlayState,
     format_preview_scale_percent,
     normalize_preview_composition_grid_line_width,
     normalize_preview_composition_grid_mode,
@@ -296,6 +297,7 @@ class PreviewPanel(QWidget):
         self._full_preview_timer.timeout.connect(self._start_full_preview_loader)
         self._preview_resolution: tuple[int, int] | None = None
         self._keep_view_on_switch = bool(get_keep_view_on_switch())
+        self._show_focus_enabled = True
         self._composition_grid_mode = normalize_preview_composition_grid_mode("none")
         self._composition_grid_line_width = normalize_preview_composition_grid_line_width(1)
         layout = QVBoxLayout(self)
@@ -332,6 +334,7 @@ class PreviewPanel(QWidget):
         self._current_path = norm_path
         self._full_preview_loaded = False
         self._cancel_pending_full_preview()
+        self.set_focus_box(None)
         load_t0 = _time.perf_counter()
         target_size = _quick_preview_target_size(self._canvas)
         pix = None
@@ -508,6 +511,15 @@ class PreviewPanel(QWidget):
         self._ensure_full_preview_loaded_sync()
         return self._canvas.save_source_pixmap_with_overlays(path, fmt=fmt, quality=quality)
 
+    def set_focus_box(self, focus_box) -> None:
+        """更新对焦点框（归一化坐标），传 None 表示清除。"""
+        self._canvas.apply_overlay_state(PreviewOverlayState(focus_box=focus_box))
+
+    def set_show_focus_enabled(self, enabled: bool) -> None:
+        """开关「显示对焦点」叠加层。"""
+        self._show_focus_enabled = bool(enabled)
+        self._apply_overlay_options()
+
     def set_composition_grid_mode(self, mode: str | None) -> None:
         self._composition_grid_mode = normalize_preview_composition_grid_mode(mode)
         self._apply_overlay_options()
@@ -582,7 +594,7 @@ class PreviewPanel(QWidget):
         return pixmap
 
     def _apply_overlay_options(self) -> None:
-        options = PreviewOverlayOptions(show_focus_box=False)
+        options = PreviewOverlayOptions(show_focus_box=self._show_focus_enabled)
         if hasattr(options, "composition_grid_mode"):
             options.composition_grid_mode = self._composition_grid_mode
         if hasattr(options, "composition_grid_line_width"):

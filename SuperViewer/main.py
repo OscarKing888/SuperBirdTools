@@ -24,7 +24,7 @@ from app_common.exif_io import (
     _get_exiftool_tag_target,
 )
 from app_common.file_browser import DirectoryBrowserWidget
-from app_common.image_formats import IMAGE_EXTENSIONS, RAW_EXTENSIONS
+from app_common.image_formats import HEIF_EXTENSIONS, IMAGE_EXTENSIONS, RAW_EXTENSIONS
 from app_common.preview_canvas import (
     PREVIEW_COMPOSITION_GRID_LINE_WIDTHS,
     PREVIEW_COMPOSITION_GRID_MODES,
@@ -95,6 +95,7 @@ try:
         _load_preview_pixmap_for_canvas,
         _resolve_focus_calc_image_size,
     )
+    from .superviewer.focus_box_loader import FocusBoxLoader
     from .superviewer.preview_panel import PreviewPanel
     from .superviewer.image_info_tabs import (
         ImageInfoTabPanel_EXIF,
@@ -108,6 +109,7 @@ try:
     from .superviewer.qt_compat import (
         QAction,
         QApplication,
+        QCheckBox,
         QColor,
         QComboBox,
         QDialog,
@@ -171,6 +173,7 @@ except ImportError:
         _load_preview_pixmap_for_canvas,
         _resolve_focus_calc_image_size,
     )
+    from superviewer.focus_box_loader import FocusBoxLoader
     from superviewer.preview_panel import PreviewPanel
     from superviewer.image_info_tabs import (
         ImageInfoTabPanel_EXIF,
@@ -184,6 +187,7 @@ except ImportError:
     from superviewer.qt_compat import (
         QAction,
         QApplication,
+        QCheckBox,
         QColor,
         QComboBox,
         QDialog,
@@ -633,6 +637,11 @@ class MainWindow(QMainWindow):
         overlay_row = QHBoxLayout()
         overlay_row.setContentsMargins(0, 0, 0, 0)
         overlay_row.setSpacing(8)
+        self.check_show_focus = QCheckBox("显示对焦点")
+        self.check_show_focus.setChecked(True)
+        self.check_show_focus.setToolTip("在预览图上叠加显示相机对焦点（来自原始 RAW/HEIF 元数据）。")
+        self.check_show_focus.toggled.connect(self._on_preview_overlay_toggled)
+        overlay_row.addWidget(self.check_show_focus)
         self.combo_preview_grid = QComboBox(self)
         self.combo_preview_grid.setFixedWidth(PREVIEW_GRID_MODE_COMBO_WIDTH)
         valid_preview_grid_modes = set(PREVIEW_COMPOSITION_GRID_MODES)
@@ -682,6 +691,7 @@ class MainWindow(QMainWindow):
         overlay_row.addStretch(1)
         left_layout.addLayout(overlay_row)
         self.preview_panel = PreviewPanel(central)
+        self.preview_panel.set_show_focus_enabled(self.check_show_focus.isChecked())
         self.preview_panel.set_composition_grid_mode(self.combo_preview_grid.currentData())
         self.preview_panel.set_composition_grid_line_width(self.combo_preview_grid_line_width.currentData())
         self.preview_panel.display_scale_percent_changed.connect(self._sync_preview_scale_combo)
@@ -734,6 +744,11 @@ class MainWindow(QMainWindow):
         layout.addWidget(splitter)
 
         self._current_exif_path = None
+
+        # 「显示对焦点」异步加载状态
+        self._focus_loader: FocusBoxLoader | None = None
+        self._focus_request_sequence = 0
+        self._focus_display_request_id = 0
 
         # preview_panel 的 parent 为 central，回调挂在 left_widget 上供拖放/选图后调用
         left_widget.on_image_loaded = self.on_image_loaded
@@ -827,6 +842,8 @@ class MainWindow(QMainWindow):
         perf_log(_log, "[PERF][fast_preview][main] START source=%r", path)
         preview_t0 = _time.perf_counter()
         self.preview_panel.set_image(path, load_full=False)
+        # 方向键长按高速浏览时不启动焦点提取线程，避免重复 I/O 拖慢翻图
+        self._update_preview_focus_box(path, allow_async_load=False)
         preview_ms = (_time.perf_counter() - preview_t0) * 1000.0
         perf_log(
             _log,
@@ -1209,6 +1226,7 @@ class MainWindow(QMainWindow):
         tabs_t0 = _time.perf_counter()
         self.image_info_tabs.on_photo_selected(path)
         tabs_ms = (_time.perf_counter() - tabs_t0) * 1000.0
+        self._update_preview_focus_box(path)
         perf_log(
             _log,
             "[PERF][image_switch][info] END path=%r label_ms=%.1f tabs_ms=%.1f total_ms=%.1f",
@@ -1226,7 +1244,165 @@ class MainWindow(QMainWindow):
             elapsed_ms(probe_t0),
         )
 
+    def _on_preview_overlay_toggled(self, _checked: bool) -> None:
+        """「显示对焦点」开关：同步 canvas 并按需加载/清除当前图的对焦点框。"""
+        enabled = self.check_show_focus.isChecked()
+        self.preview_panel.set_show_focus_enabled(enabled)
+        if enabled:
+            if self._current_exif_path:
+                self._update_preview_focus_box(self._current_exif_path)
+        else:
+            self._stop_focus_loader()
+            self.preview_panel.set_focus_box(None)
+
+    @staticmethod
+    def _find_source_file_by_stem(path: str) -> str | None:
+        """同目录同 stem 下优先查找 RAW/HEIF 源文件，供对焦点提取。"""
+        try:
+            folder = Path(path).parent
+            stem_l = Path(path).stem.lower()
+        except Exception:
+            return None
+        if not folder or not folder.is_dir() or not stem_l:
+            return None
+        preferred_exts = [".arw", ".hif", ".heif", ".heic"]
+        all_exts = preferred_exts + sorted(RAW_EXTENSIONS) + sorted(HEIF_EXTENSIONS)
+        ext_rank: dict[str, int] = {}
+        for idx, ext in enumerate(all_exts):
+            ext_l = str(ext).lower()
+            if ext_l and ext_l not in ext_rank:
+                ext_rank[ext_l] = idx
+        best_path = None
+        best_rank = 10**9
+        try:
+            for entry in os.scandir(folder):
+                if not entry.is_file():
+                    continue
+                p = Path(entry.name)
+                if p.stem.lower() != stem_l:
+                    continue
+                ext_l = p.suffix.lower()
+                if ext_l not in ext_rank:
+                    continue
+                rank = ext_rank[ext_l]
+                if rank < best_rank:
+                    best_rank = rank
+                    best_path = os.path.normpath(entry.path)
+        except Exception:
+            return None
+        return best_path
+
+    def _resolve_focus_metadata_source_path(self, path: str) -> str:
+        """为「显示对焦点」解析元数据来源（仅源文件）：当前文件若为 RAW/HEIF 则直接用，
+        否则取同目录同 stem 的 RAW/HEIF 源文件。"""
+        path_norm = os.path.normpath(path) if path else ""
+        if not path_norm:
+            return ""
+        ext = Path(path_norm).suffix.lower()
+        if os.path.isfile(path_norm) and (ext in RAW_EXTENSIONS or ext in HEIF_EXTENSIONS):
+            return path_norm
+        sibling_source = self._find_source_file_by_stem(path_norm)
+        if sibling_source:
+            return sibling_source
+        return ""
+
+    def _update_preview_focus_box(self, path: str, *, allow_async_load: bool = True) -> None:
+        """根据当前预览图尺寸与元数据，异步加载并更新 PreviewCanvas 的对焦点框。
+
+        `allow_async_load=False` 时仅清除显示、不启动新线程（用于方向键高速浏览）。
+        """
+        if not self.check_show_focus.isChecked():
+            self._stop_focus_loader()
+            self.preview_panel.set_focus_box(None)
+            return
+        if not path or not os.path.isfile(path):
+            self._stop_focus_loader()
+            self.preview_panel.set_focus_box(None)
+            return
+        size = self.preview_panel.get_preview_image_size()
+        if not size:
+            self._stop_focus_loader()
+            self.preview_panel.set_focus_box(None)
+            return
+        preview_path = self.preview_panel.current_path() or path
+        focus_source_path = self._resolve_focus_metadata_source_path(path)
+        if (not preview_path or not os.path.isfile(preview_path)) and (
+            not focus_source_path or not os.path.isfile(focus_source_path)
+        ):
+            self._stop_focus_loader()
+            self.preview_panel.set_focus_box(None)
+            return
+        if not allow_async_load:
+            self._stop_focus_loader()
+            self.preview_panel.set_focus_box(None)
+            return
+        self._stop_focus_loader()
+        self._focus_request_sequence += 1
+        request_id = self._focus_request_sequence
+        self._focus_display_request_id = request_id
+        _log.info(
+            "[_update_preview_focus_box] async request_id=%s preview=%r focus_source=%r size=%sx%s",
+            request_id,
+            preview_path,
+            focus_source_path,
+            size[0],
+            size[1],
+        )
+        loader = FocusBoxLoader(
+            request_id,
+            "",
+            preview_path,
+            focus_source_path,
+            size[0],
+            size[1],
+            self,
+        )
+        loader.focus_loaded.connect(self._on_focus_box_loaded)
+        self._focus_loader = loader
+        loader.start()
+        self.preview_panel.set_focus_box(None)
+
+    def _stop_focus_loader(self) -> None:
+        loader = self._focus_loader
+        if loader is None:
+            return
+        try:
+            loader.focus_loaded.disconnect(self._on_focus_box_loaded)
+        except Exception:
+            pass
+        loader.requestInterruption()
+        self._focus_loader = None
+
+    def _on_focus_box_loaded(self, request_id: int, focus_box, used_path: str) -> None:
+        loader = self.sender()
+        if request_id != self._focus_display_request_id:
+            _log.info(
+                "[_on_focus_box_loaded] ignore stale request_id=%s current=%s used_path=%r",
+                request_id,
+                self._focus_display_request_id,
+                used_path,
+            )
+            return
+        if isinstance(loader, FocusBoxLoader):
+            try:
+                loader.focus_loaded.disconnect(self._on_focus_box_loaded)
+            except Exception:
+                pass
+            if self._focus_loader is loader:
+                self._focus_loader = None
+        _log.info(
+            "[_on_focus_box_loaded] request_id=%s used_path=%r focus_box=%r",
+            request_id,
+            used_path,
+            focus_box,
+        )
+        self.preview_panel.set_focus_box(focus_box)
+
     def closeEvent(self, event) -> None:  # type: ignore[override]
+        try:
+            self._stop_focus_loader()
+        except Exception:
+            pass
         try:
             if self._main_splitter_state_save_timer.isActive():
                 self._main_splitter_state_save_timer.stop()
