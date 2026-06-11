@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Iterable
 
+from app_common.file_utils import is_apple_double_metadata_file
 from birdstamp.constants import SUPPORTED_EXTENSIONS
 
 
@@ -25,12 +26,29 @@ def discover_inputs(
 ) -> list[Path]:
     exts = _normalize_extensions(extensions)
     if input_path.is_file():
+        if is_apple_double_metadata_file(input_path):
+            return []
         return [input_path] if input_path.suffix.lower() in exts else []
     if not input_path.exists():
         return []
     if recursive:
-        files = [p for p in input_path.rglob("*") if p.is_file() and p.suffix.lower() in exts]
+        files = [
+            p
+            for p in input_path.rglob("*")
+            if (
+                p.is_file()
+                and not is_apple_double_metadata_file(p)
+                and p.suffix.lower() in exts
+            )
+        ]
     else:
-        files = [p for p in input_path.iterdir() if p.is_file() and p.suffix.lower() in exts]
+        files = [
+            p
+            for p in input_path.iterdir()
+            if (
+                p.is_file()
+                and not is_apple_double_metadata_file(p)
+                and p.suffix.lower() in exts
+            )
+        ]
     return sorted(files)
-

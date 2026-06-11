@@ -70,6 +70,7 @@ from PyQt6.QtWidgets import (
 
 from app_common.about_dialog import load_about_info, load_about_images, show_about_dialog
 from app_common.app_info_bar import AppInfoBar
+from app_common.file_utils import is_apple_double_metadata_file
 from app_common.log import get_logger
 from app_common.send_to_app import (
     SingleInstanceReceiver,
@@ -412,7 +413,10 @@ class _PhotoInputDiscoveryWorker(QThread):
                         stack.append(Path(entry.path))
                     elif entry.is_file(follow_symlinks=False):
                         path = Path(entry.path)
-                        if path.suffix.lower() in SUPPORTED_EXTENSIONS:
+                        if (
+                            not is_apple_double_metadata_file(path)
+                            and path.suffix.lower() in SUPPORTED_EXTENSIONS
+                        ):
                             yield path
                 except OSError:
                     continue
@@ -425,7 +429,11 @@ class _PhotoInputDiscoveryWorker(QThread):
                 path = raw_path.resolve(strict=False)
             except OSError:
                 path = raw_path
-            if path.is_file() and path.suffix.lower() in SUPPORTED_EXTENSIONS:
+            if (
+                path.is_file()
+                and not is_apple_double_metadata_file(path)
+                and path.suffix.lower() in SUPPORTED_EXTENSIONS
+            ):
                 yield path
             elif path.is_dir():
                 yield from self._iter_supported_directory(path)
@@ -3682,7 +3690,11 @@ class BirdStampEditorWindow(
                 path = path.resolve(strict=False)
             except Exception:
                 continue
-            if not path.is_file() or path.suffix.lower() not in SUPPORTED_EXTENSIONS:
+            if (
+                not path.is_file()
+                or is_apple_double_metadata_file(path)
+                or path.suffix.lower() not in SUPPORTED_EXTENSIONS
+            ):
                 continue
             valid_paths.append(path)
         return valid_paths
@@ -3781,7 +3793,11 @@ class BirdStampEditorWindow(
                     seen_directories.add(key)
                     directory_paths.append(path)
                 continue
-            if not path.is_file() or path.suffix.lower() not in SUPPORTED_EXTENSIONS:
+            if (
+                not path.is_file()
+                or is_apple_double_metadata_file(path)
+                or path.suffix.lower() not in SUPPORTED_EXTENSIONS
+            ):
                 continue
             key = _path_key(path)
             if key in seen_files:

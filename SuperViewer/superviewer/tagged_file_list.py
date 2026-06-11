@@ -412,8 +412,7 @@ class SuperViewerTaggedFileListPanel(FileListPanel):
         super()._refresh_filter_scope()
 
     def _add_species_menu_actions(self, menu, primary_path: str | None, paths: list[str]) -> None:
-        # SuperViewer 已切到原始目录 + sidecar 模式，不再暴露 report.db 鸟种菜单。
-        return
+        super()._add_species_menu_actions(menu, primary_path, paths)
 
     def _install_tag_filter_bar(self) -> None:
         if not getattr(self, "_create_filter_bar", True):
