@@ -4,13 +4,13 @@
 from __future__ import annotations
 
 import time as _time
+import io as _io
 import os
 from pathlib import Path
 
 from PIL import Image, ImageOps
 
 from app_common import thumb_stream
-from app_common.file_browser._browser_core import _load_thumbnail_image, _read_thumb_from_disk_cache
 from app_common.image_formats import HEIF_EXTENSIONS, RAW_EXTENSIONS
 from app_common.log import get_logger
 from app_common.perf_probe import perf_log
@@ -29,6 +29,8 @@ from .focus_preview_loader import (
     _load_preview_pixmap_for_canvas,
 )
 from .qt_compat import (
+    _KeepAspectRatio,
+    _SmoothTransformation,
     QImage,
     QImageReader,
     QLabel,
@@ -91,22 +93,42 @@ def _quick_preview_target_size(canvas: QWidget) -> int:
     return _QUICK_PREVIEW_SIZE
 
 
-def _load_quick_preview_pixmap(path: str, target_size: int) -> QPixmap | None:
-    qimg = None
+def _normalize_preview_target_size(target_size: int | None) -> int:
     try:
-        mtime = float(os.path.getmtime(path))
+        parsed = int(target_size or 0)
     except Exception:
-        mtime = 0.0
-    for cached_size in (512, 256, 128):
-        if cached_size > int(target_size):
-            continue
-        qimg = _read_thumb_from_disk_cache(path, mtime, cached_size)
-        if qimg is not None and not qimg.isNull():
-            break
+        parsed = 0
+    return max(_QUICK_PREVIEW_FALLBACK_SIZE, parsed or _QUICK_PREVIEW_SIZE)
+
+
+def _scale_preview_qimage(qimg: QImage | None, target_size: int) -> QImage | None:
     if qimg is None or qimg.isNull():
-        qimg = _load_thumbnail_image(path, _QUICK_PREVIEW_FALLBACK_SIZE)
+        return None
+    target_size = _normalize_preview_target_size(target_size)
+    try:
+        width = int(qimg.width())
+        height = int(qimg.height())
+    except Exception:
+        return None
+    if width <= 0 or height <= 0:
+        return None
+    if width <= target_size and height <= target_size:
+        return qimg.copy()
+    scaled = qimg.scaled(
+        target_size,
+        target_size,
+        _KeepAspectRatio,
+        _SmoothTransformation,
+    )
+    return scaled.copy() if scaled is not None and not scaled.isNull() else None
+
+
+def _load_quick_preview_pixmap(path: str, target_size: int) -> QPixmap | None:
+    target_size = _normalize_preview_target_size(target_size)
+    qimg = _qimage_from_rgb_result(thumb_stream.load_thumbnail_rgb(path, target_size))
     if qimg is None or qimg.isNull():
-        qimg = _qimage_from_rgb_result(thumb_stream.load_thumbnail_rgb(path, _QUICK_PREVIEW_FALLBACK_SIZE))
+        qimg = _load_full_preview_qimage(path)
+    qimg = _scale_preview_qimage(qimg, target_size)
     if qimg is None or qimg.isNull():
         return None
     pix = QPixmap.fromImage(qimg)
@@ -175,6 +197,16 @@ def _qimage_from_pil_image(img: Image.Image) -> QImage | None:
 def _load_full_preview_qimage_raw(path: str) -> QImage | None:
     if not path or not os.path.isfile(path) or Path(path).suffix.lower() not in RAW_EXTENSIONS:
         return None
+    preview_data = thumb_stream.get_raw_preview_jpeg(path)
+    if preview_data:
+        try:
+            with Image.open(_io.BytesIO(preview_data)) as img:
+                img = _apply_orientation_to_pil_image(img, _get_orientation_from_file(path))
+                embedded_qimg = _qimage_from_pil_image(img)
+                if embedded_qimg is not None and not embedded_qimg.isNull():
+                    return embedded_qimg
+        except Exception:
+            pass
     try:
         import rawpy
     except Exception:

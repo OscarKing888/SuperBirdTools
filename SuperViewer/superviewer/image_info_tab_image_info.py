@@ -9,6 +9,7 @@ from typing import Callable
 
 from app_common.file_browser._browser_core import (
     _format_burst_text,
+    _focus_status_text_color,
     _metadata_aesthetic_text,
     _metadata_aperture_text,
     _metadata_camera_model_text,
@@ -47,9 +48,10 @@ from .tag_menu import add_filterable_tag_actions
 
 
 _PREVIEW_HEIGHT = 180
+_BASIC_ROW_VALUE_STYLE = "color: #cfcfcf; font-size: 13px;"
 _BASIC_INFO_ROWS = (
     "鸟名",
-    "文件夹",
+    #"文件夹",
     "评分",
     "尺寸",
     "文件大小",
@@ -421,7 +423,7 @@ class ImageInfoTabPanel_ImageInfo(ImageInfoTabPanel):
         label.setStyleSheet("color: #d7d7d7; font-size: 13px;")
         value = QLabel("-")
         value.setWordWrap(True)
-        value.setStyleSheet("color: #cfcfcf; font-size: 13px;")
+        value.setStyleSheet(_BASIC_ROW_VALUE_STYLE)
         row.addWidget(label)
         row.addWidget(value, stretch=1)
         layout.addLayout(row)
@@ -693,7 +695,7 @@ class ImageInfoTabPanel_ImageInfo(ImageInfoTabPanel):
 
         info = {
             "鸟名": _metadata_species_text(metadata) or "-",
-            "文件夹": str(p.parent),
+            #"文件夹": str(p.parent),
             "评分": _rating_text(metadata.get("rating")),
             "尺寸": f"{width} × {height}" if width and height else "-",
             "文件大小": _format_file_size(stat.st_size if stat is not None else None),
@@ -741,6 +743,13 @@ class ImageInfoTabPanel_ImageInfo(ImageInfoTabPanel):
             value = str(info.get(key) or "-")
             label.setText(value)
             label.setToolTip(value if key == "文件夹" else "")
+            self._apply_basic_row_style(key, value, label)
+
+    def _apply_basic_row_style(self, key: str, value: str, label: QLabel) -> None:
+        if key == "对焦" and value and value != "-":
+            label.setStyleSheet(f"color: {_focus_status_text_color(value)}; font-size: 13px;")
+        else:
+            label.setStyleSheet(_BASIC_ROW_VALUE_STYLE)
 
 
 __all__ = [

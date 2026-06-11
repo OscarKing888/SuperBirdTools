@@ -77,7 +77,7 @@ class SuperViewerUserOptionsDialog(QDialog):
         current_size = int(opts.get("persistent_thumb_max_size", 128))
         current_index = PERSISTENT_THUMB_SIZE_LEVELS.index(current_size) if current_size in PERSISTENT_THUMB_SIZE_LEVELS else 0
         self._combo_persistent_thumb_size.setCurrentIndex(current_index)
-        self._combo_persistent_thumb_size.setToolTip("会生成不高于该值的 128/256/512 预览层级。")
+        self._combo_persistent_thumb_size.setToolTip("会生成不高于该值的 128/256/512/1024 预览层级。")
         grid.addWidget(self._combo_persistent_thumb_size, row, 1)
         grid.addWidget(QLabel("默认 128"), row, 2)
 

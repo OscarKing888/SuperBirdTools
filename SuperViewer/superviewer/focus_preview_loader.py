@@ -26,6 +26,7 @@ from app_common.focus_calc import (
 from app_common.image_formats import IMAGE_EXTENSIONS
 from app_common.log import get_logger
 from app_common.report_db import ReportDB, find_report_root
+from app_common.thumb_stream import get_raw_preview_jpeg
 
 from .exif_helpers import (
     HEIF_EXTENSIONS,
@@ -195,6 +196,12 @@ def _load_preview_pixmap_for_canvas(path: str) -> QPixmap | None:
     pix = None if is_raw else _load_standard_pixmap_qt(path)
     if pix is not None and not pix.isNull():
         return pix
+    if is_raw:
+        preview_data = get_raw_preview_jpeg(path)
+        if preview_data:
+            pix = QPixmap()
+            if pix.loadFromData(preview_data):
+                return _apply_orientation_to_pixmap(pix, _get_orientation_from_file(path))
     pix = _load_preview_pixmap_with_orientation(path)
     if (pix is None or pix.isNull()) and is_raw:
         pix = _load_raw_full_as_pixmap(path)
