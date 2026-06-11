@@ -19,6 +19,7 @@ from app_common.file_browser._browser_core import (
     _metadata_lens_model_text,
     _metadata_sharpness_text,
     _metadata_shutter_text,
+    _metadata_species_text,
     _metadata_value_from_candidates,
 )
 from app_common.log import get_logger
@@ -47,6 +48,7 @@ from .tag_menu import add_filterable_tag_actions
 
 _PREVIEW_HEIGHT = 180
 _BASIC_INFO_ROWS = (
+    "鸟名",
     "文件夹",
     "评分",
     "尺寸",
@@ -690,6 +692,7 @@ class ImageInfoTabPanel_ImageInfo(ImageInfoTabPanel):
             created_ts = stat.st_ctime
 
         info = {
+            "鸟名": _metadata_species_text(metadata) or "-",
             "文件夹": str(p.parent),
             "评分": _rating_text(metadata.get("rating")),
             "尺寸": f"{width} × {height}" if width and height else "-",
