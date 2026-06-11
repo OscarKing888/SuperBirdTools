@@ -18,11 +18,6 @@ from app_common.report_db import PHOTO_COLUMNS
 from birdstamp.config import resolve_bundled_path
 from birdstamp.meta.normalize import format_settings_line, normalize_metadata
 
-# 与 editor_utils 中一致：不写入 context 的路径列
-_REPORT_DB_PATH_COLUMNS = frozenset({
-    "original_path", "current_path", "temp_jpeg_path", "debug_crop_path", "yolo_debug_path",
-})
-
 _PHOTO_AUTHOR_KEY_CANDIDATES: tuple[str, ...] = (
     "XMP-dc:Creator",
     "XMP:Creator",
@@ -1356,6 +1351,15 @@ _CANONICAL_META_FIELD_DEFINITIONS: tuple[TemplateContextField, ...] = (
     TemplateContextField("exposure_status", "曝光状态"),
     TemplateContextField("is_flying", "飞行状态"),
     TemplateContextField("flight_conf", "飞行置信度"),
+    TemplateContextField("original_path", "原始路径"),
+    TemplateContextField("current_path", "当前路径"),
+    TemplateContextField("temp_jpeg_path", "预览图路径"),
+    TemplateContextField("debug_crop_path", "裁切调试图路径"),
+    TemplateContextField("yolo_debug_path", "YOLO 调试图路径"),
+    TemplateContextField("burst_id", "连拍组 ID"),
+    TemplateContextField("burst_position", "连拍序号"),
+    TemplateContextField("created_at", "报告创建时间", aliases=("report_created_at",)),
+    TemplateContextField("updated_at", "报告更新时间", aliases=("report_updated_at",)),
     TemplateContextField("stem", "文件名（不含扩展名）"),
     TemplateContextField("filename", "完整文件名"),
 )
@@ -1496,15 +1500,9 @@ def _is_missing_template_text(value: Any) -> bool:
 _FALLBACK_AUTO_PROXY_ROUTE_CONFIG: dict[str, list[dict[str, Any]]] = {
     "bird_species_cn": [
         {
-            "provider_id": TEMPLATE_SOURCE_REPORT_DB,
-            "candidate_keys": [
-                "bird_species_cn",
-                "report.bird_species_cn",
-            ],
-        },
-        {
             "provider_id": TEMPLATE_SOURCE_EXIF,
             "candidate_keys": [
+                "XMP-superpicky:bird_species_cn",
                 "bird_species_cn",
                 "XMP-dc:Title",
                 "IFD0:XPTitle",
@@ -1521,18 +1519,44 @@ _FALLBACK_AUTO_PROXY_ROUTE_CONFIG: dict[str, list[dict[str, Any]]] = {
                 "{title}",
             ],
         },
-    ],
-    "title": [
         {
             "provider_id": TEMPLATE_SOURCE_REPORT_DB,
             "candidate_keys": [
-                "title",
-                "report.title",
+                "bird_species_cn",
+                "report.bird_species_cn",
             ],
         },
+    ],
+    "bird_species_en": [
         {
             "provider_id": TEMPLATE_SOURCE_EXIF,
             "candidate_keys": [
+                "XMP-superpicky:bird_species_en",
+                "bird_species_en",
+            ],
+        },
+        {
+            "provider_id": TEMPLATE_SOURCE_FROM_FILE,
+            "candidate_keys": [
+                "bird_latin",
+                "{bird_latin}",
+                "bird_scientific",
+                "{bird_scientific}",
+            ],
+        },
+        {
+            "provider_id": TEMPLATE_SOURCE_REPORT_DB,
+            "candidate_keys": [
+                "bird_species_en",
+                "report.bird_species_en",
+            ],
+        },
+    ],
+    "title": [
+        {
+            "provider_id": TEMPLATE_SOURCE_EXIF,
+            "candidate_keys": [
+                "XMP-superpicky:title",
                 "title",
                 "XMP-dc:Title",
                 "IFD0:XPTitle",
@@ -1547,18 +1571,19 @@ _FALLBACK_AUTO_PROXY_ROUTE_CONFIG: dict[str, list[dict[str, Any]]] = {
                 "{title}",
             ],
         },
-    ],
-    "caption": [
         {
             "provider_id": TEMPLATE_SOURCE_REPORT_DB,
             "candidate_keys": [
-                "caption",
-                "report.caption",
+                "title",
+                "report.title",
             ],
         },
+    ],
+    "caption": [
         {
             "provider_id": TEMPLATE_SOURCE_EXIF,
             "candidate_keys": [
+                "XMP-superpicky:caption",
                 "caption",
                 "XMP-dc:Description",
                 "IPTC:Caption-Abstract",
@@ -1575,18 +1600,19 @@ _FALLBACK_AUTO_PROXY_ROUTE_CONFIG: dict[str, list[dict[str, Any]]] = {
                 "{description}",
             ],
         },
-    ],
-    "date_time_original": [
         {
             "provider_id": TEMPLATE_SOURCE_REPORT_DB,
             "candidate_keys": [
-                "date_time_original",
-                "report.date_time_original",
+                "caption",
+                "report.caption",
             ],
         },
+    ],
+    "date_time_original": [
         {
             "provider_id": TEMPLATE_SOURCE_EXIF,
             "candidate_keys": [
+                "XMP-superpicky:date_time_original",
                 "EXIF:DateTimeOriginal",
                 "DateTimeOriginal",
                 "EXIF:CreateDate",
@@ -1600,18 +1626,19 @@ _FALLBACK_AUTO_PROXY_ROUTE_CONFIG: dict[str, list[dict[str, Any]]] = {
                 "{capture_text}",
             ],
         },
-    ],
-    "camera_model": [
         {
             "provider_id": TEMPLATE_SOURCE_REPORT_DB,
             "candidate_keys": [
-                "camera_model",
-                "report.camera_model",
+                "date_time_original",
+                "report.date_time_original",
             ],
         },
+    ],
+    "camera_model": [
         {
             "provider_id": TEMPLATE_SOURCE_EXIF,
             "candidate_keys": [
+                "XMP-superpicky:camera_model",
                 "EXIF:Model",
                 "IFD0:Model",
                 "Model",
@@ -1625,18 +1652,19 @@ _FALLBACK_AUTO_PROXY_ROUTE_CONFIG: dict[str, list[dict[str, Any]]] = {
                 "{camera}",
             ],
         },
-    ],
-    "lens_model": [
         {
             "provider_id": TEMPLATE_SOURCE_REPORT_DB,
             "candidate_keys": [
-                "lens_model",
-                "report.lens_model",
+                "camera_model",
+                "report.camera_model",
             ],
         },
+    ],
+    "lens_model": [
         {
             "provider_id": TEMPLATE_SOURCE_EXIF,
             "candidate_keys": [
+                "XMP-superpicky:lens_model",
                 "EXIF:LensModel",
                 "ExifIFD:LensModel",
                 "LensModel",
@@ -1650,22 +1678,30 @@ _FALLBACK_AUTO_PROXY_ROUTE_CONFIG: dict[str, list[dict[str, Any]]] = {
                 "{lens}",
             ],
         },
+        {
+            "provider_id": TEMPLATE_SOURCE_REPORT_DB,
+            "candidate_keys": [
+                "lens_model",
+                "report.lens_model",
+            ],
+        },
     ],
     "rating": [
+        {
+            "provider_id": TEMPLATE_SOURCE_EXIF,
+            "candidate_keys": [
+                "XMP-superpicky:rating",
+                "rating",
+                "XMP-xmp:Rating",
+                "Rating",
+                "Sony:Rating",
+            ],
+        },
         {
             "provider_id": TEMPLATE_SOURCE_REPORT_DB,
             "candidate_keys": [
                 "rating",
                 "report.rating",
-            ],
-        },
-        {
-            "provider_id": TEMPLATE_SOURCE_EXIF,
-            "candidate_keys": [
-                "rating",
-                "XMP-xmp:Rating",
-                "Rating",
-                "Sony:Rating",
             ],
         },
     ],
@@ -2231,6 +2267,21 @@ class ExifTemplateContextProvider(TemplateContextProvider):
     @classmethod
     def build_context_entries(cls, photo_info: PhotoInfo) -> TemplateContext:
         metadata = _metadata_with_xmp_priority(photo_info)
+        return cls._build_context_entries_from_metadata(photo_info, metadata)
+
+    @classmethod
+    def build_sidecar_context_entries(cls, photo_info: PhotoInfo) -> TemplateContext:
+        metadata = _read_sidecar_metadata(photo_info)
+        if not _metadata_has_content(metadata):
+            return {}
+        return cls._build_context_entries_from_metadata(photo_info, metadata)
+
+    @classmethod
+    def _build_context_entries_from_metadata(
+        cls,
+        photo_info: PhotoInfo,
+        metadata: Dict[str, Any],
+    ) -> TemplateContext:
         context: TemplateContext = {}
         try:
             normalized = normalize_metadata(
@@ -2244,12 +2295,18 @@ class ExifTemplateContextProvider(TemplateContextProvider):
         except Exception:
             return context
 
-        context["bird"] = normalized.bird or ""
-        context["capture_text"] = normalized.capture_text or ""
-        context["location"] = normalized.location or ""
-        context["gps_text"] = normalized.gps_text or ""
-        context["camera"] = normalized.camera or ""
-        context["lens"] = normalized.lens or ""
+        if normalized.bird:
+            context["bird"] = normalized.bird
+        if normalized.capture_text:
+            context["capture_text"] = normalized.capture_text
+        if normalized.location:
+            context["location"] = normalized.location
+        if normalized.gps_text:
+            context["gps_text"] = normalized.gps_text
+        if normalized.camera:
+            context["camera"] = normalized.camera
+        if normalized.lens:
+            context["lens"] = normalized.lens
 
         settings = normalized.settings_text or format_settings_line(normalized, show_eq_focal=True) or ""
         if settings:
@@ -2290,6 +2347,8 @@ class ExifTemplateContextProvider(TemplateContextProvider):
         set_if_value("metering_mode", _extract_metering_mode_text(metadata))
         set_if_value("white_balance", _extract_white_balance_text(metadata))
         set_if_value("flash", _extract_flash_text(metadata))
+        set_if_value("alpha_channel", _extract_alpha_channel_text(photo_info, metadata))
+        set_if_value("red_eye", _extract_red_eye_text(metadata))
         profile_description = _extract_profile_description_text(metadata)
         set_if_value("profile_description", profile_description)
         set_if_value("color_space", _extract_color_space_text(metadata, profile_description=profile_description))
@@ -2319,6 +2378,20 @@ class ExifTemplateContextProvider(TemplateContextProvider):
             "focus_status",
             _lookup_metadata_text(metadata, *cls._CANONICAL_EXIF_TAG_CANDIDATES["focus_status"]),
         )
+        for raw_key, raw_value in metadata.items():
+            raw_key_text = str(raw_key or "").strip()
+            if not raw_key_text.lower().startswith("xmp-superpicky:"):
+                continue
+            column_name = raw_key_text.split(":", 1)[1].strip()
+            text = _clean_text(raw_value)
+            if column_name and text:
+                context[f"report.{column_name}"] = text
+        for field in cls.canonical_fields():
+            if _clean_text(context.get(field.key)):
+                continue
+            superpicky_key = f"XMP-superpicky:{field.key}"
+            value = _lookup_metadata_text(metadata, superpicky_key, field.key, *field.aliases)
+            set_if_value(field.key, value, *field.aliases)
         return context
 
     @classmethod
@@ -2328,18 +2401,23 @@ class ExifTemplateContextProvider(TemplateContextProvider):
         field: TemplateContextField | None,
     ) -> tuple[str, ...]:
         canonical_key = field.key if field is not None else canonical_meta_field_key(source_key)
+        superpicky_key = f"XMP-superpicky:{canonical_key}" if canonical_key else ""
         tags = cls._CANONICAL_EXIF_TAG_CANDIDATES.get(canonical_key)
         if tags:
-            return tags
+            return _dedupe_text_candidates(superpicky_key, canonical_key, tags)
         normalized = str(source_key or "").strip()
         for direct_key, direct_tags in cls._DIRECT_EXIF_TAG_FALLBACKS.items():
             if normalized.lower() == direct_key.lower():
-                return direct_tags
-        return (source_key,)
+                return _dedupe_text_candidates(superpicky_key, canonical_key, direct_tags)
+        return _dedupe_text_candidates(superpicky_key, canonical_key, source_key)
 
-    def _read_text_value(self, photo_info: PhotoInfo, field: TemplateContextField | None) -> str:
-        metadata = _metadata_with_xmp_priority(photo_info)
-        context = self.build_context_entries(photo_info)
+    def _read_text_value_from_metadata(
+        self,
+        photo_info: PhotoInfo,
+        field: TemplateContextField | None,
+        metadata: Dict[str, Any],
+    ) -> str:
+        context = type(self)._build_context_entries_from_metadata(photo_info, metadata)
         if field is not None:
             for candidate in (field.key, *field.aliases):
                 normalized = self.normalize_field_key(candidate)
@@ -2362,6 +2440,14 @@ class ExifTemplateContextProvider(TemplateContextProvider):
                     return _format_length_mm_text(text)
                 return text
         return ""
+
+    def get_text_content_from_metadata(self, photo_info: PhotoInfo, metadata: Dict[str, Any]) -> str:
+        info = ensure_photo_info(photo_info)
+        field = self.resolve_field_definition(self.source_key)
+        return _clean_text(self._read_text_value_from_metadata(info, field, metadata))
+
+    def _read_text_value(self, photo_info: PhotoInfo, field: TemplateContextField | None) -> str:
+        return self._read_text_value_from_metadata(photo_info, field, _metadata_with_xmp_priority(photo_info))
 
 
 class ReportDBTemplateContextProvider(TemplateContextProvider):
@@ -2406,6 +2492,13 @@ class ReportDBTemplateContextProvider(TemplateContextProvider):
         "gps_latitude": "GPS 纬度",
         "gps_longitude": "GPS 经度",
         "gps_altitude": "GPS 海拔",
+        "original_path": "原始路径",
+        "current_path": "当前路径",
+        "temp_jpeg_path": "预览图路径",
+        "debug_crop_path": "裁切调试图路径",
+        "yolo_debug_path": "YOLO 调试图路径",
+        "burst_id": "连拍组 ID",
+        "burst_position": "连拍序号",
         "created_at": "创建时间",
         "updated_at": "更新时间",
     }
@@ -2426,8 +2519,6 @@ class ReportDBTemplateContextProvider(TemplateContextProvider):
             if cls.normalize_field_key(field.key)
         }
         for col_name, _type_def, _default in PHOTO_COLUMNS:
-            if col_name in _REPORT_DB_PATH_COLUMNS:
-                continue
             normalized = cls.normalize_field_key(col_name).lower()
             if normalized in seen:
                 continue
@@ -2485,7 +2576,7 @@ class ReportDBTemplateContextProvider(TemplateContextProvider):
 
         for field in cls.available_fields():
             column_name = field.key
-            if column_name not in row or column_name in _REPORT_DB_PATH_COLUMNS:
+            if column_name not in row:
                 continue
             value = row.get(column_name)
             text = "" if value is None else _clean_text(value)
@@ -2768,18 +2859,18 @@ class AutoProxyTemplateContextProvider(TemplateContextProvider):
     display_name = ""
     _route_definitions_cache: dict[str, tuple[AutoProxyFieldRoute, ...]] | None = None
     _PROVIDER_PRIORITY: tuple[str, ...] = (
-        TEMPLATE_SOURCE_REPORT_DB,
         TEMPLATE_SOURCE_EXIF,
         TEMPLATE_SOURCE_FROM_FILE,
+        TEMPLATE_SOURCE_REPORT_DB,
         TEMPLATE_SOURCE_EDITOR,
     )
 
     @classmethod
     def delegate_provider_classes(cls) -> tuple[type[TemplateContextProvider], ...]:
         return (
-            ReportDBTemplateContextProvider,
             ExifTemplateContextProvider,
             FromFileTemplateContextProvider,
+            ReportDBTemplateContextProvider,
             EditorTemplateContextProvider,
         )
 
@@ -2822,7 +2913,7 @@ class AutoProxyTemplateContextProvider(TemplateContextProvider):
     @classmethod
     def build_context_entries(cls, photo_info: PhotoInfo) -> TemplateContext:
         context: TemplateContext = {}
-        # 合并上下文时先低优先级、后高优先级，让 report.db 字段最终胜出。
+        # 合并上下文时先低优先级、后高优先级，让 Exif/sidecar 字段最终胜出。
         for provider_cls in reversed(cls.delegate_provider_classes()):
             context.update(provider_cls.build_context_entries(photo_info))
         return context
@@ -2880,6 +2971,11 @@ class AutoProxyTemplateContextProvider(TemplateContextProvider):
         if route_specs:
             for route in route_specs:
                 if route.provider_id == provider_cls.provider_id:
+                    if provider_cls is ExifTemplateContextProvider:
+                        return _dedupe_text_candidates(
+                            ExifTemplateContextProvider._candidate_tags_for_source_key(source_key, field),
+                            route.candidate_keys,
+                        )
                     return route.candidate_keys
             return ()
 
@@ -2941,10 +3037,10 @@ class AutoProxyTemplateContextProvider(TemplateContextProvider):
 
 def iter_template_context_provider_classes() -> tuple[type[TemplateContextProvider], ...]:
     return (
+        EditorTemplateContextProvider,
+        ReportDBTemplateContextProvider,
         FromFileTemplateContextProvider,
         ExifTemplateContextProvider,
-        ReportDBTemplateContextProvider,
-        EditorTemplateContextProvider,
     )
 
 

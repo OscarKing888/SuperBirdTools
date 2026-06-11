@@ -15,17 +15,13 @@ import tempfile
 import time as _time
 from pathlib import Path
 
-import piexif
-
 from app_common import show_about_dialog, load_about_images, load_about_info
 from app_common.log import get_logger
 from app_common.perf_probe import elapsed_ms, perf_counter, perf_log
 from app_common.exif_io import (
     PhotoMetaDataXMP,
     find_xmp_sidecar,
-    get_exiftool_executable_path,
-    write_exif_with_exiftool,
-    write_exif_with_exiftool_by_key,
+    _get_exiftool_tag_target,
 )
 from app_common.file_browser import DirectoryBrowserWidget
 from app_common.image_formats import IMAGE_EXTENSIONS, RAW_EXTENSIONS
@@ -66,10 +62,7 @@ try:
         META_DESCRIPTION_TAG_ID,
         META_IFD_NAME,
         META_TITLE_TAG_ID,
-        PIEXIF_WRITABLE_EXTENSIONS,
         apply_tag_priority,
-        format_exif_value,
-        get_tag_type,
         load_all_exif,
         load_display_description,
         load_display_title,
@@ -82,7 +75,6 @@ try:
         save_preview_grid_line_width_to_settings,
         _format_exception_message,
         _normalize_meta_edit_text,
-        _parse_value_back,
     )
     from .superviewer.paths_settings import (
         _build_main_window_title,
@@ -146,10 +138,7 @@ except ImportError:
         META_DESCRIPTION_TAG_ID,
         META_IFD_NAME,
         META_TITLE_TAG_ID,
-        PIEXIF_WRITABLE_EXTENSIONS,
         apply_tag_priority,
-        format_exif_value,
-        get_tag_type,
         load_all_exif,
         load_display_description,
         load_display_title,
@@ -162,7 +151,6 @@ except ImportError:
         save_preview_grid_line_width_to_settings,
         _format_exception_message,
         _normalize_meta_edit_text,
-        _parse_value_back,
     )
     from superviewer.paths_settings import (
         _build_main_window_title,
@@ -1037,17 +1025,15 @@ class MainWindow(QMainWindow):
         if meta_tag_id == META_DESCRIPTION_TAG_ID:
             return bool(xmp_meta.write_description(path, value))
         if meta_tag_id == META_TITLE_TAG_ID:
-            return bool(xmp_meta.write(path, {"XMP-dc:Title": value}))
+            return bool(xmp_meta.write_title(path, value))
         return False
 
     def _save_exif_value(self, ifd_name: str, tag_id, new_val: str, raw_value, exiftool_key=None):
-        """Write an edited EXIF-table value back to the current image."""
+        """Write an edited EXIF-table value to XMP sidecar only."""
         path = self._current_exif_path
         if not path or not os.path.isfile(path):
             QMessageBox.warning(self, "无法保存", "未选择图片或文件不存在。")
             return
-        ext = Path(path).suffix.lower()
-        has_exiftool = bool(get_exiftool_executable_path())
         try:
             if ifd_name == META_IFD_NAME and str(tag_id) in (META_TITLE_TAG_ID, META_DESCRIPTION_TAG_ID):
                 meta_tag_id = str(tag_id)
@@ -1059,46 +1045,19 @@ class MainWindow(QMainWindow):
                 if not self._write_xmp_meta_value(path, meta_tag_id, new_text):
                     raise RuntimeError("无法写入 XMP sidecar。")
                 self._sync_metadata_after_exif_save(path, meta_tag_id, new_text)
-            elif has_exiftool:
-                if exiftool_key:
-                    write_exif_with_exiftool_by_key(path, exiftool_key, new_val)
-                elif ifd_name is not None and tag_id is not None:
-                    write_exif_with_exiftool(path, ifd_name, tag_id, new_val, raw_value)
-                else:
-                    raise RuntimeError("无法写入该标签。")
-            elif ext in PIEXIF_WRITABLE_EXTENSIONS and ifd_name is not None and tag_id is not None:
-                if tag_id == 37510:
-                    new_raw = b"ASCII\x00\x00\x00" + new_val.encode("utf-8")
-                else:
-                    new_raw = _parse_value_back(new_val, raw_value)
-                if new_raw == raw_value:
-                    QMessageBox.information(self, "未变更", "输入内容解析后与原值一致，未执行写入。")
-                    return
-                try:
-                    data = piexif.load(path)
-                    if ifd_name not in data or not isinstance(data[ifd_name], dict):
-                        data[ifd_name] = {}
-                    data[ifd_name][tag_id] = new_raw
-                    exif_bytes = piexif.dump(data)
-                    piexif.insert(exif_bytes, path)
-                    verify_data = piexif.load(path)
-                    verify_ifd = verify_data.get(ifd_name)
-                    verify_raw = verify_ifd.get(tag_id) if isinstance(verify_ifd, dict) else None
-                    if verify_raw != new_raw:
-                        tag_type = get_tag_type(ifd_name, tag_id)
-                        old_fmt = format_exif_value(new_raw, expected_type=tag_type)
-                        new_fmt = format_exif_value(verify_raw, expected_type=tag_type)
-                        if old_fmt != new_fmt:
-                            raise RuntimeError("写入后校验失败：文件中的值与目标值不一致。")
-                except Exception as exc:
-                    if type(exc).__name__ == "InvalidImageDataError" and get_exiftool_executable_path():
-                        write_exif_with_exiftool(path, ifd_name, tag_id, new_val, raw_value)
-                    else:
-                        raise
             else:
-                raise RuntimeError("未找到 exiftool，无法写入该格式。请配置 exiftools_win/exiftools_mac 或将其加入 PATH。")
+                tag_key = str(exiftool_key or "").strip()
+                if not tag_key and ifd_name is not None and tag_id is not None:
+                    try:
+                        tag_key = _get_exiftool_tag_target(str(ifd_name), int(tag_id)) or ""
+                    except Exception:
+                        tag_key = ""
+                if not tag_key:
+                    raise RuntimeError("无法确定可写入 XMP sidecar 的标签名。")
+                if not PhotoMetaDataXMP().write(path, {tag_key: new_val}):
+                    raise RuntimeError("无法写入 XMP sidecar。请确认 exiftool 可用或该字段支持直接 sidecar 写入。")
             self.exif_info_panel.refresh_current_photo()
-            QMessageBox.information(self, "已保存", "元数据已写入。")
+            QMessageBox.information(self, "已保存", "元数据已写入 XMP sidecar。")
         except Exception as exc:
             QMessageBox.critical(self, "保存失败", _format_exception_message(exc))
 

@@ -263,7 +263,7 @@ def test_auto_proxy_maps_bird_species_cn_to_exif_title_when_report_db_missing() 
     assert provider.get_text_content(photo) == "黑脸琵鹭"
 
 
-def test_auto_proxy_prefers_report_db_then_exif_then_from_file() -> None:
+def test_auto_proxy_prefers_exif_then_from_file_then_report_db() -> None:
     photo = PhotoInfo.from_path(
         "/tmp/sample.jpg",
         raw_metadata={
@@ -305,23 +305,93 @@ def test_auto_proxy_prefers_report_db_then_exif_then_from_file() -> None:
         aesthetic_provider = build_template_context_provider(TEMPLATE_SOURCE_AUTO, "aesthetic")
         context = build_template_context(photo)
 
-        assert bird_provider.get_text_content(photo) == "Report鸟名"
-        assert shutter_provider.get_text_content(photo) == "1/1250"
-        assert iso_provider.get_iso_text(photo) == "400"
-        assert aperture_provider.get_aperture_text(photo) == "5.6"
-        assert rating_provider.get_rating_text(photo) == "3"
+        assert bird_provider.get_text_content(photo) == "EXIF鸟名"
+        assert shutter_provider.get_text_content(photo) == "1/2000"
+        assert iso_provider.get_iso_text(photo) == "800"
+        assert aperture_provider.get_aperture_text(photo) == "f/8"
+        assert rating_provider.get_rating_text(photo) == "5"
         assert pick_provider.get_flag_text(photo) == "1"
-        assert sharpness_provider.get_sharpness_text(photo) == "0.96"
-        assert aesthetic_provider.get_aesthetic_text(photo) == "0.93"
-        assert context["bird_species_cn"] == "Report鸟名"
-        assert context["bird"] == "Report鸟名"
-        assert context["shutter_speed"] == "1/1250"
-        assert context["iso"] == "400"
-        assert context["rating"] == "3"
+        assert sharpness_provider.get_sharpness_text(photo) == "0.91"
+        assert aesthetic_provider.get_aesthetic_text(photo) == "0.88"
+        assert context["bird_species_cn"] == "EXIF鸟名"
+        assert context["bird"] == "EXIF鸟名"
+        assert context["shutter_speed"] == "1/2000"
+        assert context["iso"] == "800"
+        assert context["rating"] == "5"
         assert context["filename"] == "sample.jpg"
         assert context["report.filename"] == "sample"
     finally:
         set_report_db_row_resolver(None)
+
+
+def test_auto_proxy_prefers_from_file_before_report_db_when_exif_missing() -> None:
+    row = {
+        "filename": "report-stem",
+    }
+
+    def _resolver(path: Path) -> dict | None:
+        if path.name == "sample.jpg":
+            return dict(row)
+        return None
+
+    set_report_db_row_resolver(_resolver)
+    try:
+        photo = PhotoInfo.from_path("/tmp/sample.jpg", raw_metadata={})
+        provider = build_template_context_provider(TEMPLATE_SOURCE_AUTO, "filename")
+        context = build_template_context(photo)
+
+        assert provider.get_text_content(photo) == "sample.jpg"
+        assert context["filename"] == "sample.jpg"
+        assert context["report.filename"] == "report-stem"
+    finally:
+        set_report_db_row_resolver(None)
+
+
+def test_auto_proxy_prefers_sidecar_before_report_db() -> None:
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        path = Path(tmp_dir) / "sample.jpg"
+        path.write_bytes(b"x")
+        (Path(tmp_dir) / "sample.xmp").write_text(
+            """<?xml version="1.0" encoding="UTF-8"?>
+<x:xmpmeta xmlns:x="adobe:ns:meta/">
+  <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+    <rdf:Description rdf:about="">
+      <dc:title xmlns:dc="http://purl.org/dc/elements/1.1/">
+        <rdf:Alt>
+          <rdf:li xml:lang="x-default">Sidecar 鸟名</rdf:li>
+        </rdf:Alt>
+      </dc:title>
+    </rdf:Description>
+  </rdf:RDF>
+</x:xmpmeta>
+""",
+            encoding="utf-8",
+        )
+        row = {
+            "filename": "sample",
+            "bird_species_cn": "Report 鸟名",
+        }
+
+        def _resolver(current_path: Path) -> dict | None:
+            if current_path.name == "sample.jpg":
+                return dict(row)
+            return None
+
+        set_report_db_row_resolver(_resolver)
+        try:
+            photo = PhotoInfo.from_path(
+                path,
+                raw_metadata={"XMP-dc:Title": "Embedded 鸟名"},
+            )
+            provider = build_template_context_provider(TEMPLATE_SOURCE_AUTO, "bird_species_cn")
+            context = build_template_context(photo)
+
+            assert provider.get_text_content(photo) == "Sidecar 鸟名"
+            assert context["bird_species_cn"] == "Sidecar 鸟名"
+            assert context["bird"] == "Sidecar 鸟名"
+            assert context["report.bird_species_cn"] == "Report 鸟名"
+        finally:
+            set_report_db_row_resolver(None)
 
 
 def test_exif_provider_prefers_sidecar_xmp_before_embedded_exif() -> None:
@@ -365,6 +435,38 @@ def test_exif_provider_prefers_sidecar_xmp_before_embedded_exif() -> None:
         assert auto_title_provider.get_text_content(photo) == "Sidecar Title"
 
 
+def test_exif_provider_reads_superpicky_sidecar_report_only_fields() -> None:
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        path = Path(tmp_dir) / "sample.jpg"
+        path.write_bytes(b"x")
+        (Path(tmp_dir) / "sample.xmp").write_text(
+            """<?xml version="1.0" encoding="UTF-8"?>
+<x:xmpmeta xmlns:x="adobe:ns:meta/">
+  <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+    <rdf:Description
+      rdf:about=""
+      xmlns:superpicky="https://superbirdtools.local/xmp/superpicky/1.0/"
+      superpicky:has_bird="0"
+      superpicky:confidence="0.88"
+      superpicky:burst_id="12" />
+  </rdf:RDF>
+</x:xmpmeta>
+""",
+            encoding="utf-8",
+        )
+        photo = PhotoInfo.from_path(path)
+        context = build_template_context(photo)
+
+        assert context["has_bird"] == "0"
+        assert context["confidence"] == "0.88"
+        assert context["burst_id"] == "12"
+        assert context["report.has_bird"] == "0"
+        assert context["report.confidence"] == "0.88"
+        assert build_template_context_provider("auto", "has_bird").get_text_content(photo) == "0"
+        assert build_template_context_provider("auto", "confidence").get_text_content(photo) == "0.88"
+        assert build_template_context_provider("auto", "burst_id").get_text_content(photo) == "12"
+
+
 def test_auto_proxy_returns_na_when_all_sources_are_missing() -> None:
     photo = PhotoInfo.from_path(
         "/tmp/sample.jpg",
@@ -379,6 +481,8 @@ def test_auto_proxy_route_definitions_are_loaded_from_resource_json() -> None:
     routes = AutoProxyTemplateContextProvider.route_definitions()
 
     assert "bird_species_cn" in routes
-    assert routes["bird_species_cn"][0].provider_id == "report_db"
-    assert routes["bird_species_cn"][1].provider_id == "exif"
-    assert "XMP-dc:Title" in routes["bird_species_cn"][1].candidate_keys
+    assert routes["bird_species_cn"][0].provider_id == "exif"
+    assert routes["bird_species_cn"][1].provider_id == "from_file"
+    assert routes["bird_species_cn"][2].provider_id == "report_db"
+    assert "XMP-superpicky:bird_species_cn" in routes["bird_species_cn"][0].candidate_keys
+    assert "XMP-dc:Title" in routes["bird_species_cn"][0].candidate_keys

@@ -1,15 +1,9 @@
 {
   "bird_species_cn": [
     {
-      "provider_id": "report_db",
-      "candidate_keys": [
-        "bird_species_cn",
-        "report.bird_species_cn"
-      ]
-    },
-    {
       "provider_id": "exif",
       "candidate_keys": [
+        "XMP-superpicky:bird_species_cn",
         "bird_species_cn",
         "XMP-dc:Title",
         "IFD0:XPTitle",
@@ -25,14 +19,21 @@
         "title",
         "{title}"
       ]
+    },
+    {
+      "provider_id": "report_db",
+      "candidate_keys": [
+        "bird_species_cn",
+        "report.bird_species_cn"
+      ]
     }
   ],
   "bird_species_en": [
     {
-      "provider_id": "report_db",
+      "provider_id": "exif",
       "candidate_keys": [
-        "bird_species_en",
-        "report.bird_species_en"
+        "XMP-superpicky:bird_species_en",
+        "bird_species_en"
       ]
     },
     {
@@ -43,19 +44,20 @@
         "bird_scientific",
         "{bird_scientific}"
       ]
+    },
+    {
+      "provider_id": "report_db",
+      "candidate_keys": [
+        "bird_species_en",
+        "report.bird_species_en"
+      ]
     }
   ],
   "title": [
     {
-      "provider_id": "report_db",
-      "candidate_keys": [
-        "title",
-        "report.title"
-      ]
-    },
-    {
       "provider_id": "exif",
       "candidate_keys": [
+        "XMP-superpicky:title",
         "title",
         "XMP-dc:Title",
         "IFD0:XPTitle",
@@ -69,19 +71,20 @@
         "title",
         "{title}"
       ]
+    },
+    {
+      "provider_id": "report_db",
+      "candidate_keys": [
+        "title",
+        "report.title"
+      ]
     }
   ],
   "caption": [
     {
-      "provider_id": "report_db",
-      "candidate_keys": [
-        "caption",
-        "report.caption"
-      ]
-    },
-    {
       "provider_id": "exif",
       "candidate_keys": [
+        "XMP-superpicky:caption",
         "caption",
         "XMP-dc:Description",
         "IPTC:Caption-Abstract",
@@ -97,19 +100,21 @@
         "description",
         "{description}"
       ]
+    },
+    {
+      "provider_id": "report_db",
+      "candidate_keys": [
+        "caption",
+        "report.caption"
+      ]
     }
   ],
   "date_time_original": [
     {
-      "provider_id": "report_db",
-      "candidate_keys": [
-        "date_time_original",
-        "report.date_time_original"
-      ]
-    },
-    {
       "provider_id": "exif",
       "candidate_keys": [
+        "date_time_original",
+        "XMP-superpicky:date_time_original",
         "EXIF:DateTimeOriginal",
         "DateTimeOriginal",
         "EXIF:CreateDate",
@@ -122,19 +127,21 @@
         "capture_text",
         "{capture_text}"
       ]
-    }
-  ],
-  "capture_date": [
+    },
     {
       "provider_id": "report_db",
       "candidate_keys": [
         "date_time_original",
         "report.date_time_original"
       ]
-    },
+    }
+  ],
+  "capture_date": [
     {
       "provider_id": "exif",
       "candidate_keys": [
+        "capture_date",
+        "XMP-superpicky:capture_date",
         "EXIF:DateTimeOriginal",
         "DateTimeOriginal",
         "EXIF:CreateDate",
@@ -147,19 +154,21 @@
         "capture_date",
         "{capture_date}"
       ]
+    },
+    {
+      "provider_id": "report_db",
+      "candidate_keys": [
+        "date_time_original",
+        "report.date_time_original"
+      ]
     }
   ],
   "camera_model": [
     {
-      "provider_id": "report_db",
-      "candidate_keys": [
-        "camera_model",
-        "report.camera_model"
-      ]
-    },
-    {
       "provider_id": "exif",
       "candidate_keys": [
+        "camera_model",
+        "XMP-superpicky:camera_model",
         "EXIF:Model",
         "IFD0:Model",
         "Model"
@@ -172,19 +181,21 @@
         "camera",
         "{camera}"
       ]
+    },
+    {
+      "provider_id": "report_db",
+      "candidate_keys": [
+        "camera_model",
+        "report.camera_model"
+      ]
     }
   ],
   "lens_model": [
     {
-      "provider_id": "report_db",
-      "candidate_keys": [
-        "lens_model",
-        "report.lens_model"
-      ]
-    },
-    {
       "provider_id": "exif",
       "candidate_keys": [
+        "lens_model",
+        "XMP-superpicky:lens_model",
         "EXIF:LensModel",
         "ExifIFD:LensModel",
         "LensModel"
@@ -197,76 +208,90 @@
         "lens",
         "{lens}"
       ]
+    },
+    {
+      "provider_id": "report_db",
+      "candidate_keys": [
+        "lens_model",
+        "report.lens_model"
+      ]
     }
   ],
   "city": [
+    {
+      "provider_id": "exif",
+      "candidate_keys": [
+        "city",
+        "XMP-superpicky:city",
+        "XMP-photoshop:City",
+        "IPTC:City",
+        "City"
+      ]
+    },
     {
       "provider_id": "report_db",
       "candidate_keys": [
         "city",
         "report.city"
       ]
-    },
-    {
-      "provider_id": "exif",
-      "candidate_keys": [
-        "XMP-photoshop:City",
-        "IPTC:City",
-        "City"
-      ]
     }
   ],
   "state_province": [
+    {
+      "provider_id": "exif",
+      "candidate_keys": [
+        "state_province",
+        "XMP-superpicky:state_province",
+        "XMP-photoshop:State",
+        "IPTC:Province-State",
+        "Province-State",
+        "State"
+      ]
+    },
     {
       "provider_id": "report_db",
       "candidate_keys": [
         "state_province",
         "report.state_province"
       ]
-    },
-    {
-      "provider_id": "exif",
-      "candidate_keys": [
-        "XMP-photoshop:State",
-        "IPTC:Province-State",
-        "Province-State",
-        "State"
-      ]
     }
   ],
   "country": [
+    {
+      "provider_id": "exif",
+      "candidate_keys": [
+        "country",
+        "XMP-superpicky:country",
+        "XMP-photoshop:Country",
+        "IPTC:Country-PrimaryLocationName",
+        "Country-PrimaryLocationName",
+        "Country"
+      ]
+    },
     {
       "provider_id": "report_db",
       "candidate_keys": [
         "country",
         "report.country"
       ]
-    },
-    {
-      "provider_id": "exif",
-      "candidate_keys": [
-        "XMP-photoshop:Country",
-        "IPTC:Country-PrimaryLocationName",
-        "Country-PrimaryLocationName",
-        "Country"
-      ]
     }
   ],
   "rating": [
+    {
+      "provider_id": "exif",
+      "candidate_keys": [
+        "XMP-superpicky:rating",
+        "rating",
+        "XMP-xmp:Rating",
+        "Rating",
+        "Sony:Rating"
+      ]
+    },
     {
       "provider_id": "report_db",
       "candidate_keys": [
         "rating",
         "report.rating"
-      ]
-    },
-    {
-      "provider_id": "exif",
-      "candidate_keys": [
-        "rating",
-        "XMP-xmp:Rating",
-        "Rating",
-        "Sony:Rating"
       ]
     }
   ]

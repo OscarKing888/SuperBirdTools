@@ -4,7 +4,7 @@ import os
 from pathlib import Path
 
 from app_common.exif_io.photo_meta import PhotoMetaDataXMP
-from app_common.exif_io.writer import read_batch_metadata
+from app_common.exif_io.writer import read_batch_metadata, write_exif_with_exiftool_by_key
 from SuperViewer.superviewer.photo_tags import (
     PhotoTagConfig,
     PhotoTagSidecarStore,
@@ -69,6 +69,17 @@ def test_xmp_write_accepts_subject_field_alias(tmp_path: Path) -> None:
 
     assert metadata.write(str(photo_path), {"XMP-dc:Subject": "fight; feeding"})
     assert metadata.read_subjects(str(photo_path)) == ["fight", "feeding"]
+
+
+def test_legacy_exif_writer_routes_title_to_xmp_sidecar(tmp_path: Path) -> None:
+    photo_path = tmp_path / "img001.jpg"
+    photo_path.write_bytes(b"not an image")
+
+    write_exif_with_exiftool_by_key(str(photo_path), "IFD0:XPTitle", "sidecar title")
+
+    metadata = PhotoMetaDataXMP()
+    assert (tmp_path / "img001.xmp").is_file()
+    assert metadata.read(str(photo_path)).get("XMP-dc:Title") == "sidecar title"
 
 
 def test_xmp_rating_pick_read_as_normalized_fields(tmp_path: Path) -> None:
