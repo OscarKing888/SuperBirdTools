@@ -7,6 +7,20 @@ import time as _time
 from pathlib import Path
 from typing import Callable
 
+from app_common.file_browser._browser_core import (
+    _format_burst_text,
+    _metadata_aesthetic_text,
+    _metadata_aperture_text,
+    _metadata_camera_model_text,
+    _metadata_capture_time_text,
+    _metadata_focus_status_text,
+    _metadata_focal_length_text,
+    _metadata_iso_text,
+    _metadata_lens_model_text,
+    _metadata_sharpness_text,
+    _metadata_shutter_text,
+    _metadata_value_from_candidates,
+)
 from app_common.log import get_logger
 from app_common.perf_probe import perf_log
 
@@ -32,6 +46,27 @@ from .tag_menu import add_filterable_tag_actions
 
 
 _PREVIEW_HEIGHT = 180
+_BASIC_INFO_ROWS = (
+    "文件夹",
+    "评分",
+    "尺寸",
+    "文件大小",
+    "格式",
+    "拍摄时间",
+    "快门",
+    "光圈",
+    "ISO",
+    "焦距",
+    "相机",
+    "镜头",
+    "连拍",
+    "锐度",
+    "美学",
+    "对焦",
+    "添加日期",
+    "创建日期",
+    "修改日期",
+)
 _log = get_logger("superviewer.image_info_tab_image_info")
 
 
@@ -135,6 +170,30 @@ def _metadata_comment(metadata: dict) -> str:
         if text:
             return text
     return ""
+
+
+def _metadata_burst_int(metadata: dict | None, key: str) -> int | None:
+    raw = _metadata_value_from_candidates(metadata, key)
+    if raw is None:
+        return None
+    text = str(raw).strip()
+    if not text:
+        return None
+    try:
+        return int(float(text))
+    except Exception:
+        return None
+
+
+def _metadata_burst_text(metadata: dict | None) -> str:
+    return _format_burst_text(
+        _metadata_burst_int(metadata, "burst_position"),
+        _metadata_burst_int(metadata, "burst_id"),
+    )
+
+
+def _empty_basic_info() -> dict[str, str]:
+    return {label: ("☆☆☆☆☆" if label == "评分" else "-") for label in _BASIC_INFO_ROWS}
 
 
 class ImageInfoTabPanel_ImageInfo(ImageInfoTabPanel):
@@ -267,7 +326,7 @@ class ImageInfoTabPanel_ImageInfo(ImageInfoTabPanel):
         self._add_separator(layout)
         layout.addWidget(self._section_title("基本信息"))
         self.basic_rows: dict[str, QLabel] = {}
-        for label in ("文件夹", "评分", "尺寸", "文件大小", "格式", "添加日期", "创建日期", "修改日期"):
+        for label in _BASIC_INFO_ROWS:
             self._add_basic_row(layout, label)
 
         layout.addStretch(1)
@@ -617,16 +676,7 @@ class ImageInfoTabPanel_ImageInfo(ImageInfoTabPanel):
 
     def _load_basic_info(self, path: str, *, metadata: dict | None = None) -> dict[str, str]:
         if not path or not os.path.isfile(path):
-            return {
-                "文件夹": "-",
-                "评分": "☆☆☆☆☆",
-                "尺寸": "-",
-                "文件大小": "-",
-                "格式": "-",
-                "添加日期": "-",
-                "创建日期": "-",
-                "修改日期": "-",
-            }
+            return _empty_basic_info()
 
         p = Path(path)
         try:
@@ -639,16 +689,28 @@ class ImageInfoTabPanel_ImageInfo(ImageInfoTabPanel):
         if created_ts is None and stat is not None:
             created_ts = stat.st_ctime
 
-        return {
+        info = {
             "文件夹": str(p.parent),
             "评分": _rating_text(metadata.get("rating")),
             "尺寸": f"{width} × {height}" if width and height else "-",
             "文件大小": _format_file_size(stat.st_size if stat is not None else None),
             "格式": (p.suffix[1:] or "-").upper(),
+            "拍摄时间": _metadata_capture_time_text(metadata) or "-",
+            "快门": _metadata_shutter_text(metadata) or "-",
+            "光圈": _metadata_aperture_text(metadata) or "-",
+            "ISO": _metadata_iso_text(metadata) or "-",
+            "焦距": _metadata_focal_length_text(metadata) or "-",
+            "相机": _metadata_camera_model_text(metadata) or "-",
+            "镜头": _metadata_lens_model_text(metadata) or "-",
+            "连拍": _metadata_burst_text(metadata) or "-",
+            "锐度": _metadata_sharpness_text(metadata) or "-",
+            "美学": _metadata_aesthetic_text(metadata) or "-",
+            "对焦": _metadata_focus_status_text(metadata) or "-",
             "添加日期": _format_timestamp(stat.st_ctime if stat is not None else None),
             "创建日期": _format_timestamp(created_ts),
             "修改日期": _format_timestamp(stat.st_mtime if stat is not None else None),
         }
+        return {label: str(info.get(label) or "-") for label in _BASIC_INFO_ROWS}
 
     def _load_metadata(self, path: str) -> dict:
         if self._metadata_provider is None:
