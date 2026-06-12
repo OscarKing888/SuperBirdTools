@@ -448,7 +448,10 @@ def test_exif_provider_reads_superpicky_sidecar_report_only_fields() -> None:
       xmlns:superpicky="https://superbirdtools.local/xmp/superpicky/1.0/"
       superpicky:has_bird="0"
       superpicky:confidence="0.88"
-      superpicky:burst_id="12" />
+      superpicky:burst_id="12"
+      superpicky:rarity_index="8.5"
+      superpicky:iucn_category="LC"
+      superpicky:gbif_rarity_100="72.25" />
   </rdf:RDF>
 </x:xmpmeta>
 """,
@@ -460,11 +463,20 @@ def test_exif_provider_reads_superpicky_sidecar_report_only_fields() -> None:
         assert context["has_bird"] == "0"
         assert context["confidence"] == "0.88"
         assert context["burst_id"] == "12"
+        assert context["rarity_index"] == "8.5"
+        assert context["iucn_category"] == "LC"
+        assert context["gbif_rarity_100"] == "72.25"
         assert context["report.has_bird"] == "0"
         assert context["report.confidence"] == "0.88"
+        assert context["report.rarity_index"] == "8.5"
+        assert context["report.iucn_category"] == "LC"
+        assert context["report.gbif_rarity_100"] == "72.25"
         assert build_template_context_provider("auto", "has_bird").get_text_content(photo) == "0"
         assert build_template_context_provider("auto", "confidence").get_text_content(photo) == "0.88"
         assert build_template_context_provider("auto", "burst_id").get_text_content(photo) == "12"
+        assert build_template_context_provider("auto", "rarity_index").get_text_content(photo) == "8.5"
+        assert build_template_context_provider("auto", "iucn_category").get_text_content(photo) == "LC"
+        assert build_template_context_provider("auto", "gbif_rarity_100").get_text_content(photo) == "72.25"
 
 
 def test_auto_proxy_returns_na_when_all_sources_are_missing() -> None:

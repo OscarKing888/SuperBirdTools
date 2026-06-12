@@ -15,6 +15,21 @@ import tempfile
 import time as _time
 from pathlib import Path
 
+
+def _ensure_default_log_file_env() -> None:
+    if os.environ.get("APP_COMMON_LOG_FILE", "").strip():
+        return
+    try:
+        repo_root = Path(__file__).resolve().parent.parent
+        log_dir = repo_root / "logs"
+        log_dir.mkdir(parents=True, exist_ok=True)
+        os.environ["APP_COMMON_LOG_FILE"] = str(log_dir / "SuperViewer.log")
+    except OSError:
+        return
+
+
+_ensure_default_log_file_env()
+
 from app_common import show_about_dialog, load_about_images, load_about_info
 from app_common.log import get_logger
 from app_common.perf_probe import elapsed_ms, perf_counter, perf_log
@@ -1310,6 +1325,27 @@ class MainWindow(QMainWindow):
             return sibling_source
         return ""
 
+    def _get_cached_focus_box_for_preview(self, path: str, focus_source_path: str = "") -> tuple[bool, object | None]:
+        getter = getattr(self._file_list, "get_cached_focus_box_state_for_path", None)
+        if not callable(getter):
+            return (False, None)
+        seen: set[str] = set()
+        for candidate in (path, focus_source_path):
+            norm = os.path.normpath(candidate) if candidate else ""
+            if not norm:
+                continue
+            key = os.path.normcase(norm)
+            if key in seen:
+                continue
+            seen.add(key)
+            try:
+                checked, focus_box = getter(norm)
+            except Exception:
+                continue
+            if checked:
+                return (True, focus_box)
+        return (False, None)
+
     def _update_preview_focus_box(self, path: str, *, allow_async_load: bool = True) -> None:
         """根据当前预览图尺寸与元数据，异步加载并更新 PreviewCanvas 的对焦点框。
 
@@ -1323,13 +1359,18 @@ class MainWindow(QMainWindow):
             self._stop_focus_loader()
             self.preview_panel.set_focus_box(None)
             return
+        focus_source_path = self._resolve_focus_metadata_source_path(path)
+        cached_checked, cached_focus_box = self._get_cached_focus_box_for_preview(path, focus_source_path)
+        if cached_checked:
+            self._stop_focus_loader()
+            self.preview_panel.set_focus_box(cached_focus_box)
+            return
         size = self.preview_panel.get_preview_image_size()
         if not size:
             self._stop_focus_loader()
             self.preview_panel.set_focus_box(None)
             return
         preview_path = self.preview_panel.current_path() or path
-        focus_source_path = self._resolve_focus_metadata_source_path(path)
         if (not preview_path or not os.path.isfile(preview_path)) and (
             not focus_source_path or not os.path.isfile(focus_source_path)
         ):

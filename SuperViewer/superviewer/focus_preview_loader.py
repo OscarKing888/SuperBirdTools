@@ -25,6 +25,7 @@ from app_common.focus_calc import (
 )
 from app_common.image_formats import IMAGE_EXTENSIONS
 from app_common.log import get_logger
+from app_common.raw_focus_metadata import read_raw_embedded_focus_metadata
 from app_common.report_db import ReportDB, find_report_root
 from app_common.thumb_stream import get_raw_preview_jpeg
 
@@ -392,19 +393,25 @@ def _load_focus_metadata_for_path(path: str) -> dict | None:
         return None
 
     ext = Path(path_text).suffix.lower()
-    primary = None
-    try:
-        primary = extract_metadata_with_xmp_priority(Path(path_text), mode="auto")
-    except Exception:
-        primary = None
 
     if ext in RAW_EXTENSIONS:
+        raw_embedded = read_raw_embedded_focus_metadata(path_text)
+        if raw_embedded:
+            merged, providers = _merge_focus_metadata_parts([("raw_embedded", raw_embedded)])
+            _log.info(
+                "[_load_focus_metadata_for_path] path=%r ext=%r providers=%s merged_keys=%s",
+                path_text, ext, providers or ["none"], len(merged or {}),
+            )
+            return merged
         parts = [
-            ("exiftool", _run_exiftool_json_for_focus(path_text)),
-            ("primary", primary if isinstance(primary, dict) else None),
             ("exifread", _load_exifread_metadata_for_focus(path_text)),
         ]
     elif ext in HEIF_EXTENSIONS:
+        primary = None
+        try:
+            primary = extract_metadata_with_xmp_priority(Path(path_text), mode="auto")
+        except Exception:
+            primary = None
         parts = [
             ("exiftool", _run_exiftool_json_for_focus(path_text)),
             ("heif_piexif", _load_heif_piexif_metadata_for_focus(path_text)),
@@ -412,6 +419,11 @@ def _load_focus_metadata_for_path(path: str) -> dict | None:
             ("exifread", _load_exifread_metadata_for_focus(path_text)),
         ]
     else:
+        primary = None
+        try:
+            primary = extract_metadata_with_xmp_priority(Path(path_text), mode="auto")
+        except Exception:
+            primary = None
         parts = [
             ("exiftool", _run_exiftool_json_for_focus(path_text)),
             ("primary", primary if isinstance(primary, dict) else None),
