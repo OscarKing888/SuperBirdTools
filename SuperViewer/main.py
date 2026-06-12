@@ -48,6 +48,7 @@ from app_common.preview_canvas import (
     normalize_preview_composition_grid_mode,
     sync_preview_scale_preset_combo,
 )
+from app_common.triangle_toggle_splitter import TriangleToggleSplitter
 from app_common.send_to_app import (
     ensure_file_open_aware_application,
     get_initial_file_list_from_argv,
@@ -137,18 +138,11 @@ try:
         QPalette,
         QPainter,
         QPen,
-        QPoint,
         QPixmap,
-        QPolygon,
-        QSplitter,
-        QSplitterHandle,
-        QSize,
         QTimer,
         QVBoxLayout,
         QWidget,
-        pyqtSignal,
         _Horizontal,
-        _LeftButton,
     )
 except ImportError:
     from superviewer.exif_helpers import (
@@ -215,18 +209,11 @@ except ImportError:
         QPalette,
         QPainter,
         QPen,
-        QPoint,
         QPixmap,
-        QPolygon,
-        QSplitter,
-        QSplitterHandle,
-        QSize,
         QTimer,
         QVBoxLayout,
         QWidget,
-        pyqtSignal,
         _Horizontal,
-        _LeftButton,
     )
 
 PREVIEW_GRID_MODE_ITEMS = (
@@ -264,333 +251,6 @@ def _build_preview_grid_line_width_icon(width: int) -> QIcon:
 
 
 _log = get_logger("main")
-
-
-class TriangleToggleSplitterHandle(QSplitterHandle):
-    """Splitter handle rendered as a triangular click toggle that also drags."""
-
-    def __init__(self, orientation, splitter: "TriangleToggleSplitter") -> None:
-        super().__init__(orientation, splitter)
-        self._pressed = False
-        self._dragging = False
-        self._press_pos: QPoint | None = None
-        self.setMouseTracking(True)
-        self._sync_tooltip()
-
-    def sizeHint(self) -> QSize:
-        if self.orientation() == _Horizontal:
-            return QSize(18, 42)
-        return QSize(42, 18)
-
-    def minimumSizeHint(self) -> QSize:
-        return self.sizeHint()
-
-    def enterEvent(self, event) -> None:
-        self.update()
-        self._sync_tooltip()
-        super().enterEvent(event)
-
-    def leaveEvent(self, event) -> None:
-        self.update()
-        super().leaveEvent(event)
-
-    def mousePressEvent(self, event) -> None:
-        if event.button() == _LeftButton:
-            self._pressed = True
-            self._dragging = False
-            self._press_pos = self._event_pos(event)
-            super().mousePressEvent(event)
-            self.update()
-            return
-        super().mousePressEvent(event)
-
-    def mouseMoveEvent(self, event) -> None:
-        if self._pressed:
-            pos = self._event_pos(event)
-            if not self._dragging and self._press_pos is not None:
-                try:
-                    moved = (pos - self._press_pos).manhattanLength()
-                except Exception:
-                    moved = abs(pos.x() - self._press_pos.x()) + abs(pos.y() - self._press_pos.y())
-                if moved >= self._drag_threshold():
-                    self._dragging = True
-            if self._dragging:
-                super().mouseMoveEvent(event)
-                self.update()
-                return
-            event.accept()
-            return
-        super().mouseMoveEvent(event)
-
-    def mouseReleaseEvent(self, event) -> None:
-        if self._pressed and event.button() == _LeftButton:
-            was_dragging = self._dragging
-            self._pressed = False
-            self._dragging = False
-            self._press_pos = None
-            if was_dragging:
-                super().mouseReleaseEvent(event)
-                self.update()
-                return
-            pos = self._event_pos(event)
-            super().mouseReleaseEvent(event)
-            if self.rect().contains(pos):
-                splitter = self.splitter()
-                if isinstance(splitter, TriangleToggleSplitter):
-                    splitter.toggle_panel_for_handle(self)
-            event.accept()
-            self.update()
-            return
-        self._pressed = False
-        self._dragging = False
-        self._press_pos = None
-        super().mouseReleaseEvent(event)
-
-    def paintEvent(self, event) -> None:
-        self._sync_tooltip()
-        painter = QPainter(self)
-        try:
-            try:
-                painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
-            except Exception:
-                pass
-            hover = self.underMouse() or self._pressed
-            painter.fillRect(self.rect(), QColor(255, 255, 255, 28 if hover else 12))
-            color = QColor(220, 225, 230, 230 if hover else 168)
-            painter.setPen(QPen(color, 1))
-            painter.setBrush(color)
-            painter.drawPolygon(self._triangle_polygon())
-        finally:
-            painter.end()
-
-    def _event_pos(self, event) -> QPoint:
-        try:
-            return event.position().toPoint()
-        except Exception:
-            return event.pos()
-
-    def _drag_threshold(self) -> int:
-        try:
-            return max(1, int(QApplication.startDragDistance()))
-        except Exception:
-            return 4
-
-    def _triangle_polygon(self) -> QPolygon:
-        rect = self.rect()
-        cx = rect.width() // 2
-        cy = rect.height() // 2
-        splitter = self.splitter()
-        collapsed = (
-            isinstance(splitter, TriangleToggleSplitter)
-            and splitter.is_target_panel_collapsed_for_handle(self)
-        )
-        side = splitter.target_panel_side_for_handle(self) if isinstance(splitter, TriangleToggleSplitter) else "left"
-        if self.orientation() == _Horizontal:
-            if side == "right":
-                if collapsed:
-                    points = [QPoint(cx + 4, cy - 8), QPoint(cx + 4, cy + 8), QPoint(cx - 5, cy)]
-                else:
-                    points = [QPoint(cx - 4, cy - 8), QPoint(cx - 4, cy + 8), QPoint(cx + 5, cy)]
-            elif collapsed:
-                points = [QPoint(cx - 4, cy - 8), QPoint(cx - 4, cy + 8), QPoint(cx + 5, cy)]
-            else:
-                points = [QPoint(cx + 4, cy - 8), QPoint(cx + 4, cy + 8), QPoint(cx - 5, cy)]
-        else:
-            if side == "bottom":
-                if collapsed:
-                    points = [QPoint(cx - 8, cy + 4), QPoint(cx + 8, cy + 4), QPoint(cx, cy - 5)]
-                else:
-                    points = [QPoint(cx - 8, cy - 4), QPoint(cx + 8, cy - 4), QPoint(cx, cy + 5)]
-            elif collapsed:
-                points = [QPoint(cx - 8, cy - 4), QPoint(cx + 8, cy - 4), QPoint(cx, cy + 5)]
-            else:
-                points = [QPoint(cx - 8, cy + 4), QPoint(cx + 8, cy + 4), QPoint(cx, cy - 5)]
-        return QPolygon(points)
-
-    def _sync_tooltip(self) -> None:
-        splitter = self.splitter()
-        if not isinstance(splitter, TriangleToggleSplitter):
-            return
-        index = splitter.target_panel_index_for_handle(self)
-        if index < 0:
-            self.setToolTip("")
-            return
-        action = "展开" if splitter.is_panel_collapsed(index) else "折叠"
-        side = splitter.target_panel_side_for_handle(self)
-        side_text = "右侧" if side in ("right", "bottom") else "左侧"
-        self.setToolTip(f"{action}{side_text}面板")
-
-
-class TriangleToggleSplitter(QSplitter):
-    """Horizontal splitter whose handles act as triangular panel toggles."""
-
-    stateChanged = pyqtSignal()
-
-    def __init__(self, orientation, parent=None) -> None:
-        super().__init__(orientation, parent)
-        self._toggle_restore_sizes: dict[int, list[int]] = {}
-        self._toggle_target_by_handle_index: dict[int, int] = {}
-        self.setHandleWidth(18)
-
-    def createHandle(self) -> QSplitterHandle:
-        return TriangleToggleSplitterHandle(self.orientation(), self)
-
-    def left_panel_index_for_handle(self, handle: QSplitterHandle) -> int:
-        handle_index = self._handle_index(handle)
-        if handle_index <= 0:
-            return -1
-        return handle_index - 1
-
-    def set_handle_toggle_target(self, handle_index: int, panel_index: int) -> None:
-        handle_index = int(handle_index)
-        panel_index = int(panel_index)
-        if handle_index <= 0 or not (0 <= panel_index < self.count()):
-            return
-        if panel_index not in (handle_index - 1, handle_index):
-            return
-        self._toggle_target_by_handle_index[handle_index] = panel_index
-        self._refresh_handles()
-
-    def target_panel_index_for_handle(self, handle: QSplitterHandle) -> int:
-        handle_index = self._handle_index(handle)
-        if handle_index <= 0:
-            return -1
-        target = self._toggle_target_by_handle_index.get(handle_index)
-        if target is not None and 0 <= target < self.count():
-            return target
-        return handle_index - 1
-
-    def target_panel_side_for_handle(self, handle: QSplitterHandle) -> str:
-        handle_index = self._handle_index(handle)
-        target_index = self.target_panel_index_for_handle(handle)
-        if self.orientation() == _Horizontal:
-            return "right" if target_index == handle_index else "left"
-        return "bottom" if target_index == handle_index else "top"
-
-    def is_left_panel_collapsed_for_handle(self, handle: QSplitterHandle) -> bool:
-        index = self.left_panel_index_for_handle(handle)
-        return index >= 0 and self.is_panel_collapsed(index)
-
-    def is_target_panel_collapsed_for_handle(self, handle: QSplitterHandle) -> bool:
-        index = self.target_panel_index_for_handle(handle)
-        return index >= 0 and self.is_panel_collapsed(index)
-
-    def is_panel_collapsed(self, index: int) -> bool:
-        sizes = self.sizes()
-        return 0 <= index < len(sizes) and sizes[index] <= 1
-
-    def toggle_panel_for_handle(self, handle: QSplitterHandle) -> None:
-        index = self.target_panel_index_for_handle(handle)
-        if index < 0:
-            return
-        changed = False
-        if self.is_panel_collapsed(index):
-            changed = self._expand_panel(index)
-        else:
-            changed = self._collapse_panel(index)
-        if changed:
-            self._refresh_handles()
-            self.stateChanged.emit()
-
-    def toggle_left_panel_for_handle(self, handle: QSplitterHandle) -> None:
-        self.toggle_panel_for_handle(handle)
-
-    def _handle_index(self, handle: QSplitterHandle) -> int:
-        for index in range(1, self.count()):
-            if self.handle(index) is handle:
-                return index
-        return -1
-
-    def export_panel_state(self) -> dict:
-        """Return a JSON-serializable snapshot of splitter sizes and toggle restore data."""
-        count = self.count()
-        restore_sizes: dict[str, list[int]] = {}
-        for panel_index, sizes in sorted(self._toggle_restore_sizes.items()):
-            normalized = self._coerce_size_list(sizes, count)
-            if normalized and 0 <= panel_index < count and normalized[panel_index] > 1:
-                restore_sizes[str(panel_index)] = normalized
-        return {
-            "version": 1,
-            "panel_count": count,
-            "orientation": "horizontal" if self.orientation() == _Horizontal else "vertical",
-            "sizes": self._coerce_size_list(self.sizes(), count),
-            "restore_sizes": restore_sizes,
-        }
-
-    def restore_panel_state(self, state: dict | None) -> bool:
-        """Restore a state produced by export_panel_state()."""
-        if not isinstance(state, dict):
-            return False
-        count = self.count()
-        sizes = self._coerce_size_list(state.get("sizes"), count)
-        if not sizes or sum(sizes) <= 0:
-            return False
-        restore_sizes: dict[int, list[int]] = {}
-        raw_restore_sizes = state.get("restore_sizes")
-        if isinstance(raw_restore_sizes, dict):
-            for raw_index, raw_sizes in raw_restore_sizes.items():
-                try:
-                    panel_index = int(raw_index)
-                except (TypeError, ValueError):
-                    continue
-                normalized = self._coerce_size_list(raw_sizes, count)
-                if normalized and 0 <= panel_index < count and normalized[panel_index] > 1:
-                    restore_sizes[panel_index] = normalized
-        self._toggle_restore_sizes = restore_sizes
-        self.setSizes(sizes)
-        self._refresh_handles()
-        return True
-
-    @staticmethod
-    def _coerce_size_list(value, count: int) -> list[int]:
-        if not isinstance(value, (list, tuple)) or len(value) != count:
-            return []
-        sizes: list[int] = []
-        for item in value:
-            try:
-                number = int(item)
-            except (TypeError, ValueError):
-                return []
-            sizes.append(max(0, number))
-        return sizes
-
-    def _collapse_panel(self, index: int) -> bool:
-        sizes = self.sizes()
-        if not (0 <= index < len(sizes)) or sizes[index] <= 1:
-            return False
-        self._toggle_restore_sizes[index] = list(sizes)
-        collapsed_width = sizes[index]
-        sizes[index] = 0
-        target = index + 1 if index + 1 < len(sizes) else index - 1
-        if 0 <= target < len(sizes):
-            sizes[target] += collapsed_width
-        self.setSizes(sizes)
-        return True
-
-    def _expand_panel(self, index: int) -> bool:
-        restore_sizes = self._toggle_restore_sizes.get(index)
-        if restore_sizes and len(restore_sizes) == self.count() and restore_sizes[index] > 1:
-            self.setSizes(restore_sizes)
-            return True
-
-        sizes = self.sizes()
-        if not (0 <= index < len(sizes)):
-            return False
-        target = index + 1 if index + 1 < len(sizes) else index - 1
-        width = max(180, self.widget(index).minimumSizeHint().width(), self.widget(index).sizeHint().width())
-        if 0 <= target < len(sizes):
-            width = min(width, max(1, sizes[target] - 80))
-            sizes[target] = max(1, sizes[target] - width)
-        sizes[index] = max(1, width)
-        self.setSizes(sizes)
-        return True
-
-    def _refresh_handles(self) -> None:
-        for index in range(1, self.count()):
-            handle = self.handle(index)
-            if isinstance(handle, TriangleToggleSplitterHandle):
-                handle._sync_tooltip()
-            handle.update()
 
 
 class MainWindow(QMainWindow):
