@@ -754,7 +754,7 @@ class MainWindow(QMainWindow):
         left_widget.on_image_loaded = self.on_image_loaded
 
         if not initial_received_files:
-            self._restore_last_selected_directory()
+            QTimer.singleShot(0, self._restore_last_selected_directory)
 
     def _on_directory_selected(self, path: str):
         """目录树选中目录后，保存路径到设置与 .last_folder.txt，并刷新文件列表。"""

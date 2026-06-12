@@ -31,11 +31,13 @@ class SuperViewerUserOptionsDialog(QDialog):
         super().__init__(parent)
         self.setWindowTitle("用户选项")
         self.setModal(True)
-        self.resize(520, 260)
+        self.resize(540, 310)
 
         opts = dict(options or get_runtime_user_options())
         cpu_count = max(1, os.cpu_count() or 1)
         max_workers = max(64, cpu_count * 2)
+        metadata_default = max(1, min(8, cpu_count // 4 or 1))
+        persistent_default = max(1, cpu_count - metadata_default)
 
         layout = QVBoxLayout(self)
 
@@ -61,13 +63,22 @@ class SuperViewerUserOptionsDialog(QDialog):
         grid.addWidget(QLabel(f"默认 {cpu_count}"), row, 2)
 
         row += 1
+        grid.addWidget(QLabel("元数据读取线程数"), row, 0)
+        self._spin_metadata_loader_workers = QSpinBox(self)
+        self._spin_metadata_loader_workers.setRange(1, max_workers)
+        self._spin_metadata_loader_workers.setValue(int(opts.get("metadata_loader_workers", metadata_default)))
+        self._spin_metadata_loader_workers.setToolTip("文件列表读取 EXIF/XMP 元数据的并行线程数，默认约为 CPU 逻辑核心数的 1/4，最多 8。")
+        grid.addWidget(self._spin_metadata_loader_workers, row, 1)
+        grid.addWidget(QLabel(f"默认 {metadata_default}"), row, 2)
+
+        row += 1
         grid.addWidget(QLabel("小缩略图生成线程数"), row, 0)
         self._spin_persistent_thumb_workers = QSpinBox(self)
         self._spin_persistent_thumb_workers.setRange(1, max_workers)
-        self._spin_persistent_thumb_workers.setValue(int(opts.get("persistent_thumb_workers", cpu_count)))
-        self._spin_persistent_thumb_workers.setToolTip("后台持久化小缩略图生成线程数，默认等于 CPU 逻辑核心数。")
+        self._spin_persistent_thumb_workers.setValue(int(opts.get("persistent_thumb_workers", persistent_default)))
+        self._spin_persistent_thumb_workers.setToolTip("后台持久化缩略图生成线程数，默认使用扣除元数据读取后的剩余 CPU 线程。")
         grid.addWidget(self._spin_persistent_thumb_workers, row, 1)
-        grid.addWidget(QLabel(f"默认 {cpu_count}"), row, 2)
+        grid.addWidget(QLabel(f"默认 {persistent_default}"), row, 2)
 
         row += 1
         grid.addWidget(QLabel("小缩略图最大尺寸"), row, 0)
@@ -77,7 +88,7 @@ class SuperViewerUserOptionsDialog(QDialog):
         current_size = int(opts.get("persistent_thumb_max_size", 128))
         current_index = PERSISTENT_THUMB_SIZE_LEVELS.index(current_size) if current_size in PERSISTENT_THUMB_SIZE_LEVELS else 0
         self._combo_persistent_thumb_size.setCurrentIndex(current_index)
-        self._combo_persistent_thumb_size.setToolTip("会生成不高于该值的 128/256/512/1024 预览层级。")
+        self._combo_persistent_thumb_size.setToolTip("会生成不高于该值的 128/256/512/1024/2048 预览层级。")
         grid.addWidget(self._combo_persistent_thumb_size, row, 1)
         grid.addWidget(QLabel("默认 128"), row, 2)
 
@@ -133,6 +144,7 @@ class SuperViewerUserOptionsDialog(QDialog):
     def selected_options(self) -> dict[str, int]:
         return {
             "thumbnail_loader_workers": int(self._spin_thumb_loader_workers.value()),
+            "metadata_loader_workers": int(self._spin_metadata_loader_workers.value()),
             "persistent_thumb_workers": int(self._spin_persistent_thumb_workers.value()),
             "persistent_thumb_max_size": int(self._combo_persistent_thumb_size.currentData()),
             "key_navigation_fps": int(self._combo_key_navigation_fps.currentData()),
