@@ -35,6 +35,7 @@ from .qt_compat import (
     QImageReader,
     QLabel,
     QPixmap,
+    QSize,
     QThread,
     QTimer,
     QVBoxLayout,
@@ -48,6 +49,17 @@ _QUICK_PREVIEW_SIZE = 512
 _QUICK_PREVIEW_FALLBACK_SIZE = 128
 _FULL_PREVIEW_DELAY_MS = 80
 _HEIF_PIL_OPENER_REGISTERED = False
+
+
+def _env_float(name: str, default: float) -> float:
+    try:
+        return float(os.environ.get(name, default))
+    except Exception:
+        return float(default)
+
+
+_SYNC_FULL_PREVIEW_MAX_MP = max(0.0, _env_float("SuperViewer_SYNC_FULL_PREVIEW_MAX_MP", 40.0))
+_SYNC_FULL_PREVIEW_MAX_PIXELS = int(_SYNC_FULL_PREVIEW_MAX_MP * 1_000_000)
 
 
 def _qimage_rgb888_format():
@@ -89,8 +101,8 @@ def _qimage_from_rgb_result(result) -> QImage | None:
         return None
 
 
-def _quick_preview_target_size(canvas: QWidget) -> int:
-    return _QUICK_PREVIEW_SIZE
+def _quick_preview_target_size(canvas: QWidget, requested_size: int | None = None) -> int:
+    return _normalize_preview_target_size(requested_size or _QUICK_PREVIEW_SIZE)
 
 
 def _normalize_preview_target_size(target_size: int | None) -> int:
@@ -123,16 +135,72 @@ def _scale_preview_qimage(qimg: QImage | None, target_size: int) -> QImage | Non
     return scaled.copy() if scaled is not None and not scaled.isNull() else None
 
 
+def _load_scaled_preview_qimage(path: str, target_size: int) -> QImage | None:
+    if not path or not os.path.isfile(path):
+        return None
+    target_size = _normalize_preview_target_size(target_size)
+    try:
+        reader = QImageReader(path)
+        try:
+            reader.setAutoTransform(True)
+        except Exception:
+            pass
+        size = reader.size()
+        if size is not None and size.isValid():
+            scaled_size = size.scaled(QSize(target_size, target_size), _KeepAspectRatio)
+            if scaled_size.isValid():
+                reader.setScaledSize(scaled_size)
+        qimg = reader.read()
+        return qimg.copy() if qimg is not None and not qimg.isNull() else None
+    except Exception:
+        return None
+
+
 def _load_quick_preview_pixmap(path: str, target_size: int) -> QPixmap | None:
     target_size = _normalize_preview_target_size(target_size)
     qimg = _qimage_from_rgb_result(thumb_stream.load_thumbnail_rgb(path, target_size))
     if qimg is None or qimg.isNull():
-        qimg = _load_full_preview_qimage(path)
+        qimg = _load_scaled_preview_qimage(path, target_size)
     qimg = _scale_preview_qimage(qimg, target_size)
     if qimg is None or qimg.isNull():
         return None
     pix = QPixmap.fromImage(qimg)
     return pix if not pix.isNull() else None
+
+
+def _expected_image_pixel_count(path: str) -> int:
+    if not path or not os.path.isfile(path):
+        return 0
+    try:
+        reader = QImageReader(path)
+        try:
+            reader.setAutoTransform(True)
+        except Exception:
+            pass
+        size = reader.size()
+        pixels = _qsize_pixel_count(size)
+        if pixels > 0:
+            return pixels
+    except Exception:
+        pass
+    ext = Path(path).suffix.lower()
+    if ext in HEIF_EXTENSIONS:
+        _register_heif_pil_opener()
+    try:
+        with Image.open(path) as img:
+            width, height = img.size
+            return max(0, int(width)) * max(0, int(height))
+    except Exception:
+        return 0
+
+
+def _should_load_full_preview_sync(path: str) -> bool:
+    if _SYNC_FULL_PREVIEW_MAX_PIXELS <= 0:
+        return False
+    if not path or Path(path).suffix.lower() in RAW_EXTENSIONS:
+        return False
+    pixels = _expected_image_pixel_count(path)
+    return 0 < pixels <= _SYNC_FULL_PREVIEW_MAX_PIXELS
 
 
 def _qimage_pixel_count(qimg: QImage | None) -> int:
@@ -194,7 +262,7 @@ def _qimage_from_pil_image(img: Image.Image) -> QImage | None:
         return None
 
 
-def _load_full_preview_qimage_raw(path: str) -> QImage | None:
+def _load_raw_embedded_preview_qimage(path: str) -> QImage | None:
     if not path or not os.path.isfile(path) or Path(path).suffix.lower() not in RAW_EXTENSIONS:
         return None
     preview_data = thumb_stream.get_raw_preview_jpeg(path)
@@ -207,6 +275,15 @@ def _load_full_preview_qimage_raw(path: str) -> QImage | None:
                     return embedded_qimg
         except Exception:
             pass
+    return None
+
+
+def _load_full_preview_qimage_raw(path: str) -> QImage | None:
+    if not path or not os.path.isfile(path) or Path(path).suffix.lower() not in RAW_EXTENSIONS:
+        return None
+    embedded_qimg = _load_raw_embedded_preview_qimage(path)
+    if embedded_qimg is not None and not embedded_qimg.isNull():
+        return embedded_qimg
     try:
         import rawpy
     except Exception:
@@ -345,7 +422,7 @@ class PreviewPanel(QWidget):
         self._preview_status_label.setStyleSheet("color: #aaa; font-size: 12px;")
         layout.addWidget(self._preview_status_label)
 
-    def set_image(self, path: str, *, load_full: bool = True):
+    def set_image(self, path: str, *, load_full: bool = True, quick_size: int | None = None):
         t0 = _time.perf_counter()
         norm_path = os.path.normpath(path) if path else path
         if norm_path and self._is_current_path(norm_path) and self._has_canvas_pixmap():
@@ -368,9 +445,20 @@ class PreviewPanel(QWidget):
         self._cancel_pending_full_preview()
         self.set_focus_box(None)
         load_t0 = _time.perf_counter()
-        target_size = _quick_preview_target_size(self._canvas)
+        target_size = _quick_preview_target_size(self._canvas, quick_size)
         pix = None
-        pix = _load_quick_preview_pixmap(path, target_size)
+        direct_full = False
+        if load_full and path:
+            qimg = None
+            if Path(path).suffix.lower() in RAW_EXTENSIONS:
+                qimg = _load_raw_embedded_preview_qimage(path)
+            elif _should_load_full_preview_sync(path):
+                qimg = _load_full_preview_qimage(path)
+            if qimg is not None and not qimg.isNull():
+                pix = QPixmap.fromImage(qimg)
+                direct_full = bool(pix is not None and not pix.isNull())
+        if pix is None or pix.isNull():
+            pix = _load_quick_preview_pixmap(path, target_size)
         load_ms = (_time.perf_counter() - load_t0) * 1000.0
         canvas_ms = 0.0
         status_ms = 0.0
@@ -381,6 +469,8 @@ class PreviewPanel(QWidget):
             status_t0 = _time.perf_counter()
             self._set_preview_status_text(pix.width(), pix.height())
             status_ms = (_time.perf_counter() - status_t0) * 1000.0
+            if direct_full:
+                self._full_preview_loaded = True
         else:
             canvas_t0 = _time.perf_counter()
             self._canvas.set_source_pixmap(None)
@@ -389,14 +479,16 @@ class PreviewPanel(QWidget):
             status_t0 = _time.perf_counter()
             self._set_preview_status_text(None, None)
             status_ms = (_time.perf_counter() - status_t0) * 1000.0
-        if load_full and path:
+        if load_full and path and not self._full_preview_loaded:
             self._full_preview_timer.start(_FULL_PREVIEW_DELAY_MS)
         perf_log(
             _log,
-            "[PERF][image_switch][preview_panel.set_image] path=%r token=%s quick_ok=%s quick_size=%s target=%s load_ms=%.1f canvas_ms=%.1f status_ms=%.1f total_ms=%.1f",
+            "[PERF][image_switch][preview_panel.set_image] path=%r token=%s quick_ok=%s direct_full=%s full_loaded=%s quick_size=%s target=%s load_ms=%.1f canvas_ms=%.1f status_ms=%.1f total_ms=%.1f",
             path,
             token,
             bool(pix is not None and not pix.isNull()),
+            direct_full,
+            self._full_preview_loaded,
             (pix.width(), pix.height()) if pix is not None and not pix.isNull() else None,
             target_size,
             load_ms,

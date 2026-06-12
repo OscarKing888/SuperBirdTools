@@ -13,13 +13,13 @@ Follow `ai_rules/AI_CODING_RULES.md` as the project baseline.
 
 ## Current Workspace
 
-- Current Windows checkout root: `E:\SuperApps\SuperBirdTools`
+- Current Windows checkout root: `E:\SuperApps\SBT\SuperBirdTools`
 - Current macOS checkout root: `/Users/oscar/Pictures/SuperApps/SuperBirdTools`
 - Shared development virtual environment: `<repo>/.venv`
-- On Windows 64-bit, use the repo-root interpreter `E:\SuperApps\SuperBirdTools\.venv\Scripts\python.exe`
+- On Windows 64-bit, use the repo-root interpreter `E:\SuperApps\SBT\SuperBirdTools\.venv\Scripts\python.exe`
 - On macOS, use the repo-root interpreter `/Users/oscar/Pictures/SuperApps/SuperBirdTools/.venv/bin/python3`
 - Unless a script explicitly requires an app subdirectory, run commands from the repository root above.
-- Treat `<repo>` as the active checkout root for Codex file links and commands. In this Windows checkout, prefer paths under `E:\SuperApps\SuperBirdTools`.
+- Treat `<repo>` as the active checkout root for Codex file links and commands. In this Windows checkout, prefer paths under `E:\SuperApps\SBT\SuperBirdTools`.
 
 ## Monorepo Environment
 
@@ -62,6 +62,72 @@ Follow `ai_rules/AI_CODING_RULES.md` as the project baseline.
 - For `.spec` changes: packaged startup smoke test.
 - For `init_dev.py` changes: run at least `.venv\Scripts\python.exe init_dev.py --dry-run` on Windows or `.venv/bin/python3 init_dev.py --dry-run` on macOS from the repo root when `.venv` exists.
 - For `build_all.*` changes: verify the final repo-root `dist/` layout matches the intended multi-app output.
+
+## Merged SuperViewer / app_common Rules
+
+- `app_common` is the shared codebase used by SuperViewer and SuperBirdStamp. In this superproject, keep `.gitmodules` on `branch = main`; do not switch the submodule/gitlink to feature branches such as `res_mgr`.
+- `app_common.image_formats` is the source of truth for supported image extensions. Scanning, thumbnailing, preview decoding, PSD/HEIF/RAW handling, and SuperBirdStamp discovery should use its extension groups instead of local duplicate tuples.
+- `run.bat` should keep resolving Python in this order when possible: `PYTHON_EXE`, `VIRTUAL_ENV`, the repo-root `.venv`, then any documented fallback. It should default SuperViewer logging to `logs\SuperViewer.log`.
+
+## Protected SuperViewer Preview Loading Flow
+
+- This is a protected behavior. Do not replace it with "always show thumbnail", "always sync load full image", or "always async full image" simplifications.
+- Preserve `PreviewPanel.set_image(path, *, load_full=True, quick_size=None)` and keep `FileListPanel.preview_quick_size()` as the bridge from the selected thumbnail-size level to preview loading.
+- Normal single-image selection:
+  - Non-RAW images at or below `SuperViewer_SYNC_FULL_PREVIEW_MAX_MP` (default 40 MP) should synchronously show the full preview image.
+  - Non-RAW images above that threshold should first show the selected thumbnail-size preview (`128/256/512/1024/2048`) and then asynchronously replace it with the full preview.
+  - RAW images should directly use the high-resolution embedded RAW preview JPEG when available; prefer exiftool/rawpy camera previews and treat tiny piexif EXIF thumbnails such as 160x120 only as last-resort fallbacks. Do not force a full RAW demosaic for ordinary preview switching.
+- Held direction-key navigation:
+  - Starting from the second auto-repeat image and until key release, preview must stay on the selected thumbnail-size image only.
+  - This path uses `file_fast_preview_requested` and `PreviewPanel.set_image(..., load_full=False, quick_size=<current thumb size>)`.
+  - While `load_full=False`, do not start full-preview loading and do not start focus extraction. Full selection work resumes only after key release commits the final image.
+- Quick-preview fallback must remain bounded. If thumbnail extraction/cache misses, use scaled reading at the target preview size; do not synchronously decode a full large image as the quick-preview fallback.
+- Any change touching `PreviewPanel.set_image`, `MainWindow._on_file_selected_from_list`, `MainWindow._on_file_fast_preview_requested`, or file-browser direction-key handling must include `SuperViewer/tests/test_preview_panel_policy.py` and a manual or logged check of normal click, large image, RAW, and held-direction-key navigation.
+
+## Metadata And Sidecars
+
+- XMP sidecar is the only writable metadata sidecar path. Do not reintroduce `.superviewer.json`, JSON sidecar helpers/tests, or JSON sidecar copy/move/delete behavior.
+- Do not write user metadata back into RAW/original image files. EXIF/XMP writes for title, description/comment, tags, rating, pick, camera-related editable fields, and other SuperViewer/SuperBirdStamp metadata must go through `PhotoMetaDataXMP` sidecar helpers.
+- `report.db` is read-only fallback/hydration input for these apps. Do not restore old report.db write-back paths for user edits, and do not remove existing report.db compatibility reads.
+- When a sidecar is created or modified and lacks a bird-species marker, `PhotoMetaDataXMP` should hydrate missing non-empty `PHOTO_COLUMNS` values from the matching `report.db` row into `XMP-superpicky:<column>` without overwriting existing sidecar fields or the current user edit. Numeric `0` and `False` are valid values.
+- `PhotoMetaDataXMP.read()` / `xmp_sidecar.py` must preserve the custom namespace `https://superbirdtools.local/xmp/superpicky/1.0/`, expose `XMP-superpicky:*` keys, and mirror those fields back to raw `<column>` keys for UI/template callers.
+- XMP-compatible keys such as title/bird name, description, rating, pick, camera, lens, ISO, shutter, aperture, focal length, GPS, capture time, sharpness/aesthetic/focus should keep their existing standard/compatibility mappings in addition to any `XMP-superpicky:*` raw-column storage.
+- File copy, move, rename, cut, and delete operations should keep same-stem `.xmp` sidecars aligned with the photo. Deletion should continue to use the current trash/Send2Trash semantics and must not reintroduce `.superpicky/deleted`.
+- F10-style read-only permission gates are not part of the selected merge. Do not add `_permissions.py` read-only UI gating unless the user explicitly asks for that feature.
+
+## SuperViewer File Browser And Caches
+
+- File browser metadata columns must keep important camera/report fields available: burst, aperture, shutter, ISO, focal length, lens, camera, capture time, sharpness, aesthetic score, and focus status.
+- Burst display format is `({burst_position}/{burst_id})`, with `-` for a missing side. List mode uses a dedicated "连拍" column after filename; thumbnail mode prefixes the bottom filename text and must not draw a large overlay on the image.
+- Metadata values should be resolved from XMP/sidecar first, then file metadata, then `report.db` fallback. Browser metadata should recognize raw keys, `report.*`, and `XMP-superpicky:*`.
+- Persistent thumbnail caches are per-file `.superpicky` scopes, not one cache root for the selected directory. If subdirectories each have their own `.superpicky`, each image writes to its associated `.superpicky\thumb_cache\<size>`.
+- Reuse an ancestor `.superpicky` only when it contains `report.db` and the selected directory is no more than 3 levels below the volume root such as `F:\A\B\C`. Do not interpret this as walking only 3 levels upward from a deep selected directory.
+- If no valid `.superpicky` scope exists and persistent cache writing is needed, the UI may ask to create `<selected_dir>\.superpicky`; create cache directories only, not `report.db`. If the user declines or creation fails, fall back to local app cache and skip persistent pre-generation for those images for the session.
+- Persistent thumbnail size levels are `128, 256, 512, 1024, 2048`. Background generation should continue after selecting a directory and should also generate newly enabled levels when the user raises the max size.
+- Metadata reading and persistent thumbnail generation have separate worker budgets. Default metadata workers are roughly `CPU/4` capped at 8; default persistent-thumbnail workers use the remaining CPU threads, e.g. 32 total gives 8 metadata and 24 thumbnail workers. Keep progress text showing the active thread count for both.
+- Environment overrides currently include `SuperViewer_METADATA_WORKERS` and `SuperViewer_PERSISTENT_THUMB_WORKERS`; preserve them when changing worker configuration.
+
+## SuperViewer Image Info UI
+
+- The right-side image information tabs should create both the image-info panel and EXIF panel by default.
+- `ImageInfoTabPanel_ImageInfo` should show the same important camera/report fields as the file list where applicable, including aperture, shutter, ISO, focal length, lens, camera, capture time, burst, sharpness/aesthetic/focus, and should not depend on a quick-thumbnail pixmap for true image dimensions.
+- Tags, comments/descriptions, ratings, and pick state should remain XMP sidecar writes. Tag config should prefer the nearest `.superpicky/tags.cfg` and fall back to `SuperViewer/tags.cfg`.
+
+## SuperBirdStamp Metadata Templates
+
+- Template metadata resolution priority is `ExifTemplateContextProvider > FromFileTemplateContextProvider > ReportDBTemplateContextProvider > EditorTemplateContextProvider`. Keep `AutoProxyTemplateContextProvider` and `SuperBirdStamp/config/template_context_routes.json` aligned with that order.
+- `ExifTemplateContextProvider` should consider `XMP-superpicky:<PHOTO_COLUMN>` candidates for canonical report fields, while `report.<column>` remains available as lower-priority fallback.
+- `_CANONICAL_META_FIELD_DEFINITIONS` should stay broad enough to cover `PHOTO_COLUMNS`, including path fields, burst fields, created/updated timestamps, confidence/has_bird, camera/lens/exposure fields, and other report-only values that templates may need.
+- SuperBirdStamp metadata loading should continue to merge `app_common.exif_io.read_batch_metadata()` / XMP sidecar values so sidecar fields win over file-derived values, and both win over report.db/editor fallbacks.
+
+## Recommended Regression Checks For Merged Features
+
+- Metadata/sidecar changes: run `app_common/tests/test_photo_meta_proxy.py`, `app_common/tests/test_file_utils.py`, `SuperViewer/tests/test_photo_tags.py`, and `SuperViewer/tests/test_image_info_metadata.py`.
+- File browser/cache changes: run `app_common/tests/test_file_browser_cache_paths.py`, `app_common/tests/test_file_browser_metadata.py`, `app_common/tests/test_file_browser_burst_display.py`, and `app_common/tests/test_superviewer_user_options.py`.
+- Preview loading changes: run `SuperViewer/tests/test_preview_panel_policy.py` and manually/log-check normal small image, large image, RAW, and held-direction-key navigation.
+- Template-context changes: run `SuperBirdStamp/tests/test_template_context_report_db.py`.
+- Format/decoder changes: run `app_common/tests/test_image_formats.py` and `SuperBirdStamp/tests/test_psd_decoder.py` when available.
+- Always include `git diff --check` in both the main repo and `app_common` after edits that touch shared browser/metadata code.
 
 ## Protected Preview Overlay Flow
 

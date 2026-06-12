@@ -9,6 +9,7 @@ This file explains what was added and what (if anything) needs manual setup.
 - `CLAUDE.md` (Claude entry rules)
 - `.cursor/rules/cursor-rules.mdc` (Cursor project rules)
 - `.cursorrules` (Cursor legacy compatibility)
+- `.cursor/skills/superviewer-preview-loading/SKILL.md` (Cursor skill for protected SuperViewer preview loading changes)
 
 ## 1) Codex
 
@@ -29,6 +30,7 @@ Status: repository-level rule file added.
 Status: project rule added.
 
 - File used: `.cursor/rules/cursor-rules.mdc`
+- Preview-loading skill: `.cursor/skills/superviewer-preview-loading/SKILL.md`
 - Ensure Cursor "Project Rules" is enabled for the workspace.
 - If your Cursor version does not auto-read `.mdc` rules:
   - keep `.cursorrules` in repo root (already added)

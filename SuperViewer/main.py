@@ -813,7 +813,9 @@ class MainWindow(QMainWindow):
         perf_log(_log, "[PERF][image_switch][main] START source=%r", path)
         self._sync_directory_browser_to_file_selection(path)
         preview_t0 = _time.perf_counter()
-        self.preview_panel.set_image(path)
+        quick_size_fn = getattr(self._file_list, "preview_quick_size", None)
+        quick_size = quick_size_fn() if callable(quick_size_fn) else None
+        self.preview_panel.set_image(path, quick_size=quick_size)
         preview_ms = (_time.perf_counter() - preview_t0) * 1000.0
         info_t0 = _time.perf_counter()
         self.on_image_loaded(path)
@@ -841,7 +843,9 @@ class MainWindow(QMainWindow):
         probe_t0 = perf_counter()
         perf_log(_log, "[PERF][fast_preview][main] START source=%r", path)
         preview_t0 = _time.perf_counter()
-        self.preview_panel.set_image(path, load_full=False)
+        quick_size_fn = getattr(self._file_list, "preview_quick_size", None)
+        quick_size = quick_size_fn() if callable(quick_size_fn) else None
+        self.preview_panel.set_image(path, load_full=False, quick_size=quick_size)
         # 方向键长按高速浏览时不启动焦点提取线程，避免重复 I/O 拖慢翻图
         self._update_preview_focus_box(path, allow_async_load=False)
         preview_ms = (_time.perf_counter() - preview_t0) * 1000.0
