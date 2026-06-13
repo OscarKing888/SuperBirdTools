@@ -37,8 +37,8 @@ trap cleanup EXIT INT TERM
 "$VENV_PYTHON" -m SuperViewer.entry &
 viewer_pid=$!
 
-"$VENV_PYTHON" -m SuperBirdStamp.entry &
-stamp_pid=$!
+#"$VENV_PYTHON" -m SuperBirdStamp.entry &
+#stamp_pid=$!
 
 wait "$viewer_pid"
-wait "$stamp_pid"
+#wait "$stamp_pid"

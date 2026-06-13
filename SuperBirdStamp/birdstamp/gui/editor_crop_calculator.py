@@ -31,7 +31,6 @@ _transform_source_box_after_crop_padding = editor_core.transform_source_box_afte
 _detect_primary_bird_box            = editor_core.detect_primary_bird_box
 _get_bird_detector_error_message    = editor_core.get_bird_detector_error_message
 _extract_focus_point_for_display    = editor_core.get_focus_point_for_display
-_resolve_focus_camera_type_from_metadata = editor_core.resolve_focus_camera_type_from_metadata
 _CENTER_MODE_BIRD                   = editor_core.CENTER_MODE_BIRD
 _CENTER_MODE_FOCUS                  = editor_core.CENTER_MODE_FOCUS
 _CENTER_MODE_IMAGE                  = editor_core.CENTER_MODE_IMAGE
@@ -104,12 +103,11 @@ class _BirdStampCropMixin:
         center_mode: str,
         settings: dict[str, Any] | None = None,
     ) -> tuple[tuple[float, float], tuple[float, float, float, float] | None]:
-        focus_camera_type = _resolve_focus_camera_type_from_metadata(raw_metadata)
         focus_point = _extract_focus_point_for_display(
             raw_metadata,
             image.width,
             image.height,
-            camera_type=focus_camera_type,
+            source_path=path,
         )
         mode = _normalize_center_mode(center_mode)
         if mode == _CENTER_MODE_CUSTOM and settings is not None:

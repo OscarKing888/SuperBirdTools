@@ -1,0 +1,3594 @@
+{
+  "report_databases": [],
+  "photos": [
+    {
+      "path": {
+        "absolute_path": "/Users/oscar/Pictures/黑脸琵鹭/DSC09790-DxO_DeepPRIME 3.jpg",
+        "relative_path": "../../../../黑脸琵鹭/DSC09790-DxO_DeepPRIME 3.jpg"
+      },
+      "sequence": 1,
+      "render_settings": {
+        "template_name": "鸟体中心-GIF",
+        "template_payload": {
+          "name": "鸟体中心-GIF",
+          "ratio": 1.0,
+          "banner_color": "#ffffff",
+          "draw_banner_background": false,
+          "banner_background_style": "gradient_bottom",
+          "banner_gradient_height_pct": 25.0,
+          "banner_gradient_top_color": "#000000",
+          "banner_gradient_top_opacity_pct": 0.0,
+          "banner_gradient_bottom_color": "#000000",
+          "banner_gradient_bottom_opacity_pct": 80.0,
+          "center_mode": "bird",
+          "auto_crop_by_bird": true,
+          "max_long_edge": 0,
+          "crop_padding_top": 64,
+          "crop_padding_bottom": 64,
+          "crop_padding_left": 64,
+          "crop_padding_right": 64,
+          "crop_padding_fill": "#000000",
+          "fields": [
+            {
+              "name": "鸟种中文名 (bird_species_cn)",
+              "tag": "EXIF:Model",
+              "fallback": "",
+              "data_source": "auto",
+              "report_field": "",
+              "text_source": {
+                "type": "auto",
+                "key": "bird_species_cn"
+              },
+              "align_horizontal": "left",
+              "align_vertical": "bottom",
+              "x_offset_pct": 0.0,
+              "y_offset_pct": -2.0,
+              "color": "#ff9300",
+              "font_size": 64,
+              "font_type": "/System/Library/Fonts/Supplemental/Songti.ttc",
+              "style": "bold"
+            }
+          ]
+        },
+        "ratio": 1.0,
+        "center_mode": "bird",
+        "crop_padding_top": 64,
+        "crop_padding_bottom": 67,
+        "crop_padding_left": 64,
+        "crop_padding_right": 64,
+        "crop_padding_fill": "#000000",
+        "crop_box": null,
+        "custom_center_x": null,
+        "custom_center_y": null
+      }
+    },
+    {
+      "path": {
+        "absolute_path": "/Users/oscar/Pictures/黑脸琵鹭/DSC09791-DxO_DeepPRIME 3.jpg",
+        "relative_path": "../../../../黑脸琵鹭/DSC09791-DxO_DeepPRIME 3.jpg"
+      },
+      "sequence": 2,
+      "render_settings": {
+        "template_name": "鸟体中心-GIF",
+        "template_payload": {
+          "name": "鸟体中心-GIF",
+          "ratio": 1.0,
+          "banner_color": "#ffffff",
+          "draw_banner_background": false,
+          "banner_background_style": "gradient_bottom",
+          "banner_gradient_height_pct": 25.0,
+          "banner_gradient_top_color": "#000000",
+          "banner_gradient_top_opacity_pct": 0.0,
+          "banner_gradient_bottom_color": "#000000",
+          "banner_gradient_bottom_opacity_pct": 80.0,
+          "center_mode": "bird",
+          "auto_crop_by_bird": true,
+          "max_long_edge": 0,
+          "crop_padding_top": 64,
+          "crop_padding_bottom": 64,
+          "crop_padding_left": 64,
+          "crop_padding_right": 64,
+          "crop_padding_fill": "#000000",
+          "fields": [
+            {
+              "name": "鸟种中文名 (bird_species_cn)",
+              "tag": "EXIF:Model",
+              "fallback": "",
+              "data_source": "auto",
+              "report_field": "",
+              "text_source": {
+                "type": "auto",
+                "key": "bird_species_cn"
+              },
+              "align_horizontal": "left",
+              "align_vertical": "bottom",
+              "x_offset_pct": 0.0,
+              "y_offset_pct": -2.0,
+              "color": "#ff9300",
+              "font_size": 64,
+              "font_type": "/System/Library/Fonts/Supplemental/Songti.ttc",
+              "style": "bold"
+            }
+          ]
+        },
+        "ratio": 1.0,
+        "center_mode": "bird",
+        "crop_padding_top": 64,
+        "crop_padding_bottom": 64,
+        "crop_padding_left": 64,
+        "crop_padding_right": 64,
+        "crop_padding_fill": "#000000",
+        "crop_box": null,
+        "custom_center_x": null,
+        "custom_center_y": null
+      }
+    },
+    {
+      "path": {
+        "absolute_path": "/Users/oscar/Pictures/黑脸琵鹭/DSC09792-DxO_DeepPRIME 3.jpg",
+        "relative_path": "../../../../黑脸琵鹭/DSC09792-DxO_DeepPRIME 3.jpg"
+      },
+      "sequence": 3,
+      "render_settings": {
+        "template_name": "鸟体中心-GIF",
+        "template_payload": {
+          "name": "鸟体中心-GIF",
+          "ratio": 1.0,
+          "banner_color": "#ffffff",
+          "draw_banner_background": false,
+          "banner_background_style": "gradient_bottom",
+          "banner_gradient_height_pct": 25.0,
+          "banner_gradient_top_color": "#000000",
+          "banner_gradient_top_opacity_pct": 0.0,
+          "banner_gradient_bottom_color": "#000000",
+          "banner_gradient_bottom_opacity_pct": 80.0,
+          "center_mode": "bird",
+          "auto_crop_by_bird": true,
+          "max_long_edge": 0,
+          "crop_padding_top": 64,
+          "crop_padding_bottom": 64,
+          "crop_padding_left": 64,
+          "crop_padding_right": 64,
+          "crop_padding_fill": "#000000",
+          "fields": [
+            {
+              "name": "鸟种中文名 (bird_species_cn)",
+              "tag": "EXIF:Model",
+              "fallback": "",
+              "data_source": "auto",
+              "report_field": "",
+              "text_source": {
+                "type": "auto",
+                "key": "bird_species_cn"
+              },
+              "align_horizontal": "left",
+              "align_vertical": "bottom",
+              "x_offset_pct": 0.0,
+              "y_offset_pct": -2.0,
+              "color": "#ff9300",
+              "font_size": 64,
+              "font_type": "/System/Library/Fonts/Supplemental/Songti.ttc",
+              "style": "bold"
+            }
+          ]
+        },
+        "ratio": 1.0,
+        "center_mode": "bird",
+        "crop_padding_top": 64,
+        "crop_padding_bottom": 64,
+        "crop_padding_left": 64,
+        "crop_padding_right": 64,
+        "crop_padding_fill": "#000000",
+        "crop_box": null,
+        "custom_center_x": null,
+        "custom_center_y": null
+      }
+    },
+    {
+      "path": {
+        "absolute_path": "/Users/oscar/Pictures/黑脸琵鹭/DSC09793-DxO_DeepPRIME 3.jpg",
+        "relative_path": "../../../../黑脸琵鹭/DSC09793-DxO_DeepPRIME 3.jpg"
+      },
+      "sequence": 4,
+      "render_settings": {
+        "template_name": "鸟体中心-GIF",
+        "template_payload": {
+          "name": "鸟体中心-GIF",
+          "ratio": 1.0,
+          "banner_color": "#ffffff",
+          "draw_banner_background": false,
+          "banner_background_style": "gradient_bottom",
+          "banner_gradient_height_pct": 25.0,
+          "banner_gradient_top_color": "#000000",
+          "banner_gradient_top_opacity_pct": 0.0,
+          "banner_gradient_bottom_color": "#000000",
+          "banner_gradient_bottom_opacity_pct": 80.0,
+          "center_mode": "bird",
+          "auto_crop_by_bird": true,
+          "max_long_edge": 0,
+          "crop_padding_top": 64,
+          "crop_padding_bottom": 64,
+          "crop_padding_left": 64,
+          "crop_padding_right": 64,
+          "crop_padding_fill": "#000000",
+          "fields": [
+            {
+              "name": "鸟种中文名 (bird_species_cn)",
+              "tag": "EXIF:Model",
+              "fallback": "",
+              "data_source": "auto",
+              "report_field": "",
+              "text_source": {
+                "type": "auto",
+                "key": "bird_species_cn"
+              },
+              "align_horizontal": "left",
+              "align_vertical": "bottom",
+              "x_offset_pct": 0.0,
+              "y_offset_pct": -2.0,
+              "color": "#ff9300",
+              "font_size": 64,
+              "font_type": "/System/Library/Fonts/Supplemental/Songti.ttc",
+              "style": "bold"
+            }
+          ]
+        },
+        "ratio": 1.0,
+        "center_mode": "bird",
+        "crop_padding_top": 64,
+        "crop_padding_bottom": 64,
+        "crop_padding_left": 64,
+        "crop_padding_right": 64,
+        "crop_padding_fill": "#000000",
+        "crop_box": null,
+        "custom_center_x": null,
+        "custom_center_y": null
+      }
+    },
+    {
+      "path": {
+        "absolute_path": "/Users/oscar/Pictures/黑脸琵鹭/DSC09794-DxO_DeepPRIME 3.jpg",
+        "relative_path": "../../../../黑脸琵鹭/DSC09794-DxO_DeepPRIME 3.jpg"
+      },
+      "sequence": 5,
+      "render_settings": {
+        "template_name": "鸟体中心-GIF",
+        "template_payload": {
+          "name": "鸟体中心-GIF",
+          "ratio": 1.0,
+          "banner_color": "#ffffff",
+          "draw_banner_background": false,
+          "banner_background_style": "gradient_bottom",
+          "banner_gradient_height_pct": 25.0,
+          "banner_gradient_top_color": "#000000",
+          "banner_gradient_top_opacity_pct": 0.0,
+          "banner_gradient_bottom_color": "#000000",
+          "banner_gradient_bottom_opacity_pct": 80.0,
+          "center_mode": "bird",
+          "auto_crop_by_bird": true,
+          "max_long_edge": 0,
+          "crop_padding_top": 64,
+          "crop_padding_bottom": 64,
+          "crop_padding_left": 64,
+          "crop_padding_right": 64,
+          "crop_padding_fill": "#000000",
+          "fields": [
+            {
+              "name": "鸟种中文名 (bird_species_cn)",
+              "tag": "EXIF:Model",
+              "fallback": "",
+              "data_source": "auto",
+              "report_field": "",
+              "text_source": {
+                "type": "auto",
+                "key": "bird_species_cn"
+              },
+              "align_horizontal": "left",
+              "align_vertical": "bottom",
+              "x_offset_pct": 0.0,
+              "y_offset_pct": -2.0,
+              "color": "#ff9300",
+              "font_size": 64,
+              "font_type": "/System/Library/Fonts/Supplemental/Songti.ttc",
+              "style": "bold"
+            }
+          ]
+        },
+        "ratio": 1.0,
+        "center_mode": "bird",
+        "crop_padding_top": 64,
+        "crop_padding_bottom": 64,
+        "crop_padding_left": 64,
+        "crop_padding_right": 64,
+        "crop_padding_fill": "#000000",
+        "crop_box": null,
+        "custom_center_x": null,
+        "custom_center_y": null
+      }
+    },
+    {
+      "path": {
+        "absolute_path": "/Users/oscar/Pictures/黑脸琵鹭/DSC09795-DxO_DeepPRIME 3.jpg",
+        "relative_path": "../../../../黑脸琵鹭/DSC09795-DxO_DeepPRIME 3.jpg"
+      },
+      "sequence": 6,
+      "render_settings": {
+        "template_name": "鸟体中心-GIF",
+        "template_payload": {
+          "name": "鸟体中心-GIF",
+          "ratio": 1.0,
+          "banner_color": "#ffffff",
+          "draw_banner_background": false,
+          "banner_background_style": "gradient_bottom",
+          "banner_gradient_height_pct": 25.0,
+          "banner_gradient_top_color": "#000000",
+          "banner_gradient_top_opacity_pct": 0.0,
+          "banner_gradient_bottom_color": "#000000",
+          "banner_gradient_bottom_opacity_pct": 80.0,
+          "center_mode": "bird",
+          "auto_crop_by_bird": true,
+          "max_long_edge": 0,
+          "crop_padding_top": 64,
+          "crop_padding_bottom": 64,
+          "crop_padding_left": 64,
+          "crop_padding_right": 64,
+          "crop_padding_fill": "#000000",
+          "fields": [
+            {
+              "name": "鸟种中文名 (bird_species_cn)",
+              "tag": "EXIF:Model",
+              "fallback": "",
+              "data_source": "auto",
+              "report_field": "",
+              "text_source": {
+                "type": "auto",
+                "key": "bird_species_cn"
+              },
+              "align_horizontal": "left",
+              "align_vertical": "bottom",
+              "x_offset_pct": 0.0,
+              "y_offset_pct": -2.0,
+              "color": "#ff9300",
+              "font_size": 64,
+              "font_type": "/System/Library/Fonts/Supplemental/Songti.ttc",
+              "style": "bold"
+            }
+          ]
+        },
+        "ratio": 1.0,
+        "center_mode": "bird",
+        "crop_padding_top": 64,
+        "crop_padding_bottom": 64,
+        "crop_padding_left": 64,
+        "crop_padding_right": 64,
+        "crop_padding_fill": "#000000",
+        "crop_box": null,
+        "custom_center_x": null,
+        "custom_center_y": null
+      }
+    },
+    {
+      "path": {
+        "absolute_path": "/Users/oscar/Pictures/黑脸琵鹭/DSC09796-DxO_DeepPRIME 3.jpg",
+        "relative_path": "../../../../黑脸琵鹭/DSC09796-DxO_DeepPRIME 3.jpg"
+      },
+      "sequence": 7,
+      "render_settings": {
+        "template_name": "鸟体中心-GIF",
+        "template_payload": {
+          "name": "鸟体中心-GIF",
+          "ratio": 1.0,
+          "banner_color": "#ffffff",
+          "draw_banner_background": false,
+          "banner_background_style": "gradient_bottom",
+          "banner_gradient_height_pct": 25.0,
+          "banner_gradient_top_color": "#000000",
+          "banner_gradient_top_opacity_pct": 0.0,
+          "banner_gradient_bottom_color": "#000000",
+          "banner_gradient_bottom_opacity_pct": 80.0,
+          "center_mode": "bird",
+          "auto_crop_by_bird": true,
+          "max_long_edge": 0,
+          "crop_padding_top": 64,
+          "crop_padding_bottom": 64,
+          "crop_padding_left": 64,
+          "crop_padding_right": 64,
+          "crop_padding_fill": "#000000",
+          "fields": [
+            {
+              "name": "鸟种中文名 (bird_species_cn)",
+              "tag": "EXIF:Model",
+              "fallback": "",
+              "data_source": "auto",
+              "report_field": "",
+              "text_source": {
+                "type": "auto",
+                "key": "bird_species_cn"
+              },
+              "align_horizontal": "left",
+              "align_vertical": "bottom",
+              "x_offset_pct": 0.0,
+              "y_offset_pct": -2.0,
+              "color": "#ff9300",
+              "font_size": 64,
+              "font_type": "/System/Library/Fonts/Supplemental/Songti.ttc",
+              "style": "bold"
+            }
+          ]
+        },
+        "ratio": 1.0,
+        "center_mode": "bird",
+        "crop_padding_top": 64,
+        "crop_padding_bottom": 64,
+        "crop_padding_left": 64,
+        "crop_padding_right": 64,
+        "crop_padding_fill": "#000000",
+        "crop_box": null,
+        "custom_center_x": null,
+        "custom_center_y": null
+      }
+    },
+    {
+      "path": {
+        "absolute_path": "/Users/oscar/Pictures/黑脸琵鹭/DSC09797-DxO_DeepPRIME 3.jpg",
+        "relative_path": "../../../../黑脸琵鹭/DSC09797-DxO_DeepPRIME 3.jpg"
+      },
+      "sequence": 8,
+      "render_settings": {
+        "template_name": "鸟体中心-GIF",
+        "template_payload": {
+          "name": "鸟体中心-GIF",
+          "ratio": 1.0,
+          "banner_color": "#ffffff",
+          "draw_banner_background": false,
+          "banner_background_style": "gradient_bottom",
+          "banner_gradient_height_pct": 25.0,
+          "banner_gradient_top_color": "#000000",
+          "banner_gradient_top_opacity_pct": 0.0,
+          "banner_gradient_bottom_color": "#000000",
+          "banner_gradient_bottom_opacity_pct": 80.0,
+          "center_mode": "bird",
+          "auto_crop_by_bird": true,
+          "max_long_edge": 0,
+          "crop_padding_top": 64,
+          "crop_padding_bottom": 64,
+          "crop_padding_left": 64,
+          "crop_padding_right": 64,
+          "crop_padding_fill": "#000000",
+          "fields": [
+            {
+              "name": "鸟种中文名 (bird_species_cn)",
+              "tag": "EXIF:Model",
+              "fallback": "",
+              "data_source": "auto",
+              "report_field": "",
+              "text_source": {
+                "type": "auto",
+                "key": "bird_species_cn"
+              },
+              "align_horizontal": "left",
+              "align_vertical": "bottom",
+              "x_offset_pct": 0.0,
+              "y_offset_pct": -2.0,
+              "color": "#ff9300",
+              "font_size": 64,
+              "font_type": "/System/Library/Fonts/Supplemental/Songti.ttc",
+              "style": "bold"
+            }
+          ]
+        },
+        "ratio": 1.0,
+        "center_mode": "bird",
+        "crop_padding_top": 64,
+        "crop_padding_bottom": 64,
+        "crop_padding_left": 64,
+        "crop_padding_right": 64,
+        "crop_padding_fill": "#000000",
+        "crop_box": null,
+        "custom_center_x": null,
+        "custom_center_y": null
+      }
+    },
+    {
+      "path": {
+        "absolute_path": "/Users/oscar/Pictures/黑脸琵鹭/DSC09798-DxO_DeepPRIME 3.jpg",
+        "relative_path": "../../../../黑脸琵鹭/DSC09798-DxO_DeepPRIME 3.jpg"
+      },
+      "sequence": 9,
+      "render_settings": {
+        "template_name": "鸟体中心-GIF",
+        "template_payload": {
+          "name": "鸟体中心-GIF",
+          "ratio": 1.0,
+          "banner_color": "#ffffff",
+          "draw_banner_background": false,
+          "banner_background_style": "gradient_bottom",
+          "banner_gradient_height_pct": 25.0,
+          "banner_gradient_top_color": "#000000",
+          "banner_gradient_top_opacity_pct": 0.0,
+          "banner_gradient_bottom_color": "#000000",
+          "banner_gradient_bottom_opacity_pct": 80.0,
+          "center_mode": "bird",
+          "auto_crop_by_bird": true,
+          "max_long_edge": 0,
+          "crop_padding_top": 64,
+          "crop_padding_bottom": 64,
+          "crop_padding_left": 64,
+          "crop_padding_right": 64,
+          "crop_padding_fill": "#000000",
+          "fields": [
+            {
+              "name": "鸟种中文名 (bird_species_cn)",
+              "tag": "EXIF:Model",
+              "fallback": "",
+              "data_source": "auto",
+              "report_field": "",
+              "text_source": {
+                "type": "auto",
+                "key": "bird_species_cn"
+              },
+              "align_horizontal": "left",
+              "align_vertical": "bottom",
+              "x_offset_pct": 0.0,
+              "y_offset_pct": -2.0,
+              "color": "#ff9300",
+              "font_size": 64,
+              "font_type": "/System/Library/Fonts/Supplemental/Songti.ttc",
+              "style": "bold"
+            }
+          ]
+        },
+        "ratio": 1.0,
+        "center_mode": "bird",
+        "crop_padding_top": 64,
+        "crop_padding_bottom": 64,
+        "crop_padding_left": 64,
+        "crop_padding_right": 64,
+        "crop_padding_fill": "#000000",
+        "crop_box": null,
+        "custom_center_x": null,
+        "custom_center_y": null
+      }
+    },
+    {
+      "path": {
+        "absolute_path": "/Users/oscar/Pictures/黑脸琵鹭/DSC09799-DxO_DeepPRIME 3.jpg",
+        "relative_path": "../../../../黑脸琵鹭/DSC09799-DxO_DeepPRIME 3.jpg"
+      },
+      "sequence": 10,
+      "render_settings": {
+        "template_name": "鸟体中心-GIF",
+        "template_payload": {
+          "name": "鸟体中心-GIF",
+          "ratio": 1.0,
+          "banner_color": "#ffffff",
+          "draw_banner_background": false,
+          "banner_background_style": "gradient_bottom",
+          "banner_gradient_height_pct": 25.0,
+          "banner_gradient_top_color": "#000000",
+          "banner_gradient_top_opacity_pct": 0.0,
+          "banner_gradient_bottom_color": "#000000",
+          "banner_gradient_bottom_opacity_pct": 80.0,
+          "center_mode": "bird",
+          "auto_crop_by_bird": true,
+          "max_long_edge": 0,
+          "crop_padding_top": 64,
+          "crop_padding_bottom": 64,
+          "crop_padding_left": 64,
+          "crop_padding_right": 64,
+          "crop_padding_fill": "#000000",
+          "fields": [
+            {
+              "name": "鸟种中文名 (bird_species_cn)",
+              "tag": "EXIF:Model",
+              "fallback": "",
+              "data_source": "auto",
+              "report_field": "",
+              "text_source": {
+                "type": "auto",
+                "key": "bird_species_cn"
+              },
+              "align_horizontal": "left",
+              "align_vertical": "bottom",
+              "x_offset_pct": 0.0,
+              "y_offset_pct": -2.0,
+              "color": "#ff9300",
+              "font_size": 64,
+              "font_type": "/System/Library/Fonts/Supplemental/Songti.ttc",
+              "style": "bold"
+            }
+          ]
+        },
+        "ratio": 1.0,
+        "center_mode": "bird",
+        "crop_padding_top": 64,
+        "crop_padding_bottom": 64,
+        "crop_padding_left": 64,
+        "crop_padding_right": 64,
+        "crop_padding_fill": "#000000",
+        "crop_box": null,
+        "custom_center_x": null,
+        "custom_center_y": null
+      }
+    },
+    {
+      "path": {
+        "absolute_path": "/Users/oscar/Pictures/黑脸琵鹭/DSC09800-DxO_DeepPRIME 3.jpg",
+        "relative_path": "../../../../黑脸琵鹭/DSC09800-DxO_DeepPRIME 3.jpg"
+      },
+      "sequence": 11,
+      "render_settings": {
+        "template_name": "鸟体中心-GIF",
+        "template_payload": {
+          "name": "鸟体中心-GIF",
+          "ratio": 1.0,
+          "banner_color": "#ffffff",
+          "draw_banner_background": false,
+          "banner_background_style": "gradient_bottom",
+          "banner_gradient_height_pct": 25.0,
+          "banner_gradient_top_color": "#000000",
+          "banner_gradient_top_opacity_pct": 0.0,
+          "banner_gradient_bottom_color": "#000000",
+          "banner_gradient_bottom_opacity_pct": 80.0,
+          "center_mode": "bird",
+          "auto_crop_by_bird": true,
+          "max_long_edge": 0,
+          "crop_padding_top": 64,
+          "crop_padding_bottom": 64,
+          "crop_padding_left": 64,
+          "crop_padding_right": 64,
+          "crop_padding_fill": "#000000",
+          "fields": [
+            {
+              "name": "鸟种中文名 (bird_species_cn)",
+              "tag": "EXIF:Model",
+              "fallback": "",
+              "data_source": "auto",
+              "report_field": "",
+              "text_source": {
+                "type": "auto",
+                "key": "bird_species_cn"
+              },
+              "align_horizontal": "left",
+              "align_vertical": "bottom",
+              "x_offset_pct": 0.0,
+              "y_offset_pct": -2.0,
+              "color": "#ff9300",
+              "font_size": 64,
+              "font_type": "/System/Library/Fonts/Supplemental/Songti.ttc",
+              "style": "bold"
+            }
+          ]
+        },
+        "ratio": 1.0,
+        "center_mode": "bird",
+        "crop_padding_top": 64,
+        "crop_padding_bottom": 64,
+        "crop_padding_left": 64,
+        "crop_padding_right": 64,
+        "crop_padding_fill": "#000000",
+        "crop_box": null,
+        "custom_center_x": null,
+        "custom_center_y": null
+      }
+    },
+    {
+      "path": {
+        "absolute_path": "/Users/oscar/Pictures/黑脸琵鹭/DSC09801-DxO_DeepPRIME 3.jpg",
+        "relative_path": "../../../../黑脸琵鹭/DSC09801-DxO_DeepPRIME 3.jpg"
+      },
+      "sequence": 12,
+      "render_settings": {
+        "template_name": "鸟体中心-GIF",
+        "template_payload": {
+          "name": "鸟体中心-GIF",
+          "ratio": 1.0,
+          "banner_color": "#ffffff",
+          "draw_banner_background": false,
+          "banner_background_style": "gradient_bottom",
+          "banner_gradient_height_pct": 25.0,
+          "banner_gradient_top_color": "#000000",
+          "banner_gradient_top_opacity_pct": 0.0,
+          "banner_gradient_bottom_color": "#000000",
+          "banner_gradient_bottom_opacity_pct": 80.0,
+          "center_mode": "bird",
+          "auto_crop_by_bird": true,
+          "max_long_edge": 0,
+          "crop_padding_top": 64,
+          "crop_padding_bottom": 64,
+          "crop_padding_left": 64,
+          "crop_padding_right": 64,
+          "crop_padding_fill": "#000000",
+          "fields": [
+            {
+              "name": "鸟种中文名 (bird_species_cn)",
+              "tag": "EXIF:Model",
+              "fallback": "",
+              "data_source": "auto",
+              "report_field": "",
+              "text_source": {
+                "type": "auto",
+                "key": "bird_species_cn"
+              },
+              "align_horizontal": "left",
+              "align_vertical": "bottom",
+              "x_offset_pct": 0.0,
+              "y_offset_pct": -2.0,
+              "color": "#ff9300",
+              "font_size": 64,
+              "font_type": "/System/Library/Fonts/Supplemental/Songti.ttc",
+              "style": "bold"
+            }
+          ]
+        },
+        "ratio": 1.0,
+        "center_mode": "bird",
+        "crop_padding_top": 64,
+        "crop_padding_bottom": 64,
+        "crop_padding_left": 64,
+        "crop_padding_right": 64,
+        "crop_padding_fill": "#000000",
+        "crop_box": null,
+        "custom_center_x": null,
+        "custom_center_y": null
+      }
+    },
+    {
+      "path": {
+        "absolute_path": "/Users/oscar/Pictures/黑脸琵鹭/DSC09802-DxO_DeepPRIME 3.jpg",
+        "relative_path": "../../../../黑脸琵鹭/DSC09802-DxO_DeepPRIME 3.jpg"
+      },
+      "sequence": 13,
+      "render_settings": {
+        "template_name": "鸟体中心-GIF",
+        "template_payload": {
+          "name": "鸟体中心-GIF",
+          "ratio": 1.0,
+          "banner_color": "#ffffff",
+          "draw_banner_background": false,
+          "banner_background_style": "gradient_bottom",
+          "banner_gradient_height_pct": 25.0,
+          "banner_gradient_top_color": "#000000",
+          "banner_gradient_top_opacity_pct": 0.0,
+          "banner_gradient_bottom_color": "#000000",
+          "banner_gradient_bottom_opacity_pct": 80.0,
+          "center_mode": "bird",
+          "auto_crop_by_bird": true,
+          "max_long_edge": 0,
+          "crop_padding_top": 64,
+          "crop_padding_bottom": 64,
+          "crop_padding_left": 64,
+          "crop_padding_right": 64,
+          "crop_padding_fill": "#000000",
+          "fields": [
+            {
+              "name": "鸟种中文名 (bird_species_cn)",
+              "tag": "EXIF:Model",
+              "fallback": "",
+              "data_source": "auto",
+              "report_field": "",
+              "text_source": {
+                "type": "auto",
+                "key": "bird_species_cn"
+              },
+              "align_horizontal": "left",
+              "align_vertical": "bottom",
+              "x_offset_pct": 0.0,
+              "y_offset_pct": -2.0,
+              "color": "#ff9300",
+              "font_size": 64,
+              "font_type": "/System/Library/Fonts/Supplemental/Songti.ttc",
+              "style": "bold"
+            }
+          ]
+        },
+        "ratio": 1.0,
+        "center_mode": "bird",
+        "crop_padding_top": 64,
+        "crop_padding_bottom": 64,
+        "crop_padding_left": 64,
+        "crop_padding_right": 64,
+        "crop_padding_fill": "#000000",
+        "crop_box": null,
+        "custom_center_x": null,
+        "custom_center_y": null
+      }
+    },
+    {
+      "path": {
+        "absolute_path": "/Users/oscar/Pictures/黑脸琵鹭/DSC09803-DxO_DeepPRIME 3.jpg",
+        "relative_path": "../../../../黑脸琵鹭/DSC09803-DxO_DeepPRIME 3.jpg"
+      },
+      "sequence": 14,
+      "render_settings": {
+        "template_name": "鸟体中心-GIF",
+        "template_payload": {
+          "name": "鸟体中心-GIF",
+          "ratio": 1.0,
+          "banner_color": "#ffffff",
+          "draw_banner_background": false,
+          "banner_background_style": "gradient_bottom",
+          "banner_gradient_height_pct": 25.0,
+          "banner_gradient_top_color": "#000000",
+          "banner_gradient_top_opacity_pct": 0.0,
+          "banner_gradient_bottom_color": "#000000",
+          "banner_gradient_bottom_opacity_pct": 80.0,
+          "center_mode": "bird",
+          "auto_crop_by_bird": true,
+          "max_long_edge": 0,
+          "crop_padding_top": 64,
+          "crop_padding_bottom": 64,
+          "crop_padding_left": 64,
+          "crop_padding_right": 64,
+          "crop_padding_fill": "#000000",
+          "fields": [
+            {
+              "name": "鸟种中文名 (bird_species_cn)",
+              "tag": "EXIF:Model",
+              "fallback": "",
+              "data_source": "auto",
+              "report_field": "",
+              "text_source": {
+                "type": "auto",
+                "key": "bird_species_cn"
+              },
+              "align_horizontal": "left",
+              "align_vertical": "bottom",
+              "x_offset_pct": 0.0,
+              "y_offset_pct": -2.0,
+              "color": "#ff9300",
+              "font_size": 64,
+              "font_type": "/System/Library/Fonts/Supplemental/Songti.ttc",
+              "style": "bold"
+            }
+          ]
+        },
+        "ratio": 1.0,
+        "center_mode": "bird",
+        "crop_padding_top": 64,
+        "crop_padding_bottom": 64,
+        "crop_padding_left": 64,
+        "crop_padding_right": 64,
+        "crop_padding_fill": "#000000",
+        "crop_box": null,
+        "custom_center_x": null,
+        "custom_center_y": null
+      }
+    },
+    {
+      "path": {
+        "absolute_path": "/Users/oscar/Pictures/黑脸琵鹭/DSC09804-DxO_DeepPRIME 3.jpg",
+        "relative_path": "../../../../黑脸琵鹭/DSC09804-DxO_DeepPRIME 3.jpg"
+      },
+      "sequence": 15,
+      "render_settings": {
+        "template_name": "鸟体中心-GIF",
+        "template_payload": {
+          "name": "鸟体中心-GIF",
+          "ratio": 1.0,
+          "banner_color": "#ffffff",
+          "draw_banner_background": false,
+          "banner_background_style": "gradient_bottom",
+          "banner_gradient_height_pct": 25.0,
+          "banner_gradient_top_color": "#000000",
+          "banner_gradient_top_opacity_pct": 0.0,
+          "banner_gradient_bottom_color": "#000000",
+          "banner_gradient_bottom_opacity_pct": 80.0,
+          "center_mode": "bird",
+          "auto_crop_by_bird": true,
+          "max_long_edge": 0,
+          "crop_padding_top": 64,
+          "crop_padding_bottom": 64,
+          "crop_padding_left": 64,
+          "crop_padding_right": 64,
+          "crop_padding_fill": "#000000",
+          "fields": [
+            {
+              "name": "鸟种中文名 (bird_species_cn)",
+              "tag": "EXIF:Model",
+              "fallback": "",
+              "data_source": "auto",
+              "report_field": "",
+              "text_source": {
+                "type": "auto",
+                "key": "bird_species_cn"
+              },
+              "align_horizontal": "left",
+              "align_vertical": "bottom",
+              "x_offset_pct": 0.0,
+              "y_offset_pct": -2.0,
+              "color": "#ff9300",
+              "font_size": 64,
+              "font_type": "/System/Library/Fonts/Supplemental/Songti.ttc",
+              "style": "bold"
+            }
+          ]
+        },
+        "ratio": 1.0,
+        "center_mode": "bird",
+        "crop_padding_top": 64,
+        "crop_padding_bottom": 64,
+        "crop_padding_left": 64,
+        "crop_padding_right": 64,
+        "crop_padding_fill": "#000000",
+        "crop_box": null,
+        "custom_center_x": null,
+        "custom_center_y": null
+      }
+    },
+    {
+      "path": {
+        "absolute_path": "/Users/oscar/Pictures/黑脸琵鹭/DSC09805-DxO_DeepPRIME 3.jpg",
+        "relative_path": "../../../../黑脸琵鹭/DSC09805-DxO_DeepPRIME 3.jpg"
+      },
+      "sequence": 16,
+      "render_settings": {
+        "template_name": "鸟体中心-GIF",
+        "template_payload": {
+          "name": "鸟体中心-GIF",
+          "ratio": 1.0,
+          "banner_color": "#ffffff",
+          "draw_banner_background": false,
+          "banner_background_style": "gradient_bottom",
+          "banner_gradient_height_pct": 25.0,
+          "banner_gradient_top_color": "#000000",
+          "banner_gradient_top_opacity_pct": 0.0,
+          "banner_gradient_bottom_color": "#000000",
+          "banner_gradient_bottom_opacity_pct": 80.0,
+          "center_mode": "bird",
+          "auto_crop_by_bird": true,
+          "max_long_edge": 0,
+          "crop_padding_top": 64,
+          "crop_padding_bottom": 64,
+          "crop_padding_left": 64,
+          "crop_padding_right": 64,
+          "crop_padding_fill": "#000000",
+          "fields": [
+            {
+              "name": "鸟种中文名 (bird_species_cn)",
+              "tag": "EXIF:Model",
+              "fallback": "",
+              "data_source": "auto",
+              "report_field": "",
+              "text_source": {
+                "type": "auto",
+                "key": "bird_species_cn"
+              },
+              "align_horizontal": "left",
+              "align_vertical": "bottom",
+              "x_offset_pct": 0.0,
+              "y_offset_pct": -2.0,
+              "color": "#ff9300",
+              "font_size": 64,
+              "font_type": "/System/Library/Fonts/Supplemental/Songti.ttc",
+              "style": "bold"
+            }
+          ]
+        },
+        "ratio": 1.0,
+        "center_mode": "bird",
+        "crop_padding_top": 64,
+        "crop_padding_bottom": 64,
+        "crop_padding_left": 64,
+        "crop_padding_right": 64,
+        "crop_padding_fill": "#000000",
+        "crop_box": null,
+        "custom_center_x": null,
+        "custom_center_y": null
+      }
+    },
+    {
+      "path": {
+        "absolute_path": "/Users/oscar/Pictures/黑脸琵鹭/DSC09806-DxO_DeepPRIME 3.jpg",
+        "relative_path": "../../../../黑脸琵鹭/DSC09806-DxO_DeepPRIME 3.jpg"
+      },
+      "sequence": 17,
+      "render_settings": {
+        "template_name": "鸟体中心-GIF",
+        "template_payload": {
+          "name": "鸟体中心-GIF",
+          "ratio": 1.0,
+          "banner_color": "#ffffff",
+          "draw_banner_background": false,
+          "banner_background_style": "gradient_bottom",
+          "banner_gradient_height_pct": 25.0,
+          "banner_gradient_top_color": "#000000",
+          "banner_gradient_top_opacity_pct": 0.0,
+          "banner_gradient_bottom_color": "#000000",
+          "banner_gradient_bottom_opacity_pct": 80.0,
+          "center_mode": "bird",
+          "auto_crop_by_bird": true,
+          "max_long_edge": 0,
+          "crop_padding_top": 64,
+          "crop_padding_bottom": 64,
+          "crop_padding_left": 64,
+          "crop_padding_right": 64,
+          "crop_padding_fill": "#000000",
+          "fields": [
+            {
+              "name": "鸟种中文名 (bird_species_cn)",
+              "tag": "EXIF:Model",
+              "fallback": "",
+              "data_source": "auto",
+              "report_field": "",
+              "text_source": {
+                "type": "auto",
+                "key": "bird_species_cn"
+              },
+              "align_horizontal": "left",
+              "align_vertical": "bottom",
+              "x_offset_pct": 0.0,
+              "y_offset_pct": -2.0,
+              "color": "#ff9300",
+              "font_size": 64,
+              "font_type": "/System/Library/Fonts/Supplemental/Songti.ttc",
+              "style": "bold"
+            }
+          ]
+        },
+        "ratio": 1.0,
+        "center_mode": "bird",
+        "crop_padding_top": 64,
+        "crop_padding_bottom": 64,
+        "crop_padding_left": 64,
+        "crop_padding_right": 64,
+        "crop_padding_fill": "#000000",
+        "crop_box": null,
+        "custom_center_x": null,
+        "custom_center_y": null
+      }
+    },
+    {
+      "path": {
+        "absolute_path": "/Users/oscar/Pictures/黑脸琵鹭/DSC09807-DxO_DeepPRIME 3.jpg",
+        "relative_path": "../../../../黑脸琵鹭/DSC09807-DxO_DeepPRIME 3.jpg"
+      },
+      "sequence": 18,
+      "render_settings": {
+        "template_name": "鸟体中心-GIF",
+        "template_payload": {
+          "name": "鸟体中心-GIF",
+          "ratio": 1.0,
+          "banner_color": "#ffffff",
+          "draw_banner_background": false,
+          "banner_background_style": "gradient_bottom",
+          "banner_gradient_height_pct": 25.0,
+          "banner_gradient_top_color": "#000000",
+          "banner_gradient_top_opacity_pct": 0.0,
+          "banner_gradient_bottom_color": "#000000",
+          "banner_gradient_bottom_opacity_pct": 80.0,
+          "center_mode": "bird",
+          "auto_crop_by_bird": true,
+          "max_long_edge": 0,
+          "crop_padding_top": 64,
+          "crop_padding_bottom": 64,
+          "crop_padding_left": 64,
+          "crop_padding_right": 64,
+          "crop_padding_fill": "#000000",
+          "fields": [
+            {
+              "name": "鸟种中文名 (bird_species_cn)",
+              "tag": "EXIF:Model",
+              "fallback": "",
+              "data_source": "auto",
+              "report_field": "",
+              "text_source": {
+                "type": "auto",
+                "key": "bird_species_cn"
+              },
+              "align_horizontal": "left",
+              "align_vertical": "bottom",
+              "x_offset_pct": 0.0,
+              "y_offset_pct": -2.0,
+              "color": "#ff9300",
+              "font_size": 64,
+              "font_type": "/System/Library/Fonts/Supplemental/Songti.ttc",
+              "style": "bold"
+            }
+          ]
+        },
+        "ratio": 1.0,
+        "center_mode": "bird",
+        "crop_padding_top": 64,
+        "crop_padding_bottom": 64,
+        "crop_padding_left": 64,
+        "crop_padding_right": 64,
+        "crop_padding_fill": "#000000",
+        "crop_box": null,
+        "custom_center_x": null,
+        "custom_center_y": null
+      }
+    },
+    {
+      "path": {
+        "absolute_path": "/Users/oscar/Pictures/黑脸琵鹭/DSC09808-DxO_DeepPRIME 3.jpg",
+        "relative_path": "../../../../黑脸琵鹭/DSC09808-DxO_DeepPRIME 3.jpg"
+      },
+      "sequence": 19,
+      "render_settings": {
+        "template_name": "鸟体中心-GIF",
+        "template_payload": {
+          "name": "鸟体中心-GIF",
+          "ratio": 1.0,
+          "banner_color": "#ffffff",
+          "draw_banner_background": false,
+          "banner_background_style": "gradient_bottom",
+          "banner_gradient_height_pct": 25.0,
+          "banner_gradient_top_color": "#000000",
+          "banner_gradient_top_opacity_pct": 0.0,
+          "banner_gradient_bottom_color": "#000000",
+          "banner_gradient_bottom_opacity_pct": 80.0,
+          "center_mode": "bird",
+          "auto_crop_by_bird": true,
+          "max_long_edge": 0,
+          "crop_padding_top": 64,
+          "crop_padding_bottom": 64,
+          "crop_padding_left": 64,
+          "crop_padding_right": 64,
+          "crop_padding_fill": "#000000",
+          "fields": [
+            {
+              "name": "鸟种中文名 (bird_species_cn)",
+              "tag": "EXIF:Model",
+              "fallback": "",
+              "data_source": "auto",
+              "report_field": "",
+              "text_source": {
+                "type": "auto",
+                "key": "bird_species_cn"
+              },
+              "align_horizontal": "left",
+              "align_vertical": "bottom",
+              "x_offset_pct": 0.0,
+              "y_offset_pct": -2.0,
+              "color": "#ff9300",
+              "font_size": 64,
+              "font_type": "/System/Library/Fonts/Supplemental/Songti.ttc",
+              "style": "bold"
+            }
+          ]
+        },
+        "ratio": 1.0,
+        "center_mode": "bird",
+        "crop_padding_top": 64,
+        "crop_padding_bottom": 64,
+        "crop_padding_left": 64,
+        "crop_padding_right": 64,
+        "crop_padding_fill": "#000000",
+        "crop_box": null,
+        "custom_center_x": null,
+        "custom_center_y": null
+      }
+    },
+    {
+      "path": {
+        "absolute_path": "/Users/oscar/Pictures/黑脸琵鹭/DSC09809-DxO_DeepPRIME 3.jpg",
+        "relative_path": "../../../../黑脸琵鹭/DSC09809-DxO_DeepPRIME 3.jpg"
+      },
+      "sequence": 20,
+      "render_settings": {
+        "template_name": "鸟体中心-GIF",
+        "template_payload": {
+          "name": "鸟体中心-GIF",
+          "ratio": 1.0,
+          "banner_color": "#ffffff",
+          "draw_banner_background": false,
+          "banner_background_style": "gradient_bottom",
+          "banner_gradient_height_pct": 25.0,
+          "banner_gradient_top_color": "#000000",
+          "banner_gradient_top_opacity_pct": 0.0,
+          "banner_gradient_bottom_color": "#000000",
+          "banner_gradient_bottom_opacity_pct": 80.0,
+          "center_mode": "bird",
+          "auto_crop_by_bird": true,
+          "max_long_edge": 0,
+          "crop_padding_top": 64,
+          "crop_padding_bottom": 64,
+          "crop_padding_left": 64,
+          "crop_padding_right": 64,
+          "crop_padding_fill": "#000000",
+          "fields": [
+            {
+              "name": "鸟种中文名 (bird_species_cn)",
+              "tag": "EXIF:Model",
+              "fallback": "",
+              "data_source": "auto",
+              "report_field": "",
+              "text_source": {
+                "type": "auto",
+                "key": "bird_species_cn"
+              },
+              "align_horizontal": "left",
+              "align_vertical": "bottom",
+              "x_offset_pct": 0.0,
+              "y_offset_pct": -2.0,
+              "color": "#ff9300",
+              "font_size": 64,
+              "font_type": "/System/Library/Fonts/Supplemental/Songti.ttc",
+              "style": "bold"
+            }
+          ]
+        },
+        "ratio": 1.0,
+        "center_mode": "bird",
+        "crop_padding_top": 64,
+        "crop_padding_bottom": 64,
+        "crop_padding_left": 64,
+        "crop_padding_right": 64,
+        "crop_padding_fill": "#000000",
+        "crop_box": null,
+        "custom_center_x": null,
+        "custom_center_y": null
+      }
+    },
+    {
+      "path": {
+        "absolute_path": "/Users/oscar/Pictures/黑脸琵鹭/DSC09810-DxO_DeepPRIME 3.jpg",
+        "relative_path": "../../../../黑脸琵鹭/DSC09810-DxO_DeepPRIME 3.jpg"
+      },
+      "sequence": 21,
+      "render_settings": {
+        "template_name": "鸟体中心-GIF",
+        "template_payload": {
+          "name": "鸟体中心-GIF",
+          "ratio": 1.0,
+          "banner_color": "#ffffff",
+          "draw_banner_background": false,
+          "banner_background_style": "gradient_bottom",
+          "banner_gradient_height_pct": 25.0,
+          "banner_gradient_top_color": "#000000",
+          "banner_gradient_top_opacity_pct": 0.0,
+          "banner_gradient_bottom_color": "#000000",
+          "banner_gradient_bottom_opacity_pct": 80.0,
+          "center_mode": "bird",
+          "auto_crop_by_bird": true,
+          "max_long_edge": 0,
+          "crop_padding_top": 64,
+          "crop_padding_bottom": 64,
+          "crop_padding_left": 64,
+          "crop_padding_right": 64,
+          "crop_padding_fill": "#000000",
+          "fields": [
+            {
+              "name": "鸟种中文名 (bird_species_cn)",
+              "tag": "EXIF:Model",
+              "fallback": "",
+              "data_source": "auto",
+              "report_field": "",
+              "text_source": {
+                "type": "auto",
+                "key": "bird_species_cn"
+              },
+              "align_horizontal": "left",
+              "align_vertical": "bottom",
+              "x_offset_pct": 0.0,
+              "y_offset_pct": -2.0,
+              "color": "#ff9300",
+              "font_size": 64,
+              "font_type": "/System/Library/Fonts/Supplemental/Songti.ttc",
+              "style": "bold"
+            }
+          ]
+        },
+        "ratio": 1.0,
+        "center_mode": "bird",
+        "crop_padding_top": 64,
+        "crop_padding_bottom": 64,
+        "crop_padding_left": 64,
+        "crop_padding_right": 64,
+        "crop_padding_fill": "#000000",
+        "crop_box": null,
+        "custom_center_x": null,
+        "custom_center_y": null
+      }
+    },
+    {
+      "path": {
+        "absolute_path": "/Users/oscar/Pictures/黑脸琵鹭/DSC09811-DxO_DeepPRIME 3.jpg",
+        "relative_path": "../../../../黑脸琵鹭/DSC09811-DxO_DeepPRIME 3.jpg"
+      },
+      "sequence": 22,
+      "render_settings": {
+        "template_name": "鸟体中心-GIF",
+        "template_payload": {
+          "name": "鸟体中心-GIF",
+          "ratio": 1.0,
+          "banner_color": "#ffffff",
+          "draw_banner_background": false,
+          "banner_background_style": "gradient_bottom",
+          "banner_gradient_height_pct": 25.0,
+          "banner_gradient_top_color": "#000000",
+          "banner_gradient_top_opacity_pct": 0.0,
+          "banner_gradient_bottom_color": "#000000",
+          "banner_gradient_bottom_opacity_pct": 80.0,
+          "center_mode": "bird",
+          "auto_crop_by_bird": true,
+          "max_long_edge": 0,
+          "crop_padding_top": 64,
+          "crop_padding_bottom": 64,
+          "crop_padding_left": 64,
+          "crop_padding_right": 64,
+          "crop_padding_fill": "#000000",
+          "fields": [
+            {
+              "name": "鸟种中文名 (bird_species_cn)",
+              "tag": "EXIF:Model",
+              "fallback": "",
+              "data_source": "auto",
+              "report_field": "",
+              "text_source": {
+                "type": "auto",
+                "key": "bird_species_cn"
+              },
+              "align_horizontal": "left",
+              "align_vertical": "bottom",
+              "x_offset_pct": 0.0,
+              "y_offset_pct": -2.0,
+              "color": "#ff9300",
+              "font_size": 64,
+              "font_type": "/System/Library/Fonts/Supplemental/Songti.ttc",
+              "style": "bold"
+            }
+          ]
+        },
+        "ratio": 1.0,
+        "center_mode": "bird",
+        "crop_padding_top": 64,
+        "crop_padding_bottom": 64,
+        "crop_padding_left": 64,
+        "crop_padding_right": 64,
+        "crop_padding_fill": "#000000",
+        "crop_box": null,
+        "custom_center_x": null,
+        "custom_center_y": null
+      }
+    },
+    {
+      "path": {
+        "absolute_path": "/Users/oscar/Pictures/黑脸琵鹭/DSC09812-DxO_DeepPRIME 3.jpg",
+        "relative_path": "../../../../黑脸琵鹭/DSC09812-DxO_DeepPRIME 3.jpg"
+      },
+      "sequence": 23,
+      "render_settings": {
+        "template_name": "鸟体中心-GIF",
+        "template_payload": {
+          "name": "鸟体中心-GIF",
+          "ratio": 1.0,
+          "banner_color": "#ffffff",
+          "draw_banner_background": false,
+          "banner_background_style": "gradient_bottom",
+          "banner_gradient_height_pct": 25.0,
+          "banner_gradient_top_color": "#000000",
+          "banner_gradient_top_opacity_pct": 0.0,
+          "banner_gradient_bottom_color": "#000000",
+          "banner_gradient_bottom_opacity_pct": 80.0,
+          "center_mode": "bird",
+          "auto_crop_by_bird": true,
+          "max_long_edge": 0,
+          "crop_padding_top": 64,
+          "crop_padding_bottom": 64,
+          "crop_padding_left": 64,
+          "crop_padding_right": 64,
+          "crop_padding_fill": "#000000",
+          "fields": [
+            {
+              "name": "鸟种中文名 (bird_species_cn)",
+              "tag": "EXIF:Model",
+              "fallback": "",
+              "data_source": "auto",
+              "report_field": "",
+              "text_source": {
+                "type": "auto",
+                "key": "bird_species_cn"
+              },
+              "align_horizontal": "left",
+              "align_vertical": "bottom",
+              "x_offset_pct": 0.0,
+              "y_offset_pct": -2.0,
+              "color": "#ff9300",
+              "font_size": 64,
+              "font_type": "/System/Library/Fonts/Supplemental/Songti.ttc",
+              "style": "bold"
+            }
+          ]
+        },
+        "ratio": 1.0,
+        "center_mode": "bird",
+        "crop_padding_top": 64,
+        "crop_padding_bottom": 64,
+        "crop_padding_left": 64,
+        "crop_padding_right": 64,
+        "crop_padding_fill": "#000000",
+        "crop_box": null,
+        "custom_center_x": null,
+        "custom_center_y": null
+      }
+    },
+    {
+      "path": {
+        "absolute_path": "/Users/oscar/Pictures/黑脸琵鹭/DSC09813-DxO_DeepPRIME 3.jpg",
+        "relative_path": "../../../../黑脸琵鹭/DSC09813-DxO_DeepPRIME 3.jpg"
+      },
+      "sequence": 24,
+      "render_settings": {
+        "template_name": "鸟体中心-GIF",
+        "template_payload": {
+          "name": "鸟体中心-GIF",
+          "ratio": 1.0,
+          "banner_color": "#ffffff",
+          "draw_banner_background": false,
+          "banner_background_style": "gradient_bottom",
+          "banner_gradient_height_pct": 25.0,
+          "banner_gradient_top_color": "#000000",
+          "banner_gradient_top_opacity_pct": 0.0,
+          "banner_gradient_bottom_color": "#000000",
+          "banner_gradient_bottom_opacity_pct": 80.0,
+          "center_mode": "bird",
+          "auto_crop_by_bird": true,
+          "max_long_edge": 0,
+          "crop_padding_top": 64,
+          "crop_padding_bottom": 64,
+          "crop_padding_left": 64,
+          "crop_padding_right": 64,
+          "crop_padding_fill": "#000000",
+          "fields": [
+            {
+              "name": "鸟种中文名 (bird_species_cn)",
+              "tag": "EXIF:Model",
+              "fallback": "",
+              "data_source": "auto",
+              "report_field": "",
+              "text_source": {
+                "type": "auto",
+                "key": "bird_species_cn"
+              },
+              "align_horizontal": "left",
+              "align_vertical": "bottom",
+              "x_offset_pct": 0.0,
+              "y_offset_pct": -2.0,
+              "color": "#ff9300",
+              "font_size": 64,
+              "font_type": "/System/Library/Fonts/Supplemental/Songti.ttc",
+              "style": "bold"
+            }
+          ]
+        },
+        "ratio": 1.0,
+        "center_mode": "bird",
+        "crop_padding_top": 64,
+        "crop_padding_bottom": 64,
+        "crop_padding_left": 64,
+        "crop_padding_right": 64,
+        "crop_padding_fill": "#000000",
+        "crop_box": null,
+        "custom_center_x": null,
+        "custom_center_y": null
+      }
+    },
+    {
+      "path": {
+        "absolute_path": "/Users/oscar/Pictures/黑脸琵鹭/DSC09814-DxO_DeepPRIME 3.jpg",
+        "relative_path": "../../../../黑脸琵鹭/DSC09814-DxO_DeepPRIME 3.jpg"
+      },
+      "sequence": 25,
+      "render_settings": {
+        "template_name": "鸟体中心-GIF",
+        "template_payload": {
+          "name": "鸟体中心-GIF",
+          "ratio": 1.0,
+          "banner_color": "#ffffff",
+          "draw_banner_background": false,
+          "banner_background_style": "gradient_bottom",
+          "banner_gradient_height_pct": 25.0,
+          "banner_gradient_top_color": "#000000",
+          "banner_gradient_top_opacity_pct": 0.0,
+          "banner_gradient_bottom_color": "#000000",
+          "banner_gradient_bottom_opacity_pct": 80.0,
+          "center_mode": "bird",
+          "auto_crop_by_bird": true,
+          "max_long_edge": 0,
+          "crop_padding_top": 64,
+          "crop_padding_bottom": 64,
+          "crop_padding_left": 64,
+          "crop_padding_right": 64,
+          "crop_padding_fill": "#000000",
+          "fields": [
+            {
+              "name": "鸟种中文名 (bird_species_cn)",
+              "tag": "EXIF:Model",
+              "fallback": "",
+              "data_source": "auto",
+              "report_field": "",
+              "text_source": {
+                "type": "auto",
+                "key": "bird_species_cn"
+              },
+              "align_horizontal": "left",
+              "align_vertical": "bottom",
+              "x_offset_pct": 0.0,
+              "y_offset_pct": -2.0,
+              "color": "#ff9300",
+              "font_size": 64,
+              "font_type": "/System/Library/Fonts/Supplemental/Songti.ttc",
+              "style": "bold"
+            }
+          ]
+        },
+        "ratio": 1.0,
+        "center_mode": "bird",
+        "crop_padding_top": 64,
+        "crop_padding_bottom": 64,
+        "crop_padding_left": 64,
+        "crop_padding_right": 64,
+        "crop_padding_fill": "#000000",
+        "crop_box": null,
+        "custom_center_x": null,
+        "custom_center_y": null
+      }
+    },
+    {
+      "path": {
+        "absolute_path": "/Users/oscar/Pictures/黑脸琵鹭/DSC09815-DxO_DeepPRIME 3.jpg",
+        "relative_path": "../../../../黑脸琵鹭/DSC09815-DxO_DeepPRIME 3.jpg"
+      },
+      "sequence": 26,
+      "render_settings": {
+        "template_name": "鸟体中心-GIF",
+        "template_payload": {
+          "name": "鸟体中心-GIF",
+          "ratio": 1.0,
+          "banner_color": "#ffffff",
+          "draw_banner_background": false,
+          "banner_background_style": "gradient_bottom",
+          "banner_gradient_height_pct": 25.0,
+          "banner_gradient_top_color": "#000000",
+          "banner_gradient_top_opacity_pct": 0.0,
+          "banner_gradient_bottom_color": "#000000",
+          "banner_gradient_bottom_opacity_pct": 80.0,
+          "center_mode": "bird",
+          "auto_crop_by_bird": true,
+          "max_long_edge": 0,
+          "crop_padding_top": 64,
+          "crop_padding_bottom": 64,
+          "crop_padding_left": 64,
+          "crop_padding_right": 64,
+          "crop_padding_fill": "#000000",
+          "fields": [
+            {
+              "name": "鸟种中文名 (bird_species_cn)",
+              "tag": "EXIF:Model",
+              "fallback": "",
+              "data_source": "auto",
+              "report_field": "",
+              "text_source": {
+                "type": "auto",
+                "key": "bird_species_cn"
+              },
+              "align_horizontal": "left",
+              "align_vertical": "bottom",
+              "x_offset_pct": 0.0,
+              "y_offset_pct": -2.0,
+              "color": "#ff9300",
+              "font_size": 64,
+              "font_type": "/System/Library/Fonts/Supplemental/Songti.ttc",
+              "style": "bold"
+            }
+          ]
+        },
+        "ratio": 1.0,
+        "center_mode": "bird",
+        "crop_padding_top": 64,
+        "crop_padding_bottom": 64,
+        "crop_padding_left": 64,
+        "crop_padding_right": 64,
+        "crop_padding_fill": "#000000",
+        "crop_box": null,
+        "custom_center_x": null,
+        "custom_center_y": null
+      }
+    },
+    {
+      "path": {
+        "absolute_path": "/Users/oscar/Pictures/黑脸琵鹭/DSC09816-DxO_DeepPRIME 3.jpg",
+        "relative_path": "../../../../黑脸琵鹭/DSC09816-DxO_DeepPRIME 3.jpg"
+      },
+      "sequence": 27,
+      "render_settings": {
+        "template_name": "鸟体中心-GIF",
+        "template_payload": {
+          "name": "鸟体中心-GIF",
+          "ratio": 1.0,
+          "banner_color": "#ffffff",
+          "draw_banner_background": false,
+          "banner_background_style": "gradient_bottom",
+          "banner_gradient_height_pct": 25.0,
+          "banner_gradient_top_color": "#000000",
+          "banner_gradient_top_opacity_pct": 0.0,
+          "banner_gradient_bottom_color": "#000000",
+          "banner_gradient_bottom_opacity_pct": 80.0,
+          "center_mode": "bird",
+          "auto_crop_by_bird": true,
+          "max_long_edge": 0,
+          "crop_padding_top": 64,
+          "crop_padding_bottom": 64,
+          "crop_padding_left": 64,
+          "crop_padding_right": 64,
+          "crop_padding_fill": "#000000",
+          "fields": [
+            {
+              "name": "鸟种中文名 (bird_species_cn)",
+              "tag": "EXIF:Model",
+              "fallback": "",
+              "data_source": "auto",
+              "report_field": "",
+              "text_source": {
+                "type": "auto",
+                "key": "bird_species_cn"
+              },
+              "align_horizontal": "left",
+              "align_vertical": "bottom",
+              "x_offset_pct": 0.0,
+              "y_offset_pct": -2.0,
+              "color": "#ff9300",
+              "font_size": 64,
+              "font_type": "/System/Library/Fonts/Supplemental/Songti.ttc",
+              "style": "bold"
+            }
+          ]
+        },
+        "ratio": 1.0,
+        "center_mode": "bird",
+        "crop_padding_top": 64,
+        "crop_padding_bottom": 64,
+        "crop_padding_left": 64,
+        "crop_padding_right": 64,
+        "crop_padding_fill": "#000000",
+        "crop_box": null,
+        "custom_center_x": null,
+        "custom_center_y": null
+      }
+    },
+    {
+      "path": {
+        "absolute_path": "/Users/oscar/Pictures/黑脸琵鹭/DSC09817-DxO_DeepPRIME 3.jpg",
+        "relative_path": "../../../../黑脸琵鹭/DSC09817-DxO_DeepPRIME 3.jpg"
+      },
+      "sequence": 28,
+      "render_settings": {
+        "template_name": "鸟体中心-GIF",
+        "template_payload": {
+          "name": "鸟体中心-GIF",
+          "ratio": 1.0,
+          "banner_color": "#ffffff",
+          "draw_banner_background": false,
+          "banner_background_style": "gradient_bottom",
+          "banner_gradient_height_pct": 25.0,
+          "banner_gradient_top_color": "#000000",
+          "banner_gradient_top_opacity_pct": 0.0,
+          "banner_gradient_bottom_color": "#000000",
+          "banner_gradient_bottom_opacity_pct": 80.0,
+          "center_mode": "bird",
+          "auto_crop_by_bird": true,
+          "max_long_edge": 0,
+          "crop_padding_top": 64,
+          "crop_padding_bottom": 64,
+          "crop_padding_left": 64,
+          "crop_padding_right": 64,
+          "crop_padding_fill": "#000000",
+          "fields": [
+            {
+              "name": "鸟种中文名 (bird_species_cn)",
+              "tag": "EXIF:Model",
+              "fallback": "",
+              "data_source": "auto",
+              "report_field": "",
+              "text_source": {
+                "type": "auto",
+                "key": "bird_species_cn"
+              },
+              "align_horizontal": "left",
+              "align_vertical": "bottom",
+              "x_offset_pct": 0.0,
+              "y_offset_pct": -2.0,
+              "color": "#ff9300",
+              "font_size": 64,
+              "font_type": "/System/Library/Fonts/Supplemental/Songti.ttc",
+              "style": "bold"
+            }
+          ]
+        },
+        "ratio": 1.0,
+        "center_mode": "bird",
+        "crop_padding_top": 64,
+        "crop_padding_bottom": 64,
+        "crop_padding_left": 64,
+        "crop_padding_right": 64,
+        "crop_padding_fill": "#000000",
+        "crop_box": null,
+        "custom_center_x": null,
+        "custom_center_y": null
+      }
+    },
+    {
+      "path": {
+        "absolute_path": "/Users/oscar/Pictures/黑脸琵鹭/DSC09818-DxO_DeepPRIME 3.jpg",
+        "relative_path": "../../../../黑脸琵鹭/DSC09818-DxO_DeepPRIME 3.jpg"
+      },
+      "sequence": 29,
+      "render_settings": {
+        "template_name": "鸟体中心-GIF",
+        "template_payload": {
+          "name": "鸟体中心-GIF",
+          "ratio": 1.0,
+          "banner_color": "#ffffff",
+          "draw_banner_background": false,
+          "banner_background_style": "gradient_bottom",
+          "banner_gradient_height_pct": 25.0,
+          "banner_gradient_top_color": "#000000",
+          "banner_gradient_top_opacity_pct": 0.0,
+          "banner_gradient_bottom_color": "#000000",
+          "banner_gradient_bottom_opacity_pct": 80.0,
+          "center_mode": "bird",
+          "auto_crop_by_bird": true,
+          "max_long_edge": 0,
+          "crop_padding_top": 64,
+          "crop_padding_bottom": 64,
+          "crop_padding_left": 64,
+          "crop_padding_right": 64,
+          "crop_padding_fill": "#000000",
+          "fields": [
+            {
+              "name": "鸟种中文名 (bird_species_cn)",
+              "tag": "EXIF:Model",
+              "fallback": "",
+              "data_source": "auto",
+              "report_field": "",
+              "text_source": {
+                "type": "auto",
+                "key": "bird_species_cn"
+              },
+              "align_horizontal": "left",
+              "align_vertical": "bottom",
+              "x_offset_pct": 0.0,
+              "y_offset_pct": -2.0,
+              "color": "#ff9300",
+              "font_size": 64,
+              "font_type": "/System/Library/Fonts/Supplemental/Songti.ttc",
+              "style": "bold"
+            }
+          ]
+        },
+        "ratio": 1.0,
+        "center_mode": "bird",
+        "crop_padding_top": 64,
+        "crop_padding_bottom": 64,
+        "crop_padding_left": 64,
+        "crop_padding_right": 64,
+        "crop_padding_fill": "#000000",
+        "crop_box": null,
+        "custom_center_x": null,
+        "custom_center_y": null
+      }
+    },
+    {
+      "path": {
+        "absolute_path": "/Users/oscar/Pictures/黑脸琵鹭/DSC09819-DxO_DeepPRIME 3.jpg",
+        "relative_path": "../../../../黑脸琵鹭/DSC09819-DxO_DeepPRIME 3.jpg"
+      },
+      "sequence": 30,
+      "render_settings": {
+        "template_name": "鸟体中心-GIF",
+        "template_payload": {
+          "name": "鸟体中心-GIF",
+          "ratio": 1.0,
+          "banner_color": "#ffffff",
+          "draw_banner_background": false,
+          "banner_background_style": "gradient_bottom",
+          "banner_gradient_height_pct": 25.0,
+          "banner_gradient_top_color": "#000000",
+          "banner_gradient_top_opacity_pct": 0.0,
+          "banner_gradient_bottom_color": "#000000",
+          "banner_gradient_bottom_opacity_pct": 80.0,
+          "center_mode": "bird",
+          "auto_crop_by_bird": true,
+          "max_long_edge": 0,
+          "crop_padding_top": 64,
+          "crop_padding_bottom": 64,
+          "crop_padding_left": 64,
+          "crop_padding_right": 64,
+          "crop_padding_fill": "#000000",
+          "fields": [
+            {
+              "name": "鸟种中文名 (bird_species_cn)",
+              "tag": "EXIF:Model",
+              "fallback": "",
+              "data_source": "auto",
+              "report_field": "",
+              "text_source": {
+                "type": "auto",
+                "key": "bird_species_cn"
+              },
+              "align_horizontal": "left",
+              "align_vertical": "bottom",
+              "x_offset_pct": 0.0,
+              "y_offset_pct": -2.0,
+              "color": "#ff9300",
+              "font_size": 64,
+              "font_type": "/System/Library/Fonts/Supplemental/Songti.ttc",
+              "style": "bold"
+            }
+          ]
+        },
+        "ratio": 1.0,
+        "center_mode": "bird",
+        "crop_padding_top": 64,
+        "crop_padding_bottom": 64,
+        "crop_padding_left": 64,
+        "crop_padding_right": 64,
+        "crop_padding_fill": "#000000",
+        "crop_box": null,
+        "custom_center_x": null,
+        "custom_center_y": null
+      }
+    },
+    {
+      "path": {
+        "absolute_path": "/Users/oscar/Pictures/黑脸琵鹭/DSC09820-DxO_DeepPRIME 3.jpg",
+        "relative_path": "../../../../黑脸琵鹭/DSC09820-DxO_DeepPRIME 3.jpg"
+      },
+      "sequence": 31,
+      "render_settings": {
+        "template_name": "鸟体中心-GIF",
+        "template_payload": {
+          "name": "鸟体中心-GIF",
+          "ratio": 1.0,
+          "banner_color": "#ffffff",
+          "draw_banner_background": false,
+          "banner_background_style": "gradient_bottom",
+          "banner_gradient_height_pct": 25.0,
+          "banner_gradient_top_color": "#000000",
+          "banner_gradient_top_opacity_pct": 0.0,
+          "banner_gradient_bottom_color": "#000000",
+          "banner_gradient_bottom_opacity_pct": 80.0,
+          "center_mode": "bird",
+          "auto_crop_by_bird": true,
+          "max_long_edge": 0,
+          "crop_padding_top": 64,
+          "crop_padding_bottom": 64,
+          "crop_padding_left": 64,
+          "crop_padding_right": 64,
+          "crop_padding_fill": "#000000",
+          "fields": [
+            {
+              "name": "鸟种中文名 (bird_species_cn)",
+              "tag": "EXIF:Model",
+              "fallback": "",
+              "data_source": "auto",
+              "report_field": "",
+              "text_source": {
+                "type": "auto",
+                "key": "bird_species_cn"
+              },
+              "align_horizontal": "left",
+              "align_vertical": "bottom",
+              "x_offset_pct": 0.0,
+              "y_offset_pct": -2.0,
+              "color": "#ff9300",
+              "font_size": 64,
+              "font_type": "/System/Library/Fonts/Supplemental/Songti.ttc",
+              "style": "bold"
+            }
+          ]
+        },
+        "ratio": 1.0,
+        "center_mode": "bird",
+        "crop_padding_top": 64,
+        "crop_padding_bottom": 64,
+        "crop_padding_left": 64,
+        "crop_padding_right": 64,
+        "crop_padding_fill": "#000000",
+        "crop_box": null,
+        "custom_center_x": null,
+        "custom_center_y": null
+      }
+    },
+    {
+      "path": {
+        "absolute_path": "/Users/oscar/Pictures/黑脸琵鹭/DSC09821-DxO_DeepPRIME 3.jpg",
+        "relative_path": "../../../../黑脸琵鹭/DSC09821-DxO_DeepPRIME 3.jpg"
+      },
+      "sequence": 32,
+      "render_settings": {
+        "template_name": "鸟体中心-GIF",
+        "template_payload": {
+          "name": "鸟体中心-GIF",
+          "ratio": 1.0,
+          "banner_color": "#ffffff",
+          "draw_banner_background": false,
+          "banner_background_style": "gradient_bottom",
+          "banner_gradient_height_pct": 25.0,
+          "banner_gradient_top_color": "#000000",
+          "banner_gradient_top_opacity_pct": 0.0,
+          "banner_gradient_bottom_color": "#000000",
+          "banner_gradient_bottom_opacity_pct": 80.0,
+          "center_mode": "bird",
+          "auto_crop_by_bird": true,
+          "max_long_edge": 0,
+          "crop_padding_top": 64,
+          "crop_padding_bottom": 64,
+          "crop_padding_left": 64,
+          "crop_padding_right": 64,
+          "crop_padding_fill": "#000000",
+          "fields": [
+            {
+              "name": "鸟种中文名 (bird_species_cn)",
+              "tag": "EXIF:Model",
+              "fallback": "",
+              "data_source": "auto",
+              "report_field": "",
+              "text_source": {
+                "type": "auto",
+                "key": "bird_species_cn"
+              },
+              "align_horizontal": "left",
+              "align_vertical": "bottom",
+              "x_offset_pct": 0.0,
+              "y_offset_pct": -2.0,
+              "color": "#ff9300",
+              "font_size": 64,
+              "font_type": "/System/Library/Fonts/Supplemental/Songti.ttc",
+              "style": "bold"
+            }
+          ]
+        },
+        "ratio": 1.0,
+        "center_mode": "bird",
+        "crop_padding_top": 64,
+        "crop_padding_bottom": 64,
+        "crop_padding_left": 64,
+        "crop_padding_right": 64,
+        "crop_padding_fill": "#000000",
+        "crop_box": null,
+        "custom_center_x": null,
+        "custom_center_y": null
+      }
+    },
+    {
+      "path": {
+        "absolute_path": "/Users/oscar/Pictures/黑脸琵鹭/DSC09822-DxO_DeepPRIME 3.jpg",
+        "relative_path": "../../../../黑脸琵鹭/DSC09822-DxO_DeepPRIME 3.jpg"
+      },
+      "sequence": 33,
+      "render_settings": {
+        "template_name": "鸟体中心-GIF",
+        "template_payload": {
+          "name": "鸟体中心-GIF",
+          "ratio": 1.0,
+          "banner_color": "#ffffff",
+          "draw_banner_background": false,
+          "banner_background_style": "gradient_bottom",
+          "banner_gradient_height_pct": 25.0,
+          "banner_gradient_top_color": "#000000",
+          "banner_gradient_top_opacity_pct": 0.0,
+          "banner_gradient_bottom_color": "#000000",
+          "banner_gradient_bottom_opacity_pct": 80.0,
+          "center_mode": "bird",
+          "auto_crop_by_bird": true,
+          "max_long_edge": 0,
+          "crop_padding_top": 64,
+          "crop_padding_bottom": 64,
+          "crop_padding_left": 64,
+          "crop_padding_right": 64,
+          "crop_padding_fill": "#000000",
+          "fields": [
+            {
+              "name": "鸟种中文名 (bird_species_cn)",
+              "tag": "EXIF:Model",
+              "fallback": "",
+              "data_source": "auto",
+              "report_field": "",
+              "text_source": {
+                "type": "auto",
+                "key": "bird_species_cn"
+              },
+              "align_horizontal": "left",
+              "align_vertical": "bottom",
+              "x_offset_pct": 0.0,
+              "y_offset_pct": -2.0,
+              "color": "#ff9300",
+              "font_size": 64,
+              "font_type": "/System/Library/Fonts/Supplemental/Songti.ttc",
+              "style": "bold"
+            }
+          ]
+        },
+        "ratio": 1.0,
+        "center_mode": "bird",
+        "crop_padding_top": 64,
+        "crop_padding_bottom": 64,
+        "crop_padding_left": 64,
+        "crop_padding_right": 64,
+        "crop_padding_fill": "#000000",
+        "crop_box": null,
+        "custom_center_x": null,
+        "custom_center_y": null
+      }
+    },
+    {
+      "path": {
+        "absolute_path": "/Users/oscar/Pictures/黑脸琵鹭/DSC09823-DxO_DeepPRIME 3.jpg",
+        "relative_path": "../../../../黑脸琵鹭/DSC09823-DxO_DeepPRIME 3.jpg"
+      },
+      "sequence": 34,
+      "render_settings": {
+        "template_name": "鸟体中心-GIF",
+        "template_payload": {
+          "name": "鸟体中心-GIF",
+          "ratio": 1.0,
+          "banner_color": "#ffffff",
+          "draw_banner_background": false,
+          "banner_background_style": "gradient_bottom",
+          "banner_gradient_height_pct": 25.0,
+          "banner_gradient_top_color": "#000000",
+          "banner_gradient_top_opacity_pct": 0.0,
+          "banner_gradient_bottom_color": "#000000",
+          "banner_gradient_bottom_opacity_pct": 80.0,
+          "center_mode": "bird",
+          "auto_crop_by_bird": true,
+          "max_long_edge": 0,
+          "crop_padding_top": 64,
+          "crop_padding_bottom": 64,
+          "crop_padding_left": 64,
+          "crop_padding_right": 64,
+          "crop_padding_fill": "#000000",
+          "fields": [
+            {
+              "name": "鸟种中文名 (bird_species_cn)",
+              "tag": "EXIF:Model",
+              "fallback": "",
+              "data_source": "auto",
+              "report_field": "",
+              "text_source": {
+                "type": "auto",
+                "key": "bird_species_cn"
+              },
+              "align_horizontal": "left",
+              "align_vertical": "bottom",
+              "x_offset_pct": 0.0,
+              "y_offset_pct": -2.0,
+              "color": "#ff9300",
+              "font_size": 64,
+              "font_type": "/System/Library/Fonts/Supplemental/Songti.ttc",
+              "style": "bold"
+            }
+          ]
+        },
+        "ratio": 1.0,
+        "center_mode": "bird",
+        "crop_padding_top": 64,
+        "crop_padding_bottom": 64,
+        "crop_padding_left": 64,
+        "crop_padding_right": 64,
+        "crop_padding_fill": "#000000",
+        "crop_box": null,
+        "custom_center_x": null,
+        "custom_center_y": null
+      }
+    },
+    {
+      "path": {
+        "absolute_path": "/Users/oscar/Pictures/黑脸琵鹭/DSC09824-DxO_DeepPRIME 3.jpg",
+        "relative_path": "../../../../黑脸琵鹭/DSC09824-DxO_DeepPRIME 3.jpg"
+      },
+      "sequence": 35,
+      "render_settings": {
+        "template_name": "鸟体中心-GIF",
+        "template_payload": {
+          "name": "鸟体中心-GIF",
+          "ratio": 1.0,
+          "banner_color": "#ffffff",
+          "draw_banner_background": false,
+          "banner_background_style": "gradient_bottom",
+          "banner_gradient_height_pct": 25.0,
+          "banner_gradient_top_color": "#000000",
+          "banner_gradient_top_opacity_pct": 0.0,
+          "banner_gradient_bottom_color": "#000000",
+          "banner_gradient_bottom_opacity_pct": 80.0,
+          "center_mode": "bird",
+          "auto_crop_by_bird": true,
+          "max_long_edge": 0,
+          "crop_padding_top": 64,
+          "crop_padding_bottom": 64,
+          "crop_padding_left": 64,
+          "crop_padding_right": 64,
+          "crop_padding_fill": "#000000",
+          "fields": [
+            {
+              "name": "鸟种中文名 (bird_species_cn)",
+              "tag": "EXIF:Model",
+              "fallback": "",
+              "data_source": "auto",
+              "report_field": "",
+              "text_source": {
+                "type": "auto",
+                "key": "bird_species_cn"
+              },
+              "align_horizontal": "left",
+              "align_vertical": "bottom",
+              "x_offset_pct": 0.0,
+              "y_offset_pct": -2.0,
+              "color": "#ff9300",
+              "font_size": 64,
+              "font_type": "/System/Library/Fonts/Supplemental/Songti.ttc",
+              "style": "bold"
+            }
+          ]
+        },
+        "ratio": 1.0,
+        "center_mode": "bird",
+        "crop_padding_top": 64,
+        "crop_padding_bottom": 64,
+        "crop_padding_left": 64,
+        "crop_padding_right": 64,
+        "crop_padding_fill": "#000000",
+        "crop_box": null,
+        "custom_center_x": null,
+        "custom_center_y": null
+      }
+    },
+    {
+      "path": {
+        "absolute_path": "/Users/oscar/Pictures/黑脸琵鹭/DSC09825-DxO_DeepPRIME 3.jpg",
+        "relative_path": "../../../../黑脸琵鹭/DSC09825-DxO_DeepPRIME 3.jpg"
+      },
+      "sequence": 36,
+      "render_settings": {
+        "template_name": "鸟体中心-GIF",
+        "template_payload": {
+          "name": "鸟体中心-GIF",
+          "ratio": 1.0,
+          "banner_color": "#ffffff",
+          "draw_banner_background": false,
+          "banner_background_style": "gradient_bottom",
+          "banner_gradient_height_pct": 25.0,
+          "banner_gradient_top_color": "#000000",
+          "banner_gradient_top_opacity_pct": 0.0,
+          "banner_gradient_bottom_color": "#000000",
+          "banner_gradient_bottom_opacity_pct": 80.0,
+          "center_mode": "bird",
+          "auto_crop_by_bird": true,
+          "max_long_edge": 0,
+          "crop_padding_top": 64,
+          "crop_padding_bottom": 64,
+          "crop_padding_left": 64,
+          "crop_padding_right": 64,
+          "crop_padding_fill": "#000000",
+          "fields": [
+            {
+              "name": "鸟种中文名 (bird_species_cn)",
+              "tag": "EXIF:Model",
+              "fallback": "",
+              "data_source": "auto",
+              "report_field": "",
+              "text_source": {
+                "type": "auto",
+                "key": "bird_species_cn"
+              },
+              "align_horizontal": "left",
+              "align_vertical": "bottom",
+              "x_offset_pct": 0.0,
+              "y_offset_pct": -2.0,
+              "color": "#ff9300",
+              "font_size": 64,
+              "font_type": "/System/Library/Fonts/Supplemental/Songti.ttc",
+              "style": "bold"
+            }
+          ]
+        },
+        "ratio": 1.0,
+        "center_mode": "bird",
+        "crop_padding_top": 64,
+        "crop_padding_bottom": 64,
+        "crop_padding_left": 64,
+        "crop_padding_right": 64,
+        "crop_padding_fill": "#000000",
+        "crop_box": null,
+        "custom_center_x": null,
+        "custom_center_y": null
+      }
+    },
+    {
+      "path": {
+        "absolute_path": "/Users/oscar/Pictures/黑脸琵鹭/DSC09826-DxO_DeepPRIME 3.jpg",
+        "relative_path": "../../../../黑脸琵鹭/DSC09826-DxO_DeepPRIME 3.jpg"
+      },
+      "sequence": 37,
+      "render_settings": {
+        "template_name": "鸟体中心-GIF",
+        "template_payload": {
+          "name": "鸟体中心-GIF",
+          "ratio": 1.0,
+          "banner_color": "#ffffff",
+          "draw_banner_background": false,
+          "banner_background_style": "gradient_bottom",
+          "banner_gradient_height_pct": 25.0,
+          "banner_gradient_top_color": "#000000",
+          "banner_gradient_top_opacity_pct": 0.0,
+          "banner_gradient_bottom_color": "#000000",
+          "banner_gradient_bottom_opacity_pct": 80.0,
+          "center_mode": "bird",
+          "auto_crop_by_bird": true,
+          "max_long_edge": 0,
+          "crop_padding_top": 64,
+          "crop_padding_bottom": 64,
+          "crop_padding_left": 64,
+          "crop_padding_right": 64,
+          "crop_padding_fill": "#000000",
+          "fields": [
+            {
+              "name": "鸟种中文名 (bird_species_cn)",
+              "tag": "EXIF:Model",
+              "fallback": "",
+              "data_source": "auto",
+              "report_field": "",
+              "text_source": {
+                "type": "auto",
+                "key": "bird_species_cn"
+              },
+              "align_horizontal": "left",
+              "align_vertical": "bottom",
+              "x_offset_pct": 0.0,
+              "y_offset_pct": -2.0,
+              "color": "#ff9300",
+              "font_size": 64,
+              "font_type": "/System/Library/Fonts/Supplemental/Songti.ttc",
+              "style": "bold"
+            }
+          ]
+        },
+        "ratio": 1.0,
+        "center_mode": "bird",
+        "crop_padding_top": 64,
+        "crop_padding_bottom": 64,
+        "crop_padding_left": 64,
+        "crop_padding_right": 64,
+        "crop_padding_fill": "#000000",
+        "crop_box": null,
+        "custom_center_x": null,
+        "custom_center_y": null
+      }
+    },
+    {
+      "path": {
+        "absolute_path": "/Users/oscar/Pictures/黑脸琵鹭/DSC09827-DxO_DeepPRIME 3.jpg",
+        "relative_path": "../../../../黑脸琵鹭/DSC09827-DxO_DeepPRIME 3.jpg"
+      },
+      "sequence": 38,
+      "render_settings": {
+        "template_name": "鸟体中心-GIF",
+        "template_payload": {
+          "name": "鸟体中心-GIF",
+          "ratio": 1.0,
+          "banner_color": "#ffffff",
+          "draw_banner_background": false,
+          "banner_background_style": "gradient_bottom",
+          "banner_gradient_height_pct": 25.0,
+          "banner_gradient_top_color": "#000000",
+          "banner_gradient_top_opacity_pct": 0.0,
+          "banner_gradient_bottom_color": "#000000",
+          "banner_gradient_bottom_opacity_pct": 80.0,
+          "center_mode": "bird",
+          "auto_crop_by_bird": true,
+          "max_long_edge": 0,
+          "crop_padding_top": 64,
+          "crop_padding_bottom": 64,
+          "crop_padding_left": 64,
+          "crop_padding_right": 64,
+          "crop_padding_fill": "#000000",
+          "fields": [
+            {
+              "name": "鸟种中文名 (bird_species_cn)",
+              "tag": "EXIF:Model",
+              "fallback": "",
+              "data_source": "auto",
+              "report_field": "",
+              "text_source": {
+                "type": "auto",
+                "key": "bird_species_cn"
+              },
+              "align_horizontal": "left",
+              "align_vertical": "bottom",
+              "x_offset_pct": 0.0,
+              "y_offset_pct": -2.0,
+              "color": "#ff9300",
+              "font_size": 64,
+              "font_type": "/System/Library/Fonts/Supplemental/Songti.ttc",
+              "style": "bold"
+            }
+          ]
+        },
+        "ratio": 1.0,
+        "center_mode": "bird",
+        "crop_padding_top": 64,
+        "crop_padding_bottom": 64,
+        "crop_padding_left": 64,
+        "crop_padding_right": 64,
+        "crop_padding_fill": "#000000",
+        "crop_box": null,
+        "custom_center_x": null,
+        "custom_center_y": null
+      }
+    },
+    {
+      "path": {
+        "absolute_path": "/Users/oscar/Pictures/黑脸琵鹭/DSC09828-DxO_DeepPRIME 3.jpg",
+        "relative_path": "../../../../黑脸琵鹭/DSC09828-DxO_DeepPRIME 3.jpg"
+      },
+      "sequence": 39,
+      "render_settings": {
+        "template_name": "鸟体中心-GIF",
+        "template_payload": {
+          "name": "鸟体中心-GIF",
+          "ratio": 1.0,
+          "banner_color": "#ffffff",
+          "draw_banner_background": false,
+          "banner_background_style": "gradient_bottom",
+          "banner_gradient_height_pct": 25.0,
+          "banner_gradient_top_color": "#000000",
+          "banner_gradient_top_opacity_pct": 0.0,
+          "banner_gradient_bottom_color": "#000000",
+          "banner_gradient_bottom_opacity_pct": 80.0,
+          "center_mode": "bird",
+          "auto_crop_by_bird": true,
+          "max_long_edge": 0,
+          "crop_padding_top": 64,
+          "crop_padding_bottom": 64,
+          "crop_padding_left": 64,
+          "crop_padding_right": 64,
+          "crop_padding_fill": "#000000",
+          "fields": [
+            {
+              "name": "鸟种中文名 (bird_species_cn)",
+              "tag": "EXIF:Model",
+              "fallback": "",
+              "data_source": "auto",
+              "report_field": "",
+              "text_source": {
+                "type": "auto",
+                "key": "bird_species_cn"
+              },
+              "align_horizontal": "left",
+              "align_vertical": "bottom",
+              "x_offset_pct": 0.0,
+              "y_offset_pct": -2.0,
+              "color": "#ff9300",
+              "font_size": 64,
+              "font_type": "/System/Library/Fonts/Supplemental/Songti.ttc",
+              "style": "bold"
+            }
+          ]
+        },
+        "ratio": 1.0,
+        "center_mode": "bird",
+        "crop_padding_top": 64,
+        "crop_padding_bottom": 64,
+        "crop_padding_left": 64,
+        "crop_padding_right": 64,
+        "crop_padding_fill": "#000000",
+        "crop_box": null,
+        "custom_center_x": null,
+        "custom_center_y": null
+      }
+    },
+    {
+      "path": {
+        "absolute_path": "/Users/oscar/Pictures/黑脸琵鹭/DSC09829-DxO_DeepPRIME 3.jpg",
+        "relative_path": "../../../../黑脸琵鹭/DSC09829-DxO_DeepPRIME 3.jpg"
+      },
+      "sequence": 40,
+      "render_settings": {
+        "template_name": "鸟体中心-GIF",
+        "template_payload": {
+          "name": "鸟体中心-GIF",
+          "ratio": 1.0,
+          "banner_color": "#ffffff",
+          "draw_banner_background": false,
+          "banner_background_style": "gradient_bottom",
+          "banner_gradient_height_pct": 25.0,
+          "banner_gradient_top_color": "#000000",
+          "banner_gradient_top_opacity_pct": 0.0,
+          "banner_gradient_bottom_color": "#000000",
+          "banner_gradient_bottom_opacity_pct": 80.0,
+          "center_mode": "bird",
+          "auto_crop_by_bird": true,
+          "max_long_edge": 0,
+          "crop_padding_top": 64,
+          "crop_padding_bottom": 64,
+          "crop_padding_left": 64,
+          "crop_padding_right": 64,
+          "crop_padding_fill": "#000000",
+          "fields": [
+            {
+              "name": "鸟种中文名 (bird_species_cn)",
+              "tag": "EXIF:Model",
+              "fallback": "",
+              "data_source": "auto",
+              "report_field": "",
+              "text_source": {
+                "type": "auto",
+                "key": "bird_species_cn"
+              },
+              "align_horizontal": "left",
+              "align_vertical": "bottom",
+              "x_offset_pct": 0.0,
+              "y_offset_pct": -2.0,
+              "color": "#ff9300",
+              "font_size": 64,
+              "font_type": "/System/Library/Fonts/Supplemental/Songti.ttc",
+              "style": "bold"
+            }
+          ]
+        },
+        "ratio": 1.0,
+        "center_mode": "bird",
+        "crop_padding_top": 64,
+        "crop_padding_bottom": 64,
+        "crop_padding_left": 64,
+        "crop_padding_right": 64,
+        "crop_padding_fill": "#000000",
+        "crop_box": null,
+        "custom_center_x": null,
+        "custom_center_y": null
+      }
+    },
+    {
+      "path": {
+        "absolute_path": "/Users/oscar/Pictures/黑脸琵鹭/DSC09830-DxO_DeepPRIME 3.jpg",
+        "relative_path": "../../../../黑脸琵鹭/DSC09830-DxO_DeepPRIME 3.jpg"
+      },
+      "sequence": 41,
+      "render_settings": {
+        "template_name": "鸟体中心-GIF",
+        "template_payload": {
+          "name": "鸟体中心-GIF",
+          "ratio": 1.0,
+          "banner_color": "#ffffff",
+          "draw_banner_background": false,
+          "banner_background_style": "gradient_bottom",
+          "banner_gradient_height_pct": 25.0,
+          "banner_gradient_top_color": "#000000",
+          "banner_gradient_top_opacity_pct": 0.0,
+          "banner_gradient_bottom_color": "#000000",
+          "banner_gradient_bottom_opacity_pct": 80.0,
+          "center_mode": "bird",
+          "auto_crop_by_bird": true,
+          "max_long_edge": 0,
+          "crop_padding_top": 64,
+          "crop_padding_bottom": 64,
+          "crop_padding_left": 64,
+          "crop_padding_right": 64,
+          "crop_padding_fill": "#000000",
+          "fields": [
+            {
+              "name": "鸟种中文名 (bird_species_cn)",
+              "tag": "EXIF:Model",
+              "fallback": "",
+              "data_source": "auto",
+              "report_field": "",
+              "text_source": {
+                "type": "auto",
+                "key": "bird_species_cn"
+              },
+              "align_horizontal": "left",
+              "align_vertical": "bottom",
+              "x_offset_pct": 0.0,
+              "y_offset_pct": -2.0,
+              "color": "#ff9300",
+              "font_size": 64,
+              "font_type": "/System/Library/Fonts/Supplemental/Songti.ttc",
+              "style": "bold"
+            }
+          ]
+        },
+        "ratio": 1.0,
+        "center_mode": "bird",
+        "crop_padding_top": 64,
+        "crop_padding_bottom": 64,
+        "crop_padding_left": 64,
+        "crop_padding_right": 64,
+        "crop_padding_fill": "#000000",
+        "crop_box": null,
+        "custom_center_x": null,
+        "custom_center_y": null
+      }
+    },
+    {
+      "path": {
+        "absolute_path": "/Users/oscar/Pictures/黑脸琵鹭/DSC09831-DxO_DeepPRIME 3.jpg",
+        "relative_path": "../../../../黑脸琵鹭/DSC09831-DxO_DeepPRIME 3.jpg"
+      },
+      "sequence": 42,
+      "render_settings": {
+        "template_name": "鸟体中心-GIF",
+        "template_payload": {
+          "name": "鸟体中心-GIF",
+          "ratio": 1.0,
+          "banner_color": "#ffffff",
+          "draw_banner_background": false,
+          "banner_background_style": "gradient_bottom",
+          "banner_gradient_height_pct": 25.0,
+          "banner_gradient_top_color": "#000000",
+          "banner_gradient_top_opacity_pct": 0.0,
+          "banner_gradient_bottom_color": "#000000",
+          "banner_gradient_bottom_opacity_pct": 80.0,
+          "center_mode": "bird",
+          "auto_crop_by_bird": true,
+          "max_long_edge": 0,
+          "crop_padding_top": 64,
+          "crop_padding_bottom": 64,
+          "crop_padding_left": 64,
+          "crop_padding_right": 64,
+          "crop_padding_fill": "#000000",
+          "fields": [
+            {
+              "name": "鸟种中文名 (bird_species_cn)",
+              "tag": "EXIF:Model",
+              "fallback": "",
+              "data_source": "auto",
+              "report_field": "",
+              "text_source": {
+                "type": "auto",
+                "key": "bird_species_cn"
+              },
+              "align_horizontal": "left",
+              "align_vertical": "bottom",
+              "x_offset_pct": 0.0,
+              "y_offset_pct": -2.0,
+              "color": "#ff9300",
+              "font_size": 64,
+              "font_type": "/System/Library/Fonts/Supplemental/Songti.ttc",
+              "style": "bold"
+            }
+          ]
+        },
+        "ratio": 1.0,
+        "center_mode": "bird",
+        "crop_padding_top": 64,
+        "crop_padding_bottom": 64,
+        "crop_padding_left": 64,
+        "crop_padding_right": 64,
+        "crop_padding_fill": "#000000",
+        "crop_box": null,
+        "custom_center_x": null,
+        "custom_center_y": null
+      }
+    },
+    {
+      "path": {
+        "absolute_path": "/Users/oscar/Pictures/黑脸琵鹭/DSC09832-DxO_DeepPRIME 3.jpg",
+        "relative_path": "../../../../黑脸琵鹭/DSC09832-DxO_DeepPRIME 3.jpg"
+      },
+      "sequence": 43,
+      "render_settings": {
+        "template_name": "鸟体中心-GIF",
+        "template_payload": {
+          "name": "鸟体中心-GIF",
+          "ratio": 1.0,
+          "banner_color": "#ffffff",
+          "draw_banner_background": false,
+          "banner_background_style": "gradient_bottom",
+          "banner_gradient_height_pct": 25.0,
+          "banner_gradient_top_color": "#000000",
+          "banner_gradient_top_opacity_pct": 0.0,
+          "banner_gradient_bottom_color": "#000000",
+          "banner_gradient_bottom_opacity_pct": 80.0,
+          "center_mode": "bird",
+          "auto_crop_by_bird": true,
+          "max_long_edge": 0,
+          "crop_padding_top": 64,
+          "crop_padding_bottom": 64,
+          "crop_padding_left": 64,
+          "crop_padding_right": 64,
+          "crop_padding_fill": "#000000",
+          "fields": [
+            {
+              "name": "鸟种中文名 (bird_species_cn)",
+              "tag": "EXIF:Model",
+              "fallback": "",
+              "data_source": "auto",
+              "report_field": "",
+              "text_source": {
+                "type": "auto",
+                "key": "bird_species_cn"
+              },
+              "align_horizontal": "left",
+              "align_vertical": "bottom",
+              "x_offset_pct": 0.0,
+              "y_offset_pct": -2.0,
+              "color": "#ff9300",
+              "font_size": 64,
+              "font_type": "/System/Library/Fonts/Supplemental/Songti.ttc",
+              "style": "bold"
+            }
+          ]
+        },
+        "ratio": 1.0,
+        "center_mode": "bird",
+        "crop_padding_top": 64,
+        "crop_padding_bottom": 64,
+        "crop_padding_left": 64,
+        "crop_padding_right": 64,
+        "crop_padding_fill": "#000000",
+        "crop_box": null,
+        "custom_center_x": null,
+        "custom_center_y": null
+      }
+    },
+    {
+      "path": {
+        "absolute_path": "/Users/oscar/Pictures/黑脸琵鹭/DSC09833-DxO_DeepPRIME 3.jpg",
+        "relative_path": "../../../../黑脸琵鹭/DSC09833-DxO_DeepPRIME 3.jpg"
+      },
+      "sequence": 44,
+      "render_settings": {
+        "template_name": "鸟体中心-GIF",
+        "template_payload": {
+          "name": "鸟体中心-GIF",
+          "ratio": 1.0,
+          "banner_color": "#ffffff",
+          "draw_banner_background": false,
+          "banner_background_style": "gradient_bottom",
+          "banner_gradient_height_pct": 25.0,
+          "banner_gradient_top_color": "#000000",
+          "banner_gradient_top_opacity_pct": 0.0,
+          "banner_gradient_bottom_color": "#000000",
+          "banner_gradient_bottom_opacity_pct": 80.0,
+          "center_mode": "bird",
+          "auto_crop_by_bird": true,
+          "max_long_edge": 0,
+          "crop_padding_top": 64,
+          "crop_padding_bottom": 64,
+          "crop_padding_left": 64,
+          "crop_padding_right": 64,
+          "crop_padding_fill": "#000000",
+          "fields": [
+            {
+              "name": "鸟种中文名 (bird_species_cn)",
+              "tag": "EXIF:Model",
+              "fallback": "",
+              "data_source": "auto",
+              "report_field": "",
+              "text_source": {
+                "type": "auto",
+                "key": "bird_species_cn"
+              },
+              "align_horizontal": "left",
+              "align_vertical": "bottom",
+              "x_offset_pct": 0.0,
+              "y_offset_pct": -2.0,
+              "color": "#ff9300",
+              "font_size": 64,
+              "font_type": "/System/Library/Fonts/Supplemental/Songti.ttc",
+              "style": "bold"
+            }
+          ]
+        },
+        "ratio": 1.0,
+        "center_mode": "bird",
+        "crop_padding_top": 64,
+        "crop_padding_bottom": 64,
+        "crop_padding_left": 64,
+        "crop_padding_right": 64,
+        "crop_padding_fill": "#000000",
+        "crop_box": null,
+        "custom_center_x": null,
+        "custom_center_y": null
+      }
+    },
+    {
+      "path": {
+        "absolute_path": "/Users/oscar/Pictures/黑脸琵鹭/DSC09834-DxO_DeepPRIME 3.jpg",
+        "relative_path": "../../../../黑脸琵鹭/DSC09834-DxO_DeepPRIME 3.jpg"
+      },
+      "sequence": 45,
+      "render_settings": {
+        "template_name": "鸟体中心-GIF",
+        "template_payload": {
+          "name": "鸟体中心-GIF",
+          "ratio": 1.0,
+          "banner_color": "#ffffff",
+          "draw_banner_background": false,
+          "banner_background_style": "gradient_bottom",
+          "banner_gradient_height_pct": 25.0,
+          "banner_gradient_top_color": "#000000",
+          "banner_gradient_top_opacity_pct": 0.0,
+          "banner_gradient_bottom_color": "#000000",
+          "banner_gradient_bottom_opacity_pct": 80.0,
+          "center_mode": "bird",
+          "auto_crop_by_bird": true,
+          "max_long_edge": 0,
+          "crop_padding_top": 64,
+          "crop_padding_bottom": 64,
+          "crop_padding_left": 64,
+          "crop_padding_right": 64,
+          "crop_padding_fill": "#000000",
+          "fields": [
+            {
+              "name": "鸟种中文名 (bird_species_cn)",
+              "tag": "EXIF:Model",
+              "fallback": "",
+              "data_source": "auto",
+              "report_field": "",
+              "text_source": {
+                "type": "auto",
+                "key": "bird_species_cn"
+              },
+              "align_horizontal": "left",
+              "align_vertical": "bottom",
+              "x_offset_pct": 0.0,
+              "y_offset_pct": -2.0,
+              "color": "#ff9300",
+              "font_size": 64,
+              "font_type": "/System/Library/Fonts/Supplemental/Songti.ttc",
+              "style": "bold"
+            }
+          ]
+        },
+        "ratio": 1.0,
+        "center_mode": "bird",
+        "crop_padding_top": 64,
+        "crop_padding_bottom": 64,
+        "crop_padding_left": 64,
+        "crop_padding_right": 64,
+        "crop_padding_fill": "#000000",
+        "crop_box": null,
+        "custom_center_x": null,
+        "custom_center_y": null
+      }
+    },
+    {
+      "path": {
+        "absolute_path": "/Users/oscar/Pictures/黑脸琵鹭/DSC09835-DxO_DeepPRIME 3.jpg",
+        "relative_path": "../../../../黑脸琵鹭/DSC09835-DxO_DeepPRIME 3.jpg"
+      },
+      "sequence": 46,
+      "render_settings": {
+        "template_name": "鸟体中心-GIF",
+        "template_payload": {
+          "name": "鸟体中心-GIF",
+          "ratio": 1.0,
+          "banner_color": "#ffffff",
+          "draw_banner_background": false,
+          "banner_background_style": "gradient_bottom",
+          "banner_gradient_height_pct": 25.0,
+          "banner_gradient_top_color": "#000000",
+          "banner_gradient_top_opacity_pct": 0.0,
+          "banner_gradient_bottom_color": "#000000",
+          "banner_gradient_bottom_opacity_pct": 80.0,
+          "center_mode": "bird",
+          "auto_crop_by_bird": true,
+          "max_long_edge": 0,
+          "crop_padding_top": 64,
+          "crop_padding_bottom": 64,
+          "crop_padding_left": 64,
+          "crop_padding_right": 64,
+          "crop_padding_fill": "#000000",
+          "fields": [
+            {
+              "name": "鸟种中文名 (bird_species_cn)",
+              "tag": "EXIF:Model",
+              "fallback": "",
+              "data_source": "auto",
+              "report_field": "",
+              "text_source": {
+                "type": "auto",
+                "key": "bird_species_cn"
+              },
+              "align_horizontal": "left",
+              "align_vertical": "bottom",
+              "x_offset_pct": 0.0,
+              "y_offset_pct": -2.0,
+              "color": "#ff9300",
+              "font_size": 64,
+              "font_type": "/System/Library/Fonts/Supplemental/Songti.ttc",
+              "style": "bold"
+            }
+          ]
+        },
+        "ratio": 1.0,
+        "center_mode": "bird",
+        "crop_padding_top": 64,
+        "crop_padding_bottom": 64,
+        "crop_padding_left": 64,
+        "crop_padding_right": 64,
+        "crop_padding_fill": "#000000",
+        "crop_box": null,
+        "custom_center_x": null,
+        "custom_center_y": null
+      }
+    },
+    {
+      "path": {
+        "absolute_path": "/Users/oscar/Pictures/黑脸琵鹭/DSC09836-DxO_DeepPRIME 3.jpg",
+        "relative_path": "../../../../黑脸琵鹭/DSC09836-DxO_DeepPRIME 3.jpg"
+      },
+      "sequence": 47,
+      "render_settings": {
+        "template_name": "鸟体中心-GIF",
+        "template_payload": {
+          "name": "鸟体中心-GIF",
+          "ratio": 1.0,
+          "banner_color": "#ffffff",
+          "draw_banner_background": false,
+          "banner_background_style": "gradient_bottom",
+          "banner_gradient_height_pct": 25.0,
+          "banner_gradient_top_color": "#000000",
+          "banner_gradient_top_opacity_pct": 0.0,
+          "banner_gradient_bottom_color": "#000000",
+          "banner_gradient_bottom_opacity_pct": 80.0,
+          "center_mode": "bird",
+          "auto_crop_by_bird": true,
+          "max_long_edge": 0,
+          "crop_padding_top": 64,
+          "crop_padding_bottom": 64,
+          "crop_padding_left": 64,
+          "crop_padding_right": 64,
+          "crop_padding_fill": "#000000",
+          "fields": [
+            {
+              "name": "鸟种中文名 (bird_species_cn)",
+              "tag": "EXIF:Model",
+              "fallback": "",
+              "data_source": "auto",
+              "report_field": "",
+              "text_source": {
+                "type": "auto",
+                "key": "bird_species_cn"
+              },
+              "align_horizontal": "left",
+              "align_vertical": "bottom",
+              "x_offset_pct": 0.0,
+              "y_offset_pct": -2.0,
+              "color": "#ff9300",
+              "font_size": 64,
+              "font_type": "/System/Library/Fonts/Supplemental/Songti.ttc",
+              "style": "bold"
+            }
+          ]
+        },
+        "ratio": 1.0,
+        "center_mode": "bird",
+        "crop_padding_top": 64,
+        "crop_padding_bottom": 64,
+        "crop_padding_left": 64,
+        "crop_padding_right": 64,
+        "crop_padding_fill": "#000000",
+        "crop_box": null,
+        "custom_center_x": null,
+        "custom_center_y": null
+      }
+    },
+    {
+      "path": {
+        "absolute_path": "/Users/oscar/Pictures/黑脸琵鹭/DSC09837-DxO_DeepPRIME 3.jpg",
+        "relative_path": "../../../../黑脸琵鹭/DSC09837-DxO_DeepPRIME 3.jpg"
+      },
+      "sequence": 48,
+      "render_settings": {
+        "template_name": "鸟体中心-GIF",
+        "template_payload": {
+          "name": "鸟体中心-GIF",
+          "ratio": 1.0,
+          "banner_color": "#ffffff",
+          "draw_banner_background": false,
+          "banner_background_style": "gradient_bottom",
+          "banner_gradient_height_pct": 25.0,
+          "banner_gradient_top_color": "#000000",
+          "banner_gradient_top_opacity_pct": 0.0,
+          "banner_gradient_bottom_color": "#000000",
+          "banner_gradient_bottom_opacity_pct": 80.0,
+          "center_mode": "bird",
+          "auto_crop_by_bird": true,
+          "max_long_edge": 0,
+          "crop_padding_top": 64,
+          "crop_padding_bottom": 64,
+          "crop_padding_left": 64,
+          "crop_padding_right": 64,
+          "crop_padding_fill": "#000000",
+          "fields": [
+            {
+              "name": "鸟种中文名 (bird_species_cn)",
+              "tag": "EXIF:Model",
+              "fallback": "",
+              "data_source": "auto",
+              "report_field": "",
+              "text_source": {
+                "type": "auto",
+                "key": "bird_species_cn"
+              },
+              "align_horizontal": "left",
+              "align_vertical": "bottom",
+              "x_offset_pct": 0.0,
+              "y_offset_pct": -2.0,
+              "color": "#ff9300",
+              "font_size": 64,
+              "font_type": "/System/Library/Fonts/Supplemental/Songti.ttc",
+              "style": "bold"
+            }
+          ]
+        },
+        "ratio": 1.0,
+        "center_mode": "bird",
+        "crop_padding_top": 64,
+        "crop_padding_bottom": 64,
+        "crop_padding_left": 64,
+        "crop_padding_right": 64,
+        "crop_padding_fill": "#000000",
+        "crop_box": null,
+        "custom_center_x": null,
+        "custom_center_y": null
+      }
+    },
+    {
+      "path": {
+        "absolute_path": "/Users/oscar/Pictures/黑脸琵鹭/DSC09838-DxO_DeepPRIME 3.jpg",
+        "relative_path": "../../../../黑脸琵鹭/DSC09838-DxO_DeepPRIME 3.jpg"
+      },
+      "sequence": 49,
+      "render_settings": {
+        "template_name": "鸟体中心-GIF",
+        "template_payload": {
+          "name": "鸟体中心-GIF",
+          "ratio": 1.0,
+          "banner_color": "#ffffff",
+          "draw_banner_background": false,
+          "banner_background_style": "gradient_bottom",
+          "banner_gradient_height_pct": 25.0,
+          "banner_gradient_top_color": "#000000",
+          "banner_gradient_top_opacity_pct": 0.0,
+          "banner_gradient_bottom_color": "#000000",
+          "banner_gradient_bottom_opacity_pct": 80.0,
+          "center_mode": "bird",
+          "auto_crop_by_bird": true,
+          "max_long_edge": 0,
+          "crop_padding_top": 64,
+          "crop_padding_bottom": 64,
+          "crop_padding_left": 64,
+          "crop_padding_right": 64,
+          "crop_padding_fill": "#000000",
+          "fields": [
+            {
+              "name": "鸟种中文名 (bird_species_cn)",
+              "tag": "EXIF:Model",
+              "fallback": "",
+              "data_source": "auto",
+              "report_field": "",
+              "text_source": {
+                "type": "auto",
+                "key": "bird_species_cn"
+              },
+              "align_horizontal": "left",
+              "align_vertical": "bottom",
+              "x_offset_pct": 0.0,
+              "y_offset_pct": -2.0,
+              "color": "#ff9300",
+              "font_size": 64,
+              "font_type": "/System/Library/Fonts/Supplemental/Songti.ttc",
+              "style": "bold"
+            }
+          ]
+        },
+        "ratio": 1.0,
+        "center_mode": "bird",
+        "crop_padding_top": 64,
+        "crop_padding_bottom": 64,
+        "crop_padding_left": 64,
+        "crop_padding_right": 64,
+        "crop_padding_fill": "#000000",
+        "crop_box": null,
+        "custom_center_x": null,
+        "custom_center_y": null
+      }
+    },
+    {
+      "path": {
+        "absolute_path": "/Users/oscar/Pictures/黑脸琵鹭/DSC09839-DxO_DeepPRIME 3.jpg",
+        "relative_path": "../../../../黑脸琵鹭/DSC09839-DxO_DeepPRIME 3.jpg"
+      },
+      "sequence": 50,
+      "render_settings": {
+        "template_name": "鸟体中心-GIF",
+        "template_payload": {
+          "name": "鸟体中心-GIF",
+          "ratio": 1.0,
+          "banner_color": "#ffffff",
+          "draw_banner_background": false,
+          "banner_background_style": "gradient_bottom",
+          "banner_gradient_height_pct": 25.0,
+          "banner_gradient_top_color": "#000000",
+          "banner_gradient_top_opacity_pct": 0.0,
+          "banner_gradient_bottom_color": "#000000",
+          "banner_gradient_bottom_opacity_pct": 80.0,
+          "center_mode": "bird",
+          "auto_crop_by_bird": true,
+          "max_long_edge": 0,
+          "crop_padding_top": 64,
+          "crop_padding_bottom": 64,
+          "crop_padding_left": 64,
+          "crop_padding_right": 64,
+          "crop_padding_fill": "#000000",
+          "fields": [
+            {
+              "name": "鸟种中文名 (bird_species_cn)",
+              "tag": "EXIF:Model",
+              "fallback": "",
+              "data_source": "auto",
+              "report_field": "",
+              "text_source": {
+                "type": "auto",
+                "key": "bird_species_cn"
+              },
+              "align_horizontal": "left",
+              "align_vertical": "bottom",
+              "x_offset_pct": 0.0,
+              "y_offset_pct": -2.0,
+              "color": "#ff9300",
+              "font_size": 64,
+              "font_type": "/System/Library/Fonts/Supplemental/Songti.ttc",
+              "style": "bold"
+            }
+          ]
+        },
+        "ratio": 1.0,
+        "center_mode": "bird",
+        "crop_padding_top": 64,
+        "crop_padding_bottom": 64,
+        "crop_padding_left": 64,
+        "crop_padding_right": 64,
+        "crop_padding_fill": "#000000",
+        "crop_box": null,
+        "custom_center_x": null,
+        "custom_center_y": null
+      }
+    },
+    {
+      "path": {
+        "absolute_path": "/Users/oscar/Pictures/黑脸琵鹭/DSC09840-DxO_DeepPRIME 3.jpg",
+        "relative_path": "../../../../黑脸琵鹭/DSC09840-DxO_DeepPRIME 3.jpg"
+      },
+      "sequence": 51,
+      "render_settings": {
+        "template_name": "鸟体中心-GIF",
+        "template_payload": {
+          "name": "鸟体中心-GIF",
+          "ratio": 1.0,
+          "banner_color": "#ffffff",
+          "draw_banner_background": false,
+          "banner_background_style": "gradient_bottom",
+          "banner_gradient_height_pct": 25.0,
+          "banner_gradient_top_color": "#000000",
+          "banner_gradient_top_opacity_pct": 0.0,
+          "banner_gradient_bottom_color": "#000000",
+          "banner_gradient_bottom_opacity_pct": 80.0,
+          "center_mode": "bird",
+          "auto_crop_by_bird": true,
+          "max_long_edge": 0,
+          "crop_padding_top": 64,
+          "crop_padding_bottom": 64,
+          "crop_padding_left": 64,
+          "crop_padding_right": 64,
+          "crop_padding_fill": "#000000",
+          "fields": [
+            {
+              "name": "鸟种中文名 (bird_species_cn)",
+              "tag": "EXIF:Model",
+              "fallback": "",
+              "data_source": "auto",
+              "report_field": "",
+              "text_source": {
+                "type": "auto",
+                "key": "bird_species_cn"
+              },
+              "align_horizontal": "left",
+              "align_vertical": "bottom",
+              "x_offset_pct": 0.0,
+              "y_offset_pct": -2.0,
+              "color": "#ff9300",
+              "font_size": 64,
+              "font_type": "/System/Library/Fonts/Supplemental/Songti.ttc",
+              "style": "bold"
+            }
+          ]
+        },
+        "ratio": 1.0,
+        "center_mode": "bird",
+        "crop_padding_top": 64,
+        "crop_padding_bottom": 64,
+        "crop_padding_left": 64,
+        "crop_padding_right": 64,
+        "crop_padding_fill": "#000000",
+        "crop_box": null,
+        "custom_center_x": null,
+        "custom_center_y": null
+      }
+    },
+    {
+      "path": {
+        "absolute_path": "/Users/oscar/Pictures/黑脸琵鹭/DSC09841-DxO_DeepPRIME 3.jpg",
+        "relative_path": "../../../../黑脸琵鹭/DSC09841-DxO_DeepPRIME 3.jpg"
+      },
+      "sequence": 52,
+      "render_settings": {
+        "template_name": "鸟体中心-GIF",
+        "template_payload": {
+          "name": "鸟体中心-GIF",
+          "ratio": 1.0,
+          "banner_color": "#ffffff",
+          "draw_banner_background": false,
+          "banner_background_style": "gradient_bottom",
+          "banner_gradient_height_pct": 25.0,
+          "banner_gradient_top_color": "#000000",
+          "banner_gradient_top_opacity_pct": 0.0,
+          "banner_gradient_bottom_color": "#000000",
+          "banner_gradient_bottom_opacity_pct": 80.0,
+          "center_mode": "bird",
+          "auto_crop_by_bird": true,
+          "max_long_edge": 0,
+          "crop_padding_top": 64,
+          "crop_padding_bottom": 64,
+          "crop_padding_left": 64,
+          "crop_padding_right": 64,
+          "crop_padding_fill": "#000000",
+          "fields": [
+            {
+              "name": "鸟种中文名 (bird_species_cn)",
+              "tag": "EXIF:Model",
+              "fallback": "",
+              "data_source": "auto",
+              "report_field": "",
+              "text_source": {
+                "type": "auto",
+                "key": "bird_species_cn"
+              },
+              "align_horizontal": "left",
+              "align_vertical": "bottom",
+              "x_offset_pct": 0.0,
+              "y_offset_pct": -2.0,
+              "color": "#ff9300",
+              "font_size": 64,
+              "font_type": "/System/Library/Fonts/Supplemental/Songti.ttc",
+              "style": "bold"
+            }
+          ]
+        },
+        "ratio": 1.0,
+        "center_mode": "bird",
+        "crop_padding_top": 64,
+        "crop_padding_bottom": 64,
+        "crop_padding_left": 64,
+        "crop_padding_right": 64,
+        "crop_padding_fill": "#000000",
+        "crop_box": null,
+        "custom_center_x": null,
+        "custom_center_y": null
+      }
+    },
+    {
+      "path": {
+        "absolute_path": "/Users/oscar/Pictures/黑脸琵鹭/DSC09842-DxO_DeepPRIME 3.jpg",
+        "relative_path": "../../../../黑脸琵鹭/DSC09842-DxO_DeepPRIME 3.jpg"
+      },
+      "sequence": 53,
+      "render_settings": {
+        "template_name": "鸟体中心-GIF",
+        "template_payload": {
+          "name": "鸟体中心-GIF",
+          "ratio": 1.0,
+          "banner_color": "#ffffff",
+          "draw_banner_background": false,
+          "banner_background_style": "gradient_bottom",
+          "banner_gradient_height_pct": 25.0,
+          "banner_gradient_top_color": "#000000",
+          "banner_gradient_top_opacity_pct": 0.0,
+          "banner_gradient_bottom_color": "#000000",
+          "banner_gradient_bottom_opacity_pct": 80.0,
+          "center_mode": "bird",
+          "auto_crop_by_bird": true,
+          "max_long_edge": 0,
+          "crop_padding_top": 64,
+          "crop_padding_bottom": 64,
+          "crop_padding_left": 64,
+          "crop_padding_right": 64,
+          "crop_padding_fill": "#000000",
+          "fields": [
+            {
+              "name": "鸟种中文名 (bird_species_cn)",
+              "tag": "EXIF:Model",
+              "fallback": "",
+              "data_source": "auto",
+              "report_field": "",
+              "text_source": {
+                "type": "auto",
+                "key": "bird_species_cn"
+              },
+              "align_horizontal": "left",
+              "align_vertical": "bottom",
+              "x_offset_pct": 0.0,
+              "y_offset_pct": -2.0,
+              "color": "#ff9300",
+              "font_size": 64,
+              "font_type": "/System/Library/Fonts/Supplemental/Songti.ttc",
+              "style": "bold"
+            }
+          ]
+        },
+        "ratio": 1.0,
+        "center_mode": "bird",
+        "crop_padding_top": 64,
+        "crop_padding_bottom": 64,
+        "crop_padding_left": 64,
+        "crop_padding_right": 64,
+        "crop_padding_fill": "#000000",
+        "crop_box": null,
+        "custom_center_x": null,
+        "custom_center_y": null
+      }
+    },
+    {
+      "path": {
+        "absolute_path": "/Users/oscar/Pictures/黑脸琵鹭/DSC09843-DxO_DeepPRIME 3.jpg",
+        "relative_path": "../../../../黑脸琵鹭/DSC09843-DxO_DeepPRIME 3.jpg"
+      },
+      "sequence": 54,
+      "render_settings": {
+        "template_name": "鸟体中心-GIF",
+        "template_payload": {
+          "name": "鸟体中心-GIF",
+          "ratio": 1.0,
+          "banner_color": "#ffffff",
+          "draw_banner_background": false,
+          "banner_background_style": "gradient_bottom",
+          "banner_gradient_height_pct": 25.0,
+          "banner_gradient_top_color": "#000000",
+          "banner_gradient_top_opacity_pct": 0.0,
+          "banner_gradient_bottom_color": "#000000",
+          "banner_gradient_bottom_opacity_pct": 80.0,
+          "center_mode": "bird",
+          "auto_crop_by_bird": true,
+          "max_long_edge": 0,
+          "crop_padding_top": 64,
+          "crop_padding_bottom": 64,
+          "crop_padding_left": 64,
+          "crop_padding_right": 64,
+          "crop_padding_fill": "#000000",
+          "fields": [
+            {
+              "name": "鸟种中文名 (bird_species_cn)",
+              "tag": "EXIF:Model",
+              "fallback": "",
+              "data_source": "auto",
+              "report_field": "",
+              "text_source": {
+                "type": "auto",
+                "key": "bird_species_cn"
+              },
+              "align_horizontal": "left",
+              "align_vertical": "bottom",
+              "x_offset_pct": 0.0,
+              "y_offset_pct": -2.0,
+              "color": "#ff9300",
+              "font_size": 64,
+              "font_type": "/System/Library/Fonts/Supplemental/Songti.ttc",
+              "style": "bold"
+            }
+          ]
+        },
+        "ratio": 1.0,
+        "center_mode": "bird",
+        "crop_padding_top": 64,
+        "crop_padding_bottom": 64,
+        "crop_padding_left": 64,
+        "crop_padding_right": 64,
+        "crop_padding_fill": "#000000",
+        "crop_box": null,
+        "custom_center_x": null,
+        "custom_center_y": null
+      }
+    },
+    {
+      "path": {
+        "absolute_path": "/Users/oscar/Pictures/黑脸琵鹭/DSC09844-DxO_DeepPRIME 3.jpg",
+        "relative_path": "../../../../黑脸琵鹭/DSC09844-DxO_DeepPRIME 3.jpg"
+      },
+      "sequence": 55,
+      "render_settings": {
+        "template_name": "鸟体中心-GIF",
+        "template_payload": {
+          "name": "鸟体中心-GIF",
+          "ratio": 1.0,
+          "banner_color": "#ffffff",
+          "draw_banner_background": false,
+          "banner_background_style": "gradient_bottom",
+          "banner_gradient_height_pct": 25.0,
+          "banner_gradient_top_color": "#000000",
+          "banner_gradient_top_opacity_pct": 0.0,
+          "banner_gradient_bottom_color": "#000000",
+          "banner_gradient_bottom_opacity_pct": 80.0,
+          "center_mode": "bird",
+          "auto_crop_by_bird": true,
+          "max_long_edge": 0,
+          "crop_padding_top": 64,
+          "crop_padding_bottom": 64,
+          "crop_padding_left": 64,
+          "crop_padding_right": 64,
+          "crop_padding_fill": "#000000",
+          "fields": [
+            {
+              "name": "鸟种中文名 (bird_species_cn)",
+              "tag": "EXIF:Model",
+              "fallback": "",
+              "data_source": "auto",
+              "report_field": "",
+              "text_source": {
+                "type": "auto",
+                "key": "bird_species_cn"
+              },
+              "align_horizontal": "left",
+              "align_vertical": "bottom",
+              "x_offset_pct": 0.0,
+              "y_offset_pct": -2.0,
+              "color": "#ff9300",
+              "font_size": 64,
+              "font_type": "/System/Library/Fonts/Supplemental/Songti.ttc",
+              "style": "bold"
+            }
+          ]
+        },
+        "ratio": 1.0,
+        "center_mode": "bird",
+        "crop_padding_top": 64,
+        "crop_padding_bottom": 64,
+        "crop_padding_left": 64,
+        "crop_padding_right": 64,
+        "crop_padding_fill": "#000000",
+        "crop_box": null,
+        "custom_center_x": null,
+        "custom_center_y": null
+      }
+    },
+    {
+      "path": {
+        "absolute_path": "/Users/oscar/Pictures/黑脸琵鹭/DSC09845-DxO_DeepPRIME 3.jpg",
+        "relative_path": "../../../../黑脸琵鹭/DSC09845-DxO_DeepPRIME 3.jpg"
+      },
+      "sequence": 56,
+      "render_settings": {
+        "template_name": "鸟体中心-GIF",
+        "template_payload": {
+          "name": "鸟体中心-GIF",
+          "ratio": 1.0,
+          "banner_color": "#ffffff",
+          "draw_banner_background": false,
+          "banner_background_style": "gradient_bottom",
+          "banner_gradient_height_pct": 25.0,
+          "banner_gradient_top_color": "#000000",
+          "banner_gradient_top_opacity_pct": 0.0,
+          "banner_gradient_bottom_color": "#000000",
+          "banner_gradient_bottom_opacity_pct": 80.0,
+          "center_mode": "bird",
+          "auto_crop_by_bird": true,
+          "max_long_edge": 0,
+          "crop_padding_top": 64,
+          "crop_padding_bottom": 64,
+          "crop_padding_left": 64,
+          "crop_padding_right": 64,
+          "crop_padding_fill": "#000000",
+          "fields": [
+            {
+              "name": "鸟种中文名 (bird_species_cn)",
+              "tag": "EXIF:Model",
+              "fallback": "",
+              "data_source": "auto",
+              "report_field": "",
+              "text_source": {
+                "type": "auto",
+                "key": "bird_species_cn"
+              },
+              "align_horizontal": "left",
+              "align_vertical": "bottom",
+              "x_offset_pct": 0.0,
+              "y_offset_pct": -2.0,
+              "color": "#ff9300",
+              "font_size": 64,
+              "font_type": "/System/Library/Fonts/Supplemental/Songti.ttc",
+              "style": "bold"
+            }
+          ]
+        },
+        "ratio": 1.0,
+        "center_mode": "bird",
+        "crop_padding_top": 64,
+        "crop_padding_bottom": 64,
+        "crop_padding_left": 64,
+        "crop_padding_right": 64,
+        "crop_padding_fill": "#000000",
+        "crop_box": null,
+        "custom_center_x": null,
+        "custom_center_y": null
+      }
+    }
+  ],
+  "selection": {
+    "current_photo": {
+      "absolute_path": "/Users/oscar/Pictures/黑脸琵鹭/DSC09797-DxO_DeepPRIME 3.jpg",
+      "relative_path": "../../../../黑脸琵鹭/DSC09797-DxO_DeepPRIME 3.jpg"
+    },
+    "selected_photos": [
+      {
+        "absolute_path": "/Users/oscar/Pictures/黑脸琵鹭/DSC09797-DxO_DeepPRIME 3.jpg",
+        "relative_path": "../../../../黑脸琵鹭/DSC09797-DxO_DeepPRIME 3.jpg"
+      }
+    ],
+    "sort_column": 0,
+    "sort_order": "asc"
+  },
+  "editor_state": {
+    "current_render_settings": {
+      "template_name": "鸟体中心-GIF",
+      "template_payload": {
+        "name": "鸟体中心-GIF",
+        "ratio": 1.0,
+        "banner_color": "#ffffff",
+        "draw_banner_background": false,
+        "banner_background_style": "gradient_bottom",
+        "banner_gradient_height_pct": 25.0,
+        "banner_gradient_top_color": "#000000",
+        "banner_gradient_top_opacity_pct": 0.0,
+        "banner_gradient_bottom_color": "#000000",
+        "banner_gradient_bottom_opacity_pct": 80.0,
+        "center_mode": "bird",
+        "auto_crop_by_bird": true,
+        "max_long_edge": 0,
+        "crop_padding_top": 64,
+        "crop_padding_bottom": 64,
+        "crop_padding_left": 64,
+        "crop_padding_right": 64,
+        "crop_padding_fill": "#000000",
+        "fields": [
+          {
+            "name": "鸟种中文名 (bird_species_cn)",
+            "tag": "EXIF:Model",
+            "fallback": "",
+            "data_source": "auto",
+            "report_field": "",
+            "text_source": {
+              "type": "auto",
+              "key": "bird_species_cn"
+            },
+            "align_horizontal": "left",
+            "align_vertical": "bottom",
+            "x_offset_pct": 0.0,
+            "y_offset_pct": -2.0,
+            "color": "#ff9300",
+            "font_size": 64,
+            "font_type": "/System/Library/Fonts/Supplemental/Songti.ttc",
+            "style": "bold"
+          }
+        ]
+      },
+      "draw_banner": true,
+      "draw_text": true,
+      "draw_focus": true,
+      "stage_template_crop_enabled": true,
+      "stage_resize_limit_enabled": false,
+      "stage_template_overlay_enabled": false,
+      "stage_focus_overlay_enabled": true,
+      "pipeline_stage_order": [
+        "template_crop",
+        "resize_limit",
+        "template_overlay",
+        "focus_overlay"
+      ],
+      "selected_export_stage_id": "export_gif",
+      "uniform_auto_crop": true,
+      "auto_crop_stabilization": 100,
+      "ratio": 1.0,
+      "center_mode": "bird",
+      "max_long_edge": 512,
+      "crop_padding_top": 64,
+      "crop_padding_bottom": 64,
+      "crop_padding_left": 64,
+      "crop_padding_right": 64,
+      "crop_padding_fill": "#000000",
+      "crop_box": null,
+      "custom_center_x": null,
+      "custom_center_y": null
+    },
+    "global_export_settings": {
+      "draw_banner": true,
+      "draw_text": true,
+      "draw_focus": true,
+      "pipeline_stage_order": [
+        "template_crop",
+        "resize_limit",
+        "template_overlay",
+        "focus_overlay"
+      ],
+      "pipeline_stage_enabled": {
+        "template_crop": true,
+        "resize_limit": false,
+        "template_overlay": false,
+        "focus_overlay": true
+      },
+      "stage_template_crop_enabled": true,
+      "stage_resize_limit_enabled": false,
+      "stage_template_overlay_enabled": false,
+      "stage_focus_overlay_enabled": true,
+      "max_long_edge": 512,
+      "uniform_auto_crop": true,
+      "auto_crop_stabilization": 100
+    },
+    "image_export": {
+      "output_format": "png",
+      "selected_export_stage_id": "export_gif",
+      "pipeline_stage_order": [
+        "template_crop",
+        "resize_limit",
+        "template_overlay",
+        "focus_overlay"
+      ],
+      "pipeline_stage_enabled": {
+        "template_crop": true,
+        "resize_limit": false,
+        "template_overlay": false,
+        "focus_overlay": true
+      },
+      "gif_fps": 10.0,
+      "gif_loop": 0,
+      "gif_keep_frame_images": true,
+      "gif_scale_factors": [
+        0.5,
+        0.125
+      ],
+      "last_image_output_dir": {
+        "absolute_path": "/Users/oscar/Pictures/2026-3-11-快门测试",
+        "relative_path": "../../../../2026-3-11-快门测试"
+      },
+      "last_batch_output_dir": {
+        "absolute_path": "/Users/oscar/Pictures/gif/untitled folder 11",
+        "relative_path": "../../../../gif/untitled folder 11"
+      }
+    },
+    "video_export": {
+      "container": "mp4",
+      "codec": "h264",
+      "fps_text": "30",
+      "frame_size_mode": "preset",
+      "frame_size_width": 4680,
+      "frame_size_height": 2160,
+      "orientation": "landscape",
+      "custom_width": 4680,
+      "custom_height": 2160,
+      "preset": "slow",
+      "crf": 20,
+      "preserve_temp_files": true,
+      "last_video_output_dir": {
+        "absolute_path": "/Users/oscar/Pictures/gif/untitled folder 4",
+        "relative_path": "../../../../gif/untitled folder 4"
+      }
+    },
+    "preview": {
+      "show_crop_effect": true,
+      "crop_edit_mode": false,
+      "crop_effect_alpha": 160,
+      "show_focus_box": true,
+      "show_bird_box": true,
+      "composition_grid_mode": "none",
+      "composition_grid_line_width": 1,
+      "preview_scale_percent": 14.328963491147704
+    }
+  },
+  "app": "SuperBirdStamp",
+  "workspace_version": 1,
+  "saved_at": "2026-06-13T09:06:17.200251+08:00"
+}
