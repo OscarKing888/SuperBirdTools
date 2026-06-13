@@ -1,10 +1,8 @@
-import math
 from pathlib import Path
 
 from PIL import Image
 
 from birdstamp.image_pipeline import ImageProcContext, ImageProcExportStage, ImageProcPipeline, ImageProcStage
-from birdstamp.gui import editor_core
 from birdstamp.gui.editor_core import transform_source_box_after_crop_padding
 from birdstamp.video_export import (
     PIPELINE_STAGE_ORDER_KEY,
@@ -14,17 +12,6 @@ from birdstamp.video_export import (
     normalize_pipeline_stage_order,
     render_video_frame,
 )
-
-
-def _raw_embedded_focus_metadata(source_path: Path) -> dict[str, object]:
-    return {
-        "SourceFile": str(source_path),
-        "Make": "SONY",
-        "Model": "ILCE-1M2",
-        "ExifImageWidth": 100,
-        "ExifImageHeight": 100,
-        "MakerNote Tag 0x2027": "100 100 80 80 20 20",
-    }
 
 
 class _AppendStage(ImageProcStage):
@@ -146,42 +133,6 @@ def test_focus_box_transform_uses_padded_crop_coordinates() -> None:
     assert focus_box == (0.9, 0.4, 1.0, 0.6)
 
 
-def test_editor_core_focus_box_prefers_raw_embedded_metadata(monkeypatch, tmp_path: Path) -> None:
-    source_path = tmp_path / "source.ARW"
-    source_path.write_bytes(b"raw")
-    stale_metadata = {
-        "SourceFile": str(source_path),
-        "Make": "SONY",
-        "Model": "ILCE-1M2",
-        "ExifImageWidth": 100,
-        "ExifImageHeight": 100,
-        "FocusX": 10,
-        "FocusY": 10,
-        "FocusW": 20,
-        "FocusH": 20,
-    }
-    monkeypatch.setattr(
-        editor_core,
-        "read_raw_embedded_focus_metadata",
-        lambda _path: _raw_embedded_focus_metadata(source_path),
-    )
-    editor_core._read_raw_embedded_focus_metadata_cached.cache_clear()
-
-    try:
-        focus_box = editor_core.extract_focus_box_for_display(
-            stale_metadata,
-            100,
-            100,
-            source_path=source_path,
-        )
-
-        assert focus_box is not None
-        expected = (0.7, 0.7, 0.9, 0.9)
-        assert all(math.isclose(actual, target, abs_tol=1e-9) for actual, target in zip(focus_box, expected))
-    finally:
-        editor_core._read_raw_embedded_focus_metadata_cached.cache_clear()
-
-
 def test_focus_overlay_after_resize_keeps_padded_crop_position(tmp_path: Path) -> None:
     source_path = tmp_path / "source.jpg"
     source_image = Image.new("RGB", (100, 100), "#ffffff")
@@ -210,52 +161,3 @@ def test_focus_overlay_after_resize_keeps_padded_crop_position(tmp_path: Path) -
     finally:
         rendered.close()
         source_image.close()
-
-
-def test_render_video_frame_focus_overlay_prefers_raw_embedded_metadata(monkeypatch, tmp_path: Path) -> None:
-    source_path = tmp_path / "source.ARW"
-    source_path.write_bytes(b"raw")
-    source_image = Image.new("RGB", (100, 100), "#ffffff")
-    monkeypatch.setattr(
-        editor_core,
-        "read_raw_embedded_focus_metadata",
-        lambda _path: _raw_embedded_focus_metadata(source_path),
-    )
-    editor_core._read_raw_embedded_focus_metadata_cached.cache_clear()
-
-    job = VideoFrameJob(
-        path=source_path,
-        settings={
-            "draw_banner": False,
-            "draw_text": False,
-            "draw_focus": True,
-            "ratio": "no_crop",
-            "stage_template_overlay_enabled": False,
-            "stage_resize_limit_enabled": False,
-            PIPELINE_STAGE_ORDER_KEY: ["template_crop", "focus_overlay"],
-        },
-        raw_metadata={
-            "SourceFile": str(source_path),
-            "Make": "SONY",
-            "Model": "ILCE-1M2",
-            "ExifImageWidth": 100,
-            "ExifImageHeight": 100,
-            "FocusX": 10,
-            "FocusY": 10,
-            "FocusW": 20,
-            "FocusH": 20,
-        },
-        metadata_context={},
-        source_image=source_image,
-    )
-
-    rendered = None
-    try:
-        rendered = render_video_frame(job)
-        assert rendered.getpixel((75, 72)) == (46, 255, 85)
-        assert rendered.getpixel((10, 10)) == (255, 255, 255)
-    finally:
-        if rendered is not None:
-            rendered.close()
-        source_image.close()
-        editor_core._read_raw_embedded_focus_metadata_cached.cache_clear()

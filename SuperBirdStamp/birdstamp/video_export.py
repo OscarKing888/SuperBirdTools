@@ -85,6 +85,7 @@ _normalize_extended_unit_box = editor_core.normalize_extended_unit_box
 _box_center = editor_core.box_center
 _get_focus_point_for_display = editor_core.get_focus_point_for_display
 _resolve_focus_box_after_processing = editor_core.resolve_focus_box_after_processing
+_resolve_focus_camera_type_from_metadata = editor_core.resolve_focus_camera_type_from_metadata
 _detect_primary_bird_box = editor_core.detect_primary_bird_box
 _get_bird_detector_error_message = editor_core.get_bird_detector_error_message
 _CENTER_MODE_IMAGE = editor_core.CENTER_MODE_IMAGE
@@ -773,7 +774,7 @@ class FocusOverlayStage(ImageProcStage):
             crop_box=context.crop_box,
             outer_pad=context.outer_pad,
             apply_ratio_crop=True,
-            source_path=context.source_path,
+            camera_type=_resolve_focus_camera_type_from_metadata(raw_metadata),
         )
         if focus_box is not None:
             context.image = _draw_focus_box_overlay(context.image, focus_box)
@@ -905,11 +906,12 @@ def _resolve_crop_anchor_and_keep_box(
     bird_box_lock: threading.Lock | None = None,
     custom_center: tuple[float, float] | None = None,
 ) -> tuple[tuple[float, float], tuple[float, float, float, float] | None]:
+    focus_camera_type = _resolve_focus_camera_type_from_metadata(raw_metadata)
     focus_point = _get_focus_point_for_display(
         raw_metadata,
         image.width,
         image.height,
-        source_path=path,
+        camera_type=focus_camera_type,
     )
     mode = _normalize_center_mode(center_mode)
     if mode == _CENTER_MODE_CUSTOM and custom_center is not None:

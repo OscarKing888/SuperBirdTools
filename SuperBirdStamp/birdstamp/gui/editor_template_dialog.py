@@ -120,6 +120,7 @@ _compute_crop_plan = editor_core.compute_crop_plan
 _constrain_box_to_ratio = editor_core.constrain_box_to_ratio
 _compute_crop_output_size = editor_core.compute_crop_output_size
 _extract_focus_box_for_display = editor_core.extract_focus_box_for_display
+_resolve_focus_camera_type_from_metadata = editor_core.resolve_focus_camera_type_from_metadata
 _transform_source_box_after_crop_padding = editor_core.transform_source_box_after_crop_padding
 _detect_primary_bird_box = editor_core.detect_primary_bird_box
 _pad_image = editor_core.pad_image
@@ -978,13 +979,13 @@ class TemplateManagerDialog(QDialog):
         失败时降级为 Pillow EXIF。
         """
         from app_common.exif_io import extract_many, extract_pillow_metadata
-        from birdstamp.decoders.image_decoder import decode_preview_image_with_source as _decode_preview_image_with_source
+        from birdstamp.decoders.image_decoder import decode_image as _decode_image
 
         src = _default_placeholder_path()
         if src.exists():
             try:
                 self._preview_source_path = src
-                self._preview_source_image, _ = _decode_preview_image_with_source(src, decoder="auto")
+                self._preview_source_image = _decode_image(src, decoder="auto")
                 resolved = src.resolve(strict=False)
                 try:
                     raw_map = extract_many([resolved], mode="auto")
@@ -2435,6 +2436,7 @@ class TemplateManagerDialog(QDialog):
         image = source
         crop_box: tuple[float, float, float, float] | None = None
         outer_pad: tuple[int, int, int, int] = (0, 0, 0, 0)
+        focus_camera_type = _resolve_focus_camera_type_from_metadata(self._preview_raw_metadata)
 
         if self.current_payload:
             ratio = _parse_ratio_value(self.current_payload.get("ratio"))
@@ -2468,9 +2470,9 @@ class TemplateManagerDialog(QDialog):
             crop_box, outer_pad = _compute_crop_plan(
                 source,
                 self._preview_raw_metadata,
-                source_path=self._preview_source_path,
                 ratio=ratio,
                 center_mode=center_mode,
+                camera_type=focus_camera_type,
                 inner_top=inner_top,
                 inner_bottom=inner_bottom,
                 inner_left=inner_left,
@@ -2508,7 +2510,7 @@ class TemplateManagerDialog(QDialog):
                 self._preview_raw_metadata,
                 source_width,
                 source_height,
-                source_path=self._preview_source_path,
+                camera_type=focus_camera_type,
             ),
             crop_box=None,
             source_width=source_width,

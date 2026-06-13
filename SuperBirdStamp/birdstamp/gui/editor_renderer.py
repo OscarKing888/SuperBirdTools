@@ -17,7 +17,7 @@ from app_common.preview_canvas import (
     normalize_preview_composition_grid_line_width,
     normalize_preview_composition_grid_mode,
 )
-from birdstamp.decoders.image_decoder import decode_image, decode_preview_image_with_source
+from birdstamp.decoders.image_decoder import decode_image
 from birdstamp.gui import editor_core, editor_options, editor_template, editor_utils, template_context as _template_context
 from birdstamp.gui.editor_preview_canvas import EditorPreviewOverlayOptions, EditorPreviewOverlayState
 from birdstamp.video_export import (
@@ -41,9 +41,11 @@ _path_key                           = editor_utils.path_key
 _safe_color                         = editor_utils.safe_color
 _build_metadata_context             = editor_utils.build_metadata_context
 _default_placeholder_path           = editor_utils._default_placeholder_path
+_extract_focus_box                  = editor_core.extract_focus_box
 _extract_focus_box_for_display      = editor_core.extract_focus_box_for_display
 _draw_focus_box_overlay            = editor_core.draw_focus_box_overlay
 _resolve_focus_box_after_processing = editor_core.resolve_focus_box_after_processing
+_resolve_focus_camera_type_from_metadata = editor_core.resolve_focus_camera_type_from_metadata
 _transform_source_box_after_crop_padding = editor_core.transform_source_box_after_crop_padding
 _normalize_center_mode              = editor_core.normalize_center_mode
 _parse_bool_value                   = editor_core.parse_bool_value
@@ -271,7 +273,6 @@ class _BirdStampRendererMixin:
                 crop_box=crop_box,
                 outer_pad=outer_pad,
                 apply_ratio_crop=False,
-                source_path=self.current_path,
             )
             direct_pixmap = _pil_to_qpixmap(img)
             if not direct_pixmap.isNull():
@@ -297,11 +298,12 @@ class _BirdStampRendererMixin:
             return None
 
         source_width, source_height = self.current_source_image.size
+        focus_camera_type = _resolve_focus_camera_type_from_metadata(self.current_raw_metadata)
         focus_box_source = _extract_focus_box_for_display(
             self.current_raw_metadata,
             source_width,
             source_height,
-            source_path=self.current_path,
+            camera_type=focus_camera_type,
         )
         if focus_box_source is None:
             return None
@@ -350,11 +352,10 @@ class _BirdStampRendererMixin:
         src = _default_placeholder_path()
         if src.exists():
             try:
-                image, preview_source = decode_preview_image_with_source(src, decoder="auto")
+                image = decode_image(src, decoder="auto")
                 self.placeholder_path: "Path | None" = src
                 self.current_path = src
                 self.current_source_image = image
-                self.current_source_image_preview_only = preview_source != "full"
                 self._invalidate_original_mode_cache()
                 self.current_raw_metadata = self._load_raw_metadata(src)
                 self.current_photo_info = _template_context.ensure_photo_info(src, raw_metadata=self.current_raw_metadata)
@@ -369,7 +370,6 @@ class _BirdStampRendererMixin:
         self.current_path = None
         self.current_photo_info = None
         self.current_source_image = None
-        self.current_source_image_preview_only = False
         self.current_raw_metadata = {}
         self.current_metadata_context = {}
         self._preview_crop_size: tuple[int, int] | None = None
@@ -858,7 +858,6 @@ class _BirdStampRendererMixin:
         crop_box: tuple[float, float, float, float] | None,
         outer_pad: tuple[int, int, int, int],
         apply_ratio_crop: bool,
-        source_path: Path | None = None,
     ) -> Image.Image:
         if not self._is_preview_stage_enabled(settings, STAGE_FOCUS_OVERLAY_ID):
             return image
@@ -871,7 +870,7 @@ class _BirdStampRendererMixin:
             crop_box=crop_box,
             outer_pad=outer_pad,
             apply_ratio_crop=apply_ratio_crop,
-            source_path=source_path,
+            camera_type=_resolve_focus_camera_type_from_metadata(raw_metadata),
         )
         if focus_box is None:
             return image
@@ -927,7 +926,6 @@ class _BirdStampRendererMixin:
                     crop_box=crop_box,
                     outer_pad=outer_pad,
                     apply_ratio_crop=False,
-                    source_path=self.current_path,
                 )
 
         if not padded:
@@ -939,12 +937,7 @@ class _BirdStampRendererMixin:
 
     def _render_for_path(self, path: Path, *, prefer_current_ui: bool) -> Image.Image:
         settings = self._render_settings_for_path(path, prefer_current_ui=prefer_current_ui)
-        if (
-            self.current_path
-            and path == self.current_path
-            and self.current_source_image is not None
-            and not bool(getattr(self, "current_source_image_preview_only", False))
-        ):
+        if self.current_path and path == self.current_path and self.current_source_image is not None:
             source_image = self.current_source_image.copy()
             raw_metadata = dict(self.current_raw_metadata)
         else:
@@ -992,7 +985,6 @@ class _BirdStampRendererMixin:
             crop_box=crop_box,
             outer_pad=outer_pad,
             apply_ratio_crop=True,
-            source_path=path,
         )
 
     def render_preview(self, *_args: Any) -> None:
@@ -1040,6 +1032,7 @@ class _BirdStampRendererMixin:
             settings=preview_settings,
         )
         pad_top, pad_bottom, pad_left, pad_right = outer_pad
+        focus_camera_type = _resolve_focus_camera_type_from_metadata(raw_metadata)
         # 注意：预览图是经过 EXIF Orientation 纠正后的显示坐标，不能直接用当前图像尺寸调用
         # extract_focus_box()。这里必须走 extract_focus_box_for_display()，否则“显示对焦点”会再次错位。
         preview_focus_box = _transform_source_box_after_crop_padding(
@@ -1047,7 +1040,7 @@ class _BirdStampRendererMixin:
                 raw_metadata,
                 self.current_source_image.width,
                 self.current_source_image.height,
-                source_path=self.current_path,
+                camera_type=focus_camera_type,
             ),
             crop_box=None,
             source_width=self.current_source_image.width,

@@ -40,7 +40,6 @@ from .qt_compat import (
     QToolButton,
     QVBoxLayout,
     QWidget,
-    QTextEdit, 
     _AlignCenter,
     _KeepAspectRatio,
     _SmoothTransformation,
@@ -201,18 +200,6 @@ def _empty_basic_info() -> dict[str, str]:
     return {label: ("☆☆☆☆☆" if label == "评分" else "-") for label in _BASIC_INFO_ROWS}
 
 
-class _CommentTextEdit(QTextEdit):
-    """QTextEdit 无 editingFinished，在失焦时提交注释。"""
-
-    def __init__(self, commit_callback: Callable[[], None], parent=None) -> None:
-        super().__init__(parent)
-        self._commit_callback = commit_callback
-
-    def focusOutEvent(self, event) -> None:
-        super().focusOutEvent(event)
-        self._commit_callback()
-
-
 class ImageInfoTabPanel_ImageInfo(ImageInfoTabPanel):
     """Image preview, filename, tags, and basic file information tab."""
 
@@ -312,15 +299,15 @@ class ImageInfoTabPanel_ImageInfo(ImageInfoTabPanel):
             "QLabel { background: #202124; border: 1px solid #36383d; "
             "border-radius: 8px; color: #888; }"
         )
-        #layout.addWidget(self.preview_label)
+        layout.addWidget(self.preview_label)
 
-        self.comment_edit = _CommentTextEdit(self._commit_comment_edit)
-        self.comment_edit.setFixedHeight(120)
+        self.comment_edit = QLineEdit()
         self.comment_edit.setPlaceholderText("添加注释")
         self.comment_edit.setStyleSheet(
-            "QTextEdit { padding: 8px 10px; font-size: 14px; "
+            "QLineEdit { padding: 8px 10px; font-size: 14px; "
             "border: 1px solid #303238; border-radius: 7px; }"
         )
+        self.comment_edit.editingFinished.connect(self._commit_comment_edit)
         layout.addWidget(self.comment_edit)
 
         self.filename_edit = QLineEdit()
@@ -648,7 +635,7 @@ class ImageInfoTabPanel_ImageInfo(ImageInfoTabPanel):
             QMessageBox.warning(self, "写入失败", self._write_disabled_tooltip("保存注释", path))
             self.refresh_current_photo()
             return
-        comment = self.comment_edit.toPlainText().strip()
+        comment = self.comment_edit.text().strip()
         if comment == self._current_comment:
             return
         if self._comment_save_callback is None:

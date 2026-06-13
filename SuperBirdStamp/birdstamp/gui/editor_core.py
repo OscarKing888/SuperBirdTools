@@ -19,7 +19,6 @@ from app_common.focus_calc import (
     resolve_focus_camera_type as _resolve_focus_camera_type,
     resolve_focus_camera_type_from_metadata as _resolve_focus_camera_type_from_metadata,
 )
-from app_common.raw_focus_metadata import is_raw_image_path, read_raw_embedded_focus_metadata
 from birdstamp.config import resolve_bundled_path
 
 try:
@@ -58,72 +57,6 @@ _XMP_NS_TO_PREFIX = {
 _XMP_SIDECAR_SUFFIX_CANDIDATES = (".xmp", ".XMP", ".Xmp")
 _XMP_DERIVED_EXPORT_DIR_NAMES = {"dxo", "dxo pureraw", "pureraw", "exports", "export"}
 _XMP_DERIVED_STEM_SPLIT_MARKERS = ("-DxO_", "_DxO_")
-
-
-def _metadata_source_path(raw_metadata: dict[str, Any] | None) -> Path | None:
-    if not isinstance(raw_metadata, dict):
-        return None
-    for key in ("SourceFile", "source_file", "path"):
-        value = raw_metadata.get(key)
-        text = clean_text(value)
-        if text:
-            return Path(text)
-    return None
-
-
-def _raw_focus_cache_token(source_path: str | Path | None) -> tuple[str, int, int] | None:
-    if source_path is None:
-        return None
-    path = Path(source_path)
-    if not is_raw_image_path(path):
-        return None
-    try:
-        resolved = path.resolve(strict=False)
-    except Exception:
-        resolved = path
-    try:
-        stat = resolved.stat()
-        return (str(resolved), int(stat.st_size), int(stat.st_mtime_ns))
-    except Exception:
-        return (str(resolved), -1, -1)
-
-
-@lru_cache(maxsize=512)
-def _read_raw_embedded_focus_metadata_cached(path_text: str, size: int, mtime_ns: int) -> tuple[tuple[str, Any], ...]:
-    del size, mtime_ns
-    raw = read_raw_embedded_focus_metadata(path_text)
-    if not isinstance(raw, dict) or not raw:
-        return ()
-    return tuple(raw.items())
-
-
-def read_raw_focus_metadata_for_source(source_path: str | Path | None) -> dict[str, Any]:
-    """读取 RAW 文件内嵌对焦元数据；按文件签名缓存，避免预览/导出重复扫描。"""
-    token = _raw_focus_cache_token(source_path)
-    if token is None:
-        return {}
-    return dict(_read_raw_embedded_focus_metadata_cached(*token))
-
-
-def focus_metadata_for_source(
-    raw_metadata: dict[str, Any] | None,
-    source_path: str | Path | None = None,
-) -> dict[str, Any]:
-    """
-    Build metadata for focus calculations.
-
-    SuperViewer 对 RAW 焦点框优先直接读取文件内嵌 MakerNote/焦点块；
-    SuperBirdStamp 也在焦点计算专用路径上采用同一优先级，避免预览/导出使用
-    sidecar、report 或普通批量元数据里的旧焦点字段。
-    """
-    merged = dict(raw_metadata) if isinstance(raw_metadata, dict) else {}
-    resolved_source = Path(source_path) if source_path is not None else _metadata_source_path(merged)
-    raw_focus = read_raw_focus_metadata_for_source(resolved_source)
-    if raw_focus:
-        merged.update(raw_focus)
-    elif resolved_source is not None:
-        merged.setdefault("SourceFile", str(resolved_source))
-    return merged
 
 
 def clean_text(value: Any) -> str | None:
@@ -359,15 +292,9 @@ def get_focus_point(
     width: int,
     height: int,
     camera_type: CameraFocusType | str | None = None,
-    *,
-    source_path: str | Path | None = None,
 ) -> tuple[float, float] | None:
     """Return normalized (x,y) focus point from metadata, or None."""
-    focus_raw = focus_metadata_for_source(raw, source_path)
-    resolved_camera_type = camera_type
-    if resolved_camera_type is None:
-        resolved_camera_type = _resolve_focus_camera_type_from_metadata(focus_raw)
-    return _get_focus_point_by_camera_type(focus_raw, width, height, camera_type=resolved_camera_type)
+    return _get_focus_point_by_camera_type(raw, width, height, camera_type=camera_type)
 
 
 def get_focus_point_for_display(
@@ -375,20 +302,9 @@ def get_focus_point_for_display(
     width: int,
     height: int,
     camera_type: CameraFocusType | str | None = None,
-    *,
-    source_path: str | Path | None = None,
 ) -> tuple[float, float] | None:
     """Resolve a preview-ready focus point using metadata size + Orientation mapping."""
-    focus_raw = focus_metadata_for_source(raw, source_path)
-    resolved_camera_type = camera_type
-    if resolved_camera_type is None:
-        resolved_camera_type = _resolve_focus_camera_type_from_metadata(focus_raw)
-    return _get_focus_point_for_display_by_camera_type(
-        focus_raw,
-        width,
-        height,
-        camera_type=resolved_camera_type,
-    )
+    return _get_focus_point_for_display_by_camera_type(raw, width, height, camera_type=camera_type)
 
 
 def _extract_focus_point_impl(raw: dict[str, Any], width: int, height: int) -> tuple[float, float] | None:
@@ -427,11 +343,9 @@ def _extract_focus_point(
     width: int,
     height: int,
     camera_type: CameraFocusType | str | None = None,
-    *,
-    source_path: str | Path | None = None,
 ) -> tuple[float, float] | None:
     """Alias for backward compatibility in editor_core internals."""
-    return get_focus_point(raw, width, height, camera_type=camera_type, source_path=source_path)
+    return _get_focus_point_by_camera_type(raw, width, height, camera_type=camera_type)
 
 
 def resolve_focus_camera_type(camera_model: Any, *, camera_make: Any = None) -> CameraFocusType:
@@ -441,7 +355,7 @@ def resolve_focus_camera_type(camera_model: Any, *, camera_make: Any = None) -> 
 
 def resolve_focus_camera_type_from_metadata(raw: dict[str, Any]) -> CameraFocusType:
     """Public alias for app_common metadata -> focus camera-type resolver."""
-    return _resolve_focus_camera_type_from_metadata(focus_metadata_for_source(raw))
+    return _resolve_focus_camera_type_from_metadata(raw)
 
 
 def _normalize_focus_span(value: float | None, full_size: int, fallback: float) -> float:
@@ -511,14 +425,8 @@ def extract_focus_box(
     width: int,
     height: int,
     camera_type: CameraFocusType | str | None = None,
-    *,
-    source_path: str | Path | None = None,
 ) -> tuple[float, float, float, float] | None:
-    focus_raw = focus_metadata_for_source(raw, source_path)
-    resolved_camera_type = camera_type
-    if resolved_camera_type is None:
-        resolved_camera_type = _resolve_focus_camera_type_from_metadata(focus_raw)
-    return _extract_focus_box_by_camera_type(focus_raw, width, height, camera_type=resolved_camera_type)
+    return _extract_focus_box_by_camera_type(raw, width, height, camera_type=camera_type)
 
 
 def extract_focus_box_for_display(
@@ -526,20 +434,9 @@ def extract_focus_box_for_display(
     width: int,
     height: int,
     camera_type: CameraFocusType | str | None = None,
-    *,
-    source_path: str | Path | None = None,
 ) -> tuple[float, float, float, float] | None:
     """Resolve a preview-ready focus box using metadata size + Orientation mapping."""
-    focus_raw = focus_metadata_for_source(raw, source_path)
-    resolved_camera_type = camera_type
-    if resolved_camera_type is None:
-        resolved_camera_type = _resolve_focus_camera_type_from_metadata(focus_raw)
-    return _extract_focus_box_for_display_by_camera_type(
-        focus_raw,
-        width,
-        height,
-        camera_type=resolved_camera_type,
-    )
+    return _extract_focus_box_for_display_by_camera_type(raw, width, height, camera_type=camera_type)
 
 
 def transform_focus_box_after_crop(
@@ -746,19 +643,14 @@ def resolve_focus_box_after_processing(
     outer_pad: tuple[int, int, int, int] = (0, 0, 0, 0),
     apply_ratio_crop: bool = True,
     camera_type: CameraFocusType | str | None = None,
-    source_path: str | Path | None = None,
 ) -> tuple[float, float, float, float] | None:
     if source_width <= 0 or source_height <= 0:
         return None
-    focus_metadata = focus_metadata_for_source(raw_metadata, source_path)
-    resolved_camera_type = camera_type
-    if resolved_camera_type is None:
-        resolved_camera_type = _resolve_focus_camera_type_from_metadata(focus_metadata)
     focus_box = extract_focus_box_for_display(
-        focus_metadata,
+        raw_metadata,
         source_width,
         source_height,
-        camera_type=resolved_camera_type,
+        camera_type=camera_type,
     )
     if focus_box is None:
         return None
@@ -1388,7 +1280,6 @@ def compute_crop_plan(
     image: Image.Image,
     raw_metadata: dict[str, Any],
     *,
-    source_path: str | Path | None = None,
     ratio: float | None | str,
     center_mode: str,
     camera_type: CameraFocusType | str | None = None,
@@ -1421,17 +1312,7 @@ def compute_crop_plan(
     keep_box: tuple[float, float, float, float] | None = None
 
     # Resolve anchor and keep_box
-    focus_metadata = focus_metadata_for_source(raw_metadata, source_path)
-    resolved_camera_type = camera_type
-    if resolved_camera_type is None:
-        resolved_camera_type = _resolve_focus_camera_type_from_metadata(focus_metadata)
-    focus_point = get_focus_point_for_display(
-        focus_metadata,
-        w,
-        h,
-        camera_type=resolved_camera_type,
-        source_path=source_path,
-    )
+    focus_point = get_focus_point_for_display(raw_metadata, w, h, camera_type=camera_type)
     bird_box: tuple[float, float, float, float] | None = None
     try:
         bird_box = detect_primary_bird_box(image)
@@ -1519,7 +1400,6 @@ def apply_full_crop(
     """
     crop_box, outer_pad = compute_crop_plan(
         image, raw_metadata,
-        source_path=None,
         ratio=ratio,
         center_mode=center_mode,
         camera_type=camera_type,
@@ -1562,17 +1442,7 @@ def apply_editor_crop(
     keep_box: tuple[float, float, float, float] | None = None
 
     if center_mode == CENTER_MODE_FOCUS:
-        focus_metadata = focus_metadata_for_source(raw_metadata, source_path)
-        resolved_camera_type = camera_type
-        if resolved_camera_type is None:
-            resolved_camera_type = _resolve_focus_camera_type_from_metadata(focus_metadata)
-        focus_box = extract_focus_box_for_display(
-            focus_metadata,
-            w,
-            h,
-            camera_type=resolved_camera_type,
-            source_path=source_path,
-        )
+        focus_box = extract_focus_box_for_display(raw_metadata, w, h, camera_type=camera_type)
         if focus_box is not None:
             if ratio is not None and ratio > 0:
                 focus_box = transform_focus_box_after_crop(

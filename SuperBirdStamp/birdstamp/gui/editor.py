@@ -82,7 +82,7 @@ from app_common.send_to_app import (
 import birdstamp
 from birdstamp.config import get_app_resource_dir, get_config_path, resolve_bundled_path
 from birdstamp.constants import SEND_TO_APP_ID, SUPPORTED_EXTENSIONS
-from birdstamp.decoders.image_decoder import decode_preview_image_with_source
+from birdstamp.decoders.image_decoder import decode_image
 from app_common.exif_io import (
     extract_many,
     extract_many_with_xmp_priority,
@@ -623,7 +623,6 @@ class BirdStampEditorWindow(
         self.current_path: Path | None = None
         self.current_photo_info: _template_context.PhotoInfo | None = None
         self.current_source_image: Image.Image | None = None
-        self.current_source_image_preview_only: bool = False
         self.current_raw_metadata: dict[str, Any] = {}
         self.current_metadata_context: dict[str, str] = {}
         self.raw_metadata_cache: dict[str, dict[str, Any]] = {}
@@ -4211,7 +4210,6 @@ class BirdStampEditorWindow(
             self.current_path = None
             self.current_photo_info = None
             self.current_source_image = None
-            self.current_source_image_preview_only = False
             self.current_raw_metadata = {}
             self.current_metadata_context = {}
             self.current_file_label.setText("当前照片: 未选择")
@@ -4238,7 +4236,6 @@ class BirdStampEditorWindow(
         self.current_path = None
         self.current_photo_info = None
         self.current_source_image = None
-        self.current_source_image_preview_only = False
         self.current_raw_metadata = {}
         self.current_metadata_context = {}
         self.current_file_label.setText("当前照片: 未选择")
@@ -4263,7 +4260,7 @@ class BirdStampEditorWindow(
             return
 
         try:
-            image, preview_source = decode_preview_image_with_source(path, decoder="auto")
+            image = decode_image(path, decoder="auto")
         except Exception as exc:
             self._show_error("读取失败", str(exc))
             return
@@ -4271,7 +4268,6 @@ class BirdStampEditorWindow(
         self.placeholder_path = None
         self.current_path = path
         self.current_source_image = image
-        self.current_source_image_preview_only = preview_source != "full"
         self._invalidate_original_mode_cache()
         self.current_raw_metadata = self._load_raw_metadata(path)
         photo_info = current.data(PHOTO_COL_ROW, PHOTO_LIST_PHOTO_INFO_ROLE)
@@ -4453,11 +4449,7 @@ class BirdStampEditorWindow(
             settings["max_long_edge"] = export_max_long_edge
 
             source_image = None
-            if (
-                self.current_source_image is not None
-                and is_current_path
-                and not bool(getattr(self, "current_source_image_preview_only", False))
-            ):
+            if self.current_source_image is not None and is_current_path:
                 source_image = self.current_source_image.copy()
 
             jobs.append(
