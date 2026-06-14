@@ -729,6 +729,7 @@ class BirdStampEditorWindow(
         self.current_path: Path | None = None
         self.current_photo_info: _template_context.PhotoInfo | None = None
         self.current_source_image: Image.Image | None = None
+        self.current_source_full_size: tuple[int, int] | None = None
         self.current_raw_metadata: dict[str, Any] = {}
         self.current_metadata_context: dict[str, str] = {}
         self._metadata_context_cache: dict[str, dict[str, str]] = {}
@@ -1521,6 +1522,8 @@ class BirdStampEditorWindow(
 
     def _set_center_mode_value(self, value: Any, *, emit_changed: bool) -> None:
         mode = _normalize_center_mode(value)
+        if emit_changed and mode != _CENTER_MODE_CUSTOM:
+            self._clear_derived_crop_overrides_for_auto_center_mode()
         buttons = getattr(self, "center_mode_buttons", None)
         if isinstance(buttons, dict) and buttons:
             target = buttons.get(mode) or buttons.get(_DEFAULT_TEMPLATE_CENTER_MODE)
@@ -1551,6 +1554,25 @@ class BirdStampEditorWindow(
                     if not emit_changed:
                         combo.blockSignals(old_blocked)
 
+    def _clear_derived_crop_overrides_for_auto_center_mode(self) -> None:
+        """切换到图像/焦点/鸟体中心时，丢弃手动裁切框与自定义中心派生状态。"""
+        if self._current_edit_mode_id() == EDIT_MODE_CROP_ADJUST:
+            return
+        self._crop_box_override = None
+        self._custom_center = None
+        if self.current_path is None or self._is_placeholder_active():
+            return
+        key = _path_key(self.current_path)
+        overrides = self.photo_render_overrides.get(key)
+        if not isinstance(overrides, dict):
+            return
+        updated = dict(overrides)
+        updated["crop_box"] = None
+        updated["custom_center_x"] = None
+        updated["custom_center_y"] = None
+        self.photo_render_overrides[key] = updated
+        self._set_photo_crop_box_for_path(self.current_path, None)
+
     def _setup_pipeline_stage_option_groups(self) -> None:
         descriptors = {
             descriptor.stage_id: descriptor
@@ -1572,13 +1594,9 @@ class BirdStampEditorWindow(
         template_row_layout.setSpacing(6)
         template_row_layout.addWidget(self.template_combo, 1)
         template_row_layout.addWidget(self.manage_template_btn)
+
         template_form.addRow("模板", template_row_widget)
-        template_form.addRow("裁切比例", self.ratio_combo)
-        template_form.addRow("裁切中心", self.center_mode_widget)
-        template_form.addRow("留边", self.crop_padding_editor)
-        template_hint = QLabel("这些参数仍会作为当前模板重载参与预览、批量应用和导出。")
-        template_hint.setWordWrap(True)
-        template_form.addRow("说明", template_hint)
+
         override_btn_widget = QWidget()
         override_btn_layout = QHBoxLayout(override_btn_widget)
         override_btn_layout.setContentsMargins(0, 0, 0, 0)
@@ -1587,6 +1605,14 @@ class BirdStampEditorWindow(
         override_btn_layout.addWidget(self.apply_all_btn)
         override_btn_layout.addStretch()
         template_form.addRow("重载", override_btn_widget)
+        
+        template_hint = QLabel("这些参数仍会作为当前模板重载参与预览、批量应用和导出。")
+        template_hint.setWordWrap(True)
+        template_form.addRow("说明", template_hint)
+        template_form.addRow("裁切比例", self.ratio_combo)
+        template_form.addRow("裁切中心", self.center_mode_widget)
+        template_form.addRow("留边", self.crop_padding_editor)
+
         auto_crop_row_widget = QWidget()
         auto_crop_row_layout = QHBoxLayout(auto_crop_row_widget)
         auto_crop_row_layout.setContentsMargins(0, 0, 0, 0)
@@ -4745,6 +4771,7 @@ class BirdStampEditorWindow(
             self.current_path = None
             self.current_photo_info = None
             self.current_source_image = None
+            self.current_source_full_size = None
             self.current_raw_metadata = {}
             self.current_metadata_context = {}
             self.current_file_label.setText("当前照片: 未选择")
@@ -4782,6 +4809,7 @@ class BirdStampEditorWindow(
         self.current_path = None
         self.current_photo_info = None
         self.current_source_image = None
+        self.current_source_full_size = None
         self.current_raw_metadata = {}
         self.current_metadata_context = {}
         self.current_file_label.setText("当前照片: 未选择")
@@ -4822,6 +4850,8 @@ class BirdStampEditorWindow(
             self.placeholder_path = None
             self.current_path = path
             self.current_source_image = image
+            with birdstamp_perf.span("select.size", path=str(path)):
+                self.current_source_full_size = self._read_source_full_size(path)
             self._invalidate_original_mode_cache()
             with birdstamp_perf.span("select.metadata", path=str(path)):
                 self.current_raw_metadata = self._load_raw_metadata(path)
@@ -5023,6 +5053,38 @@ class BirdStampEditorWindow(
             return base_dir / f"birdstamp_video_{datetime.now().strftime('%Y%m%d_%H%M%S')}.{suffix}"
         return Path.cwd() / f"birdstamp_video_{datetime.now().strftime('%Y%m%d_%H%M%S')}.{suffix}"
 
+    def _apply_global_export_settings_to_render_settings(self, settings: dict[str, Any]) -> None:
+        """导出时强制使用当前界面的全局管线/叠加开关，避免照片级快照污染。"""
+        global_export = self._current_global_export_settings()
+        settings["draw_banner"] = bool(global_export.get("draw_banner", True))
+        settings["draw_text"] = bool(global_export.get("draw_text", True))
+        settings["draw_focus"] = bool(global_export.get("draw_focus", False))
+        settings["max_long_edge"] = max(0, int(global_export.get("max_long_edge") or 0))
+        settings["uniform_auto_crop"] = bool(global_export.get("uniform_auto_crop", False))
+        try:
+            stabilization = int(round(float(global_export.get("auto_crop_stabilization", 0))))
+        except Exception:
+            stabilization = 0
+        settings["auto_crop_stabilization"] = max(0, min(100, stabilization))
+        settings[PIPELINE_STAGE_ORDER_KEY] = list(
+            normalize_pipeline_stage_order(global_export.get(PIPELINE_STAGE_ORDER_KEY))
+        )
+        stage_enabled = global_export.get(PIPELINE_STAGE_ENABLED_KEY)
+        if isinstance(stage_enabled, dict):
+            settings[PIPELINE_STAGE_ENABLED_KEY] = dict(stage_enabled)
+        settings[STAGE_TEMPLATE_CROP_ENABLED_KEY] = bool(
+            global_export.get(STAGE_TEMPLATE_CROP_ENABLED_KEY, True)
+        )
+        settings[STAGE_RESIZE_LIMIT_ENABLED_KEY] = bool(
+            global_export.get(STAGE_RESIZE_LIMIT_ENABLED_KEY, True)
+        )
+        settings[STAGE_TEMPLATE_OVERLAY_ENABLED_KEY] = bool(
+            global_export.get(STAGE_TEMPLATE_OVERLAY_ENABLED_KEY, True)
+        )
+        settings[STAGE_FOCUS_OVERLAY_ENABLED_KEY] = bool(
+            global_export.get(STAGE_FOCUS_OVERLAY_ENABLED_KEY, True)
+        )
+
     def _build_export_render_jobs(
         self,
         paths: list[Path],
@@ -5033,10 +5095,6 @@ class BirdStampEditorWindow(
         jobs: list[VideoFrameJob] = []
         current_key = _path_key(self.current_path) if self.current_path is not None else ""
         current_render_settings = self._build_current_render_settings()
-        export_draw_banner = _parse_bool_value(current_render_settings.get("draw_banner"), True)
-        export_draw_text = _parse_bool_value(current_render_settings.get("draw_text"), True)
-        export_draw_focus = _parse_bool_value(current_render_settings.get("draw_focus"), False)
-        export_max_long_edge = max(0, int(current_render_settings.get("max_long_edge") or 0))
         total = len(paths)
         metadata_by_key = self._load_raw_metadata_batch(paths)
         if callable(progress_callback):
@@ -5051,14 +5109,9 @@ class BirdStampEditorWindow(
             else:
                 settings = self._clone_render_settings(self._render_settings_for_path(path, prefer_current_ui=False))
             # 导出图像时，全局导出开关跟随当前界面；每张照片只保留模板/裁切重载。
-            settings["draw_banner"] = export_draw_banner
-            settings["draw_text"] = export_draw_text
-            settings["draw_focus"] = export_draw_focus
-            settings["max_long_edge"] = export_max_long_edge
+            self._apply_global_export_settings_to_render_settings(settings)
 
             source_image = None
-            if self.current_source_image is not None and is_current_path:
-                source_image = self.current_source_image.copy()
 
             jobs.append(
                 VideoFrameJob(

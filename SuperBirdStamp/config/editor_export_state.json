@@ -1,5 +1,5 @@
 {
-  "last_image_output_dir": "/Users/oscar/Pictures/2026-3-11-快门测试",
+  "last_image_output_dir": "/Volumes/HP2T/_鸟录/三宝鸟/gif",
   "last_video_output_dir": "/Users/oscar/Pictures/gif/untitled folder 4",
   "last_batch_output_dir": "/Volumes/HP2T/_鸟录/三宝鸟/gif",
   "image_output_format": "png",
@@ -10,7 +10,7 @@
     0.5
   ],
   "last_workspace_dir": "/private/var/folders/p2/2rvq_nqj6j16q26hpn77y9200000gn/T/tmp_8tjc_xn",
-  "uniform_auto_crop": true,
+  "uniform_auto_crop": false,
   "auto_crop_stabilization": 100,
   "selected_export_stage_id": "export_png",
   "pipeline_stage_order": [

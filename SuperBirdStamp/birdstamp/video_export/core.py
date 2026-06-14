@@ -590,6 +590,12 @@ def _resolve_stage_enabled(
 
 
 def _should_draw_template_overlay(settings: dict[str, Any]) -> bool:
+    if not _resolve_stage_enabled(
+        settings,
+        stage_id=STAGE_TEMPLATE_OVERLAY_ID,
+        enabled_key=STAGE_TEMPLATE_OVERLAY_ENABLED_KEY,
+    ):
+        return False
     return _parse_bool_value(settings.get("draw_banner"), True) or _parse_bool_value(settings.get("draw_text"), True)
 
 
@@ -674,47 +680,6 @@ def _resolve_bird_box_for_image(
     return bird_box
 
 
-def _resolve_crop_anchor_and_keep_box(
-    *,
-    path: Path | None,
-    image: Image.Image,
-    raw_metadata: dict[str, Any],
-    center_mode: str,
-    bird_box_cache: dict[str, tuple[float, float, float, float] | None],
-    bird_box_lock: threading.Lock | None = None,
-    custom_center: tuple[float, float] | None = None,
-) -> tuple[tuple[float, float], tuple[float, float, float, float] | None]:
-    focus_camera_type = _resolve_focus_camera_type_from_metadata(raw_metadata)
-    focus_point = _get_focus_point_for_display(
-        raw_metadata,
-        image.width,
-        image.height,
-        camera_type=focus_camera_type,
-    )
-    mode = _normalize_center_mode(center_mode)
-    if mode == _CENTER_MODE_CUSTOM and custom_center is not None:
-        return (custom_center, None)
-    bird_box: tuple[float, float, float, float] | None = None
-    if mode in {_CENTER_MODE_BIRD, _CENTER_MODE_FOCUS}:
-        bird_box = _resolve_bird_box_for_image(path, image, bird_box_cache, bird_box_lock)
-
-    if mode == _CENTER_MODE_BIRD:
-        if bird_box is not None:
-            return (_box_center(bird_box), bird_box)
-        if focus_point is not None:
-            return (focus_point, None)
-        return ((0.5, 0.5), None)
-
-    if mode == _CENTER_MODE_FOCUS:
-        if focus_point is not None:
-            return (focus_point, None)
-        if bird_box is not None:
-            return (_box_center(bird_box), None)
-        return ((0.5, 0.5), None)
-
-    return ((0.5, 0.5), None)
-
-
 def _compute_auto_bird_crop_plan(
     *,
     image: Image.Image,
@@ -725,58 +690,17 @@ def _compute_auto_bird_crop_plan(
     inner_left: int,
     inner_right: int,
 ) -> tuple[tuple[float, float, float, float] | None, tuple[int, int, int, int]]:
-    width, height = image.size
-    if width <= 0 or height <= 0 or ratio <= 0:
-        return (None, (0, 0, 0, 0))
+    from birdstamp.gui import editor_core
 
-    expanded_px = _expand_unit_box_to_unclamped_pixels(
-        bird_box,
-        width=width,
-        height=height,
-        top=inner_top,
-        bottom=inner_bottom,
-        left=inner_left,
-        right=inner_right,
+    return editor_core.compute_auto_bird_crop_plan(
+        image=image,
+        bird_box=bird_box,
+        ratio=ratio,
+        inner_top=inner_top,
+        inner_bottom=inner_bottom,
+        inner_left=inner_left,
+        inner_right=inner_right,
     )
-    if expanded_px is None:
-        return (None, (0, 0, 0, 0))
-
-    keep_left, keep_top, keep_right, keep_bottom = expanded_px
-    keep_width = max(1.0, keep_right - keep_left)
-    keep_height = max(1.0, keep_bottom - keep_top)
-    center_x = (keep_left + keep_right) * 0.5
-    center_y = (keep_top + keep_bottom) * 0.5
-
-    crop_width = keep_width
-    crop_height = crop_width / ratio
-    if crop_height < keep_height:
-        crop_height = keep_height
-        crop_width = crop_height * ratio
-
-    crop_left = center_x - (crop_width * 0.5)
-    crop_top = center_y - (crop_height * 0.5)
-    crop_right = crop_left + crop_width
-    crop_bottom = crop_top + crop_height
-
-    outer_left = max(0, int(math.ceil(max(0.0, -crop_left))))
-    outer_top = max(0, int(math.ceil(max(0.0, -crop_top))))
-    outer_right = max(0, int(math.ceil(max(0.0, crop_right - width))))
-    outer_bottom = max(0, int(math.ceil(max(0.0, crop_bottom - height))))
-
-    padded_width = width + outer_left + outer_right
-    padded_height = height + outer_top + outer_bottom
-    if padded_width <= 0 or padded_height <= 0:
-        return (None, (0, 0, 0, 0))
-
-    crop_box = _normalize_unit_box(
-        (
-            (crop_left + outer_left) / float(padded_width),
-            (crop_top + outer_top) / float(padded_height),
-            (crop_right + outer_left) / float(padded_width),
-            (crop_bottom + outer_top) / float(padded_height),
-        )
-    )
-    return (crop_box, (outer_top, outer_bottom, outer_left, outer_right))
 
 
 def _crop_plan_center_in_source_pixels(
@@ -1122,59 +1046,31 @@ def _compute_crop_plan_for_image(
     bird_box_cache: dict[str, tuple[float, float, float, float] | None],
     bird_box_lock: threading.Lock | None = None,
 ) -> tuple[tuple[float, float, float, float] | None, tuple[int, int, int, int]]:
-    ratio = _parse_ratio_value(settings.get("ratio"))
-    if _is_ratio_no_crop(ratio):
-        return (None, (0, 0, 0, 0))
-    crop_box_raw = settings.get("crop_box")
-    if crop_box_raw is not None and isinstance(crop_box_raw, (list, tuple)) and len(crop_box_raw) == 4:
-        try:
-            cb = (float(crop_box_raw[0]), float(crop_box_raw[1]), float(crop_box_raw[2]), float(crop_box_raw[3]))
-            if _crop_box_has_effect(cb):
-                return _crop_plan_from_override(image.width, image.height, cb)
-        except (TypeError, ValueError):
-            pass
-    if ratio is None or _is_ratio_free(ratio):
-        return (None, (0, 0, 0, 0))
+    from birdstamp.gui import editor_core
 
-    custom_center: tuple[float, float] | None = None
-    try:
-        cx = float(settings.get("custom_center_x")) if "custom_center_x" in settings else None
-        cy = float(settings.get("custom_center_y")) if "custom_center_y" in settings else None
-        if cx is not None and cy is not None:
-            custom_center = (cx, cy)
-    except Exception:
-        custom_center = None
+    center_mode = str(settings.get("center_mode") or _CENTER_MODE_IMAGE)
+    mode = _normalize_center_mode(center_mode)
+    bird_box: tuple[float, float, float, float] | None = None
+    focus_camera_type = _resolve_focus_camera_type_from_metadata(raw_metadata)
+    focus_point = _get_focus_point_for_display(
+        raw_metadata,
+        image.width,
+        image.height,
+        camera_type=focus_camera_type,
+    )
+    needs_bird_box = mode == _CENTER_MODE_BIRD or (
+        mode == _CENTER_MODE_FOCUS and focus_point is None
+    )
+    if needs_bird_box:
+        bird_box = _resolve_bird_box_for_image(path, image, bird_box_cache, bird_box_lock)
 
-    anchor, keep_box = _resolve_crop_anchor_and_keep_box(
-        path=path,
+    return editor_core.compute_crop_plan_for_image(
         image=image,
         raw_metadata=raw_metadata,
-        center_mode=str(settings.get("center_mode") or _CENTER_MODE_IMAGE),
-        bird_box_cache=bird_box_cache,
-        bird_box_lock=bird_box_lock,
-        custom_center=custom_center,
+        settings=settings,
+        bird_box=bird_box,
+        camera_type=focus_camera_type,
     )
-    if keep_box is not None:
-        crop_box, outer_pad = _compute_auto_bird_crop_plan(
-            image=image,
-            bird_box=keep_box,
-            ratio=ratio,
-            inner_top=_parse_padding_value(settings.get("crop_padding_top"), 0),
-            inner_bottom=_parse_padding_value(settings.get("crop_padding_bottom"), 0),
-            inner_left=_parse_padding_value(settings.get("crop_padding_left"), 0),
-            inner_right=_parse_padding_value(settings.get("crop_padding_right"), 0),
-        )
-        if crop_box is not None:
-            return (crop_box, outer_pad)
-
-    crop_box = _compute_ratio_crop_box(
-        width=image.width,
-        height=image.height,
-        ratio=ratio,
-        anchor=anchor,
-        keep_box=None,
-    )
-    return (crop_box, (0, 0, 0, 0))
 
 
 def _build_processed_image(

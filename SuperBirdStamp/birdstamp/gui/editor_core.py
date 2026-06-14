@@ -876,6 +876,358 @@ def box_center(box: tuple[float, float, float, float]) -> tuple[float, float]:
     return ((box[0] + box[2]) * 0.5, (box[1] + box[3]) * 0.5)
 
 
+def expand_keep_region_from_image_center(
+    width: int,
+    height: int,
+    *,
+    top: int = 0,
+    bottom: int = 0,
+    left: int = 0,
+    right: int = 0,
+) -> tuple[float, float, float, float] | None:
+    """以图像几何中心为原点，按四向像素值向外扩展得到像素 keep 区域。"""
+    if width <= 0 or height <= 0:
+        return None
+    if top <= 0 and bottom <= 0 and left <= 0 and right <= 0:
+        return None
+    center_x = width * 0.5
+    center_y = height * 0.5
+    keep_left = center_x - max(0, int(left))
+    keep_top = center_y - max(0, int(top))
+    keep_right = center_x + max(0, int(right))
+    keep_bottom = center_y + max(0, int(bottom))
+    if keep_right <= keep_left or keep_bottom <= keep_top:
+        return None
+    return (keep_left, keep_top, keep_right, keep_bottom)
+
+
+def _compute_anchored_ratio_crop_plan(
+    *,
+    width: int,
+    height: int,
+    ratio: float,
+    anchor_x: float,
+    anchor_y: float,
+    keep_left: float,
+    keep_top: float,
+    keep_right: float,
+    keep_bottom: float,
+) -> tuple[tuple[float, float, float, float] | None, tuple[int, int, int, int]]:
+    if width <= 0 or height <= 0 or ratio <= 0:
+        return (None, (0, 0, 0, 0))
+
+    keep_width = max(1.0, keep_right - keep_left)
+    keep_height = max(1.0, keep_bottom - keep_top)
+    half_w = max(anchor_x - keep_left, keep_right - anchor_x, keep_width * 0.5)
+    half_h = max(anchor_y - keep_top, keep_bottom - anchor_y, keep_height * 0.5)
+    need_w = max(1.0, 2.0 * half_w)
+    need_h = max(1.0, 2.0 * half_h)
+
+    crop_width = need_w
+    crop_height = crop_width / ratio
+    if crop_height < need_h:
+        crop_height = need_h
+        crop_width = crop_height * ratio
+
+    crop_left = anchor_x - (crop_width * 0.5)
+    crop_top = anchor_y - (crop_height * 0.5)
+    crop_right = crop_left + crop_width
+    crop_bottom = crop_top + crop_height
+
+    outer_left = max(0, int(math.ceil(max(0.0, -crop_left))))
+    outer_top = max(0, int(math.ceil(max(0.0, -crop_top))))
+    outer_right = max(0, int(math.ceil(max(0.0, crop_right - width))))
+    outer_bottom = max(0, int(math.ceil(max(0.0, crop_bottom - height))))
+
+    padded_width = width + outer_left + outer_right
+    padded_height = height + outer_top + outer_bottom
+    if padded_width <= 0 or padded_height <= 0:
+        return (None, (0, 0, 0, 0))
+
+    crop_box = normalize_unit_box(
+        (
+            (crop_left + outer_left) / float(padded_width),
+            (crop_top + outer_top) / float(padded_height),
+            (crop_right + outer_left) / float(padded_width),
+            (crop_bottom + outer_top) / float(padded_height),
+        )
+    )
+    return (crop_box, (outer_top, outer_bottom, outer_left, outer_right))
+
+
+def _resolve_crop_source_dimensions(
+    image: Image.Image,
+    source_size: tuple[int, int] | None,
+) -> tuple[int, int]:
+    if source_size is not None:
+        return (max(1, int(source_size[0])), max(1, int(source_size[1])))
+    return image.size
+
+
+def compute_image_center_crop_plan(
+    *,
+    width: int,
+    height: int,
+    ratio: float,
+    inner_top: int,
+    inner_bottom: int,
+    inner_left: int,
+    inner_right: int,
+) -> tuple[tuple[float, float, float, float] | None, tuple[int, int, int, int]]:
+    """图像中心裁切：留边为从图像中心向四向扩展的像素范围，再按比例包住该区域并居中。"""
+    if width <= 0 or height <= 0 or ratio <= 0:
+        return (None, (0, 0, 0, 0))
+
+    if inner_top <= 0 and inner_bottom <= 0 and inner_left <= 0 and inner_right <= 0:
+        crop_box = compute_ratio_crop_box(
+            width=width,
+            height=height,
+            ratio=ratio,
+            anchor=(0.5, 0.5),
+            keep_box=None,
+        )
+        if not crop_box_has_effect(crop_box):
+            return (None, (0, 0, 0, 0))
+        return (crop_box, (0, 0, 0, 0))
+
+    expanded_px = expand_keep_region_from_image_center(
+        width,
+        height,
+        top=inner_top,
+        bottom=inner_bottom,
+        left=inner_left,
+        right=inner_right,
+    )
+    if expanded_px is None:
+        return (None, (0, 0, 0, 0))
+
+    keep_left, keep_top, keep_right, keep_bottom = expanded_px
+    return _compute_anchored_ratio_crop_plan(
+        width=width,
+        height=height,
+        ratio=ratio,
+        anchor_x=width * 0.5,
+        anchor_y=height * 0.5,
+        keep_left=keep_left,
+        keep_top=keep_top,
+        keep_right=keep_right,
+        keep_bottom=keep_bottom,
+    )
+
+
+def resolve_crop_anchor_and_keep_box(
+    *,
+    center_mode: str,
+    raw_metadata: dict[str, Any],
+    image: Image.Image,
+    bird_box: tuple[float, float, float, float] | None = None,
+    custom_center: tuple[float, float] | None = None,
+    camera_type: CameraFocusType | str | None = None,
+    source_size: tuple[int, int] | None = None,
+) -> tuple[tuple[float, float], tuple[float, float, float, float] | None]:
+    """返回 (anchor, bird_keep_box)。bird_keep_box 仅在鸟体中心模式下非 None。"""
+    width, height = _resolve_crop_source_dimensions(image, source_size)
+    mode = normalize_center_mode(center_mode)
+
+    if mode == CENTER_MODE_CUSTOM:
+        if custom_center is not None:
+            return (custom_center, None)
+        return ((0.5, 0.5), None)
+
+    focus_point = get_focus_point_for_display(
+        raw_metadata,
+        width,
+        height,
+        camera_type=camera_type,
+    )
+
+    if mode == CENTER_MODE_IMAGE:
+        return ((0.5, 0.5), None)
+
+    if mode == CENTER_MODE_BIRD:
+        if bird_box is not None:
+            return (box_center(bird_box), bird_box)
+        if focus_point is not None:
+            return (focus_point, None)
+        return ((0.5, 0.5), None)
+
+    if mode == CENTER_MODE_FOCUS:
+        if focus_point is not None:
+            return (focus_point, None)
+        if bird_box is not None:
+            return (box_center(bird_box), None)
+        return ((0.5, 0.5), None)
+
+    return ((0.5, 0.5), None)
+
+
+def should_use_crop_box_override(
+    settings: dict[str, Any],
+    *,
+    crop_edit_active: bool = False,
+) -> bool:
+    center_mode = normalize_center_mode(settings.get("center_mode"))
+    if center_mode != CENTER_MODE_CUSTOM and not crop_edit_active:
+        return False
+    crop_box_raw = settings.get("crop_box")
+    if crop_box_raw is None or not isinstance(crop_box_raw, (list, tuple)) or len(crop_box_raw) != 4:
+        return False
+    try:
+        crop_box = (
+            float(crop_box_raw[0]),
+            float(crop_box_raw[1]),
+            float(crop_box_raw[2]),
+            float(crop_box_raw[3]),
+        )
+    except (TypeError, ValueError):
+        return False
+    return crop_box_has_effect(crop_box)
+
+
+def compute_auto_bird_crop_plan(
+    *,
+    image: Image.Image,
+    bird_box: tuple[float, float, float, float],
+    ratio: float,
+    inner_top: int,
+    inner_bottom: int,
+    inner_left: int,
+    inner_right: int,
+    source_size: tuple[int, int] | None = None,
+) -> tuple[tuple[float, float, float, float] | None, tuple[int, int, int, int]]:
+    width, height = _resolve_crop_source_dimensions(image, source_size)
+    if width <= 0 or height <= 0 or ratio <= 0:
+        return (None, (0, 0, 0, 0))
+
+    expanded_px = expand_unit_box_to_unclamped_pixels(
+        bird_box,
+        width=width,
+        height=height,
+        top=inner_top,
+        bottom=inner_bottom,
+        left=inner_left,
+        right=inner_right,
+    )
+    if expanded_px is None:
+        return (None, (0, 0, 0, 0))
+
+    keep_left, keep_top, keep_right, keep_bottom = expanded_px
+    return _compute_anchored_ratio_crop_plan(
+        width=width,
+        height=height,
+        ratio=ratio,
+        anchor_x=(keep_left + keep_right) * 0.5,
+        anchor_y=(keep_top + keep_bottom) * 0.5,
+        keep_left=keep_left,
+        keep_top=keep_top,
+        keep_right=keep_right,
+        keep_bottom=keep_bottom,
+    )
+
+
+def compute_crop_plan_for_image(
+    *,
+    image: Image.Image,
+    raw_metadata: dict[str, Any],
+    settings: dict[str, Any],
+    bird_box: tuple[float, float, float, float] | None = None,
+    crop_edit_active: bool = False,
+    camera_type: CameraFocusType | str | None = None,
+    source_size: tuple[int, int] | None = None,
+) -> tuple[tuple[float, float, float, float] | None, tuple[int, int, int, int]]:
+    """根据 render settings 计算 (crop_box, outer_pad)，供 GUI / 导出 / 模板共用。"""
+    width, height = _resolve_crop_source_dimensions(image, source_size)
+    ratio = parse_ratio_value(settings.get("ratio"))
+    if is_ratio_no_crop(ratio):
+        return (None, (0, 0, 0, 0))
+
+    if should_use_crop_box_override(settings, crop_edit_active=crop_edit_active):
+        crop_box_raw = settings.get("crop_box")
+        try:
+            crop_box = (
+                float(crop_box_raw[0]),
+                float(crop_box_raw[1]),
+                float(crop_box_raw[2]),
+                float(crop_box_raw[3]),
+            )
+        except (TypeError, ValueError, IndexError):
+            crop_box = None
+        if crop_box is not None and crop_box_has_effect(crop_box):
+            box_norm, outer_pad = _crop_plan_from_override(width, height, crop_box)
+            return (box_norm, outer_pad)
+
+    if is_ratio_free(ratio) or ratio is None:
+        return (None, (0, 0, 0, 0))
+
+    inner_top = parse_padding_value(settings.get("crop_padding_top"), 0)
+    inner_bottom = parse_padding_value(settings.get("crop_padding_bottom"), 0)
+    inner_left = parse_padding_value(settings.get("crop_padding_left"), 0)
+    inner_right = parse_padding_value(settings.get("crop_padding_right"), 0)
+    center_mode = str(settings.get("center_mode") or CENTER_MODE_IMAGE)
+
+    custom_center: tuple[float, float] | None = None
+    try:
+        if "custom_center_x" in settings and "custom_center_y" in settings:
+            cx = settings.get("custom_center_x")
+            cy = settings.get("custom_center_y")
+            if cx is not None and cy is not None:
+                custom_center = (float(cx), float(cy))
+    except Exception:
+        custom_center = None
+
+    if camera_type is None:
+        camera_type = resolve_focus_camera_type_from_metadata(raw_metadata)
+
+    anchor, bird_keep = resolve_crop_anchor_and_keep_box(
+        center_mode=center_mode,
+        raw_metadata=raw_metadata,
+        image=image,
+        bird_box=bird_box,
+        custom_center=custom_center,
+        camera_type=camera_type,
+        source_size=source_size,
+    )
+
+    if bird_keep is not None:
+        crop_box, outer_pad = compute_auto_bird_crop_plan(
+            image=image,
+            bird_box=bird_keep,
+            ratio=ratio,
+            inner_top=inner_top,
+            inner_bottom=inner_bottom,
+            inner_left=inner_left,
+            inner_right=inner_right,
+            source_size=source_size,
+        )
+        if crop_box is not None:
+            return (crop_box, outer_pad)
+
+    if normalize_center_mode(center_mode) == CENTER_MODE_IMAGE:
+        crop_box, outer_pad = compute_image_center_crop_plan(
+            width=width,
+            height=height,
+            ratio=float(ratio),
+            inner_top=inner_top,
+            inner_bottom=inner_bottom,
+            inner_left=inner_left,
+            inner_right=inner_right,
+        )
+        if crop_box is not None:
+            return (crop_box, outer_pad)
+        return (None, (0, 0, 0, 0))
+
+    crop_box = compute_ratio_crop_box(
+        width=width,
+        height=height,
+        ratio=ratio,
+        anchor=anchor,
+        keep_box=None,
+    )
+    if not crop_box_has_effect(crop_box):
+        return (None, (0, 0, 0, 0))
+    return (crop_box, (0, 0, 0, 0))
+
+
 def solve_axis_crop_start(
     *,
     full_size: int,
@@ -1291,93 +1643,37 @@ def compute_crop_plan(
     inner_right: int = 0,
     crop_box_override: tuple[float, float, float, float] | None = None,
 ) -> tuple[tuple[float, float, float, float] | None, tuple[int, int, int, int]]:
-    """Compute (crop_box, outer_pad) using the same logic as the main editor's pipeline.
-
-    Returns the normalised crop box (0-1 coordinates) and the outer padding
-    (top, bottom, left, right) in pixels that must be added to the image *before*
-    applying the crop. Matches ``_BirdStampCropCalculatorMixin._compute_crop_plan_for_image``.
-    When ratio is RATIO_NO_CROP, returns (None, (0,0,0,0)) before considering
-    crop_box_override so stored crop boxes are ignored.
-    When crop_box_override is provided and effective, it is used and outer_pad is derived from it.
-    When ratio is RATIO_FREE and no override, returns (None, (0,0,0,0)).
-    """
-    w, h = image.size
+    """Compute (crop_box, outer_pad) using the same logic as the main editor's pipeline."""
     if is_ratio_no_crop(ratio):
         return (None, (0, 0, 0, 0))
     if crop_box_override is not None and crop_box_has_effect(crop_box_override):
-        box_norm, outer_pad = _crop_plan_from_override(w, h, crop_box_override)
+        box_norm, outer_pad = _crop_plan_from_override(image.width, image.height, crop_box_override)
         return (box_norm, outer_pad)
-    if is_ratio_free(ratio) or ratio is None:
-        return (None, (0, 0, 0, 0))
-    center_mode = normalize_center_mode(center_mode)
-    anchor: tuple[float, float] = (0.5, 0.5)
-    keep_box: tuple[float, float, float, float] | None = None
 
-    # Resolve anchor and keep_box
-    focus_point = get_focus_point_for_display(raw_metadata, w, h, camera_type=camera_type)
     bird_box: tuple[float, float, float, float] | None = None
-    try:
-        bird_box = detect_primary_bird_box(image)
-    except Exception:
-        pass
+    mode = normalize_center_mode(center_mode)
+    if mode in {CENTER_MODE_BIRD, CENTER_MODE_FOCUS}:
+        try:
+            bird_box = detect_primary_bird_box(image)
+        except Exception:
+            bird_box = None
 
-    if center_mode == CENTER_MODE_FOCUS:
-        if focus_point is not None:
-            anchor = focus_point
-        elif bird_box is not None:
-            anchor = box_center(bird_box)
-    elif center_mode == CENTER_MODE_BIRD:
-        if bird_box is not None:
-            anchor = box_center(bird_box)
-            keep_box = bird_box
-        elif focus_point is not None:
-            anchor = focus_point
-
-    # Auto bird crop with asymmetric inner padding
-    if keep_box is not None:
-        expanded_px = expand_unit_box_to_unclamped_pixels(
-            keep_box, width=w, height=h,
-            top=inner_top, bottom=inner_bottom, left=inner_left, right=inner_right,
-        )
-        if expanded_px is not None:
-            import math as _math
-            kl, kt, kr, kb = expanded_px
-            kw = max(1.0, kr - kl)
-            kh = max(1.0, kb - kt)
-            cx = (kl + kr) * 0.5
-            cy = (kt + kb) * 0.5
-            cw = kw
-            ch = cw / ratio
-            if ch < kh:
-                ch = kh
-                cw = ch * ratio
-            cl = cx - cw * 0.5
-            ct = cy - ch * 0.5
-            cr = cl + cw
-            cb = ct + ch
-            outer_l = max(0, int(_math.ceil(-cl)))
-            outer_t = max(0, int(_math.ceil(-ct)))
-            outer_r = max(0, int(_math.ceil(cr - w)))
-            outer_b = max(0, int(_math.ceil(cb - h)))
-            pw = w + outer_l + outer_r
-            ph = h + outer_t + outer_b
-            if pw > 0 and ph > 0:
-                crop_box = normalize_unit_box((
-                    (cl + outer_l) / float(pw),
-                    (ct + outer_t) / float(ph),
-                    (cr + outer_l) / float(pw),
-                    (cb + outer_t) / float(ph),
-                ))
-                if crop_box is not None:
-                    return (crop_box, (outer_t, outer_b, outer_l, outer_r))
-
-    # Fallback: simple ratio crop from anchor
-    crop_box = compute_ratio_crop_box(
-        width=w, height=h, ratio=ratio, anchor=anchor, keep_box=None,
+    settings = {
+        "ratio": ratio,
+        "center_mode": center_mode,
+        "crop_padding_top": inner_top,
+        "crop_padding_bottom": inner_bottom,
+        "crop_padding_left": inner_left,
+        "crop_padding_right": inner_right,
+        "crop_box": None,
+    }
+    return compute_crop_plan_for_image(
+        image=image,
+        raw_metadata=raw_metadata,
+        settings=settings,
+        bird_box=bird_box,
+        camera_type=camera_type,
     )
-    if not crop_box_has_effect(crop_box):
-        return (None, (0, 0, 0, 0))
-    return (crop_box, (0, 0, 0, 0))
 
 
 def apply_full_crop(

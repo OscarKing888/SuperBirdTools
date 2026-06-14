@@ -130,6 +130,20 @@ def _decode_raw(path: Path, decoder: str) -> Image.Image:
     raise ValueError(f"unknown RAW decoder: {decoder}")
 
 
+def read_decoded_image_size(path: Path) -> tuple[int, int]:
+    """Return display-oriented source dimensions (EXIF orientation applied) without decoding pixels."""
+    ext = path.suffix.lower()
+    if ext in PIL_EXTENSIONS or ext in HEIF_EXTENSIONS:
+        if ext in HEIF_EXTENSIONS and not _register_heif_opener():
+            raise RuntimeError("pillow-heif is required to decode HEIF/HEIC/HIF")
+        with Image.open(path) as image:
+            return ImageOps.exif_transpose(image).size
+    if ext in RAW_EXTENSIONS:
+        with Image.open(path) as image:
+            return image.size
+    raise RuntimeError(f"unsupported image format: {path.suffix}")
+
+
 def decode_image(path: Path, decoder: str = "auto") -> Image.Image:
     ext = path.suffix.lower()
     if ext in PIL_EXTENSIONS:

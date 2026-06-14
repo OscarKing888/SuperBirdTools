@@ -17,7 +17,7 @@ from app_common.preview_canvas import (
     normalize_preview_composition_grid_line_width,
     normalize_preview_composition_grid_mode,
 )
-from birdstamp.decoders.image_decoder import decode_image, decode_image_for_preview
+from birdstamp.decoders.image_decoder import decode_image, decode_image_for_preview, read_decoded_image_size
 from birdstamp import perf as birdstamp_perf
 from birdstamp.gui import editor_core, editor_options, editor_template, editor_utils, template_context as _template_context
 from birdstamp.gui.edit_modes import EDIT_MODE_NONE, EDIT_MODE_REFERENCE_REGION
@@ -312,6 +312,17 @@ class _BirdStampRendererMixin:
         )
         return image.copy()
 
+    def _read_source_full_size(self, path: Path) -> tuple[int, int]:
+        return read_decoded_image_size(path)
+
+    def _crop_display_source_size(self) -> tuple[int, int] | None:
+        full_size = getattr(self, "current_source_full_size", None)
+        if full_size:
+            return (int(full_size[0]), int(full_size[1]))
+        if self.current_source_image is not None:
+            return (self.current_source_image.width, self.current_source_image.height)
+        return None
+
     def _preview_pixmap_max_pixels(self) -> int:
         label = getattr(self, "preview_label", None)
         viewport_budget = 0
@@ -583,6 +594,7 @@ class _BirdStampRendererMixin:
         self.current_path = None
         self.current_photo_info = None
         self.current_source_image = None
+        self.current_source_full_size = None
         self.current_raw_metadata = {}
         self.current_metadata_context = {}
         self._preview_crop_size = None
@@ -603,6 +615,7 @@ class _BirdStampRendererMixin:
                 self.placeholder_path: "Path | None" = src
                 self.current_path = src
                 self.current_source_image = image
+                self.current_source_full_size = self._read_source_full_size(src)
                 self._invalidate_original_mode_cache()
                 self.current_raw_metadata = self._load_raw_metadata(src)
                 self.current_photo_info = _template_context.ensure_photo_info(src, raw_metadata=self.current_raw_metadata)
@@ -620,6 +633,7 @@ class _BirdStampRendererMixin:
         self.current_path = None
         self.current_photo_info = None
         self.current_source_image = None
+        self.current_source_full_size = None
         self.current_raw_metadata = {}
         self.current_metadata_context = {}
         self._preview_crop_size: tuple[int, int] | None = None
@@ -644,7 +658,11 @@ class _BirdStampRendererMixin:
             self.preview_overlay_state if self.preview_pixmap else EditorPreviewOverlayState()
         )
         if self.current_source_image is not None:
-            self.preview_label.set_original_size(self.current_source_image.size[0], self.current_source_image.size[1])
+            display_size = self._crop_display_source_size()
+            if display_size is not None:
+                self.preview_label.set_original_size(display_size[0], display_size[1])
+            else:
+                self.preview_label.set_original_size(None, None)
         else:
             self.preview_label.set_original_size(None, None)
         crop_size = getattr(self, "_preview_crop_size", None)
@@ -891,19 +909,6 @@ class _BirdStampRendererMixin:
             except Exception:
                 stabilization = int(settings.get("auto_crop_stabilization", 0))
             settings["auto_crop_stabilization"] = max(0, min(100, stabilization))
-
-        for key in (
-            STAGE_TEMPLATE_CROP_ENABLED_KEY,
-            STAGE_RESIZE_LIMIT_ENABLED_KEY,
-            STAGE_TEMPLATE_OVERLAY_ENABLED_KEY,
-            STAGE_FOCUS_OVERLAY_ENABLED_KEY,
-        ):
-            if key in raw:
-                settings[key] = _parse_bool_value(raw.get(key), True)
-        if PIPELINE_STAGE_ORDER_KEY in raw:
-            settings[PIPELINE_STAGE_ORDER_KEY] = list(normalize_pipeline_stage_order(raw.get(PIPELINE_STAGE_ORDER_KEY)))
-        if EXPORT_STAGE_ID_KEY in raw:
-            settings[EXPORT_STAGE_ID_KEY] = normalize_export_stage_id(raw.get(EXPORT_STAGE_ID_KEY))
 
         if "custom_center_x" in raw:
             try:
@@ -1361,7 +1366,10 @@ class _BirdStampRendererMixin:
             self.last_rendered = rendered
             self._preview_outer_pad = outer_pad
             self._preview_crop_size = self._preview_pipeline_output_size(
-                source_size=(self.current_source_image.width, self.current_source_image.height),
+                source_size=self._crop_display_source_size() or (
+                    self.current_source_image.width,
+                    self.current_source_image.height,
+                ),
                 crop_box=crop_box,
                 outer_pad=outer_pad,
                 settings=preview_settings,
