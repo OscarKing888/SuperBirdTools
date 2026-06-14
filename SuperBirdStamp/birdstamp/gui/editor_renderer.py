@@ -22,7 +22,7 @@ from birdstamp import perf as birdstamp_perf
 from birdstamp.gui import editor_core, editor_options, editor_template, editor_utils, template_context as _template_context
 from birdstamp.gui.edit_modes import EDIT_MODE_NONE, EDIT_MODE_REFERENCE_REGION
 from birdstamp.gui.editor_preview_canvas import EditorPreviewOverlayOptions, EditorPreviewOverlayState
-from birdstamp.video_export import (
+from birdstamp.export_stage import (
     DEFAULT_EXPORT_STAGE_ID,
     DEJITTER_REFERENCE_ENABLED_KEY,
     DEJITTER_REFERENCE_REGIONS_KEY,

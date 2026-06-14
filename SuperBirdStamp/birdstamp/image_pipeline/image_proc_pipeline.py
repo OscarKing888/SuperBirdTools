@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Iterable, Sequence
 
 from .image_proc_context import ImageProcContext
-from .image_proc_stage import ImageProcStage
+from .image_proc_stage.image_proc_stage import ImageProcStage
 from .image_proc_stage_descriptor import ImageProcStageDescriptor
 
 

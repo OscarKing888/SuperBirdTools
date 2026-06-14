@@ -5,7 +5,7 @@ from pathlib import Path
 from PIL import Image
 
 from birdstamp.gui import editor_core
-from birdstamp.video_export import core as video_export_core
+from birdstamp.export_stage import core as export_stage_core
 
 
 def _settings(
@@ -118,7 +118,7 @@ def test_bird_center_asymmetric_padding_matches_image_center_semantics() -> None
 
 
 def test_bird_center_crop_plan_matches_export_path() -> None:
-    from birdstamp.video_export.core import _source_signature
+    from birdstamp.export_stage.core import _source_signature
 
     image = Image.new("RGB", (3000, 2000), "#ffffff")
     bird_box = (0.35, 0.25, 0.55, 0.45)
@@ -133,7 +133,7 @@ def test_bird_center_crop_plan_matches_export_path() -> None:
         settings=settings,
         bird_box=bird_box,
     )
-    export_crop, export_pad = video_export_core._compute_crop_plan_for_image(
+    export_crop, export_pad = export_stage_core._compute_crop_plan_for_image(
         path=path,
         image=image,
         raw_metadata={},

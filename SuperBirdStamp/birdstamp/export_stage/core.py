@@ -56,14 +56,14 @@ from .video_export_options import VideoExportOptions
 from .video_export_progress import VideoExportProgress, VideoExportProgressCallback
 from .video_frame_job import VideoFrameJob
 
-_log = get_logger("video_export")
+_log = get_logger("export_stage")
 
 
-def _video_export_callable(name: str) -> Callable[..., Any]:
-    """经包命名空间解析可调用对象，便于测试 patch ``birdstamp.video_export`` 上的符号。"""
-    from birdstamp import video_export as _video_export
+def _export_stage_callable(name: str) -> Callable[..., Any]:
+    """经包命名空间解析可调用对象，便于测试 patch ``birdstamp.export_stage`` 上的符号。"""
+    from birdstamp import export_stage as _export_stage
 
-    return getattr(_video_export, name)
+    return getattr(_export_stage, name)
 
 
 
@@ -640,7 +640,7 @@ def _context_bird_box_cache(
 def _detect_primary_bird_box_for_export(
     image: Image.Image,
 ) -> tuple[float, float, float, float] | None:
-    return _video_export_callable("_detect_primary_bird_box")(image)
+    return _export_stage_callable("_detect_primary_bird_box")(image)
 
 
 def _resolve_bird_box_for_image(
@@ -1364,7 +1364,7 @@ def _render_and_cache_source_frame(
     cancel_event: threading.Event | None,
 ) -> tuple[int, str, Path, str, str]:
     _raise_if_cancel_requested(cancel_event, message="视频导出已中断，正在保留已完成源帧。")
-    rendered = _video_export_callable("render_video_frame")(
+    rendered = _export_stage_callable("render_video_frame")(
         job,
         template_paths=template_paths,
         bird_box_cache=bird_box_cache,
@@ -1826,7 +1826,7 @@ def _render_and_save_video_frame(
     cancel_event: threading.Event | None,
 ) -> tuple[int, str]:
     _raise_if_cancel_requested(cancel_event, message="视频导出已中断，正在保留已完成帧。")
-    rendered = _video_export_callable("render_video_frame")(
+    rendered = _export_stage_callable("render_video_frame")(
         job,
         template_paths=template_paths,
         bird_box_cache=bird_box_cache,
@@ -2134,7 +2134,7 @@ def _build_partial_video_from_frames(
     if validated.container == "mp4":
         cmd.extend(["-movflags", "+faststart"])
     cmd.append(str(partial_output_path))
-    _video_export_callable("_run_ffmpeg_command")(cmd, cancel_event=None)
+    _export_stage_callable("_run_ffmpeg_command")(cmd, cancel_event=None)
     return partial_output_path if partial_output_path.is_file() else None
 
 
@@ -2159,7 +2159,7 @@ def export_video(
     if not jobs:
         raise ValueError("没有可用于生成视频的图片。")
 
-    ffmpeg_path = _video_export_callable("find_ffmpeg_executable")()
+    ffmpeg_path = _export_stage_callable("find_ffmpeg_executable")()
     if ffmpeg_path is None:
         raise FileNotFoundError(_ffmpeg_not_found_message())
 
@@ -2220,7 +2220,7 @@ def export_video(
         )
         cmd = build_ffmpeg_command(ffmpeg_path, frames_dir, validated, output_path=temp_output_path)
         _log.info("video export ffmpeg command: %s", cmd)
-        _video_export_callable("_run_ffmpeg_command")(cmd, cancel_event=cancel_event)
+        _export_stage_callable("_run_ffmpeg_command")(cmd, cancel_event=cancel_event)
 
         if not temp_output_path.is_file():
             raise RuntimeError(f"视频编码完成但输出文件不存在: {temp_output_path}")
@@ -2308,12 +2308,10 @@ __all__ = [
     "EXPORT_STAGE_PNG_ID",
     "EXPORT_STAGE_VIDEO_ID",
     "FFMPEG_ENV_VAR",
-    "FocusOverlayStage",
     "GifExportStage",
     "PIPELINE_STAGE_ORDER_KEY",
     "PIPELINE_STAGE_ENABLED_KEY",
     "PngExportStage",
-    "ResizeLimitStage",
     "STAGE_FOCUS_OVERLAY_ENABLED_KEY",
     "STAGE_FOCUS_OVERLAY_ID",
     "STAGE_RESIZE_LIMIT_ENABLED_KEY",
@@ -2322,8 +2320,6 @@ __all__ = [
     "STAGE_TEMPLATE_CROP_ID",
     "STAGE_TEMPLATE_OVERLAY_ENABLED_KEY",
     "STAGE_TEMPLATE_OVERLAY_ID",
-    "TemplateCropStage",
-    "TemplateOverlayStage",
     "VideoExportCancelledError",
     "VideoExportOptions",
     "VideoExportProgress",

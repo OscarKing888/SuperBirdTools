@@ -3,9 +3,9 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from typing import Any, Mapping, Sequence
 
-from .image_proc_context import ImageProcContext
-from .image_proc_option_spec import ImageProcOptionSpec
-from .image_proc_stage_descriptor import ImageProcStageDescriptor
+from ..image_proc_context import ImageProcContext
+from ..image_proc_option_spec import ImageProcOptionSpec
+from ..image_proc_stage_descriptor import ImageProcStageDescriptor
 
 
 class ImageProcStage(ABC):

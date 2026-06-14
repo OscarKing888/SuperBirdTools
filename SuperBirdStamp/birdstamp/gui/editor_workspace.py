@@ -19,7 +19,7 @@ from birdstamp.gui.edit_modes import (
     EDIT_MODE_REFERENCE_REGION,
 )
 from birdstamp.gui.editor_photo_list import PHOTO_COL_ROW, PHOTO_COL_SEQ, PHOTO_LIST_PATH_ROLE, PHOTO_LIST_SEQUENCE_ROLE
-from birdstamp.video_export import (
+from birdstamp.export_stage import (
     PIPELINE_STAGE_ENABLED_KEY,
     PIPELINE_STAGE_ORDER_KEY,
     STAGE_FOCUS_OVERLAY_ENABLED_KEY,

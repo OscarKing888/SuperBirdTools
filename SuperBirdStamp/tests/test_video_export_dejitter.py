@@ -3,8 +3,8 @@ from pathlib import Path
 import numpy as np
 from PIL import Image
 
-from birdstamp import video_export
-from birdstamp.video_export import (
+from birdstamp import export_stage
+from birdstamp.export_stage import (
     VideoFrameJob,
     crop_plan_precompute_required,
     dejitter_reference_active,
@@ -75,7 +75,7 @@ def test_reference_region_dejitter_shifts_crop_center_to_follow_feature() -> Non
     assert prepared == 2
 
     centers = [
-        video_export._crop_plan_center_in_source_pixels(
+        export_stage._crop_plan_center_in_source_pixels(
             source_width=100,
             source_height=100,
             crop_plan=job.crop_plan,

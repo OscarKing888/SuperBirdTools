@@ -5,7 +5,7 @@ from pathlib import Path
 from PIL import Image
 
 from birdstamp.gui import editor_core
-from birdstamp.video_export import VideoFrameJob, core as video_export_core, render_video_frame
+from birdstamp.export_stage import VideoFrameJob, core as export_stage_core, render_video_frame
 
 
 def _settings(
@@ -185,7 +185,7 @@ def test_compute_crop_plan_matches_gui_path() -> None:
         inner_bottom=padding,
         inner_left=1,
     )
-    export_crop, export_pad = video_export_core._compute_crop_plan_for_image(
+    export_crop, export_pad = export_stage_core._compute_crop_plan_for_image(
         path=Path("sample.jpg"),
         image=image,
         raw_metadata={},

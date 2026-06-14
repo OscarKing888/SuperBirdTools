@@ -1,4 +1,4 @@
-"""Video export package: one public class per module; import from here."""
+"""Export stage package: one public class per module; import from here."""
 from __future__ import annotations
 
 from .constants import (
@@ -26,18 +26,13 @@ from .constants import (
     STAGE_TEMPLATE_OVERLAY_ENABLED_KEY,
     STAGE_TEMPLATE_OVERLAY_ID,
 )
-from .focus_overlay_stage import FocusOverlayStage
 from .gif_export_stage import GifExportStage
 from .png_export_stage import PngExportStage
-from .resize_limit_stage import ResizeLimitStage
-from .template_crop_stage import TemplateCropStage
-from .template_overlay_stage import TemplateOverlayStage
 from .video_export_cancelled_error import VideoExportCancelledError
 from .video_export_options import VideoExportOptions
 from .video_export_progress import VideoExportProgress
 from .video_frame_job import VideoFrameJob
 from .video_proc_export_stage import VideoProcExportStage
-from .pipeline import build_default_image_proc_pipeline, build_image_proc_export_stages
 from .constants import _detect_primary_bird_box
 from . import core as _core
 from .core import (
@@ -60,7 +55,7 @@ from .core import (
     validate_video_export_options,
 )
 
-# 测试与内部调用仍可通过 birdstamp.video_export._xxx 访问 core 私有符号。
+# 测试与内部调用仍可通过 birdstamp.export_stage._xxx 访问 core 私有符号。
 _compute_auto_bird_crop_plan = _core._compute_auto_bird_crop_plan
 _count_contiguous_rendered_frames = _core._count_contiguous_rendered_frames
 _create_video_work_dir = _core._create_video_work_dir
@@ -69,6 +64,22 @@ _partial_video_output_path = _core._partial_video_output_path
 _recommended_auto_render_workers = _core._recommended_auto_render_workers
 _render_cache_key = _core._render_cache_key
 _run_ffmpeg_command = _core._run_ffmpeg_command
+
+_LAZY_EXPORTS = {
+    "build_default_image_proc_pipeline": ".pipeline",
+    "build_image_proc_export_stages": ".pipeline",
+}
+
+
+def __getattr__(name: str):
+    module_path = _LAZY_EXPORTS.get(name)
+    if module_path is None:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    import importlib
+
+    module = importlib.import_module(module_path, __name__)
+    return getattr(module, name)
+
 
 __all__ = [
     "DEFAULT_VIDEO_BACKGROUND_COLOR",
@@ -79,12 +90,10 @@ __all__ = [
     "EXPORT_STAGE_PNG_ID",
     "EXPORT_STAGE_VIDEO_ID",
     "FFMPEG_ENV_VAR",
-    "FocusOverlayStage",
     "GifExportStage",
     "PIPELINE_STAGE_ORDER_KEY",
     "PIPELINE_STAGE_ENABLED_KEY",
     "PngExportStage",
-    "ResizeLimitStage",
     "STAGE_FOCUS_OVERLAY_ENABLED_KEY",
     "STAGE_FOCUS_OVERLAY_ID",
     "STAGE_RESIZE_LIMIT_ENABLED_KEY",
@@ -93,8 +102,6 @@ __all__ = [
     "STAGE_TEMPLATE_CROP_ID",
     "STAGE_TEMPLATE_OVERLAY_ENABLED_KEY",
     "STAGE_TEMPLATE_OVERLAY_ID",
-    "TemplateCropStage",
-    "TemplateOverlayStage",
     "VideoExportCancelledError",
     "VideoExportOptions",
     "VideoExportProgress",

@@ -141,7 +141,7 @@ def test_focus_center_crop_plan_matches_export_path() -> None:
 
     from PIL import Image
 
-    from birdstamp.video_export import core as video_export_core
+    from birdstamp.export_stage import core as export_stage_core
 
     image = Image.new("RGB", (3000, 2000), "#ffffff")
     focus_box = (0.35, 0.25, 0.55, 0.45)
@@ -159,7 +159,7 @@ def test_focus_center_crop_plan_matches_export_path() -> None:
         raw_metadata=_focus_metadata_from_box(focus_box),
         settings=settings,
     )
-    export_crop, export_pad = video_export_core._compute_crop_plan_for_image(
+    export_crop, export_pad = export_stage_core._compute_crop_plan_for_image(
         path=Path("sample.jpg"),
         image=image,
         raw_metadata=_focus_metadata_from_box(focus_box),

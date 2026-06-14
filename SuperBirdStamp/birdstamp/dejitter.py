@@ -15,7 +15,7 @@
 
 设计要点：
 * 本模块只处理 numpy 灰度 patch 与归一化/像素坐标，不依赖 PIL/Qt，图像生命周期由
-  调用方（``video_export``）负责。
+  调用方（``export_stage``）负责。
 * 策略 ``stabilize(context)`` 就地把结果写回每个 :class:`DeJitterFrame` 的
   ``stable_center``（源图像素坐标），与现有 ``candidate["stable_center"]`` 约定一致。
 """

@@ -1,31 +1,22 @@
 from __future__ import annotations
 
-from typing import Any, Mapping
-
-from birdstamp.image_pipeline import ImageProcContext, ImageProcExportStage, ImageProcOptionChoice, ImageProcOptionSpec, ImageProcStage
-
-from . import core
-from .constants import (
-    EXPORT_STAGE_GIF_ID,
-    EXPORT_STAGE_PNG_ID,
-    EXPORT_STAGE_VIDEO_ID,
-    STAGE_FOCUS_OVERLAY_ENABLED_KEY,
-    STAGE_FOCUS_OVERLAY_ID,
-    STAGE_RESIZE_LIMIT_ENABLED_KEY,
-    STAGE_RESIZE_LIMIT_ID,
-    STAGE_TEMPLATE_CROP_ENABLED_KEY,
+from ..image_proc_context import ImageProcContext
+from ..image_proc_option_choice import ImageProcOptionChoice
+from ..image_proc_option_spec import ImageProcOptionSpec
+from birdstamp.export_stage.constants import (
     STAGE_TEMPLATE_CROP_ID,
-    STAGE_TEMPLATE_OVERLAY_ENABLED_KEY,
-    STAGE_TEMPLATE_OVERLAY_ID,
     _CENTER_MODE_BIRD,
     _CENTER_MODE_CUSTOM,
     _CENTER_MODE_FOCUS,
     _CENTER_MODE_IMAGE,
     _DEFAULT_TEMPLATE_CENTER_MODE,
-    _DEFAULT_TEMPLATE_MAX_LONG_EDGE,
 )
 
-class TemplateCropStage(ImageProcStage):
+from ._export_stage_core import export_stage_core
+from .image_proc_stage import ImageProcStage
+
+
+class ImageProcTemplateCropStage(ImageProcStage):
     stage_id = STAGE_TEMPLATE_CROP_ID
     label = "模板裁切"
     description = "根据模板比例、中心模式、照片级裁切框与留边设置生成裁切后的图像。"
@@ -68,6 +59,7 @@ class TemplateCropStage(ImageProcStage):
         )
 
     def process(self, context: ImageProcContext) -> ImageProcContext:
+        core = export_stage_core()
         settings = core._clone_render_settings(context.settings)
         raw_metadata = dict(context.raw_metadata or {})
         precomputed_crop_plan = core._normalize_precomputed_crop_plan(context.crop_plan)
@@ -98,4 +90,3 @@ class TemplateCropStage(ImageProcStage):
             image = core._pad_image(image, top=top, bottom=bottom, left=left, right=right, fill=fill)
         context.image = core._crop_image_by_normalized_box(image, crop_box)
         return context
-

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from .image_proc_context import ImageProcContext
-from .image_proc_stage import ImageProcStage
+from .image_proc_stage.image_proc_stage import ImageProcStage
 
 
 class ImageProcExportStage(ImageProcStage):

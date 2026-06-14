@@ -154,7 +154,7 @@ from birdstamp.gui.editor_workspace import _BirdStampWorkspaceMixin
 from birdstamp.gui.editor_crop_calculator import _BirdStampCropMixin
 from birdstamp.gui.editor_renderer import _BirdStampRendererMixin
 from birdstamp.gui.editor_exporter import _BirdStampExporterMixin
-from birdstamp.video_export import (
+from birdstamp.export_stage import (
     DEFAULT_EXPORT_STAGE_ID,
     EXPORT_STAGE_GIF_ID,
     EXPORT_STAGE_ID_KEY,
@@ -1146,7 +1146,7 @@ class BirdStampEditorWindow(
         db_hint.setStyleSheet("color: #7A7A7A; font-size: 11px;")
         db_layout.addWidget(db_hint)
 
-        db_section = CollapsibleSection("Report 数据库", expanded=True)
+        db_section = CollapsibleSection("Report 数据库", expanded=False)
         db_section.set_content_widget(db_content)
         left_layout.addWidget(db_section)
 

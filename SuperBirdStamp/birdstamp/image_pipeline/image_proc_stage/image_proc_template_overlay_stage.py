@@ -3,30 +3,18 @@ from __future__ import annotations
 from typing import Any, Mapping
 
 from birdstamp.gui import template_context as _template_context
-from birdstamp.image_pipeline import ImageProcContext, ImageProcExportStage, ImageProcOptionChoice, ImageProcOptionSpec, ImageProcStage
-
-from . import core
-from .constants import (
-    EXPORT_STAGE_GIF_ID,
-    EXPORT_STAGE_PNG_ID,
-    EXPORT_STAGE_VIDEO_ID,
-    STAGE_FOCUS_OVERLAY_ENABLED_KEY,
-    STAGE_FOCUS_OVERLAY_ID,
-    STAGE_RESIZE_LIMIT_ENABLED_KEY,
-    STAGE_RESIZE_LIMIT_ID,
-    STAGE_TEMPLATE_CROP_ENABLED_KEY,
-    STAGE_TEMPLATE_CROP_ID,
+from ..image_proc_context import ImageProcContext
+from ..image_proc_option_spec import ImageProcOptionSpec
+from birdstamp.export_stage.constants import (
     STAGE_TEMPLATE_OVERLAY_ENABLED_KEY,
     STAGE_TEMPLATE_OVERLAY_ID,
-    _CENTER_MODE_BIRD,
-    _CENTER_MODE_CUSTOM,
-    _CENTER_MODE_FOCUS,
-    _CENTER_MODE_IMAGE,
-    _DEFAULT_TEMPLATE_CENTER_MODE,
-    _DEFAULT_TEMPLATE_MAX_LONG_EDGE,
 )
 
-class TemplateOverlayStage(ImageProcStage):
+from ._export_stage_core import export_stage_core
+from .image_proc_stage import ImageProcStage
+
+
+class ImageProcTemplateOverlayStage(ImageProcStage):
     stage_id = STAGE_TEMPLATE_OVERLAY_ID
     label = "模板叠加"
     description = "绘制 Banner 背景和模板文字字段。"
@@ -40,6 +28,7 @@ class TemplateOverlayStage(ImageProcStage):
         )
 
     def is_enabled(self, settings: Mapping[str, Any]) -> bool:
+        core = export_stage_core()
         if not core._resolve_stage_enabled(
             settings,
             stage_id=self.stage_id,
@@ -52,6 +41,7 @@ class TemplateOverlayStage(ImageProcStage):
     def process(self, context: ImageProcContext) -> ImageProcContext:
         if not self.is_enabled(context.settings):
             return context
+        core = export_stage_core()
         settings = core._clone_render_settings(context.settings)
         template_payload = core._resolve_template_payload_for_render(settings, context.template_paths)
         raw_metadata = dict(context.raw_metadata or {})
@@ -70,4 +60,3 @@ class TemplateOverlayStage(ImageProcStage):
         context.photo_info = photo_info
         context.metadata_context = metadata_context
         return context
-

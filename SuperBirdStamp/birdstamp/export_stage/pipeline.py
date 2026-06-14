@@ -3,6 +3,12 @@ from __future__ import annotations
 from typing import Any
 
 from birdstamp.image_pipeline import ImageProcExportStage, ImageProcPipeline, ImageProcStage
+from birdstamp.image_pipeline.image_proc_stage import (
+    ImageProcFocusOverlayStage,
+    ImageProcResizeLimitStage,
+    ImageProcTemplateCropStage,
+    ImageProcTemplateOverlayStage,
+)
 
 from .constants import (
     DEFAULT_PIPELINE_STAGE_ORDER,
@@ -15,19 +21,15 @@ from .constants import (
     STAGE_TEMPLATE_OVERLAY_ID,
 )
 from .core import normalize_pipeline_stage_order
-from .focus_overlay_stage import FocusOverlayStage
 from .gif_export_stage import GifExportStage
 from .png_export_stage import PngExportStage
-from .resize_limit_stage import ResizeLimitStage
-from .template_crop_stage import TemplateCropStage
-from .template_overlay_stage import TemplateOverlayStage
 from .video_proc_export_stage import VideoProcExportStage
 
 _PROCESS_STAGE_CLASSES: dict[str, type[ImageProcStage]] = {
-    STAGE_TEMPLATE_CROP_ID: TemplateCropStage,
-    STAGE_RESIZE_LIMIT_ID: ResizeLimitStage,
-    STAGE_TEMPLATE_OVERLAY_ID: TemplateOverlayStage,
-    STAGE_FOCUS_OVERLAY_ID: FocusOverlayStage,
+    STAGE_TEMPLATE_CROP_ID: ImageProcTemplateCropStage,
+    STAGE_RESIZE_LIMIT_ID: ImageProcResizeLimitStage,
+    STAGE_TEMPLATE_OVERLAY_ID: ImageProcTemplateOverlayStage,
+    STAGE_FOCUS_OVERLAY_ID: ImageProcFocusOverlayStage,
 }
 
 

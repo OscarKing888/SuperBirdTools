@@ -23,7 +23,7 @@ from PyQt6.QtWidgets import (
 )
 
 from birdstamp.gui import editor_options
-from birdstamp.video_export import VideoExportCancelledError, VideoExportOptions, VideoFrameJob, export_video
+from birdstamp.export_stage import VideoExportCancelledError, VideoExportOptions, VideoFrameJob, export_video
 
 VIDEO_CONTAINER_OPTIONS = editor_options.VIDEO_CONTAINER_OPTIONS
 VIDEO_CODEC_OPTIONS = editor_options.VIDEO_CODEC_OPTIONS

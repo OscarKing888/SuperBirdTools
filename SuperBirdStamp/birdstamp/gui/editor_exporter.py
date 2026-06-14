@@ -4,7 +4,7 @@
 - 主界面当前图导出
 - 批量图片导出
 
-两者仅在目标路径生成方式上不同，渲染任务均复用 video_export 中的
+两者仅在目标路径生成方式上不同，渲染任务均复用 export_stage 中的
 `render_video_frame()` 与相同的自动线程数策略。
 """
 from __future__ import annotations
@@ -38,7 +38,7 @@ from birdstamp.gif_export import (
     build_gif_variant_output_paths,
     export_gif,
 )
-from birdstamp.video_export import (
+from birdstamp.export_stage import (
     EXPORT_STAGE_GIF_ID,
     EXPORT_STAGE_VIDEO_ID,
     VideoFrameJob,

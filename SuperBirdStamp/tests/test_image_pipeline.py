@@ -4,7 +4,7 @@ from PIL import Image
 
 from birdstamp.image_pipeline import ImageProcContext, ImageProcExportStage, ImageProcPipeline, ImageProcStage
 from birdstamp.gui.editor_core import transform_source_box_after_crop_padding
-from birdstamp.video_export import (
+from birdstamp.export_stage import (
     PIPELINE_STAGE_ORDER_KEY,
     VideoFrameJob,
     build_default_image_proc_pipeline,

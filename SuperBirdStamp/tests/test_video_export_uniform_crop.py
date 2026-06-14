@@ -2,8 +2,8 @@ from pathlib import Path
 
 from PIL import Image
 
-from birdstamp import video_export
-from birdstamp.video_export import (
+from birdstamp import export_stage
+from birdstamp.export_stage import (
     VideoFrameJob,
     prepare_uniform_auto_crop_plans,
     render_video_frame,
@@ -56,7 +56,7 @@ def test_uniform_auto_crop_precomputes_same_source_frame_size() -> None:
 
 def test_precomputed_uniform_crop_plan_is_used_without_second_bird_detection() -> None:
     calls = 0
-    original_detect = video_export._detect_primary_bird_box
+    original_detect = export_stage._detect_primary_bird_box
 
     def _fake_detect(_image):
         nonlocal calls
@@ -81,7 +81,7 @@ def test_precomputed_uniform_crop_plan_is_used_without_second_bird_detection() -
     ]
 
     try:
-        video_export._detect_primary_bird_box = _fake_detect
+        export_stage._detect_primary_bird_box = _fake_detect
         signature_before = source_frame_signature_for_job(jobs[0])
         prepare_uniform_auto_crop_plans(jobs)
         signature_after = source_frame_signature_for_job(jobs[0])
@@ -91,16 +91,16 @@ def test_precomputed_uniform_crop_plan_is_used_without_second_bird_detection() -
         def _fail_detect(_image):
             raise AssertionError("bird detection should not run during render")
 
-        video_export._detect_primary_bird_box = _fail_detect
+        export_stage._detect_primary_bird_box = _fail_detect
         for job in jobs:
             rendered = render_video_frame(job)
             assert rendered.size[0] == rendered.size[1]
     finally:
-        video_export._detect_primary_bird_box = original_detect
+        export_stage._detect_primary_bird_box = original_detect
 
 
 def test_auto_crop_stabilization_blends_centers_to_group_median() -> None:
-    original_detect = video_export._detect_primary_bird_box
+    original_detect = export_stage._detect_primary_bird_box
     boxes = iter(
         [
             (0.15, 0.15, 0.35, 0.35),
@@ -129,10 +129,10 @@ def test_auto_crop_stabilization_blends_centers_to_group_median() -> None:
     ]
 
     try:
-        video_export._detect_primary_bird_box = _fake_detect
+        export_stage._detect_primary_bird_box = _fake_detect
         prepare_uniform_auto_crop_plans(jobs)
         centers = [
-            video_export._crop_plan_center_in_source_pixels(
+            export_stage._crop_plan_center_in_source_pixels(
                 source_width=100,
                 source_height=100,
                 crop_plan=job.crop_plan,
@@ -141,4 +141,4 @@ def test_auto_crop_stabilization_blends_centers_to_group_median() -> None:
         ]
         assert centers == [(50.0, 50.0), (50.0, 50.0)]
     finally:
-        video_export._detect_primary_bird_box = original_detect
+        export_stage._detect_primary_bird_box = original_detect
