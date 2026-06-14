@@ -206,7 +206,6 @@ class VideoExportPanel(QGroupBox):
         self.export_button.clicked.connect(self._emit_export_request)
 
         self.cancel_button = QPushButton("中断导出")
-        self.cancel_button.setEnabled(False)
         self.cancel_button.clicked.connect(self._emit_cancel_request)
 
         button_min_width = max(
@@ -218,6 +217,8 @@ class VideoExportPanel(QGroupBox):
             button.setMinimumWidth(button_min_width)
             button.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
             button_row.addWidget(button, stretch=1)
+
+        self.cancel_button.hide()
 
         form.addRow("", button_row)
         root.addLayout(form)
@@ -496,9 +497,8 @@ class VideoExportPanel(QGroupBox):
         self.preset_widget.setEnabled(not busy)
         self.crf_spin.setEnabled(not busy)
         self.preserve_temp_files_check.setEnabled(not busy)
-        self.export_button.setEnabled(not busy)
-        self.cancel_button.setEnabled(busy)
-        self.export_button.setText("正在生成..." if busy else "生成视频")
+        self.export_button.setVisible(not busy)
+        self.cancel_button.setVisible(busy)
         if status_text is not None:
             self.set_status_text(status_text)
 
