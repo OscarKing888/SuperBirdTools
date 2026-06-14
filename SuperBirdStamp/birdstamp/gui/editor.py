@@ -108,8 +108,8 @@ from birdstamp.gui import editor_options
 from birdstamp.gui import editor_template
 from birdstamp.gui import editor_utils
 from birdstamp.gui import template_context as _template_context
+from birdstamp.gui.editor_crop_padding_widget import _CropPaddingEditorWidget
 from birdstamp.gui.editor_template_dialog import (
-    _CropPaddingEditorWidget,
     _GradientBarWidget,  # noqa: F401  (re-exported for compat)
     _GradientEditorWidget,  # noqa: F401
     TemplateManagerDialog,
@@ -1087,6 +1087,7 @@ class BirdStampEditorWindow(
         left_layout = QVBoxLayout(left_panel)
         left_layout.setContentsMargins(8, 8, 8, 8)
         left_layout.setSpacing(10)
+        self._left_panel_layout = left_layout
 
         _window_icon_path, _info_bar_icon_path = _app_icon_paths()
         _app_icon = QIcon(str(_window_icon_path))
@@ -1208,9 +1209,10 @@ class BirdStampEditorWindow(
         photos_layout.addWidget(hint)
 
         photos_section = CollapsibleSection("照片列表", expanded=True)
-        photos_section.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Expanding)
         photos_section.set_content_widget(photos_content)
-        left_layout.addWidget(photos_section, stretch=1)
+        photos_section.toggled.connect(self._on_photos_section_toggled)
+        self._photos_section = photos_section
+        left_layout.addWidget(photos_section)
 
     # ------------------------------------------------------------------
     # ReportDB 列表与缓存
@@ -1505,6 +1507,15 @@ class BirdStampEditorWindow(
         export_section = CollapsibleSection("导出", expanded=True)
         export_section.set_content_widget(export_content)
         left_layout.addWidget(export_section)
+        left_layout.addStretch(1)
+        self._on_photos_section_toggled(self._photos_section.is_expanded())
+
+    def _on_photos_section_toggled(self, expanded: bool) -> None:
+        layout = getattr(self, "_left_panel_layout", None)
+        photos_section = getattr(self, "_photos_section", None)
+        if layout is None or photos_section is None:
+            return
+        layout.setStretchFactor(photos_section, 1 if expanded else 0)
 
     def _center_mode_button_value(self) -> str:
         buttons = getattr(self, "center_mode_buttons", None)
