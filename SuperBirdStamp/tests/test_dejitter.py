@@ -1,6 +1,6 @@
 import numpy as np
 
-from birdstamp.dejitter import (
+from birdstamp.image_dejitter import (
     DeJitterContext,
     DeJitterFrame,
     MedianCenterStabilizationStrategy,

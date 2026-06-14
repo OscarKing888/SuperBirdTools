@@ -19,7 +19,7 @@ import numpy as np
 from PIL import Image, ImageColor
 
 from app_common.log import get_logger
-from birdstamp import dejitter as _dejitter
+from birdstamp import image_dejitter as _dejitter
 from birdstamp.config import get_app_dir, get_app_resource_dir, get_user_data_dir
 from birdstamp.decoders.image_decoder import decode_image
 from birdstamp.export_frame_cache import (
@@ -820,7 +820,7 @@ def prepare_uniform_auto_crop_plans(
 ) -> int:
     """Precompute crop plans, optionally apply de-jitter and unify auto-crop sizes.
 
-    去抖动稳定化通过 :mod:`birdstamp.dejitter` 的策略接口完成：
+    去抖动稳定化通过 :mod:`birdstamp.image_dejitter` 的策略接口完成：
     * 默认"中位中心混合"策略保留原有 ``uniform_auto_crop`` + 防抖滑块行为；
     * 当选择"参考区特征对齐"策略且存在有效参考区时，按帧间平移补偿裁切中心，
       此路径即使未开启 ``uniform_auto_crop`` 也会生效（逐帧使用各自裁切尺寸）。

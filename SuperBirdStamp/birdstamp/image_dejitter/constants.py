@@ -1,0 +1,8 @@
+from __future__ import annotations
+
+STRATEGY_MEDIAN = "median"
+STRATEGY_REFERENCE_REGION = "reference_region"
+DEFAULT_STRATEGY = STRATEGY_MEDIAN
+
+DEFAULT_PATCH_SIZE = 192
+DEFAULT_MIN_CONFIDENCE = 2.0
