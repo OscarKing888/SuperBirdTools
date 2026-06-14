@@ -32,7 +32,8 @@
   "default_gif_loop": 0,
   "video_container_options": [
     {"suffix": "mp4", "label": "MP4"},
-    {"suffix": "mov", "label": "MOV"}
+    {"suffix": "mov", "label": "MOV"},
+    {"suffix": "raw", "label": "无压缩"}
   ],
   "video_codec_options": [
     {"value": "h264", "label": "H.264 / libx264"},

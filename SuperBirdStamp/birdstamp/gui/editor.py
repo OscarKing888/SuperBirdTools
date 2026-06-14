@@ -180,6 +180,7 @@ from birdstamp.export_stage import (
     prepare_uniform_auto_crop_plans,
     preferred_ffmpeg_binary_path,
 )
+from birdstamp.export_stage.video_export_options import is_uncompressed_video_container, video_container_file_suffix
 from app_common.report_db import (
     ReportDB,
     find_superpicky_report_db_paths,
@@ -5050,7 +5051,7 @@ class BirdStampEditorWindow(
         return metadata_by_key
 
     def _suggest_video_output_path(self, container: str) -> Path:
-        suffix = str(container or "mp4").strip().lower().lstrip(".") or "mp4"
+        suffix = video_container_file_suffix(container)
         paths = self._list_photo_paths()
         remembered_dir = self._video_export_last_output_dir
         base_dir = remembered_dir if remembered_dir is not None and remembered_dir.is_dir() else None
@@ -5241,12 +5242,18 @@ class BirdStampEditorWindow(
 
         try:
             default_path = self._suggest_video_output_path(request.container)
-            selected_filter = "MP4 视频 (*.mp4)" if str(request.container).lower() == "mp4" else "MOV 视频 (*.mov)"
+            container_lower = str(request.container or "mp4").strip().lower()
+            if is_uncompressed_video_container(container_lower):
+                selected_filter = "AVI 无压缩 (*.avi)"
+            elif container_lower == "mp4":
+                selected_filter = "MP4 视频 (*.mp4)"
+            else:
+                selected_filter = "MOV 视频 (*.mov)"
             file_path, _selected = QFileDialog.getSaveFileName(
                 self,
                 "导出视频",
                 str(default_path),
-                "MP4 视频 (*.mp4);;MOV 视频 (*.mov);;All Files (*.*)",
+                "AVI 无压缩 (*.avi);;MP4 视频 (*.mp4);;MOV 视频 (*.mov);;All Files (*.*)",
                 selected_filter,
             )
             if not file_path:

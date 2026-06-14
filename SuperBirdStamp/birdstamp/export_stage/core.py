@@ -52,7 +52,7 @@ from birdstamp.subprocess_utils import decode_subprocess_output
 
 from .constants import *
 from .video_export_cancelled_error import VideoExportCancelledError
-from .video_export_options import VideoExportOptions
+from .video_export_options import VIDEO_CODEC_RAWVIDEO, VideoExportOptions, is_uncompressed_video_container
 from .video_export_progress import VideoExportProgress, VideoExportProgressCallback
 from .video_frame_job import VideoFrameJob
 
@@ -189,11 +189,14 @@ def _crf_range_for_codec(codec: str) -> tuple[int, int]:
 
 def validate_video_export_options(options: VideoExportOptions) -> VideoExportOptions:
     container = str(options.container or "mp4").strip().lower().lstrip(".")
-    if container not in {"mp4", "mov"}:
+    if container not in {"mp4", "mov", "raw"}:
         raise ValueError(f"不支持的视频容器: {container}")
 
+    uncompressed = is_uncompressed_video_container(container)
     codec = str(options.codec or "h264").strip().lower()
-    if codec not in {"h264", "h265"}:
+    if uncompressed:
+        codec = VIDEO_CODEC_RAWVIDEO
+    elif codec not in {"h264", "h265"}:
         raise ValueError(f"不支持的视频编码器: {codec}")
 
     try:
@@ -204,16 +207,17 @@ def validate_video_export_options(options: VideoExportOptions) -> VideoExportOpt
         raise ValueError("FPS 必须大于 0。")
 
     preset = str(options.preset or "medium").strip().lower() or "medium"
-    if not preset:
+    if not uncompressed and not preset:
         raise ValueError("编码 preset 不能为空。")
 
     try:
         crf = int(options.crf)
     except Exception as exc:
         raise ValueError("CRF 必须为整数。") from exc
-    crf_min, crf_max = _crf_range_for_codec(codec)
-    if crf < crf_min or crf > crf_max:
-        raise ValueError(f"CRF 超出范围: {crf}（允许 {crf_min}-{crf_max}）")
+    if not uncompressed:
+        crf_min, crf_max = _crf_range_for_codec(codec)
+        if crf < crf_min or crf > crf_max:
+            raise ValueError(f"CRF 超出范围: {crf}（允许 {crf_min}-{crf_max}）")
 
     mode = str(options.frame_size_mode or "auto").strip().lower() or "auto"
     width = 0
@@ -1881,6 +1885,13 @@ def build_ffmpeg_command(
 
 def _codec_args_for_options(options: VideoExportOptions) -> list[str]:
     validated = validate_video_export_options(options)
+    if validated.codec == "rawvideo":
+        return [
+            "-c:v",
+            "rawvideo",
+            "-pix_fmt",
+            "rgb24",
+        ]
     if validated.codec == "h265":
         return [
             "-c:v",

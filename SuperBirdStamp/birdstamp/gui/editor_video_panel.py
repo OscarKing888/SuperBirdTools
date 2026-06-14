@@ -24,6 +24,7 @@ from PyQt6.QtWidgets import (
 
 from birdstamp.gui import editor_options
 from birdstamp.export_stage import VideoExportCancelledError, VideoExportOptions, VideoFrameJob, export_video
+from birdstamp.export_stage.video_export_options import VIDEO_CODEC_RAWVIDEO, is_uncompressed_video_container
 
 VIDEO_CONTAINER_OPTIONS = editor_options.VIDEO_CONTAINER_OPTIONS
 VIDEO_CODEC_OPTIONS = editor_options.VIDEO_CODEC_OPTIONS
@@ -85,6 +86,7 @@ class VideoExportPanel(QGroupBox):
             [(label, suffix) for suffix, label in VIDEO_CONTAINER_OPTIONS],
             DEFAULT_VIDEO_CONTAINER,
             property_name="container",
+            on_changed=self._sync_codec_quality_state,
         )
         form.addRow("视频格式", self.video_format_widget)
 
@@ -236,6 +238,18 @@ class VideoExportPanel(QGroupBox):
         root.addWidget(self.status_label)
 
         self._sync_frame_size_state()
+        self._sync_codec_quality_state()
+
+    def _is_uncompressed_container(self) -> bool:
+        container = self._radio_group_value(self.container_buttons, DEFAULT_VIDEO_CONTAINER)
+        return is_uncompressed_video_container(container)
+
+    def _sync_codec_quality_state(self) -> None:
+        uncompressed = self._is_uncompressed_container()
+        quality_enabled = (not self._busy) and (not uncompressed)
+        self.preset_widget.setEnabled(quality_enabled)
+        self.crf_spin.setEnabled(quality_enabled)
+        self.codec_widget.setEnabled((not self._busy) and (not uncompressed))
 
     def _build_radio_group(
         self,
@@ -356,7 +370,11 @@ class VideoExportPanel(QGroupBox):
 
         return VideoExportRequest(
             container=self._radio_group_value(self.container_buttons, DEFAULT_VIDEO_CONTAINER),
-            codec=self._radio_group_value(self.codec_buttons, DEFAULT_VIDEO_CODEC),
+            codec=(
+                VIDEO_CODEC_RAWVIDEO
+                if self._is_uncompressed_container()
+                else self._radio_group_value(self.codec_buttons, DEFAULT_VIDEO_CODEC)
+            ),
             fps=fps,
             preset=self._radio_group_value(self.preset_buttons, DEFAULT_VIDEO_PRESET),
             crf=int(self.crf_spin.value()),
@@ -368,9 +386,15 @@ class VideoExportPanel(QGroupBox):
 
     def current_state(self) -> dict[str, int | float | str | bool]:
         frame_data = self.current_frame_size_data()
+        container = self._radio_group_value(self.container_buttons, DEFAULT_VIDEO_CONTAINER)
+        codec = (
+            VIDEO_CODEC_RAWVIDEO
+            if is_uncompressed_video_container(container)
+            else self._radio_group_value(self.codec_buttons, DEFAULT_VIDEO_CODEC)
+        )
         return {
-            "container": self._radio_group_value(self.container_buttons, DEFAULT_VIDEO_CONTAINER),
-            "codec": self._radio_group_value(self.codec_buttons, DEFAULT_VIDEO_CODEC),
+            "container": container,
+            "codec": codec,
             "fps_text": str(self.fps_combo.currentText() or "").strip(),
             "frame_size_mode": str(frame_data.get("mode") or DEFAULT_VIDEO_FRAME_SIZE_MODE).strip().lower(),
             "frame_size_width": int(frame_data.get("width") or 0),
@@ -483,6 +507,7 @@ class VideoExportPanel(QGroupBox):
                 widget.blockSignals(old_block)
 
         self._sync_frame_size_state()
+        self._sync_codec_quality_state()
 
     def set_busy(self, busy: bool, *, status_text: str | None = None) -> None:
         self._busy = busy
@@ -494,8 +519,7 @@ class VideoExportPanel(QGroupBox):
         self.orientation_widget.setEnabled(not busy and str(self.current_frame_size_data().get("mode") or "") == "preset")
         self.frame_width_spin.setEnabled(not busy and str(self.current_frame_size_data().get("mode") or "") == "custom")
         self.frame_height_spin.setEnabled(not busy and str(self.current_frame_size_data().get("mode") or "") == "custom")
-        self.preset_widget.setEnabled(not busy)
-        self.crf_spin.setEnabled(not busy)
+        self._sync_codec_quality_state()
         self.preserve_temp_files_check.setEnabled(not busy)
         self.export_button.setVisible(not busy)
         self.cancel_button.setVisible(busy)

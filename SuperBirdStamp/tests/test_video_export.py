@@ -116,6 +116,24 @@ def test_build_ffmpeg_command_h265_mp4_contains_expected_flags(tmp_path) -> None
     assert str((tmp_path / "clip.mp4").resolve()) == command[-1]
 
 
+def test_build_ffmpeg_command_raw_uses_rawvideo_and_avi_suffix(tmp_path) -> None:
+    options = VideoExportOptions(
+        output_path=tmp_path / "clip.avi",
+        container="raw",
+        codec="h264",
+        fps=24,
+        preset="slow",
+        crf=18,
+    )
+    command = build_ffmpeg_command(Path("/tmp/ffmpeg"), tmp_path / "frames", options)
+    assert "rawvideo" in command
+    assert "rgb24" in command
+    assert "libx264" not in command
+    assert "libx265" not in command
+    assert "+faststart" not in command
+    assert str((tmp_path / "clip.avi").resolve()) == command[-1]
+
+
 def test_resolve_video_render_workers_honors_auto_and_manual_limits() -> None:
     assert resolve_video_render_workers(0, 0) == 1
     assert resolve_video_render_workers(3, 2) == 2
