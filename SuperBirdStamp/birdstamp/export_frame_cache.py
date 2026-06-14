@@ -101,6 +101,7 @@ def global_export_settings_from_settings(settings: dict[str, Any] | None) -> dic
         for key in _PIPELINE_STAGE_ENABLED_KEYS
     }
     stage_enabled["stage_template_crop_enabled"] = True
+    dejitter_reference = _normalize_dejitter_reference(raw)
     return {
         "draw_banner": _parse_bool_value(raw.get("draw_banner"), True),
         "draw_text": _parse_bool_value(raw.get("draw_text"), True),
@@ -111,6 +112,36 @@ def global_export_settings_from_settings(settings: dict[str, Any] | None) -> dic
         "uniform_auto_crop": uniform_auto_crop,
         "auto_crop_stabilization": _parse_int_range(raw.get("auto_crop_stabilization"), 0, 0, 100)
         if uniform_auto_crop else 0,
+        "dejitter_strategy": dejitter_reference["strategy"],
+        "dejitter_reference_enabled": dejitter_reference["enabled"],
+        "dejitter_reference_regions": dejitter_reference["regions"],
+        "dejitter_reference_source": dejitter_reference["source"],
+    }
+
+
+def _normalize_dejitter_reference(raw: dict[str, Any]) -> dict[str, Any]:
+    """提取去抖动参考区相关的缓存敏感字段（影响整批源帧缓存桶）。"""
+    strategy = str(raw.get("dejitter_strategy") or "median").strip().lower() or "median"
+    if strategy not in {"median", "reference_region"}:
+        strategy = "median"
+    enabled = _parse_bool_value(raw.get("dejitter_reference_enabled"), False)
+    regions: list[list[float]] = []
+    raw_regions = raw.get("dejitter_reference_regions")
+    if isinstance(raw_regions, (list, tuple)):
+        for item in raw_regions:
+            if isinstance(item, (list, tuple)) and len(item) == 4:
+                try:
+                    regions.append([round(float(value), 6) for value in item])
+                except (TypeError, ValueError):
+                    continue
+    reference_active = strategy == "reference_region" and enabled and bool(regions)
+    source_raw = raw.get("dejitter_reference_source")
+    source = str(source_raw).strip() if reference_active and source_raw else ""
+    return {
+        "strategy": strategy,
+        "enabled": reference_active,
+        "regions": regions if reference_active else [],
+        "source": source,
     }
 
 

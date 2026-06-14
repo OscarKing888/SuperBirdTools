@@ -62,6 +62,7 @@ from PyQt6.QtWidgets import (
     QSizePolicy,
     QSlider,
     QSplitter,
+    QToolButton,
     QTreeWidget,
     QTreeWidgetItem,
     QVBoxLayout,
@@ -72,6 +73,15 @@ from app_common.about_dialog import load_about_info, load_about_images, show_abo
 from app_common.app_info_bar import AppInfoBar
 from app_common.file_utils import is_apple_double_metadata_file
 from app_common.log import get_logger
+from app_common.perf_probe import elapsed_ms, perf_counter
+from app_common.superviewer_user_options import (
+    KEY_PERF_PROBES_ENABLED,
+    apply_runtime_user_options,
+    get_runtime_user_options,
+    get_user_options_path,
+    reload_runtime_user_options,
+    save_user_options,
+)
 from app_common.send_to_app import (
     SingleInstanceReceiver,
     ensure_file_open_aware_application,
@@ -82,7 +92,7 @@ from app_common.send_to_app import (
 import birdstamp
 from birdstamp.config import get_app_resource_dir, get_config_path, resolve_bundled_path
 from birdstamp.constants import SEND_TO_APP_ID, SUPPORTED_EXTENSIONS
-from birdstamp.decoders.image_decoder import decode_image
+from birdstamp import perf as birdstamp_perf
 from app_common.exif_io import (
     extract_many,
     extract_many_with_xmp_priority,
@@ -110,6 +120,11 @@ from app_common.preview_canvas import (
     PreviewWithStatusBar,
     configure_preview_scale_preset_combo,
     sync_preview_scale_preset_combo,
+)
+from birdstamp.gui.edit_modes import (
+    EDIT_MODE_CROP_ADJUST,
+    EDIT_MODE_NONE,
+    EDIT_MODE_REFERENCE_REGION,
 )
 from birdstamp.gui.editor_preview_canvas import EditorPreviewCanvas, EditorPreviewOverlayState
 from birdstamp.gui.editor_photo_metadata_loader import EditorPhotoListMetadataLoader
@@ -157,6 +172,7 @@ from birdstamp.video_export import (
     VideoFrameJob,
     build_default_image_proc_pipeline,
     build_image_proc_export_stages,
+    crop_plan_precompute_required,
     ffmpeg_install_script_path,
     find_ffmpeg_executable,
     normalize_export_stage_id,
@@ -247,6 +263,24 @@ _BANNER_GRADIENT_BOTTOM_COLOR_DEFAULT = editor_template.BANNER_GRADIENT_BOTTOM_C
 _DEFAULT_TEMPLATE_CENTER_MODE = editor_template.DEFAULT_TEMPLATE_CENTER_MODE
 _DEFAULT_TEMPLATE_MAX_LONG_EDGE = editor_template.DEFAULT_TEMPLATE_MAX_LONG_EDGE
 _path_key = editor_utils.path_key
+
+
+def _is_complete_list_metadata(metadata: dict[str, Any] | None) -> bool:
+    """列表 metadata 是否已完成后台加载（非仅 SourceFile 占位）。"""
+    if not isinstance(metadata, dict) or not metadata:
+        return False
+    if len(metadata) <= 1:
+        return False
+    return True
+
+
+def _metadata_digest_for_cache(raw_metadata: dict[str, Any]) -> str:
+    try:
+        payload = json.dumps(raw_metadata, sort_keys=True, default=str)
+    except Exception:
+        payload = str(sorted(raw_metadata.items()))
+    return hashlib.sha1(payload.encode("utf-8")).hexdigest()[:16]
+
 _sanitize_template_name = editor_utils.sanitize_template_name
 _template_directory = editor_template.template_directory
 _ensure_template_repository = editor_template.ensure_template_repository
@@ -346,6 +380,73 @@ def _app_icon_paths() -> tuple[Path, Path]:
     else:
         window_icon = png_path
     return (window_icon, png_path if png_path.exists() else window_icon)
+
+
+def _make_edit_mode_icon(kind: str, *, size: int = 18, color: "QColor | None" = None) -> QIcon:
+    """程序化绘制编辑模式工具按钮图标（随主题色），避免引入图标资源文件。
+
+    kind: "selection" 箭头指针 / "reference" 虚线参考框+中心点 / "crop" 四角裁切框。
+    """
+    pen_color = color if isinstance(color, QColor) else QColor("#3C3C3C")
+    pixmap = QPixmap(size, size)
+    pixmap.fill(Qt.GlobalColor.transparent)
+    painter = QPainter(pixmap)
+    try:
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        pen = QPen(pen_color)
+        pen.setWidthF(1.6)
+        pen.setJoinStyle(Qt.PenJoinStyle.MiterJoin)
+        pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+
+        if kind == "selection":
+            # 鼠标箭头指针
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(pen_color)
+            path = QPainterPath()
+            path.moveTo(size * 0.26, size * 0.16)
+            path.lineTo(size * 0.26, size * 0.80)
+            path.lineTo(size * 0.42, size * 0.64)
+            path.lineTo(size * 0.54, size * 0.90)
+            path.lineTo(size * 0.66, size * 0.84)
+            path.lineTo(size * 0.54, size * 0.58)
+            path.lineTo(size * 0.74, size * 0.56)
+            path.closeSubpath()
+            painter.drawPath(path)
+        elif kind == "reference":
+            # 虚线方框 + 中心点（特征参考区）
+            dashed = QPen(pen_color)
+            dashed.setWidthF(1.4)
+            dashed.setStyle(Qt.PenStyle.DashLine)
+            painter.setPen(dashed)
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            margin = size * 0.18
+            painter.drawRect(QRectF(margin, margin, size - 2 * margin, size - 2 * margin))
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(pen_color)
+            r = size * 0.09
+            painter.drawEllipse(QPointF(size * 0.5, size * 0.5), r, r)
+        else:  # crop
+            # 四角裁切框（两个 L 形角标）
+            painter.setPen(pen)
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            a = size * 0.20
+            b = size * 0.80
+            arm = size * 0.22
+            # 左上角
+            painter.drawLine(QPointF(a, a), QPointF(a + arm, a))
+            painter.drawLine(QPointF(a, a), QPointF(a, a + arm))
+            # 右下角
+            painter.drawLine(QPointF(b, b), QPointF(b - arm, b))
+            painter.drawLine(QPointF(b, b), QPointF(b, b - arm))
+            # 中间虚线提示裁切范围
+            thin = QPen(pen_color)
+            thin.setWidthF(1.0)
+            thin.setStyle(Qt.PenStyle.DotLine)
+            painter.setPen(thin)
+            painter.drawRect(QRectF(a, a, b - a, b - a))
+    finally:
+        painter.end()
+    return QIcon(pixmap)
 
 
 def _get_bird_detector_error_message() -> str:
@@ -602,6 +703,10 @@ class BirdStampEditorWindow(
         self._original_mode_pixmap: QPixmap | None = None
         self._original_mode_signature: str | None = None
         self._bird_box_cache: dict[str, tuple[float, float, float, float] | None] = {}
+        self._source_image_cache: dict[str, Image.Image] = {}
+        self._preview_image_cache: dict[str, Image.Image] = {}
+        self._perf_decode_counts: dict[str, int] = {}
+        self._crop_drag_active = False
         self.photo_render_overrides: dict[str, dict[str, Any]] = {}
         self._photo_export_dirty_keys: set[str] = set()
         self._last_global_export_settings: dict[str, Any] = {}
@@ -619,12 +724,14 @@ class BirdStampEditorWindow(
         self._bird_detect_error_reported = False
         self._bird_detector_preload_started = False
         self._bird_detector_preload_thread: threading.Thread | None = None
+        self._bird_detect_worker = None
         self.last_rendered: Image.Image | None = None
         self.current_path: Path | None = None
         self.current_photo_info: _template_context.PhotoInfo | None = None
         self.current_source_image: Image.Image | None = None
         self.current_raw_metadata: dict[str, Any] = {}
         self.current_metadata_context: dict[str, str] = {}
+        self._metadata_context_cache: dict[str, dict[str, str]] = {}
         self.raw_metadata_cache: dict[str, dict[str, Any]] = {}
         self.photo_list_metadata_cache: dict[str, dict[str, Any]] = {}
         self._photo_item_map: dict[str, QTreeWidgetItem] = {}
@@ -650,6 +757,12 @@ class BirdStampEditorWindow(
         self._photo_input_discovery_import_options: dict[int, dict[str, Any]] = {}
         self._receive_progress_reset_token: int = 0
         self._pending_preview_fit_reset: bool = False
+        self._pending_startup_workspace_restore: bool = False
+        self._pending_workspace_current_item: QTreeWidgetItem | None = None
+        self._pending_workspace_selected_paths: list[Path] = []
+        self._pending_workspace_select_metadata_key: str | None = None
+        self._photo_list_display_batch_depth: int = 0
+        self._photo_list_display_batch_sorting: bool = False
         self._video_export_worker: VideoExportWorker | None = None
         self._video_export_started_at: float | None = None
         self._pending_video_export_dirty_keys: set[str] = set()
@@ -672,6 +785,11 @@ class BirdStampEditorWindow(
         self._received_photo_import_timer.setSingleShot(False)
         self._received_photo_import_timer.setInterval(0)
         self._received_photo_import_timer.timeout.connect(self._process_received_photo_import_batch)
+        self._workspace_restore_photo_timer = QTimer(self)
+        self._workspace_restore_photo_timer.setInterval(0)
+        self._workspace_restore_photo_timer.timeout.connect(self._process_workspace_restore_photo_batch)
+        self._workspace_restore_pending_entries: deque[dict[str, Any]] = deque()
+        self._workspace_restore_context: dict[str, Any] | None = None
         self._init_workspace_autosave()
 
         self._setup_ui()
@@ -682,7 +800,7 @@ class BirdStampEditorWindow(
         self._apply_system_adaptive_style()
         self._reload_template_combo(preferred="default")
         self._set_status("就绪。请添加照片并选择模板。")
-        self._show_placeholder_preview()
+        self._show_instant_placeholder_preview()
 
         # 冷启动或「发送到本应用」传入的文件列表：加入照片列表
         files_to_add: list[Path] = []
@@ -693,12 +811,89 @@ class BirdStampEditorWindow(
         if files_to_add:
             self._add_photo_paths(files_to_add)
         else:
-            self._restore_startup_workspace()
+            self._pending_startup_workspace_restore = True
 
         self._start_bird_detector_preload()
 
         # 初始化 report.db 行解析器（无缓存时返回 None）
         self._update_report_db_row_resolver()
+
+    def _run_deferred_startup_tasks(self) -> None:
+        """出窗后恢复上次工作区或加载完整占位预览，避免阻塞构造函数。"""
+        if getattr(self, "_pending_startup_workspace_restore", False):
+            self._pending_startup_workspace_restore = False
+            self._restore_startup_workspace()
+            return
+        QTimer.singleShot(0, self._show_placeholder_preview)
+
+    def _begin_photo_list_item_display_batch(self) -> None:
+        depth = int(getattr(self, "_photo_list_display_batch_depth", 0))
+        if depth == 0:
+            self._photo_list_display_batch_sorting = bool(self.photo_list.isSortingEnabled())
+            self.photo_list.setSortingEnabled(False)
+            self.photo_list.setUpdatesEnabled(False)
+        self._photo_list_display_batch_depth = depth + 1
+
+    def _end_photo_list_item_display_batch(self, *, resort: bool = False) -> None:
+        depth = int(getattr(self, "_photo_list_display_batch_depth", 0))
+        if depth <= 0:
+            return
+        depth -= 1
+        self._photo_list_display_batch_depth = depth
+        if depth != 0:
+            return
+        self.photo_list.setUpdatesEnabled(True)
+        if resort:
+            self.photo_list.resort()
+        if getattr(self, "_photo_list_display_batch_sorting", False):
+            self.photo_list.setSortingEnabled(True)
+
+    def _schedule_workspace_photo_selection(
+        self,
+        current_item: QTreeWidgetItem | None,
+        selected_paths: Iterable[Path],
+        *,
+        wait_metadata: bool,
+    ) -> None:
+        self._pending_workspace_current_item = current_item
+        self._pending_workspace_selected_paths = list(selected_paths)
+        self._pending_workspace_select_metadata_key = None
+        if wait_metadata and current_item is not None:
+            raw = current_item.data(PHOTO_COL_ROW, PHOTO_LIST_PATH_ROLE)
+            if isinstance(raw, str):
+                key = _path_key(Path(raw))
+                if key in self._photo_list_metadata_pending_keys:
+                    self._pending_workspace_select_metadata_key = key
+                    return
+        QTimer.singleShot(0, self._apply_pending_workspace_photo_selection)
+
+    def _apply_pending_workspace_photo_selection(self) -> None:
+        current_item = self._pending_workspace_current_item
+        selected_paths = list(self._pending_workspace_selected_paths)
+        self._pending_workspace_current_item = None
+        self._pending_workspace_selected_paths = []
+        self._pending_workspace_select_metadata_key = None
+        if current_item is None:
+            return
+        self.photo_list.setCurrentItem(current_item)
+        for idx in range(self.photo_list.topLevelItemCount()):
+            item = self.photo_list.topLevelItem(idx)
+            if item is not None:
+                item.setSelected(False)
+        current_item.setSelected(True)
+        for path in selected_paths:
+            item = self._find_photo_item_by_path(path)
+            if item is not None:
+                item.setSelected(True)
+
+    def _maybe_apply_pending_workspace_photo_selection(self) -> None:
+        pending_key = self._pending_workspace_select_metadata_key
+        if not pending_key:
+            return
+        if pending_key in self._photo_list_metadata_pending_keys:
+            return
+        self._pending_workspace_select_metadata_key = None
+        QTimer.singleShot(0, self._apply_pending_workspace_photo_selection)
 
     # ------------------------------------------------------------------
     # ReportDB 列表与缓存
@@ -1754,15 +1949,23 @@ class BirdStampEditorWindow(
         preview_toolbar.setContentsMargins(0, 0, 0, 0)
         preview_toolbar.setSpacing(8)
 
+        # 编辑模式切换：三个互斥图标按钮（选择 / 去抖动参考区 / 调整裁剪框）。
+        self._setup_edit_mode_buttons(preview_toolbar)
+
+        mode_separator = QFrame()
+        mode_separator.setFrameShape(QFrame.Shape.VLine)
+        mode_separator.setFrameShadow(QFrame.Shadow.Sunken)
+        preview_toolbar.addWidget(mode_separator)
+
         self.show_crop_effect_check = QCheckBox("显示裁切效果")
         self.show_crop_effect_check.setChecked(True)
         self.show_crop_effect_check.toggled.connect(self._on_preview_toolbar_toggled)
         preview_toolbar.addWidget(self.show_crop_effect_check)
 
-        self.crop_edit_mode_check = QCheckBox("调整裁剪框")
-        self.crop_edit_mode_check.setToolTip("在预览上拖动 9 宫格手柄调整裁剪范围；比例由「裁切比例」锁定（选「自由」时不锁定）")
-        self.crop_edit_mode_check.toggled.connect(self._on_preview_toolbar_toggled)
-        preview_toolbar.addWidget(self.crop_edit_mode_check)
+        self.dejitter_reference_clear_btn = QPushButton("清除参考区")
+        self.dejitter_reference_clear_btn.setToolTip("清除已框选的去抖动特征参考区（也可在参考区模式下右键清除）。")
+        self.dejitter_reference_clear_btn.clicked.connect(self._on_dejitter_reference_clear)
+        # preview_toolbar.addWidget(self.dejitter_reference_clear_btn)
 
         self.crop_effect_alpha_label = QLabel("Alpha")
         preview_toolbar.addWidget(self.crop_effect_alpha_label)
@@ -1834,9 +2037,19 @@ class BirdStampEditorWindow(
         self.preview_label.setObjectName("PreviewLabel")
         self._crop_box_override: tuple[float, float, float, float] | None = None
         self._custom_center: tuple[float, float] | None = None
+        self._dejitter_reference_regions: tuple[tuple[float, float, float, float], ...] = ()
+        self._dejitter_reference_source: str | None = None
+        self._preview_outer_pad: tuple[int, int, int, int] = (0, 0, 0, 0)
         canvas = self.preview_label.canvas
         if hasattr(canvas, "crop_box_changed"):
             canvas.crop_box_changed.connect(self._on_canvas_crop_box_changed)
+        if hasattr(canvas, "crop_drag_started"):
+            canvas.crop_drag_started.connect(self._on_canvas_crop_drag_started)
+        if hasattr(canvas, "crop_drag_finished"):
+            canvas.crop_drag_finished.connect(self._on_canvas_crop_drag_finished)
+        if hasattr(canvas, "reference_region_changed"):
+            canvas.reference_region_changed.connect(self._on_canvas_reference_region_changed)
+        self._update_dejitter_reference_clear_enabled()
         if hasattr(self.preview_label, "display_scale_percent_changed"):
             self.preview_label.display_scale_percent_changed.connect(self._sync_preview_scale_combo)
             self.preview_label.display_scale_percent_changed.connect(self._on_workspace_state_changed)
@@ -1896,6 +2109,51 @@ class BirdStampEditorWindow(
         file_menu.addAction(self.action_load_workspace)
         file_menu.addAction(self.action_save_workspace)
         file_menu.addAction(self.action_save_workspace_as)
+
+        settings_menu = menu_bar.addMenu("设置")
+        perf_probe_act = QAction("性能探针日志", self)
+        perf_probe_act.setCheckable(True)
+        perf_probe_act.setChecked(bool(get_runtime_user_options().get(KEY_PERF_PROBES_ENABLED, 0)))
+        perf_probe_act.setToolTip(
+            "开启后在日志中记录照片选择、图像加载/预览渲染、编辑模式鼠标拖拽等关键路径耗时。"
+        )
+        perf_probe_act.triggered.connect(self._set_perf_probes_enabled)
+        self._perf_probe_action = perf_probe_act
+        settings_menu.addAction(perf_probe_act)
+
+    def _sync_perf_probe_action(self) -> None:
+        action = getattr(self, "_perf_probe_action", None)
+        if action is None:
+            return
+        try:
+            action.blockSignals(True)
+            action.setChecked(bool(get_runtime_user_options().get(KEY_PERF_PROBES_ENABLED, 0)))
+        finally:
+            action.blockSignals(False)
+
+    def _set_perf_probes_enabled(self, checked: bool) -> None:
+        options = get_runtime_user_options()
+        options[KEY_PERF_PROBES_ENABLED] = int(bool(checked))
+        try:
+            normalized = save_user_options(options)
+        except Exception as exc:
+            QMessageBox.warning(self, "保存失败", f"无法写入性能探针选项：\n{exc}")
+            self._sync_perf_probe_action()
+            return
+        apply_runtime_user_options(normalized)
+        self._sync_perf_probe_action()
+        enabled = bool(normalized.get(KEY_PERF_PROBES_ENABLED, 0))
+        _log.info(
+            "[PERF_PROBE] enabled=%s config=%r",
+            enabled,
+            get_user_options_path(),
+        )
+        if enabled:
+            self._set_status(
+                f"性能探针已开启；日志前缀 [PERF_PROBE]，配置文件：{get_user_options_path()}"
+            )
+        else:
+            self._set_status("性能探针已关闭。")
 
     def _apply_system_adaptive_style(self) -> None:
         palette = self.palette()
@@ -2516,29 +2774,158 @@ class BirdStampEditorWindow(
     def _sync_preview_scale_combo(self, scale_percent: object) -> None:
         sync_preview_scale_preset_combo(self.preview_scale_combo, scale_percent)
 
+    def _on_canvas_crop_drag_started(self) -> None:
+        self._crop_drag_active = True
+
+    def _on_canvas_crop_drag_finished(self) -> None:
+        self._crop_drag_active = False
+
     def _on_canvas_crop_box_changed(self, box: tuple[float, float, float, float]) -> None:
         """9 宫格裁切框变更。
 
         - 若当前裁切框尚未平移（仅缩放），则根据图像尺寸反算 top/bottom/left/right padding。
         - 若已经发生过平移，则将裁切中心改为自定义，并记录 custom_center_x/y。
+        - 拖拽进行中走轻量路径，release 后一次性提交完整 settings。
         """
-        canvas = self.preview_label.canvas
-        has_pan = False
-        if hasattr(canvas, "has_pan"):
-            try:
-                has_pan = bool(canvas.has_pan())  # type: ignore[call-arg]
-            except Exception:
-                has_pan = False
+        start = perf_counter()
+        try:
+            canvas = self.preview_label.canvas
+            has_pan = False
+            if hasattr(canvas, "has_pan"):
+                try:
+                    has_pan = bool(canvas.has_pan())  # type: ignore[call-arg]
+                except Exception:
+                    has_pan = False
 
-        if self.current_source_image is not None:
-            if not has_pan:
-                self._update_crop_padding_from_box(box, self.current_source_image.size)
-            else:
-                self._set_custom_center_from_box(box)
+            if self.current_source_image is not None:
+                if not has_pan:
+                    self._update_crop_padding_from_box(box, self.current_source_image.size)
+                else:
+                    self._set_custom_center_from_box(box)
 
-        self._crop_box_override = box
-        self._set_photo_crop_box_for_path(self.current_path, box)
-        self._on_crop_settings_changed()
+            self._crop_box_override = box
+            self._set_photo_crop_box_for_path(self.current_path, box)
+
+            if self._crop_drag_active:
+                self._preview_debounce_timer.start()
+                return
+
+            self._on_crop_settings_changed()
+        finally:
+            drag_probe = getattr(self.preview_label.canvas, "_drag_probe", None)
+            if drag_probe is not None:
+                drag_probe.add_callback(elapsed_ms(start))
+
+    def _setup_edit_mode_buttons(self, toolbar) -> None:
+        """创建三个互斥的编辑模式图标按钮（选择 / 去抖动参考区 / 调整裁剪框）。"""
+        try:
+            icon_color = self.palette().color(self.palette().ColorRole.WindowText)
+        except Exception:
+            icon_color = None
+
+        self.edit_mode_group = QButtonGroup(self)
+        self.edit_mode_group.setExclusive(True)
+
+        specs = (
+            (
+                EDIT_MODE_NONE,
+                "selection",
+                "选择模式",
+                "选择模式：移动/缩放预览（默认）。",
+            ),
+            (
+                EDIT_MODE_REFERENCE_REGION,
+                "reference",
+                "去抖动参考区",
+                "去抖动参考区：拖拽框选特征参考区，导出去抖动以此为锚点；"
+                "按住 Shift 追加，右键清除。",
+            ),
+            (
+                EDIT_MODE_CROP_ADJUST,
+                "crop",
+                "调整裁剪框",
+                "调整裁剪框：拖动 9 宫格手柄调整裁剪范围，比例由「裁切比例」锁定。",
+            ),
+        )
+
+        self._edit_mode_buttons: dict[str, QToolButton] = {}
+        for mode_id, icon_kind, text, tip in specs:
+            btn = QToolButton()
+            btn.setCheckable(True)
+            btn.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
+            btn.setIcon(_make_edit_mode_icon(icon_kind, color=icon_color))
+            btn.setToolTip(tip)
+            btn.setAccessibleName(text)
+            self.edit_mode_group.addButton(btn)
+            self._edit_mode_buttons[mode_id] = btn
+            toolbar.addWidget(btn)
+
+        self._edit_mode_buttons[EDIT_MODE_NONE].setChecked(True)
+        self.edit_mode_group.buttonClicked.connect(self._on_edit_mode_changed)
+
+    def _current_edit_mode_id(self) -> str:
+        buttons = getattr(self, "_edit_mode_buttons", None)
+        if not buttons:
+            return EDIT_MODE_NONE
+        for mode_id, btn in buttons.items():
+            if btn.isChecked():
+                return mode_id
+        return EDIT_MODE_NONE
+
+    def _set_edit_mode_button_checked(self, mode_id: str) -> None:
+        """以静默方式设置当前编辑模式按钮选中（不触发回调）。"""
+        buttons = getattr(self, "_edit_mode_buttons", None)
+        if not buttons:
+            return
+        target = buttons.get(mode_id) or buttons.get(EDIT_MODE_NONE)
+        if target is None:
+            return
+        group = getattr(self, "edit_mode_group", None)
+        if group is not None:
+            group.blockSignals(True)
+        try:
+            target.setChecked(True)
+        finally:
+            if group is not None:
+                group.blockSignals(False)
+
+    def _on_edit_mode_changed(self, *args) -> None:
+        """编辑模式按钮切换：刷新预览叠加并自动保存工作区。"""
+        self._refresh_preview_label(preserve_view=True)
+        self._schedule_workspace_autosave()
+
+    def _on_dejitter_reference_clear(self) -> None:
+        if not self._dejitter_reference_regions:
+            return
+        self._dejitter_reference_regions = ()
+        self._dejitter_reference_source = None
+        self._update_dejitter_reference_clear_enabled()
+        self._apply_preview_overlay_options_from_ui()
+        self._schedule_workspace_autosave()
+
+    def _on_canvas_reference_region_changed(
+        self, regions: tuple[tuple[float, float, float, float], ...]
+    ) -> None:
+        """参考区由画布交互提交（预览/含外填充归一化）→ 转为源图归一化存储。"""
+        source_regions: list[tuple[float, float, float, float]] = []
+        for box in regions or ():
+            if isinstance(box, (list, tuple)) and len(box) == 4:
+                source_regions.append(
+                    self._reference_region_preview_to_source(tuple(float(v) for v in box))
+                )
+        self._dejitter_reference_regions = tuple(source_regions)
+        if source_regions and self.current_path is not None:
+            self._dejitter_reference_source = str(self.current_path)
+        elif not source_regions:
+            self._dejitter_reference_source = None
+        self._update_dejitter_reference_clear_enabled()
+        self._apply_preview_overlay_options_from_ui()
+        self._schedule_workspace_autosave()
+
+    def _update_dejitter_reference_clear_enabled(self) -> None:
+        btn = getattr(self, "dejitter_reference_clear_btn", None)
+        if btn is not None:
+            btn.setEnabled(bool(getattr(self, "_dejitter_reference_regions", ())))
 
     def _get_crop_padding_state(self) -> dict[str, Any]:
         state = self._crop_padding_state if isinstance(self._crop_padding_state, dict) else {}
@@ -3186,6 +3573,14 @@ class BirdStampEditorWindow(
         photo_info: _template_context.PhotoInfo,
     ) -> tuple[str, tuple[int, float], str, tuple[int, int], str, tuple[int, float]]:
         raw_metadata = _template_context.ensure_photo_info(photo_info).raw_metadata or {}
+        return self._camera_list_display_from_raw_metadata(
+            raw_metadata if isinstance(raw_metadata, dict) else {}
+        )
+
+    def _camera_list_display_from_raw_metadata(
+        self,
+        raw_metadata: dict[str, Any],
+    ) -> tuple[str, tuple[int, float], str, tuple[int, int], str, tuple[int, float]]:
         lookup = _normalize_lookup(raw_metadata) if isinstance(raw_metadata, dict) else {}
 
         def _first_value(*keys: str) -> Any:
@@ -3288,6 +3683,114 @@ class BirdStampEditorWindow(
             aperture_text,
             (0, aperture_value) if aperture_value is not None else (1, 0.0),
         )
+
+    def _fast_display_capture_time_from_raw(
+        self,
+        raw_metadata: dict[str, Any],
+    ) -> tuple[str, tuple[int, float]]:
+        lookup = _normalize_lookup(raw_metadata)
+        for key in (
+            "exififd:datetimeoriginal",
+            "exif:datetimeoriginal",
+            "xmp-exif:datetimeoriginal",
+            "datetimeoriginal",
+            "exif:createdate",
+            "xmp-xmp:createdate",
+            "createdate",
+            "datetimecreated",
+            "datecreated",
+            "mediacreatedate",
+            "capture_text",
+            "capture_date",
+        ):
+            capture_text = _clean_text(lookup.get(key))
+            if not capture_text:
+                continue
+            capture_dt = self._parse_display_capture_datetime(capture_text)
+            if capture_dt is not None:
+                try:
+                    sort_value = float(capture_dt.timestamp())
+                except Exception:
+                    sort_value = 0.0
+                return capture_dt.strftime("%Y-%m-%d %H:%M:%S"), (0, sort_value)
+        return "-", (1, 0.0)
+
+    def _fast_display_title_from_raw(self, raw_metadata: dict[str, Any]) -> str:
+        lookup = _normalize_lookup(raw_metadata)
+        for key in (
+            "bird_species_cn",
+            "xmp:title",
+            "xmp-dc:title",
+            "iptc:objectname",
+            "iptc:headline",
+            "exif:imagedescription",
+            "exif:xptitle",
+            "image:title",
+            "title",
+            "imagedescription",
+        ):
+            text = _clean_text(lookup.get(key))
+            if text:
+                return text
+        return ""
+
+    def _fast_display_rating_from_raw(self, raw_metadata: dict[str, Any]) -> int | None:
+        lookup = _normalize_lookup(raw_metadata)
+        for key in (
+            "rating",
+            "xmp:rating",
+            "xmp-xmp:rating",
+            "exif:rating",
+            "composite:rating",
+        ):
+            parsed = self._parse_display_rating_value(lookup.get(key))
+            if parsed is not None:
+                return parsed
+        for key, value in raw_metadata.items():
+            if "rating" not in str(key or "").strip().lower():
+                continue
+            parsed = self._parse_display_rating_value(value)
+            if parsed is not None:
+                return parsed
+        return None
+
+    def _parse_display_rating_value(self, value: Any) -> int | None:
+        if value is None:
+            return None
+        if isinstance(value, (list, tuple)):
+            for item in value:
+                parsed = self._parse_display_rating_value(item)
+                if parsed is not None:
+                    return parsed
+            return None
+        if isinstance(value, dict):
+            for item in value.values():
+                parsed = self._parse_display_rating_value(item)
+                if parsed is not None:
+                    return parsed
+            return None
+
+        text = _clean_text(value)
+        if text:
+            full_star_count = text.count("★")
+            if full_star_count > 0:
+                return max(0, min(5, full_star_count))
+        else:
+            text = str(value).strip()
+
+        number_match = re.search(r"[-+]?\d+(?:\.\d+)?", text)
+        if not number_match:
+            return None
+        try:
+            raw_score = float(number_match.group(0))
+        except Exception:
+            return None
+        if raw_score < 0:
+            return None
+        if raw_score > 5:
+            raw_score = raw_score / 20.0
+        score = int(round(raw_score))
+        return max(0, min(5, score))
 
     def _remember_photo_item(self, path: Path, item: QTreeWidgetItem) -> None:
         self._photo_item_map[_path_key(path)] = item
@@ -3503,22 +4006,29 @@ class BirdStampEditorWindow(
     def _apply_photo_list_metadata_batch(self, batch: dict[str, dict[str, Any]]) -> None:
         if not batch:
             return
-        for norm_path, raw_metadata in batch.items():
-            path = Path(norm_path)
-            key = _path_key(path)
-            if not self._find_photo_item_by_path(path):
-                self._forget_photo_item(path)
-                continue
-            if isinstance(raw_metadata, dict):
-                self.photo_list_metadata_cache[key] = dict(raw_metadata)
-            self._photo_list_metadata_pending_keys.discard(key)
-            settings = self.photo_render_overrides.get(key)
-            self._update_photo_list_item_display(
-                path,
-                raw_metadata=raw_metadata,
-                settings=settings,
-                resort=False,
-            )
+        self._begin_photo_list_item_display_batch()
+        try:
+            for norm_path, raw_metadata in batch.items():
+                path = Path(norm_path)
+                key = _path_key(path)
+                if not self._find_photo_item_by_path(path):
+                    self._forget_photo_item(path)
+                    continue
+                if isinstance(raw_metadata, dict):
+                    merged = dict(raw_metadata)
+                    self.photo_list_metadata_cache[key] = merged
+                    self.raw_metadata_cache[key] = merged
+                self._photo_list_metadata_pending_keys.discard(key)
+                settings = self.photo_render_overrides.get(key)
+                self._update_photo_list_item_display(
+                    path,
+                    raw_metadata=raw_metadata,
+                    settings=settings,
+                    resort=False,
+                )
+        finally:
+            self._end_photo_list_item_display_batch(resort=False)
+        self._maybe_apply_pending_workspace_photo_selection()
 
     def _on_photo_list_metadata_batch_ready(self, batch: dict[str, dict[str, Any]]) -> None:
         if self.sender() is not self._photo_list_metadata_loader:
@@ -3535,6 +4045,7 @@ class BirdStampEditorWindow(
             return
         self._photo_list_metadata_loader = None
         self._finish_photo_list_metadata_loading()
+        self._maybe_apply_pending_workspace_photo_selection()
 
     def _reset_received_photo_import_state(self) -> None:
         self._received_photo_import_pending_paths.clear()
@@ -3607,20 +4118,34 @@ class BirdStampEditorWindow(
             if isinstance(raw_metadata, dict)
             else self._photo_list_display_metadata_for_path(path)
         )
+        use_fast_display = _is_complete_list_metadata(metadata)
         photo_info = self._photo_info_for_display(path, raw_metadata=metadata)
         filename_text = self._display_filename_from_photo_info(photo_info) or path.name
-        capture_time_text, capture_time_sort = self._extract_display_capture_time_from_metadata(photo_info)
-        title = self._extract_display_title_from_metadata(photo_info)
-        rating_value = self._extract_display_rating_from_metadata(photo_info)
+        if use_fast_display:
+            capture_time_text, capture_time_sort = self._fast_display_capture_time_from_raw(metadata)
+            title = self._fast_display_title_from_raw(metadata)
+            rating_value = self._fast_display_rating_from_raw(metadata)
+            (
+                shutter_text,
+                shutter_sort,
+                iso_text,
+                iso_sort,
+                aperture_text,
+                aperture_sort,
+            ) = self._camera_list_display_from_raw_metadata(metadata)
+        else:
+            capture_time_text, capture_time_sort = self._extract_display_capture_time_from_metadata(photo_info)
+            title = self._extract_display_title_from_metadata(photo_info)
+            rating_value = self._extract_display_rating_from_metadata(photo_info)
+            (
+                shutter_text,
+                shutter_sort,
+                iso_text,
+                iso_sort,
+                aperture_text,
+                aperture_sort,
+            ) = self._extract_display_camera_settings_from_metadata(photo_info)
         rating_text = self._format_rating_display(rating_value)
-        (
-            shutter_text,
-            shutter_sort,
-            iso_text,
-            iso_sort,
-            aperture_text,
-            aperture_sort,
-        ) = self._extract_display_camera_settings_from_metadata(photo_info)
         active_settings = (
             settings
             if isinstance(settings, dict)
@@ -3629,45 +4154,54 @@ class BirdStampEditorWindow(
         ratio_value = _parse_ratio_value(active_settings.get("ratio"))
         ratio_text = self._format_ratio_display(ratio_value)
 
-        item.setText(PHOTO_COL_NAME, filename_text)
-        item.setText(PHOTO_COL_CAPTURE_TIME, capture_time_text)
-        item.setText(PHOTO_COL_TITLE, title or "-")
-        item.setText(PHOTO_COL_RATIO, ratio_text)
-        item.setText(PHOTO_COL_RATING, rating_text)
-        item.setText(PHOTO_COL_SHUTTER, shutter_text)
-        item.setText(PHOTO_COL_ISO, iso_text)
-        item.setText(PHOTO_COL_APERTURE, aperture_text)
-        item.setToolTip(PHOTO_COL_NAME, str(path))
-        item.setToolTip(PHOTO_COL_CAPTURE_TIME, capture_time_text if capture_time_text != "-" else "")
-        item.setToolTip(PHOTO_COL_TITLE, title or "")
-        item.setToolTip(PHOTO_COL_RATIO, ratio_text)
-        item.setToolTip(PHOTO_COL_RATING, rating_text)
-        item.setToolTip(PHOTO_COL_SHUTTER, shutter_text if shutter_text != "-" else "")
-        item.setToolTip(PHOTO_COL_ISO, iso_text if iso_text != "-" else "")
-        item.setToolTip(PHOTO_COL_APERTURE, aperture_text if aperture_text != "-" else "")
-        item.setTextAlignment(PHOTO_COL_CAPTURE_TIME, int(Qt.AlignmentFlag.AlignCenter))
-        item.setTextAlignment(PHOTO_COL_RATIO, int(Qt.AlignmentFlag.AlignCenter))
-        item.setTextAlignment(PHOTO_COL_RATING, int(Qt.AlignmentFlag.AlignCenter))
-        item.setTextAlignment(PHOTO_COL_SHUTTER, int(Qt.AlignmentFlag.AlignCenter))
-        item.setTextAlignment(PHOTO_COL_ISO, int(Qt.AlignmentFlag.AlignCenter))
-        item.setTextAlignment(PHOTO_COL_APERTURE, int(Qt.AlignmentFlag.AlignCenter))
-        item.setData(PHOTO_COL_NAME, PHOTO_LIST_SORT_ROLE, (0, filename_text.casefold()))
-        item.setData(PHOTO_COL_CAPTURE_TIME, PHOTO_LIST_SORT_ROLE, capture_time_sort)
-        item.setData(PHOTO_COL_TITLE, PHOTO_LIST_SORT_ROLE, (0, title.casefold()) if title else (1, ""))
-        item.setData(
-            PHOTO_COL_RATIO,
-            PHOTO_LIST_SORT_ROLE,
-            self._ratio_sort_key(ratio_value),
-        )
-        item.setData(
-            PHOTO_COL_RATING,
-            PHOTO_LIST_SORT_ROLE,
-            (0, int(rating_value)) if rating_value is not None else (1, 0),
-        )
-        item.setData(PHOTO_COL_SHUTTER, PHOTO_LIST_SORT_ROLE, shutter_sort)
-        item.setData(PHOTO_COL_ISO, PHOTO_LIST_SORT_ROLE, iso_sort)
-        item.setData(PHOTO_COL_APERTURE, PHOTO_LIST_SORT_ROLE, aperture_sort)
-        if resort:
+        in_batch = int(getattr(self, "_photo_list_display_batch_depth", 0)) > 0
+        paused_sort = False
+        if not resort and not in_batch and self.photo_list.isSortingEnabled():
+            self.photo_list.setSortingEnabled(False)
+            paused_sort = True
+        try:
+            item.setText(PHOTO_COL_NAME, filename_text)
+            item.setText(PHOTO_COL_CAPTURE_TIME, capture_time_text)
+            item.setText(PHOTO_COL_TITLE, title or "-")
+            item.setText(PHOTO_COL_RATIO, ratio_text)
+            item.setText(PHOTO_COL_RATING, rating_text)
+            item.setText(PHOTO_COL_SHUTTER, shutter_text)
+            item.setText(PHOTO_COL_ISO, iso_text)
+            item.setText(PHOTO_COL_APERTURE, aperture_text)
+            item.setToolTip(PHOTO_COL_NAME, str(path))
+            item.setToolTip(PHOTO_COL_CAPTURE_TIME, capture_time_text if capture_time_text != "-" else "")
+            item.setToolTip(PHOTO_COL_TITLE, title or "")
+            item.setToolTip(PHOTO_COL_RATIO, ratio_text)
+            item.setToolTip(PHOTO_COL_RATING, rating_text)
+            item.setToolTip(PHOTO_COL_SHUTTER, shutter_text if shutter_text != "-" else "")
+            item.setToolTip(PHOTO_COL_ISO, iso_text if iso_text != "-" else "")
+            item.setToolTip(PHOTO_COL_APERTURE, aperture_text if aperture_text != "-" else "")
+            item.setTextAlignment(PHOTO_COL_CAPTURE_TIME, int(Qt.AlignmentFlag.AlignCenter))
+            item.setTextAlignment(PHOTO_COL_RATIO, int(Qt.AlignmentFlag.AlignCenter))
+            item.setTextAlignment(PHOTO_COL_RATING, int(Qt.AlignmentFlag.AlignCenter))
+            item.setTextAlignment(PHOTO_COL_SHUTTER, int(Qt.AlignmentFlag.AlignCenter))
+            item.setTextAlignment(PHOTO_COL_ISO, int(Qt.AlignmentFlag.AlignCenter))
+            item.setTextAlignment(PHOTO_COL_APERTURE, int(Qt.AlignmentFlag.AlignCenter))
+            item.setData(PHOTO_COL_NAME, PHOTO_LIST_SORT_ROLE, (0, filename_text.casefold()))
+            item.setData(PHOTO_COL_CAPTURE_TIME, PHOTO_LIST_SORT_ROLE, capture_time_sort)
+            item.setData(PHOTO_COL_TITLE, PHOTO_LIST_SORT_ROLE, (0, title.casefold()) if title else (1, ""))
+            item.setData(
+                PHOTO_COL_RATIO,
+                PHOTO_LIST_SORT_ROLE,
+                self._ratio_sort_key(ratio_value),
+            )
+            item.setData(
+                PHOTO_COL_RATING,
+                PHOTO_LIST_SORT_ROLE,
+                (0, int(rating_value)) if rating_value is not None else (1, 0),
+            )
+            item.setData(PHOTO_COL_SHUTTER, PHOTO_LIST_SORT_ROLE, shutter_sort)
+            item.setData(PHOTO_COL_ISO, PHOTO_LIST_SORT_ROLE, iso_sort)
+            item.setData(PHOTO_COL_APERTURE, PHOTO_LIST_SORT_ROLE, aperture_sort)
+        finally:
+            if paused_sort:
+                self.photo_list.setSortingEnabled(True)
+        if resort and not in_batch:
             self.photo_list.resort()
 
     def _list_photo_paths(self) -> list[Path]:
@@ -4198,6 +4732,7 @@ class BirdStampEditorWindow(
             self._photo_export_dirty_keys.discard(key)
         if removed_keys:
             self._bird_box_cache.clear()
+            self._drop_source_image_cache_for_keys(removed_keys)
             self.photo_list.refresh_row_numbers()
             if self._photo_list_metadata_pending_keys:
                 self._restart_photo_list_metadata_loader()
@@ -4219,7 +4754,8 @@ class BirdStampEditorWindow(
         self._schedule_workspace_autosave()
         self._set_status(f"已删除 {len(selected_items)} 项。")
 
-    def _clear_photos_state(self, *, status_message: str | None = None) -> None:
+    def _clear_photos_state(self, *, status_message: str | None = None, show_placeholder: bool = True) -> None:
+        self._cancel_workspace_restore_in_progress()
         self._stop_photo_input_discovery_workers(wait=True)
         self._stop_received_photo_import(reset_progress=True)
         self._stop_photo_list_metadata_loader(wait=False, reset_progress=True)
@@ -4231,6 +4767,16 @@ class BirdStampEditorWindow(
         self.photo_render_overrides.clear()
         self._photo_export_dirty_keys.clear()
         self._bird_box_cache.clear()
+        self._source_image_cache.clear()
+        self._preview_image_cache.clear()
+        self._metadata_context_cache.clear()
+        self._perf_decode_counts.clear()
+        worker = getattr(self, "_bird_detect_worker", None)
+        if worker is not None and worker.isRunning():
+            worker.requestInterruption()
+            worker.wait(100)
+        self._bird_detect_worker = None
+        self._crop_drag_active = False
         self._next_photo_sequence_number = 0
         self.placeholder_path = None
         self.current_path = None
@@ -4240,7 +4786,13 @@ class BirdStampEditorWindow(
         self.current_metadata_context = {}
         self.current_file_label.setText("当前照片: 未选择")
         self.last_rendered = None
-        self._show_placeholder_preview()
+        if show_placeholder:
+            self._show_placeholder_preview()
+        else:
+            self.preview_pixmap = None
+            self.preview_overlay_state = EditorPreviewOverlayState()
+            self._invalidate_original_mode_cache()
+            self._refresh_preview_label(reset_view=True)
         self._schedule_workspace_autosave()
         if status_message is not None:
             self._set_status(status_message)
@@ -4259,65 +4811,121 @@ class BirdStampEditorWindow(
             self._show_error("文件不存在", str(path))
             return
 
-        try:
-            image = decode_image(path, decoder="auto")
-        except Exception as exc:
-            self._show_error("读取失败", str(exc))
-            return
+        with birdstamp_perf.span("select", path=str(path)):
+            try:
+                with birdstamp_perf.span("select.decode", path=str(path)):
+                    image = self._decode_image_for_preview(path)
+            except Exception as exc:
+                self._show_error("读取失败", str(exc))
+                return
 
-        self.placeholder_path = None
-        self.current_path = path
-        self.current_source_image = image
-        self._invalidate_original_mode_cache()
-        self.current_raw_metadata = self._load_raw_metadata(path)
-        photo_info = current.data(PHOTO_COL_ROW, PHOTO_LIST_PHOTO_INFO_ROLE)
-        self.current_photo_info = _template_context.ensure_editor_photo_info(
-            photo_info if isinstance(photo_info, _template_context.PhotoInfo) else path,
-            raw_metadata=self.current_raw_metadata,
-        )
-        current.setData(PHOTO_COL_ROW, PHOTO_LIST_PHOTO_INFO_ROLE, self.current_photo_info)
-        self.current_metadata_context = _build_metadata_context(self.current_photo_info, self.current_raw_metadata)
-        settings = self._render_settings_for_path(path, prefer_current_ui=False)
-        self._set_photo_crop_box_for_path(path, settings.get("crop_box"))
-        self._apply_render_settings_to_ui(settings)
-        self._update_photo_list_item_display(path, raw_metadata=self.current_raw_metadata, settings=settings)
-        self.current_file_label.setText(f"当前照片: {path}")
-        self.render_preview()
+            self.placeholder_path = None
+            self.current_path = path
+            self.current_source_image = image
+            self._invalidate_original_mode_cache()
+            with birdstamp_perf.span("select.metadata", path=str(path)):
+                self.current_raw_metadata = self._load_raw_metadata(path)
+            with birdstamp_perf.span("select.context"):
+                photo_info = current.data(PHOTO_COL_ROW, PHOTO_LIST_PHOTO_INFO_ROLE)
+                self.current_photo_info = _template_context.ensure_editor_photo_info(
+                    photo_info if isinstance(photo_info, _template_context.PhotoInfo) else path,
+                    raw_metadata=self.current_raw_metadata,
+                )
+                current.setData(PHOTO_COL_ROW, PHOTO_LIST_PHOTO_INFO_ROLE, self.current_photo_info)
+                self.current_metadata_context = self._cached_metadata_context(
+                    self.current_photo_info,
+                    self.current_raw_metadata,
+                )
+            with birdstamp_perf.span("select.apply_ui"):
+                settings = self._render_settings_for_path(path, prefer_current_ui=False)
+                self._set_photo_crop_box_for_path(path, settings.get("crop_box"))
+                self._apply_render_settings_to_ui(settings)
+            with birdstamp_perf.span("select.update_list"):
+                self._update_photo_list_item_display(
+                    path,
+                    raw_metadata=self.current_raw_metadata,
+                    settings=settings,
+                    resort=False,
+                )
+            self.current_file_label.setText(f"当前照片: {path}")
+            with birdstamp_perf.span("select.render_preview", path=str(path)):
+                self.render_preview()
+
+    def _cached_metadata_context(
+        self,
+        photo_info: _template_context.PhotoInfo,
+        raw_metadata: dict[str, Any],
+    ) -> dict[str, str]:
+        cache_key = f"{_path_key(photo_info.path)}:{_metadata_digest_for_cache(raw_metadata)}"
+        cached = self._metadata_context_cache.get(cache_key)
+        if cached is not None:
+            birdstamp_perf.plog("metadata_context cache_hit path=%s", photo_info.path)
+            return cached
+        context = _build_metadata_context(photo_info, raw_metadata)
+        self._metadata_context_cache[cache_key] = context
+        return context
 
     def _load_raw_metadata(self, path: Path) -> dict[str, Any]:
         key = _path_key(path)
         if key in self.raw_metadata_cache:
+            birdstamp_perf.plog("metadata cache_hit path=%s", path)
             return self.raw_metadata_cache[key]
 
         resolved = path.resolve(strict=False)
+        list_cached = self.photo_list_metadata_cache.get(key)
+        can_reuse_list = (
+            key not in self._photo_list_metadata_pending_keys
+            and _is_complete_list_metadata(list_cached)
+        )
+        if (
+            not can_reuse_list
+            and _is_complete_list_metadata(list_cached)
+            and key in self._photo_list_metadata_pending_keys
+        ):
+            birdstamp_perf.plog("[redundant-meta] path=%s reason=still_pending", path)
+
         raw_metadata: dict[str, Any]
-        try:
-            raw_metadata = extract_metadata_with_xmp_priority(resolved, mode="auto")
-        except Exception:
+        if can_reuse_list:
+            raw_metadata = dict(list_cached)
+            birdstamp_perf.plog("[reuse-meta-base] path=%s", path)
+        else:
             try:
-                raw_map = extract_many([resolved], mode="auto")
-                raw_metadata = raw_map.get(resolved) or extract_pillow_metadata(path)
+                with birdstamp_perf.span("metadata.extract", path=str(path)):
+                    raw_metadata = extract_metadata_with_xmp_priority(resolved, mode="auto")
             except Exception:
-                raw_metadata = extract_pillow_metadata(path)
-        if not isinstance(raw_metadata, dict):
-            raw_metadata = {"SourceFile": str(path)}
+                try:
+                    raw_map = extract_many([resolved], mode="auto")
+                    raw_metadata = raw_map.get(resolved) or extract_pillow_metadata(path)
+                except Exception:
+                    raw_metadata = extract_pillow_metadata(path)
+            if not isinstance(raw_metadata, dict):
+                raw_metadata = {"SourceFile": str(path)}
 
         # 通过 app_common.exif_io 统一读取文件列表依赖的 XMP/sidecar 字段（Title/Rating/Pick 等）。
         # 放在最后合并，确保列表显示与 Banner 模板字段优先使用 exif_io 的 XMP 结果。
-        try:
-            batch_map = read_batch_metadata([str(resolved)])
-        except Exception:
-            batch_map = {}
-        if isinstance(batch_map, dict) and batch_map:
+        if not can_reuse_list:
             try:
-                batch_metadata = next(iter(batch_map.values()))
+                with birdstamp_perf.span("metadata.read_batch", path=str(path)):
+                    batch_map = read_batch_metadata([str(resolved)])
             except Exception:
-                batch_metadata = None
-            if isinstance(batch_metadata, dict):
-                merged = dict(raw_metadata)
-                merged.update(batch_metadata)
-                raw_metadata = merged
+                batch_map = {}
+            if isinstance(batch_map, dict) and batch_map:
+                try:
+                    batch_metadata = next(iter(batch_map.values()))
+                except Exception:
+                    batch_metadata = None
+                if isinstance(batch_metadata, dict):
+                    merged = dict(raw_metadata)
+                    merged.update(batch_metadata)
+                    raw_metadata = merged
+        else:
+            birdstamp_perf.plog("[skip-read_batch] path=%s reused_list=True", path)
 
+        birdstamp_perf.plog(
+            "metadata cache_miss path=%s reused_list=%s",
+            path,
+            can_reuse_list,
+        )
         self.raw_metadata_cache[key] = raw_metadata
         self.photo_list_metadata_cache[key] = dict(raw_metadata)
         self._photo_list_metadata_pending_keys.discard(key)
@@ -4465,7 +5073,7 @@ class BirdStampEditorWindow(
             )
             if callable(progress_callback):
                 progress_callback(index, total)
-        if _parse_bool_value(current_render_settings.get("uniform_auto_crop"), False):
+        if crop_plan_precompute_required(current_render_settings):
             if callable(progress_callback):
                 progress_callback(0, total)
             prepare_uniform_auto_crop_plans(
@@ -4738,6 +5346,7 @@ def launch_gui(
         app.setApplicationDisplayName(app_name)
     if hasattr(app, "setApplicationVersion"):
         app.setApplicationVersion(str(about_info.get("version", "")))
+    reload_runtime_user_options()
     window = BirdStampEditorWindow()
     _log.info("editor window created")
 
@@ -4789,7 +5398,12 @@ def launch_gui(
     app.aboutToQuit.connect(_on_about_to_quit)
     window.showMaximized()
     _log.info("editor window shown")
-    if startup_inputs:
-        QTimer.singleShot(0, lambda pending_paths=startup_inputs: on_files_received(pending_paths))
+
+    def _run_startup_tasks() -> None:
+        window._run_deferred_startup_tasks()
+        if startup_inputs:
+            on_files_received(startup_inputs)
+
+    QTimer.singleShot(0, _run_startup_tasks)
     exit_code = app.exec()
     _log.info("qt event loop exited code=%s window_visible=%s", exit_code, window.isVisible())

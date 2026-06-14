@@ -1,9 +1,27 @@
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 import traceback
 from pathlib import Path
+
+
+def _ensure_default_log_file_env() -> None:
+    if os.environ.get("APP_COMMON_LOG_FILE", "").strip():
+        return
+    if getattr(sys, "frozen", False):
+        return
+    try:
+        repo_root = Path(__file__).resolve().parent.parent
+        log_dir = repo_root / "logs"
+        log_dir.mkdir(parents=True, exist_ok=True)
+        os.environ["APP_COMMON_LOG_FILE"] = str(log_dir / "SuperBirdStamp.log")
+    except OSError:
+        return
+
+
+_ensure_default_log_file_env()
 
 from app_common.log import get_log_file_path, get_logger
 from app_common.send_to_app import (

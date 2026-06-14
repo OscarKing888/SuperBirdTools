@@ -20,7 +20,17 @@ from PyQt6.QtGui import QColor, QPainterPath, QPen, QPixmap
 from PyQt6.QtWidgets import QWidget
 
 from app_common.preview_canvas import PreviewCanvas, PreviewOverlayOptions, PreviewOverlayState
+from app_common.perf_probe import elapsed_ms, perf_counter
+from birdstamp.gui.edit_modes import (
+    EDIT_MODE_CROP_ADJUST,
+    EDIT_MODE_NONE,
+    EDIT_MODE_REFERENCE_REGION,
+    CropAdjustEditMode,
+    EditModeController,
+    ReferenceRegionEditMode,
+)
 from birdstamp.gui.editor_utils import DEFAULT_CROP_EFFECT_ALPHA as _DEFAULT_CROP_EFFECT_ALPHA
+from birdstamp.perf import DragProbe
 
 NormalizedBox = tuple[float, float, float, float]
 
@@ -40,6 +50,7 @@ class EditorPreviewOverlayState(PreviewOverlayState):
 
     bird_box: "NormalizedBox | None" = None
     crop_effect_box: "NormalizedBox | None" = None
+    reference_regions: tuple["NormalizedBox", ...] = ()
 
 
 @dataclass(slots=True)
@@ -49,6 +60,7 @@ class EditorPreviewOverlayOptions(PreviewOverlayOptions):
     show_bird_box: bool = False
     show_crop_effect: bool = False
     crop_effect_alpha: int = _DEFAULT_CROP_EFFECT_ALPHA
+    show_reference_regions: bool = False
 
 
 class EditorPreviewCanvas(PreviewCanvas):
@@ -60,6 +72,9 @@ class EditorPreviewCanvas(PreviewCanvas):
     """
 
     crop_box_changed = pyqtSignal(tuple)  # (l, t, r, b) normalized
+    reference_region_changed = pyqtSignal(tuple)  # tuple of (l, t, r, b) normalized boxes
+    crop_drag_started = pyqtSignal()
+    crop_drag_finished = pyqtSignal()
 
     def __init__(
         self,
@@ -81,6 +96,17 @@ class EditorPreviewCanvas(PreviewCanvas):
         self._drag_start_pos: "QPointF | None" = None
         self._last_pos: "QPointF | None" = None
         self._has_pan: bool = False
+        self._reference_regions: tuple["NormalizedBox", ...] = ()
+        self._show_reference_regions: bool = False
+        self._edit_modes = EditModeController(self)
+        self._edit_modes.register(ReferenceRegionEditMode())
+        self._edit_modes.register(CropAdjustEditMode())
+        self._drag_probe = DragProbe()
+
+    def paintEvent(self, event) -> None:  # type: ignore[override]
+        start = perf_counter()
+        super().paintEvent(event)
+        self._drag_probe.add_paint(elapsed_ms(start))
 
     # ------------------------------------------------------------------
     # Public API – crop edit (9-grid)
@@ -108,6 +134,48 @@ class EditorPreviewCanvas(PreviewCanvas):
     def has_pan(self) -> bool:
         """Return whether current crop box has been panned (dragged by center handle)."""
         return bool(self._has_pan)
+
+    # ------------------------------------------------------------------
+    # Public API – 编辑模式 FSM 与去抖动参考区
+    # ------------------------------------------------------------------
+
+    def set_edit_mode(self, mode_id: str | None) -> None:
+        """切换预览交互编辑模式（如去抖动参考区框选）。"""
+        if self._edit_modes.set_active(mode_id):
+            self.update()
+
+    def edit_mode(self) -> str:
+        return self._edit_modes.active_id()
+
+    def display_rect(self) -> "QRectF | None":
+        """当前 pixmap 在 widget 上的绘制矩形（供编辑模式做坐标换算）。"""
+        return self._display_rect()
+
+    def widget_to_norm(self, draw_rect: "QRectF", x: float, y: float) -> tuple[float, float]:
+        return self._widget_to_norm(draw_rect, x, y)
+
+    def set_reference_regions(self, regions) -> None:
+        if self._set_reference_regions_no_update(regions):
+            self.update()
+
+    def reference_regions(self) -> tuple["NormalizedBox", ...]:
+        return self._reference_regions
+
+    def set_show_reference_regions(self, enabled: bool) -> None:
+        if self._set_show_reference_regions_no_update(enabled):
+            self.update()
+
+    def commit_reference_region(self, box: "NormalizedBox | None", *, append: bool = False) -> None:
+        """由编辑模式回调：追加/替换/清除参考区，并发出变更信号。"""
+        if box is None:
+            regions: tuple[NormalizedBox, ...] = ()
+        elif append:
+            regions = self._reference_regions + (tuple(float(v) for v in box),)
+        else:
+            regions = (tuple(float(v) for v in box),)
+        self._set_reference_regions_no_update(regions)
+        self.reference_region_changed.emit(self._reference_regions)
+        self.update()
 
     # ------------------------------------------------------------------
     # Public API – bird box
@@ -149,6 +217,8 @@ class EditorPreviewCanvas(PreviewCanvas):
             changed = True
         if self._set_crop_effect_box_no_update(state.crop_effect_box):
             changed = True
+        if self._set_reference_regions_no_update(state.reference_regions):
+            changed = True
         return changed
 
     def _apply_overlay_options_data(self, options: "PreviewOverlayOptions") -> bool:
@@ -160,6 +230,8 @@ class EditorPreviewCanvas(PreviewCanvas):
         if self._set_show_crop_effect_no_update(options.show_crop_effect):
             changed = True
         if self._set_crop_effect_alpha_no_update(options.crop_effect_alpha):
+            changed = True
+        if self._set_show_reference_regions_no_update(options.show_reference_regions):
             changed = True
         return changed
 
@@ -179,6 +251,9 @@ class EditorPreviewCanvas(PreviewCanvas):
             self._paint_crop_shade(painter, draw_rect, content_rect)
         if self._crop_edit_mode and self._crop_effect_box:
             self._paint_crop_handles(painter, draw_rect, content_rect)
+        if self._show_reference_regions and self._reference_regions:
+            self._paint_reference_regions(painter, draw_rect, content_rect)
+        self._edit_modes.paint(painter, draw_rect, content_rect)
 
     def _composition_grid_target_rect(self, draw_rect: QRectF, content_rect) -> QRectF:  # type: ignore[override]
         """构图线优先限制在当前裁切范围内，避免覆盖到裁切外区域。"""
@@ -231,6 +306,57 @@ class EditorPreviewCanvas(PreviewCanvas):
             return False
         self._crop_effect_alpha = parsed
         return True
+
+    @staticmethod
+    def _coerce_reference_regions(regions) -> tuple["NormalizedBox", ...]:
+        coerced: list[NormalizedBox] = []
+        if isinstance(regions, (list, tuple)):
+            for item in regions:
+                if isinstance(item, (list, tuple)) and len(item) == 4:
+                    try:
+                        coerced.append(
+                            (float(item[0]), float(item[1]), float(item[2]), float(item[3]))
+                        )
+                    except (TypeError, ValueError):
+                        continue
+        return tuple(coerced)
+
+    def _set_reference_regions_no_update(self, regions) -> bool:
+        coerced = self._coerce_reference_regions(regions)
+        if coerced == self._reference_regions:
+            return False
+        self._reference_regions = coerced
+        return True
+
+    def _set_show_reference_regions_no_update(self, enabled: bool) -> bool:
+        parsed = bool(enabled)
+        if self._show_reference_regions == parsed:
+            return False
+        self._show_reference_regions = parsed
+        return True
+
+    def _paint_reference_regions(self, painter, draw_rect: "QRectF", content_rect) -> None:
+        visible_rect = draw_rect.intersected(QRectF(content_rect))
+        if visible_rect.width() < 1.0 or visible_rect.height() < 1.0:
+            return
+        fill = QColor("#FFD166")
+        fill.setAlpha(48)
+        pen = QPen(QColor("#FFB703"))
+        pen.setWidth(2)
+        pen.setJoinStyle(Qt.PenJoinStyle.MiterJoin)
+        for box in self._reference_regions:
+            rect = QRectF(
+                draw_rect.left() + box[0] * draw_rect.width(),
+                draw_rect.top() + box[1] * draw_rect.height(),
+                max(0.0, (box[2] - box[0]) * draw_rect.width()),
+                max(0.0, (box[3] - box[1]) * draw_rect.height()),
+            ).intersected(visible_rect)
+            if rect.width() < 1.0 or rect.height() < 1.0:
+                continue
+            painter.fillRect(rect, fill)
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.setPen(pen)
+            painter.drawRect(rect)
 
     def _norm_to_widget(self, draw_rect: QRectF, nx: float, ny: float) -> tuple[float, float]:
         x = draw_rect.left() + nx * draw_rect.width()
@@ -456,6 +582,13 @@ class EditorPreviewCanvas(PreviewCanvas):
             painter.drawEllipse(QPointF(hx, hy), hr, hr)
 
     def mousePressEvent(self, event) -> None:  # type: ignore[override]
+        if self._edit_modes.handle_press(event):
+            if (
+                event.button() == Qt.MouseButton.LeftButton
+                and self._edit_modes.active_id() == EDIT_MODE_REFERENCE_REGION
+            ):
+                self._drag_probe.begin("reference_region")
+            return
         if (
             event.button() == Qt.MouseButton.LeftButton
             and self._crop_edit_mode
@@ -469,6 +602,8 @@ class EditorPreviewCanvas(PreviewCanvas):
                     self._dragging_handle = hit
                     self._drag_start_box = self._crop_effect_box
                     self._last_pos = QPointF(pos)
+                    self.crop_drag_started.emit()
+                    self._drag_probe.begin("crop_adjust")
                     event.accept()
                     return
                 if self._is_inside_crop_box(draw_rect, self._crop_effect_box, pos.x(), pos.y()):
@@ -477,11 +612,19 @@ class EditorPreviewCanvas(PreviewCanvas):
                     self._drag_start_pos = QPointF(pos)
                     self._last_pos = QPointF(pos)
                     self._has_pan = True
+                    self.crop_drag_started.emit()
+                    self._drag_probe.begin("crop_adjust")
                     event.accept()
                     return
         super().mousePressEvent(event)
+        if event.button() == Qt.MouseButton.LeftButton and getattr(self, "_dragging", False):
+            self._drag_probe.begin("pan")
 
     def mouseMoveEvent(self, event) -> None:  # type: ignore[override]
+        start = perf_counter()
+        if self._edit_modes.handle_move(event):
+            self._drag_probe.add_move_handler(elapsed_ms(start))
+            return
         if self._dragging_handle is not None and self._drag_start_box is not None:
             draw_rect = self._display_rect()
             if draw_rect is not None and draw_rect.width() > 0 and draw_rect.height() > 0:
@@ -503,21 +646,31 @@ class EditorPreviewCanvas(PreviewCanvas):
                 self._set_crop_effect_box_no_update(new_box)
                 self.crop_box_changed.emit(new_box)
                 self.update()
+            self._drag_probe.add_move_handler(elapsed_ms(start))
             event.accept()
             return
         super().mouseMoveEvent(event)
+        if getattr(self, "_dragging", False):
+            self._drag_probe.add_move_handler(elapsed_ms(start))
 
     def mouseReleaseEvent(self, event) -> None:  # type: ignore[override]
+        if self._edit_modes.handle_release(event):
+            self._drag_probe.end()
+            return
         if event.button() == Qt.MouseButton.LeftButton and self._dragging_handle is not None:
+            self.crop_drag_finished.emit()
             if self._crop_effect_box is not None:
                 self.crop_box_changed.emit(self._crop_effect_box)
             self._dragging_handle = None
             self._drag_start_box = None
             self._drag_start_pos = None
             self._last_pos = None
+            self._drag_probe.end()
             event.accept()
             return
         super().mouseReleaseEvent(event)
+        if event.button() == Qt.MouseButton.LeftButton:
+            self._drag_probe.end()
 
     def _paint_bird_overlay(self, painter, draw_rect: "QRectF", content_rect) -> None:
         bb = self._bird_box

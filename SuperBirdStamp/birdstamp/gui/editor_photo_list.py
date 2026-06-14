@@ -330,6 +330,9 @@ class PhotoListWidget(FileListPanel):
     def setSortingEnabled(self, enabled: bool) -> None:  # type: ignore[override]
         self._tree_widget.setSortingEnabled(bool(enabled))
 
+    def isSortingEnabled(self) -> bool:
+        return bool(self._tree_widget.isSortingEnabled())
+
     def header(self):  # noqa: ANN201
         return self._tree_widget.header()
 

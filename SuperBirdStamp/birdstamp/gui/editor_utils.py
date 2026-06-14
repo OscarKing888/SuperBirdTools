@@ -399,8 +399,18 @@ def get_template_context_field_options() -> list[tuple[str, str, str]]:
     return _provider_field_options()
 
 
-def pil_to_qpixmap(image: Image.Image) -> QPixmap:
-    """Convert a PIL Image to a QPixmap (RGBA round-trip)."""
+def pil_to_qpixmap(image: Image.Image, *, max_pixels: int | None = None) -> QPixmap:
+    """Convert a PIL Image to a QPixmap (RGBA round-trip).
+
+    When ``max_pixels`` is set, downscale oversized images before Qt conversion.
+    """
+    if max_pixels is not None and max_pixels > 0:
+        current_pixels = image.width * image.height
+        if current_pixels > max_pixels:
+            scale = (max_pixels / float(current_pixels)) ** 0.5
+            target_w = max(1, int(image.width * scale))
+            target_h = max(1, int(image.height * scale))
+            image = image.resize((target_w, target_h), Image.Resampling.LANCZOS)
     rgba = image.convert("RGBA")
     data = rgba.tobytes("raw", "RGBA")
     q_image = QImage(data, rgba.width, rgba.height, QImage.Format.Format_RGBA8888)

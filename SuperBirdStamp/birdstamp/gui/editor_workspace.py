@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import time
+from collections import deque
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Iterable
@@ -8,8 +10,14 @@ from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtWidgets import QFileDialog, QMessageBox
 
 from app_common.log import get_logger
+from birdstamp import perf as birdstamp_perf
 from birdstamp.config import get_config_path
 from birdstamp.constants import SUPPORTED_EXTENSIONS
+from birdstamp.gui.edit_modes import (
+    EDIT_MODE_CROP_ADJUST,
+    EDIT_MODE_NONE,
+    EDIT_MODE_REFERENCE_REGION,
+)
 from birdstamp.gui.editor_photo_list import PHOTO_COL_ROW, PHOTO_COL_SEQ, PHOTO_LIST_PATH_ROLE, PHOTO_LIST_SEQUENCE_ROLE
 from birdstamp.video_export import (
     PIPELINE_STAGE_ENABLED_KEY,
@@ -30,6 +38,9 @@ from birdstamp.workspace import (
 
 _WORKSPACE_AUTOSAVE_FILE_NAME = f"editor_autosave{WORKSPACE_FILE_EXTENSION}"
 _WORKSPACE_AUTOSAVE_INTERVAL_MS = 1200
+_WORKSPACE_RESTORE_PHOTO_BATCH_MIN = 12
+_WORKSPACE_RESTORE_PHOTO_BATCH_MAX = 48
+_WORKSPACE_RESTORE_PHOTO_BATCH_BUDGET_S = 0.010
 _workspace_log = get_logger("birdstamp.workspace")
 _LAST_WORKSPACE_PATH_KEY = "last_workspace_path"
 _PIPELINE_STAGE_ENABLED_VALUE_KEYS = (
@@ -375,9 +386,11 @@ class _BirdStampWorkspaceMixin:
         )
 
     def _collect_workspace_preview_state(self) -> dict[str, Any]:
+        getter = getattr(self, "_current_edit_mode_id", None)
+        edit_mode = getter() if callable(getter) else EDIT_MODE_NONE
         return {
             "show_crop_effect": bool(self.show_crop_effect_check.isChecked()),
-            "crop_edit_mode": bool(self.crop_edit_mode_check.isChecked()),
+            "edit_mode": edit_mode,
             "crop_effect_alpha": int(self.crop_effect_alpha_slider.value()),
             "show_focus_box": bool(self.show_focus_box_check.isChecked()),
             "show_bird_box": bool(self.show_bird_box_check.isChecked()),
@@ -391,7 +404,6 @@ class _BirdStampWorkspaceMixin:
             return None
         widgets_state = _block_widget_signals(
             self.show_crop_effect_check,
-            self.crop_edit_mode_check,
             self.crop_effect_alpha_slider,
             self.show_focus_box_check,
             self.show_bird_box_check,
@@ -400,7 +412,7 @@ class _BirdStampWorkspaceMixin:
         )
         try:
             self.show_crop_effect_check.setChecked(bool(state.get("show_crop_effect", True)))
-            self.crop_edit_mode_check.setChecked(bool(state.get("crop_edit_mode", False)))
+            self._apply_workspace_edit_mode(state)
             try:
                 alpha = int(state.get("crop_effect_alpha", self.crop_effect_alpha_slider.value()))
             except Exception:
@@ -431,6 +443,21 @@ class _BirdStampWorkspaceMixin:
         except Exception:
             return None
         return scale_percent if scale_percent > 0 else None
+
+    def _apply_workspace_edit_mode(self, state: dict[str, Any]) -> None:
+        """从工作区恢复编辑模式按钮（兼容旧字段 crop_edit_mode）。"""
+        setter = getattr(self, "_set_edit_mode_button_checked", None)
+        if not callable(setter):
+            return
+        mode = state.get("edit_mode")
+        if not isinstance(mode, str) or mode not in (
+            EDIT_MODE_NONE,
+            EDIT_MODE_REFERENCE_REGION,
+            EDIT_MODE_CROP_ADJUST,
+        ):
+            # 旧工作区只持久化了 crop_edit_mode 复选框状态。
+            mode = EDIT_MODE_CROP_ADJUST if bool(state.get("crop_edit_mode", False)) else EDIT_MODE_NONE
+        setter(mode)
 
     def _collect_workspace_payload(self, workspace_path: Path) -> dict[str, Any]:
         photo_entries: list[dict[str, Any]] = []
@@ -570,6 +597,185 @@ class _BirdStampWorkspaceMixin:
         self.photo_list.resort()
         self.photo_list.refresh_row_numbers()
 
+    def _cancel_workspace_restore_in_progress(self) -> None:
+        timer = getattr(self, "_workspace_restore_photo_timer", None)
+        if timer is not None and timer.isActive():
+            timer.stop()
+        pending = getattr(self, "_workspace_restore_pending_entries", None)
+        if isinstance(pending, deque):
+            pending.clear()
+        self._workspace_restore_context = None
+
+    def _process_workspace_restore_photo_batch(self) -> None:
+        context = getattr(self, "_workspace_restore_context", None)
+        pending = getattr(self, "_workspace_restore_pending_entries", None)
+        if not isinstance(context, dict) or not isinstance(pending, deque) or not pending:
+            timer = getattr(self, "_workspace_restore_photo_timer", None)
+            if timer is not None and timer.isActive():
+                timer.stop()
+            if isinstance(context, dict):
+                self._finish_workspace_restore_payload()
+            return
+
+        existing_keys = context.get("existing_keys")
+        added_paths = context.get("added_paths")
+        if not isinstance(existing_keys, set) or not isinstance(added_paths, list):
+            self._cancel_workspace_restore_in_progress()
+            return
+
+        tick_t0 = time.perf_counter()
+        processed = 0
+        with birdstamp_perf.span("workspace.restore_chunk", remaining=len(pending)):
+            self.photo_list.setUpdatesEnabled(False)
+            try:
+                while pending:
+                    entry = pending[0]
+                    if not isinstance(entry, dict):
+                        pending.popleft()
+                        continue
+                    path = entry.get("path")
+                    if not isinstance(path, Path):
+                        pending.popleft()
+                        continue
+                    normalized_settings = entry.get("normalized_settings")
+                    if not isinstance(normalized_settings, dict):
+                        normalized_settings = context.get("current_render_settings") or {}
+                    sequence_value = entry.get("sequence")
+                    pending.popleft()
+                    added, _item = self._append_photo_path_to_list(
+                        path,
+                        existing_keys=existing_keys,
+                        default_settings=normalized_settings,
+                        sequence_value=sequence_value if isinstance(sequence_value, int) else None,
+                    )
+                    if added:
+                        added_paths.append(path)
+                    processed += 1
+                    if processed >= _WORKSPACE_RESTORE_PHOTO_BATCH_MAX:
+                        break
+                    if (
+                        processed >= _WORKSPACE_RESTORE_PHOTO_BATCH_MIN
+                        and (time.perf_counter() - tick_t0) >= _WORKSPACE_RESTORE_PHOTO_BATCH_BUDGET_S
+                    ):
+                        break
+            finally:
+                self.photo_list.setUpdatesEnabled(True)
+
+        total = int(context.get("total_photo_entries") or 0)
+        self._set_status(f"正在恢复工作区照片 {len(added_paths)}/{total} ...")
+        if pending:
+            return
+
+        timer = getattr(self, "_workspace_restore_photo_timer", None)
+        if timer is not None and timer.isActive():
+            timer.stop()
+        self._finish_workspace_restore_payload()
+
+    def _finish_workspace_restore_payload(self) -> None:
+        context = getattr(self, "_workspace_restore_context", None)
+        if not isinstance(context, dict):
+            return
+        self._workspace_restore_context = None
+
+        with birdstamp_perf.span("workspace.restore_finish"):
+            selection_state = context.get("selection_state")
+            if not isinstance(selection_state, dict):
+                selection_state = {}
+            workspace_path = context.get("workspace_path")
+            current_render_settings = context.get("current_render_settings")
+            if not isinstance(current_render_settings, dict):
+                current_render_settings = self._build_current_render_settings()
+            added_paths = context.get("added_paths")
+            if not isinstance(added_paths, list):
+                added_paths = []
+            missing_photos = context.get("missing_photos")
+            if not isinstance(missing_photos, list):
+                missing_photos = []
+            missing_report_dbs = context.get("missing_report_dbs")
+            if not isinstance(missing_report_dbs, list):
+                missing_report_dbs = []
+            missing_template_names = context.get("missing_template_names")
+            if not isinstance(missing_template_names, set):
+                missing_template_names = set()
+            status_label = str(context.get("status_label") or "工作区已加载")
+            mark_as_current_workspace = bool(context.get("mark_as_current_workspace", True))
+            preview_scale_percent = context.get("preview_scale_percent")
+            selected_photos = context.get("selected_photos")
+            if not isinstance(selected_photos, list):
+                selected_photos = []
+
+            self.photo_list.setSortingEnabled(True)
+            self._next_photo_sequence_number = 0
+            self._apply_workspace_photo_list_sort(selection_state)
+            if added_paths:
+                self._restart_photo_list_metadata_loader()
+
+            current_photo = (
+                resolve_workspace_path(selection_state.get("current_photo"), workspace_path=workspace_path)
+                if isinstance(workspace_path, Path)
+                else None
+            )
+            current_item = self._find_photo_item_by_path(current_photo) if current_photo is not None else None
+            if current_item is None and selected_photos:
+                for path in selected_photos:
+                    if not isinstance(path, Path):
+                        continue
+                    current_item = self._find_photo_item_by_path(path)
+                    if current_item is not None:
+                        break
+            if current_item is None and self.photo_list.topLevelItemCount() > 0:
+                current_item = self.photo_list.topLevelItem(0)
+
+            if current_item is not None:
+                self._schedule_workspace_photo_selection(
+                    current_item,
+                    selected_photos,
+                    wait_metadata=False,
+                )
+            else:
+                self._apply_render_settings_to_ui(current_render_settings)
+                self.render_preview()
+
+            if preview_scale_percent is not None:
+                self.preview_label.set_display_scale_percent(preview_scale_percent, preserve_view=True)
+                self._sync_preview_scale_combo(self.preview_label.current_display_scale_percent())
+
+            if mark_as_current_workspace and isinstance(workspace_path, Path):
+                self._workspace_path = workspace_path
+                self._save_workspace_last_path(workspace_path)
+            else:
+                self._workspace_path = None
+
+            loaded_photo_count = len(added_paths)
+            loaded_report_db_count = len(self._report_db_entries)
+            status = f"{status_label}：{loaded_photo_count} 张照片，{loaded_report_db_count} 个 report.db。"
+            if missing_photos or missing_report_dbs:
+                status = (
+                    f"{status} 跳过 {len(missing_photos)} 个缺失照片、"
+                    f"{len(missing_report_dbs)} 个缺失 report.db。"
+                )
+            self._set_status(status)
+
+            warning_lines: list[str] = []
+            if missing_photos:
+                preview = "\n".join(missing_photos[:6])
+                extra = "" if len(missing_photos) <= 6 else f"\n……另有 {len(missing_photos) - 6} 个文件"
+                warning_lines.append(f"以下照片未找到，已跳过：\n{preview}{extra}")
+            if missing_report_dbs:
+                preview = "\n".join(missing_report_dbs[:6])
+                extra = "" if len(missing_report_dbs) <= 6 else f"\n……另有 {len(missing_report_dbs) - 6} 个文件"
+                warning_lines.append(f"以下 report.db 未找到，已跳过：\n{preview}{extra}")
+            if missing_template_names:
+                warning_lines.append(
+                    "以下模板文件当前不在模板库中，已使用工作区内嵌模板快照恢复：\n"
+                    + "\n".join(sorted(missing_template_names))
+                )
+            if warning_lines:
+                QMessageBox.warning(self, "工作区加载完成", "\n\n".join(warning_lines))
+
+            if bool(context.get("autosave_after_restore", True)):
+                self._schedule_workspace_autosave()
+
     def _restore_workspace_payload(
         self,
         payload: dict[str, Any],
@@ -583,10 +789,12 @@ class _BirdStampWorkspaceMixin:
             self._show_error("视频导出进行中", "请先中断当前视频导出，再加载工作区。")
             return
 
+        self._cancel_workspace_restore_in_progress()
+
         with self._workspace_autosave_suspended():
             self._reload_template_combo(preferred=str(self.template_combo.currentText() or "default"))
             self._clear_report_dbs_state(status_message=None)
-            self._clear_photos_state(status_message=None)
+            self._clear_photos_state(status_message=None, show_placeholder=False)
 
             editor_state = payload.get("editor_state")
             if not isinstance(editor_state, dict):
@@ -595,6 +803,13 @@ class _BirdStampWorkspaceMixin:
                 editor_state.get("current_render_settings"),
                 fallback=self._build_current_render_settings(),
             )
+            # 去抖动参考区为全局导出设置，需在照片选择前先恢复，确保后续 settings 携带。
+            restore_dejitter = getattr(self, "_restore_dejitter_reference_from_settings", None)
+            if callable(restore_dejitter):
+                restore_dejitter(current_render_settings)
+            update_clear = getattr(self, "_update_dejitter_reference_clear_enabled", None)
+            if callable(update_clear):
+                update_clear()
             global_export_state = editor_state.get("global_export_settings")
             if not isinstance(global_export_state, dict):
                 global_export_state = {
@@ -634,129 +849,89 @@ class _BirdStampWorkspaceMixin:
                 photo_entries = []
 
             existing_keys: set[str] = set()
-            added_paths: list[Path] = []
             missing_photos: list[str] = []
             missing_template_names: set[str] = set()
+            pending_photo_entries: list[dict[str, Any]] = []
 
-            self.photo_list.setSortingEnabled(False)
-            try:
-                for entry in photo_entries:
-                    if not isinstance(entry, dict):
-                        continue
-                    path = resolve_workspace_path(entry.get("path"), workspace_path=workspace_path)
-                    if path is None or not path.is_file() or path.suffix.lower() not in SUPPORTED_EXTENSIONS:
-                        if path is not None:
-                            missing_photos.append(str(path))
-                        continue
-                    normalized_settings = self._photo_override_settings_from_snapshot(
-                        self._normalize_render_settings(
-                            entry.get("render_settings"),
-                            fallback=current_render_settings,
-                        )
+            for entry in photo_entries:
+                if not isinstance(entry, dict):
+                    continue
+                path = resolve_workspace_path(entry.get("path"), workspace_path=workspace_path)
+                if path is None or not path.is_file() or path.suffix.lower() not in SUPPORTED_EXTENSIONS:
+                    if path is not None:
+                        missing_photos.append(str(path))
+                    continue
+                normalized_settings = self._photo_override_settings_from_snapshot(
+                    self._normalize_render_settings(
+                        entry.get("render_settings"),
+                        fallback=current_render_settings,
                     )
-                    template_name = str(normalized_settings.get("template_name") or "").strip()
-                    if template_name and template_name not in self.template_paths:
-                        missing_template_names.add(template_name)
+                )
+                template_name = str(normalized_settings.get("template_name") or "").strip()
+                if template_name and template_name not in self.template_paths:
+                    missing_template_names.add(template_name)
 
-                    try:
-                        sequence = int(entry.get("sequence"))
-                    except Exception:
-                        sequence = None
-                    added, _item = self._append_photo_path_to_list(
-                        path,
-                        existing_keys=existing_keys,
-                        default_settings=normalized_settings,
-                        sequence_value=sequence,
-                    )
-                    if added:
-                        added_paths.append(path)
-            finally:
-                self.photo_list.setSortingEnabled(True)
-
-            self._next_photo_sequence_number = 0
-            self._apply_workspace_photo_list_sort(selection_state)
-            if added_paths:
-                self._restart_photo_list_metadata_loader()
+                try:
+                    sequence = int(entry.get("sequence"))
+                except Exception:
+                    sequence = None
+                pending_photo_entries.append(
+                    {
+                        "path": path,
+                        "normalized_settings": normalized_settings,
+                        "sequence": sequence,
+                    }
+                )
 
             self._apply_workspace_global_export_state(global_export_state)
-            self._apply_workspace_image_export_state(image_export_state if isinstance(image_export_state, dict) else {}, workspace_path)
-            self._apply_workspace_video_export_state(video_export_state if isinstance(video_export_state, dict) else {}, workspace_path)
+            self._apply_workspace_image_export_state(
+                image_export_state if isinstance(image_export_state, dict) else {},
+                workspace_path,
+            )
+            self._apply_workspace_video_export_state(
+                video_export_state if isinstance(video_export_state, dict) else {},
+                workspace_path,
+            )
             preview_scale_percent = self._apply_workspace_preview_state(
                 preview_state if isinstance(preview_state, dict) else {}
             )
 
-            current_photo = resolve_workspace_path(selection_state.get("current_photo"), workspace_path=workspace_path)
-            selected_photos_raw = selection_state.get("selected_photos")
             selected_photos: list[Path] = []
+            selected_photos_raw = selection_state.get("selected_photos")
             if isinstance(selected_photos_raw, list):
                 for entry in selected_photos_raw:
                     resolved = resolve_workspace_path(entry, workspace_path=workspace_path)
                     if resolved is not None:
                         selected_photos.append(resolved)
 
-            current_item = self._find_photo_item_by_path(current_photo) if current_photo is not None else None
-            if current_item is None and selected_photos:
-                for path in selected_photos:
-                    current_item = self._find_photo_item_by_path(path)
-                    if current_item is not None:
-                        break
-            if current_item is None and self.photo_list.topLevelItemCount() > 0:
-                current_item = self.photo_list.topLevelItem(0)
+            self._workspace_restore_context = {
+                "workspace_path": workspace_path,
+                "selection_state": selection_state,
+                "current_render_settings": current_render_settings,
+                "added_paths": [],
+                "existing_keys": existing_keys,
+                "missing_photos": missing_photos,
+                "missing_report_dbs": missing_report_dbs,
+                "missing_template_names": missing_template_names,
+                "status_label": status_label,
+                "mark_as_current_workspace": mark_as_current_workspace,
+                "autosave_after_restore": autosave_after_restore,
+                "preview_scale_percent": preview_scale_percent,
+                "selected_photos": selected_photos,
+                "total_photo_entries": len(pending_photo_entries),
+            }
+            self._workspace_restore_pending_entries = deque(pending_photo_entries)
+            self.photo_list.setSortingEnabled(False)
 
-            if current_item is not None:
-                self.photo_list.setCurrentItem(current_item)
-                for idx in range(self.photo_list.topLevelItemCount()):
-                    item = self.photo_list.topLevelItem(idx)
-                    if item is not None:
-                        item.setSelected(False)
-                current_item.setSelected(True)
-                for path in selected_photos:
-                    item = self._find_photo_item_by_path(path)
-                    if item is not None:
-                        item.setSelected(True)
+            if not pending_photo_entries:
+                self._finish_workspace_restore_payload()
             else:
-                self._apply_render_settings_to_ui(current_render_settings)
-                self.render_preview()
+                self._set_status(f"正在恢复工作区照片 0/{len(pending_photo_entries)} ...")
+                timer = getattr(self, "_workspace_restore_photo_timer", None)
+                if timer is not None:
+                    timer.start()
 
-            if preview_scale_percent is not None:
-                self.preview_label.set_display_scale_percent(preview_scale_percent, preserve_view=True)
-                self._sync_preview_scale_combo(self.preview_label.current_display_scale_percent())
-
-            if mark_as_current_workspace:
-                self._workspace_path = workspace_path
-                self._save_workspace_last_path(workspace_path)
-            else:
-                self._workspace_path = None
-
-            loaded_photo_count = len(added_paths)
-            loaded_report_db_count = len(self._report_db_entries)
-            status = f"{status_label}：{loaded_photo_count} 张照片，{loaded_report_db_count} 个 report.db。"
-            if missing_photos or missing_report_dbs:
-                status = (
-                    f"{status} 跳过 {len(missing_photos)} 个缺失照片、"
-                    f"{len(missing_report_dbs)} 个缺失 report.db。"
-                )
-            self._set_status(status)
-
-            warning_lines: list[str] = []
-            if missing_photos:
-                preview = "\n".join(missing_photos[:6])
-                extra = "" if len(missing_photos) <= 6 else f"\n……另有 {len(missing_photos) - 6} 个文件"
-                warning_lines.append(f"以下照片未找到，已跳过：\n{preview}{extra}")
-            if missing_report_dbs:
-                preview = "\n".join(missing_report_dbs[:6])
-                extra = "" if len(missing_report_dbs) <= 6 else f"\n……另有 {len(missing_report_dbs) - 6} 个文件"
-                warning_lines.append(f"以下 report.db 未找到，已跳过：\n{preview}{extra}")
-            if missing_template_names:
-                warning_lines.append(
-                    "以下模板文件当前不在模板库中，已使用工作区内嵌模板快照恢复：\n"
-                    + "\n".join(sorted(missing_template_names))
-                )
-            if warning_lines:
-                QMessageBox.warning(self, "工作区加载完成", "\n\n".join(warning_lines))
-
-        if autosave_after_restore:
-            self._schedule_workspace_autosave()
+        return
 
     def save_workspace(self) -> None:
         workspace_path = getattr(self, "_workspace_path", None)

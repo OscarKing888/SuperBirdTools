@@ -118,6 +118,75 @@ def test_render_video_frame_cannot_disable_template_crop_stage(tmp_path: Path) -
         source_image.close()
 
 
+def test_render_video_frame_skips_template_overlay_when_stage_disabled(tmp_path: Path) -> None:
+    source_path = tmp_path / "source.jpg"
+    source_image = Image.new("RGB", (200, 100), "#ff0000")
+    source_image.save(source_path)
+
+    overlay_payload = {
+        "name": "overlay-test",
+        "ratio": 1.7777777778,
+        "draw_banner_background": True,
+        "banner_background_style": "solid",
+        "banner_color": "#00ff00",
+        "center_mode": "image",
+        "fields": [
+            {
+                "name": "label",
+                "tag": "",
+                "fallback": "HELLO",
+                "data_source": "auto",
+                "report_field": "",
+                "text_source": {"type": "auto", "key": ""},
+                "x_offset_pct": 0.0,
+                "y_offset_pct": 0.0,
+                "color": "#000000",
+                "font_size": 32,
+                "font_type": "",
+                "style": "bold",
+            }
+        ],
+    }
+    base_settings = {
+        "draw_banner": True,
+        "draw_text": True,
+        "draw_focus": False,
+        "template_payload": overlay_payload,
+        "ratio": 1.7777777778,
+    }
+
+    def _render(settings: dict[str, object]) -> Image.Image:
+        job = VideoFrameJob(
+            path=source_path,
+            settings=settings,
+            raw_metadata={"SourceFile": str(source_path)},
+            metadata_context={},
+            source_image=source_image.copy(),
+        )
+        return render_video_frame(job)
+
+    disabled_flat = dict(base_settings)
+    disabled_flat["stage_template_overlay_enabled"] = False
+
+    disabled_nested = dict(base_settings)
+    disabled_nested["pipeline_stage_enabled"] = {"template_overlay": False}
+
+    enabled = dict(base_settings)
+    enabled["stage_template_overlay_enabled"] = True
+
+    rendered_disabled_flat = _render(disabled_flat)
+    rendered_disabled_nested = _render(disabled_nested)
+    rendered_enabled = _render(enabled)
+    try:
+        assert rendered_disabled_flat.tobytes() == rendered_disabled_nested.tobytes()
+        assert rendered_disabled_flat.tobytes() != rendered_enabled.tobytes()
+    finally:
+        rendered_disabled_flat.close()
+        rendered_disabled_nested.close()
+        rendered_enabled.close()
+        source_image.close()
+
+
 def test_focus_box_transform_uses_padded_crop_coordinates() -> None:
     focus_box = transform_source_box_after_crop_padding(
         (0.4, 0.4, 0.6, 0.6),

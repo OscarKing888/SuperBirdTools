@@ -1,0 +1,2676 @@
+{
+  "report_databases": [],
+  "photos": [
+    {
+      "path": {
+        "absolute_path": "/Volumes/HP2T/_鸟录/三宝鸟/吃金龟子/DSC03752_ExHiRes.TIF",
+        "relative_path": "../../../../../../../Volumes/HP2T/_鸟录/三宝鸟/吃金龟子/DSC03752_ExHiRes.TIF"
+      },
+      "sequence": 1,
+      "render_settings": {
+        "template_name": "鸟体中心-GIF",
+        "template_payload": {
+          "name": "鸟体中心-GIF",
+          "ratio": 1.0,
+          "banner_color": "#ffffff",
+          "draw_banner_background": false,
+          "banner_background_style": "gradient_bottom",
+          "banner_gradient_height_pct": 25.0,
+          "banner_gradient_top_color": "#000000",
+          "banner_gradient_top_opacity_pct": 0.0,
+          "banner_gradient_bottom_color": "#000000",
+          "banner_gradient_bottom_opacity_pct": 80.0,
+          "center_mode": "bird",
+          "auto_crop_by_bird": true,
+          "max_long_edge": 0,
+          "crop_padding_top": 64,
+          "crop_padding_bottom": 64,
+          "crop_padding_left": 64,
+          "crop_padding_right": 64,
+          "crop_padding_fill": "#000000",
+          "fields": [
+            {
+              "name": "鸟种中文名 (bird_species_cn)",
+              "tag": "EXIF:Model",
+              "fallback": "",
+              "data_source": "auto",
+              "report_field": "",
+              "text_source": {
+                "type": "auto",
+                "key": "bird_species_cn"
+              },
+              "align_horizontal": "left",
+              "align_vertical": "bottom",
+              "x_offset_pct": 0.0,
+              "y_offset_pct": -2.0,
+              "color": "#ff9300",
+              "font_size": 64,
+              "font_type": "/System/Library/Fonts/Supplemental/Songti.ttc",
+              "style": "bold"
+            }
+          ]
+        },
+        "ratio": 1.0,
+        "center_mode": "bird",
+        "crop_padding_top": 64,
+        "crop_padding_bottom": 64,
+        "crop_padding_left": 64,
+        "crop_padding_right": 64,
+        "crop_padding_fill": "#000000",
+        "crop_box": null,
+        "custom_center_x": null,
+        "custom_center_y": null
+      }
+    },
+    {
+      "path": {
+        "absolute_path": "/Volumes/HP2T/_鸟录/三宝鸟/吃金龟子/DSC03753_ExHiRes.TIF",
+        "relative_path": "../../../../../../../Volumes/HP2T/_鸟录/三宝鸟/吃金龟子/DSC03753_ExHiRes.TIF"
+      },
+      "sequence": 2,
+      "render_settings": {
+        "template_name": "鸟体中心-GIF",
+        "template_payload": {
+          "name": "鸟体中心-GIF",
+          "ratio": 1.0,
+          "banner_color": "#ffffff",
+          "draw_banner_background": false,
+          "banner_background_style": "gradient_bottom",
+          "banner_gradient_height_pct": 25.0,
+          "banner_gradient_top_color": "#000000",
+          "banner_gradient_top_opacity_pct": 0.0,
+          "banner_gradient_bottom_color": "#000000",
+          "banner_gradient_bottom_opacity_pct": 80.0,
+          "center_mode": "bird",
+          "auto_crop_by_bird": true,
+          "max_long_edge": 0,
+          "crop_padding_top": 64,
+          "crop_padding_bottom": 64,
+          "crop_padding_left": 64,
+          "crop_padding_right": 64,
+          "crop_padding_fill": "#000000",
+          "fields": [
+            {
+              "name": "鸟种中文名 (bird_species_cn)",
+              "tag": "EXIF:Model",
+              "fallback": "",
+              "data_source": "auto",
+              "report_field": "",
+              "text_source": {
+                "type": "auto",
+                "key": "bird_species_cn"
+              },
+              "align_horizontal": "left",
+              "align_vertical": "bottom",
+              "x_offset_pct": 0.0,
+              "y_offset_pct": -2.0,
+              "color": "#ff9300",
+              "font_size": 64,
+              "font_type": "/System/Library/Fonts/Supplemental/Songti.ttc",
+              "style": "bold"
+            }
+          ]
+        },
+        "ratio": 1.0,
+        "center_mode": "bird",
+        "crop_padding_top": 64,
+        "crop_padding_bottom": 64,
+        "crop_padding_left": 64,
+        "crop_padding_right": 64,
+        "crop_padding_fill": "#000000",
+        "crop_box": null,
+        "custom_center_x": null,
+        "custom_center_y": null
+      }
+    },
+    {
+      "path": {
+        "absolute_path": "/Volumes/HP2T/_鸟录/三宝鸟/吃金龟子/DSC03754_ExHiRes.TIF",
+        "relative_path": "../../../../../../../Volumes/HP2T/_鸟录/三宝鸟/吃金龟子/DSC03754_ExHiRes.TIF"
+      },
+      "sequence": 3,
+      "render_settings": {
+        "template_name": "鸟体中心-GIF",
+        "template_payload": {
+          "name": "鸟体中心-GIF",
+          "ratio": 1.0,
+          "banner_color": "#ffffff",
+          "draw_banner_background": false,
+          "banner_background_style": "gradient_bottom",
+          "banner_gradient_height_pct": 25.0,
+          "banner_gradient_top_color": "#000000",
+          "banner_gradient_top_opacity_pct": 0.0,
+          "banner_gradient_bottom_color": "#000000",
+          "banner_gradient_bottom_opacity_pct": 80.0,
+          "center_mode": "bird",
+          "auto_crop_by_bird": true,
+          "max_long_edge": 0,
+          "crop_padding_top": 64,
+          "crop_padding_bottom": 64,
+          "crop_padding_left": 64,
+          "crop_padding_right": 64,
+          "crop_padding_fill": "#000000",
+          "fields": [
+            {
+              "name": "鸟种中文名 (bird_species_cn)",
+              "tag": "EXIF:Model",
+              "fallback": "",
+              "data_source": "auto",
+              "report_field": "",
+              "text_source": {
+                "type": "auto",
+                "key": "bird_species_cn"
+              },
+              "align_horizontal": "left",
+              "align_vertical": "bottom",
+              "x_offset_pct": 0.0,
+              "y_offset_pct": -2.0,
+              "color": "#ff9300",
+              "font_size": 64,
+              "font_type": "/System/Library/Fonts/Supplemental/Songti.ttc",
+              "style": "bold"
+            }
+          ]
+        },
+        "ratio": 1.0,
+        "center_mode": "bird",
+        "crop_padding_top": 64,
+        "crop_padding_bottom": 64,
+        "crop_padding_left": 64,
+        "crop_padding_right": 64,
+        "crop_padding_fill": "#000000",
+        "crop_box": null,
+        "custom_center_x": null,
+        "custom_center_y": null
+      }
+    },
+    {
+      "path": {
+        "absolute_path": "/Volumes/HP2T/_鸟录/三宝鸟/吃金龟子/DSC03755_ExHiRes.TIF",
+        "relative_path": "../../../../../../../Volumes/HP2T/_鸟录/三宝鸟/吃金龟子/DSC03755_ExHiRes.TIF"
+      },
+      "sequence": 4,
+      "render_settings": {
+        "template_name": "鸟体中心-GIF",
+        "template_payload": {
+          "name": "鸟体中心-GIF",
+          "ratio": 1.0,
+          "banner_color": "#ffffff",
+          "draw_banner_background": false,
+          "banner_background_style": "gradient_bottom",
+          "banner_gradient_height_pct": 25.0,
+          "banner_gradient_top_color": "#000000",
+          "banner_gradient_top_opacity_pct": 0.0,
+          "banner_gradient_bottom_color": "#000000",
+          "banner_gradient_bottom_opacity_pct": 80.0,
+          "center_mode": "bird",
+          "auto_crop_by_bird": true,
+          "max_long_edge": 0,
+          "crop_padding_top": 64,
+          "crop_padding_bottom": 64,
+          "crop_padding_left": 64,
+          "crop_padding_right": 64,
+          "crop_padding_fill": "#000000",
+          "fields": [
+            {
+              "name": "鸟种中文名 (bird_species_cn)",
+              "tag": "EXIF:Model",
+              "fallback": "",
+              "data_source": "auto",
+              "report_field": "",
+              "text_source": {
+                "type": "auto",
+                "key": "bird_species_cn"
+              },
+              "align_horizontal": "left",
+              "align_vertical": "bottom",
+              "x_offset_pct": 0.0,
+              "y_offset_pct": -2.0,
+              "color": "#ff9300",
+              "font_size": 64,
+              "font_type": "/System/Library/Fonts/Supplemental/Songti.ttc",
+              "style": "bold"
+            }
+          ]
+        },
+        "ratio": 1.0,
+        "center_mode": "bird",
+        "crop_padding_top": 64,
+        "crop_padding_bottom": 64,
+        "crop_padding_left": 64,
+        "crop_padding_right": 64,
+        "crop_padding_fill": "#000000",
+        "crop_box": null,
+        "custom_center_x": null,
+        "custom_center_y": null
+      }
+    },
+    {
+      "path": {
+        "absolute_path": "/Volumes/HP2T/_鸟录/三宝鸟/吃金龟子/DSC03756_ExHiRes.TIF",
+        "relative_path": "../../../../../../../Volumes/HP2T/_鸟录/三宝鸟/吃金龟子/DSC03756_ExHiRes.TIF"
+      },
+      "sequence": 5,
+      "render_settings": {
+        "template_name": "鸟体中心-GIF",
+        "template_payload": {
+          "name": "鸟体中心-GIF",
+          "ratio": 1.0,
+          "banner_color": "#ffffff",
+          "draw_banner_background": false,
+          "banner_background_style": "gradient_bottom",
+          "banner_gradient_height_pct": 25.0,
+          "banner_gradient_top_color": "#000000",
+          "banner_gradient_top_opacity_pct": 0.0,
+          "banner_gradient_bottom_color": "#000000",
+          "banner_gradient_bottom_opacity_pct": 80.0,
+          "center_mode": "bird",
+          "auto_crop_by_bird": true,
+          "max_long_edge": 0,
+          "crop_padding_top": 64,
+          "crop_padding_bottom": 64,
+          "crop_padding_left": 64,
+          "crop_padding_right": 64,
+          "crop_padding_fill": "#000000",
+          "fields": [
+            {
+              "name": "鸟种中文名 (bird_species_cn)",
+              "tag": "EXIF:Model",
+              "fallback": "",
+              "data_source": "auto",
+              "report_field": "",
+              "text_source": {
+                "type": "auto",
+                "key": "bird_species_cn"
+              },
+              "align_horizontal": "left",
+              "align_vertical": "bottom",
+              "x_offset_pct": 0.0,
+              "y_offset_pct": -2.0,
+              "color": "#ff9300",
+              "font_size": 64,
+              "font_type": "/System/Library/Fonts/Supplemental/Songti.ttc",
+              "style": "bold"
+            }
+          ]
+        },
+        "ratio": 1.0,
+        "center_mode": "bird",
+        "crop_padding_top": 64,
+        "crop_padding_bottom": 64,
+        "crop_padding_left": 64,
+        "crop_padding_right": 64,
+        "crop_padding_fill": "#000000",
+        "crop_box": null,
+        "custom_center_x": null,
+        "custom_center_y": null
+      }
+    },
+    {
+      "path": {
+        "absolute_path": "/Volumes/HP2T/_鸟录/三宝鸟/吃金龟子/DSC03757_ExHiRes.TIF",
+        "relative_path": "../../../../../../../Volumes/HP2T/_鸟录/三宝鸟/吃金龟子/DSC03757_ExHiRes.TIF"
+      },
+      "sequence": 6,
+      "render_settings": {
+        "template_name": "鸟体中心-GIF",
+        "template_payload": {
+          "name": "鸟体中心-GIF",
+          "ratio": 1.0,
+          "banner_color": "#ffffff",
+          "draw_banner_background": false,
+          "banner_background_style": "gradient_bottom",
+          "banner_gradient_height_pct": 25.0,
+          "banner_gradient_top_color": "#000000",
+          "banner_gradient_top_opacity_pct": 0.0,
+          "banner_gradient_bottom_color": "#000000",
+          "banner_gradient_bottom_opacity_pct": 80.0,
+          "center_mode": "bird",
+          "auto_crop_by_bird": true,
+          "max_long_edge": 0,
+          "crop_padding_top": 64,
+          "crop_padding_bottom": 64,
+          "crop_padding_left": 64,
+          "crop_padding_right": 64,
+          "crop_padding_fill": "#000000",
+          "fields": [
+            {
+              "name": "鸟种中文名 (bird_species_cn)",
+              "tag": "EXIF:Model",
+              "fallback": "",
+              "data_source": "auto",
+              "report_field": "",
+              "text_source": {
+                "type": "auto",
+                "key": "bird_species_cn"
+              },
+              "align_horizontal": "left",
+              "align_vertical": "bottom",
+              "x_offset_pct": 0.0,
+              "y_offset_pct": -2.0,
+              "color": "#ff9300",
+              "font_size": 64,
+              "font_type": "/System/Library/Fonts/Supplemental/Songti.ttc",
+              "style": "bold"
+            }
+          ]
+        },
+        "ratio": 1.0,
+        "center_mode": "bird",
+        "crop_padding_top": 64,
+        "crop_padding_bottom": 64,
+        "crop_padding_left": 64,
+        "crop_padding_right": 64,
+        "crop_padding_fill": "#000000",
+        "crop_box": null,
+        "custom_center_x": null,
+        "custom_center_y": null
+      }
+    },
+    {
+      "path": {
+        "absolute_path": "/Volumes/HP2T/_鸟录/三宝鸟/吃金龟子/DSC03758_ExHiRes.TIF",
+        "relative_path": "../../../../../../../Volumes/HP2T/_鸟录/三宝鸟/吃金龟子/DSC03758_ExHiRes.TIF"
+      },
+      "sequence": 7,
+      "render_settings": {
+        "template_name": "鸟体中心-GIF",
+        "template_payload": {
+          "name": "鸟体中心-GIF",
+          "ratio": 1.0,
+          "banner_color": "#ffffff",
+          "draw_banner_background": false,
+          "banner_background_style": "gradient_bottom",
+          "banner_gradient_height_pct": 25.0,
+          "banner_gradient_top_color": "#000000",
+          "banner_gradient_top_opacity_pct": 0.0,
+          "banner_gradient_bottom_color": "#000000",
+          "banner_gradient_bottom_opacity_pct": 80.0,
+          "center_mode": "bird",
+          "auto_crop_by_bird": true,
+          "max_long_edge": 0,
+          "crop_padding_top": 64,
+          "crop_padding_bottom": 64,
+          "crop_padding_left": 64,
+          "crop_padding_right": 64,
+          "crop_padding_fill": "#000000",
+          "fields": [
+            {
+              "name": "鸟种中文名 (bird_species_cn)",
+              "tag": "EXIF:Model",
+              "fallback": "",
+              "data_source": "auto",
+              "report_field": "",
+              "text_source": {
+                "type": "auto",
+                "key": "bird_species_cn"
+              },
+              "align_horizontal": "left",
+              "align_vertical": "bottom",
+              "x_offset_pct": 0.0,
+              "y_offset_pct": -2.0,
+              "color": "#ff9300",
+              "font_size": 64,
+              "font_type": "/System/Library/Fonts/Supplemental/Songti.ttc",
+              "style": "bold"
+            }
+          ]
+        },
+        "ratio": 1.0,
+        "center_mode": "bird",
+        "crop_padding_top": 64,
+        "crop_padding_bottom": 64,
+        "crop_padding_left": 64,
+        "crop_padding_right": 64,
+        "crop_padding_fill": "#000000",
+        "crop_box": null,
+        "custom_center_x": null,
+        "custom_center_y": null
+      }
+    },
+    {
+      "path": {
+        "absolute_path": "/Volumes/HP2T/_鸟录/三宝鸟/吃金龟子/DSC03759_ExHiRes.TIF",
+        "relative_path": "../../../../../../../Volumes/HP2T/_鸟录/三宝鸟/吃金龟子/DSC03759_ExHiRes.TIF"
+      },
+      "sequence": 8,
+      "render_settings": {
+        "template_name": "鸟体中心-GIF",
+        "template_payload": {
+          "name": "鸟体中心-GIF",
+          "ratio": 1.0,
+          "banner_color": "#ffffff",
+          "draw_banner_background": false,
+          "banner_background_style": "gradient_bottom",
+          "banner_gradient_height_pct": 25.0,
+          "banner_gradient_top_color": "#000000",
+          "banner_gradient_top_opacity_pct": 0.0,
+          "banner_gradient_bottom_color": "#000000",
+          "banner_gradient_bottom_opacity_pct": 80.0,
+          "center_mode": "bird",
+          "auto_crop_by_bird": true,
+          "max_long_edge": 0,
+          "crop_padding_top": 64,
+          "crop_padding_bottom": 64,
+          "crop_padding_left": 64,
+          "crop_padding_right": 64,
+          "crop_padding_fill": "#000000",
+          "fields": [
+            {
+              "name": "鸟种中文名 (bird_species_cn)",
+              "tag": "EXIF:Model",
+              "fallback": "",
+              "data_source": "auto",
+              "report_field": "",
+              "text_source": {
+                "type": "auto",
+                "key": "bird_species_cn"
+              },
+              "align_horizontal": "left",
+              "align_vertical": "bottom",
+              "x_offset_pct": 0.0,
+              "y_offset_pct": -2.0,
+              "color": "#ff9300",
+              "font_size": 64,
+              "font_type": "/System/Library/Fonts/Supplemental/Songti.ttc",
+              "style": "bold"
+            }
+          ]
+        },
+        "ratio": 1.0,
+        "center_mode": "bird",
+        "crop_padding_top": 64,
+        "crop_padding_bottom": 64,
+        "crop_padding_left": 64,
+        "crop_padding_right": 64,
+        "crop_padding_fill": "#000000",
+        "crop_box": null,
+        "custom_center_x": null,
+        "custom_center_y": null
+      }
+    },
+    {
+      "path": {
+        "absolute_path": "/Volumes/HP2T/_鸟录/三宝鸟/吃金龟子/DSC03760_ExHiRes.TIF",
+        "relative_path": "../../../../../../../Volumes/HP2T/_鸟录/三宝鸟/吃金龟子/DSC03760_ExHiRes.TIF"
+      },
+      "sequence": 9,
+      "render_settings": {
+        "template_name": "鸟体中心-GIF",
+        "template_payload": {
+          "name": "鸟体中心-GIF",
+          "ratio": 1.0,
+          "banner_color": "#ffffff",
+          "draw_banner_background": false,
+          "banner_background_style": "gradient_bottom",
+          "banner_gradient_height_pct": 25.0,
+          "banner_gradient_top_color": "#000000",
+          "banner_gradient_top_opacity_pct": 0.0,
+          "banner_gradient_bottom_color": "#000000",
+          "banner_gradient_bottom_opacity_pct": 80.0,
+          "center_mode": "bird",
+          "auto_crop_by_bird": true,
+          "max_long_edge": 0,
+          "crop_padding_top": 64,
+          "crop_padding_bottom": 64,
+          "crop_padding_left": 64,
+          "crop_padding_right": 64,
+          "crop_padding_fill": "#000000",
+          "fields": [
+            {
+              "name": "鸟种中文名 (bird_species_cn)",
+              "tag": "EXIF:Model",
+              "fallback": "",
+              "data_source": "auto",
+              "report_field": "",
+              "text_source": {
+                "type": "auto",
+                "key": "bird_species_cn"
+              },
+              "align_horizontal": "left",
+              "align_vertical": "bottom",
+              "x_offset_pct": 0.0,
+              "y_offset_pct": -2.0,
+              "color": "#ff9300",
+              "font_size": 64,
+              "font_type": "/System/Library/Fonts/Supplemental/Songti.ttc",
+              "style": "bold"
+            }
+          ]
+        },
+        "ratio": 1.0,
+        "center_mode": "bird",
+        "crop_padding_top": 64,
+        "crop_padding_bottom": 64,
+        "crop_padding_left": 64,
+        "crop_padding_right": 64,
+        "crop_padding_fill": "#000000",
+        "crop_box": null,
+        "custom_center_x": null,
+        "custom_center_y": null
+      }
+    },
+    {
+      "path": {
+        "absolute_path": "/Volumes/HP2T/_鸟录/三宝鸟/吃金龟子/DSC03761_ExHiRes.TIF",
+        "relative_path": "../../../../../../../Volumes/HP2T/_鸟录/三宝鸟/吃金龟子/DSC03761_ExHiRes.TIF"
+      },
+      "sequence": 10,
+      "render_settings": {
+        "template_name": "鸟体中心-GIF",
+        "template_payload": {
+          "name": "鸟体中心-GIF",
+          "ratio": 1.0,
+          "banner_color": "#ffffff",
+          "draw_banner_background": false,
+          "banner_background_style": "gradient_bottom",
+          "banner_gradient_height_pct": 25.0,
+          "banner_gradient_top_color": "#000000",
+          "banner_gradient_top_opacity_pct": 0.0,
+          "banner_gradient_bottom_color": "#000000",
+          "banner_gradient_bottom_opacity_pct": 80.0,
+          "center_mode": "bird",
+          "auto_crop_by_bird": true,
+          "max_long_edge": 0,
+          "crop_padding_top": 64,
+          "crop_padding_bottom": 64,
+          "crop_padding_left": 64,
+          "crop_padding_right": 64,
+          "crop_padding_fill": "#000000",
+          "fields": [
+            {
+              "name": "鸟种中文名 (bird_species_cn)",
+              "tag": "EXIF:Model",
+              "fallback": "",
+              "data_source": "auto",
+              "report_field": "",
+              "text_source": {
+                "type": "auto",
+                "key": "bird_species_cn"
+              },
+              "align_horizontal": "left",
+              "align_vertical": "bottom",
+              "x_offset_pct": 0.0,
+              "y_offset_pct": -2.0,
+              "color": "#ff9300",
+              "font_size": 64,
+              "font_type": "/System/Library/Fonts/Supplemental/Songti.ttc",
+              "style": "bold"
+            }
+          ]
+        },
+        "ratio": 1.0,
+        "center_mode": "bird",
+        "crop_padding_top": 64,
+        "crop_padding_bottom": 64,
+        "crop_padding_left": 64,
+        "crop_padding_right": 64,
+        "crop_padding_fill": "#000000",
+        "crop_box": null,
+        "custom_center_x": null,
+        "custom_center_y": null
+      }
+    },
+    {
+      "path": {
+        "absolute_path": "/Volumes/HP2T/_鸟录/三宝鸟/吃金龟子/DSC03762_ExHiRes.TIF",
+        "relative_path": "../../../../../../../Volumes/HP2T/_鸟录/三宝鸟/吃金龟子/DSC03762_ExHiRes.TIF"
+      },
+      "sequence": 11,
+      "render_settings": {
+        "template_name": "鸟体中心-GIF",
+        "template_payload": {
+          "name": "鸟体中心-GIF",
+          "ratio": 1.0,
+          "banner_color": "#ffffff",
+          "draw_banner_background": false,
+          "banner_background_style": "gradient_bottom",
+          "banner_gradient_height_pct": 25.0,
+          "banner_gradient_top_color": "#000000",
+          "banner_gradient_top_opacity_pct": 0.0,
+          "banner_gradient_bottom_color": "#000000",
+          "banner_gradient_bottom_opacity_pct": 80.0,
+          "center_mode": "bird",
+          "auto_crop_by_bird": true,
+          "max_long_edge": 0,
+          "crop_padding_top": 64,
+          "crop_padding_bottom": 64,
+          "crop_padding_left": 64,
+          "crop_padding_right": 64,
+          "crop_padding_fill": "#000000",
+          "fields": [
+            {
+              "name": "鸟种中文名 (bird_species_cn)",
+              "tag": "EXIF:Model",
+              "fallback": "",
+              "data_source": "auto",
+              "report_field": "",
+              "text_source": {
+                "type": "auto",
+                "key": "bird_species_cn"
+              },
+              "align_horizontal": "left",
+              "align_vertical": "bottom",
+              "x_offset_pct": 0.0,
+              "y_offset_pct": -2.0,
+              "color": "#ff9300",
+              "font_size": 64,
+              "font_type": "/System/Library/Fonts/Supplemental/Songti.ttc",
+              "style": "bold"
+            }
+          ]
+        },
+        "ratio": 1.0,
+        "center_mode": "bird",
+        "crop_padding_top": 64,
+        "crop_padding_bottom": 64,
+        "crop_padding_left": 64,
+        "crop_padding_right": 64,
+        "crop_padding_fill": "#000000",
+        "crop_box": null,
+        "custom_center_x": null,
+        "custom_center_y": null
+      }
+    },
+    {
+      "path": {
+        "absolute_path": "/Volumes/HP2T/_鸟录/三宝鸟/吃金龟子/DSC03763_ExHiRes.TIF",
+        "relative_path": "../../../../../../../Volumes/HP2T/_鸟录/三宝鸟/吃金龟子/DSC03763_ExHiRes.TIF"
+      },
+      "sequence": 12,
+      "render_settings": {
+        "template_name": "鸟体中心-GIF",
+        "template_payload": {
+          "name": "鸟体中心-GIF",
+          "ratio": 1.0,
+          "banner_color": "#ffffff",
+          "draw_banner_background": false,
+          "banner_background_style": "gradient_bottom",
+          "banner_gradient_height_pct": 25.0,
+          "banner_gradient_top_color": "#000000",
+          "banner_gradient_top_opacity_pct": 0.0,
+          "banner_gradient_bottom_color": "#000000",
+          "banner_gradient_bottom_opacity_pct": 80.0,
+          "center_mode": "bird",
+          "auto_crop_by_bird": true,
+          "max_long_edge": 0,
+          "crop_padding_top": 64,
+          "crop_padding_bottom": 64,
+          "crop_padding_left": 64,
+          "crop_padding_right": 64,
+          "crop_padding_fill": "#000000",
+          "fields": [
+            {
+              "name": "鸟种中文名 (bird_species_cn)",
+              "tag": "EXIF:Model",
+              "fallback": "",
+              "data_source": "auto",
+              "report_field": "",
+              "text_source": {
+                "type": "auto",
+                "key": "bird_species_cn"
+              },
+              "align_horizontal": "left",
+              "align_vertical": "bottom",
+              "x_offset_pct": 0.0,
+              "y_offset_pct": -2.0,
+              "color": "#ff9300",
+              "font_size": 64,
+              "font_type": "/System/Library/Fonts/Supplemental/Songti.ttc",
+              "style": "bold"
+            }
+          ]
+        },
+        "ratio": 1.0,
+        "center_mode": "bird",
+        "crop_padding_top": 64,
+        "crop_padding_bottom": 64,
+        "crop_padding_left": 64,
+        "crop_padding_right": 64,
+        "crop_padding_fill": "#000000",
+        "crop_box": null,
+        "custom_center_x": null,
+        "custom_center_y": null
+      }
+    },
+    {
+      "path": {
+        "absolute_path": "/Volumes/HP2T/_鸟录/三宝鸟/吃金龟子/DSC03764_ExHiRes.TIF",
+        "relative_path": "../../../../../../../Volumes/HP2T/_鸟录/三宝鸟/吃金龟子/DSC03764_ExHiRes.TIF"
+      },
+      "sequence": 13,
+      "render_settings": {
+        "template_name": "鸟体中心-GIF",
+        "template_payload": {
+          "name": "鸟体中心-GIF",
+          "ratio": 1.0,
+          "banner_color": "#ffffff",
+          "draw_banner_background": false,
+          "banner_background_style": "gradient_bottom",
+          "banner_gradient_height_pct": 25.0,
+          "banner_gradient_top_color": "#000000",
+          "banner_gradient_top_opacity_pct": 0.0,
+          "banner_gradient_bottom_color": "#000000",
+          "banner_gradient_bottom_opacity_pct": 80.0,
+          "center_mode": "bird",
+          "auto_crop_by_bird": true,
+          "max_long_edge": 0,
+          "crop_padding_top": 64,
+          "crop_padding_bottom": 64,
+          "crop_padding_left": 64,
+          "crop_padding_right": 64,
+          "crop_padding_fill": "#000000",
+          "fields": [
+            {
+              "name": "鸟种中文名 (bird_species_cn)",
+              "tag": "EXIF:Model",
+              "fallback": "",
+              "data_source": "auto",
+              "report_field": "",
+              "text_source": {
+                "type": "auto",
+                "key": "bird_species_cn"
+              },
+              "align_horizontal": "left",
+              "align_vertical": "bottom",
+              "x_offset_pct": 0.0,
+              "y_offset_pct": -2.0,
+              "color": "#ff9300",
+              "font_size": 64,
+              "font_type": "/System/Library/Fonts/Supplemental/Songti.ttc",
+              "style": "bold"
+            }
+          ]
+        },
+        "ratio": 1.0,
+        "center_mode": "bird",
+        "crop_padding_top": 64,
+        "crop_padding_bottom": 64,
+        "crop_padding_left": 64,
+        "crop_padding_right": 64,
+        "crop_padding_fill": "#000000",
+        "crop_box": null,
+        "custom_center_x": null,
+        "custom_center_y": null
+      }
+    },
+    {
+      "path": {
+        "absolute_path": "/Volumes/HP2T/_鸟录/三宝鸟/吃金龟子/DSC03765_ExHiRes.TIF",
+        "relative_path": "../../../../../../../Volumes/HP2T/_鸟录/三宝鸟/吃金龟子/DSC03765_ExHiRes.TIF"
+      },
+      "sequence": 14,
+      "render_settings": {
+        "template_name": "鸟体中心-GIF",
+        "template_payload": {
+          "name": "鸟体中心-GIF",
+          "ratio": 1.0,
+          "banner_color": "#ffffff",
+          "draw_banner_background": false,
+          "banner_background_style": "gradient_bottom",
+          "banner_gradient_height_pct": 25.0,
+          "banner_gradient_top_color": "#000000",
+          "banner_gradient_top_opacity_pct": 0.0,
+          "banner_gradient_bottom_color": "#000000",
+          "banner_gradient_bottom_opacity_pct": 80.0,
+          "center_mode": "bird",
+          "auto_crop_by_bird": true,
+          "max_long_edge": 0,
+          "crop_padding_top": 64,
+          "crop_padding_bottom": 64,
+          "crop_padding_left": 64,
+          "crop_padding_right": 64,
+          "crop_padding_fill": "#000000",
+          "fields": [
+            {
+              "name": "鸟种中文名 (bird_species_cn)",
+              "tag": "EXIF:Model",
+              "fallback": "",
+              "data_source": "auto",
+              "report_field": "",
+              "text_source": {
+                "type": "auto",
+                "key": "bird_species_cn"
+              },
+              "align_horizontal": "left",
+              "align_vertical": "bottom",
+              "x_offset_pct": 0.0,
+              "y_offset_pct": -2.0,
+              "color": "#ff9300",
+              "font_size": 64,
+              "font_type": "/System/Library/Fonts/Supplemental/Songti.ttc",
+              "style": "bold"
+            }
+          ]
+        },
+        "ratio": 1.0,
+        "center_mode": "bird",
+        "crop_padding_top": 64,
+        "crop_padding_bottom": 64,
+        "crop_padding_left": 64,
+        "crop_padding_right": 64,
+        "crop_padding_fill": "#000000",
+        "crop_box": null,
+        "custom_center_x": null,
+        "custom_center_y": null
+      }
+    },
+    {
+      "path": {
+        "absolute_path": "/Volumes/HP2T/_鸟录/三宝鸟/吃金龟子/DSC03766_ExHiRes.TIF",
+        "relative_path": "../../../../../../../Volumes/HP2T/_鸟录/三宝鸟/吃金龟子/DSC03766_ExHiRes.TIF"
+      },
+      "sequence": 15,
+      "render_settings": {
+        "template_name": "鸟体中心-GIF",
+        "template_payload": {
+          "name": "鸟体中心-GIF",
+          "ratio": 1.0,
+          "banner_color": "#ffffff",
+          "draw_banner_background": false,
+          "banner_background_style": "gradient_bottom",
+          "banner_gradient_height_pct": 25.0,
+          "banner_gradient_top_color": "#000000",
+          "banner_gradient_top_opacity_pct": 0.0,
+          "banner_gradient_bottom_color": "#000000",
+          "banner_gradient_bottom_opacity_pct": 80.0,
+          "center_mode": "bird",
+          "auto_crop_by_bird": true,
+          "max_long_edge": 0,
+          "crop_padding_top": 64,
+          "crop_padding_bottom": 64,
+          "crop_padding_left": 64,
+          "crop_padding_right": 64,
+          "crop_padding_fill": "#000000",
+          "fields": [
+            {
+              "name": "鸟种中文名 (bird_species_cn)",
+              "tag": "EXIF:Model",
+              "fallback": "",
+              "data_source": "auto",
+              "report_field": "",
+              "text_source": {
+                "type": "auto",
+                "key": "bird_species_cn"
+              },
+              "align_horizontal": "left",
+              "align_vertical": "bottom",
+              "x_offset_pct": 0.0,
+              "y_offset_pct": -2.0,
+              "color": "#ff9300",
+              "font_size": 64,
+              "font_type": "/System/Library/Fonts/Supplemental/Songti.ttc",
+              "style": "bold"
+            }
+          ]
+        },
+        "ratio": 1.0,
+        "center_mode": "bird",
+        "crop_padding_top": 64,
+        "crop_padding_bottom": 64,
+        "crop_padding_left": 64,
+        "crop_padding_right": 64,
+        "crop_padding_fill": "#000000",
+        "crop_box": null,
+        "custom_center_x": null,
+        "custom_center_y": null
+      }
+    },
+    {
+      "path": {
+        "absolute_path": "/Volumes/HP2T/_鸟录/三宝鸟/吃金龟子/DSC03767_ExHiRes.TIF",
+        "relative_path": "../../../../../../../Volumes/HP2T/_鸟录/三宝鸟/吃金龟子/DSC03767_ExHiRes.TIF"
+      },
+      "sequence": 16,
+      "render_settings": {
+        "template_name": "鸟体中心-GIF",
+        "template_payload": {
+          "name": "鸟体中心-GIF",
+          "ratio": 1.0,
+          "banner_color": "#ffffff",
+          "draw_banner_background": false,
+          "banner_background_style": "gradient_bottom",
+          "banner_gradient_height_pct": 25.0,
+          "banner_gradient_top_color": "#000000",
+          "banner_gradient_top_opacity_pct": 0.0,
+          "banner_gradient_bottom_color": "#000000",
+          "banner_gradient_bottom_opacity_pct": 80.0,
+          "center_mode": "bird",
+          "auto_crop_by_bird": true,
+          "max_long_edge": 0,
+          "crop_padding_top": 64,
+          "crop_padding_bottom": 64,
+          "crop_padding_left": 64,
+          "crop_padding_right": 64,
+          "crop_padding_fill": "#000000",
+          "fields": [
+            {
+              "name": "鸟种中文名 (bird_species_cn)",
+              "tag": "EXIF:Model",
+              "fallback": "",
+              "data_source": "auto",
+              "report_field": "",
+              "text_source": {
+                "type": "auto",
+                "key": "bird_species_cn"
+              },
+              "align_horizontal": "left",
+              "align_vertical": "bottom",
+              "x_offset_pct": 0.0,
+              "y_offset_pct": -2.0,
+              "color": "#ff9300",
+              "font_size": 64,
+              "font_type": "/System/Library/Fonts/Supplemental/Songti.ttc",
+              "style": "bold"
+            }
+          ]
+        },
+        "ratio": 1.0,
+        "center_mode": "bird",
+        "crop_padding_top": 64,
+        "crop_padding_bottom": 64,
+        "crop_padding_left": 64,
+        "crop_padding_right": 64,
+        "crop_padding_fill": "#000000",
+        "crop_box": null,
+        "custom_center_x": null,
+        "custom_center_y": null
+      }
+    },
+    {
+      "path": {
+        "absolute_path": "/Volumes/HP2T/_鸟录/三宝鸟/吃金龟子/DSC03768_ExHiRes.TIF",
+        "relative_path": "../../../../../../../Volumes/HP2T/_鸟录/三宝鸟/吃金龟子/DSC03768_ExHiRes.TIF"
+      },
+      "sequence": 17,
+      "render_settings": {
+        "template_name": "鸟体中心-GIF",
+        "template_payload": {
+          "name": "鸟体中心-GIF",
+          "ratio": 1.0,
+          "banner_color": "#ffffff",
+          "draw_banner_background": false,
+          "banner_background_style": "gradient_bottom",
+          "banner_gradient_height_pct": 25.0,
+          "banner_gradient_top_color": "#000000",
+          "banner_gradient_top_opacity_pct": 0.0,
+          "banner_gradient_bottom_color": "#000000",
+          "banner_gradient_bottom_opacity_pct": 80.0,
+          "center_mode": "bird",
+          "auto_crop_by_bird": true,
+          "max_long_edge": 0,
+          "crop_padding_top": 64,
+          "crop_padding_bottom": 64,
+          "crop_padding_left": 64,
+          "crop_padding_right": 64,
+          "crop_padding_fill": "#000000",
+          "fields": [
+            {
+              "name": "鸟种中文名 (bird_species_cn)",
+              "tag": "EXIF:Model",
+              "fallback": "",
+              "data_source": "auto",
+              "report_field": "",
+              "text_source": {
+                "type": "auto",
+                "key": "bird_species_cn"
+              },
+              "align_horizontal": "left",
+              "align_vertical": "bottom",
+              "x_offset_pct": 0.0,
+              "y_offset_pct": -2.0,
+              "color": "#ff9300",
+              "font_size": 64,
+              "font_type": "/System/Library/Fonts/Supplemental/Songti.ttc",
+              "style": "bold"
+            }
+          ]
+        },
+        "ratio": 1.0,
+        "center_mode": "bird",
+        "crop_padding_top": 64,
+        "crop_padding_bottom": 64,
+        "crop_padding_left": 64,
+        "crop_padding_right": 64,
+        "crop_padding_fill": "#000000",
+        "crop_box": null,
+        "custom_center_x": null,
+        "custom_center_y": null
+      }
+    },
+    {
+      "path": {
+        "absolute_path": "/Volumes/HP2T/_鸟录/三宝鸟/吃金龟子/DSC03769_ExHiRes.TIF",
+        "relative_path": "../../../../../../../Volumes/HP2T/_鸟录/三宝鸟/吃金龟子/DSC03769_ExHiRes.TIF"
+      },
+      "sequence": 18,
+      "render_settings": {
+        "template_name": "鸟体中心-GIF",
+        "template_payload": {
+          "name": "鸟体中心-GIF",
+          "ratio": 1.0,
+          "banner_color": "#ffffff",
+          "draw_banner_background": false,
+          "banner_background_style": "gradient_bottom",
+          "banner_gradient_height_pct": 25.0,
+          "banner_gradient_top_color": "#000000",
+          "banner_gradient_top_opacity_pct": 0.0,
+          "banner_gradient_bottom_color": "#000000",
+          "banner_gradient_bottom_opacity_pct": 80.0,
+          "center_mode": "bird",
+          "auto_crop_by_bird": true,
+          "max_long_edge": 0,
+          "crop_padding_top": 64,
+          "crop_padding_bottom": 64,
+          "crop_padding_left": 64,
+          "crop_padding_right": 64,
+          "crop_padding_fill": "#000000",
+          "fields": [
+            {
+              "name": "鸟种中文名 (bird_species_cn)",
+              "tag": "EXIF:Model",
+              "fallback": "",
+              "data_source": "auto",
+              "report_field": "",
+              "text_source": {
+                "type": "auto",
+                "key": "bird_species_cn"
+              },
+              "align_horizontal": "left",
+              "align_vertical": "bottom",
+              "x_offset_pct": 0.0,
+              "y_offset_pct": -2.0,
+              "color": "#ff9300",
+              "font_size": 64,
+              "font_type": "/System/Library/Fonts/Supplemental/Songti.ttc",
+              "style": "bold"
+            }
+          ]
+        },
+        "ratio": 1.0,
+        "center_mode": "bird",
+        "crop_padding_top": 64,
+        "crop_padding_bottom": 64,
+        "crop_padding_left": 64,
+        "crop_padding_right": 64,
+        "crop_padding_fill": "#000000",
+        "crop_box": null,
+        "custom_center_x": null,
+        "custom_center_y": null
+      }
+    },
+    {
+      "path": {
+        "absolute_path": "/Volumes/HP2T/_鸟录/三宝鸟/吃金龟子/DSC03770_ExHiRes.TIF",
+        "relative_path": "../../../../../../../Volumes/HP2T/_鸟录/三宝鸟/吃金龟子/DSC03770_ExHiRes.TIF"
+      },
+      "sequence": 19,
+      "render_settings": {
+        "template_name": "鸟体中心-GIF",
+        "template_payload": {
+          "name": "鸟体中心-GIF",
+          "ratio": 1.0,
+          "banner_color": "#ffffff",
+          "draw_banner_background": false,
+          "banner_background_style": "gradient_bottom",
+          "banner_gradient_height_pct": 25.0,
+          "banner_gradient_top_color": "#000000",
+          "banner_gradient_top_opacity_pct": 0.0,
+          "banner_gradient_bottom_color": "#000000",
+          "banner_gradient_bottom_opacity_pct": 80.0,
+          "center_mode": "bird",
+          "auto_crop_by_bird": true,
+          "max_long_edge": 0,
+          "crop_padding_top": 64,
+          "crop_padding_bottom": 64,
+          "crop_padding_left": 64,
+          "crop_padding_right": 64,
+          "crop_padding_fill": "#000000",
+          "fields": [
+            {
+              "name": "鸟种中文名 (bird_species_cn)",
+              "tag": "EXIF:Model",
+              "fallback": "",
+              "data_source": "auto",
+              "report_field": "",
+              "text_source": {
+                "type": "auto",
+                "key": "bird_species_cn"
+              },
+              "align_horizontal": "left",
+              "align_vertical": "bottom",
+              "x_offset_pct": 0.0,
+              "y_offset_pct": -2.0,
+              "color": "#ff9300",
+              "font_size": 64,
+              "font_type": "/System/Library/Fonts/Supplemental/Songti.ttc",
+              "style": "bold"
+            }
+          ]
+        },
+        "ratio": 1.0,
+        "center_mode": "bird",
+        "crop_padding_top": 64,
+        "crop_padding_bottom": 64,
+        "crop_padding_left": 64,
+        "crop_padding_right": 64,
+        "crop_padding_fill": "#000000",
+        "crop_box": null,
+        "custom_center_x": null,
+        "custom_center_y": null
+      }
+    },
+    {
+      "path": {
+        "absolute_path": "/Volumes/HP2T/_鸟录/三宝鸟/吃金龟子/DSC03771_ExHiRes.TIF",
+        "relative_path": "../../../../../../../Volumes/HP2T/_鸟录/三宝鸟/吃金龟子/DSC03771_ExHiRes.TIF"
+      },
+      "sequence": 20,
+      "render_settings": {
+        "template_name": "鸟体中心-GIF",
+        "template_payload": {
+          "name": "鸟体中心-GIF",
+          "ratio": 1.0,
+          "banner_color": "#ffffff",
+          "draw_banner_background": false,
+          "banner_background_style": "gradient_bottom",
+          "banner_gradient_height_pct": 25.0,
+          "banner_gradient_top_color": "#000000",
+          "banner_gradient_top_opacity_pct": 0.0,
+          "banner_gradient_bottom_color": "#000000",
+          "banner_gradient_bottom_opacity_pct": 80.0,
+          "center_mode": "bird",
+          "auto_crop_by_bird": true,
+          "max_long_edge": 0,
+          "crop_padding_top": 64,
+          "crop_padding_bottom": 64,
+          "crop_padding_left": 64,
+          "crop_padding_right": 64,
+          "crop_padding_fill": "#000000",
+          "fields": [
+            {
+              "name": "鸟种中文名 (bird_species_cn)",
+              "tag": "EXIF:Model",
+              "fallback": "",
+              "data_source": "auto",
+              "report_field": "",
+              "text_source": {
+                "type": "auto",
+                "key": "bird_species_cn"
+              },
+              "align_horizontal": "left",
+              "align_vertical": "bottom",
+              "x_offset_pct": 0.0,
+              "y_offset_pct": -2.0,
+              "color": "#ff9300",
+              "font_size": 64,
+              "font_type": "/System/Library/Fonts/Supplemental/Songti.ttc",
+              "style": "bold"
+            }
+          ]
+        },
+        "ratio": 1.0,
+        "center_mode": "bird",
+        "crop_padding_top": 64,
+        "crop_padding_bottom": 64,
+        "crop_padding_left": 64,
+        "crop_padding_right": 64,
+        "crop_padding_fill": "#000000",
+        "crop_box": null,
+        "custom_center_x": null,
+        "custom_center_y": null
+      }
+    },
+    {
+      "path": {
+        "absolute_path": "/Volumes/HP2T/_鸟录/三宝鸟/吃金龟子/DSC03772_ExHiRes.TIF",
+        "relative_path": "../../../../../../../Volumes/HP2T/_鸟录/三宝鸟/吃金龟子/DSC03772_ExHiRes.TIF"
+      },
+      "sequence": 21,
+      "render_settings": {
+        "template_name": "鸟体中心-GIF",
+        "template_payload": {
+          "name": "鸟体中心-GIF",
+          "ratio": 1.0,
+          "banner_color": "#ffffff",
+          "draw_banner_background": false,
+          "banner_background_style": "gradient_bottom",
+          "banner_gradient_height_pct": 25.0,
+          "banner_gradient_top_color": "#000000",
+          "banner_gradient_top_opacity_pct": 0.0,
+          "banner_gradient_bottom_color": "#000000",
+          "banner_gradient_bottom_opacity_pct": 80.0,
+          "center_mode": "bird",
+          "auto_crop_by_bird": true,
+          "max_long_edge": 0,
+          "crop_padding_top": 64,
+          "crop_padding_bottom": 64,
+          "crop_padding_left": 64,
+          "crop_padding_right": 64,
+          "crop_padding_fill": "#000000",
+          "fields": [
+            {
+              "name": "鸟种中文名 (bird_species_cn)",
+              "tag": "EXIF:Model",
+              "fallback": "",
+              "data_source": "auto",
+              "report_field": "",
+              "text_source": {
+                "type": "auto",
+                "key": "bird_species_cn"
+              },
+              "align_horizontal": "left",
+              "align_vertical": "bottom",
+              "x_offset_pct": 0.0,
+              "y_offset_pct": -2.0,
+              "color": "#ff9300",
+              "font_size": 64,
+              "font_type": "/System/Library/Fonts/Supplemental/Songti.ttc",
+              "style": "bold"
+            }
+          ]
+        },
+        "ratio": 1.0,
+        "center_mode": "bird",
+        "crop_padding_top": 64,
+        "crop_padding_bottom": 64,
+        "crop_padding_left": 64,
+        "crop_padding_right": 64,
+        "crop_padding_fill": "#000000",
+        "crop_box": null,
+        "custom_center_x": null,
+        "custom_center_y": null
+      }
+    },
+    {
+      "path": {
+        "absolute_path": "/Volumes/HP2T/_鸟录/三宝鸟/吃金龟子/DSC03773_ExHiRes.TIF",
+        "relative_path": "../../../../../../../Volumes/HP2T/_鸟录/三宝鸟/吃金龟子/DSC03773_ExHiRes.TIF"
+      },
+      "sequence": 22,
+      "render_settings": {
+        "template_name": "鸟体中心-GIF",
+        "template_payload": {
+          "name": "鸟体中心-GIF",
+          "ratio": 1.0,
+          "banner_color": "#ffffff",
+          "draw_banner_background": false,
+          "banner_background_style": "gradient_bottom",
+          "banner_gradient_height_pct": 25.0,
+          "banner_gradient_top_color": "#000000",
+          "banner_gradient_top_opacity_pct": 0.0,
+          "banner_gradient_bottom_color": "#000000",
+          "banner_gradient_bottom_opacity_pct": 80.0,
+          "center_mode": "bird",
+          "auto_crop_by_bird": true,
+          "max_long_edge": 0,
+          "crop_padding_top": 64,
+          "crop_padding_bottom": 64,
+          "crop_padding_left": 64,
+          "crop_padding_right": 64,
+          "crop_padding_fill": "#000000",
+          "fields": [
+            {
+              "name": "鸟种中文名 (bird_species_cn)",
+              "tag": "EXIF:Model",
+              "fallback": "",
+              "data_source": "auto",
+              "report_field": "",
+              "text_source": {
+                "type": "auto",
+                "key": "bird_species_cn"
+              },
+              "align_horizontal": "left",
+              "align_vertical": "bottom",
+              "x_offset_pct": 0.0,
+              "y_offset_pct": -2.0,
+              "color": "#ff9300",
+              "font_size": 64,
+              "font_type": "/System/Library/Fonts/Supplemental/Songti.ttc",
+              "style": "bold"
+            }
+          ]
+        },
+        "ratio": 1.0,
+        "center_mode": "bird",
+        "crop_padding_top": 64,
+        "crop_padding_bottom": 64,
+        "crop_padding_left": 64,
+        "crop_padding_right": 64,
+        "crop_padding_fill": "#000000",
+        "crop_box": null,
+        "custom_center_x": null,
+        "custom_center_y": null
+      }
+    },
+    {
+      "path": {
+        "absolute_path": "/Volumes/HP2T/_鸟录/三宝鸟/吃金龟子/DSC03774_ExHiRes.TIF",
+        "relative_path": "../../../../../../../Volumes/HP2T/_鸟录/三宝鸟/吃金龟子/DSC03774_ExHiRes.TIF"
+      },
+      "sequence": 23,
+      "render_settings": {
+        "template_name": "鸟体中心-GIF",
+        "template_payload": {
+          "name": "鸟体中心-GIF",
+          "ratio": 1.0,
+          "banner_color": "#ffffff",
+          "draw_banner_background": false,
+          "banner_background_style": "gradient_bottom",
+          "banner_gradient_height_pct": 25.0,
+          "banner_gradient_top_color": "#000000",
+          "banner_gradient_top_opacity_pct": 0.0,
+          "banner_gradient_bottom_color": "#000000",
+          "banner_gradient_bottom_opacity_pct": 80.0,
+          "center_mode": "bird",
+          "auto_crop_by_bird": true,
+          "max_long_edge": 0,
+          "crop_padding_top": 64,
+          "crop_padding_bottom": 64,
+          "crop_padding_left": 64,
+          "crop_padding_right": 64,
+          "crop_padding_fill": "#000000",
+          "fields": [
+            {
+              "name": "鸟种中文名 (bird_species_cn)",
+              "tag": "EXIF:Model",
+              "fallback": "",
+              "data_source": "auto",
+              "report_field": "",
+              "text_source": {
+                "type": "auto",
+                "key": "bird_species_cn"
+              },
+              "align_horizontal": "left",
+              "align_vertical": "bottom",
+              "x_offset_pct": 0.0,
+              "y_offset_pct": -2.0,
+              "color": "#ff9300",
+              "font_size": 64,
+              "font_type": "/System/Library/Fonts/Supplemental/Songti.ttc",
+              "style": "bold"
+            }
+          ]
+        },
+        "ratio": 1.0,
+        "center_mode": "bird",
+        "crop_padding_top": 64,
+        "crop_padding_bottom": 64,
+        "crop_padding_left": 64,
+        "crop_padding_right": 64,
+        "crop_padding_fill": "#000000",
+        "crop_box": null,
+        "custom_center_x": null,
+        "custom_center_y": null
+      }
+    },
+    {
+      "path": {
+        "absolute_path": "/Volumes/HP2T/_鸟录/三宝鸟/吃金龟子/DSC03775_ExHiRes.TIF",
+        "relative_path": "../../../../../../../Volumes/HP2T/_鸟录/三宝鸟/吃金龟子/DSC03775_ExHiRes.TIF"
+      },
+      "sequence": 24,
+      "render_settings": {
+        "template_name": "鸟体中心-GIF",
+        "template_payload": {
+          "name": "鸟体中心-GIF",
+          "ratio": 1.0,
+          "banner_color": "#ffffff",
+          "draw_banner_background": false,
+          "banner_background_style": "gradient_bottom",
+          "banner_gradient_height_pct": 25.0,
+          "banner_gradient_top_color": "#000000",
+          "banner_gradient_top_opacity_pct": 0.0,
+          "banner_gradient_bottom_color": "#000000",
+          "banner_gradient_bottom_opacity_pct": 80.0,
+          "center_mode": "bird",
+          "auto_crop_by_bird": true,
+          "max_long_edge": 0,
+          "crop_padding_top": 64,
+          "crop_padding_bottom": 64,
+          "crop_padding_left": 64,
+          "crop_padding_right": 64,
+          "crop_padding_fill": "#000000",
+          "fields": [
+            {
+              "name": "鸟种中文名 (bird_species_cn)",
+              "tag": "EXIF:Model",
+              "fallback": "",
+              "data_source": "auto",
+              "report_field": "",
+              "text_source": {
+                "type": "auto",
+                "key": "bird_species_cn"
+              },
+              "align_horizontal": "left",
+              "align_vertical": "bottom",
+              "x_offset_pct": 0.0,
+              "y_offset_pct": -2.0,
+              "color": "#ff9300",
+              "font_size": 64,
+              "font_type": "/System/Library/Fonts/Supplemental/Songti.ttc",
+              "style": "bold"
+            }
+          ]
+        },
+        "ratio": 1.0,
+        "center_mode": "bird",
+        "crop_padding_top": 64,
+        "crop_padding_bottom": 64,
+        "crop_padding_left": 64,
+        "crop_padding_right": 64,
+        "crop_padding_fill": "#000000",
+        "crop_box": null,
+        "custom_center_x": null,
+        "custom_center_y": null
+      }
+    },
+    {
+      "path": {
+        "absolute_path": "/Volumes/HP2T/_鸟录/三宝鸟/吃金龟子/DSC03776_ExHiRes.TIF",
+        "relative_path": "../../../../../../../Volumes/HP2T/_鸟录/三宝鸟/吃金龟子/DSC03776_ExHiRes.TIF"
+      },
+      "sequence": 25,
+      "render_settings": {
+        "template_name": "鸟体中心-GIF",
+        "template_payload": {
+          "name": "鸟体中心-GIF",
+          "ratio": 1.0,
+          "banner_color": "#ffffff",
+          "draw_banner_background": false,
+          "banner_background_style": "gradient_bottom",
+          "banner_gradient_height_pct": 25.0,
+          "banner_gradient_top_color": "#000000",
+          "banner_gradient_top_opacity_pct": 0.0,
+          "banner_gradient_bottom_color": "#000000",
+          "banner_gradient_bottom_opacity_pct": 80.0,
+          "center_mode": "bird",
+          "auto_crop_by_bird": true,
+          "max_long_edge": 0,
+          "crop_padding_top": 64,
+          "crop_padding_bottom": 64,
+          "crop_padding_left": 64,
+          "crop_padding_right": 64,
+          "crop_padding_fill": "#000000",
+          "fields": [
+            {
+              "name": "鸟种中文名 (bird_species_cn)",
+              "tag": "EXIF:Model",
+              "fallback": "",
+              "data_source": "auto",
+              "report_field": "",
+              "text_source": {
+                "type": "auto",
+                "key": "bird_species_cn"
+              },
+              "align_horizontal": "left",
+              "align_vertical": "bottom",
+              "x_offset_pct": 0.0,
+              "y_offset_pct": -2.0,
+              "color": "#ff9300",
+              "font_size": 64,
+              "font_type": "/System/Library/Fonts/Supplemental/Songti.ttc",
+              "style": "bold"
+            }
+          ]
+        },
+        "ratio": 1.0,
+        "center_mode": "bird",
+        "crop_padding_top": 64,
+        "crop_padding_bottom": 64,
+        "crop_padding_left": 64,
+        "crop_padding_right": 64,
+        "crop_padding_fill": "#000000",
+        "crop_box": null,
+        "custom_center_x": null,
+        "custom_center_y": null
+      }
+    },
+    {
+      "path": {
+        "absolute_path": "/Volumes/HP2T/_鸟录/三宝鸟/吃金龟子/DSC03777_ExHiRes.TIF",
+        "relative_path": "../../../../../../../Volumes/HP2T/_鸟录/三宝鸟/吃金龟子/DSC03777_ExHiRes.TIF"
+      },
+      "sequence": 26,
+      "render_settings": {
+        "template_name": "鸟体中心-GIF",
+        "template_payload": {
+          "name": "鸟体中心-GIF",
+          "ratio": 1.0,
+          "banner_color": "#ffffff",
+          "draw_banner_background": false,
+          "banner_background_style": "gradient_bottom",
+          "banner_gradient_height_pct": 25.0,
+          "banner_gradient_top_color": "#000000",
+          "banner_gradient_top_opacity_pct": 0.0,
+          "banner_gradient_bottom_color": "#000000",
+          "banner_gradient_bottom_opacity_pct": 80.0,
+          "center_mode": "bird",
+          "auto_crop_by_bird": true,
+          "max_long_edge": 0,
+          "crop_padding_top": 64,
+          "crop_padding_bottom": 64,
+          "crop_padding_left": 64,
+          "crop_padding_right": 64,
+          "crop_padding_fill": "#000000",
+          "fields": [
+            {
+              "name": "鸟种中文名 (bird_species_cn)",
+              "tag": "EXIF:Model",
+              "fallback": "",
+              "data_source": "auto",
+              "report_field": "",
+              "text_source": {
+                "type": "auto",
+                "key": "bird_species_cn"
+              },
+              "align_horizontal": "left",
+              "align_vertical": "bottom",
+              "x_offset_pct": 0.0,
+              "y_offset_pct": -2.0,
+              "color": "#ff9300",
+              "font_size": 64,
+              "font_type": "/System/Library/Fonts/Supplemental/Songti.ttc",
+              "style": "bold"
+            }
+          ]
+        },
+        "ratio": 1.0,
+        "center_mode": "bird",
+        "crop_padding_top": 64,
+        "crop_padding_bottom": 64,
+        "crop_padding_left": 64,
+        "crop_padding_right": 64,
+        "crop_padding_fill": "#000000",
+        "crop_box": null,
+        "custom_center_x": null,
+        "custom_center_y": null
+      }
+    },
+    {
+      "path": {
+        "absolute_path": "/Volumes/HP2T/_鸟录/三宝鸟/吃金龟子/DSC03778_ExHiRes.TIF",
+        "relative_path": "../../../../../../../Volumes/HP2T/_鸟录/三宝鸟/吃金龟子/DSC03778_ExHiRes.TIF"
+      },
+      "sequence": 27,
+      "render_settings": {
+        "template_name": "鸟体中心-GIF",
+        "template_payload": {
+          "name": "鸟体中心-GIF",
+          "ratio": 1.0,
+          "banner_color": "#ffffff",
+          "draw_banner_background": false,
+          "banner_background_style": "gradient_bottom",
+          "banner_gradient_height_pct": 25.0,
+          "banner_gradient_top_color": "#000000",
+          "banner_gradient_top_opacity_pct": 0.0,
+          "banner_gradient_bottom_color": "#000000",
+          "banner_gradient_bottom_opacity_pct": 80.0,
+          "center_mode": "bird",
+          "auto_crop_by_bird": true,
+          "max_long_edge": 0,
+          "crop_padding_top": 64,
+          "crop_padding_bottom": 64,
+          "crop_padding_left": 64,
+          "crop_padding_right": 64,
+          "crop_padding_fill": "#000000",
+          "fields": [
+            {
+              "name": "鸟种中文名 (bird_species_cn)",
+              "tag": "EXIF:Model",
+              "fallback": "",
+              "data_source": "auto",
+              "report_field": "",
+              "text_source": {
+                "type": "auto",
+                "key": "bird_species_cn"
+              },
+              "align_horizontal": "left",
+              "align_vertical": "bottom",
+              "x_offset_pct": 0.0,
+              "y_offset_pct": -2.0,
+              "color": "#ff9300",
+              "font_size": 64,
+              "font_type": "/System/Library/Fonts/Supplemental/Songti.ttc",
+              "style": "bold"
+            }
+          ]
+        },
+        "ratio": 1.0,
+        "center_mode": "bird",
+        "crop_padding_top": 64,
+        "crop_padding_bottom": 64,
+        "crop_padding_left": 64,
+        "crop_padding_right": 64,
+        "crop_padding_fill": "#000000",
+        "crop_box": null,
+        "custom_center_x": null,
+        "custom_center_y": null
+      }
+    },
+    {
+      "path": {
+        "absolute_path": "/Volumes/HP2T/_鸟录/三宝鸟/吃金龟子/DSC03779_ExHiRes.TIF",
+        "relative_path": "../../../../../../../Volumes/HP2T/_鸟录/三宝鸟/吃金龟子/DSC03779_ExHiRes.TIF"
+      },
+      "sequence": 28,
+      "render_settings": {
+        "template_name": "鸟体中心-GIF",
+        "template_payload": {
+          "name": "鸟体中心-GIF",
+          "ratio": 1.0,
+          "banner_color": "#ffffff",
+          "draw_banner_background": false,
+          "banner_background_style": "gradient_bottom",
+          "banner_gradient_height_pct": 25.0,
+          "banner_gradient_top_color": "#000000",
+          "banner_gradient_top_opacity_pct": 0.0,
+          "banner_gradient_bottom_color": "#000000",
+          "banner_gradient_bottom_opacity_pct": 80.0,
+          "center_mode": "bird",
+          "auto_crop_by_bird": true,
+          "max_long_edge": 0,
+          "crop_padding_top": 64,
+          "crop_padding_bottom": 64,
+          "crop_padding_left": 64,
+          "crop_padding_right": 64,
+          "crop_padding_fill": "#000000",
+          "fields": [
+            {
+              "name": "鸟种中文名 (bird_species_cn)",
+              "tag": "EXIF:Model",
+              "fallback": "",
+              "data_source": "auto",
+              "report_field": "",
+              "text_source": {
+                "type": "auto",
+                "key": "bird_species_cn"
+              },
+              "align_horizontal": "left",
+              "align_vertical": "bottom",
+              "x_offset_pct": 0.0,
+              "y_offset_pct": -2.0,
+              "color": "#ff9300",
+              "font_size": 64,
+              "font_type": "/System/Library/Fonts/Supplemental/Songti.ttc",
+              "style": "bold"
+            }
+          ]
+        },
+        "ratio": 1.0,
+        "center_mode": "bird",
+        "crop_padding_top": 64,
+        "crop_padding_bottom": 64,
+        "crop_padding_left": 64,
+        "crop_padding_right": 64,
+        "crop_padding_fill": "#000000",
+        "crop_box": null,
+        "custom_center_x": null,
+        "custom_center_y": null
+      }
+    },
+    {
+      "path": {
+        "absolute_path": "/Volumes/HP2T/_鸟录/三宝鸟/吃金龟子/DSC03780_ExHiRes.TIF",
+        "relative_path": "../../../../../../../Volumes/HP2T/_鸟录/三宝鸟/吃金龟子/DSC03780_ExHiRes.TIF"
+      },
+      "sequence": 29,
+      "render_settings": {
+        "template_name": "鸟体中心-GIF",
+        "template_payload": {
+          "name": "鸟体中心-GIF",
+          "ratio": 1.0,
+          "banner_color": "#ffffff",
+          "draw_banner_background": false,
+          "banner_background_style": "gradient_bottom",
+          "banner_gradient_height_pct": 25.0,
+          "banner_gradient_top_color": "#000000",
+          "banner_gradient_top_opacity_pct": 0.0,
+          "banner_gradient_bottom_color": "#000000",
+          "banner_gradient_bottom_opacity_pct": 80.0,
+          "center_mode": "bird",
+          "auto_crop_by_bird": true,
+          "max_long_edge": 0,
+          "crop_padding_top": 64,
+          "crop_padding_bottom": 64,
+          "crop_padding_left": 64,
+          "crop_padding_right": 64,
+          "crop_padding_fill": "#000000",
+          "fields": [
+            {
+              "name": "鸟种中文名 (bird_species_cn)",
+              "tag": "EXIF:Model",
+              "fallback": "",
+              "data_source": "auto",
+              "report_field": "",
+              "text_source": {
+                "type": "auto",
+                "key": "bird_species_cn"
+              },
+              "align_horizontal": "left",
+              "align_vertical": "bottom",
+              "x_offset_pct": 0.0,
+              "y_offset_pct": -2.0,
+              "color": "#ff9300",
+              "font_size": 64,
+              "font_type": "/System/Library/Fonts/Supplemental/Songti.ttc",
+              "style": "bold"
+            }
+          ]
+        },
+        "ratio": 1.0,
+        "center_mode": "bird",
+        "crop_padding_top": 64,
+        "crop_padding_bottom": 64,
+        "crop_padding_left": 64,
+        "crop_padding_right": 64,
+        "crop_padding_fill": "#000000",
+        "crop_box": null,
+        "custom_center_x": null,
+        "custom_center_y": null
+      }
+    },
+    {
+      "path": {
+        "absolute_path": "/Volumes/HP2T/_鸟录/三宝鸟/吃金龟子/DSC03781_ExHiRes.TIF",
+        "relative_path": "../../../../../../../Volumes/HP2T/_鸟录/三宝鸟/吃金龟子/DSC03781_ExHiRes.TIF"
+      },
+      "sequence": 30,
+      "render_settings": {
+        "template_name": "鸟体中心-GIF",
+        "template_payload": {
+          "name": "鸟体中心-GIF",
+          "ratio": 1.0,
+          "banner_color": "#ffffff",
+          "draw_banner_background": false,
+          "banner_background_style": "gradient_bottom",
+          "banner_gradient_height_pct": 25.0,
+          "banner_gradient_top_color": "#000000",
+          "banner_gradient_top_opacity_pct": 0.0,
+          "banner_gradient_bottom_color": "#000000",
+          "banner_gradient_bottom_opacity_pct": 80.0,
+          "center_mode": "bird",
+          "auto_crop_by_bird": true,
+          "max_long_edge": 0,
+          "crop_padding_top": 64,
+          "crop_padding_bottom": 64,
+          "crop_padding_left": 64,
+          "crop_padding_right": 64,
+          "crop_padding_fill": "#000000",
+          "fields": [
+            {
+              "name": "鸟种中文名 (bird_species_cn)",
+              "tag": "EXIF:Model",
+              "fallback": "",
+              "data_source": "auto",
+              "report_field": "",
+              "text_source": {
+                "type": "auto",
+                "key": "bird_species_cn"
+              },
+              "align_horizontal": "left",
+              "align_vertical": "bottom",
+              "x_offset_pct": 0.0,
+              "y_offset_pct": -2.0,
+              "color": "#ff9300",
+              "font_size": 64,
+              "font_type": "/System/Library/Fonts/Supplemental/Songti.ttc",
+              "style": "bold"
+            }
+          ]
+        },
+        "ratio": 1.0,
+        "center_mode": "bird",
+        "crop_padding_top": 64,
+        "crop_padding_bottom": 64,
+        "crop_padding_left": 64,
+        "crop_padding_right": 64,
+        "crop_padding_fill": "#000000",
+        "crop_box": null,
+        "custom_center_x": null,
+        "custom_center_y": null
+      }
+    },
+    {
+      "path": {
+        "absolute_path": "/Volumes/HP2T/_鸟录/三宝鸟/吃金龟子/DSC03782_ExHiRes.TIF",
+        "relative_path": "../../../../../../../Volumes/HP2T/_鸟录/三宝鸟/吃金龟子/DSC03782_ExHiRes.TIF"
+      },
+      "sequence": 31,
+      "render_settings": {
+        "template_name": "鸟体中心-GIF",
+        "template_payload": {
+          "name": "鸟体中心-GIF",
+          "ratio": 1.0,
+          "banner_color": "#ffffff",
+          "draw_banner_background": false,
+          "banner_background_style": "gradient_bottom",
+          "banner_gradient_height_pct": 25.0,
+          "banner_gradient_top_color": "#000000",
+          "banner_gradient_top_opacity_pct": 0.0,
+          "banner_gradient_bottom_color": "#000000",
+          "banner_gradient_bottom_opacity_pct": 80.0,
+          "center_mode": "bird",
+          "auto_crop_by_bird": true,
+          "max_long_edge": 0,
+          "crop_padding_top": 64,
+          "crop_padding_bottom": 64,
+          "crop_padding_left": 64,
+          "crop_padding_right": 64,
+          "crop_padding_fill": "#000000",
+          "fields": [
+            {
+              "name": "鸟种中文名 (bird_species_cn)",
+              "tag": "EXIF:Model",
+              "fallback": "",
+              "data_source": "auto",
+              "report_field": "",
+              "text_source": {
+                "type": "auto",
+                "key": "bird_species_cn"
+              },
+              "align_horizontal": "left",
+              "align_vertical": "bottom",
+              "x_offset_pct": 0.0,
+              "y_offset_pct": -2.0,
+              "color": "#ff9300",
+              "font_size": 64,
+              "font_type": "/System/Library/Fonts/Supplemental/Songti.ttc",
+              "style": "bold"
+            }
+          ]
+        },
+        "ratio": 1.0,
+        "center_mode": "bird",
+        "crop_padding_top": 64,
+        "crop_padding_bottom": 64,
+        "crop_padding_left": 64,
+        "crop_padding_right": 64,
+        "crop_padding_fill": "#000000",
+        "crop_box": null,
+        "custom_center_x": null,
+        "custom_center_y": null
+      }
+    },
+    {
+      "path": {
+        "absolute_path": "/Volumes/HP2T/_鸟录/三宝鸟/吃金龟子/DSC03783_ExHiRes.TIF",
+        "relative_path": "../../../../../../../Volumes/HP2T/_鸟录/三宝鸟/吃金龟子/DSC03783_ExHiRes.TIF"
+      },
+      "sequence": 32,
+      "render_settings": {
+        "template_name": "鸟体中心-GIF",
+        "template_payload": {
+          "name": "鸟体中心-GIF",
+          "ratio": 1.0,
+          "banner_color": "#ffffff",
+          "draw_banner_background": false,
+          "banner_background_style": "gradient_bottom",
+          "banner_gradient_height_pct": 25.0,
+          "banner_gradient_top_color": "#000000",
+          "banner_gradient_top_opacity_pct": 0.0,
+          "banner_gradient_bottom_color": "#000000",
+          "banner_gradient_bottom_opacity_pct": 80.0,
+          "center_mode": "bird",
+          "auto_crop_by_bird": true,
+          "max_long_edge": 0,
+          "crop_padding_top": 64,
+          "crop_padding_bottom": 64,
+          "crop_padding_left": 64,
+          "crop_padding_right": 64,
+          "crop_padding_fill": "#000000",
+          "fields": [
+            {
+              "name": "鸟种中文名 (bird_species_cn)",
+              "tag": "EXIF:Model",
+              "fallback": "",
+              "data_source": "auto",
+              "report_field": "",
+              "text_source": {
+                "type": "auto",
+                "key": "bird_species_cn"
+              },
+              "align_horizontal": "left",
+              "align_vertical": "bottom",
+              "x_offset_pct": 0.0,
+              "y_offset_pct": -2.0,
+              "color": "#ff9300",
+              "font_size": 64,
+              "font_type": "/System/Library/Fonts/Supplemental/Songti.ttc",
+              "style": "bold"
+            }
+          ]
+        },
+        "ratio": 1.0,
+        "center_mode": "bird",
+        "crop_padding_top": 64,
+        "crop_padding_bottom": 64,
+        "crop_padding_left": 64,
+        "crop_padding_right": 64,
+        "crop_padding_fill": "#000000",
+        "crop_box": null,
+        "custom_center_x": null,
+        "custom_center_y": null
+      }
+    },
+    {
+      "path": {
+        "absolute_path": "/Volumes/HP2T/_鸟录/三宝鸟/吃金龟子/DSC03784_ExHiRes.TIF",
+        "relative_path": "../../../../../../../Volumes/HP2T/_鸟录/三宝鸟/吃金龟子/DSC03784_ExHiRes.TIF"
+      },
+      "sequence": 33,
+      "render_settings": {
+        "template_name": "鸟体中心-GIF",
+        "template_payload": {
+          "name": "鸟体中心-GIF",
+          "ratio": 1.0,
+          "banner_color": "#ffffff",
+          "draw_banner_background": false,
+          "banner_background_style": "gradient_bottom",
+          "banner_gradient_height_pct": 25.0,
+          "banner_gradient_top_color": "#000000",
+          "banner_gradient_top_opacity_pct": 0.0,
+          "banner_gradient_bottom_color": "#000000",
+          "banner_gradient_bottom_opacity_pct": 80.0,
+          "center_mode": "bird",
+          "auto_crop_by_bird": true,
+          "max_long_edge": 0,
+          "crop_padding_top": 64,
+          "crop_padding_bottom": 64,
+          "crop_padding_left": 64,
+          "crop_padding_right": 64,
+          "crop_padding_fill": "#000000",
+          "fields": [
+            {
+              "name": "鸟种中文名 (bird_species_cn)",
+              "tag": "EXIF:Model",
+              "fallback": "",
+              "data_source": "auto",
+              "report_field": "",
+              "text_source": {
+                "type": "auto",
+                "key": "bird_species_cn"
+              },
+              "align_horizontal": "left",
+              "align_vertical": "bottom",
+              "x_offset_pct": 0.0,
+              "y_offset_pct": -2.0,
+              "color": "#ff9300",
+              "font_size": 64,
+              "font_type": "/System/Library/Fonts/Supplemental/Songti.ttc",
+              "style": "bold"
+            }
+          ]
+        },
+        "ratio": 1.0,
+        "center_mode": "bird",
+        "crop_padding_top": 64,
+        "crop_padding_bottom": 64,
+        "crop_padding_left": 64,
+        "crop_padding_right": 64,
+        "crop_padding_fill": "#000000",
+        "crop_box": null,
+        "custom_center_x": null,
+        "custom_center_y": null
+      }
+    },
+    {
+      "path": {
+        "absolute_path": "/Volumes/HP2T/_鸟录/三宝鸟/吃金龟子/DSC03785_ExHiRes.TIF",
+        "relative_path": "../../../../../../../Volumes/HP2T/_鸟录/三宝鸟/吃金龟子/DSC03785_ExHiRes.TIF"
+      },
+      "sequence": 34,
+      "render_settings": {
+        "template_name": "鸟体中心-GIF",
+        "template_payload": {
+          "name": "鸟体中心-GIF",
+          "ratio": 1.0,
+          "banner_color": "#ffffff",
+          "draw_banner_background": false,
+          "banner_background_style": "gradient_bottom",
+          "banner_gradient_height_pct": 25.0,
+          "banner_gradient_top_color": "#000000",
+          "banner_gradient_top_opacity_pct": 0.0,
+          "banner_gradient_bottom_color": "#000000",
+          "banner_gradient_bottom_opacity_pct": 80.0,
+          "center_mode": "bird",
+          "auto_crop_by_bird": true,
+          "max_long_edge": 0,
+          "crop_padding_top": 64,
+          "crop_padding_bottom": 64,
+          "crop_padding_left": 64,
+          "crop_padding_right": 64,
+          "crop_padding_fill": "#000000",
+          "fields": [
+            {
+              "name": "鸟种中文名 (bird_species_cn)",
+              "tag": "EXIF:Model",
+              "fallback": "",
+              "data_source": "auto",
+              "report_field": "",
+              "text_source": {
+                "type": "auto",
+                "key": "bird_species_cn"
+              },
+              "align_horizontal": "left",
+              "align_vertical": "bottom",
+              "x_offset_pct": 0.0,
+              "y_offset_pct": -2.0,
+              "color": "#ff9300",
+              "font_size": 64,
+              "font_type": "/System/Library/Fonts/Supplemental/Songti.ttc",
+              "style": "bold"
+            }
+          ]
+        },
+        "ratio": 1.0,
+        "center_mode": "bird",
+        "crop_padding_top": 64,
+        "crop_padding_bottom": 64,
+        "crop_padding_left": 64,
+        "crop_padding_right": 64,
+        "crop_padding_fill": "#000000",
+        "crop_box": null,
+        "custom_center_x": null,
+        "custom_center_y": null
+      }
+    },
+    {
+      "path": {
+        "absolute_path": "/Volumes/HP2T/_鸟录/三宝鸟/吃金龟子/DSC03786_ExHiRes.TIF",
+        "relative_path": "../../../../../../../Volumes/HP2T/_鸟录/三宝鸟/吃金龟子/DSC03786_ExHiRes.TIF"
+      },
+      "sequence": 35,
+      "render_settings": {
+        "template_name": "鸟体中心-GIF",
+        "template_payload": {
+          "name": "鸟体中心-GIF",
+          "ratio": 1.0,
+          "banner_color": "#ffffff",
+          "draw_banner_background": false,
+          "banner_background_style": "gradient_bottom",
+          "banner_gradient_height_pct": 25.0,
+          "banner_gradient_top_color": "#000000",
+          "banner_gradient_top_opacity_pct": 0.0,
+          "banner_gradient_bottom_color": "#000000",
+          "banner_gradient_bottom_opacity_pct": 80.0,
+          "center_mode": "bird",
+          "auto_crop_by_bird": true,
+          "max_long_edge": 0,
+          "crop_padding_top": 64,
+          "crop_padding_bottom": 64,
+          "crop_padding_left": 64,
+          "crop_padding_right": 64,
+          "crop_padding_fill": "#000000",
+          "fields": [
+            {
+              "name": "鸟种中文名 (bird_species_cn)",
+              "tag": "EXIF:Model",
+              "fallback": "",
+              "data_source": "auto",
+              "report_field": "",
+              "text_source": {
+                "type": "auto",
+                "key": "bird_species_cn"
+              },
+              "align_horizontal": "left",
+              "align_vertical": "bottom",
+              "x_offset_pct": 0.0,
+              "y_offset_pct": -2.0,
+              "color": "#ff9300",
+              "font_size": 64,
+              "font_type": "/System/Library/Fonts/Supplemental/Songti.ttc",
+              "style": "bold"
+            }
+          ]
+        },
+        "ratio": 1.0,
+        "center_mode": "bird",
+        "crop_padding_top": 64,
+        "crop_padding_bottom": 64,
+        "crop_padding_left": 64,
+        "crop_padding_right": 64,
+        "crop_padding_fill": "#000000",
+        "crop_box": null,
+        "custom_center_x": null,
+        "custom_center_y": null
+      }
+    },
+    {
+      "path": {
+        "absolute_path": "/Volumes/HP2T/_鸟录/三宝鸟/吃金龟子/DSC03787_ExHiRes.TIF",
+        "relative_path": "../../../../../../../Volumes/HP2T/_鸟录/三宝鸟/吃金龟子/DSC03787_ExHiRes.TIF"
+      },
+      "sequence": 36,
+      "render_settings": {
+        "template_name": "鸟体中心-GIF",
+        "template_payload": {
+          "name": "鸟体中心-GIF",
+          "ratio": 1.0,
+          "banner_color": "#ffffff",
+          "draw_banner_background": false,
+          "banner_background_style": "gradient_bottom",
+          "banner_gradient_height_pct": 25.0,
+          "banner_gradient_top_color": "#000000",
+          "banner_gradient_top_opacity_pct": 0.0,
+          "banner_gradient_bottom_color": "#000000",
+          "banner_gradient_bottom_opacity_pct": 80.0,
+          "center_mode": "bird",
+          "auto_crop_by_bird": true,
+          "max_long_edge": 0,
+          "crop_padding_top": 64,
+          "crop_padding_bottom": 64,
+          "crop_padding_left": 64,
+          "crop_padding_right": 64,
+          "crop_padding_fill": "#000000",
+          "fields": [
+            {
+              "name": "鸟种中文名 (bird_species_cn)",
+              "tag": "EXIF:Model",
+              "fallback": "",
+              "data_source": "auto",
+              "report_field": "",
+              "text_source": {
+                "type": "auto",
+                "key": "bird_species_cn"
+              },
+              "align_horizontal": "left",
+              "align_vertical": "bottom",
+              "x_offset_pct": 0.0,
+              "y_offset_pct": -2.0,
+              "color": "#ff9300",
+              "font_size": 64,
+              "font_type": "/System/Library/Fonts/Supplemental/Songti.ttc",
+              "style": "bold"
+            }
+          ]
+        },
+        "ratio": 1.0,
+        "center_mode": "bird",
+        "crop_padding_top": 64,
+        "crop_padding_bottom": 64,
+        "crop_padding_left": 64,
+        "crop_padding_right": 64,
+        "crop_padding_fill": "#000000",
+        "crop_box": null,
+        "custom_center_x": null,
+        "custom_center_y": null
+      }
+    },
+    {
+      "path": {
+        "absolute_path": "/Volumes/HP2T/_鸟录/三宝鸟/吃金龟子/DSC03788_ExHiRes.TIF",
+        "relative_path": "../../../../../../../Volumes/HP2T/_鸟录/三宝鸟/吃金龟子/DSC03788_ExHiRes.TIF"
+      },
+      "sequence": 37,
+      "render_settings": {
+        "template_name": "鸟体中心-GIF",
+        "template_payload": {
+          "name": "鸟体中心-GIF",
+          "ratio": 1.0,
+          "banner_color": "#ffffff",
+          "draw_banner_background": false,
+          "banner_background_style": "gradient_bottom",
+          "banner_gradient_height_pct": 25.0,
+          "banner_gradient_top_color": "#000000",
+          "banner_gradient_top_opacity_pct": 0.0,
+          "banner_gradient_bottom_color": "#000000",
+          "banner_gradient_bottom_opacity_pct": 80.0,
+          "center_mode": "bird",
+          "auto_crop_by_bird": true,
+          "max_long_edge": 0,
+          "crop_padding_top": 64,
+          "crop_padding_bottom": 64,
+          "crop_padding_left": 64,
+          "crop_padding_right": 64,
+          "crop_padding_fill": "#000000",
+          "fields": [
+            {
+              "name": "鸟种中文名 (bird_species_cn)",
+              "tag": "EXIF:Model",
+              "fallback": "",
+              "data_source": "auto",
+              "report_field": "",
+              "text_source": {
+                "type": "auto",
+                "key": "bird_species_cn"
+              },
+              "align_horizontal": "left",
+              "align_vertical": "bottom",
+              "x_offset_pct": 0.0,
+              "y_offset_pct": -2.0,
+              "color": "#ff9300",
+              "font_size": 64,
+              "font_type": "/System/Library/Fonts/Supplemental/Songti.ttc",
+              "style": "bold"
+            }
+          ]
+        },
+        "ratio": 1.0,
+        "center_mode": "bird",
+        "crop_padding_top": 64,
+        "crop_padding_bottom": 64,
+        "crop_padding_left": 64,
+        "crop_padding_right": 64,
+        "crop_padding_fill": "#000000",
+        "crop_box": null,
+        "custom_center_x": null,
+        "custom_center_y": null
+      }
+    },
+    {
+      "path": {
+        "absolute_path": "/Volumes/HP2T/_鸟录/三宝鸟/吃金龟子/DSC03789_ExHiRes.TIF",
+        "relative_path": "../../../../../../../Volumes/HP2T/_鸟录/三宝鸟/吃金龟子/DSC03789_ExHiRes.TIF"
+      },
+      "sequence": 38,
+      "render_settings": {
+        "template_name": "鸟体中心-GIF",
+        "template_payload": {
+          "name": "鸟体中心-GIF",
+          "ratio": 1.0,
+          "banner_color": "#ffffff",
+          "draw_banner_background": false,
+          "banner_background_style": "gradient_bottom",
+          "banner_gradient_height_pct": 25.0,
+          "banner_gradient_top_color": "#000000",
+          "banner_gradient_top_opacity_pct": 0.0,
+          "banner_gradient_bottom_color": "#000000",
+          "banner_gradient_bottom_opacity_pct": 80.0,
+          "center_mode": "bird",
+          "auto_crop_by_bird": true,
+          "max_long_edge": 0,
+          "crop_padding_top": 64,
+          "crop_padding_bottom": 64,
+          "crop_padding_left": 64,
+          "crop_padding_right": 64,
+          "crop_padding_fill": "#000000",
+          "fields": [
+            {
+              "name": "鸟种中文名 (bird_species_cn)",
+              "tag": "EXIF:Model",
+              "fallback": "",
+              "data_source": "auto",
+              "report_field": "",
+              "text_source": {
+                "type": "auto",
+                "key": "bird_species_cn"
+              },
+              "align_horizontal": "left",
+              "align_vertical": "bottom",
+              "x_offset_pct": 0.0,
+              "y_offset_pct": -2.0,
+              "color": "#ff9300",
+              "font_size": 64,
+              "font_type": "/System/Library/Fonts/Supplemental/Songti.ttc",
+              "style": "bold"
+            }
+          ]
+        },
+        "ratio": 1.0,
+        "center_mode": "bird",
+        "crop_padding_top": 64,
+        "crop_padding_bottom": 64,
+        "crop_padding_left": 64,
+        "crop_padding_right": 64,
+        "crop_padding_fill": "#000000",
+        "crop_box": null,
+        "custom_center_x": null,
+        "custom_center_y": null
+      }
+    },
+    {
+      "path": {
+        "absolute_path": "/Volumes/HP2T/_鸟录/三宝鸟/吃金龟子/DSC03790_ExHiRes.TIF",
+        "relative_path": "../../../../../../../Volumes/HP2T/_鸟录/三宝鸟/吃金龟子/DSC03790_ExHiRes.TIF"
+      },
+      "sequence": 39,
+      "render_settings": {
+        "template_name": "鸟体中心-GIF",
+        "template_payload": {
+          "name": "鸟体中心-GIF",
+          "ratio": 1.0,
+          "banner_color": "#ffffff",
+          "draw_banner_background": false,
+          "banner_background_style": "gradient_bottom",
+          "banner_gradient_height_pct": 25.0,
+          "banner_gradient_top_color": "#000000",
+          "banner_gradient_top_opacity_pct": 0.0,
+          "banner_gradient_bottom_color": "#000000",
+          "banner_gradient_bottom_opacity_pct": 80.0,
+          "center_mode": "bird",
+          "auto_crop_by_bird": true,
+          "max_long_edge": 0,
+          "crop_padding_top": 64,
+          "crop_padding_bottom": 64,
+          "crop_padding_left": 64,
+          "crop_padding_right": 64,
+          "crop_padding_fill": "#000000",
+          "fields": [
+            {
+              "name": "鸟种中文名 (bird_species_cn)",
+              "tag": "EXIF:Model",
+              "fallback": "",
+              "data_source": "auto",
+              "report_field": "",
+              "text_source": {
+                "type": "auto",
+                "key": "bird_species_cn"
+              },
+              "align_horizontal": "left",
+              "align_vertical": "bottom",
+              "x_offset_pct": 0.0,
+              "y_offset_pct": -2.0,
+              "color": "#ff9300",
+              "font_size": 64,
+              "font_type": "/System/Library/Fonts/Supplemental/Songti.ttc",
+              "style": "bold"
+            }
+          ]
+        },
+        "ratio": 1.0,
+        "center_mode": "bird",
+        "crop_padding_top": 64,
+        "crop_padding_bottom": 64,
+        "crop_padding_left": 64,
+        "crop_padding_right": 64,
+        "crop_padding_fill": "#000000",
+        "crop_box": null,
+        "custom_center_x": null,
+        "custom_center_y": null
+      }
+    },
+    {
+      "path": {
+        "absolute_path": "/Volumes/HP2T/_鸟录/三宝鸟/吃金龟子/DSC03791_ExHiRes.TIF",
+        "relative_path": "../../../../../../../Volumes/HP2T/_鸟录/三宝鸟/吃金龟子/DSC03791_ExHiRes.TIF"
+      },
+      "sequence": 40,
+      "render_settings": {
+        "template_name": "鸟体中心-GIF",
+        "template_payload": {
+          "name": "鸟体中心-GIF",
+          "ratio": 1.0,
+          "banner_color": "#ffffff",
+          "draw_banner_background": false,
+          "banner_background_style": "gradient_bottom",
+          "banner_gradient_height_pct": 25.0,
+          "banner_gradient_top_color": "#000000",
+          "banner_gradient_top_opacity_pct": 0.0,
+          "banner_gradient_bottom_color": "#000000",
+          "banner_gradient_bottom_opacity_pct": 80.0,
+          "center_mode": "bird",
+          "auto_crop_by_bird": true,
+          "max_long_edge": 0,
+          "crop_padding_top": 64,
+          "crop_padding_bottom": 64,
+          "crop_padding_left": 64,
+          "crop_padding_right": 64,
+          "crop_padding_fill": "#000000",
+          "fields": [
+            {
+              "name": "鸟种中文名 (bird_species_cn)",
+              "tag": "EXIF:Model",
+              "fallback": "",
+              "data_source": "auto",
+              "report_field": "",
+              "text_source": {
+                "type": "auto",
+                "key": "bird_species_cn"
+              },
+              "align_horizontal": "left",
+              "align_vertical": "bottom",
+              "x_offset_pct": 0.0,
+              "y_offset_pct": -2.0,
+              "color": "#ff9300",
+              "font_size": 64,
+              "font_type": "/System/Library/Fonts/Supplemental/Songti.ttc",
+              "style": "bold"
+            }
+          ]
+        },
+        "ratio": 1.0,
+        "center_mode": "bird",
+        "crop_padding_top": 64,
+        "crop_padding_bottom": 64,
+        "crop_padding_left": 64,
+        "crop_padding_right": 64,
+        "crop_padding_fill": "#000000",
+        "crop_box": null,
+        "custom_center_x": null,
+        "custom_center_y": null
+      }
+    },
+    {
+      "path": {
+        "absolute_path": "/Volumes/HP2T/_鸟录/三宝鸟/吃金龟子/DSC03792_ExHiRes.TIF",
+        "relative_path": "../../../../../../../Volumes/HP2T/_鸟录/三宝鸟/吃金龟子/DSC03792_ExHiRes.TIF"
+      },
+      "sequence": 41,
+      "render_settings": {
+        "template_name": "鸟体中心-GIF",
+        "template_payload": {
+          "name": "鸟体中心-GIF",
+          "ratio": 1.0,
+          "banner_color": "#ffffff",
+          "draw_banner_background": false,
+          "banner_background_style": "gradient_bottom",
+          "banner_gradient_height_pct": 25.0,
+          "banner_gradient_top_color": "#000000",
+          "banner_gradient_top_opacity_pct": 0.0,
+          "banner_gradient_bottom_color": "#000000",
+          "banner_gradient_bottom_opacity_pct": 80.0,
+          "center_mode": "bird",
+          "auto_crop_by_bird": true,
+          "max_long_edge": 0,
+          "crop_padding_top": 64,
+          "crop_padding_bottom": 64,
+          "crop_padding_left": 64,
+          "crop_padding_right": 64,
+          "crop_padding_fill": "#000000",
+          "fields": [
+            {
+              "name": "鸟种中文名 (bird_species_cn)",
+              "tag": "EXIF:Model",
+              "fallback": "",
+              "data_source": "auto",
+              "report_field": "",
+              "text_source": {
+                "type": "auto",
+                "key": "bird_species_cn"
+              },
+              "align_horizontal": "left",
+              "align_vertical": "bottom",
+              "x_offset_pct": 0.0,
+              "y_offset_pct": -2.0,
+              "color": "#ff9300",
+              "font_size": 64,
+              "font_type": "/System/Library/Fonts/Supplemental/Songti.ttc",
+              "style": "bold"
+            }
+          ]
+        },
+        "ratio": 1.0,
+        "center_mode": "bird",
+        "crop_padding_top": 64,
+        "crop_padding_bottom": 64,
+        "crop_padding_left": 64,
+        "crop_padding_right": 64,
+        "crop_padding_fill": "#000000",
+        "crop_box": null,
+        "custom_center_x": null,
+        "custom_center_y": null
+      }
+    }
+  ],
+  "selection": {
+    "current_photo": {
+      "absolute_path": "/Volumes/HP2T/_鸟录/三宝鸟/吃金龟子/DSC03791_ExHiRes.TIF",
+      "relative_path": "../../../../../../../Volumes/HP2T/_鸟录/三宝鸟/吃金龟子/DSC03791_ExHiRes.TIF"
+    },
+    "selected_photos": [
+      {
+        "absolute_path": "/Volumes/HP2T/_鸟录/三宝鸟/吃金龟子/DSC03791_ExHiRes.TIF",
+        "relative_path": "../../../../../../../Volumes/HP2T/_鸟录/三宝鸟/吃金龟子/DSC03791_ExHiRes.TIF"
+      }
+    ],
+    "sort_column": 0,
+    "sort_order": "asc"
+  },
+  "editor_state": {
+    "current_render_settings": {
+      "template_name": "鸟体中心-GIF",
+      "template_payload": {
+        "name": "鸟体中心-GIF",
+        "ratio": 1.0,
+        "banner_color": "#ffffff",
+        "draw_banner_background": false,
+        "banner_background_style": "gradient_bottom",
+        "banner_gradient_height_pct": 25.0,
+        "banner_gradient_top_color": "#000000",
+        "banner_gradient_top_opacity_pct": 0.0,
+        "banner_gradient_bottom_color": "#000000",
+        "banner_gradient_bottom_opacity_pct": 80.0,
+        "center_mode": "bird",
+        "auto_crop_by_bird": true,
+        "max_long_edge": 0,
+        "crop_padding_top": 64,
+        "crop_padding_bottom": 64,
+        "crop_padding_left": 64,
+        "crop_padding_right": 64,
+        "crop_padding_fill": "#000000",
+        "fields": [
+          {
+            "name": "鸟种中文名 (bird_species_cn)",
+            "tag": "EXIF:Model",
+            "fallback": "",
+            "data_source": "auto",
+            "report_field": "",
+            "text_source": {
+              "type": "auto",
+              "key": "bird_species_cn"
+            },
+            "align_horizontal": "left",
+            "align_vertical": "bottom",
+            "x_offset_pct": 0.0,
+            "y_offset_pct": -2.0,
+            "color": "#ff9300",
+            "font_size": 64,
+            "font_type": "/System/Library/Fonts/Supplemental/Songti.ttc",
+            "style": "bold"
+          }
+        ]
+      },
+      "draw_banner": true,
+      "draw_text": true,
+      "draw_focus": false,
+      "stage_template_crop_enabled": true,
+      "stage_resize_limit_enabled": true,
+      "stage_template_overlay_enabled": false,
+      "stage_focus_overlay_enabled": true,
+      "pipeline_stage_order": [
+        "template_crop",
+        "resize_limit",
+        "template_overlay",
+        "focus_overlay"
+      ],
+      "selected_export_stage_id": "export_png",
+      "uniform_auto_crop": true,
+      "auto_crop_stabilization": 100,
+      "ratio": 1.0,
+      "center_mode": "bird",
+      "max_long_edge": 0,
+      "crop_padding_top": 64,
+      "crop_padding_bottom": 64,
+      "crop_padding_left": 64,
+      "crop_padding_right": 64,
+      "crop_padding_fill": "#000000",
+      "crop_box": null,
+      "custom_center_x": null,
+      "custom_center_y": null,
+      "dejitter_strategy": "median",
+      "dejitter_reference_enabled": false,
+      "dejitter_reference_regions": [],
+      "dejitter_reference_source": null
+    },
+    "global_export_settings": {
+      "draw_banner": true,
+      "draw_text": true,
+      "draw_focus": false,
+      "pipeline_stage_order": [
+        "template_crop",
+        "resize_limit",
+        "template_overlay",
+        "focus_overlay"
+      ],
+      "pipeline_stage_enabled": {
+        "template_crop": true,
+        "resize_limit": true,
+        "template_overlay": false,
+        "focus_overlay": true
+      },
+      "stage_template_crop_enabled": true,
+      "stage_resize_limit_enabled": true,
+      "stage_template_overlay_enabled": false,
+      "stage_focus_overlay_enabled": true,
+      "max_long_edge": 0,
+      "uniform_auto_crop": true,
+      "auto_crop_stabilization": 100
+    },
+    "image_export": {
+      "output_format": "png",
+      "selected_export_stage_id": "export_png",
+      "pipeline_stage_order": [
+        "template_crop",
+        "resize_limit",
+        "template_overlay",
+        "focus_overlay"
+      ],
+      "pipeline_stage_enabled": {
+        "template_crop": true,
+        "resize_limit": true,
+        "template_overlay": false,
+        "focus_overlay": true
+      },
+      "gif_fps": 10.0,
+      "gif_loop": 0,
+      "gif_keep_frame_images": true,
+      "gif_scale_factors": [
+        0.5
+      ],
+      "last_image_output_dir": null,
+      "last_batch_output_dir": {
+        "absolute_path": "/Volumes/HP2T/_鸟录/三宝鸟/gif",
+        "relative_path": "../../../../../../../Volumes/HP2T/_鸟录/三宝鸟/gif"
+      }
+    },
+    "video_export": {
+      "container": "mp4",
+      "codec": "h264",
+      "fps_text": "30",
+      "frame_size_mode": "preset",
+      "frame_size_width": 4680,
+      "frame_size_height": 2160,
+      "orientation": "landscape",
+      "custom_width": 4680,
+      "custom_height": 2160,
+      "preset": "slow",
+      "crf": 20,
+      "preserve_temp_files": true,
+      "last_video_output_dir": null
+    },
+    "preview": {
+      "show_crop_effect": true,
+      "edit_mode": "none",
+      "crop_effect_alpha": 160,
+      "show_focus_box": true,
+      "show_bird_box": true,
+      "composition_grid_mode": "none",
+      "composition_grid_line_width": 1,
+      "preview_scale_percent": 62.353515625
+    }
+  },
+  "app": "SuperBirdStamp",
+  "workspace_version": 1,
+  "saved_at": "2026-06-14T18:56:14.120660+08:00"
+}

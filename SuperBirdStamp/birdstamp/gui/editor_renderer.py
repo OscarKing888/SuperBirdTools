@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import hashlib
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterable
 
 from PIL import Image
 from PyQt6.QtGui import QPixmap
@@ -17,11 +17,17 @@ from app_common.preview_canvas import (
     normalize_preview_composition_grid_line_width,
     normalize_preview_composition_grid_mode,
 )
-from birdstamp.decoders.image_decoder import decode_image
+from birdstamp.decoders.image_decoder import decode_image, decode_image_for_preview
+from birdstamp import perf as birdstamp_perf
 from birdstamp.gui import editor_core, editor_options, editor_template, editor_utils, template_context as _template_context
+from birdstamp.gui.edit_modes import EDIT_MODE_NONE, EDIT_MODE_REFERENCE_REGION
 from birdstamp.gui.editor_preview_canvas import EditorPreviewOverlayOptions, EditorPreviewOverlayState
 from birdstamp.video_export import (
     DEFAULT_EXPORT_STAGE_ID,
+    DEJITTER_REFERENCE_ENABLED_KEY,
+    DEJITTER_REFERENCE_REGIONS_KEY,
+    DEJITTER_REFERENCE_SOURCE_KEY,
+    DEJITTER_STRATEGY_KEY,
     EXPORT_STAGE_ID_KEY,
     PIPELINE_STAGE_ORDER_KEY,
     STAGE_FOCUS_OVERLAY_ENABLED_KEY,
@@ -73,6 +79,10 @@ RATIO_FREE                          = editor_options.RATIO_FREE
 RATIO_NO_CROP                       = editor_options.RATIO_NO_CROP
 OUTPUT_FORMAT_OPTIONS               = editor_options.OUTPUT_FORMAT_OPTIONS
 
+_SOURCE_IMAGE_CACHE_MAX = 4
+_PREVIEW_DECODE_MAX_LONG_EDGE = 2048
+_PREVIEW_PIXMAP_MAX_PIXELS = 1920 * 1080 * 2
+
 
 class _BirdStampRendererMixin:
     """Mixin: preview-cache, render-settings, image processing pipeline, render_preview."""
@@ -108,10 +118,18 @@ class _BirdStampRendererMixin:
             fill=_safe_color(str(settings.get("crop_padding_fill", "#FFFFFF")), "#FFFFFF"),
         )
 
+    def _dejitter_reference_mode_active(self) -> bool:
+        getter = getattr(self, "_current_edit_mode_id", None)
+        if callable(getter):
+            return getter() == EDIT_MODE_REFERENCE_REGION
+        return False
+
     def _build_preview_overlay_options(self) -> EditorPreviewOverlayOptions:
         """Build editor preview overlay options from the current toolbar UI state."""
         preview_grid_combo = getattr(self, "preview_grid_combo", None)
         preview_grid_line_width_combo = getattr(self, "preview_grid_line_width_combo", None)
+        reference_regions = getattr(self, "_dejitter_reference_regions", ()) or ()
+        show_reference = self._dejitter_reference_mode_active() or bool(reference_regions)
         return EditorPreviewOverlayOptions(
             show_focus_box=bool(self.show_focus_box_check.isChecked()),
             show_bird_box=bool(self.show_bird_box_check.isChecked()),
@@ -123,15 +141,13 @@ class _BirdStampRendererMixin:
             composition_grid_line_width=normalize_preview_composition_grid_line_width(
                 preview_grid_line_width_combo.currentData() if preview_grid_line_width_combo is not None else 1
             ),
+            show_reference_regions=show_reference,
         )
 
     def _apply_preview_overlay_options_from_ui(self) -> None:
         """Apply preview overlay options to the preview canvas/composite."""
         self.preview_label.apply_overlay_options(self._build_preview_overlay_options())
         canvas = self.preview_label.canvas
-        if hasattr(canvas, "set_crop_edit_mode"):
-            crop_edit = getattr(self, "crop_edit_mode_check", None)
-            canvas.set_crop_edit_mode(crop_edit.isChecked() if crop_edit else False)
         if hasattr(canvas, "set_crop_ratio_constraint"):
             r = self._selected_ratio()
             ratio_constraint = float(r) if isinstance(r, (int, float)) and not isinstance(r, bool) else None
@@ -139,6 +155,72 @@ class _BirdStampRendererMixin:
                 ratio_constraint,
                 _is_ratio_free(r),
             )
+        if hasattr(canvas, "set_edit_mode"):
+            # 编辑模式由模式按钮决定；裁剪模式的 _crop_edit_mode 标志由 CropAdjustEditMode 管理。
+            getter = getattr(self, "_current_edit_mode_id", None)
+            canvas.set_edit_mode(getter() if callable(getter) else EDIT_MODE_NONE)
+        if hasattr(canvas, "set_reference_regions"):
+            canvas.set_reference_regions(
+                self._reference_regions_source_to_preview(getattr(self, "_dejitter_reference_regions", ()))
+            )
+
+    # ------------------------------------------------------------------
+    # 去抖动参考区：预览(含外填充)归一化 <-> 源图归一化 坐标互转
+    # ------------------------------------------------------------------
+
+    def _current_preview_outer_pad(self) -> tuple[int, int, int, int]:
+        pad = getattr(self, "_preview_outer_pad", None)
+        if isinstance(pad, (list, tuple)) and len(pad) == 4:
+            try:
+                return (int(pad[0]), int(pad[1]), int(pad[2]), int(pad[3]))
+            except (TypeError, ValueError):
+                return (0, 0, 0, 0)
+        return (0, 0, 0, 0)
+
+    def _reference_region_preview_to_source(
+        self, box: tuple[float, float, float, float]
+    ) -> tuple[float, float, float, float]:
+        source = getattr(self, "current_source_image", None)
+        if source is None:
+            return tuple(float(v) for v in box)  # type: ignore[return-value]
+        pt, pb, pl, pr = self._current_preview_outer_pad()
+        sw = max(1, int(source.width))
+        sh = max(1, int(source.height))
+        pw = sw + max(0, pl) + max(0, pr)
+        ph = sh + max(0, pt) + max(0, pb)
+
+        def _convert(nx: float, ny: float) -> tuple[float, float]:
+            px = nx * pw - max(0, pl)
+            py = ny * ph - max(0, pt)
+            return (max(0.0, min(1.0, px / sw)), max(0.0, min(1.0, py / sh)))
+
+        l, t = _convert(box[0], box[1])
+        r, b = _convert(box[2], box[3])
+        return (min(l, r), min(t, b), max(l, r), max(t, b))
+
+    def _reference_regions_source_to_preview(self, regions) -> tuple[tuple[float, float, float, float], ...]:
+        source = getattr(self, "current_source_image", None)
+        if source is None or not regions:
+            return tuple(tuple(float(v) for v in box) for box in (regions or ()) if len(box) == 4)
+        pt, pb, pl, pr = self._current_preview_outer_pad()
+        sw = max(1, int(source.width))
+        sh = max(1, int(source.height))
+        pw = sw + max(0, pl) + max(0, pr)
+        ph = sh + max(0, pt) + max(0, pb)
+
+        def _convert(nx: float, ny: float) -> tuple[float, float]:
+            px = nx * sw + max(0, pl)
+            py = ny * sh + max(0, pt)
+            return (max(0.0, min(1.0, px / pw)), max(0.0, min(1.0, py / ph)))
+
+        converted: list[tuple[float, float, float, float]] = []
+        for box in regions:
+            if len(box) != 4:
+                continue
+            l, t = _convert(float(box[0]), float(box[1]))
+            r, b = _convert(float(box[2]), float(box[3]))
+            converted.append((min(l, r), min(t, b), max(l, r), max(t, b)))
+        return tuple(converted)
 
     def _source_signature(self, path: Path) -> str:
         try:
@@ -146,6 +228,157 @@ class _BirdStampRendererMixin:
             return f"{_path_key(path)}:{stat.st_size}:{stat.st_mtime_ns}"
         except Exception:
             return _path_key(path)
+
+    def _store_source_image_cache(self, signature: str, image: Image.Image) -> None:
+        cache = getattr(self, "_source_image_cache", None)
+        if not isinstance(cache, dict):
+            self._source_image_cache = {}
+            cache = self._source_image_cache
+        if signature in cache:
+            return
+        if len(cache) >= _SOURCE_IMAGE_CACHE_MAX:
+            oldest = next(iter(cache))
+            del cache[oldest]
+        cache[signature] = image
+
+    def _decode_image_for_path(self, path: Path) -> Image.Image:
+        """按源图签名缓存解码结果，避免重选同图时重复读盘。"""
+        signature = self._source_signature(path)
+        cache = getattr(self, "_source_image_cache", None)
+        counts = getattr(self, "_perf_decode_counts", None)
+        if not isinstance(cache, dict):
+            self._source_image_cache = {}
+            cache = self._source_image_cache
+        if not isinstance(counts, dict):
+            self._perf_decode_counts = {}
+            counts = self._perf_decode_counts
+
+        cached = cache.get(signature)
+        if cached is not None:
+            birdstamp_perf.plog(
+                "[reuse-image] path=%s signature=%s prior_decodes=%s",
+                path,
+                signature,
+                counts.get(signature, 0),
+            )
+            return cached.copy()
+
+        with birdstamp_perf.span("decode", path=str(path)):
+            image = decode_image(path, decoder="auto")
+        self._store_source_image_cache(signature, image)
+        counts[signature] = int(counts.get(signature, 0)) + 1
+        birdstamp_perf.plog(
+            "[decode] path=%s signature=%s decode_count=%s",
+            path,
+            signature,
+            counts[signature],
+        )
+        return image.copy()
+
+    def _decode_image_for_preview(self, path: Path) -> Image.Image:
+        """Decode and downscale for editor preview; export still uses full resolution."""
+        signature = f"{self._source_signature(path)}:preview{_PREVIEW_DECODE_MAX_LONG_EDGE}"
+        cache = getattr(self, "_preview_image_cache", None)
+        counts = getattr(self, "_perf_decode_counts", None)
+        if not isinstance(cache, dict):
+            self._preview_image_cache = {}
+            cache = self._preview_image_cache
+        if not isinstance(counts, dict):
+            self._perf_decode_counts = {}
+            counts = self._perf_decode_counts
+
+        cached = cache.get(signature)
+        if cached is not None:
+            birdstamp_perf.plog(
+                "[reuse-preview-image] path=%s signature=%s prior_decodes=%s",
+                path,
+                signature,
+                counts.get(signature, 0),
+            )
+            return cached.copy()
+
+        with birdstamp_perf.span("decode_preview", path=str(path)):
+            image = decode_image_for_preview(path, max_long_edge=_PREVIEW_DECODE_MAX_LONG_EDGE, decoder="auto")
+        if len(cache) >= _SOURCE_IMAGE_CACHE_MAX:
+            oldest = next(iter(cache))
+            del cache[oldest]
+        cache[signature] = image
+        counts[signature] = int(counts.get(signature, 0)) + 1
+        birdstamp_perf.plog(
+            "[decode_preview] path=%s signature=%s decode_count=%s",
+            path,
+            signature,
+            counts[signature],
+        )
+        return image.copy()
+
+    def _preview_pixmap_max_pixels(self) -> int:
+        label = getattr(self, "preview_label", None)
+        viewport_budget = 0
+        if label is not None:
+            viewport_budget = (max(1, int(label.width())) * 2) * (max(1, int(label.height())) * 2)
+        if viewport_budget <= 0:
+            return _PREVIEW_PIXMAP_MAX_PIXELS
+        return min(viewport_budget, _PREVIEW_PIXMAP_MAX_PIXELS)
+
+    def _schedule_async_bird_detect(self, path: Path, source_image: Image.Image) -> None:
+        signature = self._source_signature(path)
+        if signature in self._bird_box_cache:
+            return
+        worker = getattr(self, "_bird_detect_worker", None)
+        if worker is not None and worker.isRunning():
+            worker.requestInterruption()
+            worker.wait(50)
+        from birdstamp.gui.bird_detect_worker import BirdDetectWorker
+
+        new_worker = BirdDetectWorker(signature, source_image.copy(), parent=self)
+        new_worker.result_ready.connect(self._on_async_bird_box_ready)
+        self._bird_detect_worker = new_worker
+        new_worker.start()
+
+    def _on_async_bird_box_ready(self, signature: str, bird_box: object) -> None:
+        if self.sender() is not getattr(self, "_bird_detect_worker", None):
+            return
+        self._bird_box_cache[signature] = bird_box  # type: ignore[assignment]
+        if self.current_path is None or self._source_signature(self.current_path) != signature:
+            return
+        self._refresh_preview_bird_overlay()
+
+    def _refresh_preview_bird_overlay(self) -> None:
+        if self.current_path is None or self.current_source_image is None:
+            return
+        show_bird_box_check = getattr(self, "show_bird_box_check", None)
+        if show_bird_box_check is None or not show_bird_box_check.isChecked():
+            return
+        pad_top, pad_bottom, pad_left, pad_right = self._current_preview_outer_pad()
+        preview_bird_box = _transform_source_box_after_crop_padding(
+            self._bird_box_cache.get(self._source_signature(self.current_path)),
+            crop_box=None,
+            source_width=self.current_source_image.width,
+            source_height=self.current_source_image.height,
+            pt=pad_top,
+            pb=pad_bottom,
+            pl=pad_left,
+            pr=pad_right,
+        )
+        state = self.preview_overlay_state
+        self.preview_overlay_state = EditorPreviewOverlayState(
+            focus_box=state.focus_box,
+            bird_box=preview_bird_box,
+            crop_effect_box=state.crop_effect_box,
+        )
+        self._refresh_preview_label(preserve_view=True)
+
+    def _drop_source_image_cache_for_keys(self, keys: Iterable[str]) -> None:
+        cache = getattr(self, "_source_image_cache", None)
+        if not isinstance(cache, dict) or not keys:
+            return
+        key_set = {str(key) for key in keys if str(key)}
+        for signature in list(cache.keys()):
+            for key in key_set:
+                if signature.startswith(f"{key}:"):
+                    cache.pop(signature, None)
+                    break
 
     def _preview_cache_file_for_source(self, path: Path, signature: str) -> Path:
         digest = hashlib.sha1(signature.encode("utf-8")).hexdigest()[:12]
@@ -344,6 +577,20 @@ class _BirdStampRendererMixin:
             return None
         return self._bird_box_for_path(self.current_path, source_image=self.current_source_image)
 
+    def _show_instant_placeholder_preview(self) -> None:
+        """冷启动瞬间显示内置占位图，不读盘、不跑元数据。"""
+        self.placeholder_path = None
+        self.current_path = None
+        self.current_photo_info = None
+        self.current_source_image = None
+        self.current_raw_metadata = {}
+        self.current_metadata_context = {}
+        self._preview_crop_size = None
+        self.preview_pixmap = _pil_to_qpixmap(self.placeholder)
+        self.preview_overlay_state = EditorPreviewOverlayState()
+        self._invalidate_original_mode_cache()
+        self._refresh_preview_label(reset_view=True)
+
     def _show_placeholder_preview(self) -> None:
         """激活 images/default.jpg 作为当前图像，走与真实照片完全相同的渲染流程。
         不将其加入照片列表，self.placeholder_path 标记当前处于占位状态。
@@ -352,14 +599,17 @@ class _BirdStampRendererMixin:
         src = _default_placeholder_path()
         if src.exists():
             try:
-                image = decode_image(src, decoder="auto")
+                image = self._decode_image_for_preview(src)
                 self.placeholder_path: "Path | None" = src
                 self.current_path = src
                 self.current_source_image = image
                 self._invalidate_original_mode_cache()
                 self.current_raw_metadata = self._load_raw_metadata(src)
                 self.current_photo_info = _template_context.ensure_photo_info(src, raw_metadata=self.current_raw_metadata)
-                self.current_metadata_context = _build_metadata_context(self.current_photo_info, self.current_raw_metadata)
+                self.current_metadata_context = self._cached_metadata_context(
+                    self.current_photo_info,
+                    self.current_raw_metadata,
+                )
                 # 走正常渲染流程（current_path 已设置，不会再次调用本函数）
                 self.render_preview()
                 return
@@ -479,6 +729,23 @@ class _BirdStampRendererMixin:
             "crop_box": _template_context.normalize_crop_box(getattr(self, "_crop_box_override", None)),
             "custom_center_x": float(custom_center[0]) if center_mode == _CENTER_MODE_CUSTOM and custom_center else None,
             "custom_center_y": float(custom_center[1]) if center_mode == _CENTER_MODE_CUSTOM and custom_center else None,
+            **self._dejitter_reference_settings(),
+        }
+
+    def _dejitter_reference_settings(self) -> dict[str, Any]:
+        """构建去抖动参考区相关的全局导出设置（源图归一化坐标）。"""
+        regions = [
+            [float(box[0]), float(box[1]), float(box[2]), float(box[3])]
+            for box in (getattr(self, "_dejitter_reference_regions", ()) or ())
+            if len(box) == 4
+        ]
+        active = bool(regions)
+        source = getattr(self, "_dejitter_reference_source", None)
+        return {
+            DEJITTER_STRATEGY_KEY: "reference_region" if active else "median",
+            DEJITTER_REFERENCE_ENABLED_KEY: active,
+            DEJITTER_REFERENCE_REGIONS_KEY: regions,
+            DEJITTER_REFERENCE_SOURCE_KEY: str(source) if (active and source) else None,
         }
 
     def _photo_override_settings_from_snapshot(self, settings: dict[str, Any]) -> dict[str, Any]:
@@ -496,6 +763,10 @@ class _BirdStampRendererMixin:
         normalized.pop("max_long_edge", None)
         normalized.pop("uniform_auto_crop", None)
         normalized.pop("auto_crop_stabilization", None)
+        normalized.pop(DEJITTER_STRATEGY_KEY, None)
+        normalized.pop(DEJITTER_REFERENCE_ENABLED_KEY, None)
+        normalized.pop(DEJITTER_REFERENCE_REGIONS_KEY, None)
+        normalized.pop(DEJITTER_REFERENCE_SOURCE_KEY, None)
         return normalized
 
     def _clone_render_settings(self, settings: dict[str, Any]) -> dict[str, Any]:
@@ -555,6 +826,32 @@ class _BirdStampRendererMixin:
             "crop_box": _template_context.normalize_crop_box(settings.get("crop_box")),
             "custom_center_x": float(custom_center_x) if custom_center_x is not None else None,
             "custom_center_y": float(custom_center_y) if custom_center_y is not None else None,
+            **self._clone_dejitter_reference_settings(settings),
+        }
+
+    @staticmethod
+    def _clone_dejitter_reference_settings(settings: dict[str, Any]) -> dict[str, Any]:
+        regions: list[list[float]] = []
+        raw_regions = settings.get(DEJITTER_REFERENCE_REGIONS_KEY)
+        if isinstance(raw_regions, (list, tuple)):
+            for item in raw_regions:
+                if isinstance(item, (list, tuple)) and len(item) == 4:
+                    try:
+                        regions.append([float(item[0]), float(item[1]), float(item[2]), float(item[3])])
+                    except (TypeError, ValueError):
+                        continue
+        strategy = str(settings.get(DEJITTER_STRATEGY_KEY) or "median").strip().lower()
+        enabled = _parse_bool_value(settings.get(DEJITTER_REFERENCE_ENABLED_KEY), False) and bool(regions)
+        if enabled:
+            strategy = "reference_region"
+        elif strategy not in {"median", "reference_region"}:
+            strategy = "median"
+        source = settings.get(DEJITTER_REFERENCE_SOURCE_KEY)
+        return {
+            DEJITTER_STRATEGY_KEY: strategy,
+            DEJITTER_REFERENCE_ENABLED_KEY: enabled,
+            DEJITTER_REFERENCE_REGIONS_KEY: regions if enabled else [],
+            DEJITTER_REFERENCE_SOURCE_KEY: str(source) if (enabled and source) else None,
         }
 
     def _normalize_render_settings(self, raw: Any, fallback: dict[str, Any]) -> dict[str, Any]:
@@ -636,6 +933,16 @@ class _BirdStampRendererMixin:
             settings["crop_padding_fill"] = _safe_color(str(raw.get("crop_padding_fill", "#FFFFFF")), "#FFFFFF")
         if not _parse_bool_value(settings.get("uniform_auto_crop"), False):
             settings["auto_crop_stabilization"] = 0
+        if any(
+            key in raw
+            for key in (
+                DEJITTER_STRATEGY_KEY,
+                DEJITTER_REFERENCE_ENABLED_KEY,
+                DEJITTER_REFERENCE_REGIONS_KEY,
+                DEJITTER_REFERENCE_SOURCE_KEY,
+            )
+        ):
+            settings.update(self._clone_dejitter_reference_settings(raw))
         return settings
 
     def _render_settings_for_path(self, path: Path | None, *, prefer_current_ui: bool) -> dict[str, Any]:
@@ -738,6 +1045,7 @@ class _BirdStampRendererMixin:
             fallback_name=template_name,
         )
         self._crop_box_override = _template_context.normalize_crop_box(normalized.get("crop_box"))
+        self._restore_dejitter_reference_from_settings(normalized)
         if normalized["center_mode"] == _CENTER_MODE_CUSTOM:
             cx = normalized.get("custom_center_x")
             cy = normalized.get("custom_center_y")
@@ -747,6 +1055,28 @@ class _BirdStampRendererMixin:
                 self._custom_center = None
         else:
             self._custom_center = None
+
+    def _restore_dejitter_reference_from_settings(self, settings: dict[str, Any]) -> None:
+        """从 render settings 恢复去抖动参考区状态（源图归一化坐标）。"""
+        regions = []
+        raw_regions = settings.get(DEJITTER_REFERENCE_REGIONS_KEY)
+        if isinstance(raw_regions, (list, tuple)):
+            for item in raw_regions:
+                if isinstance(item, (list, tuple)) and len(item) == 4:
+                    try:
+                        regions.append((float(item[0]), float(item[1]), float(item[2]), float(item[3])))
+                    except (TypeError, ValueError):
+                        continue
+        enabled = _parse_bool_value(settings.get(DEJITTER_REFERENCE_ENABLED_KEY), False) and bool(regions)
+        self._dejitter_reference_regions = tuple(regions) if enabled else ()
+        source = settings.get(DEJITTER_REFERENCE_SOURCE_KEY)
+        self._dejitter_reference_source = str(source) if (enabled and source) else None
+        # 参考区被禁用且当前正处于参考区模式时，回退到「选择模式」。
+        if not enabled:
+            getter = getattr(self, "_current_edit_mode_id", None)
+            setter = getattr(self, "_set_edit_mode_button_checked", None)
+            if callable(getter) and callable(setter) and getter() == EDIT_MODE_REFERENCE_REGION:
+                setter(EDIT_MODE_NONE)
 
     def _compose_preview_with_crop_aligned_overlay(
         self,
@@ -941,7 +1271,7 @@ class _BirdStampRendererMixin:
             source_image = self.current_source_image.copy()
             raw_metadata = dict(self.current_raw_metadata)
         else:
-            source_image = decode_image(path, decoder="auto")
+            source_image = self._decode_image_for_path(path)
             raw_metadata = self._load_raw_metadata(path)
 
         crop_box, outer_pad = self._compute_crop_plan_for_image(
@@ -993,92 +1323,121 @@ class _BirdStampRendererMixin:
             self._set_status("请选择照片后再预览。")
             return
 
-        crop_box: tuple[float, float, float, float] | None = None
-        outer_pad: tuple[int, int, int, int] = (0, 0, 0, 0)
-        try:
-            if self.current_source_image is None:
-                raise RuntimeError("缺少当前原图数据")
-            settings = self._render_settings_for_path(self.current_path, prefer_current_ui=True)
-            preview_settings = self._preview_render_settings(settings)
-            source_image = self.current_source_image.copy()
-            raw_metadata = dict(self.current_raw_metadata)
-            crop_box, outer_pad = self._compute_crop_plan_for_image(
-                path=self.current_path,
-                image=self.current_source_image,
-                raw_metadata=raw_metadata,
-                settings=preview_settings,
-            )
-            # 预览保留完整画布用于裁切框编辑，但其它 stage 按管线顺序渲染。
-            rendered = self._render_preview_pipeline_image(
-                source_image,
-                raw_metadata,
-                settings=preview_settings,
-                source_image=self.current_source_image,
+        with birdstamp_perf.span("render_preview", path=str(self.current_path)):
+            crop_box: tuple[float, float, float, float] | None = None
+            outer_pad: tuple[int, int, int, int] = (0, 0, 0, 0)
+            try:
+                if self.current_source_image is None:
+                    raise RuntimeError("缺少当前原图数据")
+                settings = self._render_settings_for_path(self.current_path, prefer_current_ui=True)
+                preview_settings = self._preview_render_settings(settings)
+                with birdstamp_perf.span("render_preview.copy_source"):
+                    source_image = self.current_source_image.copy()
+                raw_metadata = dict(self.current_raw_metadata)
+                with birdstamp_perf.span("render_preview.crop_plan"):
+                    crop_box, outer_pad = self._compute_crop_plan_for_image(
+                        path=self.current_path,
+                        image=self.current_source_image,
+                        raw_metadata=raw_metadata,
+                        settings=preview_settings,
+                    )
+                # 预览保留完整画布用于裁切框编辑，但其它 stage 按管线顺序渲染。
+                with birdstamp_perf.span("render_preview.pipeline"):
+                    rendered = self._render_preview_pipeline_image(
+                        source_image,
+                        raw_metadata,
+                        settings=preview_settings,
+                        source_image=self.current_source_image,
+                        crop_box=crop_box,
+                        outer_pad=outer_pad,
+                    )
+            except Exception as exc:
+                self._preview_crop_size = None
+                self.preview_overlay_state = EditorPreviewOverlayState()
+                self._show_error("预览失败", str(exc))
+                self._set_status(f"预览失败: {exc}")
+                return
+
+            self.last_rendered = rendered
+            self._preview_outer_pad = outer_pad
+            self._preview_crop_size = self._preview_pipeline_output_size(
+                source_size=(self.current_source_image.width, self.current_source_image.height),
                 crop_box=crop_box,
                 outer_pad=outer_pad,
+                settings=preview_settings,
             )
-        except Exception as exc:
-            self._preview_crop_size = None
-            self.preview_overlay_state = EditorPreviewOverlayState()
-            self._show_error("预览失败", str(exc))
-            self._set_status(f"预览失败: {exc}")
-            return
-
-        self.last_rendered = rendered
-        self._preview_crop_size = self._preview_pipeline_output_size(
-            source_size=(self.current_source_image.width, self.current_source_image.height),
-            crop_box=crop_box,
-            outer_pad=outer_pad,
-            settings=preview_settings,
-        )
-        pad_top, pad_bottom, pad_left, pad_right = outer_pad
-        focus_camera_type = _resolve_focus_camera_type_from_metadata(raw_metadata)
-        # 注意：预览图是经过 EXIF Orientation 纠正后的显示坐标，不能直接用当前图像尺寸调用
-        # extract_focus_box()。这里必须走 extract_focus_box_for_display()，否则“显示对焦点”会再次错位。
-        preview_focus_box = _transform_source_box_after_crop_padding(
-            _extract_focus_box_for_display(
-                raw_metadata,
-                self.current_source_image.width,
-                self.current_source_image.height,
-                camera_type=focus_camera_type,
-            ),
-            crop_box=None,
-            source_width=self.current_source_image.width,
-            source_height=self.current_source_image.height,
-            pt=pad_top,
-            pb=pad_bottom,
-            pl=pad_left,
-            pr=pad_right,
-        )
-        preview_bird_box = _transform_source_box_after_crop_padding(
-            self._bird_box_for_path(self.current_path, source_image=self.current_source_image),
-            crop_box=None,
-            source_width=self.current_source_image.width,
-            source_height=self.current_source_image.height,
-            pt=pad_top,
-            pb=pad_bottom,
-            pl=pad_left,
-            pr=pad_right,
-        )
-        focus_stage_draws = (
-            self._is_preview_stage_enabled(preview_settings, STAGE_FOCUS_OVERLAY_ID)
-            and _parse_bool_value(preview_settings.get("draw_focus"), False)
-        )
-        self.preview_overlay_state = EditorPreviewOverlayState(
-            focus_box=None if focus_stage_draws else preview_focus_box,
-            bird_box=preview_bird_box,
-            crop_effect_box=crop_box,
-        )
-
-        self.preview_pixmap = _pil_to_qpixmap(rendered)
-        fit_reset = self._pending_preview_fit_reset
-        self._pending_preview_fit_reset = False
-        self._refresh_preview_label(reset_view=True, force_fit=fit_reset)
-        output_size = self._preview_crop_size
-        output_text = f" | 输出 {output_size[0]}x{output_size[1]}" if output_size is not None else ""
-        if pad_top or pad_bottom or pad_left or pad_right:
-            self._set_status(
-                f"预览完成: {rendered.width}x{rendered.height}{output_text} | 外填充 上{pad_top}px 下{pad_bottom}px 左{pad_left}px 右{pad_right}px"
+            pad_top, pad_bottom, pad_left, pad_right = outer_pad
+            focus_camera_type = _resolve_focus_camera_type_from_metadata(raw_metadata)
+            # 注意：预览图是经过 EXIF Orientation 纠正后的显示坐标，不能直接用当前图像尺寸调用
+            # extract_focus_box()。这里必须走 extract_focus_box_for_display()，否则“显示对焦点”会再次错位。
+            preview_focus_box = _transform_source_box_after_crop_padding(
+                _extract_focus_box_for_display(
+                    raw_metadata,
+                    self.current_source_image.width,
+                    self.current_source_image.height,
+                    camera_type=focus_camera_type,
+                ),
+                crop_box=None,
+                source_width=self.current_source_image.width,
+                source_height=self.current_source_image.height,
+                pt=pad_top,
+                pb=pad_bottom,
+                pl=pad_left,
+                pr=pad_right,
             )
-        else:
-            self._set_status(f"预览完成: {rendered.width}x{rendered.height}{output_text}")
+            with birdstamp_perf.span("render_preview.bird_box"):
+                show_bird_box_check = getattr(self, "show_bird_box_check", None)
+                show_bird_box = bool(show_bird_box_check is not None and show_bird_box_check.isChecked())
+                preview_bird_box = None
+                if show_bird_box:
+                    signature = self._source_signature(self.current_path)
+                    if signature in self._bird_box_cache:
+                        preview_bird_box = _transform_source_box_after_crop_padding(
+                            self._bird_box_cache.get(signature),
+                            crop_box=None,
+                            source_width=self.current_source_image.width,
+                            source_height=self.current_source_image.height,
+                            pt=pad_top,
+                            pb=pad_bottom,
+                            pl=pad_left,
+                            pr=pad_right,
+                        )
+                    elif not (
+                        callable(getattr(self, "_is_placeholder_active", None))
+                        and self._is_placeholder_active()
+                    ):
+                        self._schedule_async_bird_detect(self.current_path, self.current_source_image)
+            focus_stage_draws = (
+                self._is_preview_stage_enabled(preview_settings, STAGE_FOCUS_OVERLAY_ID)
+                and _parse_bool_value(preview_settings.get("draw_focus"), False)
+            )
+            self.preview_overlay_state = EditorPreviewOverlayState(
+                focus_box=None if focus_stage_draws else preview_focus_box,
+                bird_box=preview_bird_box,
+                crop_effect_box=crop_box,
+            )
+
+            with birdstamp_perf.span("render_preview.pil_to_qpixmap"):
+                max_pixels = self._preview_pixmap_max_pixels()
+                birdstamp_perf.plog(
+                    "pil_to_qpixmap budget=%s rendered=%sx%s",
+                    max_pixels,
+                    rendered.width,
+                    rendered.height,
+                )
+                self.preview_pixmap = _pil_to_qpixmap(
+                    rendered,
+                    max_pixels=max_pixels,
+                )
+            fit_reset = self._pending_preview_fit_reset
+            self._pending_preview_fit_reset = False
+            with birdstamp_perf.span("render_preview.refresh_label"):
+                self._refresh_preview_label(reset_view=True, force_fit=fit_reset)
+            output_size = self._preview_crop_size
+            output_text = f" | 输出 {output_size[0]}x{output_size[1]}" if output_size is not None else ""
+            if pad_top or pad_bottom or pad_left or pad_right:
+                self._set_status(
+                    f"预览完成: {rendered.width}x{rendered.height}{output_text} | 外填充 上{pad_top}px 下{pad_bottom}px 左{pad_left}px 右{pad_right}px"
+                )
+            else:
+                self._set_status(f"预览完成: {rendered.width}x{rendered.height}{output_text}")

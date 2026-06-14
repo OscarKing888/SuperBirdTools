@@ -90,7 +90,7 @@ class EditorPhotoListMetadataLoader(QThread):
         if not chunk:
             return {}
         try:
-            raw_batch = read_batch_metadata(chunk, tags=_PHOTO_LIST_METADATA_TAGS, use_cache=False)
+            raw_batch = read_batch_metadata(chunk, tags=_PHOTO_LIST_METADATA_TAGS, use_cache=True)
         except Exception as exc:
             _log.warning("[EditorPhotoListMetadataLoader._read_chunk] batch read failed: %s", exc)
             raw_batch = {}

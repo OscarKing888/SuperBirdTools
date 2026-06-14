@@ -11,14 +11,15 @@ import tempfile
 import math
 import threading
 import time
-from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, Callable, Mapping
 
+import numpy as np
 from PIL import Image, ImageColor
 
 from app_common.log import get_logger
+from birdstamp import dejitter as _dejitter
 from birdstamp.config import get_app_dir, get_app_resource_dir, get_user_data_dir
 from birdstamp.decoders.image_decoder import decode_image
 from birdstamp.export_frame_cache import (
@@ -49,147 +50,29 @@ from birdstamp.image_pipeline import (
 )
 from birdstamp.subprocess_utils import decode_subprocess_output
 
+from .constants import *
+from .video_export_cancelled_error import VideoExportCancelledError
+from .video_export_options import VideoExportOptions
+from .video_export_progress import VideoExportProgress, VideoExportProgressCallback
+from .video_frame_job import VideoFrameJob
+
 _log = get_logger("video_export")
 
-DEFAULT_VIDEO_BACKGROUND_COLOR = "#000000"
-DEFAULT_VIDEO_RENDER_WORKERS = 0
-FFMPEG_ENV_VAR = "BIRDSTAMP_FFMPEG"
-_PLATFORM_TOOL_SUBDIR = {
-    "darwin": "macos",
-    "win32": "windows",
-}
-_BIRD_DETECT_WARNING_EMITTED = False
-_VIDEO_RENDER_CACHE_VERSION = 2
-_VIDEO_RENDER_CACHE_ROOT_NAME = "birdstamp_export_cache"
 
-_build_metadata_context = editor_utils.build_metadata_context
-_safe_color = editor_utils.safe_color
-_path_key = editor_utils.path_key
-_parse_ratio_value = editor_core.parse_ratio_value
-_is_ratio_free = editor_core.is_ratio_free
-_is_ratio_no_crop = editor_core.is_ratio_no_crop
-_crop_box_has_effect = editor_core.crop_box_has_effect
-_crop_plan_from_override = editor_core._crop_plan_from_override
-_parse_bool_value = editor_core.parse_bool_value
-_parse_padding_value = editor_core.parse_padding_value
-_normalize_center_mode = editor_core.normalize_center_mode
-_resize_fit = editor_core.resize_fit
-_pad_image = editor_core.pad_image
-_crop_image_by_normalized_box = editor_core.crop_image_by_normalized_box
-_compute_crop_output_size = editor_core.compute_crop_output_size
-_compute_ratio_crop_box = editor_core.compute_ratio_crop_box
-_draw_focus_box_overlay = editor_core.draw_focus_box_overlay
-_expand_unit_box_to_unclamped_pixels = editor_core.expand_unit_box_to_unclamped_pixels
-_normalize_unit_box = editor_core.normalize_unit_box
-_normalize_extended_unit_box = editor_core.normalize_extended_unit_box
-_box_center = editor_core.box_center
-_get_focus_point_for_display = editor_core.get_focus_point_for_display
-_resolve_focus_box_after_processing = editor_core.resolve_focus_box_after_processing
-_resolve_focus_camera_type_from_metadata = editor_core.resolve_focus_camera_type_from_metadata
-_detect_primary_bird_box = editor_core.detect_primary_bird_box
-_get_bird_detector_error_message = editor_core.get_bird_detector_error_message
-_CENTER_MODE_IMAGE = editor_core.CENTER_MODE_IMAGE
-_CENTER_MODE_FOCUS = editor_core.CENTER_MODE_FOCUS
-_CENTER_MODE_BIRD = editor_core.CENTER_MODE_BIRD
-_CENTER_MODE_CUSTOM = editor_core.CENTER_MODE_CUSTOM
-_DEFAULT_CROP_PADDING_PX = editor_core.DEFAULT_CROP_PADDING_PX
-_DEFAULT_TEMPLATE_CENTER_MODE = editor_template.DEFAULT_TEMPLATE_CENTER_MODE
-_DEFAULT_TEMPLATE_MAX_LONG_EDGE = editor_template.DEFAULT_TEMPLATE_MAX_LONG_EDGE
-_default_template_payload = editor_template.default_template_payload
-_normalize_template_payload = editor_template.normalize_template_payload
-_deep_copy_payload = editor_template.deep_copy_payload
-_load_template_payload = editor_template.load_template_payload
-_render_template_overlay = editor_template.render_template_overlay
+def _video_export_callable(name: str) -> Callable[..., Any]:
+    """经包命名空间解析可调用对象，便于测试 patch ``birdstamp.video_export`` 上的符号。"""
+    from birdstamp import video_export as _video_export
 
-STAGE_TEMPLATE_CROP_ENABLED_KEY = "stage_template_crop_enabled"
-STAGE_RESIZE_LIMIT_ENABLED_KEY = "stage_resize_limit_enabled"
-STAGE_TEMPLATE_OVERLAY_ENABLED_KEY = "stage_template_overlay_enabled"
-STAGE_FOCUS_OVERLAY_ENABLED_KEY = "stage_focus_overlay_enabled"
-PIPELINE_STAGE_ORDER_KEY = "pipeline_stage_order"
-PIPELINE_STAGE_ENABLED_KEY = "pipeline_stage_enabled"
-EXPORT_STAGE_ID_KEY = "selected_export_stage_id"
-STAGE_TEMPLATE_CROP_ID = "template_crop"
-STAGE_RESIZE_LIMIT_ID = "resize_limit"
-STAGE_TEMPLATE_OVERLAY_ID = "template_overlay"
-STAGE_FOCUS_OVERLAY_ID = "focus_overlay"
-DEFAULT_PIPELINE_STAGE_ORDER = (
-    STAGE_TEMPLATE_CROP_ID,
-    STAGE_RESIZE_LIMIT_ID,
-    STAGE_TEMPLATE_OVERLAY_ID,
-    STAGE_FOCUS_OVERLAY_ID,
-)
-EXPORT_STAGE_PNG_ID = "export_png"
-EXPORT_STAGE_GIF_ID = "export_gif"
-EXPORT_STAGE_VIDEO_ID = "export_video"
-DEFAULT_EXPORT_STAGE_ID = EXPORT_STAGE_PNG_ID
+    return getattr(_video_export, name)
 
 
-@dataclass(slots=True)
-class VideoFrameJob:
-    """单帧渲染所需的最小快照。"""
-
-    path: Path
-    settings: dict[str, Any]
-    raw_metadata: dict[str, Any]
-    metadata_context: dict[str, str]
-    photo_info: _template_context.PhotoInfo | None = None
-    source_image: Image.Image | None = None
-    crop_plan: tuple[tuple[float, float, float, float] | None, tuple[int, int, int, int]] | None = None
-    source_paths: tuple[Path, ...] = ()
 
 
-@dataclass(slots=True)
-class VideoExportOptions:
-    """视频编码参数。"""
-
-    output_path: Path
-    container: str = "mp4"
-    codec: str = "h264"
-    fps: float = 25.0
-    preset: str = "medium"
-    crf: int = 20
-    frame_size_mode: str = "auto"
-    frame_width: int = 0
-    frame_height: int = 0
-    background_color: str = DEFAULT_VIDEO_BACKGROUND_COLOR
-    render_workers: int = DEFAULT_VIDEO_RENDER_WORKERS
-    overwrite: bool = True
-    preserve_temp_files: bool = True
-
-    def normalized_output_path(self) -> Path:
-        container = str(self.container or "mp4").strip().lower().lstrip(".")
-        output = self.output_path.resolve(strict=False)
-        if output.suffix.lower() != f".{container}":
-            output = output.with_suffix(f".{container}")
-        return output
 
 
-@dataclass(slots=True)
-class VideoExportProgress:
-    """导出进度通知。"""
-
-    phase: str
-    current: int
-    total: int
-    message: str
 
 
-VideoExportProgressCallback = Callable[[VideoExportProgress], None]
 
-
-class VideoExportCancelledError(RuntimeError):
-    """视频导出已被用户中断。"""
-
-    def __init__(
-        self,
-        message: str,
-        *,
-        preserved_frames_dir: Path | None = None,
-        partial_output_path: Path | None = None,
-    ) -> None:
-        super().__init__(message)
-        self.preserved_frames_dir = preserved_frames_dir
-        self.partial_output_path = partial_output_path
 
 
 def _platform_tool_subdir() -> str:
@@ -209,7 +92,7 @@ def ffmpeg_install_script_path() -> Path | None:
     candidates = [
         get_app_resource_dir() / "scripts_dev" / "install_ffmpeg_tool.py",
         get_app_dir() / "scripts_dev" / "install_ffmpeg_tool.py",
-        Path(__file__).resolve().parent.parent / "scripts_dev" / "install_ffmpeg_tool.py",
+        Path(__file__).resolve().parent.parent.parent / "scripts_dev" / "install_ffmpeg_tool.py",
         Path.cwd() / "scripts_dev" / "install_ffmpeg_tool.py",
     ]
     seen: set[str] = set()
@@ -401,7 +284,7 @@ def _source_signature(path: Path) -> str:
 def _global_export_settings_from_jobs(jobs: list[VideoFrameJob]) -> dict[str, Any]:
     if not jobs:
         return global_export_settings_from_settings({})
-    return global_export_settings_from_settings(jobs[0].settings)
+    return global_export_settings_from_settings(_clone_render_settings(jobs[0].settings))
 
 
 def _render_cache_key(jobs: list[VideoFrameJob], options: VideoExportOptions) -> str:
@@ -521,6 +404,79 @@ def normalize_export_stage_id(value: Any) -> str:
     return DEFAULT_EXPORT_STAGE_ID
 
 
+def _normalize_reference_regions(value: Any) -> list[list[float]]:
+    """把去抖动参考区列表归一化为有效的 0..1 box 列表（顺序保留）。"""
+    regions: list[list[float]] = []
+    if not isinstance(value, (list, tuple)):
+        return regions
+    for item in value:
+        if not isinstance(item, (list, tuple)) or len(item) != 4:
+            continue
+        try:
+            box = (float(item[0]), float(item[1]), float(item[2]), float(item[3]))
+        except (TypeError, ValueError):
+            continue
+        normalized = _normalize_unit_box(box)
+        if normalized is None:
+            continue
+        if (normalized[2] - normalized[0]) <= 1e-4 or (normalized[3] - normalized[1]) <= 1e-4:
+            continue
+        regions.append([float(normalized[0]), float(normalized[1]), float(normalized[2]), float(normalized[3])])
+    return regions
+
+
+def _stabilization_eligible(settings: dict[str, Any]) -> bool:
+    """是否可对该帧做裁切中心稳定化（固定比例、无手动裁切框覆盖）。"""
+    ratio = _parse_ratio_value(settings.get("ratio"))
+    if ratio is None or _is_ratio_free(ratio) or _is_ratio_no_crop(ratio):
+        return False
+    if _crop_box_has_effect(settings.get("crop_box")):
+        return False
+    return True
+
+
+def dejitter_reference_active(settings: dict[str, Any] | None) -> bool:
+    """是否启用了"参考区特征对齐"去抖动（策略为参考区、开关开启且存在有效参考区）。"""
+    cloned = _clone_render_settings(settings if isinstance(settings, dict) else {})
+    strategy = _dejitter.resolve_dejitter_strategy(cloned.get(DEJITTER_STRATEGY_KEY))
+    return bool(
+        strategy.requires_reference_regions
+        and _parse_bool_value(cloned.get(DEJITTER_REFERENCE_ENABLED_KEY), False)
+        and (cloned.get(DEJITTER_REFERENCE_REGIONS_KEY) or [])
+    )
+
+
+def crop_plan_precompute_required(settings: dict[str, Any] | None) -> bool:
+    """统一裁切或参考区去抖动任一启用时，都需要批量预计算裁切计划。"""
+    raw = settings if isinstance(settings, dict) else {}
+    return _parse_bool_value(raw.get("uniform_auto_crop"), False) or dejitter_reference_active(raw)
+
+
+def _extract_region_patch(
+    image: Image.Image,
+    box: tuple[float, float, float, float],
+    patch_size: int,
+) -> "np.ndarray | None":
+    """从源图按归一化 box 裁取灰度 patch，缩放为 patch_size 方阵用于特征对齐。"""
+    width = int(image.width)
+    height = int(image.height)
+    if width < 2 or height < 2:
+        return None
+    left = max(0, min(width - 1, int(round(float(box[0]) * width))))
+    top = max(0, min(height - 1, int(round(float(box[1]) * height))))
+    right = max(left + 1, min(width, int(round(float(box[2]) * width))))
+    bottom = max(top + 1, min(height, int(round(float(box[3]) * height))))
+    try:
+        patch = image.crop((left, top, right, bottom)).convert("L")
+        if patch.width < 2 or patch.height < 2:
+            return None
+        size = max(2, int(patch_size))
+        patch = patch.resize((size, size))
+        return np.asarray(patch, dtype=np.float64)
+    except Exception:
+        return None
+
+
 def _clone_render_settings(settings: dict[str, Any]) -> dict[str, Any]:
     template_name = str(settings.get("template_name") or "default").strip() or "default"
     template_payload_raw = settings.get("template_payload")
@@ -555,16 +511,42 @@ def _clone_render_settings(settings: dict[str, Any]) -> dict[str, Any]:
         except Exception:
             crop_box = None
     uniform_auto_crop = _parse_bool_value(settings.get("uniform_auto_crop"), False)
+    dejitter_strategy = _dejitter.normalize_strategy_id(settings.get(DEJITTER_STRATEGY_KEY))
+    dejitter_reference_enabled = _parse_bool_value(settings.get(DEJITTER_REFERENCE_ENABLED_KEY), False)
+    reference_regions = _normalize_reference_regions(settings.get(DEJITTER_REFERENCE_REGIONS_KEY))
+    reference_active = dejitter_reference_enabled and bool(reference_regions)
+    reference_source_raw = settings.get(DEJITTER_REFERENCE_SOURCE_KEY)
+    reference_source = (
+        str(reference_source_raw).strip()
+        if reference_active and reference_source_raw
+        else None
+    )
     return {
         "template_name": template_name,
         "template_payload": _deep_copy_payload(template_payload),
         "draw_banner": _parse_bool_value(settings.get("draw_banner"), True),
         "draw_text": _parse_bool_value(settings.get("draw_text"), True),
         "draw_focus": _parse_bool_value(settings.get("draw_focus"), False),
-        STAGE_TEMPLATE_CROP_ENABLED_KEY: _parse_bool_value(settings.get(STAGE_TEMPLATE_CROP_ENABLED_KEY), True),
-        STAGE_RESIZE_LIMIT_ENABLED_KEY: _parse_bool_value(settings.get(STAGE_RESIZE_LIMIT_ENABLED_KEY), True),
-        STAGE_TEMPLATE_OVERLAY_ENABLED_KEY: _parse_bool_value(settings.get(STAGE_TEMPLATE_OVERLAY_ENABLED_KEY), True),
-        STAGE_FOCUS_OVERLAY_ENABLED_KEY: _parse_bool_value(settings.get(STAGE_FOCUS_OVERLAY_ENABLED_KEY), True),
+        STAGE_TEMPLATE_CROP_ENABLED_KEY: _resolve_stage_enabled(
+            settings,
+            stage_id=STAGE_TEMPLATE_CROP_ID,
+            enabled_key=STAGE_TEMPLATE_CROP_ENABLED_KEY,
+        ),
+        STAGE_RESIZE_LIMIT_ENABLED_KEY: _resolve_stage_enabled(
+            settings,
+            stage_id=STAGE_RESIZE_LIMIT_ID,
+            enabled_key=STAGE_RESIZE_LIMIT_ENABLED_KEY,
+        ),
+        STAGE_TEMPLATE_OVERLAY_ENABLED_KEY: _resolve_stage_enabled(
+            settings,
+            stage_id=STAGE_TEMPLATE_OVERLAY_ID,
+            enabled_key=STAGE_TEMPLATE_OVERLAY_ENABLED_KEY,
+        ),
+        STAGE_FOCUS_OVERLAY_ENABLED_KEY: _resolve_stage_enabled(
+            settings,
+            stage_id=STAGE_FOCUS_OVERLAY_ID,
+            enabled_key=STAGE_FOCUS_OVERLAY_ENABLED_KEY,
+        ),
         PIPELINE_STAGE_ORDER_KEY: list(normalize_pipeline_stage_order(settings.get(PIPELINE_STAGE_ORDER_KEY))),
         EXPORT_STAGE_ID_KEY: normalize_export_stage_id(settings.get(EXPORT_STAGE_ID_KEY)),
         "uniform_auto_crop": uniform_auto_crop,
@@ -584,7 +566,27 @@ def _clone_render_settings(settings: dict[str, Any]) -> dict[str, Any]:
         "crop_box": crop_box,
         "custom_center_x": float(custom_center_x) if custom_center_x is not None else None,
         "custom_center_y": float(custom_center_y) if custom_center_y is not None else None,
+        DEJITTER_STRATEGY_KEY: dejitter_strategy,
+        DEJITTER_REFERENCE_ENABLED_KEY: reference_active,
+        DEJITTER_REFERENCE_REGIONS_KEY: reference_regions if reference_active else [],
+        DEJITTER_REFERENCE_SOURCE_KEY: reference_source,
     }
+
+
+def _resolve_stage_enabled(
+    settings: Mapping[str, Any],
+    *,
+    stage_id: str,
+    enabled_key: str,
+    default: bool = True,
+) -> bool:
+    """解析 stage 开关：优先扁平 key，其次 pipeline_stage_enabled[stage_id]。"""
+    if enabled_key in settings:
+        return _parse_bool_value(settings.get(enabled_key), default)
+    nested = settings.get(PIPELINE_STAGE_ENABLED_KEY)
+    if isinstance(nested, dict) and stage_id in nested:
+        return _parse_bool_value(nested.get(stage_id), default)
+    return default
 
 
 def _should_draw_template_overlay(settings: dict[str, Any]) -> bool:
@@ -613,172 +615,12 @@ def _resolve_template_payload_for_render(
     return payload
 
 
-class TemplateCropStage(ImageProcStage):
-    stage_id = STAGE_TEMPLATE_CROP_ID
-    label = "模板裁切"
-    description = "根据模板比例、中心模式、照片级裁切框与留边设置生成裁切后的图像。"
-    enabled_option_key = None
-    enabled_by_default = True
-
-    def parameter_options(self) -> tuple[ImageProcOptionSpec, ...]:
-        return (
-            ImageProcOptionSpec(
-                key="template_name",
-                label="模板",
-                value_type="template",
-                default="default",
-                description="用于裁切参数、模板字段和照片级重载的当前模板。",
-            ),
-            ImageProcOptionSpec(
-                key="ratio",
-                label="裁切比例",
-                value_type="ratio",
-                default=None,
-                description="模板裁切比例；原比例、不裁切和自由比例由现有 ratio 选项表达。",
-            ),
-            ImageProcOptionSpec(
-                key="center_mode",
-                label="中心模式",
-                value_type="choice",
-                default=_DEFAULT_TEMPLATE_CENTER_MODE,
-                choices=(
-                    ImageProcOptionChoice("图像中心", _CENTER_MODE_IMAGE),
-                    ImageProcOptionChoice("焦点中心", _CENTER_MODE_FOCUS),
-                    ImageProcOptionChoice("鸟体中心", _CENTER_MODE_BIRD),
-                    ImageProcOptionChoice("自定义", _CENTER_MODE_CUSTOM),
-                ),
-            ),
-            ImageProcOptionSpec(key="crop_padding_top", label="上留边", value_type="int", default=0),
-            ImageProcOptionSpec(key="crop_padding_bottom", label="下留边", value_type="int", default=0),
-            ImageProcOptionSpec(key="crop_padding_left", label="左留边", value_type="int", default=0),
-            ImageProcOptionSpec(key="crop_padding_right", label="右留边", value_type="int", default=0),
-            ImageProcOptionSpec(key="crop_padding_fill", label="留边颜色", value_type="color", default="#FFFFFF"),
-        )
-
-    def process(self, context: ImageProcContext) -> ImageProcContext:
-        settings = _clone_render_settings(context.settings)
-        raw_metadata = dict(context.raw_metadata or {})
-        precomputed_crop_plan = _normalize_precomputed_crop_plan(context.crop_plan)
-        if precomputed_crop_plan is None:
-            precomputed_crop_plan = _normalize_precomputed_crop_plan(context.precomputed.get("crop_plan"))
-
-        if precomputed_crop_plan is None:
-            crop_box, outer_pad = _compute_crop_plan_for_image(
-                path=context.source_path,
-                image=context.image,
-                raw_metadata=raw_metadata,
-                settings=settings,
-                bird_box_cache=_context_bird_box_cache(context),
-                bird_box_lock=context.bird_box_lock,
-            )
-        else:
-            crop_box, outer_pad = precomputed_crop_plan
-
-        context.crop_plan = (crop_box, outer_pad)
-        context.crop_box = crop_box
-        context.outer_pad = outer_pad
-        context.precomputed["crop_plan"] = (crop_box, outer_pad)
-
-        top, bottom, left, right = outer_pad
-        image = context.image
-        if top or bottom or left or right:
-            fill = str(settings.get("crop_padding_fill") or "#FFFFFF").strip() or "#FFFFFF"
-            image = _pad_image(image, top=top, bottom=bottom, left=left, right=right, fill=fill)
-        context.image = _crop_image_by_normalized_box(image, crop_box)
-        return context
 
 
-class ResizeLimitStage(ImageProcStage):
-    stage_id = STAGE_RESIZE_LIMIT_ID
-    label = "尺寸限制"
-    description = "在裁切后按最长边限制缩放图像。"
-    enabled_option_key = STAGE_RESIZE_LIMIT_ENABLED_KEY
-    enabled_by_default = True
-
-    def parameter_options(self) -> tuple[ImageProcOptionSpec, ...]:
-        return (
-            ImageProcOptionSpec(
-                key="max_long_edge",
-                label="最长边",
-                value_type="int",
-                default=_DEFAULT_TEMPLATE_MAX_LONG_EDGE,
-                minimum=0,
-            ),
-        )
-
-    def process(self, context: ImageProcContext) -> ImageProcContext:
-        settings = _clone_render_settings(context.settings)
-        context.image = _resize_fit(context.image, max(0, int(settings.get("max_long_edge") or 0)))
-        return context
 
 
-class TemplateOverlayStage(ImageProcStage):
-    stage_id = STAGE_TEMPLATE_OVERLAY_ID
-    label = "模板叠加"
-    description = "绘制 Banner 背景和模板文字字段。"
-    enabled_option_key = STAGE_TEMPLATE_OVERLAY_ENABLED_KEY
-    enabled_by_default = True
-
-    def parameter_options(self) -> tuple[ImageProcOptionSpec, ...]:
-        return (
-            ImageProcOptionSpec(key="draw_banner", label="Banner 底", value_type="bool", default=True),
-            ImageProcOptionSpec(key="draw_text", label="文本", value_type="bool", default=True),
-        )
-
-    def is_enabled(self, settings: Mapping[str, Any]) -> bool:
-        return super().is_enabled(settings) and _should_draw_template_overlay(dict(settings))
-
-    def process(self, context: ImageProcContext) -> ImageProcContext:
-        settings = _clone_render_settings(context.settings)
-        template_payload = _resolve_template_payload_for_render(settings, context.template_paths)
-        raw_metadata = dict(context.raw_metadata or {})
-        photo_source = context.photo_info or context.source_path or "."
-        photo_info = _template_context.ensure_photo_info(photo_source, raw_metadata=raw_metadata)
-        metadata_context = dict(context.metadata_context or {}) or _build_metadata_context(photo_info, raw_metadata)
-        context.image = _render_template_overlay(
-            context.image,
-            raw_metadata=raw_metadata,
-            metadata_context=metadata_context,
-            photo_info=photo_info,
-            template_payload=template_payload,
-            draw_banner=_parse_bool_value(settings.get("draw_banner"), True),
-            draw_text=_parse_bool_value(settings.get("draw_text"), True),
-        )
-        context.photo_info = photo_info
-        context.metadata_context = metadata_context
-        return context
 
 
-class FocusOverlayStage(ImageProcStage):
-    stage_id = STAGE_FOCUS_OVERLAY_ID
-    label = "焦点框"
-    description = "根据原图元数据和裁切计划绘制对焦框。"
-    enabled_option_key = STAGE_FOCUS_OVERLAY_ENABLED_KEY
-    enabled_by_default = True
-
-    def parameter_options(self) -> tuple[ImageProcOptionSpec, ...]:
-        return (
-            ImageProcOptionSpec(key="draw_focus", label="焦点", value_type="bool", default=False),
-        )
-
-    def is_enabled(self, settings: Mapping[str, Any]) -> bool:
-        return super().is_enabled(settings) and _parse_bool_value(settings.get("draw_focus"), False)
-
-    def process(self, context: ImageProcContext) -> ImageProcContext:
-        raw_metadata = dict(context.raw_metadata or {})
-        source_width, source_height = context.source_size or (context.image.width, context.image.height)
-        focus_box = _resolve_focus_box_after_processing(
-            raw_metadata,
-            source_width=source_width,
-            source_height=source_height,
-            crop_box=context.crop_box,
-            outer_pad=context.outer_pad,
-            apply_ratio_crop=True,
-            camera_type=_resolve_focus_camera_type_from_metadata(raw_metadata),
-        )
-        if focus_box is not None:
-            context.image = _draw_focus_box_overlay(context.image, focus_box)
-        return context
 
 
 def _context_bird_box_cache(
@@ -789,74 +631,10 @@ def _context_bird_box_cache(
     return {}
 
 
-class PngExportStage(ImageProcExportStage):
-    stage_id = EXPORT_STAGE_PNG_ID
-    export_kind = "image"
-    label = "PNG / JPG 图片导出"
-    description = "将处理后的单帧图像写入 PNG 或 JPG 文件。"
-
-    def parameter_options(self) -> tuple[ImageProcOptionSpec, ...]:
-        return (
-            ImageProcOptionSpec(
-                key="image_output_format",
-                label="输出格式",
-                value_type="choice",
-                default="png",
-                choices=(
-                    ImageProcOptionChoice("PNG", "png"),
-                    ImageProcOptionChoice("JPG", "jpg"),
-                ),
-            ),
-        )
-
-
-class GifExportStage(ImageProcExportStage):
-    stage_id = EXPORT_STAGE_GIF_ID
-    export_kind = "gif"
-    label = "GIF 导出"
-    description = "将处理后的图片序列合成为 GIF。"
-
-    def parameter_options(self) -> tuple[ImageProcOptionSpec, ...]:
-        return (
-            ImageProcOptionSpec(key="gif_fps", label="FPS", value_type="float", default=24.0, minimum=0.1),
-            ImageProcOptionSpec(key="gif_loop", label="循环次数", value_type="int", default=0, minimum=0),
-        )
-
-
-class VideoProcExportStage(ImageProcExportStage):
-    stage_id = EXPORT_STAGE_VIDEO_ID
-    export_kind = "video"
-    label = "视频导出"
-    description = "将处理后的图片序列编码为 MP4 或 MOV 视频。"
-
-    def parameter_options(self) -> tuple[ImageProcOptionSpec, ...]:
-        return (
-            ImageProcOptionSpec(key="video_container", label="格式", value_type="choice", default="mp4"),
-            ImageProcOptionSpec(key="video_fps", label="FPS", value_type="float", default=25.0, minimum=0.1),
-        )
-
-
-_PROCESS_STAGE_CLASSES: dict[str, type[ImageProcStage]] = {
-    STAGE_TEMPLATE_CROP_ID: TemplateCropStage,
-    STAGE_RESIZE_LIMIT_ID: ResizeLimitStage,
-    STAGE_TEMPLATE_OVERLAY_ID: TemplateOverlayStage,
-    STAGE_FOCUS_OVERLAY_ID: FocusOverlayStage,
-}
-
-
-def build_default_image_proc_pipeline(stage_order: Any = None) -> ImageProcPipeline:
-    return ImageProcPipeline(
-        _PROCESS_STAGE_CLASSES[stage_id]()
-        for stage_id in normalize_pipeline_stage_order(stage_order)
-    )
-
-
-def build_image_proc_export_stages() -> tuple[ImageProcExportStage, ...]:
-    return (
-        PngExportStage(),
-        GifExportStage(),
-        VideoProcExportStage(),
-    )
+def _detect_primary_bird_box_for_export(
+    image: Image.Image,
+) -> tuple[float, float, float, float] | None:
+    return _video_export_callable("_detect_primary_bird_box")(image)
 
 
 def _resolve_bird_box_for_image(
@@ -874,7 +652,7 @@ def _resolve_bird_box_for_image(
     if bird_box_lock is None:
         if signature in bird_box_cache:
             return bird_box_cache[signature]
-        bird_box = _detect_primary_bird_box(image)
+        bird_box = _detect_primary_bird_box_for_export(image)
         bird_box_cache[signature] = bird_box
         if bird_box is None and not _BIRD_DETECT_WARNING_EMITTED:
             message = _get_bird_detector_error_message()
@@ -886,7 +664,7 @@ def _resolve_bird_box_for_image(
     with bird_box_lock:
         if signature in bird_box_cache:
             return bird_box_cache[signature]
-        bird_box = _detect_primary_bird_box(image)
+        bird_box = _detect_primary_bird_box_for_export(image)
         bird_box_cache[signature] = bird_box
         if bird_box is None and not _BIRD_DETECT_WARNING_EMITTED:
             message = _get_bird_detector_error_message()
@@ -1102,37 +880,6 @@ def _resolve_uniform_group_target_size(
     return (width, height)
 
 
-def _median_float(values: list[float]) -> float | None:
-    if not values:
-        return None
-    ordered = sorted(float(value) for value in values)
-    mid = len(ordered) // 2
-    if len(ordered) % 2:
-        return ordered[mid]
-    return (ordered[mid - 1] + ordered[mid]) * 0.5
-
-
-def _apply_auto_crop_stabilization(candidates: list[dict[str, Any]], strength: int) -> None:
-    """Blend per-frame crop centers toward the group median to reduce visible jitter."""
-    if len(candidates) <= 1:
-        return
-    blend = _parse_percent_setting(strength, 0) / 100.0
-    if blend <= 0:
-        return
-    center_x = _median_float([float(candidate["center_norm"][0]) for candidate in candidates])
-    center_y = _median_float([float(candidate["center_norm"][1]) for candidate in candidates])
-    if center_x is None or center_y is None:
-        return
-    for candidate in candidates:
-        raw_x, raw_y = candidate["center_norm"]
-        stable_x = float(raw_x) * (1.0 - blend) + center_x * blend
-        stable_y = float(raw_y) * (1.0 - blend) + center_y * blend
-        candidate["stable_center"] = (
-            stable_x * float(candidate["source_width"]),
-            stable_y * float(candidate["source_height"]),
-        )
-
-
 def _open_job_image_for_crop_plan(job: VideoFrameJob) -> tuple[Image.Image, bool]:
     if job.source_image is not None:
         return (job.source_image, False)
@@ -1147,23 +894,51 @@ def prepare_uniform_auto_crop_plans(
     progress_callback: Callable[[int, int], None] | None = None,
     cancel_event: threading.Event | None = None,
 ) -> int:
-    """Precompute crop plans and expand eligible auto crops to one size per ratio group."""
+    """Precompute crop plans, optionally apply de-jitter and unify auto-crop sizes.
+
+    去抖动稳定化通过 :mod:`birdstamp.dejitter` 的策略接口完成：
+    * 默认"中位中心混合"策略保留原有 ``uniform_auto_crop`` + 防抖滑块行为；
+    * 当选择"参考区特征对齐"策略且存在有效参考区时，按帧间平移补偿裁切中心，
+      此路径即使未开启 ``uniform_auto_crop`` 也会生效（逐帧使用各自裁切尺寸）。
+    """
     total = len(jobs)
     if total <= 0:
         return 0
-    if not any(_parse_bool_value(job.settings.get("uniform_auto_crop"), False) for job in jobs):
+
+    global_settings = _clone_render_settings(jobs[0].settings)
+    strategy = _dejitter.resolve_dejitter_strategy(global_settings.get(DEJITTER_STRATEGY_KEY))
+    reference_regions = tuple(
+        tuple(float(value) for value in box)
+        for box in (global_settings.get(DEJITTER_REFERENCE_REGIONS_KEY) or [])
+        if isinstance(box, (list, tuple)) and len(box) == 4
+    )
+    use_reference = bool(
+        strategy.requires_reference_regions
+        and _parse_bool_value(global_settings.get(DEJITTER_REFERENCE_ENABLED_KEY), False)
+        and reference_regions
+    )
+    reference_source_text = global_settings.get(DEJITTER_REFERENCE_SOURCE_KEY) if use_reference else None
+    reference_source = Path(reference_source_text) if reference_source_text else None
+
+    any_uniform = any(_parse_bool_value(job.settings.get("uniform_auto_crop"), False) for job in jobs)
+    if not any_uniform and not use_reference:
         return 0
 
     cache = bird_box_cache if isinstance(bird_box_cache, dict) else {}
     candidates: list[dict[str, Any]] = []
     grouped_candidates: dict[tuple[str, int], list[dict[str, Any]]] = {}
     grouped_sizes: dict[tuple[str, int], list[tuple[int, int]]] = {}
+    frames: list[_dejitter.DeJitterFrame] = []
+    reference_patches: tuple["np.ndarray | None", ...] = ()
+    reference_raw_center: tuple[float, float] | None = None
+    patch_size = _dejitter.DEFAULT_PATCH_SIZE
     prepared = 0
 
     for index, job in enumerate(jobs, start=1):
         _raise_if_cancel_requested(cancel_event, message="视频导出已中断，正在停止统一裁切预计算。")
         settings = _clone_render_settings(job.settings)
-        if not _parse_bool_value(settings.get("uniform_auto_crop"), False):
+        job_uniform = _parse_bool_value(settings.get("uniform_auto_crop"), False)
+        if not job_uniform and not use_reference:
             if callable(progress_callback):
                 progress_callback(index, total)
             continue
@@ -1192,23 +967,54 @@ def prepare_uniform_auto_crop_plans(
                 source_height=image.height,
                 crop_plan=crop_plan,
             )
-            if group_key is not None and crop_size is not None and center is not None:
-                candidate = {
-                    "job": job,
-                    "group_key": group_key,
-                    "source_width": image.width,
-                    "source_height": image.height,
-                    "center": center,
-                    "center_norm": (
+
+            is_reference_frame = bool(
+                use_reference
+                and reference_source is not None
+                and _path_key(job.path) == _path_key(reference_source)
+            )
+            region_patches: tuple["np.ndarray | None", ...] = ()
+            if use_reference and _stabilization_eligible(settings):
+                region_patches = tuple(
+                    _extract_region_patch(image, box, patch_size) for box in reference_regions
+                )
+
+            # 参考区模式需要固定比例/无覆盖才稳定化；统一裁切沿用 group_key 资格。
+            do_uniform = group_key is not None
+            do_stabilize = crop_size is not None and center is not None and (
+                do_uniform or (use_reference and _stabilization_eligible(settings))
+            )
+            if do_stabilize:
+                frame = _dejitter.DeJitterFrame(
+                    source_width=int(image.width),
+                    source_height=int(image.height),
+                    center=center,
+                    center_norm=(
                         center[0] / float(max(1, image.width)),
                         center[1] / float(max(1, image.height)),
                     ),
+                    strength=_parse_percent_setting(settings.get("auto_crop_stabilization"), 0),
+                    source_path=job.path,
+                    region_patches=region_patches if use_reference else (),
+                    is_reference=is_reference_frame,
+                )
+                candidate = {
+                    "job": job,
+                    "group_key": group_key,
+                    "frame": frame,
                     "crop_size": crop_size,
-                    "stabilization": _parse_percent_setting(settings.get("auto_crop_stabilization"), 0),
+                    "source_width": int(image.width),
+                    "source_height": int(image.height),
                 }
                 candidates.append(candidate)
-                grouped_candidates.setdefault(group_key, []).append(candidate)
-                grouped_sizes.setdefault(group_key, []).append(crop_size)
+                frames.append(frame)
+                if do_uniform:
+                    grouped_candidates.setdefault(group_key, []).append(candidate)
+                    grouped_sizes.setdefault(group_key, []).append(crop_size)
+
+            if is_reference_frame and center is not None:
+                reference_patches = region_patches
+                reference_raw_center = center
         finally:
             if close_image:
                 try:
@@ -1218,6 +1024,17 @@ def prepare_uniform_auto_crop_plans(
         if callable(progress_callback):
             progress_callback(index, total)
 
+    _run_dejitter_stabilization(
+        strategy=strategy,
+        frames=frames,
+        grouped_candidates=grouped_candidates,
+        use_reference=use_reference,
+        reference_regions=reference_regions,
+        reference_patches=reference_patches,
+        reference_raw_center=reference_raw_center,
+        reference_source=reference_source,
+    )
+
     target_sizes = {
         group_key: _resolve_uniform_group_target_size(
             ratio_text=group_key[0],
@@ -1225,23 +1042,75 @@ def prepare_uniform_auto_crop_plans(
         )
         for group_key, sizes in grouped_sizes.items()
     }
-    for group_candidates in grouped_candidates.values():
-        strength = max(int(candidate.get("stabilization", 0)) for candidate in group_candidates)
-        _apply_auto_crop_stabilization(group_candidates, strength)
     for candidate in candidates:
-        target_size = target_sizes.get(candidate["group_key"])
-        if target_size is None:
-            continue
+        frame = candidate["frame"]
         job = candidate["job"]
-        center = candidate.get("stable_center", candidate["center"])
-        job.crop_plan = _compute_fixed_size_crop_plan(
-            source_width=int(candidate["source_width"]),
-            source_height=int(candidate["source_height"]),
-            center=center,
-            crop_width=target_size[0],
-            crop_height=target_size[1],
-        )
+        source_w = int(candidate["source_width"])
+        source_h = int(candidate["source_height"])
+        center = frame.stable_center if frame.stable_center is not None else frame.center
+        group_key = candidate["group_key"]
+        if group_key is not None:
+            target_size = target_sizes.get(group_key)
+            if target_size is None:
+                continue
+            job.crop_plan = _compute_fixed_size_crop_plan(
+                source_width=source_w,
+                source_height=source_h,
+                center=center,
+                crop_width=target_size[0],
+                crop_height=target_size[1],
+            )
+        elif use_reference and frame.stable_center is not None:
+            crop_size = candidate["crop_size"]
+            job.crop_plan = _compute_fixed_size_crop_plan(
+                source_width=source_w,
+                source_height=source_h,
+                center=center,
+                crop_width=crop_size[0],
+                crop_height=crop_size[1],
+            )
     return prepared
+
+
+def _run_dejitter_stabilization(
+    *,
+    strategy: "_dejitter.DeJitterStrategy",
+    frames: list["_dejitter.DeJitterFrame"],
+    grouped_candidates: dict[tuple[str, int], list[dict[str, Any]]],
+    use_reference: bool,
+    reference_regions: tuple[tuple[float, float, float, float], ...],
+    reference_patches: tuple["np.ndarray | None", ...],
+    reference_raw_center: tuple[float, float] | None,
+    reference_source: Path | None,
+) -> None:
+    """根据策略执行去抖动稳定化，把稳定中心写回各 frame。"""
+    if not frames:
+        return
+    if use_reference:
+        strength = max((int(frame.strength) for frame in frames), default=0)
+        context = _dejitter.DeJitterContext(
+            frames=frames,
+            strength=strength,
+            reference_regions=reference_regions,
+            reference_patches=reference_patches,
+            reference_raw_center=reference_raw_center,
+            reference_source=reference_source,
+            aligner=_dejitter.NumpyPhaseCorrelationAligner(),
+        )
+        strategy.stabilize(context)
+        return
+
+    # 非参考区路径：保留原有"按比例组中位中心混合"语义。
+    median_strategy = (
+        strategy
+        if isinstance(strategy, _dejitter.MedianCenterStabilizationStrategy)
+        else _dejitter.MedianCenterStabilizationStrategy()
+    )
+    for group_candidates in grouped_candidates.values():
+        group_frames = [candidate["frame"] for candidate in group_candidates]
+        strength = max((int(frame.strength) for frame in group_frames), default=0)
+        context = _dejitter.DeJitterContext(frames=group_frames, strength=strength)
+        median_strategy.stabilize(context)
 
 
 def _compute_crop_plan_for_image(
@@ -1370,6 +1239,8 @@ def render_video_frame(
         bird_box_cache=cache,
         bird_box_lock=bird_box_lock,
     )
+    from .pipeline import build_default_image_proc_pipeline
+
     rendered_context = build_default_image_proc_pipeline(settings.get(PIPELINE_STAGE_ORDER_KEY)).process(context)
     return rendered_context.image.convert("RGB")
 
@@ -1597,7 +1468,7 @@ def _render_and_cache_source_frame(
     cancel_event: threading.Event | None,
 ) -> tuple[int, str, Path, str, str]:
     _raise_if_cancel_requested(cancel_event, message="视频导出已中断，正在保留已完成源帧。")
-    rendered = render_video_frame(
+    rendered = _video_export_callable("render_video_frame")(
         job,
         template_paths=template_paths,
         bird_box_cache=bird_box_cache,
@@ -1690,7 +1561,7 @@ def _ensure_source_frame_cache(
 ) -> tuple[str, Any, list[Path]]:
     total = len(jobs)
     if any(
-        _parse_bool_value(job.settings.get("uniform_auto_crop"), False)
+        crop_plan_precompute_required(job.settings)
         and _normalize_precomputed_crop_plan(job.crop_plan) is None
         for job in jobs
     ):
@@ -2059,7 +1930,7 @@ def _render_and_save_video_frame(
     cancel_event: threading.Event | None,
 ) -> tuple[int, str]:
     _raise_if_cancel_requested(cancel_event, message="视频导出已中断，正在保留已完成帧。")
-    rendered = render_video_frame(
+    rendered = _video_export_callable("render_video_frame")(
         job,
         template_paths=template_paths,
         bird_box_cache=bird_box_cache,
@@ -2367,7 +2238,7 @@ def _build_partial_video_from_frames(
     if validated.container == "mp4":
         cmd.extend(["-movflags", "+faststart"])
     cmd.append(str(partial_output_path))
-    _run_ffmpeg_command(cmd, cancel_event=None)
+    _video_export_callable("_run_ffmpeg_command")(cmd, cancel_event=None)
     return partial_output_path if partial_output_path.is_file() else None
 
 
@@ -2392,7 +2263,7 @@ def export_video(
     if not jobs:
         raise ValueError("没有可用于生成视频的图片。")
 
-    ffmpeg_path = find_ffmpeg_executable()
+    ffmpeg_path = _video_export_callable("find_ffmpeg_executable")()
     if ffmpeg_path is None:
         raise FileNotFoundError(_ffmpeg_not_found_message())
 
@@ -2453,7 +2324,7 @@ def export_video(
         )
         cmd = build_ffmpeg_command(ffmpeg_path, frames_dir, validated, output_path=temp_output_path)
         _log.info("video export ffmpeg command: %s", cmd)
-        _run_ffmpeg_command(cmd, cancel_event=cancel_event)
+        _video_export_callable("_run_ffmpeg_command")(cmd, cancel_event=cancel_event)
 
         if not temp_output_path.is_file():
             raise RuntimeError(f"视频编码完成但输出文件不存在: {temp_output_path}")
@@ -2568,6 +2439,8 @@ __all__ = [
     "export_video",
     "ffmpeg_install_script_path",
     "find_ffmpeg_executable",
+    "crop_plan_precompute_required",
+    "dejitter_reference_active",
     "normalize_frame_size",
     "normalize_export_stage_id",
     "normalize_pipeline_stage_order",

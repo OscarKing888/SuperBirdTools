@@ -1,0 +1,59 @@
+---
+description: 新类必须一类一文件，由包 __init__.py 统一对外导出
+globs: **/*.py
+alwaysApply: false
+---
+
+# Python：一类一文件 + 统一导出
+
+实现**新类**时严格遵守：**一个公开类对应一个模块文件**，不得在同一文件里堆叠多个独立公开类。
+
+## 文件与命名
+
+- 每个类单独一个 `.py` 文件，文件名用 `snake_case`，通常与类名对应（`MyService` → `my_service.py`）。
+- 文件内只放该类及其**仅被该类使用**的嵌套类、常量或小型私有辅助。
+- 模块级函数放在独立工具模块（如 `foo_utils.py`），不要与类混写在同一文件。
+
+## 统一导出
+
+- 包对外 API 由 `__init__.py`（或明确的包入口模块）集中 re-export，并维护 `__all__`。
+- 外部代码优先从包顶层导入，例如 `from birdstamp.gui import BirdDetectWorker`，不要跨层深引 `from birdstamp.gui.bird_detect_worker import BirdDetectWorker`（除非包内相对导入）。
+- 包内模块之间用相对导入：`from .request_parser import RequestParser`。
+
+## 示例
+
+```python
+# ❌ BAD — services/handlers.py 里多个公开类
+class RequestParser: ...
+class ResponseBuilder: ...
+class Handler: ...
+
+# ✅ GOOD
+# services/request_parser.py
+class RequestParser: ...
+
+# services/response_builder.py
+class ResponseBuilder: ...
+
+# services/handler.py
+from .request_parser import RequestParser
+from .response_builder import ResponseBuilder
+class Handler: ...
+
+# services/__init__.py
+from .handler import Handler
+from .request_parser import RequestParser
+from .response_builder import ResponseBuilder
+__all__ = ["Handler", "RequestParser", "ResponseBuilder"]
+```
+
+## 例外（仅限合理场景）
+
+- 嵌套类仅被外层类使用、且不会被外部直接引用时，可保留在同一文件。
+- 重构遗留多类文件时，按 `.cursor/skills/refactor-python-class-per-file/SKILL.md` 拆分，并在 `__init__.py` 保留兼容 re-export。
+
+## 新增类检查清单
+
+- [ ] 新类是否在独立文件中？
+- [ ] 是否已在包 `__init__.py` 中导出并更新 `__all__`？
+- [ ] 外部 import 是否走包顶层而非深层模块路径？

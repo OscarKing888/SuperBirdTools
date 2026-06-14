@@ -41,6 +41,7 @@ _BIRD_MODEL_CANDIDATES = ("yolo11n.pt", "yolo11s.pt", "yolov8n.pt")
 _BIRD_CLASS_NAME = "bird"
 _COCO_FALLBACK_BIRD_CLASS_ID = 14
 _BIRD_DETECT_CONFIDENCE = 0.25
+_BIRD_DETECT_MAX_LONG_EDGE = 1280
 _BIRD_DETECTOR_ERROR_MESSAGE = ""
 
 _RDF_NS = "http://www.w3.org/1999/02/22-rdf-syntax-ns#"
@@ -1214,9 +1215,10 @@ def detect_primary_bird_box(image: Image.Image) -> tuple[float, float, float, fl
     _BIRD_DETECTOR_ERROR_MESSAGE = ""
     model, bird_class_ids = detector
     source = image if image.mode == "RGB" else image.convert("RGB")
+    detect_source = resize_fit(source, _BIRD_DETECT_MAX_LONG_EDGE)
     detect_device = _preferred_bird_detect_device()
     predict_kwargs = {
-        "source": source,
+        "source": detect_source,
         "conf": _BIRD_DETECT_CONFIDENCE,
         "verbose": False,
     }
@@ -1244,7 +1246,7 @@ def detect_primary_bird_box(image: Image.Image) -> tuple[float, float, float, fl
     best_box = _best_bird_box_from_result(results[0], bird_class_ids)
     if best_box is None:
         return None
-    return _normalize_xyxy_box(best_box, source.width, source.height)
+    return _normalize_xyxy_box(best_box, detect_source.width, detect_source.height)
 
 
 def _crop_plan_from_override(

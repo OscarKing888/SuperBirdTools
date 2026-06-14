@@ -11,6 +11,7 @@ from typing import Any
 
 from PIL import Image
 
+from birdstamp import perf as birdstamp_perf
 from birdstamp.gui import editor_core, editor_options
 
 _parse_ratio_value                  = editor_core.parse_ratio_value
@@ -43,19 +44,25 @@ class _BirdStampCropMixin:
     """Mixin: crop-box calculation, bird-box detection, UI-value helpers."""
 
     def _bird_box_for_path(self, path: Path, *, source_image: Image.Image | None = None) -> tuple[float, float, float, float] | None:
+        if callable(getattr(self, "_is_placeholder_active", None)) and self._is_placeholder_active():
+            return None
+
         signature = self._source_signature(path)
         if signature in self._bird_box_cache:
+            birdstamp_perf.plog("bird_box cache_hit path=%s", path)
             return self._bird_box_cache[signature]
 
-        image = source_image
-        if image is None:
-            try:
-                image = decode_image(path, decoder="auto")
-            except Exception:
-                self._bird_box_cache[signature] = None
-                return None
+        with birdstamp_perf.span("bird_box", path=str(path), from_cache=False):
+            image = source_image
+            if image is None:
+                try:
+                    image = self._decode_image_for_path(path)
+                    birdstamp_perf.plog("bird_box extra_decode path=%s", path)
+                except Exception:
+                    self._bird_box_cache[signature] = None
+                    return None
 
-        bird_box = _detect_primary_bird_box(image)
+            bird_box = _detect_primary_bird_box(image)
         self._bird_box_cache[signature] = bird_box
         if bird_box is None and not self._bird_detect_error_reported and _get_bird_detector_error_message():
             self._set_status(f"鸟体识别不可用: {_get_bird_detector_error_message()}")
@@ -121,7 +128,10 @@ class _BirdStampCropMixin:
             return ((cx, cy), None)
 
         bird_box: tuple[float, float, float, float] | None = None
-        if path is not None:
+        needs_bird_box = mode == _CENTER_MODE_BIRD or (
+            mode == _CENTER_MODE_FOCUS and focus_point is None
+        )
+        if needs_bird_box and path is not None:
             bird_box = self._bird_box_for_path(path, source_image=image)
 
         resolver_map = {
