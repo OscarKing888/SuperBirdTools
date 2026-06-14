@@ -1,6 +1,8 @@
 """editor_photo_list.py – QTreeWidget-compatible adapter on top of FileListPanel."""
 from __future__ import annotations
 
+import os
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -9,6 +11,7 @@ from PyQt6.QtWidgets import (
     QAbstractItemView,
     QHeaderView,
     QLabel,
+    QMenu,
     QProgressBar,
     QSlider,
     QToolButton,
@@ -17,6 +20,8 @@ from PyQt6.QtWidgets import (
 )
 
 from app_common.file_browser import FileListPanel
+from app_common.file_browser._browser_core import _exec_menu
+from app_common.file_utils import reveal_in_file_manager
 from birdstamp.constants import SUPPORTED_EXTENSIONS
 from birdstamp.gui import template_context as _template_context
 from birdstamp.gui.editor_utils import path_key as _path_key
@@ -202,6 +207,9 @@ class PhotoListWidget(FileListPanel):
         self._tree_widget.setSortingEnabled(True)
         self._tree_widget.sortByColumn(PHOTO_COL_SEQ, Qt.SortOrder.AscendingOrder)
 
+        self._tree_widget.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self._tree_widget.customContextMenuRequested.connect(self._on_photo_context_menu)
+
     def _hide_non_tree_ui(self) -> None:
         # 隐藏已知控件
         for widget in (
@@ -375,6 +383,74 @@ class PhotoListWidget(FileListPanel):
 
     def selectedItems(self) -> list[QTreeWidgetItem]:
         return list(self._tree_widget.selectedItems())
+
+    def _photo_path_from_item(self, item: QTreeWidgetItem | None) -> str | None:
+        if item is None:
+            return None
+        raw = item.data(PHOTO_COL_ROW, PHOTO_LIST_PATH_ROLE)
+        if isinstance(raw, str) and raw.strip():
+            return os.path.normpath(raw)
+        return None
+
+    def _photo_selected_paths(self) -> list[str]:
+        paths: list[str] = []
+        seen: set[str] = set()
+        for item in self.selectedItems():
+            path = self._photo_path_from_item(item)
+            if not path or path in seen:
+                continue
+            seen.add(path)
+            paths.append(path)
+        return paths
+
+    def _on_photo_context_menu(self, pos) -> None:
+        item = self._tree_widget.itemAt(pos)
+        if item is not None and item not in self.selectedItems():
+            self._tree_widget.clearSelection()
+            self._tree_widget.setCurrentItem(item)
+            item.setSelected(True)
+
+        paths = self._photo_selected_paths()
+        if not paths and item is not None:
+            single = self._photo_path_from_item(item)
+            if single:
+                paths = [single]
+
+        primary_path = self._photo_path_from_item(item) if item is not None else (paths[0] if paths else None)
+        self._show_photo_context_menu(
+            self._tree_widget.viewport(),
+            pos,
+            paths=paths,
+            primary_path=primary_path,
+        )
+
+    def _show_photo_context_menu(
+        self,
+        viewport,
+        pos,
+        *,
+        paths: list[str],
+        primary_path: str | None,
+    ) -> None:
+        if not paths:
+            return
+
+        primary = os.path.normpath(primary_path) if primary_path else paths[0]
+        menu = QMenu(self)
+
+        act_copy_filename = menu.addAction("复制文件全路径")
+        act_copy_filename.triggered.connect(
+            lambda checked=False, p=list(paths): self._copy_filenames_to_clipboard(p)
+        )
+        menu.addSeparator()
+
+        label = "在Finder中显示" if sys.platform == "darwin" else "在资源管理器中显示"
+        reveal_path = self._resolve_reveal_path(primary)
+        if reveal_path:
+            act_reveal = menu.addAction(label)
+            act_reveal.triggered.connect(lambda checked=False, p=reveal_path: reveal_in_file_manager(p))
+
+        _exec_menu(menu, viewport.mapToGlobal(pos))
 
     def _on_sort_indicator_changed(self, column: int, _order: Qt.SortOrder) -> None:
         if column == PHOTO_COL_ROW:

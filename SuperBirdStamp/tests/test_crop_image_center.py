@@ -128,7 +128,7 @@ def test_image_center_asymmetric_padding_expands_from_center() -> None:
 def test_image_center_differs_from_bird_center_when_bird_offset() -> None:
     image = Image.new("RGB", (1000, 800), "#ffffff")
     bird_box = (0.05, 0.1, 0.35, 0.9)
-    image_settings = _settings(ratio=1.5)
+    image_settings = _settings(ratio=1.0, top=128, bottom=128, left=128, right=128)
     bird_settings = dict(image_settings)
     bird_settings["center_mode"] = editor_core.CENTER_MODE_BIRD
 

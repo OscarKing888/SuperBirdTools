@@ -223,7 +223,7 @@ def test_render_video_frame_no_crop_ignores_crop_box_override(tmp_path) -> None:
         source_image.close()
 
 
-def test_auto_bird_crop_padding_expands_bird_box_by_pixels() -> None:
+def test_auto_bird_crop_padding_expands_from_bird_box_center() -> None:
     source_image = Image.new("RGB", (100, 100), "#FFFFFF")
 
     crop_box, outer_pad = _compute_auto_bird_crop_plan(
@@ -238,7 +238,7 @@ def test_auto_bird_crop_padding_expands_bird_box_by_pixels() -> None:
 
     assert outer_pad == (0, 0, 0, 0)
     assert crop_box is not None
-    assert tuple(round(value, 6) for value in crop_box) == (0.3, 0.2, 0.7, 0.6)
+    assert tuple(round(value, 6) for value in crop_box) == (0.4, 0.3, 0.6, 0.5)
 
 
 def test_export_video_reuses_preserved_temp_frames() -> None:

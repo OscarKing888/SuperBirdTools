@@ -40,7 +40,7 @@ DEFAULT_FOCUS_BOX_SHORT_EDGE_RATIO = 0.12
 _BIRD_MODEL_CANDIDATES = ("yolo11n.pt", "yolo11s.pt", "yolov8n.pt")
 _BIRD_CLASS_NAME = "bird"
 _COCO_FALLBACK_BIRD_CLASS_ID = 14
-_BIRD_DETECT_CONFIDENCE = 0.25
+_BIRD_DETECT_CONFIDENCE = 0.2
 _BIRD_DETECT_MAX_LONG_EDGE = 1280
 _BIRD_DETECTOR_ERROR_MESSAGE = ""
 
@@ -1097,6 +1097,31 @@ def resolve_focus_anchor_pixels(
     return None
 
 
+def resolve_bird_anchor_pixels(
+    *,
+    bird_box: tuple[float, float, float, float] | None,
+    raw_metadata: dict[str, Any],
+    width: int,
+    height: int,
+    camera_type: CameraFocusType | str | None = None,
+) -> tuple[float, float] | None:
+    """返回鸟体裁切锚点（像素坐标）。优先鸟体框中心，忽略鸟体框尺寸。"""
+    if width <= 0 or height <= 0:
+        return None
+
+    if bird_box is not None:
+        center = box_center(bird_box)
+        return (clamp01(center[0]) * float(width), clamp01(center[1]) * float(height))
+
+    return resolve_focus_anchor_pixels(
+        raw_metadata=raw_metadata,
+        width=width,
+        height=height,
+        camera_type=camera_type,
+        bird_box=None,
+    )
+
+
 def resolve_crop_anchor_and_keep_box(
     *,
     center_mode: str,
@@ -1107,7 +1132,7 @@ def resolve_crop_anchor_and_keep_box(
     camera_type: CameraFocusType | str | None = None,
     source_size: tuple[int, int] | None = None,
 ) -> tuple[tuple[float, float], tuple[float, float, float, float] | None]:
-    """返回 (anchor, bird_keep_box)。bird_keep_box 仅在鸟体中心模式下非 None。"""
+    """返回 (anchor, legacy_bird_keep_box)。legacy_bird_keep_box 恒为 None。"""
     width, height = _resolve_crop_source_dimensions(image, source_size)
     mode = normalize_center_mode(center_mode)
 
@@ -1128,7 +1153,7 @@ def resolve_crop_anchor_and_keep_box(
 
     if mode == CENTER_MODE_BIRD:
         if bird_box is not None:
-            return (box_center(bird_box), bird_box)
+            return (box_center(bird_box), None)
         if focus_point is not None:
             return (focus_point, None)
         return ((0.5, 0.5), None)
@@ -1181,29 +1206,17 @@ def compute_auto_bird_crop_plan(
     if width <= 0 or height <= 0 or ratio <= 0:
         return (None, (0, 0, 0, 0))
 
-    expanded_px = expand_unit_box_to_unclamped_pixels(
-        bird_box,
+    center = box_center(bird_box)
+    return compute_anchor_center_crop_plan(
         width=width,
         height=height,
-        top=inner_top,
-        bottom=inner_bottom,
-        left=inner_left,
-        right=inner_right,
-    )
-    if expanded_px is None:
-        return (None, (0, 0, 0, 0))
-
-    keep_left, keep_top, keep_right, keep_bottom = expanded_px
-    return _compute_anchored_ratio_crop_plan(
-        width=width,
-        height=height,
+        anchor_x=clamp01(center[0]) * float(width),
+        anchor_y=clamp01(center[1]) * float(height),
         ratio=ratio,
-        anchor_x=(keep_left + keep_right) * 0.5,
-        anchor_y=(keep_top + keep_bottom) * 0.5,
-        keep_left=keep_left,
-        keep_top=keep_top,
-        keep_right=keep_right,
-        keep_bottom=keep_bottom,
+        inner_top=inner_top,
+        inner_bottom=inner_bottom,
+        inner_left=inner_left,
+        inner_right=inner_right,
     )
 
 
@@ -1260,7 +1273,7 @@ def compute_crop_plan_for_image(
     if camera_type is None:
         camera_type = resolve_focus_camera_type_from_metadata(raw_metadata)
 
-    anchor, bird_keep = resolve_crop_anchor_and_keep_box(
+    anchor, _legacy_bird_keep = resolve_crop_anchor_and_keep_box(
         center_mode=center_mode,
         raw_metadata=raw_metadata,
         image=image,
@@ -1270,24 +1283,35 @@ def compute_crop_plan_for_image(
         source_size=source_size,
     )
 
-    if bird_keep is not None:
-        crop_box, outer_pad = compute_auto_bird_crop_plan(
-            image=image,
-            bird_box=bird_keep,
-            ratio=ratio,
-            inner_top=inner_top,
-            inner_bottom=inner_bottom,
-            inner_left=inner_left,
-            inner_right=inner_right,
-            source_size=source_size,
-        )
-        if crop_box is not None:
-            return (crop_box, outer_pad)
-
     if normalize_center_mode(center_mode) == CENTER_MODE_IMAGE:
         crop_box, outer_pad = compute_image_center_crop_plan(
             width=width,
             height=height,
+            ratio=float(ratio),
+            inner_top=inner_top,
+            inner_bottom=inner_bottom,
+            inner_left=inner_left,
+            inner_right=inner_right,
+        )
+        if crop_box is not None:
+            return (crop_box, outer_pad)
+        return (None, (0, 0, 0, 0))
+
+    if normalize_center_mode(center_mode) == CENTER_MODE_BIRD:
+        anchor_pixels = resolve_bird_anchor_pixels(
+            bird_box=bird_box,
+            raw_metadata=raw_metadata,
+            width=width,
+            height=height,
+            camera_type=camera_type,
+        )
+        if anchor_pixels is None:
+            anchor_pixels = (width * 0.5, height * 0.5)
+        crop_box, outer_pad = compute_anchor_center_crop_plan(
+            width=width,
+            height=height,
+            anchor_x=anchor_pixels[0],
+            anchor_y=anchor_pixels[1],
             ratio=float(ratio),
             inner_top=inner_top,
             inner_bottom=inner_bottom,
