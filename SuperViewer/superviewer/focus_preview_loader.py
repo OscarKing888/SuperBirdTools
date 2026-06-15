@@ -9,15 +9,13 @@ from __future__ import annotations
 import json
 import os
 import re
-import subprocess
-import sys
-import tempfile
 from pathlib import Path
 
 import piexif
 from PIL import Image, ImageOps
 
 from app_common.exif_io import extract_metadata_with_xmp_priority, get_exiftool_executable_path
+from app_common.exif_io.exiftool_runner import run_exiftool
 from app_common.focus_calc import (
     extract_focus_box,
     resolve_focus_camera_type_from_metadata,
@@ -226,41 +224,20 @@ def _run_exiftool_json_for_focus(path: str) -> dict | None:
     if not exiftool_path:
         return None
     path_norm = os.path.normpath(path)
-    use_argfile = sys.platform.startswith("win") and any(ord(c) > 127 for c in path_norm)
-    cmd_common = [
-        exiftool_path,
+    args = [
         "-j", "-G1", "-n", "-a", "-u",
         "-charset", "filename=UTF8",
         "-api", "largefilesupport=1",
+        path_norm,
     ]
     try:
-        if use_argfile:
-            fd, argfile_path = tempfile.mkstemp(suffix=".args", prefix="exiftool_focus_")
-            try:
-                with os.fdopen(fd, "w", encoding="utf-8") as f:
-                    f.write(path_norm + "\n")
-                cp = subprocess.run(
-                    [*cmd_common, "-@", argfile_path],
-                    check=False,
-                    capture_output=True,
-                    text=True,
-                    encoding="utf-8",
-                    errors="replace",
-                )
-            finally:
-                try:
-                    os.unlink(argfile_path)
-                except OSError:
-                    pass
-        else:
-            cp = subprocess.run(
-                [*cmd_common, path_norm],
-                check=False,
-                capture_output=True,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
-            )
+        cp = run_exiftool(
+            exiftool_path,
+            args,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+        )
         if cp.returncode != 0 or not (cp.stdout or "").strip():
             return None
         payload = json.loads(cp.stdout)

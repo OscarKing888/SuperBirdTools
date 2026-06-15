@@ -71,6 +71,7 @@ from PyQt6.QtWidgets import (
 
 from app_common.about_dialog import load_about_info, load_about_images, show_about_dialog
 from app_common.app_info_bar import AppInfoBar
+from app_common.exif_io import close_exiftool_process
 from app_common.file_utils import is_apple_double_metadata_file
 from app_common.log import get_logger
 from app_common.perf_probe import elapsed_ms, perf_counter
@@ -4044,6 +4045,8 @@ class BirdStampEditorWindow(
     def _apply_photo_list_metadata_batch(self, batch: dict[str, dict[str, Any]]) -> None:
         if not batch:
             return
+        current_metadata_refresh: tuple[Path, dict[str, Any]] | None = None
+        current_key = _path_key(self.current_path) if self.current_path is not None else ""
         self._begin_photo_list_item_display_batch()
         try:
             for norm_path, raw_metadata in batch.items():
@@ -4056,6 +4059,8 @@ class BirdStampEditorWindow(
                     merged = dict(raw_metadata)
                     self.photo_list_metadata_cache[key] = merged
                     self.raw_metadata_cache[key] = merged
+                    if current_key and key == current_key:
+                        current_metadata_refresh = (path, merged)
                 self._photo_list_metadata_pending_keys.discard(key)
                 settings = self.photo_render_overrides.get(key)
                 self._update_photo_list_item_display(
@@ -4066,6 +4071,12 @@ class BirdStampEditorWindow(
                 )
         finally:
             self._end_photo_list_item_display_batch(resort=False)
+        if current_metadata_refresh is not None:
+            self._apply_current_photo_metadata(
+                current_metadata_refresh[0],
+                current_metadata_refresh[1],
+                refresh_preview=True,
+            )
         self._maybe_apply_pending_workspace_photo_selection()
 
     def _on_photo_list_metadata_batch_ready(self, batch: dict[str, dict[str, Any]]) -> None:
@@ -4157,9 +4168,17 @@ class BirdStampEditorWindow(
             else self._photo_list_display_metadata_for_path(path)
         )
         use_fast_display = _is_complete_list_metadata(metadata)
-        photo_info = self._photo_info_for_display(path, raw_metadata=metadata)
-        filename_text = self._display_filename_from_photo_info(photo_info) or path.name
+        active_settings = (
+            settings
+            if isinstance(settings, dict)
+            else self._render_settings_for_path(path, prefer_current_ui=False)
+        )
+        ratio_value = _parse_ratio_value(active_settings.get("ratio"))
+        ratio_text = self._format_ratio_display(ratio_value)
+
         if use_fast_display:
+            photo_info = self._photo_info_for_display(path, raw_metadata=metadata)
+            filename_text = self._display_filename_from_photo_info(photo_info) or path.name
             capture_time_text, capture_time_sort = self._fast_display_capture_time_from_raw(metadata)
             title = self._fast_display_title_from_raw(metadata)
             rating_value = self._fast_display_rating_from_raw(metadata)
@@ -4172,25 +4191,14 @@ class BirdStampEditorWindow(
                 aperture_sort,
             ) = self._camera_list_display_from_raw_metadata(metadata)
         else:
-            capture_time_text, capture_time_sort = self._extract_display_capture_time_from_metadata(photo_info)
-            title = self._extract_display_title_from_metadata(photo_info)
-            rating_value = self._extract_display_rating_from_metadata(photo_info)
-            (
-                shutter_text,
-                shutter_sort,
-                iso_text,
-                iso_sort,
-                aperture_text,
-                aperture_sort,
-            ) = self._extract_display_camera_settings_from_metadata(photo_info)
+            filename_text = path.name
+            capture_time_text, capture_time_sort = "-", (1, 0.0)
+            title = ""
+            rating_value = None
+            shutter_text, shutter_sort = "-", (1, 0.0)
+            iso_text, iso_sort = "-", (1, 0)
+            aperture_text, aperture_sort = "-", (1, 0.0)
         rating_text = self._format_rating_display(rating_value)
-        active_settings = (
-            settings
-            if isinstance(settings, dict)
-            else self._render_settings_for_path(path, prefer_current_ui=False)
-        )
-        ratio_value = _parse_ratio_value(active_settings.get("ratio"))
-        ratio_text = self._format_ratio_display(ratio_value)
 
         in_batch = int(getattr(self, "_photo_list_display_batch_depth", 0)) > 0
         paused_sort = False
@@ -4865,8 +4873,8 @@ class BirdStampEditorWindow(
             with birdstamp_perf.span("select.size", path=str(path)):
                 self.current_source_full_size = self._read_source_full_size(path)
             self._invalidate_original_mode_cache()
-            with birdstamp_perf.span("select.metadata", path=str(path)):
-                self.current_raw_metadata = self._load_raw_metadata(path)
+            with birdstamp_perf.span("select.metadata_snapshot", path=str(path)):
+                self.current_raw_metadata = self._metadata_snapshot_for_selection(path)
             with birdstamp_perf.span("select.context"):
                 photo_info = current.data(PHOTO_COL_ROW, PHOTO_LIST_PHOTO_INFO_ROLE)
                 self.current_photo_info = _template_context.ensure_editor_photo_info(
@@ -4893,11 +4901,52 @@ class BirdStampEditorWindow(
             with birdstamp_perf.span("select.render_preview", path=str(path)):
                 self.render_preview()
 
+    def _metadata_snapshot_for_selection(self, path: Path) -> dict[str, Any]:
+        """Return already-known metadata only; never block selection on ExifTool."""
+        key = _path_key(path)
+        for cache in (self.raw_metadata_cache, self.photo_list_metadata_cache):
+            cached = cache.get(key)
+            if isinstance(cached, dict) and cached:
+                return dict(cached)
+        return {"SourceFile": str(path)}
+
+    def _apply_current_photo_metadata(
+        self,
+        path: Path,
+        raw_metadata: dict[str, Any],
+        *,
+        refresh_preview: bool,
+    ) -> None:
+        if self.current_path is None or _path_key(path) != _path_key(self.current_path):
+            return
+        if not isinstance(raw_metadata, dict):
+            return
+        if raw_metadata == self.current_raw_metadata:
+            return
+        self.current_raw_metadata = dict(raw_metadata)
+        item = self._find_photo_item_by_path(path)
+        existing = item.data(PHOTO_COL_ROW, PHOTO_LIST_PHOTO_INFO_ROLE) if item is not None else None
+        self.current_photo_info = _template_context.ensure_editor_photo_info(
+            existing if isinstance(existing, _template_context.PhotoInfo) else path,
+            raw_metadata=self.current_raw_metadata,
+            crop_box=self._render_settings_for_path(path, prefer_current_ui=True).get("crop_box"),
+        )
+        if item is not None:
+            item.setData(PHOTO_COL_ROW, PHOTO_LIST_PHOTO_INFO_ROLE, self.current_photo_info)
+        self.current_metadata_context = self._cached_metadata_context(
+            self.current_photo_info,
+            self.current_raw_metadata,
+        )
+        if refresh_preview:
+            self.render_preview()
+
     def _cached_metadata_context(
         self,
         photo_info: _template_context.PhotoInfo,
         raw_metadata: dict[str, Any],
     ) -> dict[str, str]:
+        if not _is_complete_list_metadata(raw_metadata):
+            return self._fast_metadata_context(photo_info, raw_metadata)
         cache_key = f"{_path_key(photo_info.path)}:{_metadata_digest_for_cache(raw_metadata)}"
         cached = self._metadata_context_cache.get(cache_key)
         if cached is not None:
@@ -4905,6 +4954,30 @@ class BirdStampEditorWindow(
             return cached
         context = _build_metadata_context(photo_info, raw_metadata)
         self._metadata_context_cache[cache_key] = context
+        return context
+
+    def _fast_metadata_context(
+        self,
+        photo_info: _template_context.PhotoInfo,
+        raw_metadata: dict[str, Any],
+    ) -> dict[str, str]:
+        path = _template_context.ensure_photo_info(photo_info).path
+        context: dict[str, str] = {
+            "stem": path.stem,
+            "filename": path.name,
+            "current_path": str(path),
+            "original_path": str(path),
+            "SourceFile": str(path),
+            "sourcefile": str(path),
+        }
+        if isinstance(raw_metadata, dict):
+            for key, value in raw_metadata.items():
+                key_text = str(key or "").strip()
+                value_text = _clean_text(value)
+                if not key_text or not value_text:
+                    continue
+                context.setdefault(key_text, value_text)
+                context.setdefault(key_text.split(":")[-1], value_text)
         return context
 
     def _load_raw_metadata(self, path: Path) -> dict[str, Any]:
@@ -5459,6 +5532,7 @@ def launch_gui(
                 active_receiver.stop()
             except Exception as exc:
                 _log.warning("receiver stop failed: %s", exc)
+        close_exiftool_process()
 
     startup_inputs: list[Path] = []
     if startup_files:
