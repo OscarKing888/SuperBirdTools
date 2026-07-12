@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Iterable
 
 from app_common.exif_io.photo_meta import PhotoMetaDataXMP
+from app_common.exif_io.xmp_sidecar import find_xmp_sidecars
 from app_common.log import get_logger
 
 
@@ -151,11 +152,40 @@ class PhotoTagSidecarStore:
     ) -> dict[str, set[str]]:
         allowed = set(_normalise_tags(allowed_tags))
         use_allowed_filter = allowed_tags is not None
+        normalized_paths = _normalise_paths(paths)
         result: dict[str, set[str]] = {}
         with self._lock:
-            for path in _normalise_paths(paths):
+            # Preserve dependency-injection behaviour for custom metadata
+            # implementations.  The built-in XMP reader can index each source
+            # directory once for the whole batch instead of rescanning it for
+            # every sidecar miss.
+            if type(self._metadata) is not PhotoMetaDataXMP:
+                for path in normalized_paths:
+                    try:
+                        subjects = set(self._metadata.read_subjects(path))
+                    except Exception as exc:
+                        _log.warning(
+                            "[PhotoTagSidecarStore.load_tags_for_paths] failed path=%r: %s",
+                            path,
+                            exc,
+                        )
+                        subjects = set()
+                    if use_allowed_filter:
+                        subjects.intersection_update(allowed)
+                    result[path] = subjects
+                return result
+
+            sidecars_by_norm = find_xmp_sidecars(normalized_paths)
+            for path in normalized_paths:
                 try:
-                    subjects = set(self._metadata.read_subjects(path))
+                    sidecar_path = sidecars_by_norm.get(os.path.normpath(path))
+                    # Passing the known XMP path preserves the canonical
+                    # PhotoMetaDataXMP subject parser (including rdf:resource
+                    # and literal semicolons) without rescanning the directory.
+                    subjects = set(
+                        self._metadata.read_subjects(sidecar_path)
+                        if sidecar_path else []
+                    )
                 except Exception as exc:
                     _log.warning("[PhotoTagSidecarStore.load_tags_for_paths] failed path=%r: %s", path, exc)
                     subjects = set()

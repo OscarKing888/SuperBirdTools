@@ -157,6 +157,67 @@ def test_store_loads_and_filters_configured_tags(tmp_path: Path) -> None:
     assert tags[str(p2)] == {"same-frame"}
 
 
+def test_store_batch_indexes_sidecars_once(monkeypatch) -> None:
+    from SuperViewer.superviewer import photo_tags as photo_tags_module
+
+    paths = [os.path.normpath(f"C:/photos/{name}.jpg") for name in ("a", "b", "c")]
+    index_calls: list[list[str]] = []
+    parsed_paths: list[str] = []
+
+    def fake_find(all_paths):
+        index_calls.append(list(all_paths))
+        return {paths[0]: "a.xmp", paths[2]: "c.xmp"}
+
+    def fake_read(_self, xmp_path: str):
+        parsed_paths.append(xmp_path)
+        if xmp_path == "a.xmp":
+            return ["fight", "feeding"]
+        return ["flight"]
+
+    monkeypatch.setattr(photo_tags_module, "find_xmp_sidecars", fake_find)
+    monkeypatch.setattr(photo_tags_module.PhotoMetaDataXMP, "read_subjects", fake_read)
+
+    tags = PhotoTagSidecarStore().load_tags_for_paths(
+        paths,
+        allowed_tags=["fight", "feeding", "flight"],
+    )
+
+    assert index_calls == [paths]
+    assert parsed_paths == ["a.xmp", "c.xmp"]
+    assert tags == {
+        paths[0]: {"fight", "feeding"},
+        paths[1]: set(),
+        paths[2]: {"flight"},
+    }
+
+
+def test_store_batch_preserves_semicolons_and_rdf_resource_subjects(tmp_path: Path) -> None:
+    photo_path = tmp_path / "img001.jpg"
+    photo_path.write_bytes(b"")
+    (tmp_path / "img001.xmp").write_text(
+        """<?xml version="1.0" encoding="UTF-8"?>
+<x:xmpmeta xmlns:x="adobe:ns:meta/">
+  <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+    <rdf:Description xmlns:dc="http://purl.org/dc/elements/1.1/">
+      <dc:subject><rdf:Bag>
+        <rdf:li>行为;特殊</rdf:li>
+        <rdf:li rdf:resource="flight" />
+      </rdf:Bag></dc:subject>
+    </rdf:Description>
+  </rdf:RDF>
+</x:xmpmeta>
+""",
+        encoding="utf-8",
+    )
+
+    tags = PhotoTagSidecarStore().load_tags_for_paths(
+        [str(photo_path)],
+        allowed_tags=["行为;特殊", "flight"],
+    )
+
+    assert tags[str(photo_path)] == {"行为;特殊", "flight"}
+
+
 def test_clear_configured_tags_preserves_unrelated_xmp_subjects(tmp_path: Path) -> None:
     photo_path = tmp_path / "img001.jpg"
     photo_path.write_bytes(b"not an image")

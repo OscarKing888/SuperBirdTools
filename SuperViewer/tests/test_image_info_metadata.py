@@ -11,7 +11,7 @@ def test_basic_info_includes_camera_and_analysis_metadata(tmp_path) -> None:
     photo.write_bytes(b"not an actual image")
 
     class DummyPanel:
-        def _image_size(self, path: str):
+        def _image_size(self, path: str, *, metadata=None):
             return (4000, 3000)
 
         def _load_metadata(self, path: str) -> dict:

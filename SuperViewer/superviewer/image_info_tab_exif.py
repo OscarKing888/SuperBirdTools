@@ -10,8 +10,39 @@ from .qt_compat import (
     QCheckBox,
     QHBoxLayout,
     QPushButton,
+    QThread,
     QVBoxLayout,
+    pyqtSignal,
 )
+
+
+class _ExifRowsLoader(QThread):
+    loaded = pyqtSignal(int, str, object)
+
+    def __init__(
+        self,
+        request_token: int,
+        path: str,
+        tag_label_chinese: bool,
+        rows_loader: Callable[[str, bool], list[tuple]],
+        parent=None,
+    ) -> None:
+        super().__init__(parent)
+        self._request_token = int(request_token)
+        self._path = os.path.normpath(path) if path else ""
+        self._tag_label_chinese = bool(tag_label_chinese)
+        self._rows_loader = rows_loader
+
+    def run(self) -> None:
+        if self.isInterruptionRequested():
+            return
+        try:
+            rows = list(self._rows_loader(self._path, self._tag_label_chinese) or [])
+        except Exception:
+            rows = []
+        if self.isInterruptionRequested():
+            return
+        self.loaded.emit(self._request_token, self._path, rows)
 
 
 class ImageInfoTabPanel_EXIF(ImageInfoTabPanel):
@@ -28,6 +59,11 @@ class ImageInfoTabPanel_EXIF(ImageInfoTabPanel):
         self._metadata_rows_loader = metadata_rows_loader
         self._save_callback = save_callback
         self._last_rows: list[tuple] = []
+        self._request_sequence = 0
+        self._display_request_token = 0
+        self._loader: _ExifRowsLoader | None = None
+        self._pending_request: tuple[int, str, bool] | None = None
+        self._shutdown_requested = False
         super().__init__(parent)
 
     def create_ui(self) -> None:
@@ -70,16 +106,103 @@ class ImageInfoTabPanel_EXIF(ImageInfoTabPanel):
 
         path = self.current_photo_path()
         if not path or not os.path.isfile(path):
+            self._invalidate_requests()
             self._last_rows = []
             self.exif_table.set_exif([])
             return []
-        rows = self._metadata_rows_loader(
-            path,
-            load_tag_label_chinese_from_settings(),
+        self._request_sequence += 1
+        request_token = self._request_sequence
+        self._display_request_token = request_token
+        request = (
+            request_token,
+            os.path.normpath(path),
+            bool(load_tag_label_chinese_from_settings()),
         )
+        self._last_rows = []
+        self.exif_table.set_exif([])
+        loader = self._loader
+        if loader is not None and loader.isRunning():
+            loader.requestInterruption()
+            self._pending_request = request
+            return []
+        self._pending_request = None
+        self._launch_request(*request)
+        return []
+
+    def _launch_request(self, request_token: int, path: str, tag_label_chinese: bool) -> None:
+        if self._shutdown_requested:
+            return
+        if int(request_token) != int(self._display_request_token):
+            return
+        if not path or os.path.normcase(path) != os.path.normcase(self.current_photo_path()):
+            return
+        loader = _ExifRowsLoader(
+            request_token,
+            path,
+            tag_label_chinese,
+            self._metadata_rows_loader,
+            self,
+        )
+        loader.loaded.connect(self._on_rows_loaded)
+        loader.finished.connect(lambda l=loader: self._on_loader_finished(l))
+        self._loader = loader
+        loader.start()
+
+    def _on_rows_loaded(self, request_token: int, path: str, rows) -> None:
+        if int(request_token) != int(self._display_request_token):
+            return
+        current_path = os.path.normpath(self.current_photo_path()) if self.current_photo_path() else ""
+        if not current_path or os.path.normcase(path) != os.path.normcase(current_path):
+            return
         self._last_rows = list(rows or [])
         self.exif_table.set_exif(self._last_rows)
-        return list(self._last_rows)
+
+    def _on_loader_finished(self, loader: _ExifRowsLoader) -> None:
+        if self._loader is loader:
+            self._loader = None
+        try:
+            loader.deleteLater()
+        except Exception:
+            pass
+        if self._shutdown_requested:
+            self._pending_request = None
+            return
+        pending = self._pending_request
+        self._pending_request = None
+        if pending is not None:
+            self._launch_request(*pending)
+
+    def _invalidate_requests(self) -> None:
+        self._request_sequence += 1
+        self._display_request_token = self._request_sequence
+        self._pending_request = None
+        loader = self._loader
+        if loader is not None and loader.isRunning():
+            loader.requestInterruption()
+
+    def shutdown(self) -> None:
+        if self._shutdown_requested:
+            return
+        self._shutdown_requested = True
+        self._invalidate_requests()
+        loader = self._loader
+        if loader is None:
+            return
+        try:
+            loader.requestInterruption()
+            loader.wait()
+        except Exception:
+            pass
+        if self._loader is loader:
+            self._loader = None
+        try:
+            loader.deleteLater()
+        except Exception:
+            pass
+
+    def closeEvent(self, event) -> None:  # type: ignore[override]
+        self.shutdown()
+        super().closeEvent(event)
 
     def last_rows(self) -> list[tuple]:
         return list(self._last_rows)

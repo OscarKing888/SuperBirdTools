@@ -292,25 +292,10 @@ def _load_raw_embedded_preview_qimage(path: str) -> QImage | None:
 def _load_full_preview_qimage_raw(path: str) -> QImage | None:
     if not path or not os.path.isfile(path) or Path(path).suffix.lower() not in RAW_EXTENSIONS:
         return None
-    embedded_qimg = _load_raw_embedded_preview_qimage(path)
-    if embedded_qimg is not None and not embedded_qimg.isNull():
-        return embedded_qimg
-    try:
-        import rawpy
-    except Exception:
-        return None
-    try:
-        with rawpy.imread(path) as raw:
-            rgb = raw.postprocess(
-                use_camera_wb=True,
-                no_auto_bright=False,
-                output_bps=8,
-            )
-        img = Image.fromarray(rgb).convert("RGB")
-        img = _apply_orientation_to_pil_image(img, _get_orientation_from_file(path))
-        return _qimage_from_pil_image(img)
-    except Exception:
-        return None
+    # Ordinary RAW switching must never fall back to a full sensor demosaic.
+    # Camera-provided embedded previews are the only full-preview source here;
+    # explicit export workflows may still choose a separate RAW decode path.
+    return _load_raw_embedded_preview_qimage(path)
 
 
 def _load_full_preview_qimage_pil(path: str) -> QImage | None:
@@ -337,9 +322,9 @@ def _load_full_preview_qimage(path: str) -> QImage | None:
     expected_pixels = 0
 
     if ext in RAW_EXTENSIONS:
-        raw_qimg = _load_full_preview_qimage_raw(path)
-        if raw_qimg is not None and not raw_qimg.isNull():
-            return raw_qimg
+        # Do not let Qt/Pillow silently turn a missing embedded preview into a
+        # full RAW decode.  The normal preview policy is embedded-preview only.
+        return _load_full_preview_qimage_raw(path)
 
     if ext in HEIF_EXTENSIONS:
         pil_qimg = _load_full_preview_qimage_pil(path)
@@ -390,6 +375,11 @@ class _FullPreviewLoader(QThread):
         qimg = None
         if not self.isInterruptionRequested():
             qimg = _load_full_preview_qimage(self._path)
+        if self.isInterruptionRequested():
+            # Dropping the decoded QImage in this worker avoids queueing a
+            # potentially hundreds-of-megabytes stale object to the GUI loop.
+            qimg = None
+            return
         self.loaded.emit(
             self._token,
             self._path,
@@ -412,7 +402,8 @@ class PreviewPanel(QWidget):
         self._full_preview_loaded = False
         self._fast_preview_only = False
         self._full_preview_loader: _FullPreviewLoader | None = None
-        self._retired_full_preview_loaders: list[_FullPreviewLoader] = []
+        self._pending_full_preview_request: tuple[int, str] | None = None
+        self._shutdown_requested = False
         self._full_preview_timer = QTimer(self)
         self._full_preview_timer.setSingleShot(True)
         self._full_preview_timer.timeout.connect(self._start_full_preview_loader)
@@ -474,7 +465,9 @@ class PreviewPanel(QWidget):
         target_size = _quick_preview_target_size(self._canvas, quick_size)
         pix = None
         direct_full = False
-        if load_full and path:
+        active_loader = self._full_preview_loader
+        full_decode_busy = active_loader is not None and active_loader.isRunning()
+        if load_full and path and not full_decode_busy:
             qimg = None
             if Path(path).suffix.lower() in RAW_EXTENSIONS:
                 qimg = _load_raw_embedded_preview_qimage(path)
@@ -623,11 +616,14 @@ class PreviewPanel(QWidget):
     def _cancel_pending_full_preview(self) -> None:
         if self._full_preview_timer.isActive():
             self._full_preview_timer.stop()
+        self._pending_full_preview_request = None
         loader = self._full_preview_loader
         if loader is not None and loader.isRunning():
             loader.requestInterruption()
 
     def _start_full_preview_loader(self) -> None:
+        if self._shutdown_requested:
+            return
         path = os.path.normpath(str(self._current_path or ""))
         if not path or not os.path.isfile(path):
             return
@@ -635,7 +631,21 @@ class PreviewPanel(QWidget):
         loader = self._full_preview_loader
         if loader is not None and loader.isRunning():
             loader.requestInterruption()
-            self._retired_full_preview_loaders.append(loader)
+            # Decoders generally cannot be interrupted mid-call.  Coalesce all
+            # newer selections to one latest request instead of starting more
+            # full-size decodes in parallel.
+            self._pending_full_preview_request = (int(token), path)
+            return
+        self._pending_full_preview_request = None
+        self._launch_full_preview_loader(token, path)
+
+    def _launch_full_preview_loader(self, token: int, path: str) -> None:
+        if self._shutdown_requested:
+            return
+        if int(token) != int(self._preview_request_token):
+            return
+        if not path or not self._is_current_path(path) or not os.path.isfile(path):
+            return
         loader = _FullPreviewLoader(token, path, self)
         loader.loaded.connect(self._on_full_preview_loaded)
         loader.finished.connect(lambda l=loader: self._cleanup_full_preview_loader(l))
@@ -645,13 +655,19 @@ class PreviewPanel(QWidget):
     def _cleanup_full_preview_loader(self, loader: _FullPreviewLoader) -> None:
         if self._full_preview_loader is loader:
             self._full_preview_loader = None
-        self._retired_full_preview_loaders = [
-            item for item in self._retired_full_preview_loaders if item is not loader
-        ]
         try:
             loader.deleteLater()
         except Exception:
             pass
+        if self._shutdown_requested:
+            self._pending_full_preview_request = None
+            return
+        pending = self._pending_full_preview_request
+        self._pending_full_preview_request = None
+        if pending is None:
+            return
+        token, path = pending
+        self._launch_full_preview_loader(token, path)
 
     def _on_full_preview_loaded(self, token: int, path: str, qimg, load_ms: float) -> None:
         if int(token) != int(self._preview_request_token):
@@ -779,17 +795,28 @@ class PreviewPanel(QWidget):
         return self._current_path
 
     def shutdown(self) -> None:
+        if self._shutdown_requested:
+            return
+        self._shutdown_requested = True
         self._preview_request_token += 1
         self._cancel_pending_full_preview()
-        workers = [self._full_preview_loader] + list(self._retired_full_preview_loaders)
-        for worker in workers:
-            if worker is None:
-                continue
-            try:
-                worker.requestInterruption()
-                worker.wait(2000)
-            except Exception:
-                pass
+        worker = self._full_preview_loader
+        if worker is None:
+            return
+        try:
+            worker.requestInterruption()
+            # There is at most one decoder now.  Waiting for its owned work to
+            # finish prevents "QThread destroyed while running" on application
+            # shutdown; no new pending request can start once shutdown begins.
+            worker.wait()
+        except Exception:
+            pass
+        if self._full_preview_loader is worker:
+            self._full_preview_loader = None
+        try:
+            worker.deleteLater()
+        except Exception:
+            pass
 
     def closeEvent(self, event) -> None:  # type: ignore[override]
         self.shutdown()
@@ -797,6 +824,8 @@ class PreviewPanel(QWidget):
 
     def source_pixmap_for_path(self, path: str) -> QPixmap | None:
         """返回当前预览已经加载的同路径源图，供右侧信息面板复用，避免重复解码。"""
+        if not self._full_preview_loaded or self._fast_preview_only:
+            return None
         if not path or not self._current_path:
             return None
         try:

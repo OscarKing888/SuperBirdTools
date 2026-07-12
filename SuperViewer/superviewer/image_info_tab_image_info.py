@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import re
 import time as _time
 from pathlib import Path
 from typing import Callable
@@ -34,6 +35,7 @@ from .qt_compat import (
     QLineEdit,
     QMenu,
     QMessageBox,
+    QImageReader,
     QPixmap,
     QScrollArea,
     QSizePolicy,
@@ -42,8 +44,6 @@ from .qt_compat import (
     QWidget,
     QTextEdit, 
     _AlignCenter,
-    _KeepAspectRatio,
-    _SmoothTransformation,
 )
 from .tag_menu import add_filterable_tag_actions
 
@@ -410,7 +410,6 @@ class ImageInfoTabPanel_ImageInfo(ImageInfoTabPanel):
 
     def resizeEvent(self, event) -> None:  # type: ignore[override]
         super().resizeEvent(event)
-        self._update_preview_pixmap()
 
     def _section_title(self, text: str) -> QLabel:
         label = QLabel(text)
@@ -443,77 +442,13 @@ class ImageInfoTabPanel_ImageInfo(ImageInfoTabPanel):
         self.basic_rows[label_text] = value
 
     def _load_preview(self, path: str) -> None:
-        t0 = _time.perf_counter()
+        # The preview label is intentionally not part of the layout.  Do not
+        # fetch or scale another pixmap on every selection merely to populate a
+        # hidden widget; the main PreviewPanel already owns image rendering.
         self._preview_pixmap = None
-        provider_hit = False
-        provider_ms = 0.0
-        pixmap_ms = 0.0
-        if path:
-            pixmap = None
-            if self._preview_pixmap_provider is not None:
-                provider_t0 = _time.perf_counter()
-                try:
-                    pixmap = self._preview_pixmap_provider(path)
-                except Exception:
-                    pixmap = None
-                provider_ms = (_time.perf_counter() - provider_t0) * 1000.0
-                provider_hit = bool(pixmap is not None and not pixmap.isNull())
-            if pixmap is None or pixmap.isNull():
-                pixmap_t0 = _time.perf_counter()
-                pixmap = QPixmap(path)
-                pixmap_ms = (_time.perf_counter() - pixmap_t0) * 1000.0
-            if not pixmap.isNull():
-                self._preview_pixmap = pixmap
-        update_t0 = _time.perf_counter()
-        self._update_preview_pixmap()
-        update_ms = (_time.perf_counter() - update_t0) * 1000.0
-        perf_log(
-            _log,
-            "[PERF][image_switch][ImageInfoTabPanel_ImageInfo._load_preview] path=%r ok=%s provider_hit=%s size=%s provider_ms=%.1f qpixmap_ms=%.1f update_ms=%.1f total_ms=%.1f",
-            path,
-            bool(self._preview_pixmap is not None and not self._preview_pixmap.isNull()),
-            provider_hit,
-            (self._preview_pixmap.width(), self._preview_pixmap.height()) if self._preview_pixmap is not None and not self._preview_pixmap.isNull() else None,
-            provider_ms,
-            pixmap_ms,
-            update_ms,
-            (_time.perf_counter() - t0) * 1000.0,
-        )
 
     def _update_preview_pixmap(self) -> None:
-        t0 = _time.perf_counter()
-        if self._preview_pixmap is None or self._preview_pixmap.isNull():
-            self.preview_label.setPixmap(QPixmap())
-            self.preview_label.setText("未选择图片" if not self.current_photo_path() else "无法预览")
-            perf_log(
-                _log,
-                "[PERF][image_switch][ImageInfoTabPanel_ImageInfo._update_preview_pixmap] empty=True total_ms=%.1f",
-                (_time.perf_counter() - t0) * 1000.0,
-            )
-            return
-        target_w = max(32, self.preview_label.width() - 2)
-        target_h = max(32, self.preview_label.height() - 2)
-        scale_t0 = _time.perf_counter()
-        scaled = self._preview_pixmap.scaled(
-            target_w,
-            target_h,
-            _KeepAspectRatio,
-            _SmoothTransformation,
-        )
-        scale_ms = (_time.perf_counter() - scale_t0) * 1000.0
-        apply_t0 = _time.perf_counter()
-        self.preview_label.setText("")
-        self.preview_label.setPixmap(scaled)
-        apply_ms = (_time.perf_counter() - apply_t0) * 1000.0
-        perf_log(
-            _log,
-            "[PERF][image_switch][ImageInfoTabPanel_ImageInfo._update_preview_pixmap] empty=False target=%s scaled=%s scale_ms=%.1f apply_ms=%.1f total_ms=%.1f",
-            (target_w, target_h),
-            (scaled.width(), scaled.height()),
-            scale_ms,
-            apply_ms,
-            (_time.perf_counter() - t0) * 1000.0,
-        )
+        return
 
     def _load_available_tags(self) -> list[str]:
         try:
@@ -701,7 +636,7 @@ class ImageInfoTabPanel_ImageInfo(ImageInfoTabPanel):
         except OSError:
             stat = None
         metadata = metadata if isinstance(metadata, dict) else self._load_metadata(path)
-        width, height = self._image_size(path)
+        width, height = self._image_size(path, metadata=metadata)
         created_ts = getattr(stat, "st_birthtime", None) if stat is not None else None
         if created_ts is None and stat is not None:
             created_ts = stat.st_ctime
@@ -739,16 +674,94 @@ class ImageInfoTabPanel_ImageInfo(ImageInfoTabPanel):
             return {}
         return dict(data) if isinstance(data, dict) else {}
 
-    def _image_size(self, path: str) -> tuple[int | None, int | None]:
-        pixmap = self._preview_pixmap
-        if pixmap is not None and not pixmap.isNull():
-            return int(pixmap.width()), int(pixmap.height())
+    @staticmethod
+    def _positive_dimension(value) -> int | None:
+        if isinstance(value, (int, float)):
+            parsed = int(value)
+            return parsed if parsed > 0 else None
+        match = re.search(r"\d+", str(value or ""))
+        if not match:
+            return None
         try:
-            pixmap = QPixmap(path)
-            if not pixmap.isNull():
-                return int(pixmap.width()), int(pixmap.height())
+            parsed = int(match.group(0))
+        except Exception:
+            return None
+        return parsed if parsed > 0 else None
+
+    @classmethod
+    def _metadata_image_size(cls, metadata: dict | None) -> tuple[int | None, int | None]:
+        width = cls._positive_dimension(_metadata_value_from_candidates(
+            metadata,
+            "width",
+            "image_width",
+            "ImageWidth",
+            "ExifImageWidth",
+            "EXIF:ExifImageWidth",
+            "ExifIFD:ExifImageWidth",
+            "File:ImageWidth",
+            "RawImageWidth",
+            "SourceImageWidth",
+            "original_width",
+        ))
+        height = cls._positive_dimension(_metadata_value_from_candidates(
+            metadata,
+            "height",
+            "image_height",
+            "ImageHeight",
+            "ExifImageHeight",
+            "ExifImageLength",
+            "EXIF:ExifImageHeight",
+            "EXIF:ExifImageLength",
+            "ExifIFD:ExifImageHeight",
+            "ExifIFD:ExifImageLength",
+            "File:ImageHeight",
+            "RawImageHeight",
+            "SourceImageHeight",
+            "original_height",
+        ))
+        if width and height:
+            return width, height
+        pair = _metadata_value_from_candidates(
+            metadata,
+            "ImageSize",
+            "Composite:ImageSize",
+            "ExifImageSize",
+        )
+        numbers = re.findall(r"\d+", str(pair or ""))
+        if len(numbers) >= 2:
+            pair_width = cls._positive_dimension(numbers[0])
+            pair_height = cls._positive_dimension(numbers[1])
+            if pair_width and pair_height:
+                return pair_width, pair_height
+        return width, height
+
+    def _image_size(
+        self,
+        path: str,
+        *,
+        metadata: dict | None = None,
+    ) -> tuple[int | None, int | None]:
+        metadata_width, metadata_height = self._metadata_image_size(metadata)
+        if metadata_width and metadata_height:
+            return metadata_width, metadata_height
+        try:
+            reader = QImageReader(path)
+            size = reader.size()
+            if size is not None and size.isValid():
+                width, height = int(size.width()), int(size.height())
+                if width > 0 and height > 0:
+                    return width, height
         except Exception:
             pass
+        if self._preview_pixmap_provider is not None:
+            try:
+                # PreviewPanel only exposes this provider after a true full
+                # preview is loaded; quick-tier pixmaps are deliberately hidden.
+                pixmap = self._preview_pixmap_provider(path)
+            except Exception:
+                pixmap = None
+            if pixmap is not None and not pixmap.isNull():
+                return int(pixmap.width()), int(pixmap.height())
         return None, None
 
     def _set_basic_info(self, info: dict[str, str]) -> None:
