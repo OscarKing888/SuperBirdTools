@@ -105,6 +105,17 @@ def _quick_preview_target_size(canvas: QWidget, requested_size: int | None = Non
     return _normalize_preview_target_size(requested_size or _QUICK_PREVIEW_SIZE)
 
 
+def _can_reuse_current_preview(
+    *,
+    same_path: bool,
+    has_pixmap: bool,
+    load_full: bool,
+    fast_preview_only: bool,
+) -> bool:
+    """A fast-only frame must re-enter normal loading policy on key release."""
+    return bool(same_path and has_pixmap and not (load_full and fast_preview_only))
+
+
 def _normalize_preview_target_size(target_size: int | None) -> int:
     try:
         parsed = int(target_size or 0)
@@ -399,12 +410,17 @@ class PreviewPanel(QWidget):
         self._current_path = None
         self._preview_request_token = 0
         self._full_preview_loaded = False
+        self._fast_preview_only = False
         self._full_preview_loader: _FullPreviewLoader | None = None
         self._retired_full_preview_loaders: list[_FullPreviewLoader] = []
         self._full_preview_timer = QTimer(self)
         self._full_preview_timer.setSingleShot(True)
         self._full_preview_timer.timeout.connect(self._start_full_preview_loader)
         self._preview_resolution: tuple[int, int] | None = None
+        self._fast_preview_perf_started_at = 0.0
+        self._fast_preview_perf_frames = 0
+        self._fast_preview_perf_total_ms = 0.0
+        self._fast_preview_perf_max_ms = 0.0
         self._keep_view_on_switch = bool(get_keep_view_on_switch())
         self._show_focus_enabled = True
         self._composition_grid_mode = normalize_preview_composition_grid_mode("none")
@@ -425,23 +441,33 @@ class PreviewPanel(QWidget):
     def set_image(self, path: str, *, load_full: bool = True, quick_size: int | None = None):
         t0 = _time.perf_counter()
         norm_path = os.path.normpath(path) if path else path
-        if norm_path and self._is_current_path(norm_path) and self._has_canvas_pixmap():
+        if _can_reuse_current_preview(
+            same_path=bool(norm_path and self._is_current_path(norm_path)),
+            has_pixmap=self._has_canvas_pixmap(),
+            load_full=load_full,
+            fast_preview_only=self._fast_preview_only,
+        ):
             if load_full and not self._full_preview_loaded and not self._full_preview_timer.isActive():
                 loader = self._full_preview_loader
                 if loader is None or not loader.isRunning():
                     self._full_preview_timer.start(_FULL_PREVIEW_DELAY_MS)
-            perf_log(
-                _log,
-                "[PERF][image_switch][preview_panel.set_image] path=%r same_path=1 full_loaded=%s total_ms=%.1f",
-                path,
-                self._full_preview_loaded,
-                (_time.perf_counter() - t0) * 1000.0,
-            )
+            total_ms = (_time.perf_counter() - t0) * 1000.0
+            if load_full:
+                perf_log(
+                    _log,
+                    "[PERF][image_switch][preview_panel.set_image] path=%r same_path=1 full_loaded=%s total_ms=%.1f",
+                    path,
+                    self._full_preview_loaded,
+                    total_ms,
+                )
+            else:
+                self._record_fast_preview_timing(total_ms)
             return
         self._preview_request_token += 1
         token = self._preview_request_token
         self._current_path = norm_path
         self._full_preview_loaded = False
+        self._fast_preview_only = not bool(load_full)
         self._cancel_pending_full_preview()
         self.set_focus_box(None)
         load_t0 = _time.perf_counter()
@@ -464,13 +490,14 @@ class PreviewPanel(QWidget):
         status_ms = 0.0
         if pix is not None and not pix.isNull():
             canvas_t0 = _time.perf_counter()
-            self._set_canvas_pixmap(pix)
+            self._set_canvas_pixmap(pix, log_performance=load_full)
             canvas_ms = (_time.perf_counter() - canvas_t0) * 1000.0
             status_t0 = _time.perf_counter()
             self._set_preview_status_text(pix.width(), pix.height())
             status_ms = (_time.perf_counter() - status_t0) * 1000.0
             if direct_full:
                 self._full_preview_loaded = True
+                self._fast_preview_only = False
         else:
             canvas_t0 = _time.perf_counter()
             self._canvas.set_source_pixmap(None)
@@ -481,39 +508,105 @@ class PreviewPanel(QWidget):
             status_ms = (_time.perf_counter() - status_t0) * 1000.0
         if load_full and path and not self._full_preview_loaded:
             self._full_preview_timer.start(_FULL_PREVIEW_DELAY_MS)
+        total_ms = (_time.perf_counter() - t0) * 1000.0
+        if load_full:
+            perf_log(
+                _log,
+                "[PERF][image_switch][preview_panel.set_image] path=%r token=%s quick_ok=%s direct_full=%s full_loaded=%s quick_size=%s target=%s load_ms=%.1f canvas_ms=%.1f status_ms=%.1f total_ms=%.1f",
+                path,
+                token,
+                bool(pix is not None and not pix.isNull()),
+                direct_full,
+                self._full_preview_loaded,
+                (pix.width(), pix.height()) if pix is not None and not pix.isNull() else None,
+                target_size,
+                load_ms,
+                canvas_ms,
+                status_ms,
+                total_ms,
+            )
+        else:
+            self._record_fast_preview_timing(total_ms)
+
+    def set_quick_pixmap(self, path: str, pixmap: QPixmap, *, quick_size: int | None = None) -> None:
+        """Display an already-decoded selected-tier frame without disk round-tripping."""
+        started_at = _time.perf_counter()
+        self._preview_request_token += 1
+        self._current_path = os.path.normpath(path) if path else path
+        self._full_preview_loaded = False
+        self._fast_preview_only = True
+        self._cancel_pending_full_preview()
+        self.set_focus_box(None)
+
+        target_size = _quick_preview_target_size(self._canvas, quick_size)
+        output = None
+        if isinstance(pixmap, QPixmap) and not pixmap.isNull():
+            if pixmap.width() <= target_size and pixmap.height() <= target_size:
+                output = pixmap
+            else:
+                output = pixmap.scaled(
+                    target_size,
+                    target_size,
+                    _KeepAspectRatio,
+                    _SmoothTransformation,
+                )
+        if output is not None and not output.isNull():
+            self._set_canvas_pixmap(output, log_performance=False)
+            self._set_preview_status_text(output.width(), output.height())
+        else:
+            self._canvas.set_source_pixmap(None)
+            self._canvas.setText(f"无法预览\n{Path(path).name}")
+            self._set_preview_status_text(None, None)
+        self._record_fast_preview_timing((_time.perf_counter() - started_at) * 1000.0)
+
+    def _record_fast_preview_timing(self, total_ms: float) -> None:
+        now = _time.perf_counter()
+        if self._fast_preview_perf_started_at <= 0.0:
+            self._fast_preview_perf_started_at = now
+        self._fast_preview_perf_frames += 1
+        self._fast_preview_perf_total_ms += max(0.0, float(total_ms))
+        self._fast_preview_perf_max_ms = max(self._fast_preview_perf_max_ms, max(0.0, float(total_ms)))
+        elapsed_s = now - self._fast_preview_perf_started_at
+        if elapsed_s < 1.0:
+            return
+        frames = self._fast_preview_perf_frames
         perf_log(
             _log,
-            "[PERF][image_switch][preview_panel.set_image] path=%r token=%s quick_ok=%s direct_full=%s full_loaded=%s quick_size=%s target=%s load_ms=%.1f canvas_ms=%.1f status_ms=%.1f total_ms=%.1f",
-            path,
-            token,
-            bool(pix is not None and not pix.isNull()),
-            direct_full,
-            self._full_preview_loaded,
-            (pix.width(), pix.height()) if pix is not None and not pix.isNull() else None,
-            target_size,
-            load_ms,
-            canvas_ms,
-            status_ms,
-            (_time.perf_counter() - t0) * 1000.0,
+            "[preview.fast.summary] frames=%s elapsed_ms=%.1f effective_fps=%.1f avg_ms=%.1f max_ms=%.1f",
+            frames,
+            elapsed_s * 1000.0,
+            (frames / elapsed_s) if elapsed_s > 0.0 else 0.0,
+            (self._fast_preview_perf_total_ms / frames) if frames else 0.0,
+            self._fast_preview_perf_max_ms,
         )
+        self._fast_preview_perf_started_at = now
+        self._fast_preview_perf_frames = 0
+        self._fast_preview_perf_total_ms = 0.0
+        self._fast_preview_perf_max_ms = 0.0
 
     def clear_image(self):
         self._preview_request_token += 1
         self._current_path = None
         self._full_preview_loaded = False
+        self._fast_preview_only = False
         self._cancel_pending_full_preview()
         self._canvas.set_source_pixmap(None)
         self._set_preview_status_text(None, None)
 
-    def _set_canvas_pixmap(self, pix: QPixmap) -> None:
+    def _set_canvas_pixmap(self, pix: QPixmap, *, log_performance: bool = True) -> None:
         if self._keep_view_on_switch:
             self._canvas.set_source_pixmap(
                 pix,
                 preserve_view=True,
                 preserve_scale=True,
+                log_performance=log_performance,
             )
         else:
-            self._canvas.set_source_pixmap(pix, reset_view=True)
+            self._canvas.set_source_pixmap(
+                pix,
+                reset_view=True,
+                log_performance=log_performance,
+            )
 
     def _has_canvas_pixmap(self) -> bool:
         pixmap = getattr(self._canvas, "_source_pixmap", None)
@@ -583,6 +676,7 @@ class PreviewPanel(QWidget):
         self._set_canvas_pixmap(pix)
         self._set_preview_status_text(pix.width(), pix.height())
         self._full_preview_loaded = True
+        self._fast_preview_only = False
         perf_log(
             _log,
             "[preview.full] path=%r token=%s ok=True size=%s load_ms=%.1f apply_ms=%.1f",
@@ -606,6 +700,7 @@ class PreviewPanel(QWidget):
         self._set_canvas_pixmap(pix)
         self._set_preview_status_text(pix.width(), pix.height())
         self._full_preview_loaded = True
+        self._fast_preview_only = False
 
     def set_keep_view_on_switch(self, enabled: bool) -> None:
         self._keep_view_on_switch = bool(enabled)

@@ -8,7 +8,6 @@ from pathlib import Path
 from typing import Iterable
 
 from app_common.file_browser import FileListPanel
-from app_common.file_browser._browser_core import _thumb_disk_cache_path
 from app_common.perf_probe import elapsed_ms, perf_counter, perf_log
 from app_common.log import get_logger
 
@@ -171,6 +170,9 @@ class SuperViewerTaggedFileListPanel(FileListPanel):
 
     use_report_db = True
     use_preview_cache = True
+    enable_key_navigation_playback = True
+    enable_in_memory_fast_preview = True
+    skip_uncached_fast_preview = True
 
     def __init__(
         self,
@@ -311,23 +313,11 @@ class SuperViewerTaggedFileListPanel(FileListPanel):
         norm_path = os.path.normpath(path) if path else ""
         if not norm_path or not prefer_fast_preview:
             return norm_path
-        source_path = self._get_actual_path_for_display(norm_path) or norm_path
-        if not source_path or not os.path.isfile(source_path):
-            return norm_path
-        try:
-            mtime = float(os.path.getmtime(source_path))
-        except Exception:
-            mtime = 0.0
-        thumb_path = _thumb_disk_cache_path(source_path, mtime, self._thumb_size)
-        if thumb_path and os.path.isfile(thumb_path):
-            _log.info(
-                "[resolve_preview_path] fast source=%r thumb_disk=%r size=%s",
-                norm_path,
-                thumb_path,
-                self._thumb_size,
-            )
-            return thumb_path
-        return norm_path
+        cached_path = self._resolve_existing_sized_preview_image_path(
+            norm_path,
+            exact_size_only=True,
+        )
+        return cached_path or norm_path
 
     def _resolve_rating_write_source(
         self,

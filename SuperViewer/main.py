@@ -299,6 +299,9 @@ class MainWindow(QMainWindow):
         self._dir_browser.directory_selected.connect(self._on_directory_selected)
         # 连接文件列表选中 → 预览 + 元信息刷新
         self._file_list.file_fast_preview_requested.connect(self._on_file_fast_preview_requested)
+        self._file_list.file_fast_preview_pixmap_requested.connect(
+            self._on_file_fast_preview_pixmap_requested
+        )
         self._file_list.file_selected.connect(self._on_file_selected_from_list)
 
         # ── 面板 3：App 信息 + 文件名 + 拖放预览区 ──
@@ -514,31 +517,18 @@ class MainWindow(QMainWindow):
         )
 
     def _on_file_fast_preview_requested(self, path: str):
-        """连续方向键长按时直接预览原始文件，不再切到 report 派生预览图。"""
-        t0 = _time.perf_counter()
-        probe_t0 = perf_counter()
-        perf_log(_log, "[PERF][fast_preview][main] START source=%r", path)
-        preview_t0 = _time.perf_counter()
+        """连续方向键长按时显示已解析的当前档位缓存。"""
         quick_size_fn = getattr(self._file_list, "preview_quick_size", None)
         quick_size = quick_size_fn() if callable(quick_size_fn) else None
         self.preview_panel.set_image(path, load_full=False, quick_size=quick_size)
-        # 方向键长按高速浏览时不启动焦点提取线程，避免重复 I/O 拖慢翻图
         self._update_preview_focus_box(path, allow_async_load=False)
-        preview_ms = (_time.perf_counter() - preview_t0) * 1000.0
-        perf_log(
-            _log,
-            "[PERF][fast_preview][main] END source=%r preview_ms=%.1f total_ms=%.1f",
-            path,
-            preview_ms,
-            (_time.perf_counter() - t0) * 1000.0,
-        )
-        perf_log(
-            _log,
-            "[image.fast_preview] source=%r preview_ms=%.1f total_ms=%.1f",
-            path,
-            preview_ms,
-            elapsed_ms(probe_t0),
-        )
+
+    def _on_file_fast_preview_pixmap_requested(self, path: str, pixmap, quick_size: int) -> None:
+        """直接复用缩略图视图已解码的当前档位帧，避免 JPEG 落盘再读。"""
+        if not isinstance(pixmap, QPixmap) or pixmap.isNull():
+            return
+        self.preview_panel.set_quick_pixmap(path, pixmap, quick_size=quick_size)
+        self._update_preview_focus_box(path, allow_async_load=False)
 
     def _init_menu_bar(self):
         file_menu = self.menuBar().addMenu("文件")
@@ -1012,6 +1002,13 @@ class MainWindow(QMainWindow):
 
         `allow_async_load=False` 时仅清除显示、不启动新线程（用于方向键高速浏览）。
         """
+        if not allow_async_load:
+            # This is a frame-rate-sensitive path.  Return before resolving a
+            # sibling RAW/HEIF source, scanning cache directories, or consulting
+            # metadata; set_image()/set_quick_pixmap() already cleared the box.
+            self._stop_focus_loader()
+            self.preview_panel.set_focus_box(None)
+            return
         if not self.check_show_focus.isChecked():
             self._stop_focus_loader()
             self.preview_panel.set_focus_box(None)
@@ -1035,10 +1032,6 @@ class MainWindow(QMainWindow):
         if (not preview_path or not os.path.isfile(preview_path)) and (
             not focus_source_path or not os.path.isfile(focus_source_path)
         ):
-            self._stop_focus_loader()
-            self.preview_panel.set_focus_box(None)
-            return
-        if not allow_async_load:
             self._stop_focus_loader()
             self.preview_panel.set_focus_box(None)
             return

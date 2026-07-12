@@ -102,7 +102,7 @@ class SuperViewerUserOptionsDialog(QDialog):
         if current_fps in KEY_NAVIGATION_FPS_OPTIONS:
             current_index = KEY_NAVIGATION_FPS_OPTIONS.index(current_fps)
         self._combo_key_navigation_fps.setCurrentIndex(current_index)
-        self._combo_key_navigation_fps.setToolTip("按住方向键连续浏览时，按该 FPS 节流移动速度。")
+        self._combo_key_navigation_fps.setToolTip("按住方向键连续浏览时，由应用计时器按该目标 FPS 回放照片序列。")
         grid.addWidget(self._combo_key_navigation_fps, row, 1)
         grid.addWidget(QLabel("默认 24 FPS"), row, 2)
 

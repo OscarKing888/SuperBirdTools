@@ -13,13 +13,13 @@ Follow `ai_rules/AI_CODING_RULES.md` as the project baseline.
 
 ## Current Workspace
 
-- Current Windows checkout root: `E:\SuperApps\SBT\SuperBirdTools`
+- Current Windows checkout root: `E:\SuperBirdTools`
 - Current macOS checkout root: `/Users/oscar/Pictures/SuperApps/SuperBirdTools`
 - Shared development virtual environment: `<repo>/.venv`
-- On Windows 64-bit, use the repo-root interpreter `E:\SuperApps\SBT\SuperBirdTools\.venv\Scripts\python.exe`
+- On Windows 64-bit, use the repo-root interpreter `E:\SuperBirdTools\.venv\Scripts\python.exe`
 - On macOS, use the repo-root interpreter `/Users/oscar/Pictures/SuperApps/SuperBirdTools/.venv/bin/python3`
 - Unless a script explicitly requires an app subdirectory, run commands from the repository root above.
-- Treat `<repo>` as the active checkout root for Codex file links and commands. In this Windows checkout, prefer paths under `E:\SuperApps\SBT\SuperBirdTools`.
+- Treat `<repo>` as the active checkout root for Codex file links and commands. In this Windows checkout, prefer paths under `E:\SuperBirdTools`.
 
 ## Monorepo Environment
 
@@ -78,11 +78,18 @@ Follow `ai_rules/AI_CODING_RULES.md` as the project baseline.
   - Non-RAW images above that threshold should first show the selected thumbnail-size preview (`128/256/512/1024/2048`) and then asynchronously replace it with the full preview.
   - RAW images should directly use the high-resolution embedded RAW preview JPEG when available; prefer exiftool/rawpy camera previews and treat tiny piexif EXIF thumbnails such as 160x120 only as last-resort fallbacks. Do not force a full RAW demosaic for ordinary preview switching.
 - Held direction-key navigation:
-  - Starting from the second auto-repeat image and until key release, preview must stay on the selected thumbnail-size image only.
-  - This path uses `file_fast_preview_requested` and `PreviewPanel.set_image(..., load_full=False, quick_size=<current thumb size>)`.
-  - While `load_full=False`, do not start full-preview loading and do not start focus extraction. Full selection work resumes only after key release commits the final image.
-- Quick-preview fallback must remain bounded. If thumbnail extraction/cache misses, use scaled reading at the target preview size; do not synchronously decode a full large image as the quick-preview fallback.
-- Any change touching `PreviewPanel.set_image`, `MainWindow._on_file_selected_from_list`, `MainWindow._on_file_fast_preview_requested`, or file-browser direction-key handling must include `SuperViewer/tests/test_preview_panel_policy.py` and a manual or logged check of normal click, large image, RAW, and held-direction-key navigation.
+  - The initial physical key step remains a normal committed selection. From the first auto-repeat step until physical release, preview must stay on the selected thumbnail-size image only.
+  - `key_navigation_fps` is the target playback cadence, not merely an upper bound on OS keyboard repeat events. SuperViewer owns one precise application timer after auto-repeat begins, swallows later OS repeat press/release pairs, and must coalesce late ticks rather than queue catch-up frames.
+  - Only a non-auto-repeat physical `KeyRelease` may stop playback and commit the final full selection. An `isAutoRepeat()` release must never emit `file_selected`, refresh image-info/EXIF, or start full/focus work.
+  - Fast frames use `file_fast_preview_requested` with `PreviewPanel.set_image(..., load_full=False, quick_size=<current thumb size>)` or `file_fast_preview_pixmap_requested` with `PreviewPanel.set_quick_pixmap(...)` when the exact-tier pixmap is already decoded.
+  - Fast lookup must prefer the exact selected `128/256/512/1024/2048` tier from memory, the correct per-file persistent cache, or the matching transient cache. SuperViewer-specific overrides must reuse the shared cache resolver and must not silently substitute a smaller tier.
+  - While held, do not start full-preview loading, refresh info/EXIF, resolve or scan for focus sources, decode an original/RAW via ExifTool/rawpy, synchronously write a JPEG just to read it back, or synchronously flush per-frame logs. Aggregate hot-path performance logs instead.
+  - An uncached fast frame must be prioritized for asynchronous thumbnail generation and may retain/skip the displayed frame; it must not block the GUI by decoding the original. Full selection work resumes once, for the final photo, after physical release.
+  - A fast-only frame whose identity is the source path must re-enter the normal small/large/RAW loading policy on release; same-path short-circuiting must not downgrade it to async-only behavior.
+  - Playback must stop cleanly on physical release, focus loss, view/directory changes, and shutdown.
+- Application-driven key playback is an explicit SuperViewer capability. Shared `FileListPanel` defaults it off so SuperBirdStamp `PhotoListWidget` retains native direction-key, selection, and `currentItemChanged` behavior.
+- Quick-preview fallback outside held playback must remain bounded to the target preview size; do not synchronously decode a full large image as the fallback.
+- Any change touching `PreviewPanel.set_image`, `PreviewPanel.set_quick_pixmap`, `MainWindow._on_file_selected_from_list`, either fast-preview handler, or file-browser direction-key handling must include `SuperViewer/tests/test_preview_panel_policy.py`, `SuperViewer/tests/test_fast_preview_policy.py`, `app_common/tests/test_file_browser_key_navigation.py`, and a manual or logged check of normal click, large image, RAW, held navigation, and final release.
 
 ## Metadata And Sidecars
 
@@ -104,7 +111,9 @@ Follow `ai_rules/AI_CODING_RULES.md` as the project baseline.
 - Reuse an ancestor `.superpicky` only when it contains `report.db` and the selected directory is no more than 3 levels below the volume root such as `F:\A\B\C`. Do not interpret this as walking only 3 levels upward from a deep selected directory.
 - If no valid `.superpicky` scope exists and persistent cache writing is needed, the UI may ask to create `<selected_dir>\.superpicky`; create cache directories only, not `report.db`. If the user declines or creation fails, fall back to local app cache and skip persistent pre-generation for those images for the session.
 - Persistent thumbnail size levels are `128, 256, 512, 1024, 2048`. Background generation should continue after selecting a directory and should also generate newly enabled levels when the user raises the max size.
-- Metadata reading and persistent thumbnail generation have separate worker budgets. Default metadata workers are roughly `CPU/4` capped at 8; default persistent-thumbnail workers use the remaining CPU threads, e.g. 32 total gives 8 metadata and 24 thumbnail workers. Keep progress text showing the active thread count for both.
+- RAW/PNG/HEIF and other non-JPEG memory-cache entries must record the largest satisfied request tier. A cached 128 image is a miss for a later 512/1024/2048 request and must be upgraded; a later small request must not replace a larger base image.
+- The thumbnail QImage memory cache uses an adaptive budget of up to 25% of detected RAM with a 16 GB hard cap. Keep its documentation, implementation, byte accounting, and eviction tests aligned when changing the policy.
+- Metadata reading and persistent thumbnail generation have separate worker budgets and may run concurrently; do not make all thumbnail generation wait for the complete metadata pass. Default metadata workers are roughly `CPU/4` capped at 8; default persistent-thumbnail workers use the remaining CPU threads, e.g. 32 total gives 8 metadata and 24 thumbnail workers. Keep progress text showing the active thread count for both.
 - Environment overrides currently include `SuperViewer_METADATA_WORKERS` and `SuperViewer_PERSISTENT_THUMB_WORKERS`; preserve them when changing worker configuration.
 
 ## SuperViewer Image Info UI
@@ -123,8 +132,8 @@ Follow `ai_rules/AI_CODING_RULES.md` as the project baseline.
 ## Recommended Regression Checks For Merged Features
 
 - Metadata/sidecar changes: run `app_common/tests/test_photo_meta_proxy.py`, `app_common/tests/test_file_utils.py`, `SuperViewer/tests/test_photo_tags.py`, and `SuperViewer/tests/test_image_info_metadata.py`.
-- File browser/cache changes: run `app_common/tests/test_file_browser_cache_paths.py`, `app_common/tests/test_file_browser_metadata.py`, `app_common/tests/test_file_browser_burst_display.py`, and `app_common/tests/test_superviewer_user_options.py`.
-- Preview loading changes: run `SuperViewer/tests/test_preview_panel_policy.py` and manually/log-check normal small image, large image, RAW, and held-direction-key navigation.
+- File browser/cache changes: run `app_common/tests/test_file_browser_cache_paths.py`, `app_common/tests/test_file_browser_metadata.py`, `app_common/tests/test_file_browser_burst_display.py`, `app_common/tests/test_thumbnail_memory_cache.py`, and `app_common/tests/test_superviewer_user_options.py`.
+- Preview/key-playback changes: run `app_common/tests/test_file_browser_key_navigation.py`, `app_common/tests/test_preview_canvas_hot_path.py`, `SuperViewer/tests/test_preview_panel_policy.py`, `SuperViewer/tests/test_fast_preview_policy.py`, `SuperBirdStamp/tests/test_editor_photo_list_navigation_compat.py`, and `SuperBirdStamp/tests/test_editor_preview_grid.py`; manually/log-check normal small image, large image, RAW, held playback at representative FPS values, auto-repeat releases, and the single final full commit.
 - Template-context changes: run `SuperBirdStamp/tests/test_template_context_report_db.py`.
 - Format/decoder changes: run `app_common/tests/test_image_formats.py` and `SuperBirdStamp/tests/test_psd_decoder.py` when available.
 - Always include `git diff --check` in both the main repo and `app_common` after edits that touch shared browser/metadata code.

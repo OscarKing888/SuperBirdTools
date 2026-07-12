@@ -27,3 +27,18 @@ def test_sync_full_preview_policy_never_syncs_raw(monkeypatch, tmp_path: Path) -
 def test_quick_preview_target_uses_requested_thumbnail_size() -> None:
     assert preview_panel._quick_preview_target_size(None, 1024) == 1024
     assert preview_panel._quick_preview_target_size(None, 0) == preview_panel._QUICK_PREVIEW_SIZE
+
+
+def test_fast_only_same_path_reenters_normal_loading_policy() -> None:
+    assert not preview_panel._can_reuse_current_preview(
+        same_path=True,
+        has_pixmap=True,
+        load_full=True,
+        fast_preview_only=True,
+    )
+    assert preview_panel._can_reuse_current_preview(
+        same_path=True,
+        has_pixmap=True,
+        load_full=True,
+        fast_preview_only=False,
+    )
