@@ -1,0 +1,261 @@
+name: Build packages and release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "SemVer build version, for example 0.2.0 or 0.2.0-rc.1"
+        required: true
+        type: string
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-release-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'workflow_dispatch' }}
+
+jobs:
+  prepare:
+    name: Validate version
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - name: Check out version helper
+        uses: actions/checkout@v7
+
+      - name: Resolve build version
+        id: version
+        shell: bash
+        env:
+          RAW_VERSION: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || inputs.version }}
+        run: |
+          version="$(python3 build_tools/set_build_version.py "$RAW_VERSION" --check-only)"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "Building SuperBirdTools v$version"
+
+  build-windows:
+    name: Windows x86_64
+    needs: prepare
+    runs-on: windows-2025
+    timeout-minutes: 120
+    env:
+      BUILD_VERSION: ${{ needs.prepare.outputs.version }}
+      PYTHON_VERSION: "3.13"
+    steps:
+      - name: Check out repository and submodules
+        uses: actions/checkout@v7
+        with:
+          submodules: recursive
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          architecture: x64
+          cache: pip
+          cache-dependency-path: |
+            SuperViewer/requirements.txt
+            SuperBirdStamp/requirements.txt
+
+      - name: Install build dependencies and assets
+        shell: pwsh
+        run: python init_dev.py
+
+      - name: Stamp package version and remove runtime state
+        shell: pwsh
+        run: |
+          .\.venv\Scripts\python.exe build_tools\set_build_version.py `
+            $env:BUILD_VERSION `
+            --build-number $env:GITHUB_RUN_NUMBER
+          Remove-Item -LiteralPath `
+            "SuperBirdStamp/config/editor_autosave.birdstamp-workspace.json" `
+            -Force -ErrorAction SilentlyContinue
+          Remove-Item -LiteralPath `
+            "SuperBirdStamp/config/editor_export_state.json" `
+            -Force -ErrorAction SilentlyContinue
+
+      - name: Build merged Windows applications
+        shell: pwsh
+        run: |
+          $env:PYTHON_EXE = (Resolve-Path ".\.venv\Scripts\python.exe").Path
+          cmd /c build_all.bat --clean
+          if ($LASTEXITCODE -ne 0) {
+            exit $LASTEXITCODE
+          }
+
+      - name: Verify and package Windows applications
+        shell: pwsh
+        run: |
+          $expected = @(
+            "dist/SuperViewer/SuperViewer.exe",
+            "dist/SuperBirdStamp/SuperBirdStamp.exe"
+          )
+          foreach ($path in $expected) {
+            if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
+              throw "Missing build output: $path"
+            }
+          }
+
+          $packageName = "SuperBirdTools-v$env:BUILD_VERSION-windows-x86_64"
+          $stage = Join-Path $env:RUNNER_TEMP $packageName
+          $releaseDir = Join-Path $PWD "release"
+          New-Item -ItemType Directory -Path $stage -Force | Out-Null
+          New-Item -ItemType Directory -Path $releaseDir -Force | Out-Null
+          Copy-Item -LiteralPath "dist/SuperViewer" -Destination $stage -Recurse
+          Copy-Item -LiteralPath "dist/SuperBirdStamp" -Destination $stage -Recurse
+          Copy-Item -LiteralPath "THIRD_PARTY_NOTICES.md" -Destination $stage
+          Copy-Item -LiteralPath "SuperViewer/LICENSE" `
+            -Destination (Join-Path $stage "LICENSE-SuperViewer")
+          Copy-Item -LiteralPath "SuperBirdStamp/LICENSE" `
+            -Destination (Join-Path $stage "LICENSE-SuperBirdStamp")
+          .\.venv\Scripts\python.exe -m pip freeze |
+            Set-Content -LiteralPath (Join-Path $stage "DEPENDENCIES.txt") `
+              -Encoding utf8
+
+          $archive = Join-Path $releaseDir "$packageName.zip"
+          Compress-Archive -LiteralPath $stage -DestinationPath $archive -Force
+          Write-Host "Created $archive"
+
+      - name: Upload Windows package
+        uses: actions/upload-artifact@v7
+        with:
+          name: package-windows-x86_64
+          path: release/*.zip
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14
+
+  build-macos:
+    name: macOS arm64
+    needs: prepare
+    runs-on: macos-15
+    timeout-minutes: 120
+    env:
+      BUILD_VERSION: ${{ needs.prepare.outputs.version }}
+      PYTHON_VERSION: "3.13"
+    steps:
+      - name: Check out repository and submodules
+        uses: actions/checkout@v7
+        with:
+          submodules: recursive
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          architecture: arm64
+          cache: pip
+          cache-dependency-path: |
+            SuperViewer/requirements.txt
+            SuperBirdStamp/requirements.txt
+
+      - name: Install build dependencies and assets
+        run: python3 init_dev.py
+
+      - name: Stamp package version and remove runtime state
+        run: |
+          ./.venv/bin/python3 build_tools/set_build_version.py \
+            "$BUILD_VERSION" \
+            --build-number "$GITHUB_RUN_NUMBER"
+          rm -f \
+            SuperBirdStamp/config/editor_autosave.birdstamp-workspace.json \
+            SuperBirdStamp/config/editor_export_state.json
+
+      - name: Build macOS applications
+        env:
+          PYTHON_BIN: ${{ github.workspace }}/.venv/bin/python3
+        run: bash build_all.sh --clean
+
+      - name: Verify and package macOS applications
+        run: |
+          test -x "dist/SuperViewer.app/Contents/MacOS/SuperViewer"
+          test -x "dist/SuperBirdStamp.app/Contents/MacOS/SuperBirdStamp"
+
+          package_name="SuperBirdTools-v${BUILD_VERSION}-macos-arm64"
+          stage="$RUNNER_TEMP/$package_name"
+          mkdir -p "$stage" release
+          ditto "dist/SuperViewer.app" "$stage/SuperViewer.app"
+          ditto "dist/SuperBirdStamp.app" "$stage/SuperBirdStamp.app"
+          cp THIRD_PARTY_NOTICES.md "$stage/"
+          cp SuperViewer/LICENSE "$stage/LICENSE-SuperViewer"
+          cp SuperBirdStamp/LICENSE "$stage/LICENSE-SuperBirdStamp"
+          ./.venv/bin/python3 -m pip freeze > "$stage/DEPENDENCIES.txt"
+          ditto -c -k --sequesterRsrc --keepParent \
+            "$stage" "release/$package_name.zip"
+
+      - name: Upload macOS package
+        uses: actions/upload-artifact@v7
+        with:
+          name: package-macos-arm64
+          path: release/*.zip
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14
+
+  release:
+    name: Publish GitHub Release
+    if: startsWith(github.ref, 'refs/tags/')
+    needs:
+      - prepare
+      - build-windows
+      - build-macos
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - name: Download packaged applications
+        uses: actions/download-artifact@v8
+        with:
+          pattern: package-*
+          path: release-assets
+          merge-multiple: true
+
+      - name: Generate checksums
+        working-directory: release-assets
+        run: sha256sum ./*.zip > SHA256SUMS.txt
+
+      - name: Create release or upload missing assets
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          mapfile -t assets < <(find release-assets -maxdepth 1 -type f -print | sort)
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            existing="$(gh release view "$RELEASE_TAG" --json assets --jq '.assets[].name')"
+            present=()
+            missing=()
+            for asset in "${assets[@]}"; do
+              name="$(basename "$asset")"
+              if grep -Fqx "$name" <<<"$existing"; then
+                present+=("$name")
+              else
+                missing+=("$name")
+              fi
+            done
+            if (( ${#present[@]} == 0 )); then
+              gh release upload "$RELEASE_TAG" "${assets[@]}"
+            elif (( ${#missing[@]} == 0 )); then
+              printf 'Keeping existing release asset: %s\n' "${present[@]}"
+            else
+              echo "::error::Release assets are incomplete; refusing to mix packages from different builds."
+              printf 'Existing: %s\n' "${present[@]}"
+              printf 'Missing: %s\n' "${missing[@]}"
+              echo "Delete the listed workflow assets from the Release, then rerun this workflow."
+              exit 1
+            fi
+          else
+            release_args=(--verify-tag --generate-notes --title "SuperBirdTools $RELEASE_TAG")
+            if [[ "$RELEASE_TAG" == *-* ]]; then
+              release_args+=(--prerelease)
+            fi
+            gh release create "$RELEASE_TAG" "${assets[@]}" "${release_args[@]}"
+          fi

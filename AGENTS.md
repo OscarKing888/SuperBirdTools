@@ -53,6 +53,17 @@ Follow `ai_rules/AI_CODING_RULES.md` as the project baseline.
 - On Windows, `build_all.bat` should prefer the merged spec workflow (`build_all_win_merged.spec`) so shared runtime files are referenced instead of duplicated when possible.
 - Windows merged build outputs must be distributed together; do not assume one merged app directory is independently relocatable.
 - When invoking PyInstaller directly on Windows, use `.\.venv\Scripts\python.exe -m PyInstaller ...`; for normal full builds prefer `.\build_all.bat` so the merged spec and repo-root `dist/` / `build/` layout are used consistently.
+- A normal local `build_all.bat` run is incremental and must preserve `build/merged_win`; pass `--clean` only when a clean build is required.
+- Use `build_all.bat --clean` after Python/dependency changes, spec or hook changes, module additions/removals/renames, CPU/CUDA environment changes, suspected stale cache, and for release validation.
+- GitHub release builds must continue to invoke `build_all.bat --clean`; local incremental caching must not weaken clean release builds.
+- Keep the two app Analysis/PYZ targets in separate merged-spec workpaths; sharing one `base_library.zip` makes each app invalidate the other's Analysis cache on every run.
+- In `build_all_win_merged.spec`, collect Torch/Ultralytics before starting Viewer/Qt analysis as defense in depth. `build_all.bat` must also prepend the build-only `build_tools/pyinstaller_bootstrap` path so every PyInstaller isolated worker preloads the system MSVC runtime before PyQt/Torch imports.
+- `.github/workflows/build-release.yml` is the release build source of truth: manual runs upload Actions artifacts, while valid `v*` tags also publish a GitHub Release.
+- CI release builds use `build_tools/set_build_version.py` to synchronize the two app versions and BirdStamp's macOS bundle version without committing generated changes.
+- Release staging must omit `SuperBirdStamp/config/editor_autosave.birdstamp-workspace.json` and `SuperBirdStamp/config/editor_export_state.json`; these files may contain user-specific paths and are runtime state, not distributable defaults.
+- Existing Release assets are not overwritten automatically. Replace them only through an explicit manual maintenance step.
+- `app_common/about_dialog/about.cfg` is the shared About fallback. SuperViewer and SuperBirdStamp each use an app-specific `about.cfg` at the app root; every app and merged spec must collect it and its referenced `images/` at the bundle resource root. Do not put About fields back into `super_viewer.cfg`.
+- About cfg files are UTF-8 JSON. Keep them syntactically valid; parse failures must retain a file/line/column diagnostic instead of silently obscuring why `_DEFAULT_ABOUT` was used.
 
 ## Validation Minimum
 

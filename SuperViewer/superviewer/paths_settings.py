@@ -11,6 +11,7 @@ import sys
 
 
 CONFIG_FILENAME = "super_viewer.cfg"
+ABOUT_CONFIG_FILENAME = "about.cfg"
 LAST_SELECTED_DIRECTORY_FILENAME = "last_selected_directory.txt"
 LEGACY_LAST_FOLDER_FILENAME = ".last_folder.txt"
 USER_STATE_DIRNAME = "SuperViewer"
@@ -154,6 +155,14 @@ def _get_config_path() -> str:
 def _get_config_resource_path() -> str:
     """返回可读取的 super_viewer.cfg 路径，打包后优先使用资源目录内的配置。"""
     return _get_resource_path(CONFIG_FILENAME) or _get_config_path()
+
+
+def _get_about_config_resource_path() -> str:
+    """返回独立 about.cfg 路径；不再从 super_viewer.cfg 读取 About 信息。"""
+    return _get_resource_path(ABOUT_CONFIG_FILENAME) or os.path.join(
+        _get_app_dir(),
+        ABOUT_CONFIG_FILENAME,
+    )
 
 
 def _load_settings() -> dict:

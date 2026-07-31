@@ -50,6 +50,7 @@ block_cipher = None
 ultralytics_datas, ultralytics_binaries, ultralytics_hiddenimports = collect_all("ultralytics")
 
 project_datas = [
+    *collect_tree(APP_ROOT / "about.cfg", "."),
     *collect_tree(APP_ROOT / "models", "models"),
     *collect_tree(APP_ROOT / "icons", "icons"),
     *collect_tree(APP_ROOT / "images", "images"),

@@ -377,6 +377,46 @@ def test_main_window_defers_close_without_blocking_or_destroying_running_focus_l
         app.processEvents()
 
 
+def test_deferred_hidden_close_explicitly_quits_application_after_finalizing(
+    monkeypatch,
+) -> None:
+    app = QApplication.instance() or QApplication([])
+    _FocusLoaderProbe.reset()
+    monkeypatch.setattr(main_module, "FocusBoxLoader", _FocusLoaderProbe)
+    window = MainWindow(initial_received_files=["skip-restore"])
+    window.show()
+    app.processEvents()
+    window._focus_display_request_id = 1
+    window._start_focus_loader((1, "first.jpg", "first.arw", 100, 80))
+    loader = _FocusLoaderProbe.instances[-1]
+    quit_requested = threading.Event()
+
+    class _ApplicationProbe:
+        @staticmethod
+        def instance():
+            return type("Instance", (), {"quit": staticmethod(quit_requested.set)})()
+
+    try:
+        window.close()
+        assert window._shutdown_requested
+        assert not window._shutdown_finalized
+        assert not window.isVisible()
+
+        # The window is already hidden, so Qt's lastWindowClosed fallback can
+        # no longer be relied upon when the retry finally accepts closeEvent.
+        monkeypatch.setattr(main_module, "QApplication", _ApplicationProbe)
+        loader.finish()
+
+        assert _process_events_until(
+            app,
+            lambda: window._shutdown_finalized and quit_requested.is_set(),
+        )
+    finally:
+        loader.finish()
+        window.close()
+        app.processEvents()
+
+
 class _BlockingFocusLoader(QThread):
     focus_loaded = pyqtSignal(int, object, str)
 

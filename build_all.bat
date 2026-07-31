@@ -25,12 +25,24 @@ echo Unknown option: %~1
 exit /b 1
 
 :args_done
+set "PYINSTALLER_ARGS=--noconfirm"
 if "%CLEAN%"=="1" (
+  set "PYINSTALLER_ARGS=--noconfirm --clean"
+  echo [INFO] Clean build requested; removing local build outputs and PyInstaller cache.
   if exist "%DIST_ROOT%" rmdir /s /q "%DIST_ROOT%"
   if exist "%BUILD_ROOT%" rmdir /s /q "%BUILD_ROOT%"
+) else (
+  echo [INFO] Incremental build cache enabled: %BUILD_ROOT%\merged_win
 )
 if not exist "%DIST_ROOT%" mkdir "%DIST_ROOT%"
 if not exist "%BUILD_ROOT%" mkdir "%BUILD_ROOT%"
+
+set "PYINSTALLER_BOOTSTRAP_DIR=%ROOT_DIR%build_tools\pyinstaller_bootstrap"
+if defined PYTHONPATH (
+  set "PYTHONPATH=%PYINSTALLER_BOOTSTRAP_DIR%;%PYTHONPATH%"
+) else (
+  set "PYTHONPATH=%PYINSTALLER_BOOTSTRAP_DIR%"
+)
 
 if defined PYTHON_EXE if exist "%PYTHON_EXE%" goto python_ready
 if defined PYTHON_BIN if exist "%PYTHON_BIN%" (
@@ -55,25 +67,23 @@ goto launcher_ready
 
 :python_ready
 echo [INFO] Using Python: %PYTHON_EXE%
-"%PYTHON_EXE%" -m PyInstaller ^
-  --noconfirm ^
-  --clean ^
+"%PYTHON_EXE%" -m PyInstaller %PYINSTALLER_ARGS% ^
   --distpath "%DIST_ROOT%" ^
   --workpath "%BUILD_ROOT%\merged_win" ^
   "%ROOT_DIR%build_all_win_merged.spec"
+set "BUILD_EXIT_CODE=%ERRORLEVEL%"
 goto after_build
 
 :launcher_ready
 echo [INFO] Using Python launcher: %PYTHON_LAUNCHER%
-%PYTHON_LAUNCHER% -m PyInstaller ^
-  --noconfirm ^
-  --clean ^
+%PYTHON_LAUNCHER% -m PyInstaller %PYINSTALLER_ARGS% ^
   --distpath "%DIST_ROOT%" ^
   --workpath "%BUILD_ROOT%\merged_win" ^
   "%ROOT_DIR%build_all_win_merged.spec"
+set "BUILD_EXIT_CODE=%ERRORLEVEL%"
 
 :after_build
-if errorlevel 1 exit /b %errorlevel%
+if not "%BUILD_EXIT_CODE%"=="0" exit /b %BUILD_EXIT_CODE%
 
 echo [OK] outputs:
 echo   %DIST_ROOT%\SuperViewer\SuperViewer.exe

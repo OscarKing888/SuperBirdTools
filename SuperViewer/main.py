@@ -76,6 +76,10 @@ from app_common.superviewer_user_options import (
 
 # 开发时从包内相对导入，打包后 entry/main 作为顶层脚本无父包，改用绝对导入 superviewer
 try:
+    from .superviewer import (
+        DEFAULT_APP_NAME as _SUPERVIEWER_DEFAULT_APP_NAME,
+        __version__ as _SUPERVIEWER_VERSION,
+    )
     from .superviewer.exif_helpers import (
         META_DESCRIPTION_TAG_ID,
         META_IFD_NAME,
@@ -98,8 +102,8 @@ try:
         _build_main_window_title,
         _get_app_dir,
         _get_app_icon_path,
+        _get_about_config_resource_path,
         _apply_runtime_app_identity,
-        _get_config_resource_path,
         _get_product_display_name,
         _get_resource_path,
         load_main_splitter_state_from_settings,
@@ -147,6 +151,10 @@ try:
         _Horizontal,
     )
 except ImportError:
+    from superviewer import (
+        DEFAULT_APP_NAME as _SUPERVIEWER_DEFAULT_APP_NAME,
+        __version__ as _SUPERVIEWER_VERSION,
+    )
     from superviewer.exif_helpers import (
         META_DESCRIPTION_TAG_ID,
         META_IFD_NAME,
@@ -169,8 +177,8 @@ except ImportError:
         _build_main_window_title,
         _get_app_dir,
         _get_app_icon_path,
+        _get_about_config_resource_path,
         _apply_runtime_app_identity,
-        _get_config_resource_path,
         _get_product_display_name,
         _get_resource_path,
         load_main_splitter_state_from_settings,
@@ -255,6 +263,14 @@ def _build_preview_grid_line_width_icon(width: int) -> QIcon:
 _log = get_logger("main")
 
 
+def _load_superviewer_about_info() -> dict:
+    return load_about_info(
+        _get_about_config_resource_path(),
+        app_name=_SUPERVIEWER_DEFAULT_APP_NAME,
+        version=_SUPERVIEWER_VERSION,
+    )
+
+
 def _norm_paths_for_compare(paths: object) -> set[str]:
     if isinstance(paths, (str, os.PathLike)):
         values = [paths]
@@ -275,9 +291,11 @@ class MainWindow(QMainWindow):
         super().__init__()
         self._shutdown_requested = False
         self._shutdown_finalized = False
+        self._shutdown_started_at: float | None = None
+        self._shutdown_pending_state: tuple[bool, bool, bool, bool] | None = None
         self._exiftool_shutdown_thread: threading.Thread | None = None
         self._exiftool_shutdown_done = threading.Event()
-        info = load_about_info(_get_config_resource_path())
+        info = _load_superviewer_about_info()
         self.setWindowTitle(_build_main_window_title(info))
         self.setMinimumSize(900, 600)
         self.resize(1500, 960)
@@ -669,8 +687,8 @@ class MainWindow(QMainWindow):
         self._dir_browser.select_directory(parent, emit_signal=True)
 
     def _show_about_dialog(self):
-        about_cfg_path = _get_config_resource_path()
-        info = load_about_info(about_cfg_path)
+        about_cfg_path = _get_about_config_resource_path()
+        info = _load_superviewer_about_info()
         about_images = load_about_images(about_cfg_path)
         logo_path = _get_resource_path("icons/app_icon.png") or _get_app_icon_path()
         show_about_dialog(self, info, logo_path=logo_path, images=about_images)
@@ -1238,6 +1256,8 @@ class MainWindow(QMainWindow):
             return
         if not self._shutdown_requested:
             self._shutdown_requested = True
+            self._shutdown_started_at = _time.monotonic()
+            _log.info("[shutdown] requested; stopping background work")
             try:
                 self._file_list.stop_key_navigation_playback()
             except Exception:
@@ -1280,7 +1300,17 @@ class MainWindow(QMainWindow):
         except Exception:
             pass
         exiftool_done = self._exiftool_shutdown_done.is_set()
+        pending_state = (focus_done, tabs_done, preview_done, exiftool_done)
         if not (focus_done and tabs_done and preview_done and exiftool_done):
+            if pending_state != self._shutdown_pending_state:
+                _log.info(
+                    "[shutdown] waiting focus=%s image_info=%s preview=%s exiftool=%s",
+                    focus_done,
+                    tabs_done,
+                    preview_done,
+                    exiftool_done,
+                )
+                self._shutdown_pending_state = pending_state
             event.ignore()
             self.hide()
             if not self._shutdown_retry_timer.isActive():
@@ -1298,7 +1328,21 @@ class MainWindow(QMainWindow):
         except Exception:
             pass
         self._shutdown_finalized = True
+        elapsed_s = (
+            max(0.0, _time.monotonic() - self._shutdown_started_at)
+            if self._shutdown_started_at is not None
+            else 0.0
+        )
+        _log.info("[shutdown] finalized elapsed=%.3fs", elapsed_s)
         super().closeEvent(event)
+        # The first deferred close hides the window so shutdown appears
+        # immediate.  Once hidden, accepting a later close event does not
+        # reliably emit QApplication.lastWindowClosed, leaving the Qt event
+        # loop alive with no windows.  Explicitly quit after all owned workers
+        # have finished; quit() is idempotent if Qt already scheduled it.
+        app = QApplication.instance()
+        if app is not None:
+            QTimer.singleShot(0, app.quit)
 
 
 def main():
@@ -1308,7 +1352,7 @@ def main():
         if app_dir and os.path.isdir(app_dir):
             os.chdir(app_dir)
     reload_runtime_user_options()
-    about_info = load_about_info(_get_config_resource_path())
+    about_info = _load_superviewer_about_info()
     app_name = _get_product_display_name(about_info)
     _apply_runtime_app_identity(app_name)
 
@@ -1354,6 +1398,7 @@ def main():
     window._single_instance_receiver = receiver
 
     def stop_receiver():
+        _log.info("[main] Qt aboutToQuit emitted")
         try:
             if getattr(window, "_single_instance_receiver", None):
                 window._single_instance_receiver.stop()
@@ -1364,7 +1409,14 @@ def main():
     window.showMaximized()
     if argv_files:
         QTimer.singleShot(100, (lambda p: lambda: window._open_received_file_list(p))(argv_files))
-    sys.exit(app.exec())
+    exit_code = app.exec()
+    _log.info(
+        "[main] Qt event loop exited code=%s window_visible=%s shutdown_finalized=%s",
+        exit_code,
+        window.isVisible(),
+        window._shutdown_finalized,
+    )
+    sys.exit(exit_code)
 
 
 if __name__ == "__main__":

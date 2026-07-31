@@ -598,7 +598,17 @@ def _load_about_override_info(path: Path | None) -> dict[str, str]:
         return {}
     try:
         raw = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
+    except json.JSONDecodeError as exc:
+        _log.warning(
+            "Invalid JSON in BirdStamp about config %s at line %d column %d: %s",
+            path,
+            exc.lineno,
+            exc.colno,
+            exc.msg,
+        )
+        return {}
+    except OSError as exc:
+        _log.warning("Unable to read BirdStamp about config %s: %s", path, exc)
         return {}
     about = raw.get("about") if isinstance(raw, dict) else None
     if not isinstance(about, dict):
