@@ -180,25 +180,39 @@ class ImageInfoTabPanel_EXIF(ImageInfoTabPanel):
         if loader is not None and loader.isRunning():
             loader.requestInterruption()
 
-    def shutdown(self) -> None:
+    def request_shutdown(self) -> None:
         if self._shutdown_requested:
             return
         self._shutdown_requested = True
         self._invalidate_requests()
+
+    def shutdown(self, *, wait_timeout_ms: int | None = None) -> bool:
+        self.request_shutdown()
         loader = self._loader
         if loader is None:
-            return
+            return True
         try:
             loader.requestInterruption()
-            loader.wait()
+            if wait_timeout_ms is None:
+                wait_result = loader.wait()
+            else:
+                wait_result = loader.wait(max(0, int(wait_timeout_ms)))
+        except Exception:
+            wait_result = False
+        finished = bool(wait_result)
+        try:
+            finished = finished or not loader.isRunning()
         except Exception:
             pass
+        if not finished:
+            return False
         if self._loader is loader:
             self._loader = None
         try:
             loader.deleteLater()
         except Exception:
             pass
+        return True
 
     def closeEvent(self, event) -> None:  # type: ignore[override]
         self.shutdown()

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import io
 import os
 import subprocess
 import tempfile
@@ -12,6 +13,17 @@ from birdstamp.subprocess_utils import decode_subprocess_output
 
 _HEIF_REGISTERED = False
 _DEFAULT_PREVIEW_MAX_LONG_EDGE = 2048
+
+
+def _pillow_oriented_size(image: Image.Image) -> tuple[int, int]:
+    width, height = image.size
+    try:
+        orientation = int(image.getexif().get(274, 1))
+    except Exception:
+        orientation = 1
+    if orientation in {5, 6, 7, 8}:
+        width, height = height, width
+    return max(1, int(width)), max(1, int(height))
 
 
 def _resize_fit_image(image: Image.Image, max_long_edge: int) -> Image.Image:
@@ -81,6 +93,114 @@ def _decode_raw_rawpy(path: Path) -> Image.Image:
     return Image.fromarray(rgb).convert("RGB")
 
 
+def _decode_raw_rawpy_for_preview(path: Path, max_long_edge: int) -> Image.Image:
+    try:
+        import rawpy
+    except ImportError as exc:
+        raise RuntimeError("rawpy is not installed") from exc
+
+    with rawpy.imread(str(path)) as raw:
+        rgb = raw.postprocess(
+            use_camera_wb=True,
+            no_auto_bright=False,
+            output_bps=8,
+            half_size=True,
+        )
+    image = Image.fromarray(rgb).convert("RGB")
+    resized = _resize_fit_image(image, max_long_edge)
+    if resized is not image:
+        image.close()
+    return resized
+
+
+def _decode_embedded_raw_preview(path: Path, max_long_edge: int) -> Image.Image | None:
+    try:
+        from app_common.thumb_stream import get_raw_preview_jpeg
+    except Exception:
+        return None
+    try:
+        preview_bytes = get_raw_preview_jpeg(str(path))
+    except Exception:
+        return None
+    if not preview_bytes:
+        return None
+    try:
+        with Image.open(io.BytesIO(preview_bytes)) as source:
+            transposed = ImageOps.exif_transpose(source)
+            rgb = transposed.convert("RGB")
+        resized = _resize_fit_image(rgb, max_long_edge)
+        if resized is not rgb:
+            rgb.close()
+        return resized
+    except Exception:
+        return None
+
+
+def _positive_metadata_int(metadata: dict, *keys: str) -> int:
+    for key in keys:
+        value = metadata.get(key)
+        try:
+            parsed = int(float(str(value).strip()))
+        except Exception:
+            continue
+        if parsed > 0:
+            return parsed
+    return 0
+
+
+def _read_raw_exif_size(path: Path) -> tuple[int, int] | None:
+    """Read RAW dimensions through ExifTool metadata without decoding pixels."""
+    try:
+        from app_common.exif_io import read_batch_metadata
+
+        normalized_path = os.path.normpath(str(path))
+        rows = read_batch_metadata(
+            [normalized_path],
+            tags=[
+                "-ExifImageWidth",
+                "-ExifImageHeight",
+                "-RawImageWidth",
+                "-RawImageHeight",
+                "-ImageWidth",
+                "-ImageHeight",
+                "-Orientation",
+            ],
+            use_cache=False,
+        )
+        metadata = rows.get(normalized_path)
+    except Exception:
+        return None
+    if not isinstance(metadata, dict):
+        return None
+    width = _positive_metadata_int(
+        metadata,
+        "ExifImageWidth",
+        "EXIF:ExifImageWidth",
+        "RawImageWidth",
+        "ImageWidth",
+        "File:ImageWidth",
+    )
+    height = _positive_metadata_int(
+        metadata,
+        "ExifImageHeight",
+        "EXIF:ExifImageHeight",
+        "RawImageHeight",
+        "ImageHeight",
+        "File:ImageHeight",
+    )
+    if width <= 0 or height <= 0:
+        return None
+    orientation = _positive_metadata_int(
+        metadata,
+        "Orientation",
+        "IFD0:Orientation",
+        "EXIF:Orientation",
+    )
+    if orientation in {5, 6, 7, 8}:
+        width, height = height, width
+    return width, height
+
+
 def _decode_raw_darktable(path: Path) -> Image.Image:
     temp_fd, temp_name = tempfile.mkstemp(suffix=".tif")
     os.close(temp_fd)
@@ -137,10 +257,30 @@ def read_decoded_image_size(path: Path) -> tuple[int, int]:
         if ext in HEIF_EXTENSIONS and not _register_heif_opener():
             raise RuntimeError("pillow-heif is required to decode HEIF/HEIC/HIF")
         with Image.open(path) as image:
-            return ImageOps.exif_transpose(image).size
+            return _pillow_oriented_size(image)
     if ext in RAW_EXTENSIONS:
-        with Image.open(path) as image:
-            return image.size
+        exif_size = _read_raw_exif_size(path)
+        if exif_size is not None:
+            return exif_size
+        try:
+            import rawpy
+        except ImportError:
+            rawpy = None
+        if rawpy is not None:
+            try:
+                with rawpy.imread(str(path)) as raw:
+                    sizes = raw.sizes
+                    width = max(1, int(getattr(sizes, "width", 0) or getattr(sizes, "iwidth", 0)))
+                    height = max(1, int(getattr(sizes, "height", 0) or getattr(sizes, "iheight", 0)))
+                    if int(getattr(sizes, "flip", 0) or 0) in {5, 6}:
+                        width, height = height, width
+                    return width, height
+            except Exception:
+                pass
+        raise RuntimeError(
+            "unable to determine RAW dimensions from EXIF or rawpy headers "
+            f"without a full pixel decode: {path}"
+        )
     raise RuntimeError(f"unsupported image format: {path.suffix}")
 
 
@@ -173,5 +313,15 @@ def decode_image_for_preview(
             raise RuntimeError("pillow-heif is required to decode HEIF/HEIC/HIF")
         return _decode_standard_for_preview(path, limit)
     if ext in RAW_EXTENSIONS:
-        return _resize_fit_image(_decode_raw(path, decoder=decoder), limit)
+        embedded = _decode_embedded_raw_preview(path, limit)
+        if embedded is not None:
+            return embedded
+        try:
+            return _decode_raw_rawpy_for_preview(path, limit)
+        except Exception as exc:
+            raise RuntimeError(
+                "RAW preview decode failed: no usable embedded preview and "
+                "half-size rawpy decode is unavailable; full RAW demosaic is "
+                f"reserved for export ({path.name}): {exc}"
+            ) from exc
     raise RuntimeError(f"unsupported image format: {path.suffix}")

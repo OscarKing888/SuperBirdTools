@@ -348,16 +348,106 @@ def _serialize_crop_plan(crop_plan: Any) -> dict[str, Any] | None:
     }
 
 
-def source_frame_signature_for_job(job: VideoFrameJob) -> str:
+def _photo_info_signature_payload(job: VideoFrameJob) -> dict[str, Any]:
+    photo_info = job.photo_info
+    if photo_info is None:
+        return {}
+    payload: dict[str, Any] = {}
+    for field_name in ("path", "sidecar_path", "raw_metadata", "crop_box", "editor_row_number"):
+        try:
+            value = getattr(photo_info, field_name)
+        except Exception:
+            continue
+        if field_name in {"path", "sidecar_path"} and value is not None:
+            path = Path(value)
+            payload[field_name] = path_signature(path)
+        else:
+            payload[field_name] = value
+    return payload
+
+
+def _template_signature_payload(
+    job: VideoFrameJob,
+    template_paths: Mapping[str, Path] | None,
+    template_signature_state: Mapping[str, Mapping[str, Any]] | None = None,
+) -> dict[str, Any]:
+    template_name = str(job.settings.get("template_name") or "default").strip() or "default"
+    if isinstance(template_signature_state, Mapping):
+        precomputed = template_signature_state.get(template_name)
+        if isinstance(precomputed, Mapping):
+            return dict(precomputed)
+        return {"name": template_name}
+    payload: dict[str, Any] = {"name": template_name}
+    if isinstance(template_paths, Mapping):
+        template_path = template_paths.get(template_name)
+        if template_path is not None:
+            path = Path(template_path)
+            payload["path_signature"] = path_signature(path)
+            try:
+                payload["content_sha256"] = hashlib.sha256(path.read_bytes()).hexdigest()
+            except Exception:
+                pass
+    return payload
+
+
+def build_template_signature_state(
+    jobs: list[VideoFrameJob],
+    template_paths: Mapping[str, Path] | None,
+) -> dict[str, dict[str, Any]]:
+    """Hash each active template at most once for one cache-planning pass."""
+    template_names = {
+        str(job.settings.get("template_name") or "default").strip() or "default"
+        for job in jobs
+    }
+    state: dict[str, dict[str, Any]] = {}
+    for template_name in sorted(template_names):
+        payload: dict[str, Any] = {"name": template_name}
+        template_path = template_paths.get(template_name) if isinstance(template_paths, Mapping) else None
+        if template_path is not None:
+            path = Path(template_path)
+            payload["path_signature"] = path_signature(path)
+            try:
+                payload["content_sha256"] = hashlib.sha256(path.read_bytes()).hexdigest()
+            except Exception:
+                pass
+        state[template_name] = payload
+    return state
+
+
+def source_frame_signature_for_job(
+    job: VideoFrameJob,
+    *,
+    template_paths: Mapping[str, Path] | None = None,
+    template_signature_state: Mapping[str, Mapping[str, Any]] | None = None,
+) -> str:
     render_settings = _clone_render_settings(job.settings)
     crop_payload = _serialize_crop_plan(job.crop_plan)
     if crop_payload is not None:
         render_settings["_precomputed_crop_plan"] = crop_payload
-    return build_source_frame_signature(render_settings=render_settings)
+    return build_source_frame_signature(
+        render_settings=render_settings,
+        raw_metadata=dict(job.raw_metadata or {}),
+        metadata_context=dict(job.metadata_context or {}),
+        photo_info=_photo_info_signature_payload(job),
+        template_signature=_template_signature_payload(
+            job,
+            template_paths,
+            template_signature_state,
+        ),
+    )
 
 
-def _source_frame_signature_for_job(job: VideoFrameJob) -> str:
-    return source_frame_signature_for_job(job)
+def _source_frame_signature_for_job(
+    job: VideoFrameJob,
+    *,
+    template_paths: Mapping[str, Path] | None = None,
+    template_signature_state: Mapping[str, Mapping[str, Any]] | None = None,
+) -> str:
+    return source_frame_signature_for_job(
+        job,
+        template_paths=template_paths,
+        template_signature_state=template_signature_state,
+    )
 
 
 def _video_frame_signature_for_source(
@@ -1244,18 +1334,119 @@ def _detect_physical_cpu_count() -> int | None:
     return None
 
 
-def resolve_video_render_workers(render_workers: int, pending_jobs: int) -> int:
+def _metadata_dimension_value(metadata: Mapping[str, Any], *keys: str) -> int:
+    for key in keys:
+        value = metadata.get(key)
+        try:
+            parsed = int(float(str(value).strip()))
+        except Exception:
+            continue
+        if parsed > 0:
+            return parsed
+    return 0
+
+
+def estimate_video_job_max_pixels(jobs: list[VideoFrameJob]) -> int:
+    max_pixels = 0
+    for job in jobs:
+        if job.source_image is not None:
+            max_pixels = max(max_pixels, int(job.source_image.width) * int(job.source_image.height))
+            continue
+        metadata = dict(job.raw_metadata or {})
+        width = _metadata_dimension_value(
+            metadata,
+            "ImageWidth",
+            "File:ImageWidth",
+            "ExifImageWidth",
+            "EXIF:ExifImageWidth",
+            "EXIF:ImageWidth",
+            "RawImageWidth",
+        )
+        height = _metadata_dimension_value(
+            metadata,
+            "ImageHeight",
+            "File:ImageHeight",
+            "ExifImageHeight",
+            "EXIF:ExifImageHeight",
+            "EXIF:ImageHeight",
+            "RawImageHeight",
+        )
+        if width > 0 and height > 0:
+            max_pixels = max(max_pixels, width * height)
+    return max_pixels
+
+
+def resolve_video_render_workers(
+    render_workers: int,
+    pending_jobs: int,
+    *,
+    max_frame_pixels: int = 0,
+) -> int:
     if pending_jobs <= 0:
         return 1
     requested = max(0, int(render_workers))
-    if requested > 0:
-        return max(1, min(requested, pending_jobs))
-
-    auto_workers = _recommended_auto_render_workers(
-        physical_cpu_count=_detect_physical_cpu_count(),
-        logical_cpu_count=os.cpu_count(),
+    cpu_workers = min(
+        8,
+        _recommended_auto_render_workers(
+            physical_cpu_count=_detect_physical_cpu_count(),
+            logical_cpu_count=os.cpu_count(),
+        ),
     )
-    return max(1, min(auto_workers, pending_jobs))
+    # Budget at most 20% of currently available RAM (hard-capped at 4 GiB).
+    # A render may hold source/crop/overlay/converted buffers, estimated as
+    # 24 bytes per source pixel. Unknown dimensions use a conservative cap.
+    memory_workers = 4
+    try:
+        import psutil  # optional dependency
+
+        available_bytes = max(0, int(psutil.virtual_memory().available))
+        render_budget = min(int(available_bytes * 0.20), 4 * 1024 * 1024 * 1024)
+        pixels = max(0, int(max_frame_pixels))
+        if pixels > 0:
+            memory_workers = max(1, render_budget // max(1, pixels * 24))
+    except Exception:
+        memory_workers = 4
+    recommended = max(1, min(cpu_workers, memory_workers, pending_jobs))
+    if requested > 0:
+        explicit_workers = max(1, min(requested, pending_jobs))
+        if requested > recommended:
+            _log.warning(
+                "explicit video render worker count %s exceeds recommended %s "
+                "(pending=%s, max_frame_pixels=%s); honoring explicit setting",
+                requested,
+                recommended,
+                pending_jobs,
+                max(0, int(max_frame_pixels)),
+            )
+        return explicit_workers
+    return recommended
+
+
+def _resolve_video_render_worker_status(
+    render_workers: int,
+    pending_jobs: int,
+    *,
+    max_frame_pixels: int,
+) -> tuple[int, str]:
+    resolved = resolve_video_render_workers(
+        render_workers,
+        pending_jobs,
+        max_frame_pixels=max_frame_pixels,
+    )
+    requested = max(0, int(render_workers))
+    if requested <= 0:
+        return (resolved, "")
+    recommended = resolve_video_render_workers(
+        0,
+        pending_jobs,
+        max_frame_pixels=max_frame_pixels,
+    )
+    if requested <= recommended:
+        return (resolved, "")
+    return (
+        resolved,
+        f"；警告：显式线程数 {requested} 超出推荐值 {recommended}，实际使用 {resolved}",
+    )
 
 
 def _save_normalized_temp_frame(
@@ -1363,6 +1554,7 @@ def _render_and_cache_source_frame(
     index: int,
     source_plan,
     template_paths: dict[str, Path] | None,
+    frame_signature: str,
     bird_box_cache: dict[str, tuple[float, float, float, float] | None],
     bird_box_lock: threading.Lock | None,
     cancel_event: threading.Event | None,
@@ -1376,7 +1568,6 @@ def _render_and_cache_source_frame(
     )
     frame_path = _cache_frame_output_path(source_plan, index, suffix="png")
     source_signature = _source_signature(job.path)
-    frame_signature = _source_frame_signature_for_job(job)
     try:
         _raise_if_cancel_requested(cancel_event, message="视频导出已中断，正在保留已完成源帧。")
         _save_rendered_source_frame(rendered, frame_path)
@@ -1510,17 +1701,25 @@ def _ensure_source_frame_cache(
     source_frame_paths = [_cache_frame_output_path(source_plan, index, suffix="png") for index in range(1, total + 1)]
     pending_jobs: list[tuple[int, VideoFrameJob, str, str]] = []
     reused_count = 0
+    template_signature_state = build_template_signature_state(jobs, template_paths)
     for index, job in enumerate(jobs, start=1):
         source_signature = _source_signature(job.path)
-        frame_signature = _source_frame_signature_for_job(job)
-        reusable_path = reusable_frame_path(
-            source_plan,
-            manifest,
-            index=index,
-            source_path=job.path,
-            source_signature=source_signature,
-            frame_signature=frame_signature,
+        frame_signature = _source_frame_signature_for_job(
+            job,
+            template_paths=template_paths,
+            template_signature_state=template_signature_state,
         )
+        dirty_key = _path_key(job.path)
+        reusable_path = None
+        if dirty_key not in dirty_path_keys:
+            reusable_path = reusable_frame_path(
+                source_plan,
+                manifest,
+                index=index,
+                source_path=job.path,
+                source_signature=source_signature,
+                frame_signature=frame_signature,
+            )
         if reusable_path is not None:
             source_frame_paths[index - 1] = reusable_path
             reused_count += 1
@@ -1540,13 +1739,21 @@ def _ensure_source_frame_cache(
         write_frame_manifest(source_plan, manifest, metadata=_source_frame_cache_metadata(total=total))
         return (source_bucket_key, source_plan, source_frame_paths)
 
-    render_workers = resolve_video_render_workers(options.render_workers, len(pending_jobs))
+    max_frame_pixels = estimate_video_job_max_pixels([job for _, job, _, _ in pending_jobs])
+    render_workers, worker_warning = _resolve_video_render_worker_status(
+        options.render_workers,
+        len(pending_jobs),
+        max_frame_pixels=max_frame_pixels,
+    )
     _emit_progress(
         progress_callback,
         phase="render",
         current=reused_count,
         total=total,
-        message=f"正在渲染源帧，剩余 {len(pending_jobs)} 张，线程数 {render_workers}",
+        message=(
+            f"正在渲染源帧，剩余 {len(pending_jobs)} 张，线程数 {render_workers}"
+            f"{worker_warning}"
+        ),
     )
     completed = reused_count
     if len(pending_jobs) == 1:
@@ -1556,6 +1763,7 @@ def _ensure_source_frame_cache(
             index=index,
             source_plan=source_plan,
             template_paths=template_paths,
+            frame_signature=frame_signature,
             bird_box_cache=bird_box_cache,
             bird_box_lock=bird_box_lock,
             cancel_event=cancel_event,
@@ -1583,8 +1791,15 @@ def _ensure_source_frame_cache(
 
     executor = ThreadPoolExecutor(max_workers=render_workers, thread_name_prefix="birdstamp-video-source-render")
     futures: dict[Any, tuple[int, VideoFrameJob, str, str]] = {}
-    try:
-        for index, job, source_signature, frame_signature in pending_jobs:
+    pending_iterator = iter(pending_jobs)
+
+    def _submit_source_jobs() -> None:
+        max_in_flight = max(1, render_workers * 2)
+        while len(futures) < max_in_flight:
+            try:
+                index, job, source_signature, frame_signature = next(pending_iterator)
+            except StopIteration:
+                return
             _raise_if_cancel_requested(cancel_event, message="视频导出已中断，正在停止剩余源帧渲染。")
             future = executor.submit(
                 _render_and_cache_source_frame,
@@ -1592,14 +1807,18 @@ def _ensure_source_frame_cache(
                 index=index,
                 source_plan=source_plan,
                 template_paths=template_paths,
+                frame_signature=frame_signature,
                 bird_box_cache=bird_box_cache,
                 bird_box_lock=bird_box_lock,
                 cancel_event=cancel_event,
             )
             futures[future] = (index, job, source_signature, frame_signature)
 
-        for future in as_completed(futures):
-            index, job, source_signature, frame_signature = futures[future]
+    try:
+        _submit_source_jobs()
+        while futures:
+            future = next(as_completed(tuple(futures)))
+            index, job, source_signature, frame_signature = futures.pop(future)
             try:
                 rendered_index, frame_name, frame_path, _, _ = future.result()
             except VideoExportCancelledError:
@@ -1628,6 +1847,7 @@ def _ensure_source_frame_cache(
                 message=f"已渲染源帧 {completed}/{total}: {frame_name}",
             )
             _raise_if_cancel_requested(cancel_event, message="视频导出已中断，正在停止剩余源帧渲染。")
+            _submit_source_jobs()
     finally:
         executor.shutdown(wait=True, cancel_futures=True)
 
@@ -1697,13 +1917,21 @@ def _ensure_video_frame_cache(
         )
 
     if pending_frames:
-        render_workers = resolve_video_render_workers(options.render_workers, len(pending_frames))
+        max_frame_pixels = int(target_size[0]) * int(target_size[1])
+        render_workers, worker_warning = _resolve_video_render_worker_status(
+            options.render_workers,
+            len(pending_frames),
+            max_frame_pixels=max_frame_pixels,
+        )
         _emit_progress(
             progress_callback,
             phase="render",
             current=reused_count,
             total=total,
-            message=f"正在准备视频帧，剩余 {len(pending_frames)} 张，线程数 {render_workers}",
+            message=(
+                f"正在准备视频帧，剩余 {len(pending_frames)} 张，线程数 {render_workers}"
+                f"{worker_warning}"
+            ),
         )
         completed = reused_count
         if len(pending_frames) == 1:
@@ -1747,9 +1975,19 @@ def _ensure_video_frame_cache(
         else:
             executor = ThreadPoolExecutor(max_workers=render_workers, thread_name_prefix="birdstamp-video-frame-cache")
             futures: dict[Any, tuple[int, Path, str, str]] = {}
-            try:
-                for index, source_frame_path, source_signature, frame_name in pending_frames:
-                    _raise_if_cancel_requested(cancel_event, message="视频导出已中断，正在停止剩余视频帧准备。")
+            pending_iterator = iter(pending_frames)
+
+            def _submit_video_frames() -> None:
+                max_in_flight = max(1, render_workers * 2)
+                while len(futures) < max_in_flight:
+                    try:
+                        index, source_frame_path, source_signature, frame_name = next(pending_iterator)
+                    except StopIteration:
+                        return
+                    _raise_if_cancel_requested(
+                        cancel_event,
+                        message="视频导出已中断，正在停止剩余视频帧准备。",
+                    )
                     future = executor.submit(
                         _normalize_and_cache_video_frame,
                         index=index,
@@ -1762,9 +2000,12 @@ def _ensure_video_frame_cache(
                     )
                     futures[future] = (index, source_frame_path, source_signature, frame_name)
 
+            try:
+                _submit_video_frames()
                 completed = reused_count
-                for future in as_completed(futures):
-                    index, source_frame_path, source_signature, frame_name = futures[future]
+                while futures:
+                    future = next(as_completed(tuple(futures)))
+                    index, source_frame_path, source_signature, frame_name = futures.pop(future)
                     try:
                         rendered_index, _, frame_path, _, frame_signature = future.result()
                     except VideoExportCancelledError:
@@ -1801,6 +2042,7 @@ def _ensure_video_frame_cache(
                         message=f"已准备视频帧 {completed}/{total}: {frame_name}",
                     )
                     _raise_if_cancel_requested(cancel_event, message="视频导出已中断，正在停止剩余视频帧准备。")
+                    _submit_video_frames()
             finally:
                 executor.shutdown(wait=True, cancel_futures=True)
 
@@ -2079,30 +2321,36 @@ def _run_ffmpeg_command(
     cancel_event: threading.Event | None = None,
     cancel_message: str = "视频编码已中断，正在保留已完成帧。",
 ) -> None:
-    process = subprocess.Popen(cmd, **_subprocess_popen_kwargs())
-    stdout_data = b""
-    stderr_data = b""
-    try:
-        while True:
-            if _is_cancel_requested(cancel_event):
+    with tempfile.TemporaryFile(mode="w+b") as stderr_file:
+        popen_kwargs = _subprocess_popen_kwargs()
+        popen_kwargs["stdout"] = subprocess.DEVNULL
+        popen_kwargs["stderr"] = stderr_file
+        process = subprocess.Popen(cmd, **popen_kwargs)
+        try:
+            while True:
+                if _is_cancel_requested(cancel_event):
+                    _terminate_process(process)
+                    raise VideoExportCancelledError(cancel_message)
+                return_code = process.poll()
+                if return_code is not None:
+                    if return_code != 0:
+                        try:
+                            stderr_file.flush()
+                            stderr_file.seek(0, os.SEEK_END)
+                            size = stderr_file.tell()
+                            stderr_file.seek(max(0, size - 64 * 1024))
+                            stderr_data = stderr_file.read()
+                        except Exception:
+                            stderr_data = b""
+                        stderr_text = decode_subprocess_output(stderr_data).strip()
+                        detail = stderr_text or f"ffmpeg exit code={return_code}"
+                        raise RuntimeError(f"视频编码失败: {detail}")
+                    return
+                time.sleep(0.2)
+        except Exception:
+            if process.poll() is None:
                 _terminate_process(process)
-                stdout_data, stderr_data = process.communicate()
-                raise VideoExportCancelledError(cancel_message)
-            return_code = process.poll()
-            if return_code is not None:
-                stdout_data, stderr_data = process.communicate()
-                if return_code != 0:
-                    stderr_text = decode_subprocess_output(stderr_data).strip()
-                    stdout_text = decode_subprocess_output(stdout_data).strip()
-                    detail = stderr_text or stdout_text or f"ffmpeg exit code={return_code}"
-                    raise RuntimeError(f"视频编码失败: {detail}")
-                return
-            time.sleep(0.2)
-    except Exception:
-        if process.poll() is None:
-            _terminate_process(process)
-            stdout_data, stderr_data = process.communicate()
-        raise
+            raise
 
 
 def _build_partial_video_from_frames(
@@ -2339,6 +2587,7 @@ __all__ = [
     "build_default_image_proc_pipeline",
     "build_image_proc_export_stages",
     "build_ffmpeg_command",
+    "build_template_signature_state",
     "export_video",
     "ffmpeg_install_script_path",
     "find_ffmpeg_executable",

@@ -12,6 +12,7 @@ from __future__ import annotations
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
+import shutil
 import threading
 import time
 
@@ -42,6 +43,8 @@ from birdstamp.export_stage import (
     EXPORT_STAGE_GIF_ID,
     EXPORT_STAGE_VIDEO_ID,
     VideoFrameJob,
+    build_template_signature_state,
+    estimate_video_job_max_pixels,
     render_video_frame,
     resolve_video_render_workers,
     source_frame_signature_for_job,
@@ -437,6 +440,7 @@ class _BirdStampExporterMixin:
         jobs: list[VideoFrameJob],
         *,
         output_path: Path,
+        persistent: bool,
     ) -> tuple[list[Path], Path]:
         total = len(jobs)
         bucket_key = build_source_frame_bucket_key(
@@ -446,8 +450,9 @@ class _BirdStampExporterMixin:
             output_path,
             bucket_kind=SOURCE_FRAME_BUCKET_KIND,
             bucket_key=bucket_key,
-            persistent=True,
+            persistent=persistent,
         )
+        self._gif_transient_cache_dir = None if persistent else cache_plan.cache_dir
         manifest = load_frame_manifest(cache_plan)
         cache_plan.frames_dir.mkdir(parents=True, exist_ok=True)
 
@@ -456,18 +461,32 @@ class _BirdStampExporterMixin:
         missing_targets: list[Path] = []
         missing_records: list[tuple[int, VideoFrameJob, str, str]] = []
         reused_count = 0
+        template_paths = dict(getattr(self, "template_paths", {}) or {})
+        template_signature_state = build_template_signature_state(jobs, template_paths)
+        dirty_getter = getattr(self, "_dirty_photo_path_keys", None)
+        dirty_keys = (
+            set(dirty_getter([job.path for job in jobs]))
+            if callable(dirty_getter)
+            else set()
+        )
 
         for index, job in enumerate(jobs, start=1):
             source_signature = path_signature(job.path)
-            frame_signature = source_frame_signature_for_job(job)
-            reusable_path = reusable_frame_path(
-                cache_plan,
-                manifest,
-                index=index,
-                source_path=job.path,
-                source_signature=source_signature,
-                frame_signature=frame_signature,
+            frame_signature = source_frame_signature_for_job(
+                job,
+                template_paths=template_paths,
+                template_signature_state=template_signature_state,
             )
+            reusable_path = None
+            if str(job.path.resolve(strict=False)).casefold() not in dirty_keys:
+                reusable_path = reusable_frame_path(
+                    cache_plan,
+                    manifest,
+                    index=index,
+                    source_path=job.path,
+                    source_signature=source_signature,
+                    frame_signature=frame_signature,
+                )
             if reusable_path is not None:
                 frame_paths[index - 1] = reusable_path
                 reused_count += 1
@@ -535,13 +554,18 @@ class _BirdStampExporterMixin:
 
         frame_paths: list[Path] = []
         frame_output_dir: Path | None = None
+        self._gif_transient_cache_dir = None
         try:
             jobs = self._build_export_render_jobs(
                 paths,
                 prefer_current_ui_for_current_path=True,
                 progress_callback=_on_prepare_progress,
             )
-            frame_paths, frame_output_dir = self._ensure_gif_frame_cache(jobs, output_path=output_path)
+            frame_paths, frame_output_dir = self._ensure_gif_frame_cache(
+                jobs,
+                output_path=output_path,
+                persistent=gif_request.keep_frame_images,
+            )
             gif_paths = self._export_gif_from_frame_paths(
                 frame_paths,
                 output_path,
@@ -555,6 +579,13 @@ class _BirdStampExporterMixin:
         finally:
             if "jobs" in locals():
                 self._close_render_job_sources(jobs)
+            transient_cache_dir = getattr(self, "_gif_transient_cache_dir", None)
+            self._gif_transient_cache_dir = None
+            if not gif_request.keep_frame_images and isinstance(transient_cache_dir, Path):
+                try:
+                    shutil.rmtree(transient_cache_dir)
+                except Exception:
+                    pass
         elapsed = time.perf_counter() - started_at
         timing_text = self._format_image_export_timing_summary(max(1, len(frame_paths)), elapsed)
         outputs_text = "，".join(path.name for path in gif_paths)
@@ -678,7 +709,11 @@ class _BirdStampExporterMixin:
         bird_box_cache: dict[str, tuple[float, float, float, float] | None] = {}
         bird_box_lock = threading.Lock()
         total = len(tasks)
-        worker_count = resolve_video_render_workers(0, total)
+        worker_count = resolve_video_render_workers(
+            0,
+            total,
+            max_frame_pixels=estimate_video_job_max_pixels(jobs),
+        )
         ok_paths: list[Path] = []
         failed: list[str] = []
         progress_token = self._begin_image_export_progress(total=total, label=label, worker_count=worker_count)
@@ -703,19 +738,30 @@ class _BirdStampExporterMixin:
                     self._set_status(f"{label}进行中: 1/{total}，线程数 {worker_count}")
             else:
                 with ThreadPoolExecutor(max_workers=worker_count, thread_name_prefix="birdstamp-image-export") as executor:
-                    futures = {
-                        executor.submit(
-                            self._render_and_save_image_task,
-                            task,
-                            template_paths=template_paths,
-                            bird_box_cache=bird_box_cache,
-                            bird_box_lock=bird_box_lock,
-                        ): task
-                        for task in tasks
-                    }
+                    task_iterator = iter(tasks)
+                    futures: dict[object, _ImageExportTask] = {}
+
+                    def _submit_tasks() -> None:
+                        max_in_flight = max(1, worker_count * 2)
+                        while len(futures) < max_in_flight:
+                            try:
+                                task = next(task_iterator)
+                            except StopIteration:
+                                return
+                            future = executor.submit(
+                                self._render_and_save_image_task,
+                                task,
+                                template_paths=template_paths,
+                                bird_box_cache=bird_box_cache,
+                                bird_box_lock=bird_box_lock,
+                            )
+                            futures[future] = task
+
+                    _submit_tasks()
                     completed = 0
-                    for future in as_completed(futures):
-                        task = futures[future]
+                    while futures:
+                        future = next(as_completed(tuple(futures)))
+                        task = futures.pop(future)
                         try:
                             ok_paths.append(future.result())
                         except Exception as exc:
@@ -723,6 +769,7 @@ class _BirdStampExporterMixin:
                         completed += 1
                         self._set_image_export_progress(completed, total, label=label, worker_count=worker_count)
                         self._set_status(f"{label}进行中: {completed}/{total}，线程数 {worker_count}")
+                        _submit_tasks()
         finally:
             self._close_render_job_sources(jobs)
             self._finish_image_export_progress(

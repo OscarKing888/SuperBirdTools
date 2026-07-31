@@ -493,7 +493,10 @@ class PreviewPanel(QWidget):
                 self._fast_preview_only = False
         else:
             canvas_t0 = _time.perf_counter()
-            self._canvas.set_source_pixmap(None)
+            if load_full:
+                self._canvas.set_source_pixmap(None)
+            else:
+                self._canvas.set_source_pixmap(None, log_performance=False)
             self._canvas.setText(f"无法预览\n{Path(path).name}")
             canvas_ms = (_time.perf_counter() - canvas_t0) * 1000.0
             status_t0 = _time.perf_counter()
@@ -547,7 +550,7 @@ class PreviewPanel(QWidget):
             self._set_canvas_pixmap(output, log_performance=False)
             self._set_preview_status_text(output.width(), output.height())
         else:
-            self._canvas.set_source_pixmap(None)
+            self._canvas.set_source_pixmap(None, log_performance=False)
             self._canvas.setText(f"无法预览\n{Path(path).name}")
             self._set_preview_status_text(None, None)
         self._record_fast_preview_timing((_time.perf_counter() - started_at) * 1000.0)
@@ -794,29 +797,43 @@ class PreviewPanel(QWidget):
     def current_path(self):
         return self._current_path
 
-    def shutdown(self) -> None:
+    def request_shutdown(self) -> None:
         if self._shutdown_requested:
             return
         self._shutdown_requested = True
         self._preview_request_token += 1
         self._cancel_pending_full_preview()
+
+    def shutdown(self, *, wait_timeout_ms: int | None = None) -> bool:
+        self.request_shutdown()
         worker = self._full_preview_loader
         if worker is None:
-            return
+            return True
         try:
             worker.requestInterruption()
             # There is at most one decoder now.  Waiting for its owned work to
             # finish prevents "QThread destroyed while running" on application
             # shutdown; no new pending request can start once shutdown begins.
-            worker.wait()
+            if wait_timeout_ms is None:
+                wait_result = worker.wait()
+            else:
+                wait_result = worker.wait(max(0, int(wait_timeout_ms)))
+        except Exception:
+            wait_result = False
+        finished = bool(wait_result)
+        try:
+            finished = finished or not worker.isRunning()
         except Exception:
             pass
+        if not finished:
+            return False
         if self._full_preview_loader is worker:
             self._full_preview_loader = None
         try:
             worker.deleteLater()
         except Exception:
             pass
+        return True
 
     def closeEvent(self, event) -> None:  # type: ignore[override]
         self.shutdown()

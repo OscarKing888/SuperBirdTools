@@ -12,6 +12,7 @@ import shutil
 import re
 import subprocess
 import tempfile
+import threading
 import time as _time
 from pathlib import Path
 
@@ -36,7 +37,7 @@ from app_common.perf_probe import elapsed_ms, perf_counter, perf_log
 from app_common.exif_io import (
     PhotoMetaDataXMP,
     close_exiftool_process,
-    find_xmp_sidecar,
+    find_same_stem_xmp_sidecar,
     _get_exiftool_tag_target,
 )
 from app_common.file_browser import DirectoryBrowserWidget
@@ -254,9 +255,28 @@ def _build_preview_grid_line_width_icon(width: int) -> QIcon:
 _log = get_logger("main")
 
 
+def _norm_paths_for_compare(paths: object) -> set[str]:
+    if isinstance(paths, (str, os.PathLike)):
+        values = [paths]
+    else:
+        try:
+            values = list(paths or [])  # type: ignore[arg-type]
+        except TypeError:
+            values = []
+    normalized: set[str] = set()
+    for path in values:
+        if path:
+            normalized.add(os.path.normcase(os.path.normpath(os.fspath(path))))
+    return normalized
+
+
 class MainWindow(QMainWindow):
     def __init__(self, initial_received_files=None):
         super().__init__()
+        self._shutdown_requested = False
+        self._shutdown_finalized = False
+        self._exiftool_shutdown_thread: threading.Thread | None = None
+        self._exiftool_shutdown_done = threading.Event()
         info = load_about_info(_get_config_resource_path())
         self.setWindowTitle(_build_main_window_title(info))
         self.setMinimumSize(900, 600)
@@ -266,6 +286,9 @@ class MainWindow(QMainWindow):
         self._main_splitter_state_save_timer = QTimer(self)
         self._main_splitter_state_save_timer.setSingleShot(True)
         self._main_splitter_state_save_timer.timeout.connect(self._save_main_splitter_state)
+        self._shutdown_retry_timer = QTimer(self)
+        self._shutdown_retry_timer.setSingleShot(True)
+        self._shutdown_retry_timer.timeout.connect(self.close)
         icon_path = _get_app_icon_path()
         if icon_path:
             self.setWindowIcon(QIcon(icon_path))
@@ -411,6 +434,7 @@ class MainWindow(QMainWindow):
         self.image_info_tabs.add_info_panel(self.image_info_panel)
         self.image_info_tabs.add_info_panel(self.tags_info_panel)
         self.image_info_tabs.add_info_panel(self.exif_info_panel)
+        self._file_list.photo_tags_cache_updated.connect(self._on_photo_tags_cache_updated)
         self.image_info_tabs.on_photo_selected("")
         splitter.addWidget(self.image_info_tabs)
         splitter.set_handle_toggle_target(3, 3)
@@ -426,6 +450,7 @@ class MainWindow(QMainWindow):
 
         # 「显示对焦点」异步加载状态
         self._focus_loader: FocusBoxLoader | None = None
+        self._focus_pending_request: tuple[int, str, str, int, int] | None = None
         self._focus_request_sequence = 0
         self._focus_display_request_id = 0
 
@@ -750,9 +775,16 @@ class MainWindow(QMainWindow):
 
     @staticmethod
     def _same_filesystem_key(path_a: str | os.PathLike, path_b: str | os.PathLike) -> bool:
-        return os.path.normcase(os.path.abspath(os.path.normpath(os.fspath(path_a)))) == os.path.normcase(
-            os.path.abspath(os.path.normpath(os.fspath(path_b)))
-        )
+        path_a_abs = os.path.abspath(os.path.normpath(os.fspath(path_a)))
+        path_b_abs = os.path.abspath(os.path.normpath(os.fspath(path_b)))
+        if path_a_abs == path_b_abs:
+            return True
+        try:
+            if os.path.exists(path_a_abs) and os.path.exists(path_b_abs):
+                return bool(os.path.samefile(path_a_abs, path_b_abs))
+        except OSError:
+            pass
+        return os.path.normcase(path_a_abs) == os.path.normcase(path_b_abs)
 
     @staticmethod
     def _case_safe_rename_path(source: Path, target: Path) -> None:
@@ -768,7 +800,20 @@ class MainWindow(QMainWindow):
             else:
                 raise RuntimeError("无法创建临时重命名路径。")
             os.rename(source_text, str(tmp))
-            os.rename(str(tmp), target_text)
+            try:
+                os.rename(str(tmp), target_text)
+            except Exception:
+                try:
+                    if tmp.exists() and not source.exists():
+                        os.rename(str(tmp), source_text)
+                except Exception:
+                    _log.exception(
+                        "[_case_safe_rename_path] failed to restore temporary path source=%r temp=%r target=%r",
+                        source_text,
+                        str(tmp),
+                        target_text,
+                    )
+                raise
             return
         os.rename(source_text, target_text)
 
@@ -783,8 +828,17 @@ class MainWindow(QMainWindow):
             raise ValueError('文件名不能包含 <>:"/\\|?* 等字符。')
         if clean_name in (".", ".."):
             raise ValueError("文件名无效。")
-        name_path = Path(clean_name)
-        target_name = clean_name if name_path.suffix else f"{clean_name}{source.suffix}"
+        if clean_name.endswith((".", " ")) or any(ord(ch) < 32 for ch in clean_name):
+            raise ValueError("文件名不能以点或空格结尾，也不能包含控制字符。")
+        requested_suffix = Path(clean_name).suffix.lower()
+        source_suffix = source.suffix.lower()
+        if requested_suffix in IMAGE_EXTENSIONS:
+            if requested_suffix != source_suffix:
+                raise ValueError(f"重命名不能改变图片格式；请保留原后缀 {source.suffix}。")
+            clean_name = clean_name[: -len(Path(clean_name).suffix)]
+            if not clean_name:
+                raise ValueError("文件名不能为空。")
+        target_name = f"{clean_name}{source.suffix}"
         return source.with_name(target_name)
 
     def _file_writes_allowed(self, path: str | None = None) -> bool:
@@ -814,37 +868,43 @@ class MainWindow(QMainWindow):
             raise FileExistsError(f"目标文件已存在：{target_path}")
 
         sidecar_pairs: list[tuple[Path, Path]] = []
-        xmp_sidecar_source = find_xmp_sidecar(source_path)
-        seen_sidecars: set[str] = set()
-        for sidecar_source in (xmp_sidecar_source,):
-            if not sidecar_source or not os.path.isfile(sidecar_source):
-                continue
-            sidecar_key = os.path.normcase(os.path.normpath(os.path.abspath(sidecar_source)))
-            if sidecar_key in seen_sidecars:
-                continue
-            seen_sidecars.add(sidecar_key)
-            sidecar_suffix = Path(sidecar_source).suffix or ".xmp"
+        xmp_sidecar_source = find_same_stem_xmp_sidecar(source_path)
+        if xmp_sidecar_source and os.path.isfile(xmp_sidecar_source):
+            sidecar_suffix = Path(xmp_sidecar_source).suffix or ".xmp"
             sidecar_target = Path(target_path).with_suffix(sidecar_suffix)
             sidecar_target_text = os.path.normpath(os.path.abspath(str(sidecar_target)))
             if (
-                not self._same_filesystem_key(sidecar_source, sidecar_target_text)
+                not self._same_filesystem_key(xmp_sidecar_source, sidecar_target_text)
                 and os.path.exists(sidecar_target_text)
             ):
                 raise FileExistsError(f"目标 sidecar 已存在：{sidecar_target_text}")
-            sidecar_pairs.append((Path(sidecar_source), Path(sidecar_target_text)))
+            sidecar_pairs.append((Path(xmp_sidecar_source), Path(sidecar_target_text)))
 
         renamed_photo = False
+        renamed_sidecars: list[tuple[Path, Path]] = []
         try:
             self._case_safe_rename_path(source, Path(target_path))
             renamed_photo = True
             for sidecar_source, sidecar_target in sidecar_pairs:
                 self._case_safe_rename_path(sidecar_source, sidecar_target)
-        except Exception:
+                renamed_sidecars.append((sidecar_source, sidecar_target))
+        except Exception as rename_exc:
+            rollback_errors: list[str] = []
+            for sidecar_source, sidecar_target in reversed(renamed_sidecars):
+                if sidecar_target.exists() and not sidecar_source.exists():
+                    try:
+                        self._case_safe_rename_path(sidecar_target, sidecar_source)
+                    except Exception as exc:
+                        rollback_errors.append(f"{sidecar_target} → {sidecar_source}: {exc}")
             if renamed_photo and os.path.exists(target_path) and not os.path.exists(source_path):
                 try:
                     self._case_safe_rename_path(Path(target_path), source)
-                except Exception:
-                    pass
+                except Exception as exc:
+                    rollback_errors.append(f"{target_path} → {source_path}: {exc}")
+            if rollback_errors:
+                raise RuntimeError(
+                    f"重命名失败且回滚不完整：{rename_exc}；" + "；".join(rollback_errors)
+                ) from rename_exc
             raise
 
         self._current_exif_path = target_path
@@ -914,6 +974,23 @@ class MainWindow(QMainWindow):
             elapsed_ms(probe_t0),
         )
 
+    def _on_photo_tags_cache_updated(self, paths: object) -> None:
+        current = os.path.normpath(self._current_exif_path) if self._current_exif_path else ""
+        if not current:
+            return
+        updated = _norm_paths_for_compare(paths)
+        if os.path.normcase(current) not in updated:
+            return
+        panel = self.image_info_tabs.currentWidget()
+        if panel not in (self.image_info_panel, self.tags_info_panel):
+            return
+        try:
+            panel_path = os.path.normpath(panel.current_photo_path()) if panel.current_photo_path() else ""
+            if panel_path and os.path.normcase(panel_path) == os.path.normcase(current):
+                panel.refresh_current_photo()
+        except Exception:
+            pass
+
     def _on_preview_overlay_toggled(self, _checked: bool) -> None:
         """「显示对焦点」开关：同步 canvas 并按需加载/清除当前图的对焦点框。"""
         enabled = self.check_show_focus.isChecked()
@@ -925,42 +1002,15 @@ class MainWindow(QMainWindow):
             self._stop_focus_loader()
             self.preview_panel.set_focus_box(None)
 
-    @staticmethod
-    def _find_source_file_by_stem(path: str) -> str | None:
-        """同目录同 stem 下优先查找 RAW/HEIF 源文件，供对焦点提取。"""
+    def _find_source_file_by_stem(self, path: str) -> str | None:
+        """Resolve a RAW/HEIF sibling from the directory-listing index."""
+        resolver = getattr(self._file_list, "focus_source_for_sibling", None)
+        if not callable(resolver):
+            return None
         try:
-            folder = Path(path).parent
-            stem_l = Path(path).stem.lower()
+            return resolver(path)
         except Exception:
             return None
-        if not folder or not folder.is_dir() or not stem_l:
-            return None
-        preferred_exts = [".arw", ".hif", ".heif", ".heic"]
-        all_exts = preferred_exts + sorted(RAW_EXTENSIONS) + sorted(HEIF_EXTENSIONS)
-        ext_rank: dict[str, int] = {}
-        for idx, ext in enumerate(all_exts):
-            ext_l = str(ext).lower()
-            if ext_l and ext_l not in ext_rank:
-                ext_rank[ext_l] = idx
-        best_path = None
-        best_rank = 10**9
-        try:
-            for entry in os.scandir(folder):
-                if not entry.is_file():
-                    continue
-                p = Path(entry.name)
-                if p.stem.lower() != stem_l:
-                    continue
-                ext_l = p.suffix.lower()
-                if ext_l not in ext_rank:
-                    continue
-                rank = ext_rank[ext_l]
-                if rank < best_rank:
-                    best_rank = rank
-                    best_path = os.path.normpath(entry.path)
-        except Exception:
-            return None
-        return best_path
 
     def _resolve_focus_metadata_source_path(self, path: str) -> str:
         """为「显示对焦点」解析元数据来源（仅源文件）：当前文件若为 RAW/HEIF 则直接用，
@@ -1035,7 +1085,6 @@ class MainWindow(QMainWindow):
             self._stop_focus_loader()
             self.preview_panel.set_focus_box(None)
             return
-        self._stop_focus_loader()
         self._focus_request_sequence += 1
         request_id = self._focus_request_sequence
         self._focus_display_request_id = request_id
@@ -1047,34 +1096,85 @@ class MainWindow(QMainWindow):
             size[0],
             size[1],
         )
+        request = (
+            request_id,
+            os.path.normpath(preview_path),
+            os.path.normpath(focus_source_path) if focus_source_path else "",
+            int(size[0]),
+            int(size[1]),
+        )
+        self._queue_focus_loader_request(request)
+        self.preview_panel.set_focus_box(None)
+
+    def _queue_focus_loader_request(
+        self,
+        request: tuple[int, str, str, int, int],
+    ) -> None:
+        """Keep one active focus worker and coalesce replacements to the latest."""
+        if self._shutdown_requested:
+            return
+        loader = self._focus_loader
+        if loader is not None and loader.isRunning():
+            self._focus_pending_request = request
+            loader.requestInterruption()
+            return
+        if loader is not None:
+            self._finalize_focus_loader(loader, start_pending=False)
+        self._focus_pending_request = None
+        self._start_focus_loader(request)
+
+    def _start_focus_loader(self, request: tuple[int, str, str, int, int]) -> None:
+        if self._shutdown_requested:
+            return
+        request_id, preview_path, focus_source_path, width, height = request
         loader = FocusBoxLoader(
             request_id,
             "",
             preview_path,
             focus_source_path,
-            size[0],
-            size[1],
+            width,
+            height,
             self,
         )
         loader.focus_loaded.connect(self._on_focus_box_loaded)
+        loader.finished.connect(lambda ldr=loader: self._on_focus_loader_finished(ldr))
         self._focus_loader = loader
         loader.start()
-        self.preview_panel.set_focus_box(None)
 
-    def _stop_focus_loader(self) -> None:
+    def _stop_focus_loader(
+        self,
+        *,
+        wait: bool = False,
+        wait_timeout_ms: int | None = None,
+    ) -> bool:
+        self._focus_request_sequence += 1
+        self._focus_display_request_id = self._focus_request_sequence
+        self._focus_pending_request = None
         loader = self._focus_loader
         if loader is None:
-            return
+            return True
+        loader.requestInterruption()
+        if not wait:
+            return not loader.isRunning()
         try:
-            loader.focus_loaded.disconnect(self._on_focus_box_loaded)
+            if wait_timeout_ms is None:
+                wait_result = loader.wait()
+            else:
+                wait_result = loader.wait(max(0, int(wait_timeout_ms)))
+        except Exception:
+            wait_result = False
+        finished = bool(wait_result)
+        try:
+            finished = finished or not loader.isRunning()
         except Exception:
             pass
-        loader.requestInterruption()
-        self._focus_loader = None
+        if not finished:
+            return False
+        self._finalize_focus_loader(loader, start_pending=False)
+        return True
 
     def _on_focus_box_loaded(self, request_id: int, focus_box, used_path: str) -> None:
-        loader = self.sender()
-        if request_id != self._focus_display_request_id:
+        if self._shutdown_requested or request_id != self._focus_display_request_id:
             _log.info(
                 "[_on_focus_box_loaded] ignore stale request_id=%s current=%s used_path=%r",
                 request_id,
@@ -1082,13 +1182,6 @@ class MainWindow(QMainWindow):
                 used_path,
             )
             return
-        if isinstance(loader, FocusBoxLoader):
-            try:
-                loader.focus_loaded.disconnect(self._on_focus_box_loaded)
-            except Exception:
-                pass
-            if self._focus_loader is loader:
-                self._focus_loader = None
         _log.info(
             "[_on_focus_box_loaded] request_id=%s used_path=%r focus_box=%r",
             request_id,
@@ -1097,9 +1190,105 @@ class MainWindow(QMainWindow):
         )
         self.preview_panel.set_focus_box(focus_box)
 
-    def closeEvent(self, event) -> None:  # type: ignore[override]
+    def _on_focus_loader_finished(self, loader: FocusBoxLoader) -> None:
+        self._finalize_focus_loader(loader, start_pending=True)
+
+    def _finalize_focus_loader(self, loader: FocusBoxLoader, *, start_pending: bool) -> None:
+        if loader is not self._focus_loader:
+            return
+        self._focus_loader = None
         try:
-            self._stop_focus_loader()
+            loader.focus_loaded.disconnect(self._on_focus_box_loaded)
+        except Exception:
+            pass
+        try:
+            loader.deleteLater()
+        except Exception:
+            pass
+        if self._shutdown_requested or not start_pending:
+            self._focus_pending_request = None
+            return
+        pending = self._focus_pending_request
+        self._focus_pending_request = None
+        if pending is not None:
+            self._start_focus_loader(pending)
+
+    def _begin_exiftool_shutdown(self) -> None:
+        if self._exiftool_shutdown_thread is not None:
+            return
+        self._exiftool_shutdown_done.clear()
+
+        def close_shared_process() -> None:
+            try:
+                close_exiftool_process()
+            finally:
+                self._exiftool_shutdown_done.set()
+
+        worker = threading.Thread(
+            target=close_shared_process,
+            name="SuperViewerExifToolShutdown",
+            daemon=True,
+        )
+        self._exiftool_shutdown_thread = worker
+        worker.start()
+
+    def closeEvent(self, event) -> None:  # type: ignore[override]
+        if self._shutdown_finalized:
+            super().closeEvent(event)
+            return
+        if not self._shutdown_requested:
+            self._shutdown_requested = True
+            try:
+                self._file_list.stop_key_navigation_playback()
+            except Exception:
+                pass
+            try:
+                self._stop_focus_loader(wait=False)
+            except Exception:
+                pass
+            try:
+                self.image_info_tabs.request_shutdown()
+            except Exception:
+                pass
+            try:
+                self.preview_panel.request_shutdown()
+            except Exception:
+                pass
+            try:
+                self._file_list.request_shutdown()
+            except Exception:
+                pass
+            # Closing the shared stay-open process interrupts metadata calls
+            # before the bounded worker waits below.  Its process teardown is
+            # kept off the GUI thread because a wedged child may need a bounded
+            # terminate/kill sequence.
+            self._begin_exiftool_shutdown()
+
+        focus_done = False
+        tabs_done = False
+        preview_done = False
+        try:
+            focus_done = self._stop_focus_loader(wait=True, wait_timeout_ms=25)
+        except Exception:
+            pass
+        try:
+            tabs_done = bool(self.image_info_tabs.shutdown(wait_timeout_ms=25))
+        except Exception:
+            pass
+        try:
+            preview_done = bool(self.preview_panel.shutdown(wait_timeout_ms=25))
+        except Exception:
+            pass
+        exiftool_done = self._exiftool_shutdown_done.is_set()
+        if not (focus_done and tabs_done and preview_done and exiftool_done):
+            event.ignore()
+            self.hide()
+            if not self._shutdown_retry_timer.isActive():
+                self._shutdown_retry_timer.start(25)
+            return
+
+        try:
+            self._file_list.shutdown()
         except Exception:
             pass
         try:
@@ -1108,14 +1297,7 @@ class MainWindow(QMainWindow):
             self._save_main_splitter_state()
         except Exception:
             pass
-        try:
-            self._file_list.close_tag_store()
-        except Exception:
-            pass
-        try:
-            self.preview_panel.shutdown()
-        except Exception:
-            pass
+        self._shutdown_finalized = True
         super().closeEvent(event)
 
 

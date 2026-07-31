@@ -21,6 +21,8 @@
 # Runtime artifacts
 **/output/
 **/*.log
+/super_viewer.cfg
+/SuperViewer/SuperViewerUser.cfg
 
 SuperBirdStamp/tools/ffmpeg/macos/ffmpeg
 SuperBirdStamp/tools/ffmpeg/windows/ffmpeg.exe

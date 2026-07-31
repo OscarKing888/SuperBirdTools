@@ -11,6 +11,7 @@ from SuperViewer.superviewer.photo_tags import (
     find_superpicky_tag_config_path,
     photo_tag_filter_matches,
 )
+from SuperViewer.superviewer.tagged_file_list import SuperViewerTaggedFileListPanel
 
 
 def test_photo_tag_config_loads_utf8_lines_and_dedupes(tmp_path: Path) -> None:
@@ -228,3 +229,87 @@ def test_clear_configured_tags_preserves_unrelated_xmp_subjects(tmp_path: Path) 
     store.clear_tags_for_paths([str(photo_path)], allowed_tags=["fight", "feeding"])
 
     assert metadata.read_subjects(str(photo_path)) == ["Lightroom"]
+
+
+class _TagCacheHarness:
+    _photo_tags_from_meta_cache = SuperViewerTaggedFileListPanel._photo_tags_from_meta_cache
+    _meta_cache_has_photo_tags = SuperViewerTaggedFileListPanel._meta_cache_has_photo_tags
+    _seed_photo_tag_cache_from_meta = SuperViewerTaggedFileListPanel._seed_photo_tag_cache_from_meta
+    _tags_for_path = SuperViewerTaggedFileListPanel._tags_for_path
+
+    def __init__(self) -> None:
+        self._available_tags = ["fight", "feeding"]
+        self._photo_tag_cache: dict[str, set[str]] = {}
+        self._meta_cache: dict[str, dict] = {}
+        self._all_files: list[str] = []
+        self.queued: list[str] = []
+
+    def _queue_photo_tag_lookup(self, path: str) -> None:
+        self.queued.append(path)
+
+
+def test_tag_lookup_prefers_metadata_cache_and_caches_known_empty_values() -> None:
+    empty_path = os.path.normpath("C:/photos/empty.jpg")
+    tagged_path = os.path.normpath("C:/photos/tagged.jpg")
+    harness = _TagCacheHarness()
+    harness._all_files = [empty_path, tagged_path]
+    harness._meta_cache = {
+        empty_path: {"tags": []},
+        tagged_path: {"tags": ["fight", "unconfigured"]},
+    }
+
+    assert harness._tags_for_path(empty_path) == set()
+    assert empty_path in harness._photo_tag_cache
+    assert harness._tags_for_path(empty_path) == set()
+    assert harness._tags_for_path(tagged_path) == {"fight"}
+    assert harness.queued == []
+
+
+def test_tag_lookup_cache_miss_queues_async_work_without_sync_store_read() -> None:
+    path = os.path.normpath("C:/photos/missing.jpg")
+    harness = _TagCacheHarness()
+
+    assert harness._tags_for_path(path) == set()
+    assert harness.queued == [path]
+    assert path not in harness._photo_tag_cache
+
+
+def test_on_demand_tag_lookup_builds_bounded_same_directory_async_batch() -> None:
+    current = os.path.normpath("C:/photos/current.jpg")
+    known_meta = os.path.normpath("C:/photos/known-meta.jpg")
+    known_cache = os.path.normpath("C:/photos/known-cache.jpg")
+    same_dir = [os.path.normpath(f"C:/photos/{index:04d}.jpg") for index in range(400)]
+    other_dir = os.path.normpath("C:/other/other.jpg")
+
+    class _QueueHarness:
+        _queue_photo_tag_lookup = SuperViewerTaggedFileListPanel._queue_photo_tag_lookup
+        _meta_cache_has_photo_tags = SuperViewerTaggedFileListPanel._meta_cache_has_photo_tags
+
+        def __init__(self) -> None:
+            self._tag_shutdown_requested = False
+            self._all_files = [known_meta, known_cache, *same_dir, other_dir]
+            self._photo_tag_cache = {known_cache: set()}
+            self._meta_cache = {known_meta: {"tags": []}}
+            self.calls: list[tuple[list[str], str, bool]] = []
+
+        def _start_photo_tag_cache_loader_if_needed(
+            self,
+            paths,
+            *,
+            reason: str,
+            allow_without_filters: bool = False,
+        ) -> None:
+            self.calls.append((list(paths), reason, allow_without_filters))
+
+    harness = _QueueHarness()
+    harness._queue_photo_tag_lookup(current)
+
+    assert len(harness.calls) == 1
+    batch, reason, allow_without_filters = harness.calls[0]
+    assert batch[0] == current
+    assert len(batch) == 256
+    assert known_meta not in batch
+    assert known_cache not in batch
+    assert other_dir not in batch
+    assert reason == "on_demand"
+    assert allow_without_filters is True

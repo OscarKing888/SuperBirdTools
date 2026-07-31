@@ -13,13 +13,14 @@ Follow `ai_rules/AI_CODING_RULES.md` as the project baseline.
 
 ## Current Workspace
 
-- Current Windows checkout root: `E:\SuperBirdTools`
-- Current macOS checkout root: `/Users/oscar/Pictures/SuperApps/SuperBirdTools`
+- Treat `<repo>` as the active checkout root; do not hardcode a machine-specific checkout path in code or scripts.
+- Example Windows checkout: `E:\SuperApps\SBT\SuperBirdTools`
+- Example macOS checkout: `/Users/oscar/Pictures/SuperApps/SuperBirdTools`
 - Shared development virtual environment: `<repo>/.venv`
-- On Windows 64-bit, use the repo-root interpreter `E:\SuperBirdTools\.venv\Scripts\python.exe`
-- On macOS, use the repo-root interpreter `/Users/oscar/Pictures/SuperApps/SuperBirdTools/.venv/bin/python3`
+- On Windows 64-bit, use `<repo>\.venv\Scripts\python.exe`
+- On macOS, use `<repo>/.venv/bin/python3`
 - Unless a script explicitly requires an app subdirectory, run commands from the repository root above.
-- Treat `<repo>` as the active checkout root for Codex file links and commands. In this Windows checkout, prefer paths under `E:\SuperBirdTools`.
+- Resolve file links and commands against the current `<repo>` checkout.
 
 ## Monorepo Environment
 
@@ -55,9 +56,10 @@ Follow `ai_rules/AI_CODING_RULES.md` as the project baseline.
 
 ## Validation Minimum
 
-- These validation interpreter rules override older `py -3` examples in `ai_rules/AI_CODING_RULES.md`.
 - Run `<repo>\.venv\Scripts\python.exe -m py_compile ...` on changed Python files on Windows.
 - Run `<repo>/.venv/bin/python3 -m py_compile ...` on changed Python files on macOS.
+- From the repo root, `pytest.ini` supplies both `.` and `SuperBirdStamp` on `PYTHONPATH`; use `<repo>\.venv\Scripts\python.exe -m pytest ...` on Windows or `<repo>/.venv/bin/python3 -m pytest ...` on macOS.
+- For headless Qt checks on Windows PowerShell, set `$env:QT_QPA_PLATFORM='offscreen'` before invoking pytest or a GUI smoke test.
 - For metadata changes: write + read-back verification with Chinese sample values.
 - For `.spec` changes: packaged startup smoke test.
 - For `init_dev.py` changes: run at least `.venv\Scripts\python.exe init_dev.py --dry-run` on Windows or `.venv/bin/python3 init_dev.py --dry-run` on macOS from the repo root when `.venv` exists.
@@ -154,20 +156,20 @@ Follow `ai_rules/AI_CODING_RULES.md` as the project baseline.
 
 ## SuperBirdStamp Image Processing Pipeline
 
-- `SuperBirdStamp/birdstamp/image_pipeline.py` is the interface source of truth for the image processing pipeline. New processing steps must be modeled as `ImageProcStage` implementations that receive and return an `ImageProcContext`.
+- `SuperBirdStamp/birdstamp/image_pipeline/` is the interface source of truth for the image processing pipeline. New processing steps must be modeled as `ImageProcStage` implementations that receive and return an `ImageProcContext`.
 - `ImageProcContext` is the shared processing state. Use it to carry the current `PIL.Image`, `source_path`, full `source_paths`, list index, raw metadata, normalized metadata context, template/photo info, normalized settings, precomputed values, crop plan, crop box, outer padding, original source size, and shared caches/locks.
 - Terminal exporters must be represented by `ImageProcExportStage` subclasses. The editor may still own file dialogs and worker orchestration, but PNG/JPG image, GIF, and video export choices must be exposed as mutually exclusive export stages.
 - Keep pipeline/core processing independent from Qt widgets. GUI code may build settings and display options, but image processing logic should live in pipeline stages or reusable non-widget helpers.
-- The default export pipeline is built by `build_default_image_proc_pipeline()` in `birdstamp.video_export` and currently runs:
-  - `TemplateCropStage`
-  - `ResizeLimitStage`
-  - `TemplateOverlayStage`
-  - `FocusOverlayStage`
+- The default export pipeline is built by `build_default_image_proc_pipeline()` in `birdstamp.export_stage.pipeline` and currently runs:
+  - `ImageProcTemplateCropStage`
+  - `ImageProcResizeLimitStage`
+  - `ImageProcTemplateOverlayStage`
+  - `ImageProcFocusOverlayStage`
 - Existing image, GIF, and video export rendering should continue to converge through `VideoFrameJob -> render_video_frame() -> default image pipeline`. Do not add new export-only rendering behavior directly inside GUI handlers when it can be a stage.
 - Stage parameters must be represented as normalized settings and exposed through `ImageProcStage.ui_descriptor()` / `ImageProcOptionSpec` so the global export UI can render or persist them consistently.
 - The editor UI must display non-export stage settings in the current `ImageProcStage` order. Reordering stages must update `pipeline_stage_order`, dirty cached exports, and preserve the single selected `ImageProcExportStage` at the terminal export step.
 - Each optional stage should have an explicit enabled setting key. When adding a new stage or stage parameter, update render-setting normalization and frame/cache signatures so cached frames are invalidated when that option changes.
-- Batch/list-level work such as maximum-size precomputation, uniform auto-crop, crop-center stabilization, or future de-jitter should use `process_batch()` or precomputed context/job values instead of duplicating ad-hoc loops in GUI code.
+- Batch/list-level work such as maximum-size precomputation, uniform auto-crop, crop-center stabilization, or future de-jitter should use pipeline batch hooks where available or the shared `prepare_uniform_auto_crop_plans()` precomputation path and precomputed context/job values instead of duplicating ad-hoc loops in GUI code.
 - Template crop remains the default crop implementation stage. If crop semantics change, preserve photo-level crop overrides, `no_crop`, `free` ratio, custom center, focus center, bird center, crop padding, and uniform auto-crop behavior.
 - Overlay changes must preserve the protected preview/export behavior: Banner/text/focus export should be controlled through pipeline settings, and preview behavior must be explicitly kept in sync or intentionally documented when it differs.
 - New pipeline stages should include focused tests in `SuperBirdStamp/tests/test_image_pipeline.py` or a nearby test module. For export behavior changes, also cover relevant `render_video_frame`, GIF/video frame cache, and uniform auto-crop paths.

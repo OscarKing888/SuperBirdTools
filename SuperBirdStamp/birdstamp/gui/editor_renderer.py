@@ -234,11 +234,21 @@ class _BirdStampRendererMixin:
         if not isinstance(cache, dict):
             self._source_image_cache = {}
             cache = self._source_image_cache
-        if signature in cache:
+        existing = cache.get(signature)
+        if existing is not None:
+            if existing is not image:
+                try:
+                    image.close()
+                except Exception:
+                    pass
             return
         if len(cache) >= _SOURCE_IMAGE_CACHE_MAX:
             oldest = next(iter(cache))
-            del cache[oldest]
+            evicted = cache.pop(oldest)
+            try:
+                evicted.close()
+            except Exception:
+                pass
         cache[signature] = image
 
     def _decode_image_for_path(self, path: Path) -> Image.Image:
@@ -277,7 +287,7 @@ class _BirdStampRendererMixin:
 
     def _decode_image_for_preview(self, path: Path) -> Image.Image:
         """Decode and downscale for editor preview; export still uses full resolution."""
-        signature = f"{self._source_signature(path)}:preview{_PREVIEW_DECODE_MAX_LONG_EDGE}"
+        signature = self._preview_image_cache_signature(path)
         cache = getattr(self, "_preview_image_cache", None)
         counts = getattr(self, "_perf_decode_counts", None)
         if not isinstance(cache, dict):
@@ -299,10 +309,7 @@ class _BirdStampRendererMixin:
 
         with birdstamp_perf.span("decode_preview", path=str(path)):
             image = decode_image_for_preview(path, max_long_edge=_PREVIEW_DECODE_MAX_LONG_EDGE, decoder="auto")
-        if len(cache) >= _SOURCE_IMAGE_CACHE_MAX:
-            oldest = next(iter(cache))
-            del cache[oldest]
-        cache[signature] = image
+        self._store_preview_image_cache(signature, image)
         counts[signature] = int(counts.get(signature, 0)) + 1
         birdstamp_perf.plog(
             "[decode_preview] path=%s signature=%s decode_count=%s",
@@ -311,6 +318,52 @@ class _BirdStampRendererMixin:
             counts[signature],
         )
         return image.copy()
+
+    def _preview_image_cache_signature(self, path: Path) -> str:
+        return f"{self._source_signature(path)}:preview{_PREVIEW_DECODE_MAX_LONG_EDGE}"
+
+    def _preview_decode_max_long_edge(self) -> int:
+        return _PREVIEW_DECODE_MAX_LONG_EDGE
+
+    def _cached_preview_image(self, path: Path) -> Image.Image | None:
+        cache = getattr(self, "_preview_image_cache", None)
+        if not isinstance(cache, dict):
+            return None
+        cached = cache.get(self._preview_image_cache_signature(path))
+        return cached.copy() if cached is not None else None
+
+    def _store_preview_image_cache(self, signature: str, image: Image.Image) -> None:
+        cache = getattr(self, "_preview_image_cache", None)
+        if not isinstance(cache, dict):
+            self._preview_image_cache = {}
+            cache = self._preview_image_cache
+        existing = cache.get(signature)
+        if existing is not None:
+            if existing is not image:
+                try:
+                    image.close()
+                except Exception:
+                    pass
+            return
+        if len(cache) >= _SOURCE_IMAGE_CACHE_MAX:
+            oldest = next(iter(cache))
+            evicted = cache.pop(oldest)
+            try:
+                evicted.close()
+            except Exception:
+                pass
+        cache[signature] = image
+
+    def _accept_async_preview_image(self, path: Path, image: Image.Image) -> Image.Image:
+        signature = self._preview_image_cache_signature(path)
+        self._store_preview_image_cache(signature, image)
+        counts = getattr(self, "_perf_decode_counts", None)
+        if isinstance(counts, dict):
+            counts[signature] = int(counts.get(signature, 0)) + 1
+        cached = self._cached_preview_image(path)
+        if cached is None:
+            raise RuntimeError(f"预览缓存写入失败: {path}")
+        return cached
 
     def _read_source_full_size(self, path: Path) -> tuple[int, int]:
         return read_decoded_image_size(path)
@@ -339,11 +392,23 @@ class _BirdStampRendererMixin:
         worker = getattr(self, "_bird_detect_worker", None)
         if worker is not None and worker.isRunning():
             worker.requestInterruption()
-            worker.wait(50)
+            pending = getattr(self, "_bird_detect_pending", None)
+            if isinstance(pending, tuple) and len(pending) == 2:
+                try:
+                    pending[1].close()
+                except Exception:
+                    pass
+            self._bird_detect_pending = (signature, source_image.copy())
+            return
+        self._start_bird_detect_worker(signature, source_image.copy())
+
+    def _start_bird_detect_worker(self, signature: str, source_image: Image.Image) -> None:
         from birdstamp.gui.bird_detect_worker import BirdDetectWorker
 
-        new_worker = BirdDetectWorker(signature, source_image.copy(), parent=self)
+        new_worker = BirdDetectWorker(signature, source_image, parent=self)
         new_worker.result_ready.connect(self._on_async_bird_box_ready)
+        new_worker.finished.connect(self._on_async_bird_detect_finished)
+        new_worker.finished.connect(new_worker.deleteLater)
         self._bird_detect_worker = new_worker
         new_worker.start()
 
@@ -354,6 +419,48 @@ class _BirdStampRendererMixin:
         if self.current_path is None or self._source_signature(self.current_path) != signature:
             return
         self._refresh_preview_bird_overlay()
+
+    def _on_async_bird_detect_finished(self) -> None:
+        if self.sender() is not getattr(self, "_bird_detect_worker", None):
+            return
+        self._bird_detect_worker = None
+        if bool(getattr(self, "_bird_detect_shutdown", False)):
+            pending = getattr(self, "_bird_detect_pending", None)
+            self._bird_detect_pending = None
+            if isinstance(pending, tuple) and len(pending) == 2:
+                try:
+                    pending[1].close()
+                except Exception:
+                    pass
+            return
+        pending = getattr(self, "_bird_detect_pending", None)
+        self._bird_detect_pending = None
+        if not isinstance(pending, tuple) or len(pending) != 2:
+            return
+        signature, source_image = pending
+        if signature in self._bird_box_cache:
+            try:
+                source_image.close()
+            except Exception:
+                pass
+            return
+        self._start_bird_detect_worker(str(signature), source_image)
+
+    def _cancel_async_bird_detect(self, *, shutdown: bool = False) -> bool:
+        if shutdown:
+            self._bird_detect_shutdown = True
+        pending = getattr(self, "_bird_detect_pending", None)
+        self._bird_detect_pending = None
+        if isinstance(pending, tuple) and len(pending) == 2:
+            try:
+                pending[1].close()
+            except Exception:
+                pass
+        worker = getattr(self, "_bird_detect_worker", None)
+        if worker is None or not worker.isRunning():
+            return False
+        worker.requestInterruption()
+        return True
 
     def _refresh_preview_bird_overlay(self) -> None:
         if self.current_path is None or self.current_source_image is None:
@@ -388,8 +495,51 @@ class _BirdStampRendererMixin:
         for signature in list(cache.keys()):
             for key in key_set:
                 if signature.startswith(f"{key}:"):
-                    cache.pop(signature, None)
+                    image = cache.pop(signature, None)
+                    if image is not None:
+                        try:
+                            image.close()
+                        except Exception:
+                            pass
                     break
+
+    def _drop_preview_image_cache_for_keys(self, keys: Iterable[str]) -> None:
+        cache = getattr(self, "_preview_image_cache", None)
+        if not isinstance(cache, dict) or not keys:
+            return
+        key_set = {str(key) for key in keys if str(key)}
+        size_cache = getattr(self, "_preview_source_size_cache", None)
+        for signature in list(cache.keys()):
+            if not any(signature.startswith(f"{key}:") for key in key_set):
+                continue
+            image = cache.pop(signature, None)
+            if image is not None:
+                try:
+                    image.close()
+                except Exception:
+                    pass
+            if isinstance(size_cache, dict):
+                size_cache.pop(signature, None)
+
+    def _clear_decoded_image_caches(self) -> None:
+        seen: set[int] = set()
+        for cache_name in ("_source_image_cache", "_preview_image_cache"):
+            cache = getattr(self, cache_name, None)
+            if not isinstance(cache, dict):
+                continue
+            for image in cache.values():
+                image_id = id(image)
+                if image_id in seen:
+                    continue
+                seen.add(image_id)
+                try:
+                    image.close()
+                except Exception:
+                    pass
+            cache.clear()
+        size_cache = getattr(self, "_preview_source_size_cache", None)
+        if isinstance(size_cache, dict):
+            size_cache.clear()
 
     def _preview_cache_file_for_source(self, path: Path, signature: str) -> Path:
         digest = hashlib.sha1(signature.encode("utf-8")).hexdigest()[:12]

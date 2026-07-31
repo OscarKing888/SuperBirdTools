@@ -1,8 +1,12 @@
 import tempfile
+import os
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
+import sys
 
 from PIL import Image
+import pytest
 
 from birdstamp.export_frame_cache import build_source_frame_bucket_key, global_export_settings_from_settings
 from birdstamp.gui.editor_renderer import _BirdStampRendererMixin
@@ -12,14 +16,17 @@ from birdstamp.export_stage import (
     _recommended_auto_render_workers,
     _count_contiguous_rendered_frames,
     _partial_video_output_path,
+    _run_ffmpeg_command,
     VideoFrameJob,
     VideoExportOptions,
     build_ffmpeg_command,
+    build_template_signature_state,
     export_video,
     normalize_frame_size,
     render_video_frame,
     resolve_target_frame_size,
     resolve_video_render_workers,
+    source_frame_signature_for_job,
 )
 
 
@@ -68,6 +75,84 @@ def test_global_export_settings_include_resize_limit_for_cache_key() -> None:
     )
 
 
+def test_source_frame_signature_tracks_metadata_context() -> None:
+    job = VideoFrameJob(
+        path=Path("sample.jpg"),
+        settings={"draw_banner": True, "draw_text": True, "draw_focus": False},
+        raw_metadata={"XMP-dc:Title": "旧标题"},
+        metadata_context={"bird": "红胁蓝尾鸲"},
+    )
+
+    original = source_frame_signature_for_job(job)
+    job.raw_metadata["XMP-dc:Title"] = "新标题"
+    changed_raw = source_frame_signature_for_job(job)
+    job.metadata_context["bird"] = "蓝歌鸲"
+    changed_context = source_frame_signature_for_job(job)
+
+    assert original != changed_raw
+    assert changed_raw != changed_context
+
+
+def test_source_frame_signature_hashes_template_content_even_when_stat_is_unchanged(tmp_path: Path) -> None:
+    template_path = tmp_path / "default.json"
+    template_path.write_text('{"value":"A"}', encoding="utf-8")
+    original_stat = template_path.stat()
+    job = VideoFrameJob(
+        path=tmp_path / "sample.jpg",
+        settings={"template_name": "default", "draw_banner": True, "draw_text": True},
+        raw_metadata={},
+        metadata_context={},
+    )
+
+    original = source_frame_signature_for_job(job, template_paths={"default": template_path})
+    template_path.write_text('{"value":"B"}', encoding="utf-8")
+    os.utime(template_path, ns=(original_stat.st_atime_ns, original_stat.st_mtime_ns))
+    changed = source_frame_signature_for_job(job, template_paths={"default": template_path})
+
+    assert template_path.stat().st_size == original_stat.st_size
+    assert changed != original
+
+
+def test_precomputed_template_signature_hashes_each_active_template_once(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    template_path = tmp_path / "default.json"
+    template_path.write_text('{"value":"A"}', encoding="utf-8")
+    jobs = [
+        VideoFrameJob(
+            path=tmp_path / f"sample-{index}.jpg",
+            settings={"template_name": "default", "draw_banner": True, "draw_text": True},
+            raw_metadata={},
+            metadata_context={},
+        )
+        for index in range(3)
+    ]
+    original_read_bytes = Path.read_bytes
+    read_count = 0
+
+    def tracked_read_bytes(path: Path) -> bytes:
+        nonlocal read_count
+        if path.resolve(strict=False) == template_path.resolve(strict=False):
+            read_count += 1
+        return original_read_bytes(path)
+
+    monkeypatch.setattr(Path, "read_bytes", tracked_read_bytes)
+    state = build_template_signature_state(jobs, {"default": template_path})
+    signatures = [
+        source_frame_signature_for_job(
+            job,
+            template_paths={"default": template_path},
+            template_signature_state=state,
+        )
+        for job in jobs
+    ]
+
+    assert read_count == 1
+    assert len(signatures) == len(jobs)
+    assert len(set(signatures)) == 1
+
+
 def test_photo_override_settings_exclude_global_resize_limit() -> None:
     settings = {
         "draw_banner": False,
@@ -106,8 +191,9 @@ def test_build_ffmpeg_command_h265_mp4_contains_expected_flags(tmp_path) -> None
         preset="slow",
         crf=18,
     )
-    command = build_ffmpeg_command(Path("/tmp/ffmpeg"), tmp_path / "frames", options)
-    assert command[:4] == ["/tmp/ffmpeg", "-hide_banner", "-loglevel", "error"]
+    ffmpeg_path = tmp_path / "ffmpeg"
+    command = build_ffmpeg_command(ffmpeg_path, tmp_path / "frames", options)
+    assert command[:4] == [str(ffmpeg_path), "-hide_banner", "-loglevel", "error"]
     assert "-framerate" in command
     assert "29.97" in command
     assert "libx265" in command
@@ -146,6 +232,84 @@ def test_recommended_auto_render_workers_prefers_physical_cpu_count() -> None:
 
 def test_recommended_auto_render_workers_falls_back_to_logical_cpu_count() -> None:
     assert _recommended_auto_render_workers(physical_cpu_count=None, logical_cpu_count=16) == 12
+
+
+def test_auto_render_workers_respect_available_memory(monkeypatch) -> None:
+    import psutil
+    import birdstamp.export_stage.core as export_core
+
+    monkeypatch.setattr(export_core, "_detect_physical_cpu_count", lambda: 32)
+    monkeypatch.setattr(export_core.os, "cpu_count", lambda: 64)
+    monkeypatch.setattr(
+        psutil,
+        "virtual_memory",
+        lambda: SimpleNamespace(available=700 * 1024 * 1024),
+    )
+    assert resolve_video_render_workers(0, 100, max_frame_pixels=8_000_000) == 1
+
+    monkeypatch.setattr(
+        psutil,
+        "virtual_memory",
+        lambda: SimpleNamespace(available=8 * 1024 * 1024 * 1024),
+    )
+    assert resolve_video_render_workers(0, 100, max_frame_pixels=8_000_000) == 8
+    assert resolve_video_render_workers(0, 100) == 4
+
+
+def test_auto_render_workers_are_capped_at_eight(monkeypatch) -> None:
+    import psutil
+    import birdstamp.export_stage.core as export_core
+
+    monkeypatch.setattr(export_core, "_detect_physical_cpu_count", lambda: 64)
+    monkeypatch.setattr(export_core.os, "cpu_count", lambda: 128)
+    monkeypatch.setattr(
+        psutil,
+        "virtual_memory",
+        lambda: SimpleNamespace(available=128 * 1024 * 1024 * 1024),
+    )
+
+    assert resolve_video_render_workers(0, 100, max_frame_pixels=1_000_000) == 8
+
+
+def test_explicit_render_workers_are_honored_with_warning(monkeypatch) -> None:
+    import psutil
+    import birdstamp.export_stage.core as export_core
+
+    monkeypatch.setattr(export_core, "_detect_physical_cpu_count", lambda: 4)
+    monkeypatch.setattr(export_core.os, "cpu_count", lambda: 8)
+    monkeypatch.setattr(
+        psutil,
+        "virtual_memory",
+        lambda: SimpleNamespace(available=512 * 1024 * 1024),
+    )
+    warnings: list[str] = []
+    monkeypatch.setattr(
+        export_core._log,
+        "warning",
+        lambda message, *args, **_kwargs: warnings.append(message % args),
+    )
+
+    assert resolve_video_render_workers(12, 20, max_frame_pixels=8_000_000) == 12
+    assert any("honoring explicit setting" in message for message in warnings)
+    resolved, status_suffix = export_core._resolve_video_render_worker_status(
+        12,
+        20,
+        max_frame_pixels=8_000_000,
+    )
+    assert resolved == 12
+    assert "显式线程数 12 超出推荐值 1" in status_suffix
+    assert "实际使用 12" in status_suffix
+
+
+def test_run_ffmpeg_command_does_not_deadlock_on_large_stderr() -> None:
+    command = [
+        sys.executable,
+        "-c",
+        "import sys; sys.stderr.buffer.write(b'x' * 2000000 + b'tail-marker'); sys.exit(7)",
+    ]
+
+    with pytest.raises(RuntimeError, match="tail-marker"):
+        _run_ffmpeg_command(command)
 
 
 def test_normalize_frame_size_letterboxes_to_target_canvas() -> None:
@@ -193,6 +357,7 @@ def test_render_video_frame_applies_crop_box_override(tmp_path) -> None:
             "draw_banner": False,
             "draw_text": False,
             "draw_focus": False,
+            "center_mode": "custom",
             "crop_box": [0.0, 0.0, 0.5, 1.0],
         },
         raw_metadata={"SourceFile": str(source_path)},
@@ -449,6 +614,49 @@ def test_export_video_rerenders_only_changed_photo_when_crop_box_changes() -> No
 
             render_calls.clear()
             export_video(jobs, options)
+            assert render_calls == ["source_2.jpg"]
+        finally:
+            export_stage.find_ffmpeg_executable = original_find_ffmpeg
+            export_stage._run_ffmpeg_command = original_run_ffmpeg
+            export_stage.render_video_frame = original_render_video_frame
+            _close_video_jobs(jobs)
+
+
+def test_export_video_dirty_path_bypasses_matching_preserved_frame() -> None:
+    import birdstamp.export_stage as export_stage
+
+    with tempfile.TemporaryDirectory() as tmp_dir_text:
+        tmp_dir = Path(tmp_dir_text)
+        jobs = _build_sample_video_jobs(tmp_dir)
+        options = VideoExportOptions(
+            output_path=tmp_dir / "clip.mp4",
+            preserve_temp_files=True,
+        )
+        original_find_ffmpeg = export_stage.find_ffmpeg_executable
+        original_run_ffmpeg = export_stage._run_ffmpeg_command
+        original_render_video_frame = export_stage.render_video_frame
+        render_calls: list[str] = []
+
+        def fake_find_ffmpeg() -> Path:
+            return tmp_dir / "ffmpeg"
+
+        def fake_run_ffmpeg(cmd: list[str], *, cancel_event=None, cancel_message: str = "") -> None:
+            Path(cmd[-1]).write_bytes(b"fake-video")
+
+        def fake_render_video_frame(job: VideoFrameJob, **_kwargs) -> Image.Image:
+            render_calls.append(job.path.name)
+            return job.source_image.copy() if job.source_image is not None else Image.new("RGB", (96, 64))
+
+        try:
+            export_stage.find_ffmpeg_executable = fake_find_ffmpeg
+            export_stage._run_ffmpeg_command = fake_run_ffmpeg
+            export_stage.render_video_frame = fake_render_video_frame
+            export_video(jobs, options)
+            render_calls.clear()
+
+            dirty_key = str(jobs[1].path.resolve(strict=False)).casefold()
+            export_video(jobs, options, dirty_path_keys={dirty_key})
+
             assert render_calls == ["source_2.jpg"]
         finally:
             export_stage.find_ffmpeg_executable = original_find_ffmpeg

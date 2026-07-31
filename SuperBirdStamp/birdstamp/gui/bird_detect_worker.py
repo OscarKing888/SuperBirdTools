@@ -25,9 +25,15 @@ class BirdDetectWorker(QThread):
         self._source_image = source_image
 
     def run(self) -> None:
-        if self.isInterruptionRequested():
-            return
-        bird_box = detect_primary_bird_box(self._source_image)
-        if self.isInterruptionRequested():
-            return
-        self.result_ready.emit(self._signature, bird_box)
+        try:
+            if self.isInterruptionRequested():
+                return
+            bird_box = detect_primary_bird_box(self._source_image)
+            if self.isInterruptionRequested():
+                return
+            self.result_ready.emit(self._signature, bird_box)
+        finally:
+            try:
+                self._source_image.close()
+            except Exception:
+                pass

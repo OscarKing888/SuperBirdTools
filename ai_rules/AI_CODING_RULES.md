@@ -68,7 +68,8 @@ This document defines project-level rules for any coding assistant (Codex, Claud
 
 When editing Python code, run at least:
 
-- `py -3 -m py_compile <changed_python_files>`
+- Windows: `<repo>\.venv\Scripts\python.exe -m py_compile <changed_python_files>`
+- macOS: `<repo>/.venv/bin/python3 -m py_compile <changed_python_files>`
 
 When changing metadata write logic:
 
@@ -113,7 +114,7 @@ These areas have repeatedly regressed during feature work. Treat them as protect
 - Actual-path mismatch repair:
   - If `report.db` path is stale, UI should still resolve metadata and actions by actual file path when found.
   - Actual path lookup is a separate concern from report path normalization; do not collapse them into a single mutable path variable.
-  - When auto-fixing `report.db.current_path`, write the path relative to `root`, never an absolute path.
+  - Keep repair state in the in-memory resolver/cache. The applications treat `report.db` as read-only and must not write repaired paths back to it.
 - Preview path vs source path:
   - Preview rendering may use `temp_jpeg_path`.
   - Metadata, EXIF, focus extraction, copy/reveal actions, and sidecar logic must continue to resolve against source-file semantics.
@@ -209,17 +210,12 @@ These areas have repeatedly regressed during feature work. Treat them as protect
 ## 13) Metadata and Report-DB Rules
 
 - If a file stem exists in cached `report.db`, list metadata should still be recoverable even when `current_path` is stale.
-- `bird_species_cn` maps to UI title semantics in multiple places. Any change to species paste/writeback must update:
-  - in-memory report row cache
-  - in-memory metadata cache
-  - visible file list rows
-  - current preview-side metadata panel when affected
+- `report.db` is read-only compatibility/hydration input. User edits, including `bird_species_cn`/title, tags, rating, pick, comments, and editable camera fields, must be written to the same-stem XMP sidecar.
+- Any user metadata edit must update the XMP-backed in-memory metadata cache, visible file list rows, and the current preview-side metadata panel when affected.
 - Report-derived fields and file-derived fields may both be needed:
   - report rows are often incomplete for title/sharpness/focus display
   - file/XMP fallback should enrich missing fields instead of assuming report rows are sufficient
-- When writing back to `report.db`, update both:
-  - persistent storage
-  - corresponding in-memory caches used by the current UI session
+- Do not delete, repair, or write rows in `report.db` as a side effect of file operations or metadata editing.
 
 ## 14) GUI Consistency Rules
 
@@ -242,7 +238,7 @@ These areas have repeatedly regressed during feature work. Treat them as protect
 
 When changing `main.py`, `app_common/file_browser/_browser.py`, `app_common/report_db.py`, or focus-related flows, validate at least:
 
-- `py -3 -m py_compile <changed_python_files>`
+- the repo-root `.venv` interpreter with `-m py_compile <changed_python_files>`
 - Root selection with `.superpicky/report.db`
 - Descendant directory selection under the same root
 - A case where `current_path` is correct

@@ -2,17 +2,19 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import os
 import tempfile
+from datetime import date, datetime
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping
 
 FRAME_CACHE_MANIFEST_VERSION = 1
 FRAME_CACHE_ROOT_NAME = "birdstamp_export_cache"
 SOURCE_FRAME_BUCKET_KIND = "rendered_source_frames"
 VIDEO_FRAME_BUCKET_KIND = "video_frames"
-SOURCE_FRAME_CACHE_VERSION = 2
+SOURCE_FRAME_CACHE_VERSION = 3
 VIDEO_FRAME_CACHE_VERSION = 1
 _DEFAULT_PIPELINE_STAGE_ORDER = (
     "template_crop",
@@ -29,11 +31,63 @@ _PIPELINE_STAGE_ENABLED_KEYS = (
 
 
 def stable_json_dumps(value: Any) -> str:
-    return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return json.dumps(
+        normalize_signature_value(value),
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
 
 
 def hash_payload(value: Any) -> str:
     return hashlib.sha1(stable_json_dumps(value).encode("utf-8")).hexdigest()
+
+
+def normalize_signature_value(value: Any) -> Any:
+    """Return a deterministic JSON-safe value for cache signatures.
+
+    Metadata may contain Paths, datetimes, sets, byte strings, numpy-like
+    scalar values, or plugin-specific objects. Cache signatures must remain
+    stable without failing the export merely because one metadata field is not
+    directly JSON serializable.
+    """
+
+    if value is None or isinstance(value, (str, bool, int)):
+        return value
+    if isinstance(value, float):
+        if math.isnan(value):
+            return "__float_nan__"
+        if math.isinf(value):
+            return "__float_inf__" if value > 0 else "__float_neg_inf__"
+        return value
+    if isinstance(value, Path):
+        return normalized_path_text(value)
+    if isinstance(value, (datetime, date)):
+        return value.isoformat()
+    if isinstance(value, bytes):
+        return {"__bytes_sha1__": hashlib.sha1(value).hexdigest(), "size": len(value)}
+    if isinstance(value, Mapping):
+        normalized_items = sorted(
+            ((str(key), normalize_signature_value(item)) for key, item in value.items()),
+            key=lambda item: item[0],
+        )
+        return {key: item for key, item in normalized_items}
+    if isinstance(value, (list, tuple)):
+        return [normalize_signature_value(item) for item in value]
+    if isinstance(value, (set, frozenset)):
+        normalized = [normalize_signature_value(item) for item in value]
+        return sorted(normalized, key=lambda item: json.dumps(item, ensure_ascii=False, sort_keys=True))
+
+    scalar_item = getattr(value, "item", None)
+    if callable(scalar_item):
+        try:
+            return normalize_signature_value(scalar_item())
+        except Exception:
+            pass
+    return {
+        "__type__": f"{type(value).__module__}.{type(value).__qualname__}",
+        "__text__": str(value),
+    }
 
 
 def _parse_bool_value(value: Any, default: bool) -> bool:
@@ -153,10 +207,21 @@ def build_source_frame_bucket_key(*, global_export_settings: dict[str, Any]) -> 
     return hash_payload(payload)
 
 
-def build_source_frame_signature(*, render_settings: dict[str, Any]) -> str:
+def build_source_frame_signature(
+    *,
+    render_settings: dict[str, Any],
+    raw_metadata: Mapping[str, Any] | None = None,
+    metadata_context: Mapping[str, Any] | None = None,
+    photo_info: Mapping[str, Any] | None = None,
+    template_signature: Mapping[str, Any] | None = None,
+) -> str:
     payload = {
         "version": SOURCE_FRAME_CACHE_VERSION,
         "render_settings": render_settings if isinstance(render_settings, dict) else {},
+        "raw_metadata": dict(raw_metadata or {}),
+        "metadata_context": dict(metadata_context or {}),
+        "photo_info": dict(photo_info or {}),
+        "template_signature": dict(template_signature or {}),
     }
     return hash_payload(payload)
 
@@ -362,6 +427,7 @@ __all__ = [
     "load_frame_manifest",
     "normalized_path_text",
     "path_signature",
+    "normalize_signature_value",
     "reusable_frame_path",
     "stable_json_dumps",
     "update_frame_manifest_record",

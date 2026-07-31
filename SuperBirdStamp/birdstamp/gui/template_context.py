@@ -1137,7 +1137,13 @@ def _read_file_metadata_with_xmp_priority_cached(
     path_text: str,
     mtime_ns: int,
     size: int,
+    sidecar_path_text: str,
+    sidecar_mtime_ns: int,
+    sidecar_size: int,
 ) -> dict[str, Any]:
+    # The sidecar values are intentionally unused in the body: they are part
+    # of the LRU key so a sidecar edit/deletion cannot reuse stale metadata.
+    _ = (sidecar_path_text, sidecar_mtime_ns, sidecar_size)
     try:
         from app_common.exif_io import extract_metadata_with_xmp_priority
     except Exception:
@@ -1157,9 +1163,21 @@ def _metadata_with_xmp_priority(photo_info: PhotoInfo) -> Dict[str, Any]:
     metadata = _photo_raw_metadata(photo_info)
     if not _metadata_has_content(metadata):
         path_text, mtime_ns, size = _path_cache_signature(photo_info.path)
-        loaded = _read_file_metadata_with_xmp_priority_cached(path_text, mtime_ns, size)
+        sidecar_path = photo_info.sidecar_path or _resolve_sidecar_path(photo_info.path)
+        if sidecar_path is not None:
+            sidecar_text, sidecar_mtime_ns, sidecar_size = _path_cache_signature(sidecar_path)
+        else:
+            sidecar_text, sidecar_mtime_ns, sidecar_size = "", 0, 0
+        loaded = _read_file_metadata_with_xmp_priority_cached(
+            path_text,
+            mtime_ns,
+            size,
+            sidecar_text,
+            sidecar_mtime_ns,
+            sidecar_size,
+        )
         if loaded:
-            return dict(loaded)
+            metadata = dict(loaded)
 
     merged = dict(metadata)
     sidecar_metadata = _read_sidecar_metadata(photo_info)

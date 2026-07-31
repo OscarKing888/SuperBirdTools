@@ -791,7 +791,7 @@ def render_template_overlay(
         chosen_x = 0
         chosen_y = 0
         chosen_rect = (0, 0, 1, 1)
-        draw_text = text
+        rendered_text = text
         for candidate_size in _iter_font_sizes_for_layout(scaled_size, minimum=8):
             font = load_font(field_font_path, candidate_size)
             measured_text, text_box = _measure_text_with_fallback(draw, text, font=font)
@@ -823,12 +823,12 @@ def render_template_overlay(
             chosen_x = x
             chosen_y = y
             chosen_rect = rect
-            draw_text = measured_text
+            rendered_text = measured_text
             if non_overlap:
                 break
         draw_commands.append(
             (
-                draw_text,
+                rendered_text,
                 chosen_x,
                 chosen_y,
                 color,

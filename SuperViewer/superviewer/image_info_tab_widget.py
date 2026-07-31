@@ -72,19 +72,40 @@ class ImageInfoTabWidget(QTabWidget):
         self._pending_panels.discard(panel)
         panel.refresh_current_photo()
 
-    def shutdown(self) -> None:
+    def request_shutdown(self) -> None:
         if self._shutdown_requested:
             return
         self._shutdown_requested = True
         self._pending_panels.clear()
         for panel in self._panels:
+            request_shutdown = getattr(panel, "request_shutdown", None)
+            if not callable(request_shutdown):
+                continue
+            try:
+                request_shutdown()
+            except Exception:
+                pass
+
+    def shutdown(self, *, wait_timeout_ms: int | None = None) -> bool:
+        self.request_shutdown()
+        complete = True
+        for panel in self._panels:
             shutdown = getattr(panel, "shutdown", None)
             if not callable(shutdown):
                 continue
             try:
-                shutdown()
+                if wait_timeout_ms is None:
+                    result = shutdown()
+                else:
+                    try:
+                        result = shutdown(wait_timeout_ms=wait_timeout_ms)
+                    except TypeError:
+                        result = shutdown()
+                if result is False:
+                    complete = False
             except Exception:
-                pass
+                complete = False
+        return complete
 
     def closeEvent(self, event) -> None:  # type: ignore[override]
         self.shutdown()

@@ -8,6 +8,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from PIL import Image
 
 from app_common.file_browser._browser_core import _persistent_thumb_cache_path_for_file
+from SuperViewer.superviewer import preview_panel as preview_panel_module
 from SuperViewer.superviewer.preview_panel import PreviewPanel
 from SuperViewer.superviewer.qt_compat import QApplication, QColor, QPixmap
 from SuperViewer.main import MainWindow
@@ -218,3 +219,28 @@ def test_in_memory_fast_frame_keeps_composition_grid_in_export() -> None:
     assert grid_pixel.red() > 0 or grid_pixel.green() > 0 or grid_pixel.blue() > 0
     preview.shutdown()
     preview.close()
+
+
+def test_fast_preview_invalid_frames_suppress_per_frame_canvas_logging(monkeypatch) -> None:
+    _app = QApplication.instance() or QApplication([])
+    preview = PreviewPanel()
+    calls: list[dict] = []
+
+    def record_clear(_pixmap, **kwargs) -> None:
+        calls.append(dict(kwargs))
+
+    monkeypatch.setattr(preview_panel_module, "_load_quick_preview_pixmap", lambda *_args: None)
+    monkeypatch.setattr(preview.canvas, "set_source_pixmap", record_clear)
+    try:
+        preview.set_image("missing.jpg", load_full=False, quick_size=128)
+        preview.set_quick_pixmap("invalid.jpg", QPixmap(), quick_size=128)
+        preview.clear_image()
+
+        assert calls == [
+            {"log_performance": False},
+            {"log_performance": False},
+            {},
+        ]
+    finally:
+        preview.shutdown()
+        preview.close()

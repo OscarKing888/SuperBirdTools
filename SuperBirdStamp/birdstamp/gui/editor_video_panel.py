@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 import threading
-from typing import Callable
+from typing import Any, Callable
 
 from PyQt6.QtCore import QThread, pyqtSignal
 from PyQt6.QtWidgets import (
@@ -23,6 +23,8 @@ from PyQt6.QtWidgets import (
 )
 
 from birdstamp.gui import editor_options
+from birdstamp.gui import editor_utils, template_context
+from app_common.exif_io import extract_many_with_xmp_priority
 from birdstamp.export_stage import VideoExportCancelledError, VideoExportOptions, VideoFrameJob, export_video
 from birdstamp.export_stage.video_export_options import VIDEO_CODEC_RAWVIDEO, is_uncompressed_video_container
 
@@ -54,6 +56,17 @@ class VideoExportRequest:
     frame_width: int
     frame_height: int
     preserve_temp_files: bool = True
+
+
+@dataclass(slots=True)
+class VideoExportJobSeed:
+    """GUI-thread snapshot completed into a VideoFrameJob in the worker."""
+
+    path: Path
+    settings: dict[str, Any]
+    raw_metadata: dict[str, Any]
+    metadata_complete: bool
+    photo_info: object | None = None
 
 
 class VideoExportPanel(QGroupBox):
@@ -554,6 +567,7 @@ class VideoExportWorker(QThread):
         options: VideoExportOptions,
         template_paths: dict[str, Path] | None = None,
         dirty_path_keys: set[str] | None = None,
+        job_seeds: list[VideoExportJobSeed] | None = None,
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
@@ -561,6 +575,7 @@ class VideoExportWorker(QThread):
         self._options = options
         self._template_paths = template_paths or {}
         self._dirty_path_keys = set(dirty_path_keys or set())
+        self._job_seeds = list(job_seeds or [])
         self._cancel_event = threading.Event()
 
     def cancel(self) -> None:
@@ -568,8 +583,9 @@ class VideoExportWorker(QThread):
 
     def run(self) -> None:
         try:
+            jobs = self._prepare_jobs() if self._job_seeds else self._jobs
             output_path = export_video(
-                self._jobs,
+                jobs,
                 self._options,
                 template_paths=self._template_paths,
                 dirty_path_keys=self._dirty_path_keys,
@@ -583,3 +599,54 @@ class VideoExportWorker(QThread):
             self.exportFailed.emit(str(exc))
             return
         self.exportSucceeded.emit(str(output_path))
+
+    def _prepare_jobs(self) -> list[VideoFrameJob]:
+        if self._cancel_event.is_set():
+            raise VideoExportCancelledError("视频导出已中断，尚未开始准备任务。")
+        seeds = list(self._job_seeds)
+        pending_paths = [
+            seed.path.resolve(strict=False)
+            for seed in seeds
+            if not seed.metadata_complete
+        ]
+        self.progressTextChanged.emit(f"正在后台准备视频元数据，共 {len(seeds)} 张。")
+        if pending_paths:
+            try:
+                loaded_metadata = extract_many_with_xmp_priority(pending_paths, mode="auto")
+            except Exception:
+                loaded_metadata = {}
+        else:
+            loaded_metadata = {}
+        if self._cancel_event.is_set():
+            raise VideoExportCancelledError("视频导出已中断，正在停止元数据准备。")
+
+        source_paths = tuple(seed.path for seed in seeds)
+        jobs: list[VideoFrameJob] = []
+        total = len(seeds)
+        for index, seed in enumerate(seeds, start=1):
+            if self._cancel_event.is_set():
+                raise VideoExportCancelledError("视频导出已中断，正在停止任务准备。")
+            resolved = seed.path.resolve(strict=False)
+            raw_metadata = dict(seed.raw_metadata or {})
+            if not seed.metadata_complete:
+                loaded = loaded_metadata.get(resolved)
+                if isinstance(loaded, dict) and loaded:
+                    raw_metadata = dict(loaded)
+            raw_metadata.setdefault("SourceFile", str(seed.path))
+            photo_info = template_context.ensure_editor_photo_info(
+                seed.photo_info if isinstance(seed.photo_info, template_context.PhotoInfo) else seed.path,
+                raw_metadata=raw_metadata,
+            )
+            metadata_context = editor_utils.build_metadata_context(photo_info, raw_metadata)
+            jobs.append(
+                VideoFrameJob(
+                    path=seed.path,
+                    settings=dict(seed.settings),
+                    raw_metadata=raw_metadata,
+                    metadata_context=metadata_context,
+                    photo_info=photo_info,
+                    source_paths=source_paths,
+                )
+            )
+            self.progressTextChanged.emit(f"正在后台准备视频任务 {index}/{total}")
+        return jobs

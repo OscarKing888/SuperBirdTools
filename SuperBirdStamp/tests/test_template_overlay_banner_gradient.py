@@ -32,9 +32,14 @@ def test_default_template_draws_bottom_gradient_banner() -> None:
         draw_text=False,
     )
 
-    top_sample = rendered.getpixel((540, 1300))
-    mid_sample = rendered.getpixel((540, 1600))
-    bottom_sample = rendered.getpixel((540, 1900))
+    gradient_height = max(
+        1,
+        int(round(image.height * float(payload["banner_gradient_height_pct"]) / 100.0)),
+    )
+    gradient_top = image.height - gradient_height
+    top_sample = rendered.getpixel((image.width // 2, max(0, gradient_top - 10)))
+    mid_sample = rendered.getpixel((image.width // 2, gradient_top + gradient_height // 2))
+    bottom_sample = rendered.getpixel((image.width // 2, image.height - 20))
 
     assert top_sample == (255, 255, 255)
     assert 255 > mid_sample[0] > bottom_sample[0]
@@ -43,6 +48,25 @@ def test_default_template_draws_bottom_gradient_banner() -> None:
     assert bottom_sample[0] < 140
     assert bottom_sample[1] < 140
     assert bottom_sample[2] < 140
+
+
+def test_render_template_overlay_honors_draw_text_false() -> None:
+    image = Image.new("RGB", (640, 360), color="#FFFFFF")
+    payload = default_template_payload(name="default")
+    payload["draw_banner_background"] = False
+    for field in payload.get("fields", []):
+        field["color"] = "#000000"
+
+    rendered = render_template_overlay(
+        image,
+        raw_metadata={"SourceFile": "sample.jpg", "XMP-dc:Title": "不应绘制"},
+        metadata_context={},
+        template_payload=payload,
+        draw_banner=False,
+        draw_text=False,
+    )
+
+    assert rendered.getextrema() == ((255, 255), (255, 255), (255, 255))
 
 
 def test_template_field_text_falls_back_to_provider_caption_when_empty() -> None:

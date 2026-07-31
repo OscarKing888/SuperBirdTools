@@ -2,82 +2,85 @@
 
 `birdstamp` is a cross-platform Python tool for batch rendering bird-photo outputs with a metadata banner.
 
-当前仓库推荐的使用方式是 monorepo 根目录共享 `.venv`，通过 `python init_dev.py` 初始化环境；GUI 启动优先使用仓库根 `run.sh` / `run.bat`，打包优先使用仓库根 `build_all.sh` / `build_all.bat`。
+当前仓库推荐使用 monorepo 根目录共享的 `.venv`。首次初始化可在仓库根运行
+`python init_dev.py`；初始化完成后，运行、测试与打包均使用根目录 `.venv`。
+GUI 启动优先使用仓库根 `run.sh` / `run.bat`，完整打包优先使用仓库根
+`build_all.sh` / `build_all.bat`。
 
 ## Features
 
 - Batch process single files or directories (`--recursive`).
 - Decode JPG/JPEG/PNG/TIFF, optional HEIF/HEIC/HIF, optional RAW.
-- Metadata extraction:
-  - Preferred: ExifTool (`auto|on|off`)
-  - Fallback: Pillow EXIF
-- Render banner templates (YAML/JSON), built-in: `default/minimal/dark/compact`.
-- Bird name priority: CLI arg, metadata, filename regex.
-- Output modes: `keep`, `fit`, `square`, `vertical`.
-- CLI module commands (run from `SuperBirdStamp/` with the shared `.venv`):
-  - `python -m birdstamp render`
-  - `python -m birdstamp inspect`
-  - `python -m birdstamp templates`
-  - `python -m birdstamp init-config`
-  - `python -m birdstamp gui`
+- Metadata extraction uses ExifTool when available and merges same-stem XMP sidecars;
+  sidecar values take priority. `report.db` is read-only fallback/hydration input.
+- Render JSON banner templates from `config/templates/`.
+- GUI exports PNG/JPEG, GIF, and video.
+- GUI image/GIF/video rendering converges through
+  `VideoFrameJob -> render_video_frame() -> build_default_image_proc_pipeline()`.
+  The builder is in `birdstamp.export_stage.pipeline`; the default non-export stages
+  are `ImageProcTemplateCropStage`, `ImageProcResizeLimitStage`,
+  `ImageProcTemplateOverlayStage`, and `ImageProcFocusOverlayStage`.
 
 ## Development Setup
 
-```bash
+```powershell
 python init_dev.py
 ```
 
 启动两个 GUI：
 
-```bash
-./run.sh
+```powershell
+.\run.bat
 ```
 
-只启动 SuperBirdStamp GUI：
+macOS 使用 `./run.sh`。只启动 SuperBirdStamp GUI：
 
-```bash
-python SuperBirdStamp/entry.py
+```powershell
+.\.venv\Scripts\python.exe -m SuperBirdStamp
 ```
 
 ## Quick Start
 
-CLI 示例默认在 `SuperBirdStamp/` 目录内执行；如果你在仓库根目录，请先 `cd SuperBirdStamp`。
+CLI 模块位于 `SuperBirdStamp/`。Windows PowerShell 从仓库根执行：
 
-```bash
-python -m birdstamp render ./photos --recursive --out ./output --template default --theme gray --bird "灰喜鹊"
+```powershell
+Set-Location SuperBirdStamp
+..\.venv\Scripts\python.exe -m birdstamp render .\photos --recursive --out .\output --template default
 ```
 
 Print parsed metadata:
 
-```bash
-python -m birdstamp inspect ./photos/IMG_0001.JPG
+```powershell
+..\.venv\Scripts\python.exe -m birdstamp inspect .\photos\IMG_0001.JPG
 ```
 
 Initialize user config:
 
-```bash
-python -m birdstamp init-config
+```powershell
+..\.venv\Scripts\python.exe -m birdstamp init-config
 ```
 
 Open GUI editor:
 
-```bash
-python -m birdstamp gui
+```powershell
+..\.venv\Scripts\python.exe -m birdstamp gui
 ```
 
 Open GUI with a startup image:
 
-```bash
-python -m birdstamp gui --file ./photos/IMG_0001.JPG
+```powershell
+..\.venv\Scripts\python.exe -m birdstamp gui --file .\photos\IMG_0001.JPG
 ```
+
+macOS 在 `SuperBirdStamp/` 内将解释器替换为 `../.venv/bin/python3`。
 
 GUI capabilities:
 
 - Open an image and preview rendered output.
 - Edit template layout, fonts, colors, divider, and logo.
 - Toggle shown fields and output mode.
-- Save current template as YAML/JSON.
-- Export rendered image as JPEG/PNG.
+- Save current template as JSON.
+- Export rendered images as JPEG/PNG, GIF, or video.
 
 
 # License

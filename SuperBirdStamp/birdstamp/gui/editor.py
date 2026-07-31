@@ -71,7 +71,7 @@ from PyQt6.QtWidgets import (
 
 from app_common.about_dialog import load_about_info, load_about_images, show_about_dialog
 from app_common.app_info_bar import AppInfoBar
-from app_common.exif_io import close_exiftool_process
+from app_common.exif_io import PhotoMetaDataReportDB, close_exiftool_process
 from app_common.file_utils import is_apple_double_metadata_file
 from app_common.log import get_logger
 from app_common.perf_probe import elapsed_ms, perf_counter
@@ -150,7 +150,12 @@ from birdstamp.gui.editor_photo_list import (
 )
 from birdstamp.gui.editor_collapsible import CollapsibleSection
 from birdstamp.gui.editor_gif_panel import GifExportPanel
-from birdstamp.gui.editor_video_panel import VideoExportPanel, VideoExportRequest, VideoExportWorker
+from birdstamp.gui.editor_video_panel import (
+    VideoExportJobSeed,
+    VideoExportPanel,
+    VideoExportRequest,
+    VideoExportWorker,
+)
 from birdstamp.gui.editor_workspace import _BirdStampWorkspaceMixin
 from birdstamp.gui.editor_crop_calculator import _BirdStampCropMixin
 from birdstamp.gui.editor_renderer import _BirdStampRendererMixin
@@ -696,9 +701,10 @@ class BirdStampEditorWindow(
         self.template_paths: dict[str, Path] = {}
         self.current_template_payload: dict[str, Any] = _default_template_payload(name="default")
 
-        # ReportDB 相关：多库列表 + 行缓存（stem → row）
+        # ReportDB 相关：多库列表 + 带 root scope 的原始行缓存。
         self._report_db_entries: list[Path] = []
         self._report_db_cache: dict[str, dict[str, Any]] = {}
+        self._report_db_provider = PhotoMetaDataReportDB(cache=self._report_db_cache)
 
         self.preview_pixmap: QPixmap | None = None
         self.preview_overlay_state = EditorPreviewOverlayState()
@@ -707,6 +713,7 @@ class BirdStampEditorWindow(
         self._bird_box_cache: dict[str, tuple[float, float, float, float] | None] = {}
         self._source_image_cache: dict[str, Image.Image] = {}
         self._preview_image_cache: dict[str, Image.Image] = {}
+        self._preview_source_size_cache: dict[str, tuple[int, int]] = {}
         self._perf_decode_counts: dict[str, int] = {}
         self._crop_drag_active = False
         self.photo_render_overrides: dict[str, dict[str, Any]] = {}
@@ -727,6 +734,12 @@ class BirdStampEditorWindow(
         self._bird_detector_preload_started = False
         self._bird_detector_preload_thread: threading.Thread | None = None
         self._bird_detect_worker = None
+        self._bird_detect_pending: tuple[str, Image.Image] | None = None
+        self._bird_detect_shutdown = False
+        self._preview_decode_worker = None
+        self._preview_decode_pending: tuple[int, Path] | None = None
+        self._preview_decode_token = 0
+        self._preview_decode_shutdown = False
         self.last_rendered: Image.Image | None = None
         self.current_path: Path | None = None
         self.current_photo_info: _template_context.PhotoInfo | None = None
@@ -741,6 +754,7 @@ class BirdStampEditorWindow(
         self._photo_list_metadata_pending_keys: set[str] = set()
         self._photo_list_metadata_loader: EditorPhotoListMetadataLoader | None = None
         self._pending_photo_list_metadata_loaders: list[EditorPhotoListMetadataLoader] = []
+        self._photo_list_metadata_restart_pending = False
         self._photo_list_metadata_loading = False
         self._photo_list_header_fast_mode = False
         self._next_photo_sequence_number: int = 0
@@ -903,27 +917,25 @@ class BirdStampEditorWindow(
     # ------------------------------------------------------------------
 
     def _update_report_db_row_resolver(self) -> None:
-        """根据当前缓存更新模板上下文中的 report.db 行解析函数。"""
+        """用共享的 path/root-scoped 索引更新模板 report.db resolver。"""
 
         cache = self._report_db_cache
+        provider = self._report_db_provider
+        provider.update_cache(cache)
 
         if not cache:
             _template_context.set_report_db_row_resolver(None)
             return
 
         def _resolver(path: Path) -> dict[str, Any] | None:
-            for key in _template_context.report_db_lookup_keys_for_path(path):
-                row = cache.get(key)
-                if isinstance(row, dict):
-                    return row
-            return None
+            return provider.row_for(str(path))
 
         _template_context.set_report_db_row_resolver(_resolver)
 
     def _rebuild_report_db_cache(self) -> None:
         """根据当前 report.db 列表重建行缓存，并更新 provider 解析器。"""
         cache: dict[str, dict[str, Any]] = {}
-        for db_path in self._report_db_entries:
+        for db_index, db_path in enumerate(self._report_db_entries):
             try:
                 p = db_path
             except Exception:
@@ -935,18 +947,12 @@ class BirdStampEditorWindow(
             if not db:
                 continue
             try:
-                for row in db.get_all_photos():
+                report_root = os.path.normpath(str(db.directory))
+                for row_index, row in enumerate(db.get_all_photos()):
                     row_data = dict(row)
-                    try:
-                        lookup_keys = _template_context.report_db_lookup_keys_for_value(row_data.get("filename"))
-                    except Exception:
-                        continue
-                    if not lookup_keys:
-                        continue
-                    for key in lookup_keys:
-                        if key in cache:
-                            continue
-                        cache[key] = row_data
+                    row_data["_report_root_dir"] = report_root
+                    filename = str(row_data.get("filename") or "row").strip()
+                    cache[f"{db_index}\0{row_index}\0{filename}"] = row_data
             finally:
                 try:
                     db.close()
@@ -1215,28 +1221,6 @@ class BirdStampEditorWindow(
         photos_section.toggled.connect(self._on_photos_section_toggled)
         self._photos_section = photos_section
         left_layout.addWidget(photos_section)
-
-    # ------------------------------------------------------------------
-    # ReportDB 列表与缓存
-    # ------------------------------------------------------------------
-
-    def _update_report_db_row_resolver(self) -> None:
-        """根据当前缓存更新模板上下文中的 report.db 行解析函数。"""
-
-        cache = self._report_db_cache
-
-        if not cache:
-            _template_context.set_report_db_row_resolver(None)
-            return
-
-        def _resolver(path: Path) -> dict[str, Any] | None:
-            for key in _template_context.report_db_lookup_keys_for_path(path):
-                row = cache.get(key)
-                if isinstance(row, dict):
-                    return row
-            return None
-
-        _template_context.set_report_db_row_resolver(_resolver)
 
     def _setup_ui_template_output_actions(self, left_layout: QVBoxLayout) -> None:
         """构建左侧「处理管线」「导出」分组 UI。"""
@@ -2781,8 +2765,27 @@ class BirdStampEditorWindow(
             QMessageBox.information(self, "视频导出进行中", "请先中断当前视频导出，或等待导出完成后再关闭窗口。")
             event.ignore()
             return
+        self._cancel_async_bird_detect(shutdown=True)
+        self._cancel_preview_decode(shutdown=True)
+        self._stop_photo_list_metadata_loader(wait=False, reset_progress=True)
+        bird_worker = getattr(self, "_bird_detect_worker", None)
+        preview_worker = getattr(self, "_preview_decode_worker", None)
+        metadata_worker = self._photo_list_metadata_loader
+        if (
+            bird_worker is not None
+            and bird_worker.isRunning()
+        ) or (
+            preview_worker is not None
+            and preview_worker.isRunning()
+        ) or (
+            metadata_worker is not None
+            and metadata_worker.isRunning()
+        ):
+            self._set_status("正在安全结束后台任务...")
+            event.ignore()
+            QTimer.singleShot(100, self.close)
+            return
         self._stop_photo_input_discovery_workers(wait=True)
-        self._stop_photo_list_metadata_loader(wait=True, reset_progress=True)
         self._autosave_workspace_now()
         super().closeEvent(event)
 
@@ -3990,32 +3993,47 @@ class BirdStampEditorWindow(
         *,
         wait: bool = False,
         reset_progress: bool = False,
-    ) -> None:
+    ) -> bool:
         loader = self._photo_list_metadata_loader
-        self._photo_list_metadata_loader = None
+        self._photo_list_metadata_restart_pending = False
+        stopped = True
         if loader is not None:
-            self._detach_photo_list_metadata_loader(loader, wait=wait)
+            loader.stop()
+            if wait:
+                try:
+                    if loader.isRunning():
+                        stopped = bool(loader.wait(2500))
+                except Exception:
+                    stopped = False
+            else:
+                stopped = not loader.isRunning()
         if wait and self._pending_photo_list_metadata_loaders:
             pending = list(self._pending_photo_list_metadata_loaders)
-            self._pending_photo_list_metadata_loaders.clear()
             for worker in pending:
                 try:
                     if worker.isRunning():
-                        worker.wait(2500)
+                        stopped = bool(worker.wait(2500)) and stopped
                 except Exception:
-                    pass
+                    stopped = False
         if reset_progress:
             self._photo_list_metadata_loading = False
             self._set_photo_list_header_fast_mode(False)
             self.photo_list.setSortingEnabled(True)
             self._reset_photo_list_progress()
+        return stopped
 
     def _restart_photo_list_metadata_loader(self) -> None:
+        active_loader = self._photo_list_metadata_loader
+        if active_loader is not None and active_loader.isRunning():
+            self._photo_list_metadata_restart_pending = True
+            active_loader.stop()
+            return
+
         pending_paths = [
             path for path in self._list_photo_paths()
             if _path_key(path) in self._photo_list_metadata_pending_keys
         ]
-        self._stop_photo_list_metadata_loader(wait=False, reset_progress=False)
+        self._photo_list_metadata_restart_pending = False
         if not pending_paths:
             self._finish_photo_list_metadata_loading()
             return
@@ -4027,6 +4045,7 @@ class BirdStampEditorWindow(
         loader.metadata_batch_ready.connect(self._on_photo_list_metadata_batch_ready)
         loader.progress_updated.connect(self._on_photo_list_metadata_progress)
         loader.finished.connect(self._on_photo_list_metadata_loader_finished)
+        loader.finished.connect(loader.deleteLater)
         self._photo_list_metadata_loader = loader
         loader.start()
 
@@ -4093,6 +4112,10 @@ class BirdStampEditorWindow(
         if self.sender() is not self._photo_list_metadata_loader:
             return
         self._photo_list_metadata_loader = None
+        if self._photo_list_metadata_restart_pending:
+            self._photo_list_metadata_restart_pending = False
+            self._restart_photo_list_metadata_loader()
+            return
         self._finish_photo_list_metadata_loading()
         self._maybe_apply_pending_workspace_photo_selection()
 
@@ -4779,6 +4802,7 @@ class BirdStampEditorWindow(
         if removed_keys:
             self._bird_box_cache.clear()
             self._drop_source_image_cache_for_keys(removed_keys)
+            self._drop_preview_image_cache_for_keys(removed_keys)
             self.photo_list.refresh_row_numbers()
             if self._photo_list_metadata_pending_keys:
                 self._restart_photo_list_metadata_loader()
@@ -4786,11 +4810,17 @@ class BirdStampEditorWindow(
                 self._stop_photo_list_metadata_loader(wait=False, reset_progress=True)
 
         if self.photo_list.topLevelItemCount() == 0:
+            current_source = self.current_source_image
             self._next_photo_sequence_number = 0
             self.placeholder_path = None
             self.current_path = None
             self.current_photo_info = None
             self.current_source_image = None
+            if current_source is not None:
+                try:
+                    current_source.close()
+                except Exception:
+                    pass
             self.current_source_full_size = None
             self.current_raw_metadata = {}
             self.current_metadata_context = {}
@@ -4814,21 +4844,23 @@ class BirdStampEditorWindow(
         self.photo_render_overrides.clear()
         self._photo_export_dirty_keys.clear()
         self._bird_box_cache.clear()
-        self._source_image_cache.clear()
-        self._preview_image_cache.clear()
+        self._clear_decoded_image_caches()
         self._metadata_context_cache.clear()
         self._perf_decode_counts.clear()
-        worker = getattr(self, "_bird_detect_worker", None)
-        if worker is not None and worker.isRunning():
-            worker.requestInterruption()
-            worker.wait(100)
-        self._bird_detect_worker = None
+        self._cancel_async_bird_detect()
+        self._cancel_preview_decode()
         self._crop_drag_active = False
         self._next_photo_sequence_number = 0
         self.placeholder_path = None
         self.current_path = None
         self.current_photo_info = None
+        current_source = self.current_source_image
         self.current_source_image = None
+        if current_source is not None:
+            try:
+                current_source.close()
+            except Exception:
+                pass
         self.current_source_full_size = None
         self.current_raw_metadata = {}
         self.current_metadata_context = {}
@@ -4859,19 +4891,146 @@ class BirdStampEditorWindow(
             self._show_error("文件不存在", str(path))
             return
 
-        with birdstamp_perf.span("select", path=str(path)):
-            try:
-                with birdstamp_perf.span("select.decode", path=str(path)):
-                    image = self._decode_image_for_preview(path)
-            except Exception as exc:
-                self._show_error("读取失败", str(exc))
-                return
+        self._preview_decode_token += 1
+        token = self._preview_decode_token
+        cached = self._cached_preview_image(path)
+        if cached is not None:
+            worker = getattr(self, "_preview_decode_worker", None)
+            if worker is not None and worker.isRunning():
+                worker.requestInterruption()
+            self._preview_decode_pending = None
+            signature = self._preview_image_cache_signature(path)
+            full_size = self._preview_source_size_cache.get(signature, cached.size)
+            self._apply_decoded_photo_selection(path, cached, full_size)
+            return
 
+        worker = getattr(self, "_preview_decode_worker", None)
+        if worker is not None and worker.isRunning():
+            worker.requestInterruption()
+            self._preview_decode_pending = (token, path)
+        else:
+            self._start_preview_decode_worker(token, path)
+        self._set_status(f"正在后台读取预览: {path.name}")
+
+    def _start_preview_decode_worker(self, token: int, path: Path) -> None:
+        from birdstamp.gui.editor_preview_decode_worker import EditorPreviewDecodeWorker
+
+        worker = EditorPreviewDecodeWorker(
+            token,
+            path,
+            max_long_edge=self._preview_decode_max_long_edge(),
+            parent=self,
+        )
+        worker.decoded.connect(self._on_preview_decode_ready)
+        worker.failed.connect(self._on_preview_decode_failed)
+        worker.finished.connect(self._on_preview_decode_finished)
+        worker.finished.connect(worker.deleteLater)
+        self._preview_decode_worker = worker
+        worker.start()
+
+    def _selected_item_matches_path(self, path: Path) -> bool:
+        current = self.photo_list.currentItem()
+        if current is None:
+            return False
+        raw = current.data(PHOTO_COL_ROW, PHOTO_LIST_PATH_ROLE)
+        return isinstance(raw, str) and _path_key(Path(raw)) == _path_key(path)
+
+    def _on_preview_decode_ready(
+        self,
+        token: int,
+        path_text: str,
+        decoded_image: object,
+        full_size: object,
+    ) -> None:
+        if not isinstance(decoded_image, Image.Image):
+            return
+        path = Path(path_text)
+        if (
+            int(token) != self._preview_decode_token
+            or not self._selected_item_matches_path(path)
+            or bool(getattr(self, "_preview_decode_shutdown", False))
+        ):
+            decoded_image.close()
+            return
+        try:
+            accepted = self._accept_async_preview_image(path, decoded_image)
+        except Exception as exc:
+            decoded_image.close()
+            self._show_error("读取失败", str(exc))
+            return
+        if isinstance(full_size, (tuple, list)) and len(full_size) == 2:
+            try:
+                normalized_size = (max(1, int(full_size[0])), max(1, int(full_size[1])))
+            except Exception:
+                normalized_size = accepted.size
+        else:
+            normalized_size = accepted.size
+        self._preview_source_size_cache[self._preview_image_cache_signature(path)] = normalized_size
+        self._apply_decoded_photo_selection(path, accepted, normalized_size)
+
+    def _on_preview_decode_failed(self, token: int, path_text: str, message: str) -> None:
+        path = Path(path_text)
+        if int(token) != self._preview_decode_token or not self._selected_item_matches_path(path):
+            return
+        self._show_error("读取失败", str(message or path))
+
+    def _on_preview_decode_finished(self) -> None:
+        if self.sender() is not getattr(self, "_preview_decode_worker", None):
+            return
+        self._preview_decode_worker = None
+        if bool(getattr(self, "_preview_decode_shutdown", False)):
+            self._preview_decode_pending = None
+            return
+        pending = self._preview_decode_pending
+        self._preview_decode_pending = None
+        if pending is None:
+            return
+        token, path = pending
+        if int(token) != self._preview_decode_token or not self._selected_item_matches_path(path):
+            return
+        cached = self._cached_preview_image(path)
+        if cached is not None:
+            signature = self._preview_image_cache_signature(path)
+            self._apply_decoded_photo_selection(
+                path,
+                cached,
+                self._preview_source_size_cache.get(signature, cached.size),
+            )
+            return
+        self._start_preview_decode_worker(token, path)
+
+    def _cancel_preview_decode(self, *, shutdown: bool = False) -> bool:
+        self._preview_decode_token += 1
+        self._preview_decode_pending = None
+        if shutdown:
+            self._preview_decode_shutdown = True
+        worker = getattr(self, "_preview_decode_worker", None)
+        if worker is None or not worker.isRunning():
+            return False
+        worker.requestInterruption()
+        return True
+
+    def _apply_decoded_photo_selection(
+        self,
+        path: Path,
+        image: Image.Image,
+        full_size: tuple[int, int],
+    ) -> None:
+        current = self._find_photo_item_by_path(path)
+        if current is None or not self._selected_item_matches_path(path):
+            image.close()
+            return
+        with birdstamp_perf.span("select", path=str(path)):
             self.placeholder_path = None
             self.current_path = path
+            previous_source = self.current_source_image
             self.current_source_image = image
-            with birdstamp_perf.span("select.size", path=str(path)):
-                self.current_source_full_size = self._read_source_full_size(path)
+            if previous_source is not None and previous_source is not image:
+                try:
+                    previous_source.close()
+                except Exception:
+                    pass
+            self.current_source_full_size = full_size
             self._invalidate_original_mode_cache()
             with birdstamp_perf.span("select.metadata_snapshot", path=str(path)):
                 self.current_raw_metadata = self._metadata_snapshot_for_selection(path)
@@ -5064,6 +5223,16 @@ class BirdStampEditorWindow(
                 metadata_by_key[key] = cached
                 continue
 
+            list_cached = self.photo_list_metadata_cache.get(key)
+            if (
+                key not in self._photo_list_metadata_pending_keys
+                and _is_complete_list_metadata(list_cached)
+            ):
+                reused = dict(list_cached)
+                self.raw_metadata_cache[key] = reused
+                metadata_by_key[key] = reused
+                continue
+
             if key == current_key and isinstance(self.current_raw_metadata, dict) and self.current_raw_metadata:
                 current_metadata = dict(self.current_raw_metadata)
                 self.raw_metadata_cache[key] = current_metadata
@@ -5082,10 +5251,6 @@ class BirdStampEditorWindow(
             full_batch = extract_many_with_xmp_priority(resolved_paths, mode="auto")
         except Exception:
             full_batch = {}
-        try:
-            batch_map = read_batch_metadata([str(resolved) for resolved in resolved_paths])
-        except Exception:
-            batch_map = {}
 
         for path, key, resolved in pending_entries:
             raw_metadata = full_batch.get(resolved)
@@ -5108,13 +5273,6 @@ class BirdStampEditorWindow(
             if not isinstance(merged, dict):
                 merged = {"SourceFile": str(path)}
             merged.setdefault("SourceFile", str(path))
-
-            if isinstance(batch_map, dict) and batch_map:
-                batch_metadata = batch_map.get(os.path.normpath(str(resolved))) or batch_map.get(str(resolved))
-                if isinstance(batch_metadata, dict) and batch_metadata:
-                    combined = dict(merged)
-                    combined.update(batch_metadata)
-                    merged = combined
 
             self.raw_metadata_cache[key] = merged
             self.photo_list_metadata_cache[key] = dict(merged)
@@ -5176,6 +5334,7 @@ class BirdStampEditorWindow(
         *,
         prefer_current_ui_for_current_path: bool = True,
         progress_callback: Callable[[int, int], None] | None = None,
+        precompute_crop_plans: bool = True,
     ) -> list[VideoFrameJob]:
         jobs: list[VideoFrameJob] = []
         current_key = _path_key(self.current_path) if self.current_path is not None else ""
@@ -5211,7 +5370,7 @@ class BirdStampEditorWindow(
             )
             if callable(progress_callback):
                 progress_callback(index, total)
-        if crop_plan_precompute_required(current_render_settings):
+        if precompute_crop_plans and crop_plan_precompute_required(current_render_settings):
             if callable(progress_callback):
                 progress_callback(0, total)
             prepare_uniform_auto_crop_plans(
@@ -5222,7 +5381,62 @@ class BirdStampEditorWindow(
             )
         return jobs
 
-    def _cleanup_video_export_worker(self) -> None:
+    def _build_video_export_job_seeds(self, paths: list[Path]) -> list[VideoExportJobSeed]:
+        """Capture Qt-owned state quickly; metadata/context work stays in the worker."""
+        seeds: list[VideoExportJobSeed] = []
+        current_key = _path_key(self.current_path) if self.current_path is not None else ""
+        current_render_settings = self._build_current_render_settings()
+        for path in paths:
+            key = _path_key(path)
+            raw_metadata: dict[str, Any] = {}
+            for candidate in (
+                self.raw_metadata_cache.get(key),
+                self.current_raw_metadata if key == current_key else None,
+                self.photo_list_metadata_cache.get(key),
+            ):
+                if isinstance(candidate, dict) and candidate:
+                    raw_metadata = dict(candidate)
+                    break
+            raw_metadata.setdefault("SourceFile", str(path))
+
+            if current_key and key == current_key:
+                settings = self._clone_render_settings(current_render_settings)
+            else:
+                settings = self._clone_render_settings(
+                    self._render_settings_for_path(path, prefer_current_ui=False)
+                )
+            self._apply_global_export_settings_to_render_settings(settings)
+
+            item = self._find_photo_item_by_path(path)
+            existing_photo_info = (
+                item.data(PHOTO_COL_ROW, PHOTO_LIST_PHOTO_INFO_ROLE)
+                if item is not None
+                else None
+            )
+            photo_info_snapshot = None
+            if isinstance(existing_photo_info, _template_context.PhotoInfo):
+                photo_info_snapshot = _template_context.ensure_editor_photo_info(
+                    existing_photo_info.path,
+                    raw_metadata=dict(existing_photo_info.raw_metadata or {}),
+                    sidecar_path=existing_photo_info.sidecar_path,
+                    crop_box=getattr(existing_photo_info, "crop_box", None),
+                    editor_row_number=getattr(existing_photo_info, "editor_row_number", None),
+                )
+            seeds.append(
+                VideoExportJobSeed(
+                    path=path,
+                    settings=settings,
+                    raw_metadata=raw_metadata,
+                    metadata_complete=_is_complete_list_metadata(raw_metadata),
+                    photo_info=photo_info_snapshot,
+                )
+            )
+        return seeds
+
+    def _cleanup_video_export_worker(self, worker: VideoExportWorker | None = None) -> None:
+        current = self._video_export_worker
+        if worker is not None and worker is not current:
+            return
         self._video_export_worker = None
 
     def _on_video_export_progress(self, text: str) -> None:
@@ -5253,7 +5467,6 @@ class BirdStampEditorWindow(
         message = f"视频导出完成: {output_path}{timing_text}"
         self.video_export_panel.set_busy(False, status_text=message)
         self._set_status(message)
-        self._cleanup_video_export_worker()
 
     def _on_video_export_cancelled(self, message: str) -> None:
         self._pending_video_export_dirty_keys.clear()
@@ -5263,7 +5476,6 @@ class BirdStampEditorWindow(
             cancel_text = f"{cancel_text} | 已耗时 {self._format_export_elapsed_time(elapsed)}"
         self.video_export_panel.set_busy(False, status_text=cancel_text)
         self._set_status(cancel_text)
-        self._cleanup_video_export_worker()
         QMessageBox.information(self, "视频导出已中断", cancel_text)
 
     def _on_video_export_failed(self, message: str) -> None:
@@ -5275,14 +5487,13 @@ class BirdStampEditorWindow(
             status_text = f"{status_text} | 已耗时 {self._format_export_elapsed_time(elapsed)}"
         self.video_export_panel.set_busy(False, status_text=status_text)
         self._set_status(status_text)
-        self._cleanup_video_export_worker()
         self._show_error("视频导出失败", error_text)
 
     def _cancel_video_export(self) -> None:
         worker = self._video_export_worker
         if worker is None or not worker.isRunning():
             self.video_export_panel.set_busy(False)
-            self._cleanup_video_export_worker()
+            self._cleanup_video_export_worker(worker)
             return
         worker.cancel()
         message = "正在中断视频导出，并保留已完成帧..."
@@ -5350,7 +5561,7 @@ class BirdStampEditorWindow(
                 return
             self._video_export_last_output_dir = output_path.parent
             self._save_video_export_last_output_dir(output_path.parent)
-            jobs = self._build_export_render_jobs(paths, prefer_current_ui_for_current_path=True)
+            job_seeds = self._build_video_export_job_seeds(paths)
         except Exception as exc:
             self._show_error("视频导出参数无效", str(exc))
             return
@@ -5359,22 +5570,24 @@ class BirdStampEditorWindow(
         self._pending_video_export_dirty_keys = set(dirty_path_keys)
 
         worker = VideoExportWorker(
-            jobs=jobs,
+            jobs=[],
             options=options,
             template_paths=dict(self.template_paths),
             dirty_path_keys=dirty_path_keys,
+            job_seeds=job_seeds,
             parent=self,
         )
         worker.progressTextChanged.connect(self._on_video_export_progress)
         worker.exportSucceeded.connect(self._on_video_export_succeeded)
         worker.exportCancelled.connect(self._on_video_export_cancelled)
         worker.exportFailed.connect(self._on_video_export_failed)
+        worker.finished.connect(lambda worker=worker: self._cleanup_video_export_worker(worker))
         worker.finished.connect(worker.deleteLater)
         self._video_export_worker = worker
         self._video_export_started_at = time.perf_counter()
 
-        self.video_export_panel.set_busy(True, status_text=f"准备生成视频，共 {len(jobs)} 帧。")
-        self._set_status(f"准备生成视频，共 {len(jobs)} 帧。")
+        self.video_export_panel.set_busy(True, status_text=f"后台准备视频，共 {len(job_seeds)} 帧。")
+        self._set_status(f"后台准备视频，共 {len(job_seeds)} 帧。")
         worker.start()
 
 

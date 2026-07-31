@@ -29,6 +29,60 @@ def test_report_db_lookup_keys_cover_filename_and_stem() -> None:
     assert keys == (r"folder\\sample.jpg", "sample.jpg", "sample")
 
 
+def test_editor_report_resolver_scopes_duplicate_stems_to_each_root(
+    tmp_path: Path,
+) -> None:
+    from app_common.exif_io import PhotoMetaDataReportDB
+    from app_common.report_db import ReportDB
+    from birdstamp.gui.editor import BirdStampEditorWindow
+    from birdstamp.gui.template_context import get_report_db_row_for_path
+
+    db_paths: list[Path] = []
+    photo_paths: list[Path] = []
+    for name, species in (("library-a", "根目录甲"), ("library-b", "根目录乙")):
+        report_root = tmp_path / name
+        report_root.mkdir()
+        photo_path = report_root / "shared.jpg"
+        photo_path.write_bytes(b"not decoded")
+        db = ReportDB(str(report_root))
+        try:
+            db.insert_photo(
+                {
+                    "filename": "shared",
+                    "current_path": "shared.jpg",
+                    "bird_species_cn": species,
+                }
+            )
+            db_paths.append(Path(db.db_path))
+        finally:
+            db.close()
+        photo_paths.append(photo_path)
+
+    class _ResolverHarness:
+        _rebuild_report_db_cache = BirdStampEditorWindow._rebuild_report_db_cache
+        _update_report_db_row_resolver = BirdStampEditorWindow._update_report_db_row_resolver
+
+        def __init__(self) -> None:
+            self._report_db_entries = list(db_paths)
+            self._report_db_cache: dict[str, dict] = {}
+            self._report_db_provider = PhotoMetaDataReportDB(cache={})
+
+    harness = _ResolverHarness()
+    try:
+        harness._rebuild_report_db_cache()
+        first = get_report_db_row_for_path(photo_paths[0])
+        second = get_report_db_row_for_path(photo_paths[1])
+    finally:
+        set_report_db_row_resolver(None)
+
+    assert first is not None and first["bird_species_cn"] == "根目录甲"
+    assert second is not None and second["bird_species_cn"] == "根目录乙"
+    assert {
+        Path(row["_report_root_dir"])
+        for row in harness._report_db_cache.values()
+    } == {photo_paths[0].parent, photo_paths[1].parent}
+
+
 def test_build_template_context_reads_species_from_report_db_filename_key() -> None:
     row = {
         "filename": "sample.jpg",

@@ -32,7 +32,9 @@ git submodule update --init --recursive
 python init_dev.py
 ```
 
-从仓库根目录启动两个 GUI：
+初始化完成后，日常运行、测试和打包都应使用仓库根目录的共享 `.venv`，不要改用全局 Python。
+
+从仓库根目录启动 GUI：
 
 ```bash
 ./run.sh
@@ -46,16 +48,32 @@ run.bat
 
 如果只想直接运行某个 app，也可以从仓库根目录执行：
 
-```bash
-python -m SuperViewer
-python -m SuperBirdStamp
+```powershell
+.\.venv\Scripts\python.exe -m SuperViewer
+.\.venv\Scripts\python.exe -m SuperBirdStamp
 ```
 
-如果只想进入单个 app 目录运行，也可以使用各自的 `entry.py`：
+macOS：
 
 ```bash
-python SuperViewer/entry.py
-python SuperBirdStamp/entry.py
+./.venv/bin/python3 -m SuperViewer
+./.venv/bin/python3 -m SuperBirdStamp
+```
+
+从根目录运行完整测试：
+
+```powershell
+$env:QT_QPA_PLATFORM='offscreen'
+.\.venv\Scripts\python.exe -m pytest
+```
+
+`pytest.ini` 会加入根目录与 `SuperBirdStamp` 包路径，无需临时改用全局解释器。
+
+如果只想直接运行入口脚本：
+
+```powershell
+.\.venv\Scripts\python.exe SuperViewer\entry.py
+.\.venv\Scripts\python.exe SuperBirdStamp\entry.py
 ```
 
 ## 打包入口
