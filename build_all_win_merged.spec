@@ -8,6 +8,7 @@ import sys
 from pathlib import Path
 
 from PyInstaller.building.api import MERGE
+from PyInstaller.config import CONF
 from PyInstaller.utils.hooks import collect_all, collect_submodules
 
 
@@ -15,6 +16,7 @@ REPO_ROOT = Path(SPECPATH).resolve()
 SUPERVIEWER_ROOT = REPO_ROOT / "SuperViewer"
 SUPERBIRDSTAMP_ROOT = REPO_ROOT / "SuperBirdStamp"
 APP_COMMON_ROOT = REPO_ROOT / "app_common"
+MERGED_WORKPATH = Path(CONF["workpath"]).resolve()
 
 for candidate in (REPO_ROOT, SUPERVIEWER_ROOT, SUPERBIRDSTAMP_ROOT):
     candidate_str = str(candidate)
@@ -39,9 +41,37 @@ def collect_tree(source: Path, dest: str) -> list[tuple[str, str]]:
     return items
 
 
+def use_app_workpath(app_name: str) -> None:
+    """Keep each Analysis/PYZ cache from overwriting the other's base library."""
+    app_workpath = MERGED_WORKPATH / app_name
+    app_workpath.mkdir(parents=True, exist_ok=True)
+    CONF["workpath"] = str(app_workpath)
+
+
+def share_base_library(primary_analysis, dependent_analysis) -> None:
+    """Point MERGE at one base library while retaining isolated cache files."""
+    primary_entries = [
+        entry for entry in primary_analysis.datas if entry[0] == "base_library.zip"
+    ]
+    dependent_entries = [
+        entry for entry in dependent_analysis.datas if entry[0] == "base_library.zip"
+    ]
+    if len(primary_entries) != 1 or len(dependent_entries) != 1:
+        raise RuntimeError("Expected exactly one base_library.zip per Analysis")
+
+    primary_source = primary_entries[0][1]
+    dependent_analysis.datas = [
+        (dest_name, primary_source, typecode)
+        if dest_name == "base_library.zip"
+        else (dest_name, source_name, typecode)
+        for dest_name, source_name, typecode in dependent_analysis.datas
+    ]
+
+
 # --------------------------------------------------------------------------- #
 # SuperViewer
 # --------------------------------------------------------------------------- #
+use_app_workpath("superviewer")
 superviewer_datas = [
     *collect_tree(SUPERVIEWER_ROOT / "super_viewer.cfg", "."),
     *collect_tree(SUPERVIEWER_ROOT / "icons", "icons"),
@@ -69,6 +99,7 @@ superviewer_pyz = PYZ(superviewer_a.pure)
 # --------------------------------------------------------------------------- #
 # SuperBirdStamp
 # --------------------------------------------------------------------------- #
+use_app_workpath("superbirdstamp")
 ultralytics_datas, ultralytics_binaries, ultralytics_hiddenimports = collect_all("ultralytics")
 superbirdstamp_datas = [
     *collect_tree(SUPERBIRDSTAMP_ROOT / "models", "models"),
@@ -120,12 +151,26 @@ superbirdstamp_a = Analysis(
         "nbformat",
         "matplotlib",
         "tkinter",
+        # PyInstaller 6.19 appends this in-place to every non-empty excludes
+        # list. Declare it up front so Analysis-01.toc remains stable and can
+        # be reused by subsequent incremental builds.
+        "__main__",
     ],
     win_no_prefer_redirects=False,
     win_private_assemblies=False,
     noarchive=False,
 )
 superbirdstamp_pyz = PYZ(superbirdstamp_a.pure, superbirdstamp_a.zipped_data)
+
+# EXE/PKG targets remain in the merged root; only the Analysis/PYZ caches need
+# separate base_library.zip and localpycs paths.
+CONF["workpath"] = str(MERGED_WORKPATH)
+
+# MERGE-processed onedir executables resolve shared dependencies through the
+# primary executable at runtime. Keep BirdStamp's base library in that shared
+# dependency set, while its own untouched copy remains available for Analysis
+# cache validation in the app-specific workpath.
+share_base_library(superviewer_a, superbirdstamp_a)
 
 # Let SuperBirdStamp reference common files from SuperViewer so that both
 # directories can live side-by-side under dist/ with fewer duplicated runtime files.

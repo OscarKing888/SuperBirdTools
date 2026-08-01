@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import os
+import re
 import time as _time
 from pathlib import Path
 from typing import Callable
 
 from app_common.log import get_logger
 from app_common.perf_probe import perf_log
+from app_common.psd_composite import read_psd_composite_size
 from app_common.file_browser._permissions import (
     clear_readonly_label,
     mark_write_action_disabled,
@@ -24,6 +26,7 @@ from .qt_compat import (
     QLineEdit,
     QMenu,
     QMessageBox,
+    QImageReader,
     QPixmap,
     QScrollArea,
     QSizePolicy,
@@ -361,7 +364,6 @@ class ImageInfoTabPanel_ImageInfo(ImageInfoTabPanel):
         self._preview_pixmap = None
         provider_hit = False
         provider_ms = 0.0
-        pixmap_ms = 0.0
         if path:
             pixmap = None
             if self._preview_pixmap_provider is not None:
@@ -372,24 +374,20 @@ class ImageInfoTabPanel_ImageInfo(ImageInfoTabPanel):
                     pixmap = None
                 provider_ms = (_time.perf_counter() - provider_t0) * 1000.0
                 provider_hit = bool(pixmap is not None and not pixmap.isNull())
-            if pixmap is None or pixmap.isNull():
-                pixmap_t0 = _time.perf_counter()
-                pixmap = QPixmap(path)
-                pixmap_ms = (_time.perf_counter() - pixmap_t0) * 1000.0
-            if not pixmap.isNull():
+            # 右侧预览只复用主预览已经解码的帧，禁止在 GUI 线程再次 QPixmap(path)。
+            if pixmap is not None and not pixmap.isNull():
                 self._preview_pixmap = pixmap
         update_t0 = _time.perf_counter()
         self._update_preview_pixmap()
         update_ms = (_time.perf_counter() - update_t0) * 1000.0
         perf_log(
             _log,
-            "[PERF][image_switch][ImageInfoTabPanel_ImageInfo._load_preview] path=%r ok=%s provider_hit=%s size=%s provider_ms=%.1f qpixmap_ms=%.1f update_ms=%.1f total_ms=%.1f",
+            "[PERF][image_switch][ImageInfoTabPanel_ImageInfo._load_preview] path=%r ok=%s provider_hit=%s size=%s provider_ms=%.1f update_ms=%.1f total_ms=%.1f",
             path,
             bool(self._preview_pixmap is not None and not self._preview_pixmap.isNull()),
             provider_hit,
             (self._preview_pixmap.width(), self._preview_pixmap.height()) if self._preview_pixmap is not None and not self._preview_pixmap.isNull() else None,
             provider_ms,
-            pixmap_ms,
             update_ms,
             (_time.perf_counter() - t0) * 1000.0,
         )
@@ -624,7 +622,7 @@ class ImageInfoTabPanel_ImageInfo(ImageInfoTabPanel):
         except OSError:
             stat = None
         metadata = metadata if isinstance(metadata, dict) else self._load_metadata(path)
-        width, height = self._image_size(path)
+        width, height = self._image_size(path, metadata=metadata)
         created_ts = getattr(stat, "st_birthtime", None) if stat is not None else None
         if created_ts is None and stat is not None:
             created_ts = stat.st_ctime
@@ -649,14 +647,100 @@ class ImageInfoTabPanel_ImageInfo(ImageInfoTabPanel):
             return {}
         return dict(data) if isinstance(data, dict) else {}
 
-    def _image_size(self, path: str) -> tuple[int | None, int | None]:
-        pixmap = self._preview_pixmap
-        if pixmap is not None and not pixmap.isNull():
-            return int(pixmap.width()), int(pixmap.height())
+    @staticmethod
+    def _positive_dimension(value) -> int | None:
+        if isinstance(value, (int, float)):
+            parsed = int(value)
+            return parsed if parsed > 0 else None
+        match = re.search(r"\d+", str(value or ""))
+        if not match:
+            return None
         try:
-            pixmap = QPixmap(path)
-            if not pixmap.isNull():
-                return int(pixmap.width()), int(pixmap.height())
+            parsed = int(match.group(0))
+        except Exception:
+            return None
+        return parsed if parsed > 0 else None
+
+    @staticmethod
+    def _metadata_value(metadata: dict | None, *keys: str):
+        if not isinstance(metadata, dict):
+            return None
+        for key in keys:
+            if key in metadata and metadata.get(key) not in (None, ""):
+                return metadata.get(key)
+        folded = {str(key).casefold(): value for key, value in metadata.items()}
+        for key in keys:
+            value = folded.get(key.casefold())
+            if value not in (None, ""):
+                return value
+        return None
+
+    @classmethod
+    def _metadata_image_size(cls, metadata: dict | None) -> tuple[int | None, int | None]:
+        width = cls._positive_dimension(cls._metadata_value(
+            metadata,
+            "width",
+            "image_width",
+            "ImageWidth",
+            "ExifImageWidth",
+            "EXIF:ExifImageWidth",
+            "ExifIFD:ExifImageWidth",
+            "File:ImageWidth",
+            "RawImageWidth",
+            "SourceImageWidth",
+            "original_width",
+        ))
+        height = cls._positive_dimension(cls._metadata_value(
+            metadata,
+            "height",
+            "image_height",
+            "ImageHeight",
+            "ExifImageHeight",
+            "ExifImageLength",
+            "EXIF:ExifImageHeight",
+            "EXIF:ExifImageLength",
+            "ExifIFD:ExifImageHeight",
+            "ExifIFD:ExifImageLength",
+            "File:ImageHeight",
+            "RawImageHeight",
+            "SourceImageHeight",
+            "original_height",
+        ))
+        if width and height:
+            return width, height
+        pair = cls._metadata_value(
+            metadata,
+            "ImageSize",
+            "Composite:ImageSize",
+            "ExifImageSize",
+        )
+        numbers = re.findall(r"\d+", str(pair or ""))
+        if len(numbers) >= 2:
+            pair_width = cls._positive_dimension(numbers[0])
+            pair_height = cls._positive_dimension(numbers[1])
+            if pair_width and pair_height:
+                return pair_width, pair_height
+        return width, height
+
+    def _image_size(
+        self,
+        path: str,
+        *,
+        metadata: dict | None = None,
+    ) -> tuple[int | None, int | None]:
+        metadata_width, metadata_height = self._metadata_image_size(metadata)
+        if metadata_width and metadata_height:
+            return metadata_width, metadata_height
+        psd_size = read_psd_composite_size(path)
+        if psd_size is not None:
+            return psd_size
+        try:
+            reader = QImageReader(path)
+            size = reader.size()
+            if size is not None and size.isValid():
+                width, height = int(size.width()), int(size.height())
+                if width > 0 and height > 0:
+                    return width, height
         except Exception:
             pass
         return None, None

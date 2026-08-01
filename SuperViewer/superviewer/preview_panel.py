@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import io as _io
 import time as _time
 import os
 from pathlib import Path
@@ -11,9 +12,10 @@ from PIL import Image, ImageOps
 
 from app_common import thumb_stream
 from app_common.file_browser._browser_core import _load_thumbnail_image, _read_thumb_from_disk_cache
-from app_common.image_formats import HEIF_EXTENSIONS, RAW_EXTENSIONS
+from app_common.image_formats import HEIF_EXTENSIONS, PHOTOSHOP_EXTENSIONS, RAW_EXTENSIONS
 from app_common.log import get_logger
 from app_common.perf_probe import perf_log
+from app_common.psd_composite import read_psd_composite_size
 from app_common.preview_canvas import (
     PreviewCanvas,
     PreviewOverlayOptions,
@@ -26,8 +28,11 @@ from app_common.superviewer_user_options import get_keep_view_on_switch
 from .focus_preview_loader import (
     _get_orientation_from_file,
     _load_preview_pixmap_for_canvas,
+    _load_raw_full_as_pixmap,
 )
 from .qt_compat import (
+    _KeepAspectRatio,
+    _SmoothTransformation,
     QImage,
     QImageReader,
     QLabel,
@@ -44,7 +49,8 @@ _log = get_logger("superviewer.preview_panel")
 _QUICK_PREVIEW_SIZE = 512
 _QUICK_PREVIEW_FALLBACK_SIZE = 128
 _FULL_PREVIEW_DELAY_MS = 80
-_DIRECT_ORIGINAL_PREVIEW_MAX_PIXELS = 40 * 1024 * 1024 # 40M
+_DIRECT_ORIGINAL_PREVIEW_MAX_PIXELS = 40 * 1024 * 1024  # 保留原有约 40MP 阈值。
+_EXPORT_PREVIEW_DRAIN_TIMEOUT_MS = 30_000
 _HEIF_PIL_OPENER_REGISTERED = False
 
 
@@ -87,8 +93,12 @@ def _qimage_from_rgb_result(result) -> QImage | None:
         return None
 
 
-def _quick_preview_target_size(canvas: QWidget) -> int:
-    return _QUICK_PREVIEW_SIZE
+def _quick_preview_target_size(canvas: QWidget, requested_size: int | None = None) -> int:
+    try:
+        parsed = int(requested_size or 0)
+    except Exception:
+        parsed = 0
+    return max(_QUICK_PREVIEW_FALLBACK_SIZE, parsed or _QUICK_PREVIEW_SIZE)
 
 
 def _load_quick_preview_pixmap(path: str, target_size: int) -> QPixmap | None:
@@ -114,10 +124,17 @@ def _load_quick_preview_pixmap(path: str, target_size: int) -> QPixmap | None:
 
 
 def _preview_source_pixel_count(path: str) -> int:
+    """只读图片头获取像素数，不触发原图像素解码。"""
     if not path or not os.path.isfile(path):
         return 0
-    if Path(path).suffix.lower() in RAW_EXTENSIONS:
+    ext = Path(path).suffix.lower()
+    if ext in RAW_EXTENSIONS:
+        # RAW 即使尺寸较小也不能在选图热路径同步 demosaic。
         return 0
+    if ext in PHOTOSHOP_EXTENSIONS:
+        psd_size = read_psd_composite_size(path)
+        if psd_size is not None:
+            return max(0, int(psd_size[0])) * max(0, int(psd_size[1]))
     try:
         reader = QImageReader(path)
         try:
@@ -129,7 +146,7 @@ def _preview_source_pixel_count(path: str) -> int:
             return pixels
     except Exception:
         pass
-    if Path(path).suffix.lower() in HEIF_EXTENSIONS:
+    if ext in HEIF_EXTENSIONS:
         _register_heif_pil_opener()
     try:
         with Image.open(path) as img:
@@ -203,9 +220,25 @@ def _qimage_from_pil_image(img: Image.Image) -> QImage | None:
         return None
 
 
-def _load_full_preview_qimage_raw(path: str) -> QImage | None:
+def _load_raw_embedded_preview_qimage(path: str) -> QImage | None:
     if not path or not os.path.isfile(path) or Path(path).suffix.lower() not in RAW_EXTENSIONS:
         return None
+    preview_data = thumb_stream.get_raw_preview_jpeg(path)
+    if not preview_data:
+        return None
+    try:
+        with Image.open(_io.BytesIO(preview_data)) as img:
+            img = _apply_orientation_to_pil_image(img, _get_orientation_from_file(path))
+            return _qimage_from_pil_image(img)
+    except Exception:
+        return None
+
+
+def _load_full_preview_qimage_raw(path: str) -> QImage | None:
+    """加载 RAW 的显示级预览，不承担覆盖导出的原分辨率契约。"""
+    embedded = _load_raw_embedded_preview_qimage(path)
+    if embedded is not None and not embedded.isNull():
+        return embedded
     try:
         import rawpy
     except Exception:
@@ -213,6 +246,7 @@ def _load_full_preview_qimage_raw(path: str) -> QImage | None:
     try:
         with rawpy.imread(path) as raw:
             rgb = raw.postprocess(
+                half_size=True,
                 use_camera_wb=True,
                 no_auto_bright=False,
                 output_bps=8,
@@ -237,6 +271,10 @@ def _load_full_preview_qimage_pil(path: str) -> QImage | None:
                 pass
             return _qimage_from_pil_image(img)
     except Exception:
+        if Path(path).suffix.lower() in PHOTOSHOP_EXTENSIONS:
+            return _qimage_from_rgb_result(
+                thumb_stream.load_psd_composite_rgb(path, None)
+            )
         return None
 
 
@@ -248,9 +286,9 @@ def _load_full_preview_qimage(path: str) -> QImage | None:
     expected_pixels = 0
 
     if ext in RAW_EXTENSIONS:
-        raw_qimg = _load_full_preview_qimage_raw(path)
-        if raw_qimg is not None and not raw_qimg.isNull():
-            return raw_qimg
+        # RAW 的常规显示只允许内嵌预览或 half-size 解码；覆盖导出走独立
+        # 的全分辨率路径，避免切图时做完整传感器 demosaic。
+        return _load_full_preview_qimage_raw(path)
 
     if ext in HEIF_EXTENSIONS:
         pil_qimg = _load_full_preview_qimage_pil(path)
@@ -301,6 +339,10 @@ class _FullPreviewLoader(QThread):
         qimg = None
         if not self.isInterruptionRequested():
             qimg = _load_full_preview_qimage(self._path)
+        if self.isInterruptionRequested():
+            # 不把可能很大的过期 QImage 排入 GUI 事件队列。
+            qimg = None
+            return
         self.loaded.emit(
             self._token,
             self._path,
@@ -321,8 +363,11 @@ class PreviewPanel(QWidget):
         self._current_path = None
         self._preview_request_token = 0
         self._full_preview_loaded = False
+        self._canvas_source_full_resolution = False
+        self._fast_preview_only = False
         self._full_preview_loader: _FullPreviewLoader | None = None
-        self._retired_full_preview_loaders: list[_FullPreviewLoader] = []
+        self._pending_full_preview_request: tuple[int, str] | None = None
+        self._shutdown_requested = False
         self._full_preview_timer = QTimer(self)
         self._full_preview_timer.setSingleShot(True)
         self._full_preview_timer.timeout.connect(self._start_full_preview_loader)
@@ -343,13 +388,32 @@ class PreviewPanel(QWidget):
         self._preview_status_label.setStyleSheet("color: #aaa; font-size: 12px;")
         layout.addWidget(self._preview_status_label)
 
-    def set_image(self, path: str, *, load_full: bool = True):
+    def set_image(self, path: str, *, load_full: bool = True, quick_size: int | None = None):
+        if self._shutdown_requested:
+            return
         t0 = _time.perf_counter()
         norm_path = os.path.normpath(path) if path else path
-        if norm_path and self._is_current_path(norm_path) and self._has_canvas_pixmap():
+        same_path = bool(norm_path and self._is_current_path(norm_path))
+        can_reuse = bool(same_path and self._has_canvas_pixmap())
+        if can_reuse:
+            if not load_full:
+                # 同路径从普通预览切回键盘快速模式时，也必须让已经排队的
+                # full result 失效；保留当前 canvas，不重新读取缩略图。
+                self._preview_request_token += 1
+                self._fast_preview_only = True
+                self._cancel_pending_full_preview()
+                return
+            if load_full:
+                self._fast_preview_only = False
             if load_full and not self._full_preview_loaded and not self._full_preview_timer.isActive():
                 loader = self._full_preview_loader
-                if loader is None or not loader.isRunning():
+                loader_is_current = bool(
+                    loader is not None
+                    and loader.isRunning()
+                    and int(getattr(loader, "_token", -1)) == int(self._preview_request_token)
+                    and self._is_current_path(getattr(loader, "_path", ""))
+                )
+                if not loader_is_current:
                     if not self._try_set_direct_original_preview(norm_path):
                         self._full_preview_timer.start(_FULL_PREVIEW_DELAY_MS)
             perf_log(
@@ -364,9 +428,11 @@ class PreviewPanel(QWidget):
         token = self._preview_request_token
         self._current_path = norm_path
         self._full_preview_loaded = False
+        self._canvas_source_full_resolution = False
+        self._fast_preview_only = not bool(load_full)
         self._cancel_pending_full_preview()
         load_t0 = _time.perf_counter()
-        target_size = _quick_preview_target_size(self._canvas)
+        target_size = _quick_preview_target_size(self._canvas, quick_size)
         pix = None
         direct_original = False
         if load_full:
@@ -377,19 +443,20 @@ class PreviewPanel(QWidget):
         canvas_ms = 0.0
         status_ms = 0.0
         if direct_original:
+            # _try_set_direct_original_preview 已更新 canvas 与状态栏。
             canvas_ms = 0.0
             status_ms = 0.0
         elif pix is not None and not pix.isNull():
             canvas_t0 = _time.perf_counter()
-            self._set_canvas_pixmap(pix)
+            self._set_canvas_pixmap(pix, log_performance=load_full)
             canvas_ms = (_time.perf_counter() - canvas_t0) * 1000.0
             status_t0 = _time.perf_counter()
             self._set_preview_status_text(pix.width(), pix.height())
             status_ms = (_time.perf_counter() - status_t0) * 1000.0
         else:
             canvas_t0 = _time.perf_counter()
-            self._canvas.set_source_pixmap(None)
-            self._canvas.setText(f"无法预览\n{Path(path).name}")
+            self._canvas.set_source_pixmap(None, log_performance=load_full)
+            self._canvas.setText(f"无法预览\n{Path(path).name if path else ''}")
             canvas_ms = (_time.perf_counter() - canvas_t0) * 1000.0
             status_t0 = _time.perf_counter()
             self._set_preview_status_text(None, None)
@@ -411,29 +478,70 @@ class PreviewPanel(QWidget):
             (_time.perf_counter() - t0) * 1000.0,
         )
 
+    def set_quick_pixmap(self, path: str, pixmap: QPixmap, *, quick_size: int | None = None) -> None:
+        """直接显示文件列表内存中的当前缩略图层级，避免落盘再读。"""
+        if self._shutdown_requested:
+            return
+        self._preview_request_token += 1
+        self._current_path = os.path.normpath(path) if path else path
+        self._full_preview_loaded = False
+        self._canvas_source_full_resolution = False
+        self._fast_preview_only = True
+        self._cancel_pending_full_preview()
+
+        target_size = _quick_preview_target_size(self._canvas, quick_size)
+        output = None
+        if isinstance(pixmap, QPixmap) and not pixmap.isNull():
+            if pixmap.width() <= target_size and pixmap.height() <= target_size:
+                output = pixmap
+            else:
+                output = pixmap.scaled(
+                    target_size,
+                    target_size,
+                    _KeepAspectRatio,
+                    _SmoothTransformation,
+                )
+        if output is not None and not output.isNull():
+            self._set_canvas_pixmap(output, log_performance=False)
+            self._set_preview_status_text(output.width(), output.height())
+        else:
+            self._canvas.set_source_pixmap(None, log_performance=False)
+            self._canvas.setText(f"无法预览\n{Path(path).name if path else ''}")
+            self._set_preview_status_text(None, None)
+
     def clear_image(self):
         self._preview_request_token += 1
         self._current_path = None
         self._full_preview_loaded = False
+        self._canvas_source_full_resolution = False
+        self._fast_preview_only = False
         self._cancel_pending_full_preview()
         self._canvas.set_source_pixmap(None)
         self._set_preview_status_text(None, None)
 
-    def _set_canvas_pixmap(self, pix: QPixmap) -> None:
+    def _set_canvas_pixmap(self, pix: QPixmap, *, log_performance: bool = True) -> None:
         if self._keep_view_on_switch:
             self._canvas.set_source_pixmap(
                 pix,
                 preserve_view=True,
                 preserve_scale=True,
+                log_performance=log_performance,
             )
         else:
-            self._canvas.set_source_pixmap(pix, reset_view=True)
+            self._canvas.set_source_pixmap(
+                pix,
+                reset_view=True,
+                log_performance=log_performance,
+            )
 
     def _has_canvas_pixmap(self) -> bool:
         pixmap = getattr(self._canvas, "_source_pixmap", None)
         return bool(pixmap is not None and not pixmap.isNull())
 
     def _try_set_direct_original_preview(self, path: str) -> bool:
+        if not path or self._full_preview_loader is not None:
+            # 旧 worker 尚未由 finished 回调清理时继续维持 single-flight。
+            return False
         if not _should_load_original_immediately(path):
             return False
         load_t0 = _time.perf_counter()
@@ -448,6 +556,8 @@ class PreviewPanel(QWidget):
         self._set_canvas_pixmap(pix)
         self._set_preview_status_text(pix.width(), pix.height())
         self._full_preview_loaded = True
+        self._canvas_source_full_resolution = True
+        self._fast_preview_only = False
         perf_log(
             _log,
             "[preview.direct_original] path=%r size=%s load_ms=%.1f apply_ms=%.1f",
@@ -469,19 +579,40 @@ class PreviewPanel(QWidget):
     def _cancel_pending_full_preview(self) -> None:
         if self._full_preview_timer.isActive():
             self._full_preview_timer.stop()
+        self._pending_full_preview_request = None
         loader = self._full_preview_loader
         if loader is not None and loader.isRunning():
             loader.requestInterruption()
 
     def _start_full_preview_loader(self) -> None:
+        if self._shutdown_requested:
+            return
         path = os.path.normpath(str(self._current_path or ""))
         if not path or not os.path.isfile(path):
             return
         token = self._preview_request_token
         loader = self._full_preview_loader
-        if loader is not None and loader.isRunning():
-            loader.requestInterruption()
-            self._retired_full_preview_loaders.append(loader)
+        if loader is not None:
+            if loader.isRunning():
+                loader.requestInterruption()
+            # 底层解码通常不能在函数中途取消；这里只保存最后一次请求，绝不
+            # 并行启动第二个全图 decoder。即使线程已结束，也要等待其 queued
+            # finished 回调清理当前指针，避免旧回调与新线程交错。
+            self._pending_full_preview_request = (int(token), path)
+            return
+        self._pending_full_preview_request = None
+        self._launch_full_preview_loader(token, path)
+
+    def _launch_full_preview_loader(self, token: int, path: str) -> None:
+        if self._shutdown_requested:
+            return
+        if self._full_preview_loader is not None:
+            self._pending_full_preview_request = (int(token), path)
+            return
+        if int(token) != int(self._preview_request_token):
+            return
+        if not path or not self._is_current_path(path) or not os.path.isfile(path):
+            return
         loader = _FullPreviewLoader(token, path, self)
         loader.loaded.connect(self._on_full_preview_loaded)
         loader.finished.connect(lambda l=loader: self._cleanup_full_preview_loader(l))
@@ -489,15 +620,23 @@ class PreviewPanel(QWidget):
         loader.start()
 
     def _cleanup_full_preview_loader(self, loader: _FullPreviewLoader) -> None:
-        if self._full_preview_loader is loader:
+        was_current = self._full_preview_loader is loader
+        if was_current:
             self._full_preview_loader = None
-        self._retired_full_preview_loaders = [
-            item for item in self._retired_full_preview_loaders if item is not loader
-        ]
         try:
             loader.deleteLater()
         except Exception:
             pass
+        if not was_current:
+            return
+        if self._shutdown_requested:
+            self._pending_full_preview_request = None
+            return
+        pending = self._pending_full_preview_request
+        self._pending_full_preview_request = None
+        if pending is not None:
+            token, path = pending
+            self._launch_full_preview_loader(token, path)
 
     def _on_full_preview_loaded(self, token: int, path: str, qimg, load_ms: float) -> None:
         if int(token) != int(self._preview_request_token):
@@ -522,6 +661,8 @@ class PreviewPanel(QWidget):
         self._set_canvas_pixmap(pix)
         self._set_preview_status_text(pix.width(), pix.height())
         self._full_preview_loaded = True
+        self._canvas_source_full_resolution = Path(path).suffix.lower() not in RAW_EXTENSIONS
+        self._fast_preview_only = False
         perf_log(
             _log,
             "[preview.full] path=%r token=%s ok=True size=%s load_ms=%.1f apply_ms=%.1f",
@@ -532,19 +673,50 @@ class PreviewPanel(QWidget):
             (_time.perf_counter() - apply_t0) * 1000.0,
         )
 
-    def _ensure_full_preview_loaded_sync(self) -> None:
-        if self._full_preview_loaded:
-            return
+    def _ensure_full_preview_loaded_sync(self) -> bool:
+        if self._canvas_source_full_resolution:
+            return True
         path = os.path.normpath(str(self._current_path or ""))
         if not path or not os.path.isfile(path):
-            return
-        pix = _load_preview_pixmap_for_canvas(path)
-        if pix is None or pix.isNull():
-            return
+            return False
+        # 使已经排入 GUI 队列、但尚未处理的显示级结果立即失效，避免它在
+        # 导出完成后把 full-resolution canvas 覆盖回 RAW half-size。
+        self._preview_request_token += 1
         self._cancel_pending_full_preview()
+        loader = self._full_preview_loader
+        if loader is not None and loader.isRunning():
+            try:
+                loader.requestInterruption()
+                drained = bool(loader.wait(_EXPORT_PREVIEW_DRAIN_TIMEOUT_MS))
+            except Exception:
+                drained = False
+            if not drained:
+                _log.warning("[preview.export] decoder drain timed out path=%r", path)
+                return False
+            if self._full_preview_loader is loader:
+                self._full_preview_loader = None
+            try:
+                loader.deleteLater()
+            except Exception:
+                pass
+
+        ext = Path(path).suffix.lower()
+        if ext in RAW_EXTENSIONS:
+            # 显示级 RAW 可以是内嵌图/half-size；覆盖导出必须显式完整解码。
+            pix = _load_raw_full_as_pixmap(path)
+        else:
+            pix = _load_preview_pixmap_for_canvas(path)
+            if (pix is None or pix.isNull()) and ext in PHOTOSHOP_EXTENSIONS:
+                qimg = _load_full_preview_qimage(path)
+                pix = QPixmap.fromImage(qimg) if qimg is not None and not qimg.isNull() else None
+        if pix is None or pix.isNull():
+            return False
         self._set_canvas_pixmap(pix)
         self._set_preview_status_text(pix.width(), pix.height())
         self._full_preview_loaded = True
+        self._canvas_source_full_resolution = True
+        self._fast_preview_only = False
+        return True
 
     def set_keep_view_on_switch(self, enabled: bool) -> None:
         self._keep_view_on_switch = bool(enabled)
@@ -562,7 +734,8 @@ class PreviewPanel(QWidget):
         return self._canvas.set_display_scale_percent(scale_percent, preserve_view=preserve_view)
 
     def render_source_pixmap_with_overlays(self) -> QPixmap | None:
-        self._ensure_full_preview_loaded_sync()
+        if not self._ensure_full_preview_loaded_sync():
+            return None
         return self._canvas.render_source_pixmap_with_overlays()
 
     def save_source_pixmap_with_overlays(
@@ -571,7 +744,8 @@ class PreviewPanel(QWidget):
         fmt: str | None = None,
         quality: int = -1,
     ) -> bool:
-        self._ensure_full_preview_loaded_sync()
+        if not self._ensure_full_preview_loaded_sync():
+            return False
         return self._canvas.save_source_pixmap_with_overlays(path, fmt=fmt, quality=quality)
 
     def set_composition_grid_mode(self, mode: str | None) -> None:
@@ -613,21 +787,47 @@ class PreviewPanel(QWidget):
     def current_path(self):
         return self._current_path
 
-    def shutdown(self) -> None:
+    def request_shutdown(self) -> None:
+        if self._shutdown_requested:
+            return
+        self._shutdown_requested = True
         self._preview_request_token += 1
         self._cancel_pending_full_preview()
-        workers = [self._full_preview_loader] + list(self._retired_full_preview_loaders)
-        for worker in workers:
-            if worker is None:
-                continue
-            try:
-                worker.requestInterruption()
-                worker.wait(2000)
-            except Exception:
-                pass
+
+    def shutdown(self, *, wait_timeout_ms: int | None = None) -> bool:
+        self.request_shutdown()
+        worker = self._full_preview_loader
+        if worker is None:
+            return True
+        try:
+            worker.requestInterruption()
+            if wait_timeout_ms is None:
+                wait_result = worker.wait()
+            else:
+                wait_result = worker.wait(max(0, int(wait_timeout_ms)))
+        except Exception:
+            wait_result = False
+        finished = bool(wait_result)
+        try:
+            finished = finished or not worker.isRunning()
+        except Exception:
+            pass
+        if not finished:
+            return False
+        if self._full_preview_loader is worker:
+            self._full_preview_loader = None
+        try:
+            worker.deleteLater()
+        except Exception:
+            pass
+        return True
 
     def closeEvent(self, event) -> None:  # type: ignore[override]
-        self.shutdown()
+        self.request_shutdown()
+        if not self.shutdown(wait_timeout_ms=25):
+            event.ignore()
+            QTimer.singleShot(25, self.close)
+            return
         super().closeEvent(event)
 
     def source_pixmap_for_path(self, path: str) -> QPixmap | None:

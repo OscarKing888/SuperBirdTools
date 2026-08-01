@@ -230,6 +230,21 @@ def _build_preview_grid_line_width_icon(width: int) -> QIcon:
 _log = get_logger("main")
 
 
+def _norm_paths_for_compare(paths: object) -> set[str]:
+    if isinstance(paths, (str, os.PathLike)):
+        values = [paths]
+    else:
+        try:
+            values = list(paths or [])  # type: ignore[arg-type]
+        except TypeError:
+            values = []
+    normalized: set[str] = set()
+    for path in values:
+        if path:
+            normalized.add(os.path.normcase(os.path.normpath(os.fspath(path))))
+    return normalized
+
+
 class TriangleToggleSplitterHandle(QSplitterHandle):
     """Splitter handle rendered as a triangular click toggle that also drags."""
 
@@ -560,6 +575,8 @@ class TriangleToggleSplitter(QSplitter):
 class MainWindow(QMainWindow):
     def __init__(self, initial_received_files=None):
         super().__init__()
+        self._shutdown_requested = False
+        self._shutdown_finalized = False
         info = load_about_info(_get_config_resource_path())
         self.setWindowTitle(_build_main_window_title(info))
         self.setMinimumSize(900, 600)
@@ -569,6 +586,9 @@ class MainWindow(QMainWindow):
         self._main_splitter_state_save_timer = QTimer(self)
         self._main_splitter_state_save_timer.setSingleShot(True)
         self._main_splitter_state_save_timer.timeout.connect(self._save_main_splitter_state)
+        self._shutdown_retry_timer = QTimer(self)
+        self._shutdown_retry_timer.setSingleShot(True)
+        self._shutdown_retry_timer.timeout.connect(self.close)
         icon_path = _get_app_icon_path()
         if icon_path:
             self.setWindowIcon(QIcon(icon_path))
@@ -602,6 +622,9 @@ class MainWindow(QMainWindow):
         self._dir_browser.directory_selected.connect(self._on_directory_selected)
         # 连接文件列表选中 → 预览 + 元信息刷新
         self._file_list.file_fast_preview_requested.connect(self._on_file_fast_preview_requested)
+        self._file_list.file_fast_preview_pixmap_requested.connect(
+            self._on_file_fast_preview_pixmap_requested
+        )
         self._file_list.file_selected.connect(self._on_file_selected_from_list)
 
         # ── 面板 3：App 信息 + 文件名 + 拖放预览区 ──
@@ -680,7 +703,7 @@ class MainWindow(QMainWindow):
             self._file_list.photo_tags_for_path,
             self._file_list.set_photo_tag_for_paths,
             self._rename_photo_from_info_panel,
-            metadata_provider=lambda path: self._file_list.get_photo_metadata_for_path(path, allow_slow_read=True),
+            metadata_provider=lambda path: self._file_list.get_photo_metadata_for_path(path, allow_slow_read=False),
             comment_save_callback=self._save_photo_comment_from_info_panel,
             preview_pixmap_provider=self.preview_panel.source_pixmap_for_path,
             write_enabled_provider=self._file_writes_allowed,
@@ -699,6 +722,7 @@ class MainWindow(QMainWindow):
 
         self.image_info_tabs.add_info_panel(self.image_info_panel)
         self.image_info_tabs.add_info_panel(self.tags_info_panel)
+        self._file_list.metadata_cache_updated.connect(self._on_metadata_cache_updated)
         self.image_info_tabs.on_photo_selected("")
         splitter.addWidget(self.image_info_tabs)
         splitter.set_handle_toggle_target(3, 3)
@@ -819,6 +843,12 @@ class MainWindow(QMainWindow):
             preview_ms,
             elapsed_ms(probe_t0),
         )
+
+    def _on_file_fast_preview_pixmap_requested(self, path: str, pixmap, quick_size: int) -> None:
+        """直接复用缩略图视图已经解码的帧，避免写盘后再读取。"""
+        if not isinstance(pixmap, QPixmap) or pixmap.isNull():
+            return
+        self.preview_panel.set_quick_pixmap(path, pixmap, quick_size=quick_size)
 
     def _init_menu_bar(self):
         file_menu = self.menuBar().addMenu("文件")
@@ -1131,6 +1161,21 @@ class MainWindow(QMainWindow):
         )
         return True
 
+    def _on_metadata_cache_updated(self, paths: object) -> None:
+        """Refresh only the visible info panel when current cached data changes."""
+        current = os.path.normpath(self._current_exif_path) if self._current_exif_path else ""
+        if not current or os.path.normcase(current) not in _norm_paths_for_compare(paths):
+            return
+        panel = self.image_info_tabs.currentWidget()
+        if panel not in self.image_info_tabs.panels():
+            return
+        try:
+            panel_path = os.path.normpath(panel.current_photo_path()) if panel.current_photo_path() else ""
+            if panel_path and os.path.normcase(panel_path) == os.path.normcase(current):
+                panel.refresh_current_photo()
+        except Exception:
+            pass
+
     def on_image_loaded(self, path: str):
         """图片被拖入或选择后调用。"""
         t0 = _time.perf_counter()
@@ -1162,20 +1207,53 @@ class MainWindow(QMainWindow):
         )
 
     def closeEvent(self, event) -> None:  # type: ignore[override]
+        if self._shutdown_finalized:
+            super().closeEvent(event)
+            return
+        if not self._shutdown_requested:
+            self._shutdown_requested = True
+            try:
+                self._file_list.stop_key_navigation_playback(commit=False)
+            except Exception:
+                pass
+            for component in (self.image_info_tabs, self.preview_panel, self._file_list):
+                request_shutdown = getattr(component, "request_shutdown", None)
+                if not callable(request_shutdown):
+                    continue
+                try:
+                    request_shutdown()
+                except Exception:
+                    pass
+
+        tabs_done = False
+        preview_done = False
+        file_list_done = False
+        try:
+            tabs_done = bool(self.image_info_tabs.shutdown(wait_timeout_ms=25))
+        except Exception:
+            pass
+        try:
+            preview_done = bool(self.preview_panel.shutdown(wait_timeout_ms=25))
+        except Exception:
+            pass
+        try:
+            file_list_done = bool(self._file_list.shutdown(wait_timeout_ms=25))
+        except Exception:
+            pass
+        if not (tabs_done and preview_done and file_list_done):
+            event.ignore()
+            self.hide()
+            if not self._shutdown_retry_timer.isActive():
+                self._shutdown_retry_timer.start(25)
+            return
+
         try:
             if self._main_splitter_state_save_timer.isActive():
                 self._main_splitter_state_save_timer.stop()
             self._save_main_splitter_state()
         except Exception:
             pass
-        try:
-            self._file_list.close_tag_store()
-        except Exception:
-            pass
-        try:
-            self.preview_panel.shutdown()
-        except Exception:
-            pass
+        self._shutdown_finalized = True
         super().closeEvent(event)
 
 

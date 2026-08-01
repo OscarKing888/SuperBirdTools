@@ -25,8 +25,17 @@ class ImageInfoTabPanel(QWidget, metaclass=_ImageInfoTabPanelMeta):
     def current_photo_path(self) -> str:
         return self._current_photo_path
 
-    def on_photo_selected(self, path: str):
+    def set_current_photo_path(self, path: str) -> str:
+        """Update the selected path without refreshing the panel.
+
+        Inactive tabs use this helper to stay logically in sync while
+        deferring their file I/O until the user opens them.
+        """
         self._current_photo_path = os.path.normpath(path) if path else ""
+        return self._current_photo_path
+
+    def on_photo_selected(self, path: str):
+        self.set_current_photo_path(path)
         return self.refresh_ui()
 
     def refresh_current_photo(self):
