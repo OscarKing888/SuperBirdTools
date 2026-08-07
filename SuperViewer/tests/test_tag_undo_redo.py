@@ -74,6 +74,27 @@ def test_clear_tags_undo_restores_snapshot(tmp_path: Path) -> None:
         _shutdown_panel(app, panel)
 
 
+def test_context_menu_clear_all_tags_supports_undo(tmp_path: Path) -> None:
+    """右键「清除所有TAG」与 clear_photo_tags_for_paths 同一历史路径。"""
+    app, panel, paths = _make_panel(tmp_path)
+    try:
+        panel.set_photo_tag_for_paths([paths[0]], "打架", True)
+        panel.set_photo_tag_for_paths([paths[0]], "捕食", True)
+        panel._photo_tag_cache[paths[0]] = {"打架", "捕食"}
+
+        # Same entry used by the context-menu action.
+        panel.clear_photo_tags_for_paths([paths[0]])
+        assert panel.can_undo
+        assert panel.configured_tags_snapshot([paths[0]])[paths[0]] == set()
+
+        panel.undo()
+        assert panel.configured_tags_snapshot([paths[0]])[paths[0]] == {"打架", "捕食"}
+        panel.redo()
+        assert panel.configured_tags_snapshot([paths[0]])[paths[0]] == set()
+    finally:
+        _shutdown_panel(app, panel)
+
+
 def test_new_tag_command_clears_redo(tmp_path: Path) -> None:
     app, panel, paths = _make_panel(tmp_path)
     try:

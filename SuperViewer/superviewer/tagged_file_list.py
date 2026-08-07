@@ -1185,12 +1185,16 @@ class SuperViewerTaggedFileListPanel(FileListPanel):
             lambda tag, checked=False, p=target_paths: self._set_tag_for_paths(p, tag, bool(checked)),
             checkable=True,
             checked_provider=lambda tag: bool(tag_sets) and all(tag in tags for tags in tag_sets),
+            keep_open=True,
         )
 
         tag_menu.addSeparator()
+        # Undo/Redo: clear_photo_tags_for_paths → ClearPhotoTagsCommand → CommandHistory
         act_clear = tag_menu.addAction("清除所有TAG")
         act_clear.setEnabled(any(tag_sets) and writes_allowed)
-        act_clear.triggered.connect(lambda checked=False, p=list(norm_paths): self._clear_tags_for_paths(p))
+        act_clear.triggered.connect(
+            lambda checked=False, p=list(norm_paths): self.clear_photo_tags_for_paths(p)
+        )
 
     def _set_tag_for_paths(self, paths: list[str], tag: str, enabled: bool) -> None:
         if not self._sidecar_writes_allowed("保存标签", warn=True):
@@ -1290,11 +1294,17 @@ class SuperViewerTaggedFileListPanel(FileListPanel):
         paths = _norm_paths(tags_by_path.keys())
         if not paths:
             return
+        # Allow lookup by either normalized or original snapshot keys.
+        by_case = {
+            os.path.normcase(os.path.normpath(path)): set(tags)
+            for path, tags in tags_by_path.items()
+        }
         probe_t0 = perf_counter()
         try:
             write_t0 = perf_counter()
             for path in paths:
-                for tag in sorted(tags_by_path.get(path, set())):
+                tags = by_case.get(os.path.normcase(path), set())
+                for tag in sorted(tags):
                     self._photo_tag_store.set_tag_for_paths(
                         [path],
                         tag,

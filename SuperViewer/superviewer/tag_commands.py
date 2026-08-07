@@ -63,11 +63,20 @@ class ClearPhotoTagsCommand:
         if not self._clearing:
             return any(self._before.values())
         snapshot = self._panel.configured_tags_snapshot(self._paths)
-        return any(snapshot.get(path) for path in self._paths)
+        if any(snapshot.values()):
+            return True
+        # Context menu enables clear from UI/cache tags; keep history in sync.
+        return any(self._panel.photo_tags_for_path(path) for path in self._paths)
 
     def execute(self) -> ClearPhotoTagsCommand:
         if self._clearing:
             before = self._panel.configured_tags_snapshot(self._paths)
+            for path, tags in list(before.items()):
+                before[path] = set(tags) | set(self._panel.photo_tags_for_path(path))
+            for path in self._paths:
+                key = path
+                if key not in before:
+                    before[key] = set(self._panel.photo_tags_for_path(path))
             self._panel._apply_clear_tags_for_paths(self._paths)
             return ClearPhotoTagsCommand(
                 self._panel,
