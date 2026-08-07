@@ -1,1 +1,0 @@
-    ./dist/SuperBirdStamp.app/Contents/MacOS/SuperBirdStamp
