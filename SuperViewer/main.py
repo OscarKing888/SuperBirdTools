@@ -97,6 +97,7 @@ try:
     )
     from .superviewer.super_viewer_user_options_dialog import SuperViewerUserOptionsDialog
     from .superviewer.tagged_file_list import SuperViewerTaggedFileListPanel
+    from .superviewer.ui_theme import install_ui_theme
     from .superviewer import qt_compat
     from .superviewer.qt_compat import (
         QAction,
@@ -168,6 +169,7 @@ except ImportError:
     )
     from superviewer.super_viewer_user_options_dialog import SuperViewerUserOptionsDialog
     from superviewer.tagged_file_list import SuperViewerTaggedFileListPanel
+    from superviewer.ui_theme import install_ui_theme
     from superviewer import qt_compat
     from superviewer.qt_compat import (
         QAction,
@@ -1437,14 +1439,11 @@ def main():
     if icon_path:
         app.setWindowIcon(QIcon(icon_path))
     app.setStyle("Fusion")
-    palette = QPalette()
-    palette.setColor(QPalette.ColorRole.Window, QColor(45, 45, 45))
-    palette.setColor(QPalette.ColorRole.WindowText, QColor(220, 220, 220))
-    palette.setColor(QPalette.ColorRole.Base, QColor(35, 35, 35))
-    palette.setColor(QPalette.ColorRole.AlternateBase, QColor(50, 50, 50))
-    palette.setColor(QPalette.ColorRole.Text, QColor(220, 220, 220))
-    app.setPalette(palette)
+    theme_manager = install_ui_theme(app)
     window = MainWindow(initial_received_files=argv_files if argv_files else None)
+    window._ui_theme_manager = theme_manager
+    theme_manager.add_listener(window._dir_browser.apply_theme)
+    window._dir_browser.apply_theme(theme_manager.scheme)
 
     # 单例接收：其它进程「发送到本应用」时回调到主线程
     def on_files_received(paths):

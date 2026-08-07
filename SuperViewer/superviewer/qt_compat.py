@@ -47,7 +47,7 @@ try:
         QToolBar,
         QWidgetAction,
     )
-    from PyQt6.QtCore import Qt, QMimeData, QSize, QDir, QThread, QTimer, pyqtSignal, QModelIndex, QRect, QPoint
+    from PyQt6.QtCore import Qt, QEvent, QMimeData, QSize, QDir, QThread, QTimer, pyqtSignal, QModelIndex, QRect, QPoint
     from PyQt6.QtGui import (
         QPixmap,
         QImage,
@@ -112,7 +112,7 @@ except ImportError:
         QToolBar,
         QWidgetAction,
     )
-    from PyQt5.QtCore import Qt, QMimeData, QSize, QDir, QThread, QTimer, pyqtSignal, QModelIndex, QRect, QPoint
+    from PyQt5.QtCore import Qt, QEvent, QMimeData, QSize, QDir, QThread, QTimer, pyqtSignal, QModelIndex, QRect, QPoint
     from PyQt5.QtGui import (
         QPixmap,
         QImage,

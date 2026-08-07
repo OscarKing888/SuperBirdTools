@@ -26,6 +26,7 @@ from .qt_compat import (
     QVBoxLayout,
     QWidget,
 )
+from .ui_theme import PanelThemeColors, current_panel_colors
 
 
 _log = get_logger("superviewer.image_info_tab_tags")
@@ -74,7 +75,6 @@ class ImageInfoTabPanel_Tags(ImageInfoTabPanel):
         top_row = QHBoxLayout()
         top_row.setSpacing(6)
         self.photo_label = QLabel("未选择图片")
-        self.photo_label.setStyleSheet("color: #aaa; font-size: 12px;")
         self.photo_label.setWordWrap(True)
         top_row.addWidget(self.photo_label, stretch=1)
 
@@ -84,7 +84,6 @@ class ImageInfoTabPanel_Tags(ImageInfoTabPanel):
         layout.addLayout(top_row)
 
         self.empty_label = QLabel("")
-        self.empty_label.setStyleSheet("color: #888; font-size: 12px; padding: 4px;")
         self.empty_label.setWordWrap(True)
         layout.addWidget(self.empty_label)
 
@@ -97,6 +96,17 @@ class ImageInfoTabPanel_Tags(ImageInfoTabPanel):
         self.tag_layout.addStretch(1)
         scroll.setWidget(self.tag_container)
         layout.addWidget(scroll, stretch=1)
+
+    def apply_theme(self, colors: PanelThemeColors | None = None) -> None:
+        theme = colors or current_panel_colors()
+        if not hasattr(self, "photo_label"):
+            return
+        self.photo_label.setStyleSheet(
+            "color: %s; font-size: 12px;" % theme.secondary_text
+        )
+        self.empty_label.setStyleSheet(
+            "color: %s; font-size: 12px; padding: 4px;" % theme.muted_text
+        )
 
     def refresh_ui(self) -> set[str]:
         t0 = _time.perf_counter()

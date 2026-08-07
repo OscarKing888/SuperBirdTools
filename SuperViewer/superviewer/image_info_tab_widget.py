@@ -8,7 +8,8 @@ from app_common.log import get_logger
 from app_common.perf_probe import perf_log
 
 from .image_info_tab_base import ImageInfoTabPanel
-from .qt_compat import QTabWidget
+from .qt_compat import QEvent, QTabWidget
+from .ui_theme import ColorSchemeName, get_ui_theme_manager, panel_colors
 
 
 _log = get_logger("superviewer.image_info_tabs")
@@ -23,14 +24,27 @@ class ImageInfoTabWidget(QTabWidget):
         self._pending_panels: set[ImageInfoTabPanel] = set()
         self._shutdown_requested = False
         self._shutdown_complete = False
+        self._theme_listener_attached = False
         self.currentChanged.connect(self._on_current_tab_changed)
+        self._attach_theme_listener()
 
     def add_info_panel(self, panel: ImageInfoTabPanel) -> None:
+        self._attach_theme_listener()
         self._panels.append(panel)
         self.addTab(panel, panel.tab_title)
+        panel.apply_theme(panel_colors())
 
     def panels(self) -> list[ImageInfoTabPanel]:
         return list(self._panels)
+
+    def apply_theme(self, scheme: ColorSchemeName | None = None) -> None:
+        """Broadcast theme colors to all panels without metadata I/O."""
+        colors = panel_colors(scheme)
+        for panel in self._panels:
+            try:
+                panel.apply_theme(colors)
+            except Exception:
+                pass
 
     def on_photo_selected(self, path: str) -> dict[str, object]:
         if self._shutdown_requested:
@@ -72,12 +86,46 @@ class ImageInfoTabWidget(QTabWidget):
         self._pending_panels.discard(panel)
         panel.refresh_current_photo()
 
+    def _attach_theme_listener(self) -> None:
+        manager = get_ui_theme_manager()
+        if manager is None or self._theme_listener_attached:
+            return
+        manager.add_listener(self.apply_theme)
+        self._theme_listener_attached = True
+
+    def _detach_theme_listener(self) -> None:
+        manager = get_ui_theme_manager()
+        if manager is None or not self._theme_listener_attached:
+            return
+        manager.remove_listener(self.apply_theme)
+        self._theme_listener_attached = False
+
+    def changeEvent(self, event) -> None:  # type: ignore[override]
+        super().changeEvent(event)
+        if event is None:
+            return
+        # Ensure listener is attached once the app theme manager exists.
+        self._attach_theme_listener()
+        event_type = event.type()
+        theme_change = getattr(QEvent, "ThemeChange", None)
+        palette_change = getattr(QEvent, "PaletteChange", None)
+        type_value = getattr(event_type, "value", event_type)
+        watched = {
+            getattr(theme_change, "value", theme_change) if theme_change is not None else None,
+            getattr(palette_change, "value", palette_change) if palette_change is not None else None,
+            214,
+            39,
+        }
+        if type_value in watched or event_type in watched:
+            self.apply_theme()
+
     def request_shutdown(self) -> None:
         """Ask child panels to stop without waiting on the GUI thread."""
         if self._shutdown_requested:
             return
         self._shutdown_requested = True
         self._pending_panels.clear()
+        self._detach_theme_listener()
         for panel in self._panels:
             request_shutdown = getattr(panel, "request_shutdown", None)
             if not callable(request_shutdown):
