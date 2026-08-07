@@ -5,11 +5,15 @@ from __future__ import annotations
 import os
 import threading
 import time as _time
+from pathlib import Path
 from typing import Iterable
 
 from app_common.command_history import CommandHistory, CommandHistoryError
 from app_common.file_browser import FileListPanel
-from app_common.file_browser._browser_core import _thumb_disk_cache_path
+from app_common.file_browser._browser_core import (
+    _metadata_comment_from_meta,
+    _thumb_disk_cache_path,
+)
 from app_common.file_browser._permissions import mark_write_action_disabled
 from app_common.perf_probe import elapsed_ms, perf_counter, perf_log
 from app_common.log import get_logger
@@ -18,6 +22,7 @@ from app_common.exif_io import PhotoMetaDataJSON
 from .photo_tags import (
     PhotoTagConfig,
     PhotoTagSidecarStore,
+    TagTreeNode,
     find_superpicky_tag_config_path,
     photo_tag_filter_matches,
 )
@@ -83,6 +88,39 @@ def _norm_paths(paths: Iterable[str]) -> list[str]:
         seen.add(key)
         out.append(norm)
     return out
+
+
+def filter_text_tokens_match(
+    tokens: Iterable[str],
+    *,
+    name: str = "",
+    comment: str = "",
+    photo_tags: Iterable[str] | None = None,
+) -> bool:
+    """Return whether every whitespace token matches name, comment, or tags.
+
+    Tokens are AND'd together.  Each token may hit filename, comment, or any
+    photo tag via case-insensitive substring matching.
+    """
+    token_list = [str(token or "").strip() for token in (tokens or [])]
+    token_list = [token for token in token_list if token]
+    if not token_list:
+        return True
+    name_cf = str(name or "").casefold()
+    comment_cf = str(comment or "").casefold()
+    tag_values = [
+        str(tag or "").casefold()
+        for tag in (photo_tags or [])
+        if str(tag or "").strip()
+    ]
+    for token in token_list:
+        needle = token.casefold()
+        if needle in name_cf or needle in comment_cf:
+            continue
+        if any(needle in value for value in tag_values):
+            continue
+        return False
+    return True
 
 
 class PhotoTagCacheWorker(QThread):
@@ -189,6 +227,7 @@ class SuperViewerTaggedFileListPanel(FileListPanel):
         self._tag_config_signature: tuple[str, int, int] | None = None
         self._tag_config_scope_key = ""
         self._available_tags: list[str] = []
+        self._available_tag_tree: list[TagTreeNode] = []
         self._active_tag_filters: set[str] = set()
         self._tag_filter_partial_match: bool = True
         self._tag_filter_buttons: dict[str, QToolButton] = {}
@@ -215,6 +254,8 @@ class SuperViewerTaggedFileListPanel(FileListPanel):
         super().__init__(parent)
         self._load_tag_config_if_changed(force=True)
         self._install_tag_filter_bar()
+        if self._filter_edit is not None:
+            self._filter_edit.setPlaceholderText("过滤文件名/注释/标签…")
 
     def close_tag_store(self) -> None:
         self.shutdown()
@@ -311,6 +352,11 @@ class SuperViewerTaggedFileListPanel(FileListPanel):
         """Return the current configured SuperViewer tag vocabulary."""
         self._load_tag_config_if_changed()
         return list(self._available_tags)
+
+    def available_photo_tag_tree(self) -> list[TagTreeNode]:
+        """Return the configured tag hierarchy (groups + leaf tags)."""
+        self._load_tag_config_if_changed()
+        return list(self._available_tag_tree)
 
     def rating_writes_allowed(self) -> bool:
         return self.sidecar_writes_allowed()
@@ -535,23 +581,62 @@ class SuperViewerTaggedFileListPanel(FileListPanel):
     def _has_any_filter(self) -> bool:
         return super()._has_any_filter() or bool(self._active_tag_filters)
 
-    def _path_matches_active_filters(self, path: str) -> bool:
-        if not super()._path_matches_active_filters(path):
-            return False
-        if not self._active_tag_filters:
-            return True
+    def _filter_text_tokens(self) -> list[str]:
+        if not getattr(self, "_filter_edit", None):
+            return []
+        return [token for token in str(self._filter_edit.text() or "").split() if token]
+
+    def _text_filter_needs_photo_tags(self) -> bool:
+        return bool(self._filter_text_tokens())
+
+    def _photo_tag_lookup_needed_for_filters(self) -> bool:
+        return bool(self._active_tag_filters) or self._text_filter_needs_photo_tags()
+
+    def _photo_tags_for_filter_path(self, path: str) -> set[str]:
         norm = os.path.normpath(path)
         tags = self._photo_tag_cache.get(norm)
         if tags is None:
             tags = self._photo_tags_from_meta_cache(norm)
+        return set(tags or set())
+
+    def _path_matches_active_filters(self, path: str) -> bool:
+        # Skip base text filter so tag tokens are not rejected by the
+        # filename/comment-only substring check; pick/rating/focus still apply.
+        if not self._path_matches_filters(
+            path,
+            filter_text="",
+            filter_pick=self._filter_pick,
+            filter_reject=self._filter_reject,
+            filter_min_rating=self._filter_min_rating,
+            filter_focus_status=self._filter_focus_status,
+        ):
+            return False
+
+        tokens = self._filter_text_tokens()
+        if tokens:
+            norm = os.path.normpath(path) if path else ""
+            name = Path(norm).name if norm else ""
+            meta = self._meta_cache.get(norm, {}) if norm else {}
+            comment = _metadata_comment_from_meta(meta if isinstance(meta, dict) else {})
+            tags = self._photo_tags_for_filter_path(norm) if norm else set()
+            if not filter_text_tokens_match(
+                tokens,
+                name=name,
+                comment=comment,
+                photo_tags=tags,
+            ):
+                return False
+
+        if not self._active_tag_filters:
+            return True
         return photo_tag_filter_matches(
             self._active_tag_filters,
-            tags,
+            self._photo_tags_for_filter_path(path),
             partial_match=self._tag_filter_partial_match,
         )
 
     def _refresh_filter_scope(self) -> None:
-        if self._active_tag_filters:
+        if self._photo_tag_lookup_needed_for_filters():
             self._start_photo_tag_cache_loader_if_needed(self._all_files, reason="tag_filter")
         super()._refresh_filter_scope()
 
@@ -704,8 +789,8 @@ class SuperViewerTaggedFileListPanel(FileListPanel):
         menu = QMenu(self)
         add_filterable_tag_actions(
             menu,
-            self._available_tags,
-            lambda tag, checked=False: self._on_tag_filter_toggled(tag, bool(checked)),
+            on_triggered=lambda tag, checked=False: self._on_tag_filter_toggled(tag, bool(checked)),
+            tree=self._available_tag_tree,
             checkable=True,
             checked_provider=lambda tag: tag in self._active_tag_filters,
             filter_placeholder="过滤标签",
@@ -722,8 +807,9 @@ class SuperViewerTaggedFileListPanel(FileListPanel):
         if not force and signature == self._tag_config_signature:
             return False
         self._tag_config_signature = signature
-        new_tags = self._tag_config.load()
+        new_tree, new_tags = self._tag_config.load_tree_and_tags()
         if new_tags == self._available_tags and not force:
+            self._available_tag_tree = new_tree
             return False
         if new_tags != self._available_tags:
             self._stop_photo_tag_cache_loader()
@@ -735,6 +821,7 @@ class SuperViewerTaggedFileListPanel(FileListPanel):
             self._photo_tag_pending_paths = []
             self._photo_tag_loader_covers_all_files = False
         self._available_tags = new_tags
+        self._available_tag_tree = new_tree
         self._active_tag_filters.intersection_update(new_tags)
         self._rebuild_tag_filter_bar()
         return True
@@ -824,7 +911,7 @@ class SuperViewerTaggedFileListPanel(FileListPanel):
     ) -> None:
         if self._tag_shutdown_requested or not self._available_tags:
             return
-        if not allow_without_filters and not self._active_tag_filters:
+        if not allow_without_filters and not self._photo_tag_lookup_needed_for_filters():
             return
         path_list = _norm_paths(paths)
         if not path_list:
@@ -856,7 +943,7 @@ class SuperViewerTaggedFileListPanel(FileListPanel):
         self._photo_tag_loader_covers_all_files = bool(all_norm) and all(
             path in covered for path in all_norm
         )
-        if self._active_tag_filters:
+        if self._photo_tag_lookup_needed_for_filters():
             self._show_meta_progress_status("正在读取照片标签", value=0, total=len(path_list))
         self._probe_log(
             "photo_tag_cache.start",
@@ -909,7 +996,7 @@ class SuperViewerTaggedFileListPanel(FileListPanel):
             return
         self._photo_tag_cache_done = max(0, int(done or 0))
         self._photo_tag_cache_total = max(0, int(total or 0))
-        if self._active_tag_filters:
+        if self._photo_tag_lookup_needed_for_filters():
             self._show_meta_progress_status(
                 "正在读取照片标签",
                 value=self._photo_tag_cache_done,
@@ -922,7 +1009,7 @@ class SuperViewerTaggedFileListPanel(FileListPanel):
         )
 
     def _schedule_photo_tag_filter_refresh(self) -> None:
-        if not self._active_tag_filters:
+        if not self._photo_tag_lookup_needed_for_filters():
             return
         self._ensure_photo_tag_filter_refresh_timer()
         timer = self._photo_tag_filter_refresh_timer
@@ -931,7 +1018,7 @@ class SuperViewerTaggedFileListPanel(FileListPanel):
         timer.start(_PHOTO_TAG_FILTER_REFRESH_MS)
 
     def _flush_photo_tag_filter_refresh(self) -> None:
-        if not self._active_tag_filters:
+        if not self._photo_tag_lookup_needed_for_filters():
             return
         self._probe_log("photo_tag_cache.filter_refresh", cached=len(self._photo_tag_cache))
         self._apply_filter()
@@ -984,9 +1071,9 @@ class SuperViewerTaggedFileListPanel(FileListPanel):
         timer = self._photo_tag_filter_refresh_timer
         if timer is not None and timer.isActive():
             timer.stop()
-        if self._active_tag_filters:
+        if self._photo_tag_lookup_needed_for_filters():
             self._apply_filter()
-        if self._active_tag_filters and self._photo_tag_cache_total:
+        if self._photo_tag_lookup_needed_for_filters() and self._photo_tag_cache_total:
             self._show_meta_progress_status(
                 "照片标签读取完成",
                 value=self._photo_tag_cache_total,
@@ -1181,8 +1268,10 @@ class SuperViewerTaggedFileListPanel(FileListPanel):
         target_paths = list(norm_paths)
         add_filterable_tag_actions(
             tag_menu,
-            self._available_tags,
-            lambda tag, checked=False, p=target_paths: self._set_tag_for_paths(p, tag, bool(checked)),
+            on_triggered=lambda tag, checked=False, p=target_paths: self._set_tag_for_paths(
+                p, tag, bool(checked)
+            ),
+            tree=self._available_tag_tree,
             checkable=True,
             checked_provider=lambda tag: bool(tag_sets) and all(tag in tags for tags in tag_sets),
             keep_open=True,

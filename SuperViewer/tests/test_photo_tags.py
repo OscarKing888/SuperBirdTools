@@ -17,10 +17,16 @@ from app_common.exif_io.writer import read_batch_metadata
 from SuperViewer.superviewer.photo_tags import (
     PhotoTagConfig,
     PhotoTagSidecarStore,
+    TagTreeNode,
     find_superpicky_tag_config_path,
+    iter_tag_tree_leaves,
+    parse_tag_tree_text,
     photo_tag_filter_matches,
 )
-from SuperViewer.superviewer.tagged_file_list import SuperViewerTaggedFileListPanel
+from SuperViewer.superviewer.tagged_file_list import (
+    SuperViewerTaggedFileListPanel,
+    filter_text_tokens_match,
+)
 from SuperViewer.superviewer.qt_compat import QApplication
 
 
@@ -29,6 +35,53 @@ def test_photo_tag_config_loads_utf8_lines_and_dedupes(tmp_path: Path) -> None:
     cfg.write_text("窝\n打架\n\n打架\n捕食\n", encoding="utf-8")
 
     assert PhotoTagConfig(cfg).load() == ["窝", "打架", "捕食"]
+
+
+def test_photo_tag_config_parses_indent_tree_leaves_only(tmp_path: Path) -> None:
+    cfg = tmp_path / "tags.cfg"
+    cfg.write_text(
+        "# comment\n"
+        "MVP高光时刻\n"
+        "行为\n"
+        "  窝\n"
+        "  打架\n"
+        "  打架\n"
+        "场景\n"
+        "  同框\n"
+        "\n"
+        "  炮弹\n",
+        encoding="utf-8",
+    )
+
+    tree, tags = PhotoTagConfig(cfg).load_tree_and_tags()
+    assert tags == ["MVP高光时刻", "窝", "打架", "同框", "炮弹"]
+    assert [node.name for node in tree] == ["MVP高光时刻", "行为", "场景"]
+    assert tree[0].is_leaf
+    assert tree[1].is_group
+    assert [child.name for child in tree[1].children] == ["窝", "打架"]
+    assert [child.name for child in tree[2].children] == ["同框", "炮弹"]
+    assert PhotoTagConfig(cfg).load() == tags
+
+
+def test_parse_tag_tree_text_supports_tabs_and_nested_groups() -> None:
+    tree = parse_tag_tree_text(
+        "根\n"
+        "\t一级\n"
+        "\t\t叶子A\n"
+        "\t叶子B\n"
+    )
+    assert iter_tag_tree_leaves(tree) == ["叶子A", "叶子B"]
+    assert tree[0].name == "根"
+    assert tree[0].children[0].name == "一级"
+    assert tree[0].children[0].children[0].name == "叶子A"
+    assert tree[0].children[1].name == "叶子B"
+
+
+def test_tag_tree_node_helpers() -> None:
+    leaf = TagTreeNode(name="窝")
+    group = TagTreeNode(name="行为", children=[leaf])
+    assert leaf.is_leaf and not leaf.is_group
+    assert group.is_group and not group.is_leaf
 
 
 def test_photo_tag_config_path_comes_from_nearest_superpicky(tmp_path: Path) -> None:
@@ -71,6 +124,89 @@ def test_photo_tag_filter_partial_multiple_filters_accept_any_match() -> None:
     assert photo_tag_filter_matches(["鸟", "猛禽"], ["水鸟"], partial_match=True)
     assert photo_tag_filter_matches(["鸟", "猛禽"], ["猛禽类"], partial_match=True)
     assert not photo_tag_filter_matches(["鸟", "猛禽"], ["昆虫"], partial_match=True)
+
+
+def test_filter_text_tokens_match_single_tag_substring() -> None:
+    assert filter_text_tokens_match(["打架"], photo_tags=["打架", "捕食"])
+    assert filter_text_tokens_match(["打"], photo_tags=["打架"])
+    assert not filter_text_tokens_match(["炮弹"], photo_tags=["打架"])
+
+
+def test_filter_text_tokens_match_multiple_tags_require_all() -> None:
+    assert filter_text_tokens_match(["打架", "捕食"], photo_tags=["打架", "捕食", "窝"])
+    assert not filter_text_tokens_match(["打架", "捕食"], photo_tags=["打架"])
+
+
+def test_filter_text_tokens_match_filename_or_comment() -> None:
+    assert filter_text_tokens_match(["DSC"], name="DSC06705.jpg", comment="", photo_tags=[])
+    assert filter_text_tokens_match(["nest"], name="a.jpg", comment="nesting pair", photo_tags=[])
+    assert filter_text_tokens_match(
+        ["DSC", "打架"],
+        name="DSC06705.jpg",
+        comment="",
+        photo_tags=["打架"],
+    )
+    assert not filter_text_tokens_match(
+        ["DSC", "打架"],
+        name="DSC06705.jpg",
+        comment="",
+        photo_tags=["捕食"],
+    )
+
+
+def test_path_matches_active_filters_text_tokens_use_tags_and_meta() -> None:
+    tagged = os.path.normpath("C:/photos/tagged.jpg")
+    named = os.path.normpath("C:/photos/DSC06705.jpg")
+    commented = os.path.normpath("C:/photos/other.jpg")
+    plain = os.path.normpath("C:/photos/plain.jpg")
+
+    class _FilterEdit:
+        def __init__(self, text: str) -> None:
+            self._text = text
+
+        def text(self) -> str:
+            return self._text
+
+    class _Harness:
+        _path_matches_active_filters = SuperViewerTaggedFileListPanel._path_matches_active_filters
+        _filter_text_tokens = SuperViewerTaggedFileListPanel._filter_text_tokens
+        _photo_tags_for_filter_path = SuperViewerTaggedFileListPanel._photo_tags_for_filter_path
+        _photo_tags_from_meta_cache = SuperViewerTaggedFileListPanel._photo_tags_from_meta_cache
+
+        def __init__(self) -> None:
+            self._filter_edit = _FilterEdit("打架 捕食")
+            self._filter_pick = False
+            self._filter_reject = False
+            self._filter_min_rating = 0
+            self._filter_focus_status = ""
+            self._active_tag_filters: set[str] = set()
+            self._tag_filter_partial_match = True
+            self._photo_tag_cache = {tagged: {"打架", "捕食"}}
+            self._meta_cache = {
+                commented: {"tags": ["打架", "捕食"], "comment": "ignore"},
+                named: {"comment": "some note"},
+                plain: {},
+            }
+
+        def _path_matches_filters(self, path: str, **kwargs) -> bool:
+            # Mimic base pick/rating path with empty text filter.
+            assert kwargs.get("filter_text") == ""
+            return bool(path)
+
+    harness = _Harness()
+    assert harness._path_matches_active_filters(tagged)
+    assert harness._path_matches_active_filters(commented)
+    assert not harness._path_matches_active_filters(named)
+    assert not harness._path_matches_active_filters(plain)
+
+    harness._filter_edit = _FilterEdit("DSC")
+    assert harness._path_matches_active_filters(named)
+    assert not harness._path_matches_active_filters(tagged)
+
+    harness._filter_edit = _FilterEdit("DSC 打架")
+    harness._photo_tag_cache[named] = {"打架"}
+    assert harness._path_matches_active_filters(named)
+    assert not harness._path_matches_active_filters(tagged)
 
 
 def test_xmp_subject_roundtrip_preserves_multiple_tags(tmp_path: Path) -> None:
