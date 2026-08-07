@@ -45,10 +45,10 @@ def _run(cmd: list[str], *, cwd: Path) -> None:
 
 
 def _app_init_scripts(repo_root: Path) -> list[Path]:
-    return [
+    candidates = [
         repo_root / "SuperViewer" / "init_dev.py",
-        repo_root / "SuperBirdStamp" / "init_dev.py",
     ]
+    return [path for path in candidates if path.is_file()]
 
 
 def main() -> None:
@@ -63,6 +63,8 @@ def main() -> None:
     _reexec_if_needed(repo_python)
 
     scripts = _app_init_scripts(repo_root)
+    if not scripts:
+        raise FileNotFoundError("未找到可用的应用 init_dev.py（例如 SuperViewer/init_dev.py）")
     for script_path in scripts:
         cmd = [sys.executable, str(script_path)]
         if args.dry_run:

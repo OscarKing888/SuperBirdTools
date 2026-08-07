@@ -32,7 +32,7 @@ if "%CLEAN%"=="1" (
   if exist "%DIST_ROOT%" rmdir /s /q "%DIST_ROOT%"
   if exist "%BUILD_ROOT%" rmdir /s /q "%BUILD_ROOT%"
 ) else (
-  echo [INFO] Incremental build cache enabled: %BUILD_ROOT%\merged_win
+  echo [INFO] Incremental build cache enabled: %BUILD_ROOT%\SuperViewer
 )
 if not exist "%DIST_ROOT%" mkdir "%DIST_ROOT%"
 if not exist "%BUILD_ROOT%" mkdir "%BUILD_ROOT%"
@@ -62,8 +62,8 @@ goto launcher_ready
 echo [INFO] Using Python: %PYTHON_EXE%
 "%PYTHON_EXE%" -m PyInstaller %PYINSTALLER_ARGS% ^
   --distpath "%DIST_ROOT%" ^
-  --workpath "%BUILD_ROOT%\merged_win" ^
-  "%ROOT_DIR%build_all_win_merged.spec"
+  --workpath "%BUILD_ROOT%\SuperViewer" ^
+  "%ROOT_DIR%SuperViewer\SuperViewer_win.spec"
 set "BUILD_EXIT_CODE=%ERRORLEVEL%"
 goto after_build
 
@@ -71,8 +71,8 @@ goto after_build
 echo [INFO] Using Python launcher: %PYTHON_LAUNCHER%
 %PYTHON_LAUNCHER% -m PyInstaller %PYINSTALLER_ARGS% ^
   --distpath "%DIST_ROOT%" ^
-  --workpath "%BUILD_ROOT%\merged_win" ^
-  "%ROOT_DIR%build_all_win_merged.spec"
+  --workpath "%BUILD_ROOT%\SuperViewer" ^
+  "%ROOT_DIR%SuperViewer\SuperViewer_win.spec"
 set "BUILD_EXIT_CODE=%ERRORLEVEL%"
 
 :after_build
@@ -80,6 +80,5 @@ if not "%BUILD_EXIT_CODE%"=="0" exit /b %BUILD_EXIT_CODE%
 
 echo [OK] outputs:
 echo   %DIST_ROOT%\SuperViewer\SuperViewer.exe
-echo   %DIST_ROOT%\SuperBirdStamp\SuperBirdStamp.exe
 
 endlocal
