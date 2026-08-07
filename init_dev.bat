@@ -2,6 +2,7 @@
 setlocal
 chcp 65001 >nul
 
+REM 调用 init_dev.py：创建/复用 .venv，安装 pytest，再初始化各应用依赖。
 set "ROOT_DIR=%~dp0"
 cd /d "%ROOT_DIR%"
 

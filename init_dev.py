@@ -39,9 +39,16 @@ def _reexec_if_needed(target_python: Path) -> None:
     raise SystemExit(subprocess.run(cmd, check=False).returncode)
 
 
-def _run(cmd: list[str], *, cwd: Path) -> None:
-    print("$", " ".join(cmd))
+def _run(cmd: list[str], *, cwd: Path, dry_run: bool = False) -> None:
+    print("$", " ".join(cmd), flush=True)
+    if dry_run:
+        return
     subprocess.run(cmd, cwd=str(cwd), check=True)
+
+
+def _install_dev_tools(*, cwd: Path, dry_run: bool) -> None:
+    """Install shared development tools into the repo .venv."""
+    _run([sys.executable, "-m", "pip", "install", "pytest"], cwd=cwd, dry_run=dry_run)
 
 
 def _app_init_scripts(repo_root: Path) -> list[Path]:
@@ -61,6 +68,8 @@ def main() -> None:
 
     repo_python = _ensure_repo_venv(repo_root)
     _reexec_if_needed(repo_python)
+
+    _install_dev_tools(cwd=repo_root, dry_run=args.dry_run)
 
     scripts = _app_init_scripts(repo_root)
     if not scripts:

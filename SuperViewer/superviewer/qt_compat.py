@@ -44,6 +44,7 @@ try:
         QStyledItemDelegate,
         QStackedWidget,
         QSlider,
+        QToolBar,
         QWidgetAction,
     )
     from PyQt6.QtCore import Qt, QMimeData, QSize, QDir, QThread, QTimer, pyqtSignal, QModelIndex, QRect, QPoint
@@ -59,8 +60,10 @@ try:
         QColor,
         QAction,
         QIcon,
+        QKeySequence,
         QFileSystemModel,
         QPainter,
+        QPainterPath,
         QBrush,
         QPen,
         QPolygon,
@@ -106,6 +109,7 @@ except ImportError:
         QStyledItemDelegate,
         QStackedWidget,
         QSlider,
+        QToolBar,
         QWidgetAction,
     )
     from PyQt5.QtCore import Qt, QMimeData, QSize, QDir, QThread, QTimer, pyqtSignal, QModelIndex, QRect, QPoint
@@ -121,7 +125,9 @@ except ImportError:
         QColor,
         QAction,
         QIcon,
+        QKeySequence,
         QPainter,
+        QPainterPath,
         QBrush,
         QPen,
         QPolygon,

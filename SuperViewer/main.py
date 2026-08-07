@@ -6,6 +6,7 @@ Super Viewer - 图片元信息查看器
 """
 
 import json
+import math
 import os
 import sys
 import shutil
@@ -106,11 +107,14 @@ try:
         QFileDialog,
         QHBoxLayout,
         QIcon,
+        QKeySequence,
         QLabel,
         QMainWindow,
         QMessageBox,
         QPalette,
         QPainter,
+        QPainterPath,
+        QBrush,
         QPen,
         QPoint,
         QPixmap,
@@ -119,6 +123,7 @@ try:
         QSplitterHandle,
         QSize,
         QTimer,
+        QToolBar,
         QVBoxLayout,
         QWidget,
         pyqtSignal,
@@ -173,11 +178,14 @@ except ImportError:
         QFileDialog,
         QHBoxLayout,
         QIcon,
+        QKeySequence,
         QLabel,
         QMainWindow,
         QMessageBox,
         QPalette,
         QPainter,
+        QPainterPath,
+        QBrush,
         QPen,
         QPoint,
         QPixmap,
@@ -186,6 +194,7 @@ except ImportError:
         QSplitterHandle,
         QSize,
         QTimer,
+        QToolBar,
         QVBoxLayout,
         QWidget,
         pyqtSignal,
@@ -225,6 +234,92 @@ def _build_preview_grid_line_width_icon(width: int) -> QIcon:
     painter.drawLine(6, int(round(y)), pixmap.width() - 6, int(round(y)))
     painter.end()
     return QIcon(pixmap)
+
+
+def _build_office_undo_redo_icon(*, redo: bool = False) -> QIcon:
+    """Office 风格弯箭头：撤销=向左弯箭（蓝），重做=向右弯箭（绿）。"""
+    logical = 20
+    dpr = 2
+    pixel = logical * dpr
+    pixmap = QPixmap(pixel, pixel)
+    pixmap.fill(QColor(0, 0, 0, 0))
+    painter = QPainter(pixmap)
+    try:
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+    except Exception:
+        try:
+            painter.setRenderHint(QPainter.Antialiasing, True)  # type: ignore[attr-defined]
+        except Exception:
+            pass
+    painter.scale(dpr, dpr)
+    # Base stroke is a left-pointing undo arrow; redo mirrors it to the right.
+    if redo:
+        painter.translate(logical, 0)
+        painter.scale(-1, 1)
+
+    color = QColor(16, 124, 16) if redo else QColor(0, 120, 212)  # green / Office blue
+    pen = QPen(color, 2.1)
+    round_cap = getattr(getattr(qt_compat.Qt, "PenCapStyle", qt_compat.Qt), "RoundCap", None)
+    round_join = getattr(getattr(qt_compat.Qt, "PenJoinStyle", qt_compat.Qt), "RoundJoin", None)
+    if round_cap is None:
+        round_cap = getattr(qt_compat.Qt, "RoundCap", None)
+    if round_join is None:
+        round_join = getattr(qt_compat.Qt, "RoundJoin", None)
+    if round_cap is not None:
+        pen.setCapStyle(round_cap)
+    if round_join is not None:
+        pen.setJoinStyle(round_join)
+    painter.setPen(pen)
+    no_brush = getattr(getattr(qt_compat.Qt, "BrushStyle", qt_compat.Qt), "NoBrush", None)
+    if no_brush is None:
+        no_brush = getattr(qt_compat.Qt, "NoBrush", 0)
+    painter.setBrush(no_brush)
+
+    # Arc: tip at ~132° (upper-left). 0°=east, positive=CCW.
+    cx = logical / 2.0
+    cy = logical / 2.0 + 0.4
+    radius = 5.8
+    tip_deg = 132.0
+    span_deg = -245.0  # clockwise body so the free tip faces left for undo
+    path = QPainterPath()
+    path.arcMoveTo(cx - radius, cy - radius, radius * 2, radius * 2, tip_deg)
+    path.arcTo(cx - radius, cy - radius, radius * 2, radius * 2, tip_deg, span_deg)
+    painter.drawPath(path)
+
+    tip_rad = math.radians(tip_deg)
+    tip_x = cx + radius * math.cos(tip_rad)
+    tip_y = cy - radius * math.sin(tip_rad)
+    # Arrowhead points left along the undo tip.
+    heading = math.pi  # left
+    length = 4.4
+    width = 3.5
+    back_x = tip_x - length * math.cos(heading)
+    back_y = tip_y + length * math.sin(heading)
+    ortho = heading + math.pi / 2.0
+    left = QPoint(
+        int(round(back_x + width * math.cos(ortho))),
+        int(round(back_y - width * math.sin(ortho))),
+    )
+    right = QPoint(
+        int(round(back_x - width * math.cos(ortho))),
+        int(round(back_y + width * math.sin(ortho))),
+    )
+    tip = QPoint(int(round(tip_x - 0.6)), int(round(tip_y)))
+    painter.setBrush(QBrush(color))
+    painter.setPen(QPen(color, 1.0))
+    painter.drawPolygon(QPolygon([tip, left, right]))
+    painter.end()
+
+    icon = QIcon()
+    icon.addPixmap(pixmap)
+    return icon
+
+
+def _tool_button_icon_only_style():
+    style = getattr(getattr(qt_compat.Qt, "ToolButtonStyle", qt_compat.Qt), "ToolButtonIconOnly", None)
+    if style is None:
+        style = getattr(qt_compat.Qt, "ToolButtonIconOnly", 0)
+    return style
 
 
 _log = get_logger("main")
@@ -582,6 +677,8 @@ class MainWindow(QMainWindow):
         self.setMinimumSize(900, 600)
         self.resize(1500, 960)
         self._init_menu_bar()
+        self._undo_action: QAction | None = None
+        self._redo_action: QAction | None = None
         self._main_splitter: TriangleToggleSplitter | None = None
         self._main_splitter_state_save_timer = QTimer(self)
         self._main_splitter_state_save_timer.setSingleShot(True)
@@ -612,6 +709,9 @@ class MainWindow(QMainWindow):
         self._file_list = SuperViewerTaggedFileListPanel()
         self._file_list.setMinimumWidth(520)
         splitter.addWidget(self._file_list)
+        self._init_edit_toolbar()
+        self._file_list.command_history_changed.connect(self._sync_undo_redo_actions)
+        self._sync_undo_redo_actions()
 
         self._pending_dir_browser_sync_file_path = ""
         self._dir_browser_sync_timer = QTimer(self)
@@ -881,6 +981,54 @@ class MainWindow(QMainWindow):
         about_action = QAction("关于...", self)
         about_action.triggered.connect(self._show_about_dialog)
         help_menu.addAction(about_action)
+
+    def _init_edit_toolbar(self) -> None:
+        toolbar = QToolBar("编辑", self)
+        toolbar.setObjectName("editToolBar")
+        toolbar.setMovable(False)
+        toolbar.setIconSize(QSize(20, 20))
+        toolbar.setToolButtonStyle(_tool_button_icon_only_style())
+        self.addToolBar(toolbar)
+
+        undo_action = QAction("撤销", self)
+        undo_action.setIcon(_build_office_undo_redo_icon(redo=False))
+        undo_action.setShortcut(QKeySequence("Ctrl+Z"))
+        undo_action.setToolTip("撤销 (Ctrl+Z)")
+        undo_action.setStatusTip("撤销上一次标签操作")
+        undo_action.triggered.connect(self._undo_photo_tag_command)
+        toolbar.addAction(undo_action)
+        self._undo_action = undo_action
+
+        redo_action = QAction("重做", self)
+        redo_action.setIcon(_build_office_undo_redo_icon(redo=True))
+        redo_action.setShortcut(QKeySequence("Ctrl+Y"))
+        redo_action.setToolTip("重做 (Ctrl+Y)")
+        redo_action.setStatusTip("重做标签操作")
+        redo_action.triggered.connect(self._redo_photo_tag_command)
+        toolbar.addAction(redo_action)
+        self._redo_action = redo_action
+        self._sync_undo_redo_actions()
+
+    def _undo_photo_tag_command(self) -> None:
+        file_list = getattr(self, "_file_list", None)
+        if file_list is None:
+            return
+        file_list.undo()
+
+    def _redo_photo_tag_command(self) -> None:
+        file_list = getattr(self, "_file_list", None)
+        if file_list is None:
+            return
+        file_list.redo()
+
+    def _sync_undo_redo_actions(self) -> None:
+        file_list = getattr(self, "_file_list", None)
+        can_undo = bool(file_list is not None and file_list.can_undo)
+        can_redo = bool(file_list is not None and file_list.can_redo)
+        if self._undo_action is not None:
+            self._undo_action.setEnabled(can_undo)
+        if self._redo_action is not None:
+            self._redo_action.setEnabled(can_redo)
 
     def _send_to_external_app(self, app: dict) -> None:
         """将当前选中的文件发送到指定外部应用。"""

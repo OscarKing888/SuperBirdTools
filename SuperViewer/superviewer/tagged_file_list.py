@@ -7,6 +7,7 @@ import threading
 import time as _time
 from typing import Iterable
 
+from app_common.command_history import CommandHistory, CommandHistoryError
 from app_common.file_browser import FileListPanel
 from app_common.file_browser._browser_core import _thumb_disk_cache_path
 from app_common.file_browser._permissions import mark_write_action_disabled
@@ -21,6 +22,7 @@ from .photo_tags import (
     photo_tag_filter_matches,
 )
 from .qt_compat import QCheckBox, QHBoxLayout, QLabel, QMenu, QThread, QTimer, QToolButton, pyqtSignal
+from .tag_commands import ClearPhotoTagsCommand, SetPhotoTagCommand
 from .tag_menu import add_filterable_tag_actions
 
 
@@ -173,6 +175,7 @@ class SuperViewerTaggedFileListPanel(FileListPanel):
     enable_key_navigation_playback = True
     enable_in_memory_fast_preview = True
     skip_uncached_fast_preview = True
+    command_history_changed = pyqtSignal()
 
     def __init__(
         self,
@@ -207,6 +210,8 @@ class SuperViewerTaggedFileListPanel(FileListPanel):
         self._tag_shutdown_complete = False
         self._tag_shutdown_workers: list[QThread] = []
         self._tag_filter_bar: QHBoxLayout | None = None
+        self._command_history = CommandHistory()
+        self._command_history.add_observer(self._emit_command_history_changed)
         super().__init__(parent)
         self._load_tag_config_if_changed(force=True)
         self._install_tag_filter_bar()
@@ -320,6 +325,16 @@ class SuperViewerTaggedFileListPanel(FileListPanel):
             return set()
         return self._tags_for_path(path)
 
+    def configured_tags_snapshot(self, paths: Iterable[str]) -> dict[str, set[str]]:
+        """Read configured tags for *paths* from the sidecar store (authoritative)."""
+        self._load_tag_config_if_changed()
+        result: dict[str, set[str]] = {}
+        for path in _norm_paths(paths):
+            result[path] = set(
+                self._photo_tag_store.get_tags(path, allowed_tags=self._available_tags)
+            )
+        return result
+
     def set_photo_tag_for_paths(self, paths: Iterable[str], tag: str, enabled: bool) -> None:
         """Set or unset one configured tag for one or more photo paths."""
         if not self._sidecar_writes_allowed("保存标签", warn=True):
@@ -333,6 +348,42 @@ class SuperViewerTaggedFileListPanel(FileListPanel):
             return
         self._load_tag_config_if_changed()
         self._clear_tags_for_paths(_norm_paths(paths))
+
+    @property
+    def can_undo(self) -> bool:
+        return self._command_history.can_undo
+
+    @property
+    def can_redo(self) -> bool:
+        return self._command_history.can_redo
+
+    def undo(self) -> None:
+        """Undo the last photo-tag command when possible."""
+        if not self.can_undo:
+            return
+        if not self._sidecar_writes_allowed("撤销标签", warn=True):
+            return
+        try:
+            self._command_history.undo()
+        except CommandHistoryError:
+            return
+
+    def redo(self) -> None:
+        """Redo the last undone photo-tag command when possible."""
+        if not self.can_redo:
+            return
+        if not self._sidecar_writes_allowed("重做标签", warn=True):
+            return
+        try:
+            self._command_history.redo()
+        except CommandHistoryError:
+            return
+
+    def _emit_command_history_changed(self) -> None:
+        self.command_history_changed.emit()
+
+    def _clear_command_history(self) -> None:
+        self._command_history.clear()
 
     def _set_tag_config_directory(self, path: str | os.PathLike[str] | None) -> bool:
         if self._static_tag_config_path:
@@ -349,6 +400,7 @@ class SuperViewerTaggedFileListPanel(FileListPanel):
         self._tag_config_scope_key = scope_key
         self._tag_config = PhotoTagConfig(config_path)
         self._tag_config_signature = None
+        self._clear_command_history()
         return True
 
     def load_directory(
@@ -1143,13 +1195,37 @@ class SuperViewerTaggedFileListPanel(FileListPanel):
     def _set_tag_for_paths(self, paths: list[str], tag: str, enabled: bool) -> None:
         if not self._sidecar_writes_allowed("保存标签", warn=True):
             return
+        self._load_tag_config_if_changed()
+        cmd = SetPhotoTagCommand(self, paths, tag, enabled)
+        if not cmd.would_change():
+            return
+        self._command_history.add_command(cmd)
+
+    def _clear_tags_for_paths(self, paths: list[str]) -> None:
+        if not self._sidecar_writes_allowed("清除标签", warn=True):
+            return
+        self._load_tag_config_if_changed()
+        cmd = ClearPhotoTagsCommand(self, paths)
+        if not cmd.would_change():
+            return
+        self._command_history.add_command(cmd)
+
+    def _apply_set_tag_for_paths(self, paths: list[str], tag: str, enabled: bool) -> None:
+        if not self._sidecar_writes_allowed("保存标签", warn=True):
+            return
         probe_t0 = perf_counter()
         try:
             write_t0 = perf_counter()
             self._photo_tag_store.set_tag_for_paths(paths, tag, enabled, allowed_tags=self._available_tags)
             write_ms = elapsed_ms(write_t0)
         except Exception as exc:
-            _log.warning("[_set_tag_for_paths] failed tag=%r enabled=%s paths=%s: %s", tag, enabled, len(paths), exc)
+            _log.warning(
+                "[_apply_set_tag_for_paths] failed tag=%r enabled=%s paths=%s: %s",
+                tag,
+                enabled,
+                len(paths),
+                exc,
+            )
             return
         cache_t0 = perf_counter()
         self._update_photo_tag_cache_for_paths(paths)
@@ -1175,7 +1251,7 @@ class SuperViewerTaggedFileListPanel(FileListPanel):
             elapsed_ms(probe_t0),
         )
 
-    def _clear_tags_for_paths(self, paths: list[str]) -> None:
+    def _apply_clear_tags_for_paths(self, paths: list[str]) -> None:
         if not self._sidecar_writes_allowed("清除标签", warn=True):
             return
         probe_t0 = perf_counter()
@@ -1184,7 +1260,7 @@ class SuperViewerTaggedFileListPanel(FileListPanel):
             self._photo_tag_store.clear_tags_for_paths(paths, allowed_tags=self._available_tags)
             write_ms = elapsed_ms(write_t0)
         except Exception as exc:
-            _log.warning("[_clear_tags_for_paths] failed paths=%s: %s", len(paths), exc)
+            _log.warning("[_apply_clear_tags_for_paths] failed paths=%s: %s", len(paths), exc)
             return
         cache_t0 = perf_counter()
         self._update_photo_tag_cache_for_paths(paths)
@@ -1200,6 +1276,49 @@ class SuperViewerTaggedFileListPanel(FileListPanel):
         perf_log(
             _log,
             "[tag.write] action=clear paths=%s write_ms=%.1f cache_ms=%.1f refresh_ms=%.1f filter_ms=%.1f total_ms=%.1f",
+            len(paths),
+            write_ms,
+            cache_ms,
+            refresh_ms,
+            filter_ms,
+            elapsed_ms(probe_t0),
+        )
+
+    def _apply_restore_tags_for_paths(self, tags_by_path: dict[str, set[str]]) -> None:
+        if not self._sidecar_writes_allowed("恢复标签", warn=True):
+            return
+        paths = _norm_paths(tags_by_path.keys())
+        if not paths:
+            return
+        probe_t0 = perf_counter()
+        try:
+            write_t0 = perf_counter()
+            for path in paths:
+                for tag in sorted(tags_by_path.get(path, set())):
+                    self._photo_tag_store.set_tag_for_paths(
+                        [path],
+                        tag,
+                        True,
+                        allowed_tags=self._available_tags,
+                    )
+            write_ms = elapsed_ms(write_t0)
+        except Exception as exc:
+            _log.warning("[_apply_restore_tags_for_paths] failed paths=%s: %s", len(paths), exc)
+            return
+        cache_t0 = perf_counter()
+        self._update_photo_tag_cache_for_paths(paths)
+        cache_ms = elapsed_ms(cache_t0)
+        refresh_t0 = perf_counter()
+        self._refresh_metadata_state_for_paths(paths)
+        refresh_ms = elapsed_ms(refresh_t0)
+        filter_ms = 0.0
+        if self._active_tag_filters:
+            filter_t0 = perf_counter()
+            self._apply_filter()
+            filter_ms = elapsed_ms(filter_t0)
+        perf_log(
+            _log,
+            "[tag.write] action=restore paths=%s write_ms=%.1f cache_ms=%.1f refresh_ms=%.1f filter_ms=%.1f total_ms=%.1f",
             len(paths),
             write_ms,
             cache_ms,
