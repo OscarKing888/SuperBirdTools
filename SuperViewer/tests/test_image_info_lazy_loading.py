@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import struct
 import threading
 import time
 from pathlib import Path
@@ -178,6 +179,27 @@ def test_hidden_image_info_preview_does_no_pixmap_work_and_uses_true_size(
         image_path = tmp_path / "header.jpg"
         Image.new("RGB", (321, 123), (20, 30, 40)).save(image_path, "JPEG")
         assert panel._image_size(str(image_path), metadata={}) == (321, 123)
+        assert provider_calls == []
+
+        psd_path = tmp_path / "header.psd"
+        psd_path.write_bytes(
+            struct.pack(
+                ">4sH6sHIIHHIIIH",
+                b"8BPS",
+                1,
+                b"\x00" * 6,
+                3,
+                45,
+                123,
+                16,
+                3,
+                0,
+                0,
+                0,
+                0,
+            )
+        )
+        assert panel._image_size(str(psd_path), metadata={}) == (123, 45)
         assert provider_calls == []
 
         assert panel._image_size(str(tmp_path / "missing.jpg"), metadata={}) == (640, 480)

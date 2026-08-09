@@ -21,8 +21,9 @@ from app_common.focus_calc import (
     resolve_focus_camera_type_from_metadata,
     resolve_focus_display_orientation,
 )
-from app_common.image_formats import IMAGE_EXTENSIONS
+from app_common.image_formats import IMAGE_EXTENSIONS, PHOTOSHOP_EXTENSIONS
 from app_common.log import get_logger
+from app_common.psd_composite import load_psd_composite_rgb
 from app_common.raw_focus_metadata import read_raw_embedded_focus_metadata
 from app_common.report_db import ReportDB, find_report_root
 from app_common.thumb_stream import get_raw_preview_jpeg
@@ -138,6 +139,32 @@ def _load_standard_pixmap_qt(path: str) -> QPixmap | None:
         return None
 
 
+def _load_psd_composite_pixmap(path: str) -> QPixmap | None:
+    """在 Qt/Pillow 无法读取时，加载 PSD 文件内的合成 RGB 图。"""
+    if not path or Path(path).suffix.lower() not in PHOTOSHOP_EXTENSIONS:
+        return None
+    try:
+        result = load_psd_composite_rgb(path, None)
+        if not result:
+            return None
+        data, width, height = result
+        width = int(width)
+        height = int(height)
+        if width <= 0 or height <= 0:
+            return None
+        fmt_container = getattr(QImage, "Format", QImage)
+        fmt = getattr(fmt_container, "Format_RGB888", None)
+        if fmt is None:
+            fmt = getattr(QImage, "Format_RGB888")
+        qimg = QImage(bytes(data), width, height, width * 3, fmt).copy()
+        if qimg.isNull():
+            return None
+        pix = QPixmap.fromImage(qimg)
+        return pix if not pix.isNull() else None
+    except Exception:
+        return None
+
+
 def _load_raw_full_as_pixmap(path: str) -> QPixmap | None:
     """使用 rawpy 解码 RAW 为完整原图并转为 QPixmap（应用 EXIF 方向）。"""
     if rawpy is None or Path(path).suffix.lower() not in RAW_EXTENSIONS:
@@ -211,6 +238,8 @@ def _load_preview_pixmap_for_canvas(path: str) -> QPixmap | None:
             if pix.loadFromData(thumb_data):
                 pix = _apply_orientation_to_pixmap(pix, _get_orientation_from_file(path))
                 return pix
+    if pix is None or pix.isNull():
+        pix = _load_psd_composite_pixmap(path)
     if pix is None or pix.isNull():
         pix = QPixmap(path)
     if pix is not None and not pix.isNull() and is_raw:

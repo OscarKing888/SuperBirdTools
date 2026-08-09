@@ -1,4 +1,5 @@
 import os
+import struct
 import sys
 import threading
 import time
@@ -6,6 +7,27 @@ from pathlib import Path
 
 from SuperViewer.superviewer import preview_panel
 from SuperViewer.superviewer.qt_compat import QApplication, QImage, QPixmap
+
+
+def _write_preview_psd(path: Path, width: int = 6, height: int = 4) -> None:
+    header = struct.pack(
+        ">4sH6sHIIHH",
+        b"8BPS",
+        1,
+        b"\x00" * 6,
+        3,
+        height,
+        width,
+        16,
+        3,
+    )
+    sections = struct.pack(">III", 0, 0, 0)
+    pixels = width * height
+    planes = b"".join(
+        struct.pack(f">{pixels}H", *([value] * pixels))
+        for value in (65535, 32768, 0)
+    )
+    path.write_bytes(header + sections + b"\x00\x00" + planes)
 
 
 def test_sync_full_preview_policy_uses_pixel_threshold(monkeypatch, tmp_path: Path) -> None:
@@ -27,6 +49,55 @@ def test_sync_full_preview_policy_never_syncs_raw(monkeypatch, tmp_path: Path) -
     monkeypatch.setattr(preview_panel, "_expected_image_pixel_count", lambda path: 1)
 
     assert not preview_panel._should_load_full_preview_sync(str(raw))
+
+
+def test_16_bit_psd_uses_header_sync_policy_and_full_decoder(tmp_path: Path) -> None:
+    app = QApplication.instance() or QApplication([])
+    psd_path = tmp_path / "16-bit.psd"
+    _write_preview_psd(psd_path)
+
+    assert preview_panel._expected_image_pixel_count(str(psd_path)) == 24
+    assert preview_panel._should_load_full_preview_sync(str(psd_path))
+    decoded = preview_panel._load_full_preview_qimage(str(psd_path))
+    assert decoded is not None and not decoded.isNull()
+    assert (decoded.width(), decoded.height()) == (6, 4)
+
+    panel = preview_panel.PreviewPanel()
+    try:
+        panel.set_image(str(psd_path), load_full=True)
+        assert panel._full_preview_loaded
+        assert not panel._fast_preview_only
+        assert not panel._full_preview_timer.isActive()
+        assert panel.get_preview_image_size() == (6, 4)
+        assert panel.source_pixmap_for_path(str(psd_path)) is not None
+    finally:
+        panel.shutdown()
+        panel.close()
+    assert app is QApplication.instance()
+
+
+def test_16_bit_psd_quick_frame_exports_full_resolution_overlay(tmp_path: Path) -> None:
+    app = QApplication.instance() or QApplication([])
+    psd_path = tmp_path / "overlay.psd"
+    _write_preview_psd(psd_path)
+    quick = QPixmap(3, 2)
+    quick.fill()
+
+    panel = preview_panel.PreviewPanel()
+    try:
+        panel.set_composition_grid_mode("thirds")
+        panel.set_quick_pixmap(str(psd_path), quick, quick_size=128)
+        assert panel.source_pixmap_for_path(str(psd_path)) is None
+
+        rendered = panel.render_source_pixmap_with_overlays()
+        assert rendered is not None and not rendered.isNull()
+        assert (rendered.width(), rendered.height()) == (6, 4)
+        assert panel._full_preview_loaded
+        assert not panel._fast_preview_only
+    finally:
+        panel.shutdown()
+        panel.close()
+    assert app is QApplication.instance()
 
 
 def test_quick_preview_target_uses_requested_thumbnail_size() -> None:

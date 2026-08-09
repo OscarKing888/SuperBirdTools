@@ -11,9 +11,10 @@ from pathlib import Path
 from PIL import Image, ImageOps
 
 from app_common import thumb_stream
-from app_common.image_formats import HEIF_EXTENSIONS, RAW_EXTENSIONS
+from app_common.image_formats import HEIF_EXTENSIONS, PHOTOSHOP_EXTENSIONS, RAW_EXTENSIONS
 from app_common.log import get_logger
 from app_common.perf_probe import perf_log
+from app_common.psd_composite import read_psd_composite_size
 from app_common.preview_canvas import (
     PreviewCanvas,
     PreviewOverlayOptions,
@@ -182,6 +183,11 @@ def _load_quick_preview_pixmap(path: str, target_size: int) -> QPixmap | None:
 def _expected_image_pixel_count(path: str) -> int:
     if not path or not os.path.isfile(path):
         return 0
+    ext = Path(path).suffix.lower()
+    if ext in PHOTOSHOP_EXTENSIONS:
+        psd_size = read_psd_composite_size(path)
+        if psd_size is not None:
+            return max(0, int(psd_size[0])) * max(0, int(psd_size[1]))
     try:
         reader = QImageReader(path)
         try:
@@ -194,7 +200,6 @@ def _expected_image_pixel_count(path: str) -> int:
             return pixels
     except Exception:
         pass
-    ext = Path(path).suffix.lower()
     if ext in HEIF_EXTENSIONS:
         _register_heif_pil_opener()
     try:
@@ -311,6 +316,10 @@ def _load_full_preview_qimage_pil(path: str) -> QImage | None:
                 pass
             return _qimage_from_pil_image(img)
     except Exception:
+        if Path(path).suffix.lower() in PHOTOSHOP_EXTENSIONS:
+            return _qimage_from_rgb_result(
+                thumb_stream.load_psd_composite_rgb(path, None)
+            )
         return None
 
 

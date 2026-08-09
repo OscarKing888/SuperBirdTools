@@ -26,6 +26,7 @@ from app_common.file_browser._browser_core import (
 )
 from app_common.log import get_logger
 from app_common.perf_probe import perf_log
+from app_common.psd_composite import read_psd_composite_size
 
 from .image_info_tab_base import ImageInfoTabPanel
 from .qt_compat import (
@@ -744,6 +745,9 @@ class ImageInfoTabPanel_ImageInfo(ImageInfoTabPanel):
         metadata_width, metadata_height = self._metadata_image_size(metadata)
         if metadata_width and metadata_height:
             return metadata_width, metadata_height
+        psd_size = read_psd_composite_size(path)
+        if psd_size is not None:
+            return psd_size
         try:
             reader = QImageReader(path)
             size = reader.size()
