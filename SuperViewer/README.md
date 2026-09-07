@@ -39,6 +39,23 @@
 * 自定义隐藏标签
 [![自定义隐藏标签](./manual/images/CustomEditHiddenTag.png)](./manual/images/CustomEditHiddenTag.png)
 
+## 标签分组与搜索
+
+`tags.cfg` 兼容原有每行一个标签的格式，也可用缩进组织分组。例如：
+
+```text
+鸟类
+    白鹭
+    苍鹭
+行为
+    飞行
+    筑巢
+```
+
+分组只用于菜单导航，只有最末级标签会写入照片的 XMP sidecar。程序优先读取照片库 `.superpicky/tags.cfg`；没有库配置时使用 `SuperViewer/tags.cfg`。
+
+文件列表的标签菜单支持搜索分组或标签，并可连续勾选。文件名搜索框同时匹配文件名、备注和标签；空格分开的多个关键词需要全部命中，但可以分别命中不同字段。例如 `白鹭 飞行` 可匹配同时有这两个标签的照片。评级、精选、焦点等已有过滤条件仍同时生效。
+
 # 关于作者
 小红书 @追鸟奇遇记 https://xhslink.com/m/A2cowPsYj8P
 

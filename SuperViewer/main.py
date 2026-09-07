@@ -433,6 +433,7 @@ class MainWindow(QMainWindow):
             write_enabled_provider=self._file_writes_allowed,
             write_disabled_tooltip_provider=self._file_writes_disabled_message,
             tag_write_enabled_provider=self._sidecar_writes_allowed,
+            available_tag_tree_provider=self._file_list.available_photo_tag_tree,
             parent=self.image_info_tabs,
         )
         self.tags_info_panel = ImageInfoTabPanel_Tags(

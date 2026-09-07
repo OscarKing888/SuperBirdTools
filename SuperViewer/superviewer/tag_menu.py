@@ -3,31 +3,259 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Iterable
+from dataclasses import dataclass, field
+import weakref
 
-from .qt_compat import QLineEdit, QMenu, QTimer, QWidgetAction
+try:
+    from PyQt6.QtCore import QEvent, QObject, QPoint, QSignalBlocker
+except ImportError:  # pragma: no cover - PyQt5 fallback
+    from PyQt5.QtCore import QEvent, QObject, QPoint, QSignalBlocker
+
+from app_common.log import get_logger
+
+from .photo_tags import TagTreeNode, iter_tag_tree_leaves
+from .qt_compat import (
+    QApplication,
+    QCheckBox,
+    QLineEdit,
+    QMenu,
+    QVBoxLayout,
+    QWidget,
+    QWidgetAction,
+)
 
 
-def add_filterable_tag_actions(
-    menu: QMenu,
-    tags: Iterable[str],
-    on_triggered: Callable[[str, bool], None],
-    *,
-    checkable: bool = False,
-    checked_provider: Callable[[str], bool] | None = None,
-    filter_placeholder: str = "过滤标签…",
-    no_match_text: str = "没有匹配的标签",
-) -> list:
-    """Add tag actions to ``menu`` with a filter edit at the top."""
-    clean_tags = []
-    seen = set()
+_log = get_logger("superviewer.tag_menu")
+
+
+def _mouse_button_event_types() -> tuple:
+    if hasattr(QEvent, "Type"):
+        return (
+            QEvent.Type.MouseButtonPress,
+            QEvent.Type.MouseButtonRelease,
+            QEvent.Type.MouseButtonDblClick,
+        )
+    return (
+        QEvent.MouseButtonPress,
+        QEvent.MouseButtonRelease,
+        QEvent.MouseButtonDblClick,
+    )
+
+
+def _event_global_pos(event) -> QPoint:
+    if hasattr(event, "globalPosition"):
+        return event.globalPosition().toPoint()
+    return event.globalPos()
+
+
+def _root_context_menu(menu: QMenu) -> QMenu:
+    root = menu
+    parent = menu.parentWidget()
+    while isinstance(parent, QMenu):
+        root = parent
+        parent = parent.parentWidget()
+    return root
+
+
+def _iter_visible_menus(root: QMenu):
+    yield root
+    for action in root.actions():
+        child = action.menu() if hasattr(action, "menu") else None
+        if child is not None and child.isVisible():
+            yield from _iter_visible_menus(child)
+
+
+def _global_pos_in_menus(root: QMenu, global_pos: QPoint) -> bool:
+    for menu in _iter_visible_menus(root):
+        local = menu.mapFromGlobal(global_pos)
+        if menu.rect().contains(local):
+            return True
+    return False
+
+
+class _KeepOpenMenuFilter(QObject):
+    """Prevent QMenu from dismissing when clicking empty areas or widget actions."""
+
+    _MOUSE_TYPES = None
+
+    def eventFilter(self, obj, event) -> bool:  # noqa: N802 - Qt API
+        if self._MOUSE_TYPES is None:
+            type(self)._MOUSE_TYPES = _mouse_button_event_types()
+        if event.type() not in self._MOUSE_TYPES:
+            return False
+        if not isinstance(obj, QMenu):
+            return False
+        action = obj.actionAt(event.pos())
+        # Empty chrome / embedded widgets: keep menu open.
+        # Plain QAction (e.g. "清除所有TAG") still goes through and can dismiss.
+        if action is None or isinstance(action, QWidgetAction):
+            return True
+        return False
+
+
+class _OutsideClickCloseFilter(QObject):
+    """Close the whole context-menu tree when pressing outside any visible menu."""
+
+    _PRESS_TYPE = None
+
+    def __init__(self, root_menu: QMenu) -> None:
+        super().__init__(root_menu)
+        self._root_menu_ref = weakref.ref(root_menu)
+
+    def eventFilter(self, obj, event) -> bool:  # noqa: N802 - Qt API
+        if self._PRESS_TYPE is None:
+            if hasattr(QEvent, "Type"):
+                type(self)._PRESS_TYPE = QEvent.Type.MouseButtonPress
+            else:
+                type(self)._PRESS_TYPE = QEvent.MouseButtonPress
+        if event.type() != self._PRESS_TYPE:
+            return False
+        root = self._root_menu_ref()
+        if root is None or not root.isVisible():
+            return False
+        global_pos = _event_global_pos(event)
+        if _global_pos_in_menus(root, global_pos):
+            return False
+        # Outside the entire right-click menu tree: dismiss everything.
+        # Do not consume the event so the click can still select another image.
+        root.close()
+        return False
+
+
+def _install_keep_open_guard(menu: QMenu) -> None:
+    if getattr(menu, "_sv_keep_open_guard", None) is not None:
+        return
+    guard = _KeepOpenMenuFilter(menu)
+    menu.installEventFilter(guard)
+    menu._sv_keep_open_guard = guard  # type: ignore[attr-defined]
+
+
+def _install_outside_close_guard(menu: QMenu) -> None:
+    """Own the application event filter only while the root menu is visible."""
+    root = _root_context_menu(menu)
+    if getattr(root, "_sv_outside_close_wired", False):
+        return
+    app = QApplication.instance()
+    if app is None:
+        return
+    root._sv_outside_close_wired = True  # type: ignore[attr-defined]
+    root_ref = weakref.ref(root)
+
+    def _attach() -> None:
+        current_root = root_ref()
+        if current_root is None or getattr(current_root, "_sv_outside_close_guard", None) is not None:
+            return
+        guard = _OutsideClickCloseFilter(current_root)
+        app.installEventFilter(guard)
+        current_root._sv_outside_close_guard = guard  # type: ignore[attr-defined]
+
+    def _cleanup() -> None:
+        current_root = root_ref()
+        guard = getattr(current_root, "_sv_outside_close_guard", None)
+        if guard is None:
+            return
+        app.removeEventFilter(guard)
+        current_root._sv_outside_close_guard = None  # type: ignore[attr-defined]
+        guard.deleteLater()
+
+    root.aboutToShow.connect(_attach)
+    root.aboutToHide.connect(_cleanup)
+    if root.isVisible():
+        _attach()
+
+
+def _nodes_from_flat_tags(tags: Iterable[str] | None) -> list[TagTreeNode]:
+    nodes: list[TagTreeNode] = []
+    seen: set[str] = set()
     for tag in tags or []:
         clean = str(tag or "").strip()
         if not clean or clean in seen:
             continue
         seen.add(clean)
-        clean_tags.append(clean)
-    if not clean_tags:
+        nodes.append(TagTreeNode(name=clean))
+    return nodes
+
+
+@dataclass
+class _LeafEntry:
+    tag: str
+    set_visible: Callable[[bool], None]
+    action: object | None = None
+
+
+@dataclass
+class _GroupEntry:
+    name: str
+    menu_action: object
+    children: list["_MenuEntry"] = field(default_factory=list)
+
+
+_MenuEntry = _LeafEntry | _GroupEntry
+
+
+def _apply_entry_filter(entry: _MenuEntry, needle: str) -> bool:
+    """Show/hide entry for *needle*; return whether anything visible remains."""
+    if isinstance(entry, _LeafEntry):
+        visible = not needle or needle in entry.tag.casefold()
+        entry.set_visible(visible)
+        return visible
+    visible_children = 0
+    child_needle = "" if needle in entry.name.casefold() else needle
+    for child in entry.children:
+        if _apply_entry_filter(child, child_needle):
+            visible_children += 1
+    visible = visible_children > 0
+    try:
+        entry.menu_action.setVisible(visible)
+    except Exception:
+        pass
+    return visible
+
+
+def add_filterable_tag_actions(
+    menu: QMenu,
+    tags: Iterable[str] | None = None,
+    on_triggered: Callable[[str, bool], None] | None = None,
+    *,
+    tag_tree: Iterable[TagTreeNode] | None = None,
+    checkable: bool = False,
+    checked_provider: Callable[[str], bool] | None = None,
+    keep_open: bool = False,
+    leaf_filter: Callable[[str], bool] | None = None,
+    filter_placeholder: str = "过滤标签…",
+    no_match_text: str = "没有匹配的标签",
+) -> list:
+    """Add tag actions to ``menu`` with a filter edit at the top.
+
+    Pass ``tag_tree`` for nested group/leaf menus. If ``tags`` is also supplied,
+    it limits the allowed leaves without removing their parent groups. When
+    ``tag_tree`` is omitted, ``tags`` is a flat leaf list (backward compatible).
+
+    When ``keep_open`` and ``checkable`` are both True, leaf tags use embedded
+    checkbox widgets so clicks do not dismiss the parent ``QMenu``. Clicks
+    outside the whole context-menu tree still close every open menu.
+    """
+    if on_triggered is None:
+        raise TypeError("on_triggered is required")
+
+    if tag_tree is not None:
+        nodes = list(tag_tree)
+        if tags is not None:
+            allowed = {str(tag or "").strip() for tag in tags}
+            nodes = _filter_tree_leaves(nodes, lambda tag: tag in allowed)
+    else:
+        nodes = _nodes_from_flat_tags(tags)
+
+    if leaf_filter is not None:
+        nodes = _filter_tree_leaves(nodes, leaf_filter)
+
+    if not iter_tag_tree_leaves(nodes):
         return []
+
+    use_keep_open = bool(keep_open and checkable)
+    if use_keep_open:
+        _install_keep_open_guard(menu)
+        _install_outside_close_guard(menu)
 
     filter_edit = QLineEdit(menu)
     filter_edit.setPlaceholderText(filter_placeholder)
@@ -38,17 +266,58 @@ def add_filterable_tag_actions(
     menu.addAction(filter_action)
     menu.addSeparator()
 
-    tag_actions = []
-    for tag in clean_tags:
-        action = menu.addAction(tag)
-        if checkable:
-            action.setCheckable(True)
+    checkboxes_by_tag: dict[str, list] = {}
+    checked_state: dict[str, bool] = {}
+
+    def on_leaf_toggled(tag: str, checked: bool) -> None:
+        before = checked_state.get(tag, not checked)
+        succeeded = False
+        try:
+            on_triggered(tag, checked)
+            succeeded = True
+        except Exception as exc:
+            _log.warning("[tag_menu] tag callback failed tag=%r: %s", tag, exc)
+        finally:
+            current = checked if succeeded else before
             if checked_provider is not None:
-                action.setChecked(bool(checked_provider(tag)))
-        action.triggered.connect(
-            lambda checked=False, t=tag: on_triggered(t, bool(checked))
-        )
-        tag_actions.append((tag, action))
+                try:
+                    current = bool(checked_provider(tag))
+                except Exception as exc:
+                    current = before
+                    _log.warning("[tag_menu] tag state refresh failed tag=%r: %s", tag, exc)
+            checked_state[tag] = current
+            for checkbox_ref in checkboxes_by_tag.get(tag, []):
+                checkbox = checkbox_ref()
+                if checkbox is None:
+                    continue
+                try:
+                    blocker = QSignalBlocker(checkbox)
+                    try:
+                        checkbox.setChecked(current)
+                    finally:
+                        del blocker
+                except RuntimeError:
+                    # A callback may legitimately close and destroy its menu.
+                    continue
+
+    entries, leaf_actions = _populate_tag_tree_menu(
+        menu,
+        nodes,
+        on_leaf_toggled if use_keep_open else on_triggered,
+        checkable=checkable,
+        checked_provider=checked_provider,
+        keep_open=use_keep_open,
+    )
+    if use_keep_open:
+        def collect_checkboxes(items: list[_MenuEntry]) -> None:
+            for entry in items:
+                if isinstance(entry, _GroupEntry):
+                    collect_checkboxes(entry.children)
+                else:
+                    checked_state[entry.tag] = bool(entry.action.isChecked())
+                    checkboxes_by_tag.setdefault(entry.tag, []).append(weakref.ref(entry.action))
+
+        collect_checkboxes(entries)
 
     empty_match_action = menu.addAction(no_match_text)
     empty_match_action.setEnabled(False)
@@ -57,16 +326,175 @@ def add_filterable_tag_actions(
     def apply_filter(text: str) -> None:
         needle = str(text or "").strip().casefold()
         visible_count = 0
-        for tag, action in tag_actions:
-            visible = not needle or needle in tag.casefold()
-            action.setVisible(visible)
-            if visible:
+        for entry in entries:
+            if _apply_entry_filter(entry, needle):
                 visible_count += 1
         empty_match_action.setVisible(visible_count == 0)
 
     filter_edit.textChanged.connect(apply_filter)
-    QTimer.singleShot(0, filter_edit.setFocus)
-    return [action for _tag, action in tag_actions]
+    # Qt owns this connection; never queue a bound method beyond menu lifetime.
+    menu.aboutToShow.connect(filter_edit.setFocus)
+    return leaf_actions
+
+
+def _filter_tree_leaves(
+    nodes: list[TagTreeNode],
+    leaf_filter: Callable[[str], bool],
+) -> list[TagTreeNode]:
+    """Return a pruned copy keeping groups that still contain matching leaves."""
+    result: list[TagTreeNode] = []
+    for node in nodes:
+        if node.is_leaf:
+            if leaf_filter(node.name):
+                result.append(TagTreeNode(name=node.name))
+            continue
+        children = _filter_tree_leaves(list(node.children), leaf_filter)
+        if children:
+            result.append(TagTreeNode(name=node.name, children=children))
+    return result
+
+
+def _populate_tag_tree_menu(
+    menu: QMenu,
+    nodes: list[TagTreeNode],
+    on_triggered: Callable[[str, bool], None],
+    *,
+    checkable: bool,
+    checked_provider: Callable[[str], bool] | None,
+    keep_open: bool,
+) -> tuple[list[_MenuEntry], list]:
+    entries: list[_MenuEntry] = []
+    leaf_actions: list = []
+
+    if keep_open:
+        _install_keep_open_guard(menu)
+        _install_outside_close_guard(menu)
+
+    # Collect consecutive leaves into one panel when keep_open so padding clicks
+    # stay inside a QWidgetAction; preserve group/leaf order from the config.
+    pending_leaves: list[TagTreeNode] = []
+
+    def flush_leaves() -> None:
+        nonlocal pending_leaves
+        if not pending_leaves:
+            return
+        if keep_open:
+            panel_entries, actions = _add_keep_open_leaf_panel(
+                menu,
+                [node.name for node in pending_leaves],
+                on_triggered,
+                checked_provider=checked_provider,
+            )
+            entries.extend(panel_entries)
+            leaf_actions.extend(actions)
+        else:
+            for leaf in pending_leaves:
+                action = menu.addAction(leaf.name)
+                if checkable:
+                    action.setCheckable(True)
+                    if checked_provider is not None:
+                        action.setChecked(bool(checked_provider(leaf.name)))
+                action.triggered.connect(
+                    lambda checked=False, t=leaf.name: on_triggered(t, bool(checked))
+                )
+                entries.append(
+                    _LeafEntry(
+                        tag=leaf.name,
+                        set_visible=action.setVisible,
+                        action=action,
+                    )
+                )
+                leaf_actions.append(action)
+        pending_leaves = []
+
+    for node in nodes:
+        if node.is_group:
+            flush_leaves()
+            submenu = menu.addMenu(node.name)
+            child_entries, child_actions = _populate_tag_tree_menu(
+                submenu,
+                list(node.children),
+                on_triggered,
+                checkable=checkable,
+                checked_provider=checked_provider,
+                keep_open=keep_open,
+            )
+            entries.append(
+                _GroupEntry(
+                    name=node.name,
+                    menu_action=submenu.menuAction(),
+                    children=child_entries,
+                )
+            )
+            leaf_actions.extend(child_actions)
+        else:
+            pending_leaves.append(node)
+    flush_leaves()
+    return entries, leaf_actions
+
+
+def _add_keep_open_leaf_panel(
+    menu: QMenu,
+    tags: list[str],
+    on_triggered: Callable[[str, bool], None],
+    *,
+    checked_provider: Callable[[str], bool] | None,
+) -> tuple[list[_LeafEntry], list]:
+    """Build one full-width panel so the whole leaf region absorbs clicks."""
+    panel = QWidget(menu)
+    layout = QVBoxLayout(panel)
+    layout.setContentsMargins(6, 6, 6, 6)
+    layout.setSpacing(2)
+
+    leaf_entries: list[_LeafEntry] = []
+    for tag in tags:
+        checkbox = QCheckBox(tag, panel)
+        checkbox.setStyleSheet("QCheckBox { padding: 4px 8px; min-width: 180px; }")
+        if checked_provider is not None:
+            checkbox.setChecked(bool(checked_provider(tag)))
+        checkbox.toggled.connect(
+            lambda checked=False, t=tag: on_triggered(t, bool(checked))
+        )
+        layout.addWidget(checkbox)
+        leaf_entries.append(
+            _LeafEntry(tag=tag, set_visible=checkbox.setVisible, action=checkbox)
+        )
+
+    panel_action = QWidgetAction(menu)
+    panel_action.setDefaultWidget(panel)
+    menu.addAction(panel_action)
+
+    # Hide the whole panel when every leaf is filtered out.
+    def set_panel_visible_from_children() -> None:
+        # A matching child of a closed submenu is not globally visible yet.
+        # Track its explicit hidden state so searching can reveal it again.
+        any_visible = any(
+            not entry.action.isHidden()  # type: ignore[union-attr]
+            for entry in leaf_entries
+            if entry.action is not None
+        )
+        panel_action.setVisible(any_visible)
+
+    wrapped: list[_LeafEntry] = []
+    for entry in leaf_entries:
+        checkbox = entry.action
+
+        def _make_setter(cb, refresh=set_panel_visible_from_children):
+            def _set(visible: bool) -> None:
+                cb.setVisible(visible)
+                refresh()
+
+            return _set
+
+        wrapped.append(
+            _LeafEntry(
+                tag=entry.tag,
+                set_visible=_make_setter(checkbox),
+                action=checkbox,
+            )
+        )
+
+    return wrapped, [panel_action]
 
 
 __all__ = [

@@ -29,6 +29,7 @@ from app_common.perf_probe import perf_log
 from app_common.psd_composite import read_psd_composite_size
 
 from .image_info_tab_base import ImageInfoTabPanel
+from .photo_tags import TagTreeNode
 from .qt_compat import (
     QFrame,
     QHBoxLayout,
@@ -232,8 +233,11 @@ class ImageInfoTabPanel_ImageInfo(ImageInfoTabPanel):
         write_disabled_tooltip_provider: Callable[..., str] | None = None,
         tag_write_enabled_provider: Callable[[], bool] | None = None,
         parent=None,
+        *,
+        available_tag_tree_provider: Callable[[], list[TagTreeNode]] | None = None,
     ) -> None:
         self._available_tags_provider = available_tags_provider
+        self._available_tag_tree_provider = available_tag_tree_provider
         self._tags_for_path_provider = tags_for_path_provider
         self._set_tag_callback = set_tag_callback
         self._rename_callback = rename_callback
@@ -458,6 +462,15 @@ class ImageInfoTabPanel_ImageInfo(ImageInfoTabPanel):
             QMessageBox.warning(self, "TAG", f"读取标签配置失败：\n{exc}")
             return []
 
+    def _load_available_tag_tree(self) -> list[TagTreeNode]:
+        if self._available_tag_tree_provider is not None:
+            try:
+                return list(self._available_tag_tree_provider())
+            except Exception as exc:
+                QMessageBox.warning(self, "TAG", f"读取标签配置失败：\n{exc}")
+                return []
+        return [TagTreeNode(name=tag) for tag in self._load_available_tags()]
+
     def _load_current_tags(self, path: str) -> set[str]:
         try:
             return set(self._tags_for_path_provider(path))
@@ -556,6 +569,7 @@ class ImageInfoTabPanel_ImageInfo(ImageInfoTabPanel):
                 menu,
                 addable,
                 lambda tag, checked=False: self._set_current_tag(tag, True),
+                tag_tree=self._load_available_tag_tree(),
             )
         _exec_menu(menu, button.mapToGlobal(button.rect().bottomLeft()))
 

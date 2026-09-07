@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import os
 import threading
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Iterable
 
@@ -21,6 +22,94 @@ _log = get_logger("superviewer.photo_tags")
 
 SUPERPICKY_DIRNAME = ".superpicky"
 PHOTO_TAG_CONFIG_FILENAME = "tags.cfg"
+
+
+@dataclass
+class TagTreeNode:
+    """One node in a tags.cfg hierarchy.
+
+    Nodes with children are display-only groups. Leaf nodes (no children) are
+    assignable photo tags.
+    """
+
+    name: str
+    children: list[TagTreeNode] = field(default_factory=list)
+
+    @property
+    def is_group(self) -> bool:
+        return bool(self.children)
+
+    @property
+    def is_leaf(self) -> bool:
+        return not self.children
+
+
+def iter_tag_tree_leaves(nodes: Iterable[TagTreeNode] | None) -> list[str]:
+    """Return DFS leaf tag names, deduped while preserving first-seen order."""
+    result: list[str] = []
+    seen: set[str] = set()
+
+    def walk(node: TagTreeNode) -> None:
+        if node.is_leaf:
+            if node.name not in seen:
+                seen.add(node.name)
+                result.append(node.name)
+            return
+        for child in node.children:
+            walk(child)
+
+    for root in nodes or []:
+        walk(root)
+    return result
+
+
+def parse_tag_tree_text(text: str) -> list[TagTreeNode]:
+    """Parse indented tags.cfg text into a forest of ``TagTreeNode`` roots.
+
+    Indent may use spaces or tabs. Blank lines and ``#`` comments are ignored.
+    Sibling names are deduped (first wins). A node becomes a group once it has
+    at least one child; only leaves are assignable tags.
+    """
+    roots: list[TagTreeNode] = []
+    # Stack entries: (indent_width, node, sibling_names_at_this_level)
+    stack: list[tuple[int, TagTreeNode, set[str]]] = []
+    root_names: set[str] = set()
+
+    for raw_line in text.splitlines():
+        if not raw_line.strip():
+            continue
+        expanded = raw_line.expandtabs(4)
+        stripped = expanded.lstrip(" ")
+        if not stripped or stripped.startswith("#"):
+            continue
+        indent = len(expanded) - len(stripped)
+        name = stripped.strip()
+        if not name:
+            continue
+
+        while stack and indent <= stack[-1][0]:
+            stack.pop()
+
+        node = TagTreeNode(name=name)
+        if not stack:
+            if name in root_names:
+                continue
+            root_names.add(name)
+            roots.append(node)
+            stack.append((indent, node, set()))
+            continue
+
+        parent_indent, parent, sibling_names = stack[-1]
+        if indent <= parent_indent:
+            # Defensive: should have been popped above.
+            continue
+        if name in sibling_names:
+            continue
+        sibling_names.add(name)
+        parent.children.append(node)
+        stack.append((indent, node, set()))
+
+    return roots
 
 
 def _normalise_path(path: str | os.PathLike[str]) -> str:
@@ -113,24 +202,30 @@ class PhotoTagConfig:
     def __init__(self, path: str | os.PathLike[str] | None) -> None:
         self.path = Path(path) if path else None
 
-    def load(self) -> list[str]:
+    def _read_text(self) -> str | None:
         if self.path is None or not self.path.is_file():
-            return []
+            return None
         try:
-            text = self.path.read_text(encoding="utf-8-sig")
+            return self.path.read_text(encoding="utf-8-sig")
         except Exception as exc:
             _log.warning("[PhotoTagConfig.load] failed path=%r: %s", str(self.path), exc)
-            return []
+            return None
 
-        tags: list[str] = []
-        seen: set[str] = set()
-        for line in text.splitlines():
-            tag = line.strip()
-            if not tag or tag in seen:
-                continue
-            seen.add(tag)
-            tags.append(tag)
-        return tags
+    def load_tree(self) -> list[TagTreeNode]:
+        """Load the full tag hierarchy (groups + leaf tags)."""
+        text = self._read_text()
+        if text is None:
+            return []
+        return parse_tag_tree_text(text)
+
+    def load_tree_and_tags(self) -> tuple[list[TagTreeNode], list[str]]:
+        """Load hierarchy and flattened leaf tags in one read."""
+        tree = self.load_tree()
+        return tree, iter_tag_tree_leaves(tree)
+
+    def load(self) -> list[str]:
+        """Load assignable leaf tags in DFS order (groups excluded)."""
+        return iter_tag_tree_leaves(self.load_tree())
 
 
 class PhotoTagSidecarStore:
