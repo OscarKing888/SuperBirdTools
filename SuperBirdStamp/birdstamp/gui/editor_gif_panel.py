@@ -95,7 +95,10 @@ class GifExportPanel(QGroupBox):
 
         root.addLayout(form)
 
-        hint_label = QLabel("按当前照片列表顺序合成 GIF；主 GIF 生成后会按勾选项继续生成缩小版本。")
+        hint_label = QLabel(
+            "按当前照片列表顺序合成 GIF，并生成勾选的缩小版本。"
+            "GIF 以 10 毫秒计时；高于 100 FPS 时按原总时长采样到 100 FPS，部分输入帧不会写入 GIF。"
+        )
         hint_label.setStyleSheet("color: #7A7A7A; font-size: 11px;")
         hint_label.setWordWrap(True)
         root.addWidget(hint_label)

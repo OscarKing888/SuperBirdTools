@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from fractions import Fraction
+import math
 from pathlib import Path
 from typing import Callable, Iterable, Sequence
 
@@ -31,6 +32,37 @@ class GifExportProgress:
     current: int
     total: int
     message: str
+    requested_fps: float = 0.0
+    effective_fps: float = 0.0
+    input_frame_count: int = 0
+    encoded_frame_count: int = 0
+    duration_ms: int = 0
+    output_index: int = 0
+    total_outputs: int = 0
+
+
+@dataclass(frozen=True, slots=True)
+class GifFrameTiming:
+    requested_fps: float
+    input_frame_count: int
+    frame_indices: tuple[int, ...]
+    durations_ms: tuple[int, ...]
+    duration_ms: int
+
+    @property
+    def encoded_frame_count(self) -> int:
+        return len(self.frame_indices)
+
+    @property
+    def effective_fps(self) -> float:
+        return self.encoded_frame_count * 1000.0 / self.duration_ms
+
+    def summary(self) -> str:
+        sampling = "，已按时间采样" if self.requested_fps > 100 else ""
+        return (
+            f"请求 {self.requested_fps:g} FPS，GIF 实际 {self.effective_fps:.3f} FPS"
+            f"（{self.encoded_frame_count} 帧，{self.duration_ms / 1000.0:.3f} 秒{sampling}）"
+        )
 
 
 GifExportProgressCallback = Callable[[GifExportProgress], None]
@@ -44,8 +76,8 @@ def validate_gif_export_options(options: GifExportOptions) -> GifExportOptions:
         fps = float(options.fps)
     except Exception as exc:
         raise ValueError("GIF FPS 无效。") from exc
-    if fps <= 0:
-        raise ValueError("GIF FPS 必须大于 0。")
+    if not math.isfinite(fps) or fps <= 0:
+        raise ValueError("GIF FPS 必须为大于 0 的有限数值。")
 
     try:
         loop = int(options.loop)
@@ -76,6 +108,31 @@ def validate_gif_export_options(options: GifExportOptions) -> GifExportOptions:
         scale_factors=tuple(scales),
         background_color=background_color,
     )
+
+
+def build_gif_frame_timing(frame_count: int, fps: float) -> GifFrameTiming:
+    """Quantize cumulative time to GIF's 10 ms ticks, sampling above 100 FPS.
+
+    A nonempty clip always has at least one 10 ms frame. Otherwise its total
+    duration differs from the requested timeline by at most half a tick.
+    """
+    if frame_count <= 0:
+        raise ValueError("GIF 帧为空。")
+    requested_fps = float(fps)
+    if not math.isfinite(requested_fps) or requested_fps <= 0:
+        raise ValueError("GIF FPS 必须为大于 0 的有限数值。")
+    rate = Fraction(str(requested_fps))
+    if rate > 100:
+        encoded_count = max(1, round(frame_count * 100 / rate))
+        indices = tuple(min(frame_count - 1, round(index * rate / 100)) for index in range(encoded_count))
+        durations = (10,) * encoded_count
+    else:
+        indices = tuple(range(frame_count))
+        boundaries = [round(index * 100 / rate) for index in range(frame_count + 1)]
+        durations = tuple((end - start) * 10 for start, end in zip(boundaries, boundaries[1:]))
+    if max(durations) > 655350:
+        raise ValueError("GIF 单帧时长不能超过 655.35 秒，请提高 FPS。")
+    return GifFrameTiming(requested_fps, frame_count, indices, durations, sum(durations))
 
 
 def build_gif_variant_output_paths(output_path: Path, scale_factors: Iterable[float]) -> list[tuple[float, Path]]:
@@ -139,6 +196,8 @@ def export_gif(
     normalized_frame_paths = [Path(path).resolve(strict=False) for path in frame_paths]
     if not normalized_frame_paths:
         raise ValueError("没有可用于合成 GIF 的图片。")
+    timing = build_gif_frame_timing(len(normalized_frame_paths), validated.fps)
+    sampled_frame_paths = [normalized_frame_paths[index] for index in timing.frame_indices]
 
     output_path = validated.normalized_output_path()
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -147,10 +206,11 @@ def export_gif(
         progress_callback,
         phase="scan",
         current=0,
-        total=len(normalized_frame_paths),
-        message=f"正在检查 GIF 帧尺寸，共 {len(normalized_frame_paths)} 帧。",
+        total=timing.encoded_frame_count,
+        message=f"正在检查 GIF 编码帧尺寸。{timing.summary()}",
+        timing=timing,
     )
-    target_size = resolve_gif_target_size(normalized_frame_paths)
+    target_size = resolve_gif_target_size(sampled_frame_paths)
 
     output_specs = [(1.0, output_path)]
     output_specs.extend(build_gif_variant_output_paths(output_path, validated.scale_factors))
@@ -162,25 +222,41 @@ def export_gif(
         _emit_progress(
             progress_callback,
             phase="encode",
-            current=index - 1,
-            total=total_outputs,
-            message=f"正在合成 GIF {index}/{total_outputs}: {variant_output_path.name}",
+            current=0,
+            total=timing.encoded_frame_count,
+            message=f"正在合成 GIF {index}/{total_outputs}: {variant_output_path.name} | {timing.summary()}",
+            timing=timing,
+            output_index=index,
+            total_outputs=total_outputs,
         )
         _save_gif_variant(
-            normalized_frame_paths,
+            sampled_frame_paths,
             variant_output_path,
-            fps=validated.fps,
+            durations_ms=timing.durations_ms,
             loop=validated.loop,
             target_size=variant_target_size,
             background_color=validated.background_color,
+            frame_prepared_callback=lambda current: _emit_progress(
+                progress_callback,
+                phase="encode",
+                current=current,
+                total=timing.encoded_frame_count,
+                message=f"GIF {index}/{total_outputs} 已准备编码帧 {current}/{timing.encoded_frame_count} | {timing.summary()}",
+                timing=timing,
+                output_index=index,
+                total_outputs=total_outputs,
+            ),
         )
         written_paths.append(variant_output_path)
         _emit_progress(
             progress_callback,
-            phase="encode",
-            current=index,
-            total=total_outputs,
-            message=f"已生成 GIF {index}/{total_outputs}: {variant_output_path.name}",
+            phase="done",
+            current=timing.encoded_frame_count,
+            total=timing.encoded_frame_count,
+            message=f"已生成 GIF {index}/{total_outputs}: {variant_output_path.name} | {timing.summary()}",
+            timing=timing,
+            output_index=index,
+            total_outputs=total_outputs,
         )
 
     return written_paths
@@ -190,10 +266,11 @@ def _save_gif_variant(
     frame_paths: Sequence[Path],
     output_path: Path,
     *,
-    fps: float,
+    durations_ms: Sequence[int],
     loop: int,
     target_size: tuple[int, int],
     background_color: str,
+    frame_prepared_callback: Callable[[int], None] | None = None,
 ) -> None:
     frames: list[Image.Image] = []
     try:
@@ -206,10 +283,11 @@ def _save_gif_variant(
                         background_color=background_color,
                     )
                 )
+            if frame_prepared_callback is not None:
+                frame_prepared_callback(len(frames))
         if not frames:
             raise ValueError("GIF 帧为空。")
 
-        duration_ms = max(1, int(round(1000.0 / max(0.001, float(fps)))))
         primary = frames[0]
         append_frames = frames[1:]
         primary.save(
@@ -217,7 +295,7 @@ def _save_gif_variant(
             format="GIF",
             save_all=True,
             append_images=append_frames,
-            duration=duration_ms,
+            duration=list(durations_ms),
             loop=max(0, int(loop)),
             optimize=False,
             disposal=2,
@@ -262,6 +340,9 @@ def _emit_progress(
     current: int,
     total: int,
     message: str,
+    timing: GifFrameTiming | None = None,
+    output_index: int = 0,
+    total_outputs: int = 0,
 ) -> None:
     if callback is None:
         return
@@ -271,6 +352,13 @@ def _emit_progress(
             current=max(0, int(current)),
             total=max(0, int(total)),
             message=str(message or "").strip(),
+            requested_fps=timing.requested_fps if timing is not None else 0.0,
+            effective_fps=timing.effective_fps if timing is not None else 0.0,
+            input_frame_count=timing.input_frame_count if timing is not None else 0,
+            encoded_frame_count=timing.encoded_frame_count if timing is not None else 0,
+            duration_ms=timing.duration_ms if timing is not None else 0,
+            output_index=output_index,
+            total_outputs=total_outputs,
         )
     )
 
@@ -280,6 +368,8 @@ __all__ = [
     "GifExportOptions",
     "GifExportProgress",
     "GifExportProgressCallback",
+    "GifFrameTiming",
+    "build_gif_frame_timing",
     "build_gif_variant_output_paths",
     "export_gif",
     "normalize_gif_frame_size",

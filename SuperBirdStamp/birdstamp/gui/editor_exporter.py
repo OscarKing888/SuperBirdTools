@@ -37,6 +37,7 @@ from birdstamp.gui import editor_options
 from birdstamp.gif_export import (
     DEFAULT_GIF_BACKGROUND_COLOR,
     GifExportOptions,
+    build_gif_frame_timing,
     build_gif_variant_output_paths,
     export_gif,
 )
@@ -432,7 +433,11 @@ class _BirdStampExporterMixin:
         if phase == "scan":
             self._set_image_export_progress(current, total, label="GIF 合成", phase_text="检查帧尺寸")
         else:
-            self._set_image_export_progress(current, max(1, total_outputs), label="GIF 合成", phase_text="编码中")
+            output_index = max(1, int(getattr(progress, "output_index", 1) or 1))
+            self._set_image_export_progress(
+                current, total, label="GIF 合成",
+                phase_text=f"编码 {output_index}/{max(1, total_outputs)}",
+            )
         if message:
             self._set_status(message)
 
@@ -589,6 +594,7 @@ class _BirdStampExporterMixin:
                     pass
         elapsed = time.perf_counter() - started_at
         timing_text = self._format_image_export_timing_summary(max(1, len(frame_paths)), elapsed)
+        timing_text = f"{build_gif_frame_timing(len(frame_paths), gif_request.fps).summary()} | {timing_text}"
         outputs_text = "，".join(path.name for path in gif_paths)
         self._clear_photo_export_dirty(paths)
         if gif_request.keep_frame_images and frame_output_dir is not None:
@@ -613,7 +619,8 @@ class _BirdStampExporterMixin:
     ) -> list[Path]:
         variant_paths = build_gif_variant_output_paths(output_path.with_suffix(".gif"), scale_factors)
         total_outputs = 1 + len(variant_paths)
-        progress_token = self._begin_image_export_progress(total=total_outputs, label="GIF 合成", phase_text="编码中")
+        timing = build_gif_frame_timing(len(frame_paths), fps)
+        progress_token = self._begin_image_export_progress(total=timing.encoded_frame_count, label="GIF 合成", phase_text="编码中")
         try:
             options = GifExportOptions(
                 output_path=output_path,
@@ -628,8 +635,8 @@ class _BirdStampExporterMixin:
                 progress_callback=lambda progress: self._on_gif_export_progress(progress, total_outputs),
             )
             self._finish_image_export_progress(
-                current=total_outputs,
-                total=total_outputs,
+                current=timing.encoded_frame_count,
+                total=timing.encoded_frame_count,
                 label="GIF 合成",
                 token=progress_token,
             )
