@@ -114,6 +114,8 @@ class ImageInfoTabPanel_EXIF(ImageInfoTabPanel):
     def refresh_ui(self) -> list[tuple]:
         from .exif_helpers import load_tag_label_chinese_from_settings
 
+        if self._shutdown_requested:
+            return []
         path = self.current_photo_path()
         if not path or not os.path.isfile(path):
             self._invalidate_requests()
@@ -131,8 +133,10 @@ class ImageInfoTabPanel_EXIF(ImageInfoTabPanel):
         self._last_rows = []
         self.exif_table.set_exif([])
         loader = self._loader
-        if loader is not None and loader.isRunning():
+        if loader is not None:
             loader.requestInterruption()
+            # Native completion may precede the queued finished slot. Keep
+            # ownership until that slot hands off this latest request.
             self._pending_request = request
             return []
         self._pending_request = None
@@ -159,7 +163,7 @@ class ImageInfoTabPanel_EXIF(ImageInfoTabPanel):
         loader.start()
 
     def _on_rows_loaded(self, request_token: int, path: str, rows) -> None:
-        if int(request_token) != int(self._display_request_token):
+        if self._shutdown_requested or int(request_token) != int(self._display_request_token):
             return
         current_path = os.path.normpath(self.current_photo_path()) if self.current_photo_path() else ""
         if not current_path or os.path.normcase(path) != os.path.normcase(current_path):
@@ -168,12 +172,14 @@ class ImageInfoTabPanel_EXIF(ImageInfoTabPanel):
         self.exif_table.set_exif(self._last_rows)
 
     def _on_loader_finished(self, loader: _ExifRowsLoader) -> None:
-        if self._loader is loader:
-            self._loader = None
+        is_current = self._loader is loader
         try:
             loader.deleteLater()
         except Exception:
             pass
+        if not is_current:
+            return
+        self._loader = None
         if self._shutdown_requested:
             self._pending_request = None
             return
