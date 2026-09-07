@@ -446,6 +446,12 @@ class ImageInfoTabPanel_ImageInfo(ImageInfoTabPanel):
         )
         return info
 
+    def refresh_photo_tags(self) -> None:
+        """Apply asynchronous tag results without resetting editable drafts."""
+        path = self.current_photo_path()
+        self._current_tags = self._load_current_tags(path) if path else set()
+        self._rebuild_tag_chips()
+
     def resizeEvent(self, event) -> None:  # type: ignore[override]
         super().resizeEvent(event)
 

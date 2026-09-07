@@ -1030,7 +1030,10 @@ class MainWindow(QMainWindow):
         try:
             panel_path = os.path.normpath(panel.current_photo_path()) if panel.current_photo_path() else ""
             if panel_path and os.path.normcase(panel_path) == os.path.normcase(current):
-                panel.refresh_current_photo()
+                if panel is self.image_info_panel:
+                    panel.refresh_photo_tags()
+                else:
+                    panel.refresh_current_photo()
         except Exception:
             pass
 
