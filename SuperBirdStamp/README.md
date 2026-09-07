@@ -7,6 +7,10 @@
 GUI 启动优先使用仓库根 `run.sh` / `run.bat`，完整打包优先使用仓库根
 `build_all.sh` / `build_all.bat`。
 
+## 开发定位
+
+编辑器、工作区、模板元数据、流水线和导出模块的关系见 [架构与代码定位](docs/ARCHITECTURE.md)。文档包含常见功能的入口、核心文件和回归测试；必须保留的行为见 [AGENTS](../AGENTS.md)。
+
 ## Features
 
 - Batch process single files or directories (`--recursive`).
