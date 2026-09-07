@@ -6,6 +6,7 @@ import argparse
 import hashlib
 import os
 from pathlib import Path
+from tempfile import TemporaryDirectory
 
 EXCLUDED_PARTS = {"_CodeSignature", "__pycache__"}
 DEFAULT_MIN_SIZE = 64 * 1024
@@ -62,8 +63,13 @@ def dedupe(roots: list[Path], min_size: int) -> tuple[int, int]:
                 continue
             if (stat.st_dev, stat.st_ino) == (existing_stat.st_dev, existing_stat.st_ino):
                 continue
-            path.unlink()
-            os.link(existing, path)
+            # Keep the destination intact until a replacement link exists. A
+            # failed link (permissions, volume boundary, etc.) must not damage
+            # an otherwise usable build artifact.
+            with TemporaryDirectory(prefix=".hardlink-dedupe-", dir=path.parent) as staging:
+                replacement = Path(staging) / path.name
+                os.link(existing, replacement)
+                os.replace(replacement, path)
             linked_files += 1
             saved_bytes += stat.st_size
     return linked_files, saved_bytes
