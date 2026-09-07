@@ -402,6 +402,8 @@ class SuperViewerTaggedFileListPanel(FileListPanel):
     ) -> None:
         tag_config_scope_changed = self._set_tag_config_directory(path)
         self._load_tag_config_if_changed(force=tag_config_scope_changed)
+        if force_reload or os.path.normcase(os.path.normpath(path)) != os.path.normcase(self.get_current_dir() or ""):
+            self._local_metadata_updates_by_path = {}
         self._photo_tag_cache = {}
         self._photo_tag_generation_by_path = {}
         self._photo_tag_cache_complete = False
@@ -460,6 +462,23 @@ class SuperViewerTaggedFileListPanel(FileListPanel):
         metadata = dict(self.get_report_row_for_path(path) or {})
         metadata.update(self.get_photo_metadata_for_path(path, allow_slow_read=False))
         return metadata
+
+    def sync_metadata_edit_for_path(
+        self, path: str, *, report_fields: dict | None = None, meta_updates: dict | None = None,
+    ) -> bool:
+        updated = super().sync_metadata_edit_for_path(
+            path, report_fields=report_fields, meta_updates=meta_updates,
+        )
+        if updated:
+            overrides = getattr(self, "_local_metadata_updates_by_path", None)
+            if overrides is None:
+                overrides = self._local_metadata_updates_by_path = {}
+            key = os.path.normcase(os.path.normpath(path))
+            overrides.setdefault(key, {}).update({
+                str(name): value for name, value in (meta_updates or {}).items()
+                if str(name) and value is not None
+            })
+        return updated
 
     def cached_quick_preview_for_path(self, path: str, size: int) -> QPixmap | None:
         """Reuse the same exact-tier cache resolver as held-key playback."""
@@ -1115,17 +1134,16 @@ class SuperViewerTaggedFileListPanel(FileListPanel):
             )
 
     def _merge_metadata_batch_with_photo_tag_cache(self, meta_dict: dict) -> dict:
-        """Keep locally edited tags when an older metadata read arrives late."""
+        """Keep local edits when an older metadata read arrives late."""
         order = {tag: index for index, tag in enumerate(self._available_tags)}
         merged = {}
         for path, metadata in meta_dict.items():
             norm_path = os.path.normpath(path) if path else path
             tags = self._photo_tag_cache.get(norm_path)
-            if tags is None or not self._photo_tag_generation(norm_path):
-                merged[norm_path] = metadata
-                continue
             item = dict(metadata) if isinstance(metadata, dict) else {}
-            item["tags"] = sorted(tags, key=lambda tag: (order.get(tag, len(order)), tag))
+            item.update(getattr(self, "_local_metadata_updates_by_path", {}).get(os.path.normcase(norm_path), {}))
+            if tags is not None and self._photo_tag_generation(norm_path):
+                item["tags"] = sorted(tags, key=lambda tag: (order.get(tag, len(order)), tag))
             merged[norm_path] = item
         return merged
 

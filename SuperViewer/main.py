@@ -128,6 +128,7 @@ try:
     from .superviewer.super_viewer_user_options_dialog import SuperViewerUserOptionsDialog
     from .superviewer.tagged_file_list import SuperViewerTaggedFileListPanel
     from .superviewer.tag_history_actions import TagHistoryActions
+    from .superviewer.metadata_edit_sync import sync_saved_xmp_edit
     from .superviewer.ui_theme import get_ui_theme_manager, install_app_theme, panel_theme_colors
     from .superviewer import qt_compat
     from .superviewer.qt_compat import (
@@ -204,6 +205,7 @@ except ImportError:
     from superviewer.super_viewer_user_options_dialog import SuperViewerUserOptionsDialog
     from superviewer.tagged_file_list import SuperViewerTaggedFileListPanel
     from superviewer.tag_history_actions import TagHistoryActions
+    from superviewer.metadata_edit_sync import sync_saved_xmp_edit
     from superviewer.ui_theme import get_ui_theme_manager, install_app_theme, panel_theme_colors
     from superviewer import qt_compat
     from superviewer.qt_compat import (
@@ -809,6 +811,7 @@ class MainWindow(QMainWindow):
                     raise RuntimeError("无法确定可写入 XMP sidecar 的标签名。")
                 if not PhotoMetaDataXMP().write(path, {tag_key: new_val}):
                     raise RuntimeError("无法写入 XMP sidecar。请确认 exiftool 可用或该字段支持直接 sidecar 写入。")
+                sync_saved_xmp_edit(self._file_list, path, tag_key)
             self.exif_info_panel.refresh_current_photo()
             QMessageBox.information(self, "已保存", "元数据已写入 XMP sidecar。")
         except Exception as exc:

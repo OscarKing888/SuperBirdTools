@@ -7,10 +7,12 @@ from PIL import Image
 
 from app_common.exif_io.photo_meta import PhotoMetaDataXMP
 from app_common.file_browser._workers import MetadataLoader
+from app_common.file_browser import FileListPanel
 from SuperViewer.main import MainWindow
 from SuperViewer.superviewer.image_info_tab_image_info import ImageInfoTabPanel_ImageInfo, _metadata_comment
 from SuperViewer.superviewer.qt_compat import QApplication
 from SuperViewer.superviewer.tagged_file_list import SuperViewerTaggedFileListPanel
+from SuperViewer.superviewer.metadata_edit_sync import sync_saved_xmp_edit
 
 
 _APP = QApplication.instance() or QApplication([])
@@ -43,10 +45,101 @@ def test_comment_save_updates_parsed_cache_and_readback(tmp_path, entry, new_tex
             MainWindow._sync_metadata_after_exif_save(harness, path, main.META_DESCRIPTION_TAG_ID, new_text)
         assert _metadata_comment(xmp.read(path)) == new_text
         assert _metadata_comment(panel._meta_cache[path]) == new_text
+        # A batch that read before the edit must still fill unrelated fields
+        # without resurrecting its old comment after the successful save.
+        panel._on_metadata_batch_ready({path: {"comment": "原来的备注", "iso": "800"}})
+        assert _metadata_comment(panel._meta_cache[path]) == new_text
+        assert panel._meta_cache[path]["iso"] == "800"
     finally:
         panel.shutdown()
         panel.deleteLater()
         loader.deleteLater()
+        _APP.processEvents()
+
+
+def test_exif_subject_edit_refreshes_filters_and_rejects_stale_tag_results(tmp_path, monkeypatch):
+    photo = tmp_path / "标签.png"
+    Image.new("RGB", (8, 6)).save(photo)
+    path = str(photo)
+    config = tmp_path / "tags.cfg"
+    config.write_text("飞行\n捕食\n", encoding="utf-8")
+    files = SuperViewerTaggedFileListPanel(tag_config_path=config)
+    messages = []
+    monkeypatch.setattr(main, "QMessageBox", SimpleNamespace(
+        information=lambda *_args: messages.append("saved"),
+        critical=lambda *_args: messages.append("failed"),
+    ))
+    refreshes = []
+    window = SimpleNamespace(
+        _current_exif_path=path, _file_list=files,
+        exif_info_panel=SimpleNamespace(refresh_current_photo=lambda: refreshes.append(path)),
+    )
+    try:
+        files.set_photo_tag_for_paths([path], "飞行", True)
+        assert files.can_undo
+        generation = files._photo_tag_generation(path)
+        MainWindow._save_exif_value(window, None, None, "捕食", "飞行", "XMP-dc:Subject")
+        assert messages == ["saved"]
+        assert refreshes == [path]
+        assert PhotoMetaDataXMP().read_subjects(path, strict=True) == ["捕食"]
+        assert files.photo_tags_for_path(path) == {"捕食"}
+        assert files._photo_tag_generation(path) > generation
+        assert not files.can_undo
+        files._active_tag_filters = {"捕食"}
+        assert files._path_matches_active_filters(path)
+        files._active_tag_filters = {"飞行"}
+        assert not files._path_matches_active_filters(path)
+        assert files._merge_metadata_batch_with_photo_tag_cache({path: {"tags": ["飞行"]}})[path]["tags"] == ["捕食"]
+    finally:
+        files.shutdown()
+        files.deleteLater()
+        _APP.processEvents()
+
+
+@pytest.mark.parametrize("key,value,field,expected", [
+    ("XMP-dc:Description", "新备注", "comment", "新备注"),
+    ("XMP-dc:Description", "", "comment", ""),
+    ("IFD0:DocumentName", "新鸟名", "bird_species_cn", "新鸟名"),
+    ("XMP:Rating", "0", "rating", 0),
+    ("XMP-xmpDM:pick", "-1", "pick", -1),
+    ("EXIF:ISO", "1600", "iso", "1600"),
+    ("EXIF:ExposureTime", "0.001", "shutter", "1/1000s"),
+    ("EXIF:Model", "中文相机", "camera_model", "中文相机"),
+    ("EXIF:LensModel", "中文镜头", "lens_model", "中文镜头"),
+])
+def test_generic_xmp_edits_update_canonical_fields_without_source_read(tmp_path, key, value, field, expected):
+    photo = tmp_path / "元数据.png"
+    Image.new("RGB", (8, 6)).save(photo)
+    path = str(photo)
+    metadata = PhotoMetaDataXMP()
+    assert metadata.write(path, {key: value})
+    calls = []
+    files = SimpleNamespace(sync_metadata_edit_for_path=lambda path, **kwargs: calls.append(kwargs["meta_updates"]))
+    sync_saved_xmp_edit(files, path, key)
+    assert calls[0][field] == expected
+
+
+def test_metadata_edit_overrides_expire_on_directory_change_or_explicit_reload(tmp_path, monkeypatch):
+    config = tmp_path / "tags.cfg"
+    config.write_text("飞行\n", encoding="utf-8")
+    files = SuperViewerTaggedFileListPanel(tag_config_path=config)
+    first = str(tmp_path)
+    second = str(tmp_path / "other")
+    photo = str(tmp_path / "photo.png")
+    monkeypatch.setattr(FileListPanel, "load_directory", lambda *args, **kwargs: None)
+    try:
+        files._current_dir = first
+        files.sync_metadata_edit_for_path(photo, meta_updates={"comment": "编辑值"})
+        files.load_directory(first)
+        assert files._merge_metadata_batch_with_photo_tag_cache({photo: {"comment": "磁盘值"}})[photo]["comment"] == "编辑值"
+        files.load_directory(first, force_reload=True)
+        assert files._merge_metadata_batch_with_photo_tag_cache({photo: {"comment": "磁盘值"}})[photo]["comment"] == "磁盘值"
+        files.sync_metadata_edit_for_path(photo, meta_updates={"comment": "另一次编辑"})
+        files.load_directory(second)
+        assert files._local_metadata_updates_by_path == {}
+    finally:
+        files.shutdown()
+        files.deleteLater()
         _APP.processEvents()
 
 
