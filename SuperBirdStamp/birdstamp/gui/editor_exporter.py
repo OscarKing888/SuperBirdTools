@@ -15,6 +15,7 @@ from pathlib import Path
 import shutil
 import threading
 import time
+import unicodedata
 
 from PIL import Image
 from PyQt6.QtCore import QEventLoop, QTimer
@@ -653,8 +654,12 @@ class _BirdStampExporterMixin:
         stem_counter: dict[str, int] = {}
         for path in paths:
             stem = f"{path.stem}__birdstamp"
-            count = stem_counter.get(stem, 0)
-            stem_counter[stem] = count + 1
+            # Allocate portable names before starting parallel writes. Windows
+            # and typical macOS volumes may identify differently-cased (or
+            # canonically equivalent Unicode) names as the same destination.
+            key = unicodedata.normalize("NFC", stem).casefold()
+            count = stem_counter.get(key, 0)
+            stem_counter[key] = count + 1
             file_name = f"{stem}.{suffix}" if count == 0 else f"{stem}_{count + 1}.{suffix}"
             targets.append(out_dir / file_name)
         return targets
