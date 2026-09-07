@@ -1,6 +1,6 @@
-# Super Viewer AI Coding Rules
+# SuperBirdTools AI Coding Rules
 
-This document defines project-level rules for any coding assistant (Codex, Claude, Cursor, etc.).
+This document defines the cross-tool coding baseline for any coding assistant (Codex, Claude, Cursor, etc.). Read [AGENTS.md](../AGENTS.md) as well: it is the shared authoritative behavior/validation contract for SuperViewer, SuperBirdStamp and app_common. Application architecture maps explain code locations; they do not override these rules.
 
 ## 1) File Encoding and Text Safety
 
@@ -54,7 +54,7 @@ This document defines project-level rules for any coding assistant (Codex, Claud
 
 - Make minimal, task-scoped diffs.
 - Do not touch unrelated files.
-- If unexpected unrelated modifications are detected, pause and confirm direction.
+- Preserve unrelated user changes and stage only task-owned paths. If an unexpected change conflicts with the work, inspect its origin and coordinate; known unrelated changes do not require stopping authorized work.
 - When implementing new features, always evaluate modularization / encapsulation first:
   - prefer reusable module-level functions or class-based (OOP) encapsulation for coherent responsibilities
   - avoid embedding core logic directly in GUI/event handlers or one-off scripts when it can be extracted
@@ -191,7 +191,9 @@ These areas have repeatedly regressed during feature work. Treat them as protect
   - thumbnail decode
 - Use request/version tokens for async UI work:
   - If results can arrive out of order, attach a request id and ignore stale results.
-  - This is mandatory for preview/focus style flows tied to current selection.
+  - This is mandatory for preview/focus style flows tied to current selection and for metadata/tag batches racing with local edits.
+  - Retain each QThread until its real `finished` is handled; a logical result signal or timeout is not completed shutdown.
+  - GUI selection must not perform a synchronous metadata read behind the shared ExifTool batch lock.
 - Batch GUI updates with a timer budget:
   - Large result sets should be applied in chunks.
   - Keep each GUI-thread chunk bounded by both item count and elapsed time.
@@ -215,7 +217,8 @@ These areas have repeatedly regressed during feature work. Treat them as protect
 - Report-derived fields and file-derived fields may both be needed:
   - report rows are often incomplete for title/sharpness/focus display
   - file/XMP fallback should enrich missing fields instead of assuming report rows are sufficient
-- Do not delete, repair, or write rows in `report.db` as a side effect of file operations or metadata editing.
+- Do not delete, repair, or write rows in `report.db` as a side effect of file operations or metadata editing. Open fallback reads in SQLite read-only mode; never invoke schema initialization/migration from them.
+- Metadata and file-operation failure paths must preserve the last complete data copy; retained recovery files must have their paths reported.
 
 ## 14) GUI Consistency Rules
 
@@ -236,7 +239,7 @@ These areas have repeatedly regressed during feature work. Treat them as protect
 
 ## 15) Required Validation for File-Browser / Preview Changes
 
-When changing `main.py`, `app_common/file_browser/_browser.py`, `app_common/report_db.py`, or focus-related flows, validate at least:
+When changing `SuperViewer/main.py`, `app_common/file_browser/_panel.py`, `_workers.py`, shared cache/path helpers, `app_common/report_db.py`, or focus-related flows, select the relevant cases below. `_browser.py` is a compatibility entry point, not the primary implementation. Validate the changed behavior and the protected flows it affects:
 
 - the repo-root `.venv` interpreter with `-m py_compile <changed_python_files>`
 - Root selection with `.superpicky/report.db`

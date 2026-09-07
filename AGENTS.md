@@ -1,6 +1,14 @@
 # AGENTS.md (Codex / OpenAI Coding Agents)
 
-Follow `ai_rules/AI_CODING_RULES.md` as the project baseline.
+Follow [ai_rules/AI_CODING_RULES.md](ai_rules/AI_CODING_RULES.md) as the cross-tool coding baseline. This file is the authoritative project behavior and validation contract for **both** applications and `app_common`; architecture documents explain where that behavior is implemented.
+
+## Start Here: Code And Documentation Map
+
+- [SuperViewer architecture](SuperViewer/docs/ARCHITECTURE.md): directory selection, thumbnail/preview policy, metadata, tags/history, Qt workers and extension points.
+- [SuperBirdStamp architecture](SuperBirdStamp/docs/ARCHITECTURE.md): editor mixins, workspace restore, metadata providers, processing stages, image/GIF/video exports and extension points.
+- [Repository README](README.md): environment, startup and multi-app builds.
+- [AI rules setup](ai_rules/AI_RULES_SETUP.md): instruction entry points and precedence. Keep architecture maps aligned when moving modules or adding a feature; link to symbols and files rather than copying implementations.
+- Before modifying shared code, inspect `git status --short` in both the superproject and `app_common`. Commit shared changes in `app_common` first, then commit the superproject gitlink with its integration changes. Preserve known unrelated user modifications and stage explicit paths only. When feature-by-feature commits are requested, keep each independently reviewable fix and its tests together; do not push without authorization.
 
 ## Mandatory Project Constraints
 
@@ -41,7 +49,7 @@ Follow `ai_rules/AI_CODING_RULES.md` as the project baseline.
   `@' ... '@ | .\.venv\Scripts\python.exe -`
 - Keep command working directory at the repo root unless the command requires an app subdirectory.
 - If pytest is missing from `.venv`, report that pytest is unavailable instead of retrying with global Python. Direct `py_compile` and focused Python assertions are acceptable fallback validation.
-- Remove runtime autosave artifacts created during GUI smoke checks, such as `SuperBirdStamp/config/editor_autosave.birdstamp-workspace.json`, unless the user explicitly asks to keep them.
+- GUI tests must isolate runtime configuration **before window construction**. For BirdStamp, patch `birdstamp.config.get_user_data_dir` to a temporary directory; redirect local caches as needed. Disabling an autosave method after constructing the window is insufficient. Never remove or overwrite a pre-existing workspace/autosave merely to clean up a test.
 - After GUI/template smoke checks, inspect `SuperBirdStamp/config/editor_export_state.json` and `SuperBirdStamp/config/templates/*.json` for unintended runtime state changes. Do not leave accidental config/template mutations in the diff; if a change might be user-authored, report it instead of silently reverting it.
 
 ## Packaging Layout
@@ -89,6 +97,7 @@ Follow `ai_rules/AI_CODING_RULES.md` as the project baseline.
 - Normal single-image selection:
   - Non-RAW images at or below `SuperViewer_SYNC_FULL_PREVIEW_MAX_MP` (default 40 MP) should synchronously show the full preview image.
   - Non-RAW images above that threshold should first show the selected thumbnail-size preview (`128/256/512/1024/2048`) and then asynchronously replace it with the full preview.
+  - For large HEIF/HIF, first reuse the exact selected-tier cache. If no cached quick image exists, show a loading placeholder and decode the full preview in the owned worker; Pillow HEVC thumbnailing would otherwise synchronously decode the entire image only to shrink it. Do not decode it twice to fabricate an intermediate quick frame.
   - RAW images should directly use the high-resolution embedded RAW preview JPEG when available; prefer exiftool/rawpy camera previews and treat tiny piexif EXIF thumbnails such as 160x120 only as last-resort fallbacks. Do not force a full RAW demosaic for ordinary preview switching.
 - Held direction-key navigation:
   - The initial physical key step remains a normal committed selection. From the first auto-repeat step until physical release, preview must stay on the selected thumbnail-size image only.
@@ -185,3 +194,38 @@ Follow `ai_rules/AI_CODING_RULES.md` as the project baseline.
 - Overlay changes must preserve the protected preview/export behavior: Banner/text/focus export should be controlled through pipeline settings, and preview behavior must be explicitly kept in sync or intentionally documented when it differs.
 - New pipeline stages should include focused tests in `SuperBirdStamp/tests/test_image_pipeline.py` or a nearby test module. For export behavior changes, also cover relevant `render_video_frame`, GIF/video frame cache, and uniform auto-crop paths.
 - Validation for pipeline changes must include repo-root `.venv` `py_compile` on changed Python files. If `pytest` is unavailable in `.venv`, run focused Python assertions with the repo-root `.venv` interpreter and report that pytest was unavailable.
+
+## Directory Switching And Qt Worker Ownership
+
+- GUI directory/selection handlers must not wait for a shared ExifTool session held by an earlier metadata batch. Render cached/report-backed fields immediately and schedule missing metadata in a worker; HIF directories can contain thousands of files even when the selected directory itself contains no photos.
+- Distinguish directory scan time, report-cache load, GUI list application, selected-image decode, and ExifTool lock wait in diagnostics. A supported extension alone does not prove responsive decoding. Reproduce with temporary image copies and read-only metadata queries; never use a production photo library as a write test.
+- Keep a QThread owned until its actual `QThread.finished` callback has been handled. A custom result/finished signal and `isRunning() == False` are not sufficient to hand pending work to a new owner: a queued old `finished` can otherwise steal the new request.
+- Result and completion callbacks must verify worker identity/request generation before mutating current state or starting pending work. Shutdown is latched, clears pending work, stops owned timers, rejects late callbacks and retains every running worker until safe finalization; timeout is not permission to destroy a live QThread.
+- Background metadata/tag updates must refresh only the affected display fields. Do not reset an in-progress filename/comment, cursor, focus or text undo history by calling a full photo refresh for a tag-only signal.
+
+## Tags, History And Theme Contracts
+
+- `SuperViewer/superviewer/photo_tags.py` owns tag config and XMP tag storage; `tagged_file_list.py` coordinates cache/filter/UI work, while `photo_tag_commands.py` supplies per-path commands to `app_common/command_history.py`.
+- Indented `tags.cfg` groups are navigation/filter structure; only leaf labels are writable. Flat files remain compatible. Searching uses AND across whitespace-separated tokens, and each token may match a different field (filename, comment or tag).
+- Before an edit, read subjects strictly. An unreadable/malformed existing XMP must fail the edit, not masquerade as an empty tag set. Preserve unknown subjects and unrelated metadata; missing source images must not create orphan XMP.
+- Undo/redo stores the actual previous membership for each successful file, not one assumed state for a batch. Preserve partial successes and retryable failures, keep no-op edits from clearing redo, and bound history to 100 entries. Rename or a changed tag scope/vocabulary invalidates history; ordering-only changes do not.
+- Per-path tag generations prevent in-flight metadata/tag batches from overwriting local edits, undo or redo. Viewer ordinary metadata edits use a per-path field overlay for the active directory, merged over late batches; changing the directory or forcing a reload clears that overlay. Use actual `QThread.finished` for loader handoff, and never restart pending tag work after shutdown.
+- System theme changes are style-only. `app_common/qt_theme.py` provides shared colors and `SuperViewer/superviewer/ui_theme.py` owns Viewer propagation. Do not reread images/EXIF or rebuild editable panels to change colors. Deferred stylesheet refreshes must use a panel-owned, cancellable timer; weak callbacks must not retain deleted widgets.
+
+## Data Retention On Failure
+
+- In a failed cut/move rollback, a staging or destination file may be the only complete original. Keep that recovery copy and report its path even when a partial source file exists. Clean up staging only after confirmed restoration/success; cover real photo + XMP pairs with injected I/O failures.
+- XMP editing must handle property attributes and multiple same-photo RDF descriptions, retain unrelated resource descriptions/namespaces, and prefer `x-default` text. Clearing the default translation must not resurrect an old translated value. Verify Chinese writes and clears by reading the actual sidecar back.
+- `report.db` fallback reads must open SQLite read-only and must not initialize or migrate schemas, create indexes, set writable journal policy or repair stored paths. Compatibility readers should handle missing optional columns without changing the file.
+- Generic ExifTool assignments must be validated on a same-directory staging sidecar before committing; a zero exit code alone does not prove every tag was accepted. Mixed native/generic edits fail together. Keep ExifTool command names distinct from XML properties (ISO versus ISOSpeedRatings; Lens versus legacy LensModel), use UTF-8 arguments, and reject unmapped file-operation pseudo-tags.
+- Hardlink deduplication must create the replacement link before atomically replacing a destination. Link/replace failures must leave both build artifacts intact.
+- BirdStamp workspace restoration is asynchronous: suspend automatic and manual saves until the full restore finishes. Closing midway preserves the last complete autosave and cancels remaining restore/autosave callbacks.
+- Export temporary directories need an owner immediately after creation, including failure/cancel paths before a render plan is returned. Output names are allocated with Unicode normalization and case-insensitive collision detection before parallel writes.
+- GIF timing is quantized on cumulative 10 ms boundaries, not truncated per frame. Input rates above 100 FPS are sampled to the GIF timeline, preserving requested total duration within quantization error; report actual FPS/frame count. A nonempty clip shorter than 10 ms still needs one 10 ms frame. Keep all size variants on the same timeline.
+
+## Qt And Failure Regression Tests
+
+- Keep a strong reference to one `QApplication` for the complete test process; multiple short-lived application instances can invalidate widgets across modules.
+- Wait for the actual Qt state/owned timer/worker completion with a bounded event-processing loop. Do not assert asynchronous theme/worker outcomes after an arbitrary fixed sleep.
+- Use real temporary image/XMP/workspace files and controlled failures for data-retention bugs; use controllable real QThreads to test queued-completion races. Test success, stale results and shutdown as well as the failure itself.
+- For review fixes, run targeted tests first, then the repo-root full suite with `QT_QPA_PLATFORM=offscreen`; inspect both git working trees and runtime config afterwards. Report platform-specific validation limits honestly (offscreen tests do not replace Windows/macOS packaged UI smoke tests).

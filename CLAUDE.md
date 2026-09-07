@@ -1,6 +1,6 @@
 # CLAUDE.md (Claude / Anthropic Coding Agents)
 
-Use `ai_rules/AI_CODING_RULES.md` as the single source of truth for this repository.
+Read [ai_rules/AI_CODING_RULES.md](ai_rules/AI_CODING_RULES.md) for the cross-tool baseline and [AGENTS.md](AGENTS.md) for the authoritative project behavior and validation contract. Use the Viewer/BirdStamp architecture links in AGENTS.md to locate code.
 
 ## Always Enforce
 

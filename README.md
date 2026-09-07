@@ -6,6 +6,13 @@
 - `SuperViewer/`：SuperViewer 模块，保留自身配置、图标、脚本与打包 spec。
 - `SuperBirdStamp/`：SuperBirdStamp 模块，保留自身包代码、模型、资源、脚本与打包 spec。
 
+## 开发文档导航
+
+- [项目行为与验证约束（AGENTS）](AGENTS.md)
+- [2026-09-07 审查、修复与后续建议](docs/REVIEW_2026-09-07.md)
+- [SuperViewer 架构与功能定位](SuperViewer/docs/ARCHITECTURE.md)
+- [SuperBirdStamp 架构与功能定位](SuperBirdStamp/docs/ARCHITECTURE.md)
+
 ## 目录原则
 
 - 每个 app 只维护自己独有的资源与构建脚本。
