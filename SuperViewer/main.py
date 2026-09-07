@@ -755,6 +755,7 @@ class MainWindow(QMainWindow):
             })
         elif meta_tag_id == META_DESCRIPTION_TAG_ID:
             meta_updates.update({
+                "comment": value,
                 "Description": value,
                 "XMP-dc:Description": value,
                 "XMP:Description": value,
@@ -974,6 +975,7 @@ class MainWindow(QMainWindow):
         self._file_list.sync_metadata_edit_for_path(
             source_path,
             meta_updates={
+                "comment": text,
                 "Description": text,
                 "XMP-dc:Description": text,
                 "XMP:Description": text,
