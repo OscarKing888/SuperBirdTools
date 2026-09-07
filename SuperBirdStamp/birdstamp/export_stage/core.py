@@ -23,6 +23,7 @@ from birdstamp import image_dejitter as _dejitter
 from birdstamp.config import get_app_dir, get_app_resource_dir, get_user_data_dir
 from birdstamp.decoders.image_decoder import decode_image
 from birdstamp.export_frame_cache import (
+    FrameCachePlan,
     SOURCE_FRAME_BUCKET_KIND,
     VIDEO_FRAME_BUCKET_KIND,
     build_source_frame_bucket_key,
@@ -1649,6 +1650,7 @@ def _ensure_source_frame_cache(
     bird_box_cache: dict[str, tuple[float, float, float, float] | None],
     bird_box_lock: threading.Lock,
     dirty_path_keys: set[str],
+    on_cache_created: Callable[[FrameCachePlan], None] | None = None,
 ) -> tuple[str, Any, list[Path]]:
     total = len(jobs)
     if any(
@@ -1687,6 +1689,8 @@ def _ensure_source_frame_cache(
         bucket_key=source_bucket_key,
         persistent=options.preserve_temp_files,
     )
+    if on_cache_created is not None:
+        on_cache_created(source_plan)
     manifest = load_frame_manifest(source_plan)
     source_plan.frames_dir.mkdir(parents=True, exist_ok=True)
     _prune_cache_frames(source_plan.frames_dir, manifest, total=total)
@@ -1864,6 +1868,7 @@ def _ensure_video_frame_cache(
     source_bucket_key: str,
     progress_callback: VideoExportProgressCallback | None,
     cancel_event: threading.Event | None,
+    on_cache_created: Callable[[FrameCachePlan], None] | None = None,
 ) -> tuple[Any, tuple[int, int], Path]:
     total = len(jobs)
     target_size = _resolve_target_size_from_source_frame(source_frame_paths[0], options)
@@ -1878,6 +1883,8 @@ def _ensure_video_frame_cache(
         bucket_key=video_bucket_key,
         persistent=options.preserve_temp_files,
     )
+    if on_cache_created is not None:
+        on_cache_created(video_plan)
     manifest = load_frame_manifest(video_plan)
     video_plan.frames_dir.mkdir(parents=True, exist_ok=True)
     _prune_cache_frames(video_plan.frames_dir, manifest, total=total)
@@ -2437,6 +2444,19 @@ def export_video(
     frames_dir: Path | None = None
     temp_output_path: Path | None = None
 
+    # Own each directory before any helper can fail or be cancelled. Waiting
+    # for its return value loses partially rendered caches during unwinding.
+    def own_source_cache(plan: FrameCachePlan) -> None:
+        nonlocal source_plan
+        source_plan = plan
+
+    def own_video_cache(plan: FrameCachePlan) -> None:
+        nonlocal video_plan, work_dir, frames_dir, temp_output_path
+        video_plan = plan
+        work_dir = plan.cache_dir
+        frames_dir = plan.frames_dir
+        temp_output_path = plan.cache_dir / output_path.name
+
     try:
         _raise_if_cancel_requested(cancel_event, message="视频导出已中断，尚未开始渲染。")
         source_bucket_key, source_plan, source_frame_paths = _ensure_source_frame_cache(
@@ -2449,6 +2469,7 @@ def export_video(
             bird_box_cache=bird_box_cache,
             bird_box_lock=bird_box_lock,
             dirty_path_keys=dirty_keys,
+            on_cache_created=own_source_cache,
         )
         video_plan, _target_size, temp_output_path = _ensure_video_frame_cache(
             source_frame_paths,
@@ -2458,6 +2479,7 @@ def export_video(
             source_bucket_key=source_bucket_key,
             progress_callback=progress_callback,
             cancel_event=cancel_event,
+            on_cache_created=own_video_cache,
         )
         work_dir = video_plan.cache_dir
         frames_dir = video_plan.frames_dir
