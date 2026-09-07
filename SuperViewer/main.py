@@ -128,6 +128,7 @@ try:
     from .superviewer.super_viewer_user_options_dialog import SuperViewerUserOptionsDialog
     from .superviewer.tagged_file_list import SuperViewerTaggedFileListPanel
     from .superviewer.tag_history_actions import TagHistoryActions
+    from .superviewer.ui_theme import get_ui_theme_manager, install_app_theme, panel_theme_colors
     from .superviewer import qt_compat
     from .superviewer.qt_compat import (
         QAction,
@@ -142,7 +143,6 @@ try:
         QLabel,
         QMainWindow,
         QMessageBox,
-        QPalette,
         QPainter,
         QPen,
         QPixmap,
@@ -204,6 +204,7 @@ except ImportError:
     from superviewer.super_viewer_user_options_dialog import SuperViewerUserOptionsDialog
     from superviewer.tagged_file_list import SuperViewerTaggedFileListPanel
     from superviewer.tag_history_actions import TagHistoryActions
+    from superviewer.ui_theme import get_ui_theme_manager, install_app_theme, panel_theme_colors
     from superviewer import qt_compat
     from superviewer.qt_compat import (
         QAction,
@@ -218,7 +219,6 @@ except ImportError:
         QLabel,
         QMainWindow,
         QMessageBox,
-        QPalette,
         QPainter,
         QPen,
         QPixmap,
@@ -355,7 +355,7 @@ class MainWindow(QMainWindow):
         left_layout.setContentsMargins(0, 0, 0, 0)
 
         self.file_label = QLabel("未选择图片")
-        self.file_label.setStyleSheet("color: #aaa; font-size: 12px;")
+        self.file_label.setStyleSheet("color: palette(text); font-size: 12px;")
         self.file_label.setWordWrap(True)
         left_layout.addWidget(self.file_label)
         overlay_row = QHBoxLayout()
@@ -482,6 +482,17 @@ class MainWindow(QMainWindow):
 
         if not initial_received_files:
             QTimer.singleShot(0, self._restore_last_selected_directory)
+
+        self._ui_theme_manager = get_ui_theme_manager()
+        if self._ui_theme_manager is not None:
+            self._ui_theme_manager.add_listener(self._apply_ui_theme)
+        self._apply_ui_theme()
+
+    def _apply_ui_theme(self, scheme=None) -> None:
+        if self._shutdown_requested:
+            return
+        colors = panel_theme_colors(scheme)
+        self.file_label.setStyleSheet("color: %s; font-size: 12px;" % colors.secondary_text)
 
     def _on_directory_selected(self, path: str):
         """目录树选中目录后，保存路径到设置与 .last_folder.txt，并刷新文件列表。"""
@@ -1268,6 +1279,9 @@ class MainWindow(QMainWindow):
             return
         if not self._shutdown_requested:
             self._shutdown_requested = True
+            if self._ui_theme_manager is not None:
+                self._ui_theme_manager.remove_listener(self._apply_ui_theme)
+                self._ui_theme_manager = None
             self._shutdown_started_at = _time.monotonic()
             _log.info("[shutdown] requested; stopping background work")
             try:
@@ -1387,14 +1401,7 @@ def main():
     icon_path = _get_app_icon_path()
     if icon_path:
         app.setWindowIcon(QIcon(icon_path))
-    app.setStyle("Fusion")
-    palette = QPalette()
-    palette.setColor(QPalette.ColorRole.Window, QColor(45, 45, 45))
-    palette.setColor(QPalette.ColorRole.WindowText, QColor(220, 220, 220))
-    palette.setColor(QPalette.ColorRole.Base, QColor(35, 35, 35))
-    palette.setColor(QPalette.ColorRole.AlternateBase, QColor(50, 50, 50))
-    palette.setColor(QPalette.ColorRole.Text, QColor(220, 220, 220))
-    app.setPalette(palette)
+    install_app_theme(app)
     window = MainWindow(initial_received_files=argv_files if argv_files else None)
 
     # 单例接收：其它进程「发送到本应用」时回调到主线程

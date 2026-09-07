@@ -7,9 +7,11 @@ import time as _time
 
 from app_common.log import get_logger
 from app_common.perf_probe import perf_log
+from app_common.qt_theme import is_theme_change_event
 
 from .image_info_tab_base import ImageInfoTabPanel
 from .qt_compat import QTabWidget
+from .ui_theme import ColorSchemeName, get_ui_theme_manager, panel_theme_colors
 
 
 _log = get_logger("superviewer.image_info_tabs")
@@ -19,18 +21,63 @@ class ImageInfoTabWidget(QTabWidget):
     """Container that dispatches image-selection events to all info tabs."""
 
     def __init__(self, parent=None) -> None:
+        self._theme_ready = False
+        self._theme_broadcast_in_progress = False
+        self._theme_manager = None
         super().__init__(parent)
         self._panels: list[ImageInfoTabPanel] = []
         self._pending_panels: set[ImageInfoTabPanel] = set()
         self._shutdown_requested = False
         self.currentChanged.connect(self._on_current_tab_changed)
+        self._theme_ready = True
+        self._attach_theme_listener()
 
     def add_info_panel(self, panel: ImageInfoTabPanel) -> None:
+        self._attach_theme_listener()
         self._panels.append(panel)
         self.addTab(panel, panel.tab_title)
+        panel.apply_theme(panel_theme_colors())
 
     def panels(self) -> list[ImageInfoTabPanel]:
         return list(self._panels)
+
+    def apply_theme(self, scheme: ColorSchemeName | None = None) -> None:
+        """Restyle all tabs without consuming their pending metadata refresh."""
+        if self._shutdown_requested or self._theme_broadcast_in_progress:
+            return
+        self._attach_theme_listener()
+        colors = panel_theme_colors(scheme)
+        self._theme_broadcast_in_progress = True
+        try:
+            for panel in self._panels:
+                try:
+                    panel.apply_theme(colors)
+                except Exception:
+                    _log.exception("Theme update failed for info panel %s", type(panel).__name__)
+        finally:
+            self._theme_broadcast_in_progress = False
+
+    def _attach_theme_listener(self) -> None:
+        if self._shutdown_requested:
+            return
+        manager = get_ui_theme_manager()
+        if manager is self._theme_manager:
+            return
+        self._detach_theme_listener()
+        if manager is not None and not manager.closed:
+            manager.add_listener(self.apply_theme)
+            self._theme_manager = manager
+
+    def _detach_theme_listener(self) -> None:
+        manager = self._theme_manager
+        self._theme_manager = None
+        if manager is not None:
+            manager.remove_listener(self.apply_theme)
+
+    def changeEvent(self, event) -> None:  # type: ignore[override]
+        super().changeEvent(event)
+        if self._theme_ready and is_theme_change_event(event):
+            self.apply_theme()
 
     def on_photo_selected(self, path: str) -> dict[str, object]:
         total_t0 = _time.perf_counter()
@@ -77,6 +124,7 @@ class ImageInfoTabWidget(QTabWidget):
             return
         self._shutdown_requested = True
         self._pending_panels.clear()
+        self._detach_theme_listener()
         for panel in self._panels:
             request_shutdown = getattr(panel, "request_shutdown", None)
             if not callable(request_shutdown):

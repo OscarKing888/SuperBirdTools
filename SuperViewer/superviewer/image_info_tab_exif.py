@@ -6,6 +6,7 @@ import os
 from typing import Callable
 
 from .image_info_tab_base import ImageInfoTabPanel
+from .ui_theme import PanelThemeColors, current_panel_colors
 from .qt_compat import (
     QCheckBox,
     QHBoxLayout,
@@ -81,7 +82,6 @@ class ImageInfoTabPanel_EXIF(ImageInfoTabPanel):
         self.exif_filter = QLineEdit()
         self.exif_filter.setPlaceholderText("按分组、标签或值过滤…")
         self.exif_filter.setClearButtonEnabled(True)
-        self.exif_filter.setStyleSheet("QLineEdit { padding: 6px; font-size: 13px; }")
         self.exif_filter.textChanged.connect(self._on_exif_filter_changed)
         top_row.addWidget(self.exif_filter, stretch=1)
 
@@ -100,6 +100,16 @@ class ImageInfoTabPanel_EXIF(ImageInfoTabPanel):
         self.exif_table = ExifTable(self)
         self.exif_table.set_save_callback(self._save_callback)
         layout.addWidget(self.exif_table, stretch=1)
+
+    def apply_theme(self, colors: PanelThemeColors | None = None) -> None:
+        theme = colors or current_panel_colors()
+        self.exif_filter.setStyleSheet(
+            "QLineEdit { padding: 6px; font-size: 13px; "
+            "border: 1px solid %s; border-radius: 6px; }"
+            % theme.input_border
+        )
+        self.exif_table.viewport().update()
+        self.exif_table.update()
 
     def refresh_ui(self) -> list[tuple]:
         from .exif_helpers import load_tag_label_chinese_from_settings

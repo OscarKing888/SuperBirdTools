@@ -48,10 +48,10 @@ from .qt_compat import (
     _AlignCenter,
 )
 from .tag_menu import add_filterable_tag_actions
+from .ui_theme import PanelThemeColors, current_panel_colors
 
 
 _PREVIEW_HEIGHT = 180
-_BASIC_ROW_VALUE_STYLE = "color: #cfcfcf; font-size: 13px;"
 _BASIC_INFO_ROWS = (
     "鸟名",
     #"文件夹",
@@ -252,6 +252,10 @@ class ImageInfoTabPanel_ImageInfo(ImageInfoTabPanel):
         self._current_comment = ""
         self._updating_comment = False
         self._updating_name = False
+        self._section_title_labels: list[QLabel] = []
+        self._separator_lines: list[QFrame] = []
+        self._basic_label_widgets: list[QLabel] = []
+        self._theme_colors = current_panel_colors()
         super().__init__(parent)
 
     def _writes_allowed(self, path: str | None = None) -> bool:
@@ -313,27 +317,15 @@ class ImageInfoTabPanel_ImageInfo(ImageInfoTabPanel):
         self.preview_label.setAlignment(_AlignCenter)
         self.preview_label.setFixedHeight(_PREVIEW_HEIGHT)
         self.preview_label.setSizePolicy(QSizePolicy.Policy.Expanding if hasattr(QSizePolicy, "Policy") else QSizePolicy.Expanding, QSizePolicy.Policy.Fixed if hasattr(QSizePolicy, "Policy") else QSizePolicy.Fixed)
-        self.preview_label.setStyleSheet(
-            "QLabel { background: #202124; border: 1px solid #36383d; "
-            "border-radius: 8px; color: #888; }"
-        )
         #layout.addWidget(self.preview_label)
 
         self.comment_edit = _CommentTextEdit(self._commit_comment_edit)
         self.comment_edit.setFixedHeight(120)
         self.comment_edit.setPlaceholderText("添加注释")
-        self.comment_edit.setStyleSheet(
-            "QTextEdit { padding: 8px 10px; font-size: 14px; "
-            "border: 1px solid #303238; border-radius: 7px; }"
-        )
         layout.addWidget(self.comment_edit)
 
         self.filename_edit = QLineEdit()
         self.filename_edit.setPlaceholderText("文件名")
-        self.filename_edit.setStyleSheet(
-            "QLineEdit { padding: 8px 10px; font-size: 14px; "
-            "border: 1px solid #303238; border-radius: 7px; }"
-        )
         self.filename_edit.editingFinished.connect(self._commit_filename_edit)
         layout.addWidget(self.filename_edit)
 
@@ -353,6 +345,47 @@ class ImageInfoTabPanel_ImageInfo(ImageInfoTabPanel):
 
         layout.addStretch(1)
         scroll.setWidget(content)
+
+    def apply_theme(self, colors: PanelThemeColors | None = None) -> None:
+        theme = colors or current_panel_colors()
+        self._theme_colors = theme
+        self.preview_label.setStyleSheet(
+            "QLabel { background: %s; border: 1px solid %s; "
+            "border-radius: 8px; color: %s; }"
+            % (theme.preview_bg, theme.preview_border, theme.preview_text)
+        )
+        self.comment_edit.setStyleSheet(
+            "QTextEdit { padding: 8px 10px; font-size: 14px; "
+            "border: 1px solid %s; border-radius: 7px; }" % theme.input_border
+        )
+        self.filename_edit.setStyleSheet(
+            "QLineEdit { padding: 8px 10px; font-size: 14px; "
+            "border: 1px solid %s; border-radius: 7px; }" % theme.input_border
+        )
+        for label in self._section_title_labels:
+            label.setStyleSheet(
+                "color: %s; font-size: 13px; font-weight: 600;" % theme.section_title
+            )
+        for line in self._separator_lines:
+            line.setStyleSheet("color: %s;" % theme.separator)
+        for label in self._basic_label_widgets:
+            label.setStyleSheet("color: %s; font-size: 13px;" % theme.label_text)
+        for key, label in self.basic_rows.items():
+            self._apply_basic_row_style(key, label.text(), label)
+        # Style existing and future chips through their container. Do not
+        # rebuild them here: that rechecks files and can discard focused UI.
+        self.tags_container.setStyleSheet(
+            "QFrame#svTagChip { border: 1px solid %s; border-radius: 7px; background: %s; }"
+            "QLabel#svTagChipLabel { color: %s; font-size: 13px; border: none; background: transparent; }"
+            "QToolButton#svTagRemove { color: %s; border: none; font-size: 14px; }"
+            "QToolButton#svTagAdd { padding: 5px 10px; border: 1px solid %s; border-radius: 7px; "
+            "background: %s; color: %s; font-size: 13px; }"
+            "QToolButton#svTagAdd:hover { background: %s; }"
+            % (
+                theme.chip_border, theme.chip_bg, theme.chip_text, theme.chip_btn,
+                theme.button_border, theme.button_bg, theme.button_text, theme.button_hover,
+            )
+        )
 
     def refresh_ui(self) -> dict[str, str]:
         t0 = _time.perf_counter()
@@ -418,7 +451,7 @@ class ImageInfoTabPanel_ImageInfo(ImageInfoTabPanel):
 
     def _section_title(self, text: str) -> QLabel:
         label = QLabel(text)
-        label.setStyleSheet("color: #b8b8b8; font-size: 13px; font-weight: 600;")
+        self._section_title_labels.append(label)
         return label
 
     def _add_separator(self, layout: QVBoxLayout) -> None:
@@ -429,7 +462,7 @@ class ImageInfoTabPanel_ImageInfo(ImageInfoTabPanel):
         else:
             line.setFrameShape(QFrame.HLine)
             line.setFrameShadow(QFrame.Plain)
-        line.setStyleSheet("color: #303238;")
+        self._separator_lines.append(line)
         layout.addWidget(line)
 
     def _add_basic_row(self, layout: QVBoxLayout, label_text: str) -> None:
@@ -437,10 +470,10 @@ class ImageInfoTabPanel_ImageInfo(ImageInfoTabPanel):
         row.setSpacing(8)
         label = QLabel(label_text)
         label.setFixedWidth(64)
-        label.setStyleSheet("color: #d7d7d7; font-size: 13px;")
+        self._basic_label_widgets.append(label)
         value = QLabel("-")
         value.setWordWrap(True)
-        value.setStyleSheet(_BASIC_ROW_VALUE_STYLE)
+        value.setStyleSheet("color: %s; font-size: 13px;" % self._theme_colors.value_text)
         row.addWidget(label)
         row.addWidget(value, stretch=1)
         layout.addLayout(row)
@@ -512,15 +545,12 @@ class ImageInfoTabPanel_ImageInfo(ImageInfoTabPanel):
 
     def _make_tag_chip(self, tag: str) -> QWidget:
         chip = QFrame()
-        chip.setStyleSheet(
-            "QFrame { border: 1px solid #4a4c52; border-radius: 7px; "
-            "background: #2b2d31; }"
-        )
+        chip.setObjectName("svTagChip")
         layout = QHBoxLayout(chip)
         layout.setContentsMargins(9, 4, 5, 4)
         layout.setSpacing(5)
         label = QLabel(tag)
-        label.setStyleSheet("color: #f0f0f0; font-size: 13px; border: none; background: transparent;")
+        label.setObjectName("svTagChipLabel")
         btn = QToolButton(chip)
         btn.setText("×")
         btn.setToolTip(f"删除标签「{tag}」")
@@ -529,7 +559,7 @@ class ImageInfoTabPanel_ImageInfo(ImageInfoTabPanel):
         if not can_write:
             btn.setToolTip(self._tag_write_disabled_tooltip("删除标签"))
         btn.setAutoRaise(True)
-        btn.setStyleSheet("QToolButton { color: #aaa; border: none; font-size: 14px; }")
+        btn.setObjectName("svTagRemove")
         btn.clicked.connect(lambda checked=False, t=tag: self._set_current_tag(t, False))
         layout.addWidget(label)
         layout.addWidget(btn)
@@ -540,11 +570,7 @@ class ImageInfoTabPanel_ImageInfo(ImageInfoTabPanel):
         btn.setText(str(text or ""))
         btn.setToolTip("添加标签")
         btn.setAutoRaise(False)
-        btn.setStyleSheet(
-            "QToolButton { padding: 5px 10px; border: 1px solid #34363b; "
-            "border-radius: 7px; background: #2a2c30; color: #e6e6e6; font-size: 13px; }"
-            "QToolButton:hover { background: #34373d; }"
-        )
+        btn.setObjectName("svTagAdd")
         btn.clicked.connect(lambda checked=False, b=btn: self._show_add_tag_menu(b))
         return btn
 
@@ -793,7 +819,7 @@ class ImageInfoTabPanel_ImageInfo(ImageInfoTabPanel):
         if key == "对焦" and value and value != "-":
             label.setStyleSheet(f"color: {_focus_status_text_color(value)}; font-size: 13px;")
         else:
-            label.setStyleSheet(_BASIC_ROW_VALUE_STYLE)
+            label.setStyleSheet("color: %s; font-size: 13px;" % self._theme_colors.value_text)
 
 
 __all__ = [

@@ -13,6 +13,7 @@ from app_common.file_browser._browser_core import _metadata_comment_from_meta
 from app_common.image_formats import HEIF_EXTENSIONS, RAW_EXTENSIONS
 from app_common.perf_probe import elapsed_ms, perf_counter, perf_log
 from app_common.log import get_logger
+from app_common.qt_theme import is_theme_change_event, scheme_from_palette
 
 from .photo_tags import (
     PhotoTagConfig,
@@ -26,33 +27,32 @@ from .photo_tags import (
 from .qt_compat import QCheckBox, QHBoxLayout, QLabel, QMenu, QMessageBox, QThread, QTimer, QToolButton, pyqtSignal
 from .photo_tag_commands import ClearPhotoTagsCommand, SetPhotoTagCommand
 from .tag_menu import add_filterable_tag_actions
+from .ui_theme import PanelThemeColors, panel_theme_colors
 
 
 _log = get_logger("superviewer.tagged_file_list")
 
-_TAG_FILTER_BUTTON_STYLE = (
-    "QToolButton {"
-    "font-size: 11px; padding: 1px 7px; min-width: 38px; "
-    "border-radius: 9px; border: 1px solid rgba(160, 160, 160, 120); "
-    "background: rgba(160, 160, 160, 26); color: #d7d7d7;"
-    "}"
-    "QToolButton:hover { background: rgba(160, 160, 160, 48); }"
-    "QToolButton:checked {"
-    "background: rgba(80, 150, 120, 120); border: 1px solid #5fb68e; color: #ffffff;"
-    "}"
-)
-_TAG_FILTER_CLEAR_BUTTON_STYLE = (
-    "QToolButton {"
-    "font-size: 11px; padding: 1px 7px; min-width: 38px; "
-    "border-radius: 9px; border: 1px solid rgba(180, 110, 110, 120); "
-    "background: rgba(180, 80, 80, 28); color: #e3c4c4;"
-    "}"
-    "QToolButton:hover { background: rgba(180, 80, 80, 52); color: #ffffff; }"
-)
 _TAG_FILTER_INLINE_LIMIT = 8
 _PHOTO_TAG_CACHE_BATCH_SIZE = 256
 _PHOTO_TAG_FILTER_REFRESH_MS = 750
 _FOCUS_SOURCE_PREFERRED_EXTENSIONS = (".arw", ".hif", ".heif", ".heic")
+
+
+def _tag_filter_button_style(colors: PanelThemeColors, *, clear: bool = False) -> str:
+    text = colors.secondary_text if clear else colors.chip_text
+    background = colors.button_bg if clear else colors.chip_bg
+    return (
+        "QToolButton {"
+        "font-size: 11px; padding: 1px 7px; min-width: 38px; "
+        f"border-radius: 9px; border: 1px solid {colors.chip_border}; "
+        f"background: {background}; color: {text};"
+        "}"
+        f"QToolButton:hover {{ background: {colors.button_hover}; }}"
+        "QToolButton:checked {"
+        "background: palette(highlight); border: 1px solid palette(highlight); "
+        "color: palette(highlighted-text);"
+        "}"
+    )
 
 
 def _focus_source_extension_ranks() -> dict[str, int]:
@@ -244,6 +244,9 @@ class SuperViewerTaggedFileListPanel(FileListPanel):
         self._tag_filter_exact_match_checkbox: QCheckBox | None = None
         self._tag_filter_menu_button: QToolButton | None = None
         self._tag_filter_clear_button: QToolButton | None = None
+        self._tag_filter_title_label: QLabel | None = None
+        self._tag_filter_empty_label: QLabel | None = None
+        self._tag_filter_theme_applying = False
         self._photo_tag_store = tag_store or PhotoTagSidecarStore()
         self._photo_tag_cache: dict[str, set[str]] = {}
         self._photo_tag_generation_by_path: dict[str, int] = {}
@@ -267,6 +270,35 @@ class SuperViewerTaggedFileListPanel(FileListPanel):
         if self._filter_edit is not None:
             self._filter_edit.setPlaceholderText("过滤文件名/备注/标签…")
             self._filter_edit.setToolTip("空格分隔多个关键词；每个关键词可匹配文件名、备注或照片标签，需全部命中。")
+
+    def changeEvent(self, event) -> None:
+        super().changeEvent(event)
+        if getattr(self, "_tag_filter_bar", None) is not None and is_theme_change_event(event):
+            self._apply_tag_filter_theme()
+
+    def _apply_tag_filter_theme(self) -> None:
+        """Restyle existing filter controls without changing photo or filter state."""
+        if self._tag_filter_bar is None or self._tag_filter_theme_applying or self._tag_shutdown_requested:
+            return
+        self._tag_filter_theme_applying = True
+        try:
+            colors = panel_theme_colors(scheme_from_palette(self.palette()))
+            button_style = _tag_filter_button_style(colors)
+            styled_widgets = [
+                (button, button_style) for button in self._tag_filter_buttons.values()
+            ]
+            styled_widgets.extend((
+                (self._tag_filter_menu_button, button_style),
+                (self._tag_filter_clear_button, _tag_filter_button_style(colors, clear=True)),
+                (self._tag_filter_title_label, f"color: {colors.secondary_text}; font-size: 11px;"),
+                (self._tag_filter_empty_label, f"color: {colors.muted_text}; font-size: 11px;"),
+                (self._tag_filter_exact_match_checkbox, f"QCheckBox {{ color: {colors.label_text}; font-size: 11px; }}"),
+            ))
+            for widget, style in styled_widgets:
+                if widget is not None and widget.styleSheet() != style:
+                    widget.setStyleSheet(style)
+        finally:
+            self._tag_filter_theme_applying = False
 
     def close_tag_store(self) -> None:
         self._stop_photo_tag_cache_loader()
@@ -618,24 +650,26 @@ class SuperViewerTaggedFileListPanel(FileListPanel):
         self._tag_filter_exact_match_checkbox = None
         self._tag_filter_menu_button = None
         self._tag_filter_clear_button = None
+        self._tag_filter_title_label = None
+        self._tag_filter_empty_label = None
 
         title = QLabel("标签过滤:")
-        title.setStyleSheet("color: #aaa; font-size: 11px;")
+        self._tag_filter_title_label = title
         layout.addWidget(title)
 
         exact_match_checkbox = QCheckBox("完全匹配")
         exact_match_checkbox.setChecked(not self._tag_filter_partial_match)
         exact_match_checkbox.setToolTip("勾选：照片必须包含所有已选标签；取消勾选：任意已选标签部分匹配即可。")
-        exact_match_checkbox.setStyleSheet("QCheckBox { color: #d7d7d7; font-size: 11px; }")
         exact_match_checkbox.toggled.connect(self._on_tag_exact_match_toggled)
         self._tag_filter_exact_match_checkbox = exact_match_checkbox
         layout.addWidget(exact_match_checkbox)
 
         if not self._available_tags:
             empty = QLabel("tags.cfg 未配置")
-            empty.setStyleSheet("color: #777; font-size: 11px;")
+            self._tag_filter_empty_label = empty
             layout.addWidget(empty)
             layout.addStretch()
+            self._apply_tag_filter_theme()
             self._sync_tag_filter_widgets()
             return
 
@@ -648,7 +682,6 @@ class SuperViewerTaggedFileListPanel(FileListPanel):
         if len(inline_tags) < len(self._available_tags) or any(node.is_group for node in self._available_tag_tree):
             more_btn = QToolButton()
             more_btn.setAutoRaise(False)
-            more_btn.setStyleSheet(_TAG_FILTER_BUTTON_STYLE)
             more_btn.clicked.connect(lambda checked=False, b=more_btn: self._show_tag_filter_menu(b))
             self._tag_filter_menu_button = more_btn
             layout.addWidget(more_btn)
@@ -657,11 +690,11 @@ class SuperViewerTaggedFileListPanel(FileListPanel):
         clear_btn.setText("清除")
         clear_btn.setToolTip("清除所有标签过滤")
         clear_btn.setAutoRaise(False)
-        clear_btn.setStyleSheet(_TAG_FILTER_CLEAR_BUTTON_STYLE)
         clear_btn.clicked.connect(lambda checked=False: self._clear_tag_filters())
         self._tag_filter_clear_button = clear_btn
         layout.addWidget(clear_btn)
         layout.addStretch()
+        self._apply_tag_filter_theme()
         self._sync_tag_filter_widgets()
 
     def _inline_tag_filter_tags(self) -> list[str]:
@@ -687,7 +720,6 @@ class SuperViewerTaggedFileListPanel(FileListPanel):
         btn.setCheckable(True)
         btn.setChecked(tag in self._active_tag_filters)
         btn.setAutoRaise(False)
-        btn.setStyleSheet(_TAG_FILTER_BUTTON_STYLE)
         btn.clicked.connect(lambda checked=False, t=tag: self._on_tag_filter_toggled(t, bool(checked)))
         return btn
 
