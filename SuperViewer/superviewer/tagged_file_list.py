@@ -130,6 +130,8 @@ class PhotoTagCacheWorker(QThread):
         self._allowed_tags = list(allowed_tags or [])
         self._batch_size = max(1, int(batch_size or _PHOTO_TAG_CACHE_BATCH_SIZE))
         self._stop_event = threading.Event()
+        self._finished_processed = 0
+        self._finished_total = 0
 
     def stop(self) -> None:
         self._stop_event.set()
@@ -138,10 +140,14 @@ class PhotoTagCacheWorker(QThread):
     def _stopped(self) -> bool:
         return self._stop_event.is_set() or self.isInterruptionRequested()
 
+    def finished_counts(self) -> tuple[int, int]:
+        return self._finished_processed, self._finished_total
+
     def run(self) -> None:
         paths = _norm_paths(self._paths)
         total = len(paths)
         processed = 0
+        self._finished_total = total
         if total <= 0 or self._stopped():
             self.finished_summary.emit(0, total)
             return
@@ -170,6 +176,7 @@ class PhotoTagCacheWorker(QThread):
                     self.batch_ready.emit(payload)
                     self.progress_updated.emit(min(processed, total), total)
         finally:
+            self._finished_processed = processed
             try:
                 store.close()
             except Exception:
@@ -214,7 +221,9 @@ class SuperViewerTaggedFileListPanel(FileListPanel):
         self._tag_filter_clear_button: QToolButton | None = None
         self._photo_tag_store = tag_store or PhotoTagSidecarStore()
         self._photo_tag_cache: dict[str, set[str]] = {}
+        self._photo_tag_generation_by_path: dict[str, int] = {}
         self._photo_tag_loader: PhotoTagCacheWorker | None = None
+        self._photo_tag_stopping_loader: PhotoTagCacheWorker | None = None
         self._photo_tag_cache_complete = False
         self._photo_tag_cache_done = 0
         self._photo_tag_cache_total = 0
@@ -237,8 +246,9 @@ class SuperViewerTaggedFileListPanel(FileListPanel):
         if self._tag_shutdown_requested:
             return
         self._tag_shutdown_requested = True
+        self._request_background_shutdown()
         try:
-            self.stop_key_navigation_playback()
+            self.stop_key_navigation_playback(commit=False)
         except Exception:
             pass
         self._stop_photo_tag_cache_loader()
@@ -255,6 +265,9 @@ class SuperViewerTaggedFileListPanel(FileListPanel):
         self.request_shutdown()
         super()._shutdown_background_work()
         self._photo_tag_store.close()
+        worker = self._photo_tag_stopping_loader
+        if worker is not None and not worker.isRunning():
+            self._on_photo_tag_cache_thread_finished(worker)
         self._tag_shutdown_complete = True
 
     def _stop_all_loaders(self) -> None:
@@ -321,6 +334,7 @@ class SuperViewerTaggedFileListPanel(FileListPanel):
         tag_config_scope_changed = self._set_tag_config_directory(path)
         self._load_tag_config_if_changed(force=tag_config_scope_changed)
         self._photo_tag_cache = {}
+        self._photo_tag_generation_by_path = {}
         self._photo_tag_cache_complete = False
         self._photo_tag_cache_done = 0
         self._photo_tag_cache_total = 0
@@ -362,6 +376,9 @@ class SuperViewerTaggedFileListPanel(FileListPanel):
         self._probe_log("photo_tag_cache.after_listing", files=len(files), elapsed_ms=elapsed_ms(apply_t0))
 
     def _on_metadata_batch_ready(self, meta_dict: dict) -> None:
+        if not self._is_current_metadata_sender():
+            return
+        meta_dict = self._merge_metadata_batch_with_photo_tag_cache(meta_dict)
         super()._on_metadata_batch_ready(meta_dict)
         changed = self._seed_photo_tag_cache_from_meta(meta_dict.keys())
         if changed:
@@ -671,6 +688,7 @@ class SuperViewerTaggedFileListPanel(FileListPanel):
         if new_tags != self._available_tags:
             self._stop_photo_tag_cache_loader()
             self._photo_tag_cache = {}
+            self._photo_tag_generation_by_path = {}
             self._photo_tag_cache_complete = False
             self._photo_tag_cache_done = 0
             self._photo_tag_cache_total = 0
@@ -695,10 +713,11 @@ class SuperViewerTaggedFileListPanel(FileListPanel):
         timer = self._photo_tag_filter_refresh_timer
         if timer is not None and timer.isActive():
             timer.stop()
-        worker = self._photo_tag_loader
+        worker = self._photo_tag_loader or self._photo_tag_stopping_loader
         self._photo_tag_loader = None
         if worker is None:
             return
+        self._photo_tag_stopping_loader = worker
         try:
             worker.stop()
         except Exception:
@@ -707,14 +726,6 @@ class SuperViewerTaggedFileListPanel(FileListPanel):
             if worker.isRunning():
                 if worker not in self._pending_loaders:
                     self._pending_loaders.append(worker)
-                worker.finished.connect(
-                    lambda ldr=worker: (
-                        self._pending_loaders.remove(ldr)
-                        if ldr in self._pending_loaders else None
-                    )
-                )
-            else:
-                worker.deleteLater()
         except Exception:
             pass
 
@@ -774,8 +785,10 @@ class SuperViewerTaggedFileListPanel(FileListPanel):
         path_list = [path for path in path_list if path not in self._photo_tag_cache]
         if not path_list:
             return
-        worker = self._photo_tag_loader
-        if worker is not None and worker.isRunning():
+        worker = self._photo_tag_loader or self._photo_tag_stopping_loader
+        if worker is not None:
+            # Keep ownership until the queued QThread.finished slot runs,
+            # including the interval after run() returns but before delivery.
             pending_keys = {os.path.normcase(path) for path in self._photo_tag_pending_paths}
             for path in path_list:
                 key = os.path.normcase(path)
@@ -801,6 +814,10 @@ class SuperViewerTaggedFileListPanel(FileListPanel):
         )
 
         worker = PhotoTagCacheWorker(path_list, allowed_tags=self._available_tags)
+        worker._tag_generation_snapshot = {
+            os.path.normcase(path): self._photo_tag_generation(path)
+            for path in path_list
+        }
         self._photo_tag_loader = worker
         worker.batch_ready.connect(
             lambda batch, ldr=worker: self._on_photo_tag_cache_batch_ready(ldr, batch)
@@ -811,16 +828,24 @@ class SuperViewerTaggedFileListPanel(FileListPanel):
         worker.finished_summary.connect(
             lambda done, total, ldr=worker: self._on_photo_tag_cache_finished(ldr, done, total)
         )
-        worker.finished.connect(lambda ldr=worker: ldr.deleteLater())
+        worker.finished.connect(lambda ldr=worker: self._on_photo_tag_cache_thread_finished(ldr))
         worker.start()
 
     def _on_photo_tag_cache_batch_ready(self, worker: PhotoTagCacheWorker, batch: dict[str, set[str]]) -> None:
         if worker is not self._photo_tag_loader or not batch:
             return
+        snapshot = getattr(worker, "_tag_generation_snapshot", {})
+        accepted: list[str] = []
         for path, tags in batch.items():
-            self._photo_tag_cache[os.path.normpath(path)] = set(tags or set())
-        self._sync_photo_tags_to_meta_cache(batch.keys())
-        self.photo_tags_cache_updated.emit(_norm_paths(batch.keys()))
+            norm_path = os.path.normpath(path)
+            if snapshot.get(os.path.normcase(norm_path), 0) != self._photo_tag_generation(norm_path):
+                continue
+            self._photo_tag_cache[norm_path] = set(tags or set())
+            accepted.append(norm_path)
+        if not accepted:
+            return
+        self._sync_photo_tags_to_meta_cache(accepted)
+        self.photo_tags_cache_updated.emit(accepted)
         self._schedule_photo_tag_filter_refresh()
 
     def _on_photo_tag_cache_progress(self, worker: PhotoTagCacheWorker, done: int, total: int) -> None:
@@ -858,7 +883,34 @@ class SuperViewerTaggedFileListPanel(FileListPanel):
     def _on_photo_tag_cache_finished(self, worker: PhotoTagCacheWorker, done: int, total: int) -> None:
         if worker is not self._photo_tag_loader:
             return
+        # The summary is emitted inside run(); the thread still owns its work.
+        self._photo_tag_cache_done = max(0, int(done or 0))
+        self._photo_tag_cache_total = max(0, int(total or 0))
+
+    def _on_photo_tag_cache_thread_finished(self, worker: PhotoTagCacheWorker) -> None:
+        if worker in self._pending_loaders:
+            self._pending_loaders.remove(worker)
+        if worker is self._photo_tag_stopping_loader:
+            self._photo_tag_stopping_loader = None
+            pending = self._photo_tag_pending_paths
+            self._photo_tag_pending_paths = []
+            if pending and not self._tag_shutdown_requested:
+                self._start_photo_tag_cache_loader_if_needed(
+                    pending, reason="pending_after_stop", allow_without_filters=True,
+                )
+            try:
+                worker.deleteLater()
+            except RuntimeError:
+                pass
+            return
+        if worker is not self._photo_tag_loader:
+            try:
+                worker.deleteLater()
+            except RuntimeError:
+                pass
+            return
         self._photo_tag_loader = None
+        done, total = worker.finished_counts()
         self._photo_tag_cache_done = max(0, int(done or 0))
         self._photo_tag_cache_total = max(0, int(total or 0))
         worker_complete = (
@@ -897,9 +949,11 @@ class SuperViewerTaggedFileListPanel(FileListPanel):
                 reason="pending_on_demand",
                 allow_without_filters=True,
             )
+        worker.deleteLater()
 
     def _refresh_photo_tag_cache(self, paths: Iterable[str]) -> None:
         norm_paths = _norm_paths(paths)
+        self._bump_photo_tag_generations(norm_paths)
         cache = {path: set() for path in norm_paths}
         try:
             cache.update(self._photo_tag_store.load_tags_for_paths(norm_paths, allowed_tags=self._available_tags))
@@ -913,6 +967,7 @@ class SuperViewerTaggedFileListPanel(FileListPanel):
         norm_paths = _norm_paths(paths)
         if not norm_paths:
             return
+        self._bump_photo_tag_generations(norm_paths)
         try:
             fresh = self._photo_tag_store.load_tags_for_paths(norm_paths, allowed_tags=self._available_tags)
         except Exception as exc:
@@ -922,6 +977,32 @@ class SuperViewerTaggedFileListPanel(FileListPanel):
             self._photo_tag_cache[path] = set(fresh.get(path, set()))
         self._sync_photo_tags_to_meta_cache(norm_paths)
         self.photo_tags_cache_updated.emit(norm_paths)
+
+    def _photo_tag_generation(self, path: str) -> int:
+        key = os.path.normcase(os.path.normpath(path)) if path else ""
+        return self._photo_tag_generation_by_path.get(key, 0)
+
+    def _bump_photo_tag_generations(self, paths: Iterable[str]) -> None:
+        for path in _norm_paths(paths):
+            key = os.path.normcase(path)
+            self._photo_tag_generation_by_path[key] = (
+                self._photo_tag_generation_by_path.get(key, 0) + 1
+            )
+
+    def _merge_metadata_batch_with_photo_tag_cache(self, meta_dict: dict) -> dict:
+        """Keep locally edited tags when an older metadata read arrives late."""
+        order = {tag: index for index, tag in enumerate(self._available_tags)}
+        merged = {}
+        for path, metadata in meta_dict.items():
+            norm_path = os.path.normpath(path) if path else path
+            tags = self._photo_tag_cache.get(norm_path)
+            if tags is None or not self._photo_tag_generation(norm_path):
+                merged[norm_path] = metadata
+                continue
+            item = dict(metadata) if isinstance(metadata, dict) else {}
+            item["tags"] = sorted(tags, key=lambda tag: (order.get(tag, len(order)), tag))
+            merged[norm_path] = item
+        return merged
 
     def _sync_photo_tags_to_meta_cache(self, paths: Iterable[str]) -> None:
         order = {tag: i for i, tag in enumerate(self._available_tags)}
