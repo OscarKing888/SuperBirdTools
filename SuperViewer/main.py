@@ -415,6 +415,8 @@ class MainWindow(QMainWindow):
         overlay_row.addStretch(1)
         left_layout.addLayout(overlay_row)
         self.preview_panel = PreviewPanel(central)
+        self.preview_panel.set_quick_preview_provider(self._file_list.cached_quick_preview_for_path)
+        self.preview_panel.full_preview_ready.connect(self._on_full_preview_ready)
         self.preview_panel.set_show_focus_enabled(self.check_show_focus.isChecked())
         self.preview_panel.set_composition_grid_mode(self.combo_preview_grid.currentData())
         self.preview_panel.set_composition_grid_line_width(self.combo_preview_grid_line_width.currentData())
@@ -431,7 +433,7 @@ class MainWindow(QMainWindow):
             self._file_list.photo_tags_for_path,
             self._file_list.set_photo_tag_for_paths,
             self._rename_photo_from_info_panel,
-            metadata_provider=lambda path: self._file_list.get_photo_metadata_for_path(path, allow_slow_read=True),
+            metadata_provider=self._file_list.cached_photo_metadata_for_path,
             comment_save_callback=self._save_photo_comment_from_info_panel,
             preview_pixmap_provider=self.preview_panel.source_pixmap_for_path,
             write_enabled_provider=self._file_writes_allowed,
@@ -458,6 +460,7 @@ class MainWindow(QMainWindow):
         self.image_info_tabs.add_info_panel(self.tags_info_panel)
         self.image_info_tabs.add_info_panel(self.exif_info_panel)
         self._file_list.photo_tags_cache_updated.connect(self._on_photo_tags_cache_updated)
+        self._file_list.photo_metadata_cache_updated.connect(self._on_photo_metadata_cache_updated)
         self.image_info_tabs.on_photo_selected("")
         splitter.addWidget(self.image_info_tabs)
         splitter.set_handle_toggle_target(3, 3)
@@ -1036,6 +1039,34 @@ class MainWindow(QMainWindow):
                     panel.refresh_current_photo()
         except Exception:
             pass
+
+    def _on_photo_metadata_cache_updated(self, paths: object) -> None:
+        if (
+            self._shutdown_requested
+            or not self._current_exif_path
+            or self._file_list._key_navigation_playback_active
+        ):
+            return
+        current = os.path.normcase(os.path.normpath(self._current_exif_path))
+        if current not in _norm_paths_for_compare(paths):
+            return
+        if self.image_info_tabs.currentWidget() is self.image_info_panel:
+            panel_path = self.image_info_panel.current_photo_path()
+            if panel_path and os.path.normcase(os.path.normpath(panel_path)) == current:
+                self.image_info_panel.refresh_metadata_fields()
+
+    def _on_full_preview_ready(self, path: str) -> None:
+        if (
+            self._shutdown_requested
+            or not self._current_exif_path
+            or self._file_list._key_navigation_playback_active
+        ):
+            return
+        if os.path.normcase(os.path.normpath(path)) != os.path.normcase(os.path.normpath(self._current_exif_path)):
+            return
+        self._update_preview_focus_box(path)
+        if self.image_info_tabs.currentWidget() is self.image_info_panel:
+            self.image_info_panel.refresh_metadata_fields()
 
     def _on_preview_overlay_toggled(self, _checked: bool) -> None:
         """「显示对焦点」开关：同步 canvas 并按需加载/清除当前图的对焦点框。"""

@@ -7,6 +7,7 @@ import time as _time
 import io as _io
 import os
 from pathlib import Path
+from typing import Callable
 
 from PIL import Image, ImageOps
 
@@ -401,6 +402,7 @@ class PreviewPanel(QWidget):
     """预览区：内嵌 app_common.preview_canvas.PreviewCanvas，提供 set_image 等接口。"""
 
     display_scale_percent_changed = pyqtSignal(object)
+    full_preview_ready = pyqtSignal(str)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -413,6 +415,7 @@ class PreviewPanel(QWidget):
         self._full_preview_loader: _FullPreviewLoader | None = None
         self._pending_full_preview_request: tuple[int, str] | None = None
         self._shutdown_requested = False
+        self._quick_preview_provider: Callable[[str, int], QPixmap | None] | None = None
         self._full_preview_timer = QTimer(self)
         self._full_preview_timer.setSingleShot(True)
         self._full_preview_timer.timeout.connect(self._start_full_preview_loader)
@@ -486,6 +489,12 @@ class PreviewPanel(QWidget):
                 pix = QPixmap.fromImage(qimg)
                 direct_full = bool(pix is not None and not pix.isNull())
         if pix is None or pix.isNull():
+            pix = self._cached_quick_preview_pixmap(path, target_size)
+        # HEIF thumbnailing through Pillow still decodes the full HEVC image.
+        # An uncached 50 MP HIF must not do that work in the GUI thread merely
+        # to produce a 512 px placeholder. The owned full worker handles it.
+        defer_heif_preview = bool(path and Path(path).suffix.lower() in HEIF_EXTENSIONS)
+        if (pix is None or pix.isNull()) and not defer_heif_preview:
             pix = _load_quick_preview_pixmap(path, target_size)
         load_ms = (_time.perf_counter() - load_t0) * 1000.0
         canvas_ms = 0.0
@@ -506,7 +515,8 @@ class PreviewPanel(QWidget):
                 self._canvas.set_source_pixmap(None)
             else:
                 self._canvas.set_source_pixmap(None, log_performance=False)
-            self._canvas.setText(f"无法预览\n{Path(path).name}")
+            message = "正在加载预览" if defer_heif_preview and load_full else "无法预览"
+            self._canvas.setText(f"{message}\n{Path(path).name}")
             canvas_ms = (_time.perf_counter() - canvas_t0) * 1000.0
             status_t0 = _time.perf_counter()
             self._set_preview_status_text(None, None)
@@ -532,6 +542,23 @@ class PreviewPanel(QWidget):
             )
         else:
             self._record_fast_preview_timing(total_ms)
+
+    def set_quick_preview_provider(self, provider: Callable[[str, int], QPixmap | None] | None) -> None:
+        self._quick_preview_provider = provider
+
+    def _cached_quick_preview_pixmap(self, path: str, size: int) -> QPixmap | None:
+        if self._quick_preview_provider is None or not path:
+            return None
+        try:
+            pixmap = self._quick_preview_provider(path, size)
+        except Exception:
+            _log.exception("[preview.quick] cached preview lookup failed path=%r", path)
+            return None
+        if not isinstance(pixmap, QPixmap) or pixmap.isNull():
+            return None
+        if pixmap.width() > size or pixmap.height() > size:
+            pixmap = pixmap.scaled(size, size, _KeepAspectRatio, _SmoothTransformation)
+        return pixmap
 
     def set_quick_pixmap(self, path: str, pixmap: QPixmap, *, quick_size: int | None = None) -> None:
         """Display an already-decoded selected-tier frame without disk round-tripping."""
@@ -641,11 +668,12 @@ class PreviewPanel(QWidget):
             return
         token = self._preview_request_token
         loader = self._full_preview_loader
-        if loader is not None and loader.isRunning():
+        if loader is not None:
             loader.requestInterruption()
             # Decoders generally cannot be interrupted mid-call.  Coalesce all
             # newer selections to one latest request instead of starting more
-            # full-size decodes in parallel.
+            # full-size decodes in parallel. Retain ownership even after the
+            # native thread exits, until its queued finished slot is handled.
             self._pending_full_preview_request = (int(token), path)
             return
         self._pending_full_preview_request = None
@@ -665,12 +693,14 @@ class PreviewPanel(QWidget):
         loader.start()
 
     def _cleanup_full_preview_loader(self, loader: _FullPreviewLoader) -> None:
-        if self._full_preview_loader is loader:
-            self._full_preview_loader = None
+        is_current = self._full_preview_loader is loader
         try:
             loader.deleteLater()
         except Exception:
             pass
+        if not is_current:
+            return
+        self._full_preview_loader = None
         if self._shutdown_requested:
             self._pending_full_preview_request = None
             return
@@ -682,13 +712,15 @@ class PreviewPanel(QWidget):
         self._launch_full_preview_loader(token, path)
 
     def _on_full_preview_loaded(self, token: int, path: str, qimg, load_ms: float) -> None:
-        if int(token) != int(self._preview_request_token):
+        if self._shutdown_requested or int(token) != int(self._preview_request_token):
             return
         if not path or not self._current_path:
             return
         if not self._is_current_path(path):
             return
         if qimg is None or qimg.isNull():
+            if not self._has_canvas_pixmap():
+                self._canvas.setText(f"无法预览\n{Path(path).name}")
             perf_log(
                 _log,
                 "[preview.full] path=%r token=%s ok=False load_ms=%.1f",
@@ -705,6 +737,7 @@ class PreviewPanel(QWidget):
         self._set_preview_status_text(pix.width(), pix.height())
         self._full_preview_loaded = True
         self._fast_preview_only = False
+        self.full_preview_ready.emit(path)
         perf_log(
             _log,
             "[preview.full] path=%r token=%s ok=True size=%s load_ms=%.1f apply_ms=%.1f",

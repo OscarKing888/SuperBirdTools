@@ -24,7 +24,7 @@ from .photo_tags import (
     find_superpicky_tag_config_path,
     photo_tag_filter_matches,
 )
-from .qt_compat import QCheckBox, QHBoxLayout, QLabel, QMenu, QMessageBox, QThread, QTimer, QToolButton, pyqtSignal
+from .qt_compat import QCheckBox, QHBoxLayout, QLabel, QMenu, QMessageBox, QPixmap, QThread, QTimer, QToolButton, pyqtSignal
 from .photo_tag_commands import ClearPhotoTagsCommand, SetPhotoTagCommand
 from .tag_menu import add_filterable_tag_actions
 from .ui_theme import PanelThemeColors, panel_theme_colors
@@ -218,6 +218,7 @@ class SuperViewerTaggedFileListPanel(FileListPanel):
     """FileListPanel extension that adds configured custom tags."""
 
     photo_tags_cache_updated = pyqtSignal(object)
+    photo_metadata_cache_updated = pyqtSignal(object)
     command_history_changed = pyqtSignal()
     use_report_db = True
     use_preview_cache = True
@@ -451,6 +452,27 @@ class SuperViewerTaggedFileListPanel(FileListPanel):
         changed = self._seed_photo_tag_cache_from_meta(meta_dict.keys())
         if changed:
             self.photo_tags_cache_updated.emit(changed)
+        if meta_dict:
+            self.photo_metadata_cache_updated.emit(list(meta_dict))
+
+    def cached_photo_metadata_for_path(self, path: str) -> dict:
+        """Return current browser/report fields without waiting for EXIF I/O."""
+        metadata = dict(self.get_report_row_for_path(path) or {})
+        metadata.update(self.get_photo_metadata_for_path(path, allow_slow_read=False))
+        return metadata
+
+    def cached_quick_preview_for_path(self, path: str, size: int) -> QPixmap | None:
+        """Reuse the same exact-tier cache resolver as held-key playback."""
+        if int(size) != int(self._thumb_size):
+            return None
+        pixmap = self._current_thumbnail_fast_preview_pixmap(path)
+        if pixmap is not None and not pixmap.isNull():
+            return pixmap
+        cache_path = self._resolve_existing_sized_preview_image_path(path, exact_size_only=True)
+        if not cache_path:
+            return None
+        pixmap = QPixmap(cache_path)
+        return pixmap if not pixmap.isNull() else None
 
     def _rebuild_focus_source_index(self, paths: Iterable[str]) -> None:
         """Index RAW/HEIF siblings once per directory listing for focus lookup."""

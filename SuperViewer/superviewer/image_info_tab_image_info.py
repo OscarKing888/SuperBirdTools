@@ -452,6 +452,26 @@ class ImageInfoTabPanel_ImageInfo(ImageInfoTabPanel):
         self._current_tags = self._load_current_tags(path) if path else set()
         self._rebuild_tag_chips()
 
+    def refresh_metadata_fields(self) -> None:
+        """Apply cached background metadata while preserving editable drafts."""
+        path = self.current_photo_path()
+        if not path or not os.path.isfile(path):
+            return
+        metadata = self._load_metadata(path)
+        comment = _metadata_comment(metadata)
+        has_comment_draft = self.comment_edit.toPlainText().strip() != self._current_comment
+        self._current_comment = comment
+        if not has_comment_draft:
+            self._updating_comment = True
+            try:
+                if self.comment_edit.toPlainText() != comment:
+                    self.comment_edit.setPlainText(comment)
+                if self.comment_edit.isEnabled():
+                    self.comment_edit.setToolTip(comment)
+            finally:
+                self._updating_comment = False
+        self._set_basic_info(self._load_basic_info(path, metadata=metadata))
+
     def resizeEvent(self, event) -> None:  # type: ignore[override]
         super().resizeEvent(event)
 
