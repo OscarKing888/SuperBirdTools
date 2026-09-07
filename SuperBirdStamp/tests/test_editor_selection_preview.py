@@ -10,12 +10,23 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from PIL import Image
 from PyQt6.QtCore import QTimer
 from PyQt6.QtWidgets import QApplication
+import pytest
 
+from birdstamp import config
 from birdstamp.gui import editor as editor_module
 from birdstamp.gui import editor_preview_decode_worker
 from birdstamp.gui.editor import BirdStampEditorWindow
 
 editor_module._load_bird_detector = lambda: None
+_APP = QApplication.instance() or QApplication([])
+
+
+@pytest.fixture(autouse=True)
+def isolated_editor_state(tmp_path, monkeypatch):
+    # Construction and close may persist state before/after _make_window's
+    # per-instance hooks. Keep every runtime path outside the real checkout.
+    monkeypatch.setattr(config, "get_user_data_dir", lambda: tmp_path / "user")
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "cache"))
 
 
 def _app() -> QApplication:
