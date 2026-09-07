@@ -74,6 +74,7 @@ def _restore_widget_signals(previous_states: Iterable[tuple[object, bool]]) -> N
 class _BirdStampWorkspaceMixin:
     def _init_workspace_autosave(self) -> None:
         self._workspace_autosave_suspend_depth = 0
+        self._workspace_autosave_shutdown = False
         self._workspace_autosave_timer = QTimer(self)
         self._workspace_autosave_timer.setSingleShot(True)
         self._workspace_autosave_timer.setInterval(_WORKSPACE_AUTOSAVE_INTERVAL_MS)
@@ -83,7 +84,26 @@ class _BirdStampWorkspaceMixin:
         return get_config_path().parent / _WORKSPACE_AUTOSAVE_FILE_NAME
 
     def _workspace_autosave_enabled(self) -> bool:
-        return int(getattr(self, "_workspace_autosave_suspend_depth", 0) or 0) <= 0
+        return (
+            not getattr(self, "_workspace_autosave_shutdown", False)
+            and int(getattr(self, "_workspace_autosave_suspend_depth", 0) or 0) <= 0
+            and not self._workspace_restore_in_progress()
+        )
+
+    def _workspace_restore_in_progress(self) -> bool:
+        return (
+            getattr(self, "_workspace_restore_context", None) is not None
+            or bool(getattr(self, "_workspace_restore_pending_entries", ()))
+        )
+
+    def _shutdown_workspace_autosave(self) -> None:
+        """Keep the last complete session if the window closes during restore."""
+        timer = getattr(self, "_workspace_autosave_timer", None)
+        if timer is not None:
+            timer.stop()
+        self._autosave_workspace_now()
+        self._workspace_autosave_shutdown = True
+        self._cancel_workspace_restore_in_progress()
 
     @contextmanager
     def _workspace_autosave_suspended(self):
@@ -953,6 +973,9 @@ class _BirdStampWorkspaceMixin:
         self._save_workspace_to_path(self._normalize_workspace_target_path(file_path))
 
     def _save_workspace_to_path(self, workspace_path: Path) -> None:
+        if self._workspace_restore_in_progress():
+            self._set_status("工作区仍在恢复，请等待恢复完成后再保存。")
+            return
         try:
             payload = self._collect_workspace_payload(workspace_path)
             written_path = write_workspace_json(workspace_path, payload)

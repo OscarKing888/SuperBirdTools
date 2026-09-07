@@ -2796,7 +2796,7 @@ class BirdStampEditorWindow(
             QTimer.singleShot(100, self.close)
             return
         self._stop_photo_input_discovery_workers(wait=True)
-        self._autosave_workspace_now()
+        self._shutdown_workspace_autosave()
         super().closeEvent(event)
 
     def _on_preview_toolbar_toggled(self, _checked: bool) -> None:
