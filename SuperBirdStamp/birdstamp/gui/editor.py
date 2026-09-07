@@ -781,6 +781,7 @@ class BirdStampEditorWindow(
         self._received_photo_import_default_settings: dict[str, Any] | None = None
         self._received_photo_import_select_last_added: bool = False
         self._photo_input_discovery_workers: list[_PhotoInputDiscoveryWorker] = []
+        self._pending_photo_input_discovery_workers: list[_PhotoInputDiscoveryWorker] = []
         self._photo_input_discovery_import_options: dict[int, dict[str, Any]] = {}
         self._receive_progress_reset_token: int = 0
         self._pending_preview_fit_reset: bool = False
@@ -2778,6 +2779,8 @@ class BirdStampEditorWindow(
         self._cancel_async_bird_detect(shutdown=True)
         self._cancel_preview_decode(shutdown=True)
         self._stop_photo_list_metadata_loader(wait=False, reset_progress=True)
+        discovery_stopped = self._stop_photo_input_discovery_workers(wait=False)
+        self._stop_received_photo_import(reset_progress=True)
         bird_worker = getattr(self, "_bird_detect_worker", None)
         preview_worker = getattr(self, "_preview_decode_worker", None)
         metadata_worker = self._photo_list_metadata_loader
@@ -2790,12 +2793,11 @@ class BirdStampEditorWindow(
         ) or (
             metadata_worker is not None
             and metadata_worker.isRunning()
-        ):
+        ) or not discovery_stopped:
             self._set_status("正在安全结束后台任务...")
             event.ignore()
             QTimer.singleShot(100, self.close)
             return
-        self._stop_photo_input_discovery_workers(wait=True)
         self._shutdown_workspace_autosave()
         super().closeEvent(event)
 
@@ -4441,15 +4443,20 @@ class BirdStampEditorWindow(
         worker.finished_discovery.connect(
             lambda found_count, active_worker=worker: self._on_photo_input_discovery_finished(active_worker, found_count)
         )
+        worker.finished.connect(
+            lambda active_worker=worker: self._on_photo_input_discovery_thread_finished(active_worker)
+        )
         worker.finished.connect(worker.deleteLater)
         worker.start()
         self._set_status(f"正在扫描 {len(directories)} 个目录...")
 
-    def _stop_photo_input_discovery_workers(self, *, wait: bool = False) -> None:
+    def _stop_photo_input_discovery_workers(self, *, wait: bool = False) -> bool:
         workers = list(self._photo_input_discovery_workers)
         self._photo_input_discovery_workers.clear()
         self._photo_input_discovery_import_options.clear()
         for worker in workers:
+            if worker not in self._pending_photo_input_discovery_workers:
+                self._pending_photo_input_discovery_workers.append(worker)
             try:
                 worker.paths_ready.disconnect(self._on_photo_input_discovery_paths_ready)
             except Exception:
@@ -4458,11 +4465,18 @@ class BirdStampEditorWindow(
                 worker.progress_updated.disconnect(self._on_photo_input_discovery_progress)
             except Exception:
                 pass
+        pending_workers = list(self._pending_photo_input_discovery_workers)
+        for worker in pending_workers:
             worker.stop()
         if wait:
-            for worker in workers:
+            for worker in pending_workers:
                 if worker.isRunning():
                     worker.wait(3000)
+        return all(not worker.isRunning() for worker in pending_workers)
+
+    def _on_photo_input_discovery_thread_finished(self, worker: _PhotoInputDiscoveryWorker) -> None:
+        if worker in self._pending_photo_input_discovery_workers:
+            self._pending_photo_input_discovery_workers.remove(worker)
 
     def _on_photo_input_discovery_paths_ready(self, paths: object) -> None:
         sender = self.sender()
@@ -4497,6 +4511,10 @@ class BirdStampEditorWindow(
             return
         if was_active:
             self._photo_input_discovery_workers.remove(worker)
+            # finished_discovery is emitted from run() before QThread.finished.
+            # Keep ownership across that gap, including while closing the UI.
+            if worker not in self._pending_photo_input_discovery_workers:
+                self._pending_photo_input_discovery_workers.append(worker)
         pre_added_report_db_count = max(0, int(options.get("pre_added_report_db_count") or 0))
         if pre_added_report_db_count > 0:
             self._enqueue_received_photo_paths([], pre_added_report_db_count=pre_added_report_db_count)
