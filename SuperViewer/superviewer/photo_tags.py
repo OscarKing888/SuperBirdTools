@@ -24,6 +24,16 @@ SUPERPICKY_DIRNAME = ".superpicky"
 PHOTO_TAG_CONFIG_FILENAME = "tags.cfg"
 
 
+TagStates = dict[str, dict[str, bool]]
+
+
+@dataclass
+class TagWriteResult:
+    inverse_states: TagStates = field(default_factory=dict)
+    failed_paths: dict[str, str] = field(default_factory=dict)
+    current_tags: dict[str, set[str]] = field(default_factory=dict)
+
+
 @dataclass
 class TagTreeNode:
     """One node in a tags.cfg hierarchy.
@@ -297,6 +307,64 @@ class PhotoTagSidecarStore:
     ) -> set[str]:
         norm = _normalise_path(path)
         return set(self.load_tags_for_paths([norm], allowed_tags=allowed_tags).get(norm, set()))
+
+    def apply_tag_states(
+        self,
+        states: TagStates,
+        *,
+        allowed_tags: Iterable[str] | None = None,
+    ) -> TagWriteResult:
+        """Apply requested memberships and record only successful changes.
+
+        Strict reads prevent unreadable sidecars from becoming empty snapshots.
+        Each path gets one write preserving all unrelated subjects/properties.
+        """
+        allowed = set(_normalise_tags(allowed_tags)) if allowed_tags is not None else None
+        normalized: TagStates = {}
+        paths_by_key: dict[str, str] = {}
+        for path, values in states.items():
+            if not path:
+                continue
+            norm = _normalise_path(path)
+            key = os.path.normcase(os.path.abspath(norm))
+            norm = paths_by_key.setdefault(key, norm)
+            desired = normalized.setdefault(norm, {})
+            for tag, enabled in values.items():
+                clean = str(tag or "").strip()
+                if clean and (allowed is None or clean in allowed):
+                    desired[clean] = bool(enabled)
+
+        result = TagWriteResult()
+        with self._lock:
+            for path, desired in normalized.items():
+                if not desired:
+                    continue
+                try:
+                    if not os.path.isfile(path):
+                        raise FileNotFoundError("源照片不存在或不可访问，可能已被移动、重命名或删除。")
+                    subjects = self._metadata.read_subjects(path, strict=True)
+                    before = set(subjects)
+                    inverse = {
+                        tag: tag in before
+                        for tag, enabled in desired.items()
+                        if enabled != (tag in before)
+                    }
+                    if inverse:
+                        after = [tag for tag in subjects if desired.get(tag, True)]
+                        after.extend(
+                            tag for tag, enabled in desired.items()
+                            if enabled and tag not in before
+                        )
+                        if not self._metadata.write_subjects(path, after):
+                            raise OSError("无法保存 XMP 标签，请检查文件权限和磁盘空间。")
+                        result.inverse_states[path] = inverse
+                        current = set(after)
+                    else:
+                        current = before
+                    result.current_tags[path] = current if allowed is None else current.intersection(allowed)
+                except Exception as exc:
+                    result.failed_paths[path] = str(exc) or type(exc).__name__
+        return result
 
     def set_tag_for_paths(
         self,

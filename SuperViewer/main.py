@@ -127,6 +127,7 @@ try:
     )
     from .superviewer.super_viewer_user_options_dialog import SuperViewerUserOptionsDialog
     from .superviewer.tagged_file_list import SuperViewerTaggedFileListPanel
+    from .superviewer.tag_history_actions import TagHistoryActions
     from .superviewer import qt_compat
     from .superviewer.qt_compat import (
         QAction,
@@ -202,6 +203,7 @@ except ImportError:
     )
     from superviewer.super_viewer_user_options_dialog import SuperViewerUserOptionsDialog
     from superviewer.tagged_file_list import SuperViewerTaggedFileListPanel
+    from superviewer.tag_history_actions import TagHistoryActions
     from superviewer import qt_compat
     from superviewer.qt_compat import (
         QAction,
@@ -299,6 +301,7 @@ class MainWindow(QMainWindow):
         self.setWindowTitle(_build_main_window_title(info))
         self.setMinimumSize(900, 600)
         self.resize(1500, 960)
+        self._tag_history_actions = TagHistoryActions(self)
         self._init_menu_bar()
         self._main_splitter: TriangleToggleSplitter | None = None
         self._main_splitter_state_save_timer = QTimer(self)
@@ -328,6 +331,7 @@ class MainWindow(QMainWindow):
 
         # ── 面板 2：图像文件列表 ──
         self._file_list = SuperViewerTaggedFileListPanel()
+        self._tag_history_actions.set_panel(self._file_list)
         self._file_list.setMinimumWidth(520)
         splitter.addWidget(self._file_list)
 
@@ -588,6 +592,9 @@ class MainWindow(QMainWindow):
         settings_act.triggered.connect(self._open_external_apps_settings)
         file_menu.addAction(settings_act)
         file_menu.addSeparator()
+
+        edit_menu = self.menuBar().addMenu("编辑")
+        self._tag_history_actions.add_to_menu(edit_menu)
 
         settings_menu = self.menuBar().addMenu("设置")
         user_options_act = QAction("用户选项...", self)
@@ -926,6 +933,10 @@ class MainWindow(QMainWindow):
                 ) from rename_exc
             raise
 
+        # Tag history holds file paths; a successful rename invalidates them.
+        clear_tag_history = getattr(self._file_list, "clear_tag_history", None)
+        if callable(clear_tag_history):
+            clear_tag_history()
         self._current_exif_path = target_path
         self.file_label.setText(target_path)
         self.file_label.setToolTip(target_path)

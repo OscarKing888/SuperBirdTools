@@ -228,14 +228,16 @@ def test_context_menu_duplicate_leaves_follow_writes_and_failure_state(
         assert panel._photo_tag_store.get_tags(path) == set()
         assert not clear.isEnabled()
 
-        def deny_write(*args, **kwargs):
-            raise OSError("test write denied")
+        from SuperViewer.superviewer import tagged_file_list as tagged_module
 
-        monkeypatch.setattr(panel._photo_tag_store, "set_tag_for_paths", deny_write)
+        errors = []
+        monkeypatch.setattr(panel._photo_tag_store._metadata, "write_subjects", lambda *args, **kwargs: False)
+        monkeypatch.setattr(tagged_module.QMessageBox, "warning", lambda *args: errors.append(args))
         _click_checkbox(second.findChild(QCheckBox))
         assert all(not box.isChecked() for box in boxes)
         assert not clear.isEnabled()
         assert panel._photo_tag_store.get_tags(path) == set()
+        assert len(errors) == 1
         assert menu.isVisible() and tag_menu.isVisible()
     finally:
         menu.close()
