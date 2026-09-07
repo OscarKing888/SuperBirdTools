@@ -1,6 +1,10 @@
 # Super Viewer - 图片 EXIF 查看器/编辑器
 适合通过`慧眼选鸟(4.1.0及后继版本)`处理后，不需要LRC、PS流程处理照片的情况
 
+## 开发定位
+
+完整模块关系、目录/预览/元数据数据流和功能修改入口见 [架构与代码定位](docs/ARCHITECTURE.md)。修改前同时查看仓库根目录的 [AGENTS 行为约束](../AGENTS.md)。下方保留简要模块概览。
+
 ## 代码结构（重构后）
 
 - **main.py**：应用入口 `main()`、主窗口类 `MainWindow`、构图线常量与线宽图标；对脚本兼容的 re-export（`QApplication`、`RAW_EXTENSIONS`、`_load_preview_pixmap_for_canvas`、`_load_exifread_metadata_for_focus`、`_resolve_focus_calc_image_size`、`_load_focus_box_for_preview`）。脚本仍可 `import main` 使用上述符号。
@@ -83,3 +87,7 @@
 本仓库根目录代码与文档在未另行说明时，按 `GNU Affero General Public License v3.0 (AGPL v3.0)` 发布，详见 `LICENSE`。
 
 仓库中包含独立子模块与第三方组件时，这些内容仍以其各自上游许可证为准，不因本仓库根目录 `LICENSE` 自动变更。相关边界说明见 `THIRD_PARTY_NOTICES.md`。
+
+## HIF 大目录切换
+
+图片信息先展示已缓存的字段，再由后台补齐，避免界面等待上一目录的批量 ExifTool 读取。超过同步预览阈值的大 HIF 优先复用当前尺寸档位的缓存；没有缓存时显示加载提示，由后台解码完整预览。小图、RAW 和按住方向键的预览策略保持原有约定。
