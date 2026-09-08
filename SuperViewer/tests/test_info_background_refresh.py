@@ -6,6 +6,8 @@ from PyQt6.QtCore import QObject, pyqtSignal
 
 from SuperViewer.main import MainWindow
 from SuperViewer.superviewer.image_info_tab_image_info import ImageInfoTabPanel_ImageInfo
+from SuperViewer.superviewer.image_info_tab_tags import ImageInfoTabPanel_Tags
+from SuperViewer.superviewer.image_info_tab_widget import ImageInfoTabWidget
 from SuperViewer.superviewer.qt_compat import QApplication
 
 
@@ -28,19 +30,27 @@ def info(tmp_path):
         lambda *_args: None, lambda path, _name: path,
         metadata_provider=lambda _path: dict(metadata),
     )
+    tabs = ImageInfoTabWidget()
+    tags_panel = ImageInfoTabPanel_Tags(
+        lambda: ["飞行", "捕食"], lambda _path: set(tags),
+        lambda *_args: None, lambda *_args: None,
+    )
+    tabs.add_info_panel(panel)
+    tabs.add_info_panel(tags_panel)
     window = SimpleNamespace(
         _current_exif_path=path, _shutdown_requested=False,
         _file_list=SimpleNamespace(_selection_key_nav_hold_active=False),
         image_info_panel=panel,
-        image_info_tabs=SimpleNamespace(currentWidget=lambda: panel, panels=lambda: [panel]),
+        image_info_tabs=tabs,
     )
     signals = _MetadataSignals()
     signals.updated.connect(lambda paths: MainWindow._on_metadata_cache_updated(window, paths))
-    panel.on_photo_selected(path)
+    tabs.on_photo_selected(path)
     try:
         yield window, panel, signals, path, metadata, tags
     finally:
-        panel.deleteLater()
+        tabs.request_shutdown()
+        tabs.deleteLater()
         signals.deleteLater()
         _APP.processEvents()
 
@@ -111,3 +121,80 @@ def test_direct_tag_refresh_keeps_drafts_without_metadata_read(info):
     panel._set_current_tag("捕食", True)
     assert (_edit_state(panel.comment_edit), _edit_state(panel.filename_edit)) == before
     assert panel._current_tags == {"飞行", "捕食"}
+
+
+def test_hidden_metadata_refresh_waits_for_activation_and_preserves_drafts(info):
+    window, panel, signals, path, metadata, tags = info
+    tabs = window.image_info_tabs
+    panel.comment_edit.selectAll()
+    panel.comment_edit.insert("")
+    panel.filename_edit.insert("草稿")
+    panel.filename_edit.setSelection(1, 2)
+    before = _edit_state(panel.comment_edit), _edit_state(panel.filename_edit)
+    tabs.setCurrentIndex(1)
+    reads = []
+    panel._metadata_provider = lambda _path: reads.append(_path) or dict(metadata)
+    panel._tags_for_path_provider = lambda _path: reads.append("tags") or set(tags)
+    metadata.update(comment="后台备注", rating=4)
+    tags.clear()
+    tags.add("捕食")
+
+    signals.updated.emit([path])
+    signals.updated.emit([path])
+
+    assert reads == []
+    assert panel.basic_rows["评分"].text() == "★☆☆☆☆"
+    tabs.setCurrentWidget(panel)
+    assert reads == [path, "tags"]
+    assert (_edit_state(panel.comment_edit), _edit_state(panel.filename_edit)) == before
+    assert panel._current_comment == "后台备注"
+    assert panel.basic_rows["评分"].text() == "★★★★☆"
+    assert panel._current_tags == {"捕食"}
+    tabs.setCurrentIndex(1)
+    tabs.setCurrentWidget(panel)
+    assert reads == [path, "tags"]
+
+
+def test_new_photo_replaces_deferred_metadata_refresh_with_full_refresh(info, tmp_path):
+    window, panel, signals, path, metadata, _tags = info
+    tabs = window.image_info_tabs
+    panel.comment_edit.insert("旧图草稿")
+    panel.filename_edit.insert("旧图草稿")
+    tabs.setCurrentIndex(1)
+    signals.updated.emit([path])
+    assert panel in tabs._pending_metadata_panels
+    new_photo = tmp_path / "新照片.png"
+    Image.new("RGB", (12, 9)).save(new_photo)
+    window._current_exif_path = str(new_photo)
+    metadata["comment"] = "新照片备注"
+    tabs.on_photo_selected(str(new_photo))
+    assert panel not in tabs._pending_metadata_panels
+    assert panel in tabs._pending_panels
+    signals.updated.emit([path])
+    signals.updated.emit([str(new_photo)])
+
+    tabs.setCurrentWidget(panel)
+
+    assert panel.comment_edit.text() == "新照片备注"
+    assert panel.filename_edit.text() == "新照片"
+    assert panel.basic_rows["尺寸"].text() == "12 × 9"
+    assert panel not in tabs._pending_panels
+    assert panel not in tabs._pending_metadata_panels
+
+
+def test_shutdown_discards_hidden_metadata_refresh(info):
+    window, panel, signals, path, metadata, _tags = info
+    tabs = window.image_info_tabs
+    tabs.setCurrentIndex(1)
+    signals.updated.emit([path])
+    assert panel in tabs._pending_metadata_panels
+    tabs.request_shutdown()
+    assert not tabs._pending_metadata_panels
+    metadata["comment"] = "关窗后不应读取"
+    panel._metadata_provider = lambda _path: pytest.fail("closed tabs must not read metadata")
+
+    signals.updated.emit([path])
+    tabs.setCurrentWidget(panel)
+
+    assert panel.comment_edit.text() == "原始备注"
+    assert not tabs._pending_metadata_panels

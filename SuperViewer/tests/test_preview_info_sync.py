@@ -42,7 +42,8 @@ def window(tmp_path, monkeypatch):
         _APP.processEvents()
 
 
-def test_full_preview_signal_fills_info_preview_without_resetting_drafts(window, tmp_path):
+@pytest.mark.parametrize("hidden", [False, True])
+def test_full_preview_signal_fills_info_preview_without_resetting_drafts(window, tmp_path, monkeypatch, hidden):
     photo = tmp_path / "白鹭.png"
     Image.new("RGB", (80, 60)).save(photo)
     path = str(photo)
@@ -54,6 +55,11 @@ def test_full_preview_signal_fills_info_preview_without_resetting_drafts(window,
     info.filename_edit.insert("新名字")
     info.comment_edit.setSelection(0, 2)
     before = (info.comment_edit.text(), info.comment_edit.selectedText(), info.filename_edit.text())
+    if hidden:
+        window.image_info_tabs.setCurrentWidget(window.tags_info_panel)
+    metadata_reads = []
+    original_provider = info._metadata_provider
+    monkeypatch.setattr(info, "_metadata_provider", lambda path: metadata_reads.append(path) or original_provider(path))
 
     preview = window.preview_panel
     preview._current_path = path
@@ -62,6 +68,11 @@ def test_full_preview_signal_fills_info_preview_without_resetting_drafts(window,
     image.fill(80)
     preview._on_full_preview_loaded(preview._preview_request_token, path, image, 10.0)
 
+    if hidden:
+        assert info._preview_pixmap is None
+        assert metadata_reads == []
+        window.image_info_tabs.setCurrentWidget(info)
+    assert metadata_reads == [path]
     assert info._preview_pixmap is not None
     assert (info._preview_pixmap.width(), info._preview_pixmap.height()) == (80, 60)
     assert (info.comment_edit.text(), info.comment_edit.selectedText(), info.filename_edit.text()) == before

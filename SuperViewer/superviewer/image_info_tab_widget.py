@@ -2,6 +2,7 @@
 """Tab widget container for SuperViewer image information panels."""
 from __future__ import annotations
 
+import os
 import time as _time
 
 from app_common.log import get_logger
@@ -22,6 +23,7 @@ class ImageInfoTabWidget(QTabWidget):
         super().__init__(parent)
         self._panels: list[ImageInfoTabPanel] = []
         self._pending_panels: set[ImageInfoTabPanel] = set()
+        self._pending_metadata_panels: set[ImageInfoTabPanel] = set()
         self._shutdown_requested = False
         self._shutdown_complete = False
         self._theme_listener_attached = False
@@ -49,6 +51,7 @@ class ImageInfoTabWidget(QTabWidget):
     def on_photo_selected(self, path: str) -> dict[str, object]:
         if self._shutdown_requested:
             return {}
+        self._pending_metadata_panels.clear()
         total_t0 = _time.perf_counter()
         perf_log(_log, "[PERF][image_switch][ImageInfoTabWidget] START path=%r panels=%s", path, len(self._panels))
         results: dict[str, object] = {}
@@ -77,14 +80,51 @@ class ImageInfoTabWidget(QTabWidget):
         )
         return results
 
+    @staticmethod
+    def _refresh_cached_panel(panel: ImageInfoTabPanel) -> None:
+        refresh_metadata = getattr(panel, "refresh_metadata_fields", None)
+        if not callable(refresh_metadata):
+            panel.refresh_current_photo()
+            return
+        refresh_metadata()
+        refresh_tags = getattr(panel, "refresh_photo_tags", None)
+        if callable(refresh_tags):
+            refresh_tags()
+
+    def refresh_cached_photo(self, path: str) -> None:
+        """Refresh visible cached fields and defer hidden pages without I/O."""
+        if self._shutdown_requested or not path:
+            return
+        path_key = os.path.normcase(os.path.normpath(path))
+        active_panel = self.currentWidget()
+        for panel in self._panels:
+            panel_path = panel.current_photo_path()
+            if not panel_path or os.path.normcase(os.path.normpath(panel_path)) != path_key:
+                continue
+            if panel is not active_panel:
+                if panel not in self._pending_panels:
+                    self._pending_metadata_panels.add(panel)
+                continue
+            self._pending_metadata_panels.discard(panel)
+            if panel in self._pending_panels:
+                self._pending_panels.discard(panel)
+                panel.refresh_current_photo()
+            else:
+                self._refresh_cached_panel(panel)
+
     def _on_current_tab_changed(self, index: int) -> None:
         if self._shutdown_requested or index < 0:
             return
         panel = self.widget(index)
-        if not isinstance(panel, ImageInfoTabPanel) or panel not in self._pending_panels:
+        if not isinstance(panel, ImageInfoTabPanel):
             return
-        self._pending_panels.discard(panel)
-        panel.refresh_current_photo()
+        if panel in self._pending_panels:
+            self._pending_panels.discard(panel)
+            self._pending_metadata_panels.discard(panel)
+            panel.refresh_current_photo()
+        elif panel in self._pending_metadata_panels:
+            self._pending_metadata_panels.discard(panel)
+            self._refresh_cached_panel(panel)
 
     def _attach_theme_listener(self) -> None:
         manager = get_ui_theme_manager()
@@ -125,6 +165,7 @@ class ImageInfoTabWidget(QTabWidget):
             return
         self._shutdown_requested = True
         self._pending_panels.clear()
+        self._pending_metadata_panels.clear()
         self._detach_theme_listener()
         for panel in self._panels:
             request_shutdown = getattr(panel, "request_shutdown", None)
