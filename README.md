@@ -1,66 +1,73 @@
-# SuperBirdTools
+# SuperBirdTools — Image Manager 分支
 
-单仓多应用结构：
+当前 `img_mgr` 分支只运行和构建 **SuperViewer**。图像浏览、筛选、标签和预览由 `SuperViewer/` 实现；根级 `app_common/` 使用独立的 `res_mgr` 代码线提供文件列表、解码、元数据和文件操作。这里的规则与主分支不同，移植时应按功能适配。
 
-- `app_common/`：共享通用库，作为 git submodule 维护。
-- `SuperViewer/`：SuperViewer 模块，保留自身配置、图标、脚本与打包 spec。
-- `SuperBirdStamp/`：SuperBirdStamp 模块，保留自身包代码、模型、资源、脚本与打包 spec。
+## 开发入口
 
-## 目录原则
+- [SuperViewer 使用说明](SuperViewer/README.md)
+- [SuperViewer 架构与开发定位](SuperViewer/docs/ARCHITECTURE.md)
+- [AGENTS.md](AGENTS.md)：当前分支的行为和验证约束
+- [AI 编码基线](ai_rules/AI_CODING_RULES.md)
+- [本批移植记录](docs/PORTS_2026-09-08.md)
+- [第三方组件说明](THIRD_PARTY_NOTICES.md)
 
-- 每个 app 只维护自己独有的资源与构建脚本。
-- `app_common` 在仓库根目录平级共享，两个 app 都通过入口文件和 PyInstaller `pathex` 引用它。
-- 后续新增第 3 个 app 时，直接新增一个顶层 app 目录，并复用相同模式即可。
+`<repo>` 表示当前检出的目录，所有开发命令默认在该目录运行。不要引用另一份工作区的虚拟环境。
 
-## 开发运行
+## 准备环境
 
-前提：
+运行依赖见 [SuperViewer/requirements.txt](SuperViewer/requirements.txt)。首次建立环境、尚无 `.venv` 时运行：
 
-- Python `>= 3.10`
-- 先安装各 app 自己的依赖，或统一建一个包含两个 app 依赖的虚拟环境
-- 首次 clone 后先初始化 `app_common` 子模块
-
-先初始化子模块：
-
-```bash
-git submodule update --init --recursive
-```
-
-初始化共享开发环境：
-
-```bash
+```powershell
 python init_dev.py
 ```
 
-从仓库根目录启动两个 GUI：
+[init_dev.py](init_dev.py) 创建根级 `.venv`，重启到该解释器，安装开发工具并调用 SuperViewer 的初始化脚本。已有环境时直接使用它：
+
+```powershell
+.\.venv\Scripts\python.exe init_dev.py
+```
+
+macOS 对应解释器为 `.venv/bin/python3`。
+
+[.gitmodules](.gitmodules) 声明 `app_common` 的上游和 `res_mgr` 分支。检查代码前同时查看两个工作树：
+
+```powershell
+git status --short
+git -C app_common status --short
+```
+
+带有 `app_common` gitlink 的检出可用 `git submodule update --init --recursive` 初始化。当前分支也可能以独立嵌套仓库提供 `app_common/`；没有 gitlink 时，该命令不会创建依赖。缺少目录时按 `.gitmodules` 中的上游检出 `res_mgr` 到该位置，保留现有目录和本地修改，不为移植顺带改变仓库结构。
+
+## 运行
+
+Windows：
+
+```powershell
+.\run.bat
+```
+
+macOS：
 
 ```bash
 ./run.sh
 ```
 
-Windows：
+也可以显式使用仓库解释器，绕过启动脚本的环境选择：
 
-```bat
-run.bat
+```powershell
+.\.venv\Scripts\python.exe -m SuperViewer
 ```
 
-如果只想直接运行某个 app，也可以从仓库根目录执行：
+[entry.py](SuperViewer/entry.py) 负责补齐导入路径，本身不切换解释器。启动日志及诊断入口见 [架构文档](SuperViewer/docs/ARCHITECTURE.md)。
 
-```bash
-python -m SuperViewer
-python -m SuperBirdStamp
+## 构建
+
+Windows 默认保留增量缓存；清理重建时传 `--clean`：
+
+```powershell
+.\build_all.bat
+.\build_all.bat --clean
 ```
-
-如果只想进入单个 app 目录运行，也可以使用各自的 `entry.py`：
-
-```bash
-python SuperViewer/entry.py
-python SuperBirdStamp/entry.py
-```
-
-## 打包入口
-
-推荐的全量打包入口：
 
 macOS：
 
@@ -68,80 +75,23 @@ macOS：
 bash build_all.sh
 ```
 
-Windows：
+当前 [build_all.bat](build_all.bat) 调用 `SuperViewer/SuperViewer_win.spec`，[build_all.sh](build_all.sh) 调用 `SuperViewer/scripts_dev/build_mac.sh`，均只构建 Viewer，不执行双应用 MERGE 或构建后硬链接去重。
 
-```bat
-build_all.bat
+默认输出为 `dist/SuperViewer/SuperViewer.exe` 或 `dist/SuperViewer.app`，中间产物在根级 `build/`。`SUPERBIRDTOOLS_DIST_ROOT`、`SUPERBIRDTOOLS_BUILD_ROOT` 可覆盖位置；`--clean` 会删除所选输出与构建目录，使用前确认这些变量指向可重建产物。
+
+## 验证
+
+```powershell
+$env:QT_QPA_PLATFORM = 'offscreen'
+.\.venv\Scripts\python.exe -m pytest app_common/tests SuperViewer/tests -q
 ```
 
-如果只想单独打包某个 app，可直接使用模块目录内的实际脚本：
+先运行变更对应的专项测试，再运行相关完整测试目录；测试定位见 [架构文档](SuperViewer/docs/ARCHITECTURE.md)。GUI 测试必须在构造窗口前隔离配置、上次目录和缓存，不能用真实图库验证会写入的操作。
 
-macOS：
+## 当前分支的数据约定
 
-```bash
-bash SuperViewer/scripts_dev/build_mac.sh
-bash SuperBirdStamp/scripts_dev/build_mac.sh
-```
-
-Windows：
-
-```bat
-SuperViewer\\scripts_dev\\build_win.bat
-SuperBirdStamp\\build_win.bat
-```
-
-## 输出布局
-
-- 单独 build 和全量 build 都默认输出到仓库根 `dist/`
-- macOS 全量 build 后，`dist/` 顶层只保留：
-  - `SuperViewer.app`
-  - `SuperBirdStamp.app`
-- Windows 单独 build 仍输出 `dist/SuperViewer/`、`dist/SuperBirdStamp/`
-- Windows `build_all.bat` 默认走根级 merged spec，目标是让两个 app 在同一个 `dist/` 下共享尽可能多的运行库
-
-## 平台差异
-
-- macOS：`.app` bundle 天然更偏向自包含，`build_all.sh` 采用“统一 `dist` + 构建后 hardlink 去重”的方式，减少两个 `.app` 在同一磁盘上的总占用，但不改变 bundle 自身结构
-- Windows：`build_all.bat` 使用 PyInstaller `MERGE` 多程序构建，让后一个 app 尽量引用前一个 app 已收集的公共运行库，避免简单串行 build 带来的重复 `_internal`
-- Windows merged 输出要求两个 app 目录一起分发，不能单独拿走其中一个目录
-
-## 这次重组的关键点
-
-- 不改原始两个仓库，只在 `SuperBirdTools` 中复制整理。
-- 两个 app 不再各自内嵌 `app_common`，而是共享根目录 submodule。
-- PyInstaller spec 已改为从各自模块目录打包，同时把仓库根加入 `pathex`。
-- 每个 app 新增 `entry.py` / `__main__.py`，解决 sibling `app_common` 的导入问题。
-
-# 修改记录
-## 2026/6/9
-- 主界面分隔条改成了三角形切换按钮，可以点击折叠/恢复左侧面板。
-
-- 标签过滤增加了“完全匹配”复选框：
-  - 勾选时：必须同时拥有所有选中的标签。
-  - 不勾选时：只要任意一个选中标签部分匹配即可。
-
-- 标签、星级、Pick/Reject 的数据改为写入 `.superpicky` 下的集中 sidecar 目录，便于多人协作和只读图库使用。
-
-- 支持从 `.superpicky/config.ini` 配置 sidecar 存储目录，默认是 `.superpicky/metadata`。
-
-- 旧的图片旁边 `.superviewer.json` 仍可读取，新写入会写到新的集中 sidecar 位置。
-
-- 权限控制拆分为两类：
-  - 图片目录写权限：控制剪切、粘贴、删除、重命名等文件操作。
-  - sidecar 写权限：控制打标签、清标签、标星、Pick/Reject。
-
-- 只读状态下，相关菜单和按钮会禁用，并在标题后显示“(只读)”，黑色主题下更容易看出来。
-
-- 增加了对单个只读文件的判断：即使目录可写，只读文件也不能剪切、删除、重命名。
-
-- 复制、显示到资源管理器、预览、筛选、发送到外部应用等只读操作保持可用。
-
-- 预览面板优化：
-  - 小图会直接显示原图，不再先显示缩略图。
-  - 大图仍然先显示快速预览，再加载原图。
-  - RAW 等重格式不会同步加载原图，避免卡顿。
-
-- 方向键浏览优化：
-  - 单次按方向键会直接显示原图。
-  - 按住方向键连续移动时，从第二次开始使用快速缩略图预览。
-  - 松开后会加载最后选中图片的原图。
+- 最近的 `.superpicky` 是图库状态范围；目录切换时按该范围加载 `tags.cfg`。
+- JSON 侧车优先写入 `.superpicky/metadata/`，可通过 `.superpicky/config.ini` 的 `[sidecar] dir` 指定内部相对目录；保留旧图片旁 JSON 与 XMP 读取兼容。
+- 文件操作按图像与侧车整组处理，保留本分支的权限检查和 `.superpicky/deleted` 回收行为。
+- `report.db` 在当前文件列表中默认停用；共享库中的兼容读写 API 仍保留。
+- 普通选图、连续方向键和覆盖导出有不同的分辨率与异步约定，不应统一为全同步或全异步。

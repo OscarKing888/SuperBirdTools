@@ -1,6 +1,6 @@
 # Super Viewer AI Coding Rules
 
-This document defines project-level rules for any coding assistant (Codex, Claude, Cursor, etc.).
+This document is the cross-tool coding baseline for the current single-Viewer `img_mgr` / `res_mgr` checkout. [AGENTS.md](../AGENTS.md) is the authoritative branch behavior and validation contract. Use the [Viewer architecture map](../SuperViewer/docs/ARCHITECTURE.md) to locate implementations and tests; do not import the other branch's application, metadata or preview assumptions.
 
 ## 1) File Encoding and Text Safety
 
@@ -54,7 +54,7 @@ This document defines project-level rules for any coding assistant (Codex, Claud
 
 - Make minimal, task-scoped diffs.
 - Do not touch unrelated files.
-- If unexpected unrelated modifications are detected, pause and confirm direction.
+- Inspect both root and `app_common` working trees and preserve unrelated modifications. Coordinate overlapping edits; ask for direction only when an actual conflict prevents safe progress, not merely because other changes exist.
 - When implementing new features, always evaluate modularization / encapsulation first:
   - prefer reusable module-level functions or class-based (OOP) encapsulation for coherent responsibilities
   - avoid embedding core logic directly in GUI/event handlers or one-off scripts when it can be extracted
@@ -83,7 +83,7 @@ When changing packaging/spec:
 
 ## 8) Logging and Error Handling
 
-- Error logs must include concrete failing component (e.g., `YOLO`, `Keypoint`, `Flight`, `BirdID`).
+- Error logs must identify the concrete failing component (for example, preview decode, tag sidecar, metadata batch, clipboard publish or rollback).
 - For preload/startup pipelines, avoid "all-or-nothing" failure where possible.
 - Keep fallback behavior explicit and visible in logs.
 
@@ -98,10 +98,10 @@ If rules conflict, apply this order:
 
 ## 10) High Regression Areas in This Project
 
-These areas have repeatedly regressed during feature work. Treat them as protected flows.
+These areas have repeatedly regressed during feature work. Treat them as protected flows. The current file list has `use_report_db = False`: report-specific rules below apply when a caller explicitly uses that compatibility path. Do not enable report listing or disable the shared write APIs as a side effect of unrelated work.
 
 - `report.db` root semantics:
-  - A directory containing `.superpicky/report.db` defines a `root`.
+  - In report mode, a directory containing `.superpicky/report.db` defines a report `root`. This is separate from the current JSON/tag/cache scope, which uses the nearest existing `.superpicky` directory.
   - Selecting any descendant directory must continue to reuse the same in-memory report cache for that root.
   - When the selected directory is outside the current root, search upward for a new root, but keep the search bounded.
 - `report.db` file listing semantics:
@@ -119,18 +119,25 @@ These areas have repeatedly regressed during feature work. Treat them as protect
   - Preview rendering may use `temp_jpeg_path`.
   - Metadata, EXIF, focus extraction, copy/reveal actions, and sidecar logic must continue to resolve against source-file semantics.
   - Do not assume preview JPEG carries the same metadata as the source file.
-- SuperViewer two-stage preview:
-  - First-frame preview may use thumbnails, but the final committed selection must attempt asynchronous full-size decode.
-  - Fast keyboard navigation must keep using `load_full=False` and must not start HIF/RAW/PSD full decodes in the hot path.
-  - HIF/HEIC/HEIF full preview should keep the Pillow/`pillow-heif` fallback; RAW full preview should keep the `rawpy` fallback in the background worker.
+- SuperViewer preview policy:
+  - A committed selection may synchronously load the original when its known pixel count is at most `40 * 1024 * 1024` and no previous full-preview worker still owns the decoder. Keep the exact threshold and ownership check.
+  - Large/unknown-size images first use a cached or bounded quick preview, then an owned background decode. A same-path fast selection becoming committed must still request the missing full preview.
+  - Fast keyboard navigation keeps `load_full=False` and must not start HIF/RAW/PSD full decodes in the hot path.
+  - In the HEIF quick-preview branch, a cache miss must not invoke synchronous Pillow thumbnail generation that can decode the entire source. Preserve Pillow/`pillow-heif` in the actual full decode path.
+  - RAW display prefers embedded previews and may use background half-size demosaic. Overlay export must separately acquire full source resolution, drain the display decoder first, and fail if a full source image cannot be obtained.
+  - Hold the active decoder until real `QThread.finished` cleanup and retain only the newest pending request. A logical result or `isRunning() == False` must not allow two owners or stale cleanup to clear a new worker.
 - Focus extraction pipeline:
+  - The dedicated focus-worker modules are not instantiated by the current default MainWindow; preserve their format-specific behavior when extending or explicitly wiring them.
   - Focus extraction is format-dependent.
   - HIF/HEIF/HEIC and RAW cannot share a single metadata acquisition path blindly.
   - `report.db.focus_x/focus_y` is only a fallback, not the primary source when file metadata is available.
 - SuperViewer JSON/XMP sidecars:
-  - JSON sidecars use `<image filename>.superviewer.json` and coexist with legacy XMP sidecars.
-  - Metadata reads and filters must continue to honor comment/title data from supported sidecar sources.
-  - Copy, duplicate, delete, and trash operations must keep sibling `.xmp` and `.superviewer.json` files paired with the source image.
+  - Use `app_common.exif_io.json_sidecar` helpers for new writes and read candidates. In a library, new JSON uses `.superpicky/<configured-dir>/<relative-image-path>.superviewer.json`, with `[sidecar] dir` in `.superpicky/config.ini` and default `metadata`.
+  - Read central JSON first, then legacy sibling JSON. Without a library root, new JSON stays beside the image. Retain explicitly configured XMP fallback and collaborative edit-journal compatibility.
+  - Metadata reads and filters continue to honor supported comment/title fields; preserve unrelated JSON metadata and unconfigured Subject values.
+  - Tag command snapshots use strict JSON/XMP reads: corrupt or unreadable sidecars are failures, not empty states. Missing photos must not produce orphan tag sidecars.
+  - Copy, duplicate, delete and trash operations pair existing XMP and resolved JSON with the source image; recompute central JSON paths for destination libraries instead of always appending sibling names.
+  - Clipboard failures roll back the whole payload, and final publish must refuse concurrent destination files. Shared source XMP may need independent copies at multiple destinations; retain recovery copies and report their paths if restore fails.
 - List vs thumbnail mode:
   - List mode must not do thumbnail work.
   - Thumbnail mode must avoid full-list thumbnail churn and only load what the viewport needs.
@@ -144,6 +151,8 @@ These areas have repeatedly regressed during feature work. Treat them as protect
 - Batched metadata apply:
   - Metadata updates for large directories must be incremental and time-budgeted.
   - Never reintroduce a single synchronous loop that applies thousands of UI row updates on the GUI thread without yielding.
+  - Keep sender/request validation and per-photo tag generation. Successful local edits overlay older queued metadata by path and field, including valid empty comments and zero rating/Pick; directory changes and force reload clear this overlay.
+  - Same-photo cached refresh must not reload the preview or reset unsaved filename/comment drafts. Hidden pages keep partial metadata pending separate from full photo-change pending.
 - Tree numbering column:
   - The `#` column is display-only.
   - It must always be natural-order numbering from `1`, refreshed after rebuild/filter/sort, and must not become a real sort key.
@@ -166,11 +175,11 @@ These areas have repeatedly regressed during feature work. Treat them as protect
   - Centralize path resolution in reusable helpers.
   - GUI handlers should call helpers like "resolve source", "resolve preview", "resolve reveal target", not duplicate path heuristics inline.
 - Keep a full-cache + scoped-view architecture:
-  - Cache the full `report.db` for a root once.
+  - When report mode is explicitly used, cache the full `report.db` for a root once.
   - Derive selected-directory subsets from the full cache.
   - This is more stable than reopening databases or rescanning from scratch on every click.
 - Use append-only enhancement instead of destructive replacement:
-  - Prefer "DB first, then fallback file/XMP enrichment" over replacing one source with another.
+  - In report mode, preserve DB-first enrichment; in the default JSON/file mode, preserve its configured adapter priority. Do not force a report dependency into ordinary image-manager browsing.
   - Preserve raw input fields when normalizing or enriching records.
 - Follow the Open-Closed Principle:
   - Prefer extension by adding helpers, strategy branches, delegates, workers, or adapters instead of rewriting stable flows.
@@ -209,8 +218,12 @@ These areas have repeatedly regressed during feature work. Treat them as protect
 - Thread-pool shutdown must be owned by the creating thread:
   - Do not shut down executors from another thread while submissions are still happening.
   - Signal stop first, then let the worker thread wind down and own final shutdown.
+  - Retain QThread references until real thread completion; a custom logical-finished signal or a wait timeout does not transfer ownership.
+  - Latch shutdown before stopping timers/workers, reject new requests, and use the MainWindow bounded retry flow instead of destroying active worker owners.
 
 ## 13) Metadata and Report-DB Rules
+
+The following report-specific rules protect explicit report-mode callers. Shared write APIs remain available; default image-manager listing does not use them automatically.
 
 - If a file stem exists in cached `report.db`, list metadata should still be recoverable even when `current_path` is stale.
 - `bird_species_cn` maps to UI title semantics in multiple places. Any change to species paste/writeback must update:
@@ -231,6 +244,8 @@ These areas have repeatedly regressed during feature work. Treat them as protect
   - View classes may format and present state, but should not own business rules for metadata, report resolution, path repair, or focus extraction.
   - Controller/ViewModel logic should be testable without requiring full widget interaction.
   - When adding a new GUI feature, first decide which part is view-only behavior and which part belongs in reusable model/controller helpers.
+- Preserve current write gates: comment/rename and file operations use file-write permission; tags and rating/Pick use sidecar permission. Shared rating entry points dynamically call the Viewer override of `rating_writes_allowed()`.
+- Theme handlers change styles only. Default information tabs are image-info and tags; EXIF and dedicated focus modules need explicit lifecycle integration before being enabled.
 - If the same file is reachable from multiple selected directories under one root, visible metadata must remain consistent.
 - Tooltip text, copy/reveal actions, preview loading, and row coloring must use the same resolved-path logic.
 - Path mismatch coloring must only affect the file-name presentation, not unrelated columns.
@@ -244,22 +259,25 @@ These areas have repeatedly regressed during feature work. Treat them as protect
 
 ## 15) Required Validation for File-Browser / Preview Changes
 
-When changing `main.py`, `app_common/file_browser/_browser.py`, `app_common/report_db.py`, or focus-related flows, validate at least:
+Use this checkout's interpreter, never another worktree or an implicit global `py` launcher:
 
-- `py -3 -m py_compile <changed_python_files>`
-- Root selection with `.superpicky/report.db`
-- Descendant directory selection under the same root
-- A case where `current_path` is correct
-- A case where `current_path` is stale but filename stem exists
-- A case where actual-path lookup repairs the row
-- List mode behavior
-- Thumbnail mode behavior
-- Filtering by text / pick / rating / focus status
-- Copy / reveal actions on both resolved and stale-path files
-- Preview image loading from `temp_jpeg_path`
-- Focus overlay loading from source file when preview JPEG lacks focus metadata
+- Windows: `<repo>/.venv/Scripts/python.exe -m py_compile <changed_python_files>`
+- macOS: `<repo>/.venv/bin/python3 -m py_compile <changed_python_files>`
+- Focused tests from the [architecture map](../SuperViewer/docs/ARCHITECTURE.md), then relevant complete directories: `python -m pytest app_common/tests SuperViewer/tests -q` with that interpreter.
 
-If the change touches a fragile pipeline, add temporary stat/debug logs or a small CLI reproducer rather than guessing.
+Choose regression cases relevant to the changed boundary:
+
+- Nearest existing `.superpicky` root, descendants, nested roots and no-library fallback.
+- Central/configured JSON paths, legacy sibling JSON, XMP fallback and real Chinese write/read-back.
+- List mode, thumbnail mode, recursive text/tag/rating/Pick filtering and copy/reveal source semantics.
+- Ordinary preview threshold, quick navigation, HEIF cache miss, RAW display vs full-resolution overlay export, and retained worker handoff/shutdown.
+- Same-photo background metadata refresh, hidden-page pending state, unsaved drafts and stale-batch protection after local writes.
+- Clipboard image/sidecar batches, shared XMP, destination races, partial failure and recovery-copy retention.
+- If touching explicit report mode: correct/stale `current_path`, relative repair, cached-root descendant filtering, preview asset vs source metadata and source-file reveal.
+
+Before constructing GUI test windows, isolate configuration and last-folder load/save paths, user options, permission globals and relevant caches. Use only temporary libraries for writing tests; never remove real user state as cleanup. Keep QApplication alive and wait for bounded asynchronous completion conditions rather than arbitrary sleeps. Inspect both Git working trees after tests.
+
+If the change touches a fragile pipeline, use narrow diagnostic logs or a small reproducer that reuses core helpers rather than guessing.
 
 ## 16) Preferred Debugging Workflow
 

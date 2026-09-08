@@ -1,19 +1,10 @@
 # CLAUDE.md (Claude / Anthropic Coding Agents)
 
-Use `ai_rules/AI_CODING_RULES.md` as the single source of truth for this repository.
+Read [AGENTS.md](AGENTS.md) as the authoritative behavior and validation contract for this `img_mgr` checkout, then follow [ai_rules/AI_CODING_RULES.md](ai_rules/AI_CODING_RULES.md) as the cross-tool coding baseline. The [Viewer architecture map](SuperViewer/docs/ARCHITECTURE.md) locates implementations and extension points.
 
-## Always Enforce
-
-- UTF-8 safety first; do not introduce Chinese text corruption.
-- ExifTool Chinese metadata writes must use UTF-8 temp files (`-XMP:Title<=tmp.txt`) instead of inline CLI values.
-- Keep changes cross-platform (Windows + macOS).
-- Any persistent external process must have deterministic cleanup on task/app exit.
-- Packaged CUDA failures: prioritize packaging/runtime diagnosis before algorithm refactors.
-- Keep Windows Torch/CUDA packaging with `upx=False` unless explicitly requested and validated.
-
-## Minimum Verification
-
-- `py -3 -m py_compile` for changed Python modules.
-- Metadata write/read-back check for non-ASCII fields.
-- Packaged app smoke test when `.spec` or runtime packaging behavior changes.
-
+- Preserve UTF-8, Windows/macOS compatibility, and deterministic worker/process cleanup.
+- Use this checkout's `<repo>/.venv`; on Windows run `.venv\Scripts\python.exe`, on macOS `.venv/bin/python3`.
+- Keep `img_mgr` / `res_mgr` behavior: centralized JSON sidecars with compatibility reads, existing permission gates, default-disabled report listing, and the current preview policy.
+- Inspect both Git working trees, preserve unrelated changes, and stage explicit feature paths only when authorized.
+- Compile changed Python files; run relevant tests, real temporary-file Chinese metadata write/read-back checks, and packaged startup checks for packaging changes.
+- Isolate GUI state before constructing windows. Do not delete or overwrite existing user configuration as test cleanup.

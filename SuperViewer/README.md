@@ -1,58 +1,93 @@
-# Super Viewer - 图片 EXIF 查看器/编辑器
-适合通过`慧眼选鸟(4.1.0及后继版本)`处理后，不需要LRC、PS流程处理照片的情况
+# SuperViewer — 图片管理与预览
 
-## 代码结构（重构后）
+当前 `img_mgr` 分支用于浏览、筛选、标记和整理图片，既可打开普通目录，也可使用慧眼选鸟图库中的 `.superpicky` 状态目录。应用使用共享库的 `res_mgr` 代码线；开发入口见 [仓库说明](../README.md)，实现定位见 [架构文档](docs/ARCHITECTURE.md)。
 
-- **main.py**：应用入口 `main()`、主窗口类 `MainWindow`、构图线常量与线宽图标；对脚本兼容的 re-export（`QApplication`、`RAW_EXTENSIONS`、`_load_preview_pixmap_for_canvas`、`_load_exifread_metadata_for_focus`、`_resolve_focus_calc_image_size`、`_load_focus_box_for_preview`）。脚本仍可 `import main` 使用上述符号。
-- **superviewer/**：子包，包含以下模块：
-  - **qt_compat.py**：PyQt5/PyQt6 统一导入与枚举别名，无业务逻辑。
-  - **paths_settings.py**：程序目录、用户状态目录、last folder、cfg 读写、应用身份与窗口标题。
-  - **exif_helpers.py**：EXIF 读取/解析、标签显示与优先级、报告元数据、扩展名常量（如 `RAW_EXTENSIONS`、`HEIF_EXTENSIONS`）。
-  - **focus_preview_loader.py**：预览图加载、焦点框提取与 report.db 保底、`IMAGE_EXTENSIONS`。
-  - **photo_focus_memory_cache_state.py** / **photo_preview_memory_entry.py**：预览期焦点缓存 dataclass。
-  - **super_viewer_user_options_dialog.py**：用户选项对话框。
-  - **focus_box_loader.py** / **focus_cache_preload_worker.py**：焦点加载与预加载线程。
-  - **preview_panel.py**：预览区控件（内嵌 PreviewCanvas）。
-  - **exif_table.py**：EXIF 表格；**exif_tag_order_dialog.py**：EXIF 显示顺序与禁止显示配置。
+## 当前功能
 
-推荐从 `main` 或 `SuperViewer` 包导入以保持兼容；新代码可按需从 `SuperViewer.superviewer` 子模块直接导入。
+- 目录树、列表和缩略图浏览，支持递归范围、排序、星级及 Pick 状态筛选。
+- 文本搜索匹配文件名、备注与标签；标签支持分组树、批量添加/清除和撤销/重做。
+- 常见 JPEG、PNG、TIFF、RAW、HIF/HEIC/HEIF、PSD 等图片的预览；实际格式能力取决于对应解码依赖。
+- 连续方向键使用快速预览，停留后加载清晰图；可显示构图辅助线并导出带覆盖层的原图。
+- 图片信息页显示缓存元数据，提供文件名、备注和标签编辑；后台补齐信息时保留尚未保存的输入。
+- 右键文件操作包含复制、剪切、粘贴、回收、定位文件和查看缓存缩略图；缓存查看会打开相应目录。
+- 支持命令行文件列表、已有实例接收文件，以及 macOS 的文件打开事件。
 
-* V0.1.0版本功能
-  * 选中`慧眼选鸟`处理过的目录会自动读取数据库并可过滤显示
-  * 支持从`慧眼选鸟`发送文件到本应用
-  * 支持发送文件到`Super Birdstamp`切图工具
-    * https://github.com/OscarKing888/SuperBirdStamp.git
-  * 支持星级、文件名、精选（奖杯）过滤
-  * 文件列表可排序
-  * 右键菜单可复制粘贴鸟名，并写入数据库
-  * 实际文件路径与数据库不一致的会自动修正数据库中的文件路径
-  * 支持自定义显示顺序，支持自定义标签名称。
-  * 支持常见的照片格式（如 各种RAW/JPEG/TIF/HEIC/HEIF）。    
-  * `文件信息-标题` 与 `文件信息-描述` 支持直接双击编辑并写回元数据。
-  * 额外增加了超焦距计算，公式为 H = f^2 / (N * c) + f，其中 f=焦距(mm), N=光圈值, c=弥散圆(mm)。
+默认窗口只挂载“图片信息”和“标签”两页。仓库还保留 EXIF 表格、显示顺序设置及专用焦点线程模块，它们并未全部接入当前默认窗口；开发时不要把这些模块的存在当作已启用的界面功能。
 
-* 主界面
-[![主界面](./manual/images/MainCH.png)](./manual/images/MainCH.png)
-[![主界面](./manual/images/MainEng.png)](./manual/images/MainEng.png)
-* 自定义显示顺序
-[![自定义显示顺序](./manual/images/CustomEdit.png)](./manual/images/CustomEdit.png)
-* 自定义隐藏标签
-[![自定义隐藏标签](./manual/images/CustomEditHiddenTag.png)](./manual/images/CustomEditHiddenTag.png)
+## 运行与构建
 
-# 关于作者
-小红书 @追鸟奇遇记 https://xhslink.com/m/A2cowPsYj8P
+在仓库根目录准备 `.venv` 后运行：
 
+```powershell
+.\.venv\Scripts\python.exe -m SuperViewer
+```
 
-# 友情链接：慧眼选鸟
-* 官网：https://superpicky.app
+也可以使用根目录 `run.bat` / `run.sh`。环境初始化、单应用打包和测试命令见 [仓库说明](../README.md)。启动脚本默认将日志放到根目录 `logs/SuperViewer.log`，可用 `APP_COMMON_LOG_FILE` 覆盖。
 
-* 小红书 @詹姆斯摄影 https://xhslink.com/m/3UWGeUJqUi0
+## 图库和侧车
 
-*开源库：https://github.com/jamesphotography/SuperPicky
-[![友情链接：慧眼选鸟](https://raw.githubusercontent.com/jamesphotography/SuperPicky/master/img/icon.png)](https://superpicky.app)
+向上找到的最近 `.superpicky` 目录决定标签配置、集中侧车和图库缓存的范围。没有这个目录也能浏览图片；缓存代码不会仅为缓存自动创建新的图库根。
 
-# License
+标签配置是 `.superpicky/tags.cfg` 中的 UTF-8 文本。缩进建立层级，有子节点的条目只作为分组，叶子条目才是可赋予图片的标签。例如：
 
-本仓库根目录代码与文档在未另行说明时，按 `GNU Affero General Public License v3.0 (AGPL v3.0)` 发布，详见 `LICENSE`。
+```text
+题材
+  鸟类
+  风景
+处理
+  待整理
+  已完成
+```
 
-仓库中包含独立子模块与第三方组件时，这些内容仍以其各自上游许可证为准，不因本仓库根目录 `LICENSE` 自动变更。相关边界说明见 `THIRD_PARTY_NOTICES.md`。
+精确标签筛选要求图片拥有全部选中标签；部分匹配模式匹配任一选中词在标签中的子串。分组本身不写入图片 Subject。
+
+新备注、标签、评级和 Pick 写入 JSON 侧车。图库中的默认位置保留图片相对于图库根的路径，例如：
+
+```text
+图库/
+  .superpicky/
+    tags.cfg
+    metadata/子目录/白鹭.JPG.superviewer.json
+  子目录/白鹭.JPG
+```
+
+`.superpicky/config.ini` 可以改变集中侧车的内部相对目录：
+
+```ini
+[sidecar]
+dir = metadata
+```
+
+该值相对于 `.superpicky`，绝对路径和跳出该目录的配置不会被采纳。读取优先使用集中 JSON，再兼容图片旁的旧 `<完整文件名>.superviewer.json`；配置了 XMP fallback 的读取器在没有可用 JSON 时继续读取旧 XMP。没有图库根时，新 JSON 写在图片旁。
+
+标签撤销记录每张图片原先的成员状态，保留未在 `tags.cfg` 中配置的 Subject。损坏或不可读取的侧车会使对应标签操作失败；部分文件成功时仍可撤销成功部分，撤销/重做失败的子集可以重试。历史默认每个栈最多保留 100 条，只涵盖已接入命令系统的标签操作。
+
+## 写入权限与文件整理
+
+当前权限按操作入口区分：备注、重命名和文件操作使用文件写权限；标签、评级和 Pick 使用侧车写权限。目录加载会刷新权限状态，文件操作中的单文件只读限制继续生效。
+
+复制/剪切粘贴将图片与已有 XMP、解析出的 JSON 侧车作为一批处理，目标图库的集中 JSON 路径会重新计算。同名目标分配新名字，最终发布也拒绝覆盖并发出现的文件。批次失败时恢复已移动的原件并清理本批输出；恢复失败会保留完整副本，并在错误提示中给出恢复路径。这是失败回滚机制，不是断电或进程崩溃时的跨文件原子事务。
+
+回收沿用 `.superpicky/deleted` 路由及现有回退逻辑。`report.db` 文件列表模式默认关闭，共享库仍保留显式的兼容读写接口；当前浏览不依赖数据库自动修复。
+
+## 预览分辨率
+
+普通选图在已知像素数不超过 `40 * 1024 * 1024` 且没有旧解码线程占用时，可以直接同步显示原图；其余情况先快速显示，再由后台线程补齐。HEIF 快速预览的缓存未命中不会同步生成可能触发整图解码的缩略图。
+
+RAW 日常显示优先使用内嵌预览，必要时后台半尺寸解码。带覆盖层的原图导出会另行确保完整源分辨率，不能将显示就绪的 RAW 预览当成完整原图；无法取得完整图像时导出失败。
+
+## 关于作者
+
+小红书 [@追鸟奇遇记](https://xhslink.com/m/A2cowPsYj8P)
+
+## 友情链接：慧眼选鸟
+
+- [官网](https://superpicky.app)
+- 小红书 [@詹姆斯摄影](https://xhslink.com/m/3UWGeUJqUi0)
+- [开源库](https://github.com/jamesphotography/SuperPicky)
+
+## License
+
+沿用本仓库原有声明：根目录代码与文档在未另行说明时，按 `GNU Affero General Public License v3.0 (AGPL v3.0)` 发布。当前检出未包含根级 `LICENSE` 正文。
+
+独立共享仓库和第三方组件仍以各自上游许可证为准。相关边界说明见 [THIRD_PARTY_NOTICES.md](../THIRD_PARTY_NOTICES.md)。
