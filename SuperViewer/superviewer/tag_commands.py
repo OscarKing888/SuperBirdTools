@@ -1,93 +1,51 @@
-# -*- coding: utf-8 -*-
-"""Undo/redo commands for SuperViewer photo tag writes."""
+"""Photo tag history commands based on per-file membership snapshots."""
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+import os
+from typing import TYPE_CHECKING, Iterable
+
+from app_common.command_history import PartialCommandError
+
+from .photo_tags import TagStates
 
 if TYPE_CHECKING:
     from .tagged_file_list import SuperViewerTaggedFileListPanel
 
 
-class SetPhotoTagCommand:
-    """Set or unset one configured tag on one or more photo paths."""
-
-    def __init__(
-        self,
-        panel: SuperViewerTaggedFileListPanel,
-        paths: list[str],
-        tag: str,
-        enabled: bool,
-    ) -> None:
+class RestorePhotoTagStatesCommand:
+    def __init__(self, panel: SuperViewerTaggedFileListPanel, states: TagStates) -> None:
         self._panel = panel
-        self._paths = list(paths or [])
-        self._tag = str(tag or "").strip()
-        self._enabled = bool(enabled)
+        self._states = {os.path.normpath(path): dict(values) for path, values in states.items() if path}
 
-    def would_change(self) -> bool:
-        if not self._tag or not self._paths:
-            return False
-        snapshot = self._panel.configured_tags_snapshot(self._paths)
-        for path in self._paths:
-            has_tag = self._tag in snapshot.get(path, set())
-            if has_tag != self._enabled:
-                return True
-        return False
-
-    def execute(self) -> SetPhotoTagCommand:
-        self._panel._apply_set_tag_for_paths(self._paths, self._tag, self._enabled)
-        return SetPhotoTagCommand(self._panel, self._paths, self._tag, not self._enabled)
-
-
-class ClearPhotoTagsCommand:
-    """Clear configured tags for paths; inverse restores the pre-clear snapshot."""
-
-    def __init__(
-        self,
-        panel: SuperViewerTaggedFileListPanel,
-        paths: list[str],
-        before_tags_by_path: dict[str, set[str]] | None = None,
-        *,
-        clearing: bool = True,
-    ) -> None:
-        self._panel = panel
-        self._paths = list(paths or [])
-        self._before = {
-            path: set(tags)
-            for path, tags in (before_tags_by_path or {}).items()
-        }
-        self._clearing = bool(clearing)
-
-    def would_change(self) -> bool:
-        if not self._paths:
-            return False
-        if not self._clearing:
-            return any(self._before.values())
-        snapshot = self._panel.configured_tags_snapshot(self._paths)
-        if any(snapshot.values()):
-            return True
-        # Context menu enables clear from UI/cache tags; keep history in sync.
-        return any(self._panel.photo_tags_for_path(path) for path in self._paths)
-
-    def execute(self) -> ClearPhotoTagsCommand:
-        if self._clearing:
-            before = self._panel.configured_tags_snapshot(self._paths)
-            for path, tags in list(before.items()):
-                before[path] = set(tags) | set(self._panel.photo_tags_for_path(path))
-            for path in self._paths:
-                key = path
-                if key not in before:
-                    before[key] = set(self._panel.photo_tags_for_path(path))
-            self._panel._apply_clear_tags_for_paths(self._paths)
-            return ClearPhotoTagsCommand(
-                self._panel,
-                self._paths,
-                before,
-                clearing=False,
-            )
-        self._panel._apply_restore_tags_for_paths(self._before)
-        return ClearPhotoTagsCommand(
-            self._panel,
-            self._paths,
-            self._before,
-            clearing=True,
+    def execute(self) -> RestorePhotoTagStatesCommand | None:
+        result = self._panel._apply_photo_tag_states(self._states)
+        inverse = (
+            RestorePhotoTagStatesCommand(self._panel, result.inverse_states)
+            if result.inverse_states else None
         )
+        if result.failed_paths:
+            remaining = {
+                path: self._states[path]
+                for path in result.failed_paths
+                if path in self._states
+            }
+            details = "\n".join(
+                f"{path}: {reason}" for path, reason in list(result.failed_paths.items())[:5]
+            )
+            raise PartialCommandError(
+                f"{len(result.failed_paths)} 个文件的标签未能保存。\n{details}",
+                inverse=inverse,
+                remaining=RestorePhotoTagStatesCommand(self._panel, remaining) if remaining else None,
+            )
+        return inverse
+
+
+class SetPhotoTagCommand(RestorePhotoTagStatesCommand):
+    def __init__(self, panel: SuperViewerTaggedFileListPanel, paths: Iterable[str], tag: str, enabled: bool) -> None:
+        super().__init__(panel, {path: {tag: enabled} for path in paths})
+
+
+class ClearPhotoTagsCommand(RestorePhotoTagStatesCommand):
+    def __init__(self, panel: SuperViewerTaggedFileListPanel, paths: Iterable[str], tags: Iterable[str]) -> None:
+        memberships = {tag: False for tag in tags}
+        super().__init__(panel, {path: dict(memberships) for path in paths})
