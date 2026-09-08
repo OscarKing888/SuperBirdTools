@@ -355,6 +355,43 @@ class ImageInfoTabPanel_ImageInfo(ImageInfoTabPanel):
         )
         return info
 
+    def refresh_photo_tags(self) -> None:
+        """Apply tag changes without replacing editable text or its undo state."""
+        path = self.current_photo_path()
+        self._current_tags = self._load_current_tags(path) if path else set()
+        self._rebuild_tag_chips()
+
+    def refresh_metadata_fields(self) -> None:
+        """Apply cached metadata while keeping comment and filename drafts."""
+        path = self.current_photo_path()
+        if not path or not os.path.isfile(path):
+            return
+        metadata = self._load_metadata(path)
+        comment = _metadata_comment(metadata)
+        has_comment_draft = self.comment_edit.text().strip() != self._current_comment
+        self._current_comment = comment
+        can_write = self._writes_allowed(path)
+        self._updating_comment = True
+        try:
+            if not has_comment_draft and self.comment_edit.text() != comment:
+                self.comment_edit.setText(comment)
+            self.comment_edit.setEnabled(can_write)
+            self.comment_edit.setToolTip(
+                comment if can_write else self._write_disabled_tooltip("编辑图片信息", path)
+            )
+        finally:
+            self._updating_comment = False
+        self._updating_name = True
+        try:
+            self.filename_edit.setEnabled(can_write)
+            self.filename_edit.setToolTip(
+                path if can_write else self._write_disabled_tooltip("编辑图片信息", path)
+            )
+        finally:
+            self._updating_name = False
+        self._load_preview(path)
+        self._set_basic_info(self._load_basic_info(path, metadata=metadata))
+
     def resizeEvent(self, event) -> None:  # type: ignore[override]
         super().resizeEvent(event)
         self._update_preview_pixmap()
@@ -590,14 +627,15 @@ class ImageInfoTabPanel_ImageInfo(ImageInfoTabPanel):
             return
         if not self._tag_writes_allowed():
             QMessageBox.warning(self, "sidecar 只读", self._tag_write_disabled_tooltip("保存标签"))
-            self.refresh_current_photo()
+            self.refresh_photo_tags()
             return
         try:
             self._set_tag_callback([path], tag, enabled)
         except Exception as exc:
             QMessageBox.warning(self, "TAG", f"保存标签失败：\n{exc}")
+            self.refresh_photo_tags()
             return
-        self.refresh_current_photo()
+        self.refresh_photo_tags()
 
     def _commit_comment_edit(self) -> None:
         if self._updating_comment:

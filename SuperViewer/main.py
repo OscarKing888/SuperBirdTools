@@ -1314,6 +1314,8 @@ class MainWindow(QMainWindow):
 
     def _on_metadata_cache_updated(self, paths: object) -> None:
         """Refresh only the visible info panel when current cached data changes."""
+        if self._shutdown_requested or getattr(self._file_list, "_selection_key_nav_hold_active", False):
+            return
         current = os.path.normpath(self._current_exif_path) if self._current_exif_path else ""
         if not current or os.path.normcase(current) not in _norm_paths_for_compare(paths):
             return
@@ -1323,7 +1325,11 @@ class MainWindow(QMainWindow):
         try:
             panel_path = os.path.normpath(panel.current_photo_path()) if panel.current_photo_path() else ""
             if panel_path and os.path.normcase(panel_path) == os.path.normcase(current):
-                panel.refresh_current_photo()
+                if panel is self.image_info_panel:
+                    panel.refresh_metadata_fields()
+                    panel.refresh_photo_tags()
+                else:
+                    panel.refresh_current_photo()
         except Exception:
             pass
 
