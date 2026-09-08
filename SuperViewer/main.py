@@ -790,6 +790,7 @@ class MainWindow(QMainWindow):
         overlay_row.addStretch(1)
         left_layout.addLayout(overlay_row)
         self.preview_panel = PreviewPanel(central)
+        self.preview_panel.full_preview_ready.connect(self._on_full_preview_ready)
         self.preview_panel.set_composition_grid_mode(self.combo_preview_grid.currentData())
         self.preview_panel.set_composition_grid_line_width(self.combo_preview_grid_line_width.currentData())
         self.preview_panel.display_scale_percent_changed.connect(self._sync_preview_scale_combo)
@@ -1332,6 +1333,10 @@ class MainWindow(QMainWindow):
                     panel.refresh_current_photo()
         except Exception:
             pass
+
+    def _on_full_preview_ready(self, path: str) -> None:
+        """Refresh cached info after the asynchronous source preview arrives."""
+        self._on_metadata_cache_updated([path])
 
     def on_image_loaded(self, path: str):
         """图片被拖入或选择后调用。"""

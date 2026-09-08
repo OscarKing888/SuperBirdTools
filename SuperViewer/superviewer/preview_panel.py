@@ -113,6 +113,11 @@ def _load_quick_preview_pixmap(path: str, target_size: int) -> QPixmap | None:
         qimg = _read_thumb_from_disk_cache(path, mtime, cached_size)
         if qimg is not None and not qimg.isNull():
             break
+    if (qimg is None or qimg.isNull()) and Path(path).suffix.lower() in HEIF_EXTENSIONS:
+        # Pillow's HEIF thumbnail path still decodes the full HEVC image.
+        # A cache miss must leave that work to the owned full-preview worker,
+        # including when the caller only wants a held-key quick frame.
+        return None
     if qimg is None or qimg.isNull():
         qimg = _load_thumbnail_image(path, _QUICK_PREVIEW_FALLBACK_SIZE)
     if qimg is None or qimg.isNull():
@@ -355,6 +360,7 @@ class PreviewPanel(QWidget):
     """预览区：内嵌 app_common.preview_canvas.PreviewCanvas，提供 set_image 等接口。"""
 
     display_scale_percent_changed = pyqtSignal(object)
+    full_preview_ready = pyqtSignal(str)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -456,7 +462,9 @@ class PreviewPanel(QWidget):
         else:
             canvas_t0 = _time.perf_counter()
             self._canvas.set_source_pixmap(None, log_performance=load_full)
-            self._canvas.setText(f"无法预览\n{Path(path).name if path else ''}")
+            loading_heif = bool(load_full and path and Path(path).suffix.lower() in HEIF_EXTENSIONS)
+            message = "正在加载预览" if loading_heif else "无法预览"
+            self._canvas.setText(f"{message}\n{Path(path).name if path else ''}")
             canvas_ms = (_time.perf_counter() - canvas_t0) * 1000.0
             status_t0 = _time.perf_counter()
             self._set_preview_status_text(None, None)
@@ -639,13 +647,15 @@ class PreviewPanel(QWidget):
             self._launch_full_preview_loader(token, path)
 
     def _on_full_preview_loaded(self, token: int, path: str, qimg, load_ms: float) -> None:
-        if int(token) != int(self._preview_request_token):
+        if self._shutdown_requested or int(token) != int(self._preview_request_token):
             return
         if not path or not self._current_path:
             return
         if not self._is_current_path(path):
             return
         if qimg is None or qimg.isNull():
+            if not self._has_canvas_pixmap():
+                self._canvas.setText(f"无法预览\n{Path(path).name}")
             perf_log(
                 _log,
                 "[preview.full] path=%r token=%s ok=False load_ms=%.1f",
@@ -663,6 +673,7 @@ class PreviewPanel(QWidget):
         self._full_preview_loaded = True
         self._canvas_source_full_resolution = Path(path).suffix.lower() not in RAW_EXTENSIONS
         self._fast_preview_only = False
+        self.full_preview_ready.emit(path)
         perf_log(
             _log,
             "[preview.full] path=%r token=%s ok=True size=%s load_ms=%.1f apply_ms=%.1f",
