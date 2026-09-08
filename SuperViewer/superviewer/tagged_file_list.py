@@ -1169,11 +1169,12 @@ class SuperViewerTaggedFileListPanel(FileListPanel):
         if not isinstance(meta_dict, dict) or not meta_dict:
             return meta_dict
         order = {tag: index for index, tag in enumerate(self._available_tags)}
+        local_updates = getattr(self, "_local_metadata_updates_by_path", {})
         merged: dict = {}
         for path, metadata in meta_dict.items():
             norm_path = os.path.normpath(path) if path else path
             item = dict(metadata) if isinstance(metadata, dict) else {}
-            item.update(self._local_metadata_updates_by_path.get(os.path.normcase(norm_path), {}))
+            item.update(local_updates.get(os.path.normcase(norm_path), {}))
             cached_tags = self._photo_tag_cache.get(norm_path)
             if cached_tags is not None:
                 item["tags"] = sorted(
