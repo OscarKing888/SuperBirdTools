@@ -1303,6 +1303,7 @@ class MainWindow(QMainWindow):
         self._file_list.sync_metadata_edit_for_path(
             source_path,
             meta_updates={
+                "comment": text,
                 "Description": text,
                 "XMP-dc:Description": text,
                 "XMP:Description": text,

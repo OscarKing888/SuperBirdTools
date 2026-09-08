@@ -238,6 +238,7 @@ class SuperViewerTaggedFileListPanel(FileListPanel):
         self._tag_filter_clear_button: QToolButton | None = None
         self._photo_tag_store = tag_store or PhotoTagSidecarStore()
         self._photo_tag_cache: dict[str, set[str]] = {}
+        self._local_metadata_updates_by_path: dict[str, dict] = {}
         self._photo_tag_generation_by_path: dict[str, int] = {}
         self._photo_tag_loader: PhotoTagCacheWorker | None = None
         self._photo_tag_stopping_loader: PhotoTagCacheWorker | None = None
@@ -463,6 +464,8 @@ class SuperViewerTaggedFileListPanel(FileListPanel):
             return
         tag_config_scope_changed = self._set_tag_config_directory(path)
         self._load_tag_config_if_changed(force=tag_config_scope_changed)
+        if force_reload or os.path.normcase(os.path.normpath(path)) != os.path.normcase(self.get_current_dir() or ""):
+            self._local_metadata_updates_by_path.clear()
         self._photo_tag_cache = {}
         self._photo_tag_generation_by_path = {}
         self._photo_tag_cache_complete = False
@@ -526,6 +529,24 @@ class SuperViewerTaggedFileListPanel(FileListPanel):
             return thumb_path
         return norm_path
 
+    def _record_local_metadata_updates(self, path: str, fields: dict) -> None:
+        if not path:
+            return
+        updates = {str(name): value for name, value in fields.items() if str(name) and value is not None}
+        if updates:
+            key = os.path.normcase(os.path.normpath(path))
+            self._local_metadata_updates_by_path.setdefault(key, {}).update(updates)
+
+    def sync_metadata_edit_for_path(
+        self, path: str, *, report_fields: dict | None = None, meta_updates: dict | None = None,
+    ) -> bool:
+        updated = super().sync_metadata_edit_for_path(
+            path, report_fields=report_fields, meta_updates=meta_updates,
+        )
+        if updated:
+            self._record_local_metadata_updates(path, meta_updates or {})
+        return updated
+
     def _resolve_rating_write_source(
         self,
         path: str,
@@ -567,6 +588,10 @@ class SuperViewerTaggedFileListPanel(FileListPanel):
                 continue
             write_count += 1
             self._apply_rating_state_to_meta_cache(path, rating=rating, pick=pick)
+            self._record_local_metadata_updates(path, {
+                **({"rating": fields["XMP-xmp:Rating"]} if rating is not None else {}),
+                **({"pick": fields["XMP-xmpDM:pick"]} if pick is not None else {}),
+            })
             updated_paths.append(path)
         perf_log(
             _log,
@@ -1140,22 +1165,21 @@ class SuperViewerTaggedFileListPanel(FileListPanel):
             ) + 1
 
     def _merge_metadata_batch_with_photo_tag_cache(self, meta_dict: dict) -> dict:
-        """Keep a newer tag write authoritative over an older metadata batch."""
+        """Keep successful local field/tag writes ahead of older metadata batches."""
         if not isinstance(meta_dict, dict) or not meta_dict:
             return meta_dict
         order = {tag: index for index, tag in enumerate(self._available_tags)}
         merged: dict = {}
         for path, metadata in meta_dict.items():
             norm_path = os.path.normpath(path) if path else path
-            cached_tags = self._photo_tag_cache.get(norm_path)
-            if cached_tags is None:
-                merged[norm_path] = metadata
-                continue
             item = dict(metadata) if isinstance(metadata, dict) else {}
-            item["tags"] = sorted(
-                cached_tags,
-                key=lambda tag: (order.get(tag, len(order)), tag),
-            )
+            item.update(self._local_metadata_updates_by_path.get(os.path.normcase(norm_path), {}))
+            cached_tags = self._photo_tag_cache.get(norm_path)
+            if cached_tags is not None:
+                item["tags"] = sorted(
+                    cached_tags,
+                    key=lambda tag: (order.get(tag, len(order)), tag),
+                )
             merged[norm_path] = item
         return merged
 
