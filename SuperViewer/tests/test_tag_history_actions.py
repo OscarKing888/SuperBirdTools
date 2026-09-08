@@ -48,6 +48,7 @@ def test_tag_history_actions_track_history_and_preserve_text_undo():
     actions = TagHistoryActions(window)
     menu = window.menuBar().addMenu("编辑")
     actions.add_to_menu(menu)
+    window.addToolBar(actions.create_toolbar(window))
     assert not actions.undo_action.isEnabled()
     panel = _HistoryPanel()
     actions.set_panel(panel)

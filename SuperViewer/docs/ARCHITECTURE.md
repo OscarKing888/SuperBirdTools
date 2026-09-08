@@ -132,7 +132,7 @@ flowchart LR
 
 `TagWriteResult.inverse_states` 只记录成功且实际变化的成员。例如 A 已有“飞行”、B 没有，批量添加后撤销只删除 B 的“飞行”。`RestorePhotoTagStatesCommand.execute()` 将成功逆状态与失败剩余命令交给共享 [`CommandHistory`](../../app_common/command_history.py) / `PartialCommandError`，部分失败可重试，无变化操作不会抹掉 redo。
 
-历史归列表面板所有，最多 100 次；窗口的 [`TagHistoryActions`](../superviewer/tag_history_actions.py) 只维护 QAction 和快捷键。在文字编辑器获焦时释放标签撤销快捷键。切换标签库、可用叶子集合变化、照片重命名或 EXIF 表直接修改 Subject 时清历史；同库切文件夹、单纯标签重排不清。历史不落盘。
+历史归列表面板所有，最多 100 次；窗口的 [`TagHistoryActions`](../superviewer/tag_history_actions.py) 维护 QAction、图标和快捷键。`MainWindow.__init__()` 通过 `create_toolbar()` 创建固定的 `editToolBar`，与编辑菜单共用同一对动作，统一启用状态和命令入口；菜单重建不重建工具栏。在文字编辑器获焦时释放标签撤销快捷键，工具栏按钮仍操作标签历史。切换标签库、可用叶子集合变化、照片重命名或 EXIF 表直接修改 Subject 时清历史；同库切文件夹、单纯标签重排不清。历史不落盘。
 
 异步读取由 `PhotoTagCacheWorker` 分批执行。每路径 `_photo_tag_generation_by_path` 防止读取早于本地写入的 tag/metadata 批次回退新标签；未知路径会排队补读，GUI 查询不做整批 XMP I/O。`finished_summary` 只报告逻辑进度，真正的线程释放和下一批启动必须等 `QThread.finished`。
 
@@ -172,7 +172,7 @@ flowchart LR
 | 连续浏览 FPS/缓存复用 | `_panel.py` 导航计时器、Main 的两个快切槽、`cached_quick_preview_for_path()` | [快切策略](../tests/test_fast_preview_policy.py)、[按键导航](../../app_common/tests/test_file_browser_key_navigation.py) |
 | 新相机焦点或方向修正 | `focus_preview_loader.py`、`FocusBoxLoader`、`focus_calc.py` | [焦点预览](../tests/test_focus_preview_loader.py)、[焦点算法](../../app_common/tests/test_focus_calc.py) |
 | 标签分组、搜索或持续菜单 | `PhotoTagConfig`、`tag_menu.py`、信息页 provider | [树菜单](../tests/test_tag_tree_menu.py)、[信息页菜单](../tests/test_image_info_tag_tree.py) |
-| 批量标签、撤销/重做 | `PhotoTagSidecarStore`、`photo_tag_commands.py`、`TagHistoryActions` | [标签历史](../tests/test_photo_tag_history.py)、[主菜单历史](../tests/test_main_window_tag_history.py)、[异步竞态](../tests/test_photo_tag_concurrency.py) |
+| 批量标签、撤销/重做 | `PhotoTagSidecarStore`、`photo_tag_commands.py`、`TagHistoryActions` | [标签历史](../tests/test_photo_tag_history.py)、[菜单与工具栏](../tests/test_main_window_tag_history.py)、[快捷键与输入框](../tests/test_tag_history_actions.py)、[异步竞态](../tests/test_photo_tag_concurrency.py) |
 | 备注/标题/EXIF 字段写入 | Main 保存回调、`metadata_edit_sync.py`、`PhotoMetaDataXMP` | [编辑同步](../tests/test_main_window_metadata_sync.py)、[中文与 XML 字段替换](../../app_common/tests/test_xmp_field_replacement.py) |
 | 重命名/复制/剪切及侧车 | Main 重命名；共享 `_paste_clipboard_to_current_dir()` 及事务 helpers | [窗口文件操作](../tests/test_main_window_safety.py)、[剪贴板侧车](../../app_common/tests/test_file_browser_clipboard_sidecars.py) |
 | 主题/布局/信息页懒加载 | `ui_theme.py`、`ImageInfoTabWidget`、各页 `apply_theme()` | [主窗口主题](../tests/test_main_window_theme.py)、[标签栏主题](../tests/test_tag_filter_theme.py)、[懒加载](../tests/test_image_info_lazy_loading.py) |

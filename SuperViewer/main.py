@@ -305,6 +305,8 @@ class MainWindow(QMainWindow):
         self.resize(1500, 960)
         self._tag_history_actions = TagHistoryActions(self)
         self._init_menu_bar()
+        self._edit_toolbar = self._tag_history_actions.create_toolbar(self)
+        self.addToolBar(self._edit_toolbar)
         self._main_splitter: TriangleToggleSplitter | None = None
         self._main_splitter_state_save_timer = QTimer(self)
         self._main_splitter_state_save_timer.setSingleShot(True)
