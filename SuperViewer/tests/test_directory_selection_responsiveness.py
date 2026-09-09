@@ -291,3 +291,38 @@ def test_preview_owns_finished_worker_until_queued_finished_is_handled(tmp_path,
     finally:
         panel.shutdown()
         panel.close()
+
+
+def test_window_close_waits_for_canceled_directory_scan_finished_slot(window, tmp_path, monkeypatch):
+    from app_common.file_browser._workers import DirectoryScanWorker
+
+    started = threading.Event()
+    release = threading.Event()
+
+    def blocking_scan(worker):
+        started.set()
+        release.wait(3)
+
+    monkeypatch.setattr(DirectoryScanWorker, "run", blocking_scan)
+    window._file_list.load_directory(str(tmp_path))
+    worker = window._file_list._directory_scan_worker
+    assert started.wait(1)
+    try:
+        start = time.monotonic()
+        window.close()
+        assert time.monotonic() - start < 0.5
+        assert window._shutdown_requested
+        assert not window._shutdown_finalized
+        assert worker.isInterruptionRequested()
+        assert window._file_list.has_pending_directory_scans()
+
+        release.set()
+        assert worker.wait(1000)
+        # The queued finished callback must run before the window may destroy
+        # the scan owner, even though the native thread has already exited.
+        assert window._file_list.has_pending_directory_scans()
+        assert not window._shutdown_finalized
+        _wait_until(lambda: window._shutdown_finalized)
+        assert not window._file_list.has_pending_directory_scans()
+    finally:
+        release.set()

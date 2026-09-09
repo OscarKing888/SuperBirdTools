@@ -41,6 +41,10 @@ flowchart TD
 
 报告模式保留整个根目录的 `_report_full_cache`，当前目录只是它的一个范围。`report.db.current_path` 可能仍指向 XMP，或照片实际已移动：[`_browser_core.py`](../../app_common/file_browser/_browser_core.py) 的报告路径规范化、范围筛选、实际路径缓存负责这种兼容。不要把原始报告路径、实际源图路径和预览 JPEG 路径合成一个可变字段，也不要回写报告修复路径。
 
+多报告目录通过 `_build_report_scope_maps_for_files()` 按文件所属报告范围建立 `_IndexedReportCache` 路径索引；未命中的旧路径不能为每张照片重新遍历整份报告。索引随目录缓存保存和释放，保留同名照片的完整路径区分。扫描 worker 分别报告文件枚举与报告匹配进度，记录报告读取、文件枚举、报告匹配耗时，并在匹配期间响应取消。
+
+目录切换立即启动新扫描；旧扫描取消后仍由面板持有，直到其真正的 `QThread.finished` 被处理。扫描进度和结果校验 worker 身份，排队的列表应用还校验请求代次，防止 A → B → A 时旧 A 的结果覆盖新请求。窗口关闭也等待这些扫描完成交接。
+
 `FileTableModel` / `FileTableSortProxyModel` 和 `ThumbnailListModel` 展示同一套过滤数据。文本、评级、精选、排除、焦点及标签条件组合后重建数据集，不靠逐行隐藏控件。编号列只表示当前自然顺序。列表模式不触发缩略图工作；缩略图模式依据可见区域加载。
 
 `MetadataLoader.metadata_batch_ready` 进入 `_on_metadata_batch_ready()` 后先更新模型缓存，再经 `_enqueue_meta_apply()` / `_apply_meta_batch_tick()` 按数量和时间预算更新行。新增字段应补齐缓存解析和模型显示，不能在结果槽里同步循环更新整目录控件。

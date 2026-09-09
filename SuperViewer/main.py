@@ -296,7 +296,7 @@ class MainWindow(QMainWindow):
         self._shutdown_requested = False
         self._shutdown_finalized = False
         self._shutdown_started_at: float | None = None
-        self._shutdown_pending_state: tuple[bool, bool, bool, bool] | None = None
+        self._shutdown_pending_state: tuple[bool, bool, bool, bool, bool] | None = None
         self._exiftool_shutdown_thread: threading.Thread | None = None
         self._exiftool_shutdown_done = threading.Event()
         info = _load_superviewer_about_info()
@@ -1367,15 +1367,17 @@ class MainWindow(QMainWindow):
         except Exception:
             pass
         exiftool_done = self._exiftool_shutdown_done.is_set()
-        pending_state = (focus_done, tabs_done, preview_done, exiftool_done)
-        if not (focus_done and tabs_done and preview_done and exiftool_done):
+        directory_scans_done = not self._file_list.has_pending_directory_scans()
+        pending_state = (focus_done, tabs_done, preview_done, exiftool_done, directory_scans_done)
+        if not all(pending_state):
             if pending_state != self._shutdown_pending_state:
                 _log.info(
-                    "[shutdown] waiting focus=%s image_info=%s preview=%s exiftool=%s",
+                    "[shutdown] waiting focus=%s image_info=%s preview=%s exiftool=%s directory_scans=%s",
                     focus_done,
                     tabs_done,
                     preview_done,
                     exiftool_done,
+                    directory_scans_done,
                 )
                 self._shutdown_pending_state = pending_state
             event.ignore()
