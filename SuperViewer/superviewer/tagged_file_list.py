@@ -277,7 +277,7 @@ class SuperViewerTaggedFileListPanel(FileListPanel):
             self._thumbnail_loader,
             self._metadata_loader,
             self._persistent_thumb_cache_worker,
-            self._directory_scan_worker,
+            *list(self._directory_scan_workers),
             *list(self._path_lookup_workers),
             *list(self._pending_loaders),
         ]
@@ -325,7 +325,7 @@ class SuperViewerTaggedFileListPanel(FileListPanel):
                 continue
             except Exception:
                 complete = False
-        if not complete:
+        if not complete or self.has_pending_directory_scans():
             return False
         # All QThreads are already stopped, so the base finalizer's waits are
         # normally immediate. A bounded GUI close must not wait indefinitely

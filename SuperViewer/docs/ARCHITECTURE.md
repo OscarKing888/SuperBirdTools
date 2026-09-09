@@ -44,6 +44,8 @@ flowchart LR
 
 共享扫描和读取线程位于 [_workers.py](../../app_common/file_browser/_workers.py)：`DirectoryScanWorker`、`MetadataLoader`、`PathLookupWorker`。`FileListPanel` 将元数据批次排入 `_enqueue_meta_apply()`，再由 `_apply_meta_batch_tick()` 按数量和时间预算更新缓存/行；树与缩略图模型也分批填充。过滤由数据集重新推导，不能仅隐藏已有行造成列表和缩略图结果分叉。
 
+默认目录扫描不读取 `report.db`，也没有主分支按文件构建多报告路径映射的步骤。目录扫描的线程交接独立于报告模式：切换目录后旧扫描仍保留到真正的 `QThread.finished`，进度/结果检查 worker 身份，待应用列表检查请求代次，避免 A → B → A 时旧结果覆盖新请求。Viewer 的有界关闭流程也等待这些已取消扫描的完成回调；不改变持久缩略图队列的保留策略。
+
 Viewer 子类在基础文件筛选上加入标签与文本语义。`photo_tag_filter_matches()` 的精确模式要求全部标签，部分模式对标签子串做任一匹配；`filter_text_tokens_match()` 将文件名、备注、标签纳入文本搜索。目录递归范围仍由文件列表管理。
 
 ### 缓存范围
@@ -161,6 +163,7 @@ HEIF 的直接原图分支仍受普通选图阈值规则约束，不能把“快
 
 | 要修改的功能 | 先查入口 / 核心 | 相关测试 |
 | --- | --- | --- |
+| 目录扫描与旧请求交接 | `DirectoryScanWorker`、`FileListPanel` 的扫描所有权、Viewer `shutdown()` | [默认扫描不读报告](../../app_common/tests/test_directory_scan_default.py)、[目录扫描生命周期](../../app_common/tests/test_file_browser_directory_scan_lifecycle.py)、[Viewer 关闭扫描](../tests/test_directory_scan_shutdown.py) |
 | 新图片格式、首帧、RAW 完整导出 | `PreviewPanel`、共享 [thumb_stream.py](../../app_common/thumb_stream.py) 和格式 helper | [test_preview_panel_policy.py](../tests/test_preview_panel_policy.py)、[test_heif_preview_responsiveness.py](../tests/test_heif_preview_responsiveness.py)、[test_thumb_stream_raw_preview.py](../../app_common/tests/test_thumb_stream_raw_preview.py)、[test_image_formats.py](../../app_common/tests/test_image_formats.py) |
 | 元数据字段、同图后台补齐、编辑后旧批次 | `MainWindow` 编辑回调、`sync_metadata_edit_for_path()`、`refresh_cached_photo()` | [test_metadata_edit_cache_sync.py](../tests/test_metadata_edit_cache_sync.py)、[test_info_background_refresh.py](../tests/test_info_background_refresh.py)、[test_preview_info_sync.py](../tests/test_preview_info_sync.py)、[test_image_info_metadata.py](../tests/test_image_info_metadata.py) |
 | 信息页、新标签页或主题样式 | `ImageInfoTabWidget`、`ImageInfoTabPanel`、`UiThemeManager` | [test_image_info_lazy_loading.py](../tests/test_image_info_lazy_loading.py)、[test_image_info_theme.py](../tests/test_image_info_theme.py)、[test_directory_browser_theme.py](../../app_common/tests/test_directory_browser_theme.py) |
