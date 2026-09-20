@@ -55,7 +55,7 @@ This document defines the cross-tool coding baseline for any coding assistant (C
 - Make minimal, task-scoped diffs.
 - Do not touch unrelated files.
 - Preserve unrelated user changes and stage only task-owned paths. If an unexpected change conflicts with the work, inspect its origin and coordinate; known unrelated changes do not require stopping authorized work.
-- Do each round of feature work on its own branch in its own git worktree, then merge into `main` and commit; resolve merge conflicts by reviewing each feature's intent, not by taking one side wholesale. The concrete procedure (worktree location, submodule handling, validation before merge) lives in `AGENTS.md`.
+- Do each round of feature work on its own branch in its own git worktree, then merge into `main`, commit, and delete the temporary branch and worktree; resolve merge conflicts by reviewing each feature's intent, not by taking one side wholesale. The concrete procedure (worktree location, submodule handling, validation before merge) lives in `AGENTS.md`.
 - When implementing new features, always evaluate modularization / encapsulation first:
   - prefer reusable module-level functions or class-based (OOP) encapsulation for coherent responsibilities
   - avoid embedding core logic directly in GUI/event handlers or one-off scripts when it can be extracted
