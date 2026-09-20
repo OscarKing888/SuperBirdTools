@@ -11,6 +11,7 @@ Read [ai_rules/AI_CODING_RULES.md](ai_rules/AI_CODING_RULES.md) for the cross-to
 - Treat `report.db` as read-only compatibility/hydration input; write user metadata to same-stem XMP sidecars.
 - Packaged CUDA failures: prioritize packaging/runtime diagnosis before algorithm refactors.
 - Keep Windows Torch/CUDA packaging with `upx=False` unless explicitly requested and validated.
+- Each round of feature work gets its own branch in its own worktree; merge to `main` and commit when done, resolving conflicts feature-by-feature (see AGENTS.md "Feature Branch And Worktree Workflow").
 
 ## Minimum Verification
 

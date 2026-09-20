@@ -8,7 +8,22 @@ Follow [ai_rules/AI_CODING_RULES.md](ai_rules/AI_CODING_RULES.md) as the cross-t
 - [SuperBirdStamp architecture](SuperBirdStamp/docs/ARCHITECTURE.md): editor mixins, workspace restore, metadata providers, processing stages, image/GIF/video exports and extension points.
 - [Repository README](README.md): environment, startup and multi-app builds.
 - [AI rules setup](ai_rules/AI_RULES_SETUP.md): instruction entry points and precedence. Keep architecture maps aligned when moving modules or adding a feature; link to symbols and files rather than copying implementations.
-- Before modifying shared code, inspect `git status --short` in both the superproject and `app_common`. Commit shared changes in `app_common` first, then commit the superproject gitlink with its integration changes. Preserve known unrelated user modifications and stage explicit paths only. When feature-by-feature commits are requested, keep each independently reviewable fix and its tests together; do not push without authorization.
+- Before modifying shared code, inspect `git status --short` in both the superproject and `app_common`. Commit shared changes in `app_common` first, then commit the superproject gitlink with its integration changes. Preserve known unrelated user modifications and stage explicit paths only. When feature-by-feature commits are requested, keep each independently reviewable fix and its tests together; do not push without authorization. Every round of feature work runs on its own branch in its own worktree and is merged back to `main` afterwards; see [Feature Branch And Worktree Workflow](#feature-branch-and-worktree-workflow).
+
+## Feature Branch And Worktree Workflow
+
+- One round of feature work (a feature, a fix batch, a documentation/rules update, a review-fix pass) = one branch = one worktree. Do not edit `main` in place; `main` only receives merges.
+- Create the worktree as a sibling directory of the checkout root, named after the branch, and branch from the current `main`:
+  `git worktree add -b <feature-branch> ../SuperBirdTools-<feature-branch> main`
+  then `git submodule update --init app_common` inside the new worktree so `app_common` is populated. Existing worktrees (for example `../SuperBirdTools-img_mgr`) belong to other rounds; never edit, reset or remove them unless the user asks.
+- Do not create a new `.venv` per worktree. Run validation from the worktree root with the main checkout's interpreter (`<repo>/.venv/bin/python3` on macOS, `<repo>\.venv\Scripts\python.exe` on Windows); `pytest.ini` resolves paths relative to the current worktree, so tests import the worktree code, not `main`.
+- Commit on the feature branch, following the shared-code order above: `app_common` first (on its `main`), then the superproject gitlink plus integration changes. Stage explicit paths only; the `main` checkout may carry unrelated user modifications (runtime config, `run.sh`, gitlink) that must not be folded into the feature branch.
+- Before merging, run the "Validation Minimum" and the relevant "Recommended Regression Checks" for the feature on the feature branch, plus `git diff --check` in the worktree and its `app_common`.
+- Merge back into `main` from the main checkout and commit there:
+  `git merge --ff-only <feature-branch>` when `main` has not moved; otherwise `git merge --no-ff <feature-branch>` with a message naming the feature. Then `git submodule update --init` in the main checkout and confirm the gitlink commit exists in the main checkout's `app_common` (fetch it from the worktree's `app_common` or from origin); never leave `main` pointing at an `app_common` commit that only exists inside a worktree.
+- Conflicts are resolved by feature, not by side: when `main` has moved, first merge `main` into the feature branch (or rebase the feature branch onto `main`) inside the worktree, so `main` never holds a half-resolved merge. For every conflicting hunk identify which feature each side implements, review both against this file's behavior contracts, and keep both behaviors; do not take `ours`/`theirs` wholesale or drop the other round's tests. After resolution re-run the regression checks of **every** feature touched by the conflict, then merge into `main`.
+- Do not push `main`, the feature branch or `app_common` without authorization. After the merge is committed, remove the worktree (`git worktree remove ../SuperBirdTools-<feature-branch>`) and delete the merged branch unless the user wants it kept; report any worktree left behind and why.
+- Keep `.gitmodules` on `branch = main` for `app_common` in every worktree; a feature worktree must not switch the submodule to a feature branch.
 
 ## Mandatory Project Constraints
 
