@@ -45,7 +45,7 @@ flowchart TD
 
 目录切换立即启动新扫描；旧扫描取消后仍由面板持有，直到其真正的 `QThread.finished` 被处理。扫描进度和结果校验 worker 身份，排队的列表应用还校验请求代次，防止 A → B → A 时旧 A 的结果覆盖新请求。窗口关闭也等待这些扫描完成交接。
 
-`FileTableModel` / `FileTableSortProxyModel` 和 `ThumbnailListModel` 展示同一套过滤数据。文本、评级、精选、排除、焦点及标签条件组合后重建数据集，不靠逐行隐藏控件。编号列只表示当前自然顺序。列表模式不触发缩略图工作；缩略图模式依据可见区域加载。
+`FileTableModel` / `FileTableSortProxyModel` 和 `ThumbnailListModel` 展示同一套过滤数据。文本、评级、精选、排除、焦点及标签条件组合后重建数据集，不靠逐行隐藏控件。编号列只表示当前自然顺序。列表模式不触发缩略图工作；缩略图模式依据可见区域加载。连拍分组底框由两个模型共享的 `_BurstGroupMixin` 按模型行序惰性计算（同目录 + 同 `burst_id`、至少 2 张），两种配色交替；列表模式走 `BackgroundRole`，缩略图模式由 `ThumbnailItemDelegate` 读取 `_MetaBurstGroupRole` 画色带。`_apply_filter()` / `_rebuild_views()` 调用 `_sync_burst_group_display()`，任何过滤（含标签过滤）激活时关闭底框。
 
 `MetadataLoader.metadata_batch_ready` 进入 `_on_metadata_batch_ready()` 后先更新模型缓存，再经 `_enqueue_meta_apply()` / `_apply_meta_batch_tick()` 按数量和时间预算更新行。新增字段应补齐缓存解析和模型显示，不能在结果槽里同步循环更新整目录控件。
 
