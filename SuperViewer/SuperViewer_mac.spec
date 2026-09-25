@@ -97,4 +97,8 @@ app = BUNDLE(
     name="SuperViewer.app",
     icon=str(ICON_PATH) if ICON_PATH.exists() else None,
     bundle_identifier=None,
+    info_plist={
+        "CFBundleShortVersionString": "0.1.0",
+        "CFBundleVersion": "1",
+    },
 )

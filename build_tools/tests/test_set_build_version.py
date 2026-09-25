@@ -32,6 +32,10 @@ def _write_version_fixture(repo_root: Path) -> None:
         spec_text,
         encoding="utf-8",
     )
+    (viewer_root / "SuperViewer_mac.spec").write_text(
+        spec_text,
+        encoding="utf-8",
+    )
 
 
 @pytest.mark.parametrize(
@@ -66,15 +70,19 @@ def test_apply_build_version_updates_all_packaged_version_sources(
         build_number=37,
     )
 
-    assert len(changed) == 4
+    assert len(changed) == 5
     assert '__version__ = "2.4.0-rc.2"' in (
         tmp_path / "SuperViewer" / "superviewer" / "__init__.py"
     ).read_text(encoding="utf-8")
     assert '__version__ = "2.4.0-rc.2"' in (
         tmp_path / "SuperBirdStamp" / "birdstamp" / "__init__.py"
     ).read_text(encoding="utf-8")
-    for spec_name in ("BirdStamp_mac.spec", "BirdStamp_mac_console.spec"):
-        spec_text = (tmp_path / "SuperBirdStamp" / spec_name).read_text(
+    for spec_path in (
+        Path("SuperBirdStamp") / "BirdStamp_mac.spec",
+        Path("SuperBirdStamp") / "BirdStamp_mac_console.spec",
+        Path("SuperViewer") / "SuperViewer_mac.spec",
+    ):
+        spec_text = (tmp_path / spec_path).read_text(
             encoding="utf-8"
         )
         assert '"CFBundleShortVersionString": "2.4.0"' in spec_text

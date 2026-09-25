@@ -107,6 +107,16 @@ def apply_build_version(
             normalized_version,
         ),
         (
+            root / "SuperViewer" / "SuperViewer_mac.spec",
+            _MAC_SHORT_VERSION_RE,
+            plist_version,
+        ),
+        (
+            root / "SuperViewer" / "SuperViewer_mac.spec",
+            _MAC_BUILD_VERSION_RE,
+            normalized_build_number,
+        ),
+        (
             root / "SuperBirdStamp" / "BirdStamp_mac.spec",
             _MAC_SHORT_VERSION_RE,
             plist_version,
