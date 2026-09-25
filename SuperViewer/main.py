@@ -1393,11 +1393,13 @@ class MainWindow(QMainWindow):
             pass
         exiftool_done = self._exiftool_shutdown_done.is_set()
         directory_scans_done = not self._file_list.has_pending_directory_scans()
+        pool_pending = getattr(self._file_list, 'has_pending_pool_work', lambda: False)
+        directory_scans_done = directory_scans_done and not pool_pending()
         pending_state = (focus_done, tabs_done, preview_done, exiftool_done, directory_scans_done)
         if not all(pending_state):
             if pending_state != self._shutdown_pending_state:
                 _log.info(
-                    "[shutdown] waiting focus=%s image_info=%s preview=%s exiftool=%s directory_scans=%s",
+                    "[shutdown] waiting focus=%s image_info=%s preview=%s exiftool=%s directory_scans_and_pool=%s",
                     focus_done,
                     tabs_done,
                     preview_done,

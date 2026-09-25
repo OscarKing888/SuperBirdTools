@@ -222,6 +222,7 @@ class SuperViewerTaggedFileListPanel(FileListPanel):
     command_history_changed = pyqtSignal()
     use_report_db = True
     include_videos = True
+    use_unified_worker_pool = True
     video_playback_stop_requested = pyqtSignal()
     use_preview_cache = True
     enable_key_navigation_playback = True
@@ -322,6 +323,7 @@ class SuperViewerTaggedFileListPanel(FileListPanel):
         self._stop_all_loaders()
         self._stop_persistent_thumb_cache_worker()
         self._stop_directory_scan_worker()
+        self._request_worker_pool_shutdown()
 
     def shutdown(self) -> None:
         """Stop all owned workers even when the child widget gets no closeEvent."""

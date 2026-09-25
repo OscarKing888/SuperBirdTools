@@ -154,6 +154,20 @@ flowchart LR
 | EXIF 请求 token、worker 与最新 pending | `ImageInfoTabPanel_EXIF`；`loaded` 只能更新匹配照片，当前 worker 的 `finished` 才能交接 |
 | `command_history_changed` | 列表通知 `TagHistoryActions` 更新菜单状态，历史不归菜单控件 |
 
+`SuperViewerTaggedFileListPanel.use_unified_worker_pool` 显式启用
+[`BrowserWorkPool`](../../app_common/file_browser/_work_pool.py)。每个列表只创建一个池，
+切目录复用它；`MetadataLoader`、`ThumbnailLoader`、`PersistentThumbCacheWorker`
+只负责提交有界窗口与回传信号，不另开 executor。优先级为可见缩略图 > 预取 >
+持久缩略图，同时至少保留 2 个元数据 worker。无缩略图需求时元数据可借用其余
+worker；小批次（最多 8 文件）完成即回传、补位，不等待同批最慢文件。
+
+每个池线程拥有独立的 ExifTool 读取会话，避免多个元数据线程竞争全局执行锁。
+20 秒逐命令超时和目录取消同时覆盖 stay-open 与 RAW 二进制预览读取。
+状态栏显示实际活跃线程数，元数据进度提示显示总预算、保留量与两类队列长度；
+`[browser.pool]` / `[metadata.pool]` 日志记录排队、慢任务和总耗时。
+列表保留 coordinator 至 `QThread.finished`；关闭时先取消生产者，再关闭池，
+`MainWindow.closeEvent()` 等待 `has_pending_pool_work()` 清空才销毁窗口。
+
 所有异步 UI 更新都需要“仍在当前范围/请求”检查；关闭标志之后不得补发新任务。不要用逻辑结果信号代替线程完成，也不要因为 `isRunning()` 已经为 False 就丢弃尚未处理 `finished` 的 worker 引用。
 
 `MainWindow.closeEvent()` 首次关闭时停止导航、计时器与各面板请求，并在后台关闭 ExifTool。随后用有界等待检查焦点、信息页、完整预览及 ExifTool；仍有任务则隐藏窗口、忽略此次 close 并计时重试。只有相关任务结束后才完成列表 shutdown 和退出。超时不是完成，不能在仍有活线程时销毁父窗口。
