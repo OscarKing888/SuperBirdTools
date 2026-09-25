@@ -84,7 +84,7 @@ Follow [ai_rules/AI_CODING_RULES.md](ai_rules/AI_CODING_RULES.md) as the cross-t
 - Keep the two app Analysis/PYZ targets in separate merged-spec workpaths; sharing one `base_library.zip` makes each app invalidate the other's Analysis cache on every run.
 - In `build_all_win_merged.spec`, collect Torch/Ultralytics before starting Viewer/Qt analysis as defense in depth. `build_all.bat` must also prepend the build-only `build_tools/pyinstaller_bootstrap` path so every PyInstaller isolated worker preloads the system MSVC runtime before PyQt/Torch imports.
 - `.github/workflows/build-release.yml` is the release build source of truth: manual runs upload Actions artifacts, while valid `v*` tags also publish a GitHub Release.
-- CI release builds use `build_tools/set_build_version.py` to synchronize the two app versions and BirdStamp's macOS bundle version without committing generated changes.
+- CI release builds use `build_tools/set_build_version.py` to synchronize the two app versions and both macOS bundle versions without committing generated changes.
 - Release staging must omit `SuperBirdStamp/config/editor_autosave.birdstamp-workspace.json` and `SuperBirdStamp/config/editor_export_state.json`; these files may contain user-specific paths and are runtime state, not distributable defaults.
 - Existing Release assets are not overwritten automatically. Replace them only through an explicit manual maintenance step.
 - `app_common/about_dialog/about.cfg` is the shared About fallback. SuperViewer and SuperBirdStamp each use an app-specific `about.cfg` at the app root; every app and merged spec must collect it and its referenced `images/` at the bundle resource root. Do not put About fields back into `super_viewer.cfg`.
