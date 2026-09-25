@@ -123,8 +123,8 @@ def main() -> None:
     )
     parser.add_argument(
         "--release",
-        default="latest",
-        help="Ultralytics assets release，默认 latest。",
+        default=os.environ.get("SUPERBIRDSTAMP_YOLO_RELEASE") or "latest",
+        help="Ultralytics assets release，默认读取环境变量 SUPERBIRDSTAMP_YOLO_RELEASE，未设置时为 latest。",
     )
     args = parser.parse_args()
 
