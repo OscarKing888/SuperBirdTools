@@ -446,8 +446,19 @@ class _BirdStampRendererMixin:
         self._bird_box_cache[signature] = bird_box  # type: ignore[assignment]
         if self.current_path is None or self._source_signature(self.current_path) != signature:
             return
-        # 鸟体也用于裁切中心；结果到达后必须更新裁切和文字，不能只重画识别框。
-        self.render_preview()
+        settings = self._render_settings_for_path(self.current_path, prefer_current_ui=True)
+        crop_uses_bird = (
+            not _is_ratio_no_crop(settings.get("ratio"))
+            and not editor_core.normalize_extended_unit_box(settings.get("crop_box"))
+            and _normalize_center_mode(settings.get("center_mode")) in {
+                editor_core.CENTER_MODE_BIRD, editor_core.CENTER_MODE_FOCUS,
+            }
+        )
+        if crop_uses_bird:
+            # 自动裁切需要重新排版；仅显示识别框时保留当前缩放/平移和编辑画布。
+            self.render_preview()
+        else:
+            self._refresh_preview_bird_overlay()
 
     def _on_async_bird_detect_finished(self) -> None:
         if self.sender() is not getattr(self, "_bird_detect_worker", None):
@@ -493,13 +504,17 @@ class _BirdStampRendererMixin:
 
     def _refresh_preview_bird_overlay(self) -> None:
         if self.current_path is None or self.current_source_image is None:
+            self._refresh_preview_label(preserve_view=True)
             return
         show_bird_box_check = getattr(self, "show_bird_box_check", None)
         if show_bird_box_check is None or not show_bird_box_check.isChecked():
             return
+        signature = self._source_signature(self.current_path)
+        if signature not in self._bird_box_cache:
+            self._schedule_async_bird_detect(self.current_path, self.current_source_image)
         pad_top, pad_bottom, pad_left, pad_right = self._current_preview_outer_pad()
         preview_bird_box = _transform_source_box_after_crop_padding(
-            self._bird_box_cache.get(self._source_signature(self.current_path)),
+            self._bird_box_cache.get(signature),
             crop_box=None,
             source_width=self.current_source_image.width,
             source_height=self.current_source_image.height,
@@ -513,6 +528,7 @@ class _BirdStampRendererMixin:
             focus_box=state.focus_box,
             bird_box=preview_bird_box,
             crop_effect_box=state.crop_effect_box,
+            reference_regions=state.reference_regions,
         )
         self._refresh_preview_label(preserve_view=True)
 
@@ -786,6 +802,7 @@ class _BirdStampRendererMixin:
                 self.placeholder_path: "Path | None" = src
                 self.current_path = src
                 self.current_source_image = image
+                self._preview_is_quick = False
                 self.current_source_full_size = self._read_source_full_size(src)
                 self._invalidate_original_mode_cache()
                 self.current_raw_metadata = self._load_raw_metadata(src)
@@ -1607,10 +1624,7 @@ class _BirdStampRendererMixin:
                             pl=pad_left,
                             pr=pad_right,
                         )
-                    elif not (
-                        callable(getattr(self, "_is_placeholder_active", None))
-                        and self._is_placeholder_active()
-                    ):
+                    else:
                         self._schedule_async_bird_detect(self.current_path, self.current_source_image)
             focus_stage_draws = (
                 self._is_preview_stage_enabled(preview_settings, STAGE_FOCUS_OVERLAY_ID)

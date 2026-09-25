@@ -77,8 +77,6 @@ class _BirdStampCropMixin:
         )
         if not needs_bird_box or path is None:
             return None
-        if callable(getattr(self, "_is_placeholder_active", None)) and self._is_placeholder_active():
-            return None
         if preview_only:
             signature = self._source_signature(path)
             if signature not in self._bird_box_cache:

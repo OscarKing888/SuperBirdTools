@@ -754,7 +754,8 @@ class _BirdStampWorkspaceMixin:
                 )
             else:
                 self._apply_render_settings_to_ui(current_render_settings)
-                self.render_preview()
+                # 仅 report.db / 照片已失效的工作区也需要完整示例预览及其检测框。
+                self._show_placeholder_preview()
 
             if preview_scale_percent is not None:
                 self.preview_label.set_display_scale_percent(preview_scale_percent, preserve_view=True)

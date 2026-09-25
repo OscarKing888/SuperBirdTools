@@ -43,6 +43,8 @@
 
 `render_preview` 的鸟体中心及缺失焦点回退通过后台识别计算，结果到达后重算裁切与文字；中间缩略图不参与检测，手动裁切框不会被覆盖。导出仍使用完整裁切管线。预览模板通过 `template_context.preview_photo_info` 消费已合并 XMP 的元数据快照，字段缺失时等待后台元数据刷新，不在 GUI 抢占 ExifTool 或打开原图探测。字段解析按优先级命中即返回，同次预览复用 provider context；导出和模板管理器保留完整读取规则。
 
+启动示意位图只用于快速出窗；未恢复工作区时，`_show_startup_placeholder_if_idle` 延后加载带真实 EXIF 的内置示例，且不能覆盖已开始导入或选中的照片。恢复后没有有效照片时也加载该示例。示例图与普通照片都支持后台鸟体识别及焦点显示。重新勾选「显示鸟体框」会按需启动识别；仅更新辅助框时保持当前缩放/平移，只有自动裁切依赖鸟体中心时才重排预览。开关、空工作区、迟到元数据和补边坐标回归见 [test_editor_preview_boxes.py](../tests/test_editor_preview_boxes.py)。
+
 普通格式解码在旋转/转色前缩小像素，并携带原尺寸和文件属性，避免再次打开 TIFF 读取尺寸。TIFF 原尺寸读取兼容 Pillow 已应用 Orientation 的情形，不能重复交换宽高。性能探针 `select.activate`、`select.render_preview`、`preview.cached_thumbnail`、`preview.source_size`、`preview.decode` 区分点击耗时和后台读取耗时。
 
 `BirdStampEditorWindow.closeEvent` 在视频导出仍运行时拒绝关闭并提示先停止；其他工作采用协作停止。只要预览、检测、元数据或发现线程仍在运行，窗口忽略本次关闭并通过定时器重试，不阻塞 GUI 等待发现线程。全部结束后才关闭工作区自动保存并接受关闭。修改这条路径时，应测试“业务完成信号已发出但线程尚未返回”的窗口期。

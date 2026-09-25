@@ -850,9 +850,21 @@ class BirdStampEditorWindow(
         """出窗后恢复上次工作区或加载完整占位预览，避免阻塞构造函数。"""
         if getattr(self, "_pending_startup_workspace_restore", False):
             self._pending_startup_workspace_restore = False
-            self._restore_startup_workspace()
+            if self._restore_startup_workspace():
+                return
+        QTimer.singleShot(0, self._show_startup_placeholder_if_idle)
+
+    def _show_startup_placeholder_if_idle(self) -> None:
+        """空工作区加载带 EXIF 的示例图；延迟回调不能盖住新导入/选中的照片。"""
+        if (
+            self._preview_decode_shutdown
+            or self.current_path is not None
+            or self.photo_list.topLevelItemCount() > 0
+            or self._photo_input_discovery_workers
+            or self._received_photo_import_pending_paths
+        ):
             return
-        QTimer.singleShot(0, self._show_placeholder_preview)
+        self._show_placeholder_preview()
 
     def _begin_photo_list_item_display_batch(self) -> None:
         depth = int(getattr(self, "_photo_list_display_batch_depth", 0))
@@ -2805,7 +2817,10 @@ class BirdStampEditorWindow(
         super().closeEvent(event)
 
     def _on_preview_toolbar_toggled(self, _checked: bool) -> None:
-        self._refresh_preview_label(preserve_view=True)
+        if self.sender() is self.show_bird_box_check and self.show_bird_box_check.isChecked():
+            self._refresh_preview_bird_overlay()
+        else:
+            self._refresh_preview_label(preserve_view=True)
         self._schedule_workspace_autosave()
 
     def _on_preview_grid_mode_changed(self, _index: int) -> None:
