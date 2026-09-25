@@ -42,6 +42,7 @@ from app_common.exif_io import (
 )
 from app_common.file_browser import DirectoryBrowserWidget
 from app_common.image_formats import HEIF_EXTENSIONS, IMAGE_EXTENSIONS, RAW_EXTENSIONS
+from app_common.video import is_video
 from app_common.preview_canvas import (
     PREVIEW_COMPOSITION_GRID_LINE_WIDTHS,
     PREVIEW_COMPOSITION_GRID_MODES,
@@ -118,7 +119,8 @@ try:
         _resolve_focus_calc_image_size,
     )
     from .superviewer.focus_box_loader import FocusBoxLoader
-    from .superviewer.preview_panel import PreviewPanel
+    from .superviewer.video_preview import MediaPreviewPanel as PreviewPanel, VideoInfoPanel
+    from .superviewer.qt_compat import QStackedWidget
     from .superviewer.image_info_tabs import (
         ImageInfoTabPanel_EXIF,
         ImageInfoTabPanel_ImageInfo,
@@ -195,7 +197,8 @@ except ImportError:
         _resolve_focus_calc_image_size,
     )
     from superviewer.focus_box_loader import FocusBoxLoader
-    from superviewer.preview_panel import PreviewPanel
+    from superviewer.video_preview import MediaPreviewPanel as PreviewPanel, VideoInfoPanel
+    from superviewer.qt_compat import QStackedWidget
     from superviewer.image_info_tabs import (
         ImageInfoTabPanel_EXIF,
         ImageInfoTabPanel_ImageInfo,
@@ -358,7 +361,7 @@ class MainWindow(QMainWindow):
         left_layout = QVBoxLayout(left_widget)
         left_layout.setContentsMargins(0, 0, 0, 0)
 
-        self.file_label = QLabel("未选择图片")
+        self.file_label = QLabel("未选择图片或视频")
         self.file_label.setStyleSheet("color: palette(text); font-size: 12px;")
         self.file_label.setWordWrap(True)
         left_layout.addWidget(self.file_label)
@@ -466,7 +469,14 @@ class MainWindow(QMainWindow):
         self._file_list.photo_tags_cache_updated.connect(self._on_photo_tags_cache_updated)
         self._file_list.photo_metadata_cache_updated.connect(self._on_photo_metadata_cache_updated)
         self.image_info_tabs.on_photo_selected("")
-        splitter.addWidget(self.image_info_tabs)
+        self.video_info_panel = VideoInfoPanel(self)
+        self.media_info_stack = QStackedWidget(self)
+        self.media_info_stack.setMinimumWidth(300)
+        self.media_info_stack.addWidget(self.image_info_tabs)
+        self.media_info_stack.addWidget(self.video_info_panel)
+        self.preview_panel.video_info_ready.connect(self.video_info_panel.update_info)
+        self._file_list.video_playback_stop_requested.connect(self.preview_panel.stop_video_playback)
+        splitter.addWidget(self.media_info_stack)
         splitter.set_handle_toggle_target(3, 3)
 
         # 各面板初始宽度：目录树 200 | 文件列表 320 | 预览 380 | 元信息 320
@@ -503,6 +513,14 @@ class MainWindow(QMainWindow):
 
     def _on_directory_selected(self, path: str):
         """目录树选中目录后，保存路径到设置与 .last_folder.txt，并刷新文件列表。"""
+        self.preview_panel.clear_image()
+        self.video_info_panel.set_path('')
+        self.media_info_stack.setCurrentWidget(self.image_info_tabs)
+        self.image_info_tabs.on_photo_selected('')
+        self._current_exif_path = ''
+        self.file_label.setText('未选择图片或视频')
+        self.file_label.setToolTip('')
+        self._stop_focus_loader()
         save_last_selected_directory_to_settings(path)
         self._file_list.load_directory(path)
 
@@ -1005,7 +1023,14 @@ class MainWindow(QMainWindow):
         self.file_label.setToolTip(path)
         label_ms = (_time.perf_counter() - label_t0) * 1000.0
         tabs_t0 = _time.perf_counter()
-        self.image_info_tabs.on_photo_selected(path)
+        if hasattr(self, 'media_info_stack'):
+            video = is_video(path)
+            self.media_info_stack.setCurrentWidget(self.video_info_panel if video else self.image_info_tabs)
+            self.video_info_panel.set_path(path if video else '')
+            for control in (self.check_show_focus, self.combo_preview_grid,
+                            self.combo_preview_grid_line_width, self.combo_preview_scale):
+                control.setEnabled(not video)
+        self.image_info_tabs.on_photo_selected('' if is_video(path) else path)
         tabs_ms = (_time.perf_counter() - tabs_t0) * 1000.0
         self._update_preview_focus_box(path)
         perf_log(
@@ -1134,7 +1159,7 @@ class MainWindow(QMainWindow):
 
         `allow_async_load=False` 时仅清除显示、不启动新线程（用于方向键高速浏览）。
         """
-        if not allow_async_load:
+        if not allow_async_load or is_video(path):
             # This is a frame-rate-sensitive path.  Return before resolving a
             # sibling RAW/HEIF source, scanning cache directories, or consulting
             # metadata; set_image()/set_quick_pixmap() already cleared the box.

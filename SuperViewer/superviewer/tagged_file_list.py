@@ -221,6 +221,8 @@ class SuperViewerTaggedFileListPanel(FileListPanel):
     photo_metadata_cache_updated = pyqtSignal(object)
     command_history_changed = pyqtSignal()
     use_report_db = True
+    include_videos = True
+    video_playback_stop_requested = pyqtSignal()
     use_preview_cache = True
     enable_key_navigation_playback = True
     enable_in_memory_fast_preview = True
@@ -479,6 +481,10 @@ class SuperViewerTaggedFileListPanel(FileListPanel):
                 if str(name) and value is not None
             })
         return updated
+
+    def _start_key_navigation_playback(self, event, *, view_name: str) -> None:
+        self.video_playback_stop_requested.emit()
+        super()._start_key_navigation_playback(event, view_name=view_name)
 
     def cached_quick_preview_for_path(self, path: str, size: int) -> QPixmap | None:
         """Reuse the same exact-tier cache resolver as held-key playback."""

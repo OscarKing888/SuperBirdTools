@@ -205,3 +205,16 @@ macOS 使用同一根环境的 `.venv/bin/python3`。编译命令中的文件列
 Qt 测试在窗口构造前隔离 `paths_settings` 的应用/用户状态目录与共享运行选项，缓存指向临时目录；用临时图片/XMP，不对真实图库做写入 smoke。整个进程保留一个 `QApplication`，不要让 fixture 销毁后再次创建。需要完整窗口和实际事件的范例见 `test_directory_selection_responsiveness.py`、`test_main_window_theme.py`。
 
 卡顿排查先看根 `logs/SuperViewer.log`（可通过 `APP_COMMON_LOG_FILE` 重定向）及 `perf_probe`：区分扫描、列表应用、`set_image`、信息页读取和后台批次等待。必要时使用临时只读探针或线程栈定位阻塞，再修改调度；不要先放宽等待时间或把整图解码藏进缩略图 fallback。
+
+## 11. 视频浏览、封面与播放
+
+视频格式和无 Qt 的探测/抽帧入口集中在共享 [`video.py`](../../app_common/video.py)：`VIDEO_EXTENSIONS`、`probe_video()`、`video_thumbnail_rgb()`。实现参考 SuperVideo 的 FFmpeg 抽帧与等比缩放方式；本工程不依赖旁边的 SuperVideo 目录。`run_video_tool()` 限制同时运行的子进程数量，设置超时、取消与 Windows 隐藏控制台，并在退出前回收进程。
+
+- **发现与缓存**：`FileListPanel.include_videos` 默认关闭，Viewer 子类启用；`DirectoryScanWorker` 在现有照片/报告列表之后补充当前范围的视频，报告模式仍遵循子树范围。图片扩展名定义不混入视频，所以 BirdStamp 的图片发现不变。视频封面走现有按文件定位、按尺寸分档、内存/磁盘缓存路径；`_resolve_thumb_source_path()` 保持视频源身份，不复用同名照片的报告 JPEG。缩略图 worker 将停止信号传给 FFmpeg；列表模式仍不生成封面。
+- **信息模型**：`MetadataLoader` 在原有 XMP/文件读取之后探测视频，把只读技术字段存入 `video_info`。Viewer 列表模型追加时长、视频分辨率、帧率、视频编码列，使用数值排序；缩略图角标显示播放符号和时长，未读到时长时显示格式。BirdStamp 不增加视频列。刷新/重建后保留角标数据。
+- **选择与预览**：[`MediaPreviewPanel`](../superviewer/video_preview.py) 继承原 `PreviewPanel`，所有照片选择仍走原有小图、大图、RAW 策略。视频先复用当前尺寸封面，再由单个 `_VideoProbe` 异步补充信息与最大 1024 px 封面，只有显式播放才创建 Qt Multimedia 播放源。快切只显示缓存，不开播放器、不启动探测；进入长按导航即停止旧播放，即使下一帧缓存尚未就绪。
+- **播放与界面**：`VideoPlayerView` 使用 PyQt6 `QMediaPlayer` / `QAudioOutput` / `QVideoWidget`，提供播放/暂停、重播、定位、0.25–2 倍速和音量/静音。`MainWindow` 在右侧堆叠容器中切换照片信息页与 `VideoInfoPanel`，视频不走照片信息、EXIF 或焦点 UI。视频模式禁用照片构图/焦点/缩放工具；不会修改照片构图设置。信息页展示容器、时长、显示分辨率、帧率、编码、总码率、音轨、大小与文件修改时间。帧率来自 FFmpeg 头信息，变帧率素材不是逐帧统计。
+- **线程与关闭**：预览以 token + 路径拒绝旧结果，只保留最新 pending 请求，直到旧 `QThread.finished` 被处理才交接。切文件/目录及关闭时停止播放器、清空源、取消探测。停止音频通过 Qt 元调用释放 GIL，避免 FFmpeg 音频线程的 SIP 断连回调与 Python 主线程互等。损坏文件/缺少工具显示错误并保留手动播放入口。
+- **依赖与打包**：Viewer requirements 增加 `imageio-ffmpeg`；默认使用其平台二进制，也支持 `SUPERVIEWER_FFMPEG`、已有工程 FFmpeg 或 PATH。现有 PyInstaller 对 `superviewer`/`app_common` 的收集，加上内置 Qt Multimedia hook 和 `hook-imageio_ffmpeg`，负责播放器插件及 FFmpeg 二进制；不要仅复制 Python 文件而漏掉二进制。Windows 64 位需要在相应环境安装 requirements 后重新构建并进行平台播放验证。
+
+回归入口：[共享视频与扫描测试](../../app_common/tests/test_video.py)、[真实抽帧/播放/切换/关闭与混合目录测试](../tests/test_video_preview.py)，以及原有预览策略、快切、键盘导航、缓存与 BirdStamp 导航/构图网格测试。命令行信息检查可在根目录执行 `.venv/bin/python3 -m app_common.video /path/to/视频.mp4`（Windows 使用 `.venv\Scripts\python.exe`）。
