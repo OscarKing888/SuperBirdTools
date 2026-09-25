@@ -443,6 +443,9 @@ def _format_length_mm_text(value: Any) -> str:
     text = _clean_text(value)
     if not text:
         return ""
+    numeric = _try_parse_float(text)
+    if numeric is not None:
+        return f"{_format_decimal_number(numeric)} 毫米"
     match = re.fullmatch(r"(-?\d+(?:\.\d+)?)\s*(?:mm|毫米)?", text, flags=re.IGNORECASE)
     if match:
         try:
@@ -461,11 +464,9 @@ def _format_aperture_text(value: Any) -> str:
         return text
     if normalized.startswith("f"):
         normalized = normalized[1:]
-    if re.fullmatch(r"-?\d+(?:\.\d+)?", normalized):
-        try:
-            return f"f/{_format_decimal_number(float(normalized))}"
-        except Exception:
-            return text
+    numeric = _try_parse_float(normalized)
+    if numeric is not None:
+        return f"f/{_format_decimal_number(numeric)}"
     return text
 
 

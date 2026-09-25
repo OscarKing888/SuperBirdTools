@@ -6,48 +6,15 @@ from typing import Any
 
 from PyQt6.QtCore import QThread, pyqtSignal
 
-from app_common.exif_io import DEFAULT_METADATA_TAGS, read_batch_metadata
+from app_common.exif_io import extract_many_with_xmp_priority
 from app_common.log import get_logger
 
 _log = get_logger("editor.photo_metadata_loader")
 _PHOTO_LIST_METADATA_CHUNK_SIZE = 48
-_PHOTO_LIST_CAMERA_METADATA_TAGS = [
-    "-ExifIFD:ExposureTime",
-    "-EXIF:ExposureTime",
-    "-XMP-exif:ExposureTime",
-    "-Composite:ShutterSpeed",
-    "-ExifIFD:ISO",
-    "-EXIF:ISO",
-    "-XMP-exif:PhotographicSensitivity",
-    "-XMP-exif:ISOSpeedRatings",
-    "-ExifIFD:FNumber",
-    "-EXIF:FNumber",
-    "-XMP-exif:FNumber",
-    "-Composite:Aperture",
-]
-
-
-def _merge_metadata_tags(*groups: list[str]) -> list[str]:
-    merged: list[str] = []
-    seen: set[str] = set()
-    for group in groups:
-        for tag in group or []:
-            text = str(tag or "").strip()
-            if not text or text in seen:
-                continue
-            seen.add(text)
-            merged.append(text)
-    return merged
-
-
-_PHOTO_LIST_METADATA_TAGS = _merge_metadata_tags(
-    DEFAULT_METADATA_TAGS,
-    _PHOTO_LIST_CAMERA_METADATA_TAGS,
-)
 
 
 class EditorPhotoListMetadataLoader(QThread):
-    """后台批量读取照片列表所需 metadata，避免主线程逐张阻塞。"""
+    """后台批量读取列表、模板预览和导出共用的完整 EXIF/XMP 快照。"""
 
     metadata_batch_ready = pyqtSignal(object)  # dict[norm_path, metadata_dict]
     progress_updated = pyqtSignal(int, int)  # (current_count, total_count)
@@ -90,7 +57,9 @@ class EditorPhotoListMetadataLoader(QThread):
         if not chunk:
             return {}
         try:
-            raw_batch = read_batch_metadata(chunk, tags=_PHOTO_LIST_METADATA_TAGS, use_cache=True)
+            # 限定标签的浏览器缓存可能只有尺寸/report 字段，且不会总是合并 sidecar。
+            # 模板消费只读快照，必须在后台一次读全，并让 XMP 覆盖同语义字段。
+            raw_batch = extract_many_with_xmp_priority([Path(path) for path in chunk])
         except Exception as exc:
             _log.warning("[EditorPhotoListMetadataLoader._read_chunk] batch read failed: %s", exc)
             raw_batch = {}
@@ -100,7 +69,7 @@ class EditorPhotoListMetadataLoader(QThread):
             if self._should_stop():
                 return {}
             norm_path = os.path.normpath(raw_path)
-            record = raw_batch.get(norm_path) or raw_batch.get(raw_path)
+            record = raw_batch.get(Path(raw_path).resolve(strict=False))
             if isinstance(record, dict):
                 normalized = dict(record)
             else:
