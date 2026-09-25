@@ -158,8 +158,16 @@ flowchart LR
 [`BrowserWorkPool`](../../app_common/file_browser/_work_pool.py)。每个列表只创建一个池，
 切目录复用它；`MetadataLoader`、`ThumbnailLoader`、`PersistentThumbCacheWorker`
 只负责提交有界窗口与回传信号，不另开 executor。优先级为可见缩略图 > 预取 >
-持久缩略图，同时至少保留 2 个元数据 worker。无缩略图需求时元数据可借用其余
-worker；小批次（最多 8 文件）完成即回传、补位，不等待同批最慢文件。
+持久缩略图，同时至少保留 2 个元数据并发额度。线程没有固定任务类型：
+[`WorkerAction.execute()`](../../app_common/file_browser/_work_action.py) 是统一入口，
+`MetadataReadAction`、`ThumbnailAction`、`PersistentThumbnailAction` 分别封装具体操作，
+[`BrowserWorkPolicy`](../../app_common/file_browser/_work_policy.py) 只选择下一类任务和额度。
+生产者通过 `begin_producer()` / `end_producer()` 声明未提交完的任务需求，避免小批次
+补位间隙误判整类工作结束；持久缩略图协调器进入空闲时就释放需求，不等 QThread 退出。
+最后一项缩略图完成且需求释放后，元数据自动占用全部空闲 worker；反向也一样。
+总线程数有界且不变，新缩略图到来时，借出的线程完成当前小批次后优先转回缩略图。
+Qt 进度回调只更新界面/初始需求提示，实际任务完成和需求释放直接唤醒调度。
+小批次（最多 8 文件）完成即回传、补位，不等待同批最慢文件。
 
 每个池线程拥有独立的 ExifTool 读取会话，避免多个元数据线程竞争全局执行锁。
 20 秒逐命令超时和目录取消同时覆盖 stay-open 与 RAW 二进制预览读取。
