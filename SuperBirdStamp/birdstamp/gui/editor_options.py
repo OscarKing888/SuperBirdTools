@@ -6,6 +6,7 @@ from functools import lru_cache
 from typing import Any
 
 from birdstamp.config import resolve_bundled_path
+from birdstamp.render.text_scale import TEXT_SCALE_DEFAULT, TEXT_SCALE_MIN, TEXT_SCALE_MAX
 
 # Sentinel for "no crop" and "free aspect ratio" crop modes.
 RATIO_NO_CROP = "no_crop"
@@ -232,6 +233,23 @@ def _normalize_sample_raw_metadata(value: Any) -> dict[str, Any]:
     return cleaned if cleaned else dict(_FALLBACK_SAMPLE_RAW_METADATA)
 
 
+def _normalize_text_scale_slider(value: Any) -> dict[str, int]:
+    raw = value if isinstance(value, dict) else {}
+    lower, upper = round(TEXT_SCALE_MIN * 100), round(TEXT_SCALE_MAX * 100)
+    defaults = {"minimum": lower, "maximum": upper, "default": round(TEXT_SCALE_DEFAULT * 100), "step": 1}
+    result = dict(defaults)
+    for key, fallback in defaults.items():
+        try:
+            result[key] = int(raw.get(key, fallback))
+        except (TypeError, ValueError, OverflowError):
+            result[key] = fallback
+    result["minimum"] = max(lower, min(100, result["minimum"]))
+    result["maximum"] = min(upper, max(100, result["maximum"]))
+    result["default"] = max(result["minimum"], min(result["maximum"], result["default"]))
+    result["step"] = max(1, min(25, result["step"]))
+    return result
+
+
 def load_editor_options() -> dict[str, Any]:
     try:
         raw = _load_builtin_editor_options_raw()
@@ -332,6 +350,7 @@ def load_editor_options() -> dict[str, Any]:
         default_video_height = _FALLBACK_DEFAULT_VIDEO_HEIGHT
 
     return {
+        "text_scale_slider": _normalize_text_scale_slider(raw.get("text_scale_slider")),
         "style_options": style_options,
         "ratio_options": ratio_options,
         "max_long_edge_options": max_long_edge_options,
@@ -362,6 +381,7 @@ def load_editor_options() -> dict[str, Any]:
 
 
 _EDITOR_OPTIONS = load_editor_options()
+TEXT_SCALE_SLIDER: dict[str, int] = _EDITOR_OPTIONS["text_scale_slider"]
 STYLE_OPTIONS: tuple[str, ...] = _EDITOR_OPTIONS["style_options"]
 RATIO_OPTIONS: list[tuple[str, float | None | str]] = _EDITOR_OPTIONS["ratio_options"]
 MAX_LONG_EDGE_OPTIONS: list[int] = _EDITOR_OPTIONS["max_long_edge_options"]

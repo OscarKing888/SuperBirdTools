@@ -19,6 +19,7 @@ import numpy as np
 from PIL import Image, ImageColor
 
 from app_common.log import get_logger
+from birdstamp.render.text_scale import normalize_text_scale
 from birdstamp import image_dejitter as _dejitter
 from birdstamp.config import get_app_dir, get_app_resource_dir, get_user_data_dir
 from birdstamp.decoders.image_decoder import decode_image
@@ -621,6 +622,7 @@ def _clone_render_settings(settings: dict[str, Any]) -> dict[str, Any]:
         "template_payload": _deep_copy_payload(template_payload),
         "draw_banner": _parse_bool_value(settings.get("draw_banner"), True),
         "draw_text": _parse_bool_value(settings.get("draw_text"), True),
+        "text_scale": normalize_text_scale(settings.get("text_scale")),
         "draw_focus": _parse_bool_value(settings.get("draw_focus"), False),
         STAGE_TEMPLATE_CROP_ENABLED_KEY: _resolve_stage_enabled(
             settings,

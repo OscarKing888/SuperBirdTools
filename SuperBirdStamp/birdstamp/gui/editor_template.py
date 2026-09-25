@@ -12,6 +12,7 @@ from typing import Any
 from PIL import Image, ImageColor, ImageDraw
 
 from birdstamp.config import get_config_path, resolve_bundled_path
+from birdstamp.render.text_scale import normalize_text_scale
 from birdstamp.render.typography import load_font
 
 from birdstamp.gui.editor_core import (
@@ -521,7 +522,8 @@ def _template_font_scale_for_canvas(width: int, height: int) -> float:
     short_scale = short_edge / 900.0
     long_scale = long_edge / 1600.0
     scale = (short_scale * 0.68) + (long_scale * 0.32)
-    return max(0.72, min(2.25, scale))
+    # 同比例画幅的文字占比应恒定，不能以固定倍数截断大图或小图。
+    return scale
 
 
 def _compute_template_text_position(
@@ -763,6 +765,7 @@ def render_template_overlay(
     auto_scale_font: bool = True,
     draw_banner: bool = True,
     draw_text: bool = True,
+    text_scale: float = 1.0,
     layout_size: tuple[int, int] | None = None,
 ) -> Image.Image:
     canvas = image.convert("RGBA")
@@ -771,8 +774,10 @@ def render_template_overlay(
     layout_width, layout_height = layout_size or canvas.size
     sx, sy = canvas.width / layout_width, canvas.height / layout_height
     font_scale = _template_font_scale_for_canvas(layout_width, layout_height) if auto_scale_font else 1.0
+    minimum_font_size = max(1, round(8 * font_scale))
+    font_scale *= normalize_text_scale(text_scale)
     occupied_boxes: list[tuple[int, int, int, int]] = []
-    text_gap = max(4, int(round(min(layout_width, layout_height) * 0.006)))
+    text_gap = max(1, int(round(min(layout_width, layout_height) * 0.006)))
     draw_commands: list[tuple[str, int, int, str, Any, str, tuple[int, int, int, int]]] = []
     fields = template_payload.get("fields") or []
     if not isinstance(fields, list):
@@ -799,13 +804,14 @@ def render_template_overlay(
         x_offset = float(field.get("x_offset_pct") or 0.0) / 100.0
         y_offset = float(field.get("y_offset_pct") or 0.0) / 100.0
         field_font_path = template_font_path_from_type(field.get("font_type"))
-        scaled_size = max(8, min(320, int(round(font_size_base * font_scale))))
+        scaled_size = max(1, int(round(font_size_base * font_scale)))
         chosen_font = load_font(field_font_path, scaled_size)
         chosen_x = 0
         chosen_y = 0
         chosen_rect = (0, 0, 1, 1)
         rendered_text = text
-        for candidate_size in _iter_font_sizes_for_layout(scaled_size, minimum=8):
+        # 放大倍率不能抬高避让下限；缩小时也不能被默认字号下限强行放大。
+        for candidate_size in _iter_font_sizes_for_layout(scaled_size, minimum=min(scaled_size, minimum_font_size)):
             font = load_font(field_font_path, candidate_size)
             measured_text, text_box = _measure_text_with_fallback(draw, text, font=font)
             text_width = max(1, text_box[2] - text_box[0])
@@ -940,6 +946,7 @@ def render_template_overlay_in_crop_region(
     crop_box: tuple[float, float, float, float] | None,
     draw_banner: bool = True,
     draw_text: bool = True,
+    text_scale: float = 1.0,
     layout_size: tuple[int, int] | None = None,
 ) -> Image.Image:
     kw = dict(
@@ -949,6 +956,7 @@ def render_template_overlay_in_crop_region(
         template_payload=template_payload,
         draw_banner=draw_banner,
         draw_text=draw_text,
+        text_scale=text_scale,
         layout_size=layout_size,
     )
     if not crop_box_has_effect(crop_box):
