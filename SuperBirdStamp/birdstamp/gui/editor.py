@@ -4912,7 +4912,7 @@ class BirdStampEditorWindow(
         self._clear_photos_state(status_message="已清空照片列表。")
 
     def _on_photo_selected(self, current: QTreeWidgetItem | None, _previous: QTreeWidgetItem | None) -> None:
-        if not current:
+        if not current or getattr(self, "_preview_decode_shutdown", False):
             return
         raw = current.data(PHOTO_COL_ROW, PHOTO_LIST_PATH_ROLE)
         if not isinstance(raw, str):
@@ -4924,6 +4924,8 @@ class BirdStampEditorWindow(
 
         self._preview_decode_token += 1
         token = self._preview_decode_token
+        self._cancel_async_bird_detect()
+        self._begin_photo_selection(path, current)
         cached = self._cached_preview_image(path)
         if cached is not None:
             worker = getattr(self, "_preview_decode_worker", None)
@@ -4936,7 +4938,7 @@ class BirdStampEditorWindow(
             return
 
         worker = getattr(self, "_preview_decode_worker", None)
-        if worker is not None and worker.isRunning():
+        if worker is not None:
             worker.requestInterruption()
             self._preview_decode_pending = (token, path)
         else:
@@ -4953,6 +4955,7 @@ class BirdStampEditorWindow(
             parent=self,
         )
         worker.decoded.connect(self._on_preview_decode_ready)
+        worker.quick_decoded.connect(self._on_quick_preview_ready)
         worker.failed.connect(self._on_preview_decode_failed)
         worker.finished.connect(self._on_preview_decode_finished)
         worker.finished.connect(worker.deleteLater)
@@ -4983,6 +4986,10 @@ class BirdStampEditorWindow(
         ):
             decoded_image.close()
             return
+        if self._crop_drag_active:
+            # 拖动期间保持当前像素/填充坐标系，松手后再升级；过期/关闭仍由 token 释放图像。
+            QTimer.singleShot(30, lambda: self._on_preview_decode_ready(token, path_text, decoded_image, full_size))
+            return
         try:
             accepted = self._accept_async_preview_image(path, decoded_image)
         except Exception as exc:
@@ -4998,6 +5005,20 @@ class BirdStampEditorWindow(
             normalized_size = accepted.size
         self._preview_source_size_cache[self._preview_image_cache_signature(path)] = normalized_size
         self._apply_decoded_photo_selection(path, accepted, normalized_size)
+
+    def _on_quick_preview_ready(self, token: int, path_text: str, image: object, full_size: object) -> None:
+        if not isinstance(image, Image.Image):
+            return
+        path = Path(path_text)
+        if (token != self._preview_decode_token or not self._selected_item_matches_path(path)
+                or getattr(self, "_preview_decode_shutdown", False)):
+            image.close()
+            return
+        if self._crop_drag_active:
+            image.close()
+            return  # 已有可编辑画布时，拖动期间无需再显示中间缩略图。
+        self._apply_decoded_photo_selection(path, image, full_size, quick=True)
+        self._set_status(f"已显示缓存预览，正在读取清晰预览: {path.name}")
 
     def _on_preview_decode_failed(self, token: int, path_text: str, message: str) -> None:
         path = Path(path_text)
@@ -5046,23 +5067,41 @@ class BirdStampEditorWindow(
         path: Path,
         image: Image.Image,
         full_size: tuple[int, int],
+        *,
+        quick: bool = False,
     ) -> None:
         current = self._find_photo_item_by_path(path)
         if current is None or not self._selected_item_matches_path(path):
             image.close()
             return
-        with birdstamp_perf.span("select", path=str(path)):
+        self._preview_is_quick = quick
+        previous_source = self.current_source_image
+        self.current_source_image = image
+        if previous_source is not None and previous_source is not image:
+            previous_source.close()
+        self.current_source_full_size = full_size
+        self._invalidate_original_mode_cache()
+        # 后台升级只替换像素，不再加载逐图设置，以免覆盖用户刚拖动的裁切框。
+        with birdstamp_perf.span("select.render_preview", path=str(path)):
+            self.render_preview()
+
+    def _begin_photo_selection(self, path: Path, current: QTreeWidgetItem) -> None:
+        """选中即切换编辑目标，异步像素未到达时不会继续修改上一张照片。"""
+        with birdstamp_perf.span("select.activate", path=str(path)):
             self.placeholder_path = None
             self.current_path = path
             previous_source = self.current_source_image
-            self.current_source_image = image
-            if previous_source is not None and previous_source is not image:
-                try:
-                    previous_source.close()
-                except Exception:
-                    pass
-            self.current_source_full_size = full_size
+            self.current_source_image = None
+            if previous_source is not None:
+                previous_source.close()
+            self.current_source_full_size = None
+            self._preview_is_quick = False
+            self._crop_drag_active = False
+            self.last_rendered = None
+            self.preview_pixmap = None
+            self.preview_overlay_state = EditorPreviewOverlayState()
             self._invalidate_original_mode_cache()
+            self._refresh_preview_label(reset_view=True)
             with birdstamp_perf.span("select.metadata_snapshot", path=str(path)):
                 self.current_raw_metadata = self._metadata_snapshot_for_selection(path)
             with birdstamp_perf.span("select.context"):
@@ -5080,16 +5119,8 @@ class BirdStampEditorWindow(
                 settings = self._render_settings_for_path(path, prefer_current_ui=False)
                 self._set_photo_crop_box_for_path(path, settings.get("crop_box"))
                 self._apply_render_settings_to_ui(settings)
-            with birdstamp_perf.span("select.update_list"):
-                self._update_photo_list_item_display(
-                    path,
-                    raw_metadata=self.current_raw_metadata,
-                    settings=settings,
-                    resort=False,
-                )
+            # 列表数据只在元数据/设置变化时更新；点击本身不重新排序整个列表。
             self.current_file_label.setText(f"当前照片: {path}")
-            with birdstamp_perf.span("select.render_preview", path=str(path)):
-                self.render_preview()
 
     def _metadata_snapshot_for_selection(self, path: Path) -> dict[str, Any]:
         """Return already-known metadata only; never block selection on ExifTool."""
@@ -5127,7 +5158,7 @@ class BirdStampEditorWindow(
             self.current_photo_info,
             self.current_raw_metadata,
         )
-        if refresh_preview:
+        if refresh_preview and self.current_source_image is not None:
             self.render_preview()
 
     def _cached_metadata_context(
@@ -5142,7 +5173,7 @@ class BirdStampEditorWindow(
         if cached is not None:
             birdstamp_perf.plog("metadata_context cache_hit path=%s", photo_info.path)
             return cached
-        context = _build_metadata_context(photo_info, raw_metadata)
+        context = _build_metadata_context(_template_context.preview_photo_info(photo_info), raw_metadata)
         self._metadata_context_cache[cache_key] = context
         return context
 

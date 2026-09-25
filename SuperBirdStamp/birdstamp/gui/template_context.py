@@ -2,10 +2,10 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from collections import defaultdict
-from dataclasses import dataclass
+from dataclasses import dataclass, field, replace
 from datetime import datetime
 from fractions import Fraction
-from functools import lru_cache
+from functools import lru_cache, wraps
 import json
 from pathlib import Path
 import re
@@ -86,6 +86,9 @@ class PhotoInfo:
     path: Path
     sidecar_path: Path | None = None
     raw_metadata: Dict[str, Any] | None = None
+    # GUI 预览只消费已读取的快照，导出/模板编辑仍可按原规则补读 metadata。
+    metadata_is_snapshot: bool = field(default=False, kw_only=True)
+    _snapshot_contexts: dict = field(default_factory=dict, kw_only=True, repr=False, compare=False)
 
     @classmethod
     def from_path(
@@ -134,6 +137,24 @@ class EditorPhotoInfo(PhotoInfo):
         )
 
 
+def preview_photo_info(photo_info: PhotoInfo) -> PhotoInfo:
+    """单次预览拥有独立快照缓存，避免污染列表对象、后续刷新和导出。"""
+    return replace(photo_info, raw_metadata=dict(photo_info.raw_metadata or {}),
+                   metadata_is_snapshot=True, _snapshot_contexts={})
+
+
+def _cache_snapshot_context(builder):
+    @wraps(builder)
+    def cached(cls, photo_info, *args):
+        if not photo_info.metadata_is_snapshot:
+            return builder(cls, photo_info, *args)
+        key = (cls.provider_id, builder.__name__)
+        if key not in photo_info._snapshot_contexts:
+            photo_info._snapshot_contexts[key] = builder(cls, photo_info, *args)
+        return photo_info._snapshot_contexts[key]
+    return cached
+
+
 def _resolve_sidecar_path(source_path: Path) -> Path | None:
     try:
         from app_common.exif_io import find_xmp_sidecar
@@ -180,7 +201,7 @@ def ensure_photo_info(
             photo.raw_metadata = dict(raw_metadata)
         elif not isinstance(photo.raw_metadata, dict):
             photo.raw_metadata = {}
-        if sidecar_path is not None or photo.sidecar_path is None:
+        if not photo.metadata_is_snapshot and (sidecar_path is not None or photo.sidecar_path is None):
             photo.sidecar_path = _normalize_sidecar_path(sidecar_path, source_path=photo.path)
         return photo
     return PhotoInfo.from_path(
@@ -236,7 +257,7 @@ def ensure_editor_photo_info(
             photo.raw_metadata = dict(raw_metadata)
         elif not isinstance(photo.raw_metadata, dict):
             photo.raw_metadata = {}
-        if sidecar_path is not None or photo.sidecar_path is None:
+        if not photo.metadata_is_snapshot and (sidecar_path is not None or photo.sidecar_path is None):
             photo.sidecar_path = _normalize_sidecar_path(sidecar_path, source_path=photo.path)
         if crop_box is not _PHOTO_INFO_CROP_BOX_UNSET:
             photo.crop_box = normalized_crop_box
@@ -253,6 +274,7 @@ def ensure_editor_photo_info(
         path=base.path,
         sidecar_path=base.sidecar_path,
         raw_metadata=dict(base.raw_metadata) if isinstance(base.raw_metadata, dict) else {},
+        metadata_is_snapshot=base.metadata_is_snapshot,
         crop_box=normalized_crop_box,
         editor_row_number=normalized_editor_row_number,
     )
@@ -731,6 +753,8 @@ def _extract_alpha_channel_text(photo_info: PhotoInfo, raw_metadata: Dict[str, A
     normalized = _format_yes_no_text(text)
     if normalized:
         return normalized
+    if photo_info.metadata_is_snapshot:
+        return ""
     _width, _height, has_alpha = _probe_image_file_properties(str(photo_info.path))
     if has_alpha is None:
         return ""
@@ -839,7 +863,7 @@ def _extract_dimensions_text(photo_info: PhotoInfo, raw_metadata: Dict[str, Any]
             "RawImageHeight",
         )
     )
-    if width is None or height is None:
+    if (width is None or height is None) and not photo_info.metadata_is_snapshot:
         probed_width, probed_height, _has_alpha = _probe_image_file_properties(str(photo_info.path))
         if width is None and probed_width is not None:
             width = float(probed_width)
@@ -1124,6 +1148,8 @@ def _read_sidecar_metadata_cached(
 
 
 def _read_sidecar_metadata(photo_info: PhotoInfo) -> Dict[str, Any]:
+    if photo_info.metadata_is_snapshot:
+        return {}
     sidecar_path = photo_info.sidecar_path or _resolve_sidecar_path(photo_info.path)
     if sidecar_path is None:
         return {}
@@ -1161,6 +1187,10 @@ def _read_file_metadata_with_xmp_priority_cached(
 
 def _metadata_with_xmp_priority(photo_info: PhotoInfo) -> Dict[str, Any]:
     metadata = _photo_raw_metadata(photo_info)
+    if photo_info.metadata_is_snapshot:
+        # 列表后台读取已经合并 XMP；缺失字段等待下一批，不在点击回调抢 ExifTool 锁。
+        _overlay_template_metadata_aliases(metadata, prefer_xmp=True)
+        return metadata
     if not _metadata_has_content(metadata):
         path_text, mtime_ns, size = _path_cache_signature(photo_info.path)
         sidecar_path = photo_info.sidecar_path or _resolve_sidecar_path(photo_info.path)
@@ -2298,6 +2328,7 @@ class ExifTemplateContextProvider(TemplateContextProvider):
         return cls._build_context_entries_from_metadata(photo_info, metadata)
 
     @classmethod
+    @_cache_snapshot_context
     def _build_context_entries_from_metadata(
         cls,
         photo_info: PhotoInfo,
@@ -2696,6 +2727,7 @@ class FromFileTemplateContextProvider(TemplateContextProvider):
         return cls._FIELD_DEFINITIONS
 
     @classmethod
+    @_cache_snapshot_context
     def build_context_entries(cls, photo_info: PhotoInfo) -> TemplateContext:
         metadata = _photo_raw_metadata(photo_info)
         context: TemplateContext = {
@@ -3034,9 +3066,13 @@ class AutoProxyTemplateContextProvider(TemplateContextProvider):
         return tuple(results)
 
     def _read_text_value(self, photo_info: PhotoInfo, field: TemplateContextField | None) -> str:
-        for candidate in self.inspect_candidates(photo_info):
-            if not _is_missing_template_text(candidate.text_content):
-                return candidate.text_content
+        # inspect_candidates 供诊断列出所有来源；实际渲染命中高优先级来源后立即返回。
+        source_key = str(field.key if field is not None else self.source_key or "").strip()
+        for provider_cls in self.delegate_provider_classes():
+            for candidate_key in self._candidate_keys_for_provider(provider_cls, source_key, field):
+                text = _clean_text(provider_cls(candidate_key).get_text_content(photo_info))
+                if not _is_missing_template_text(text):
+                    return text
         return MISSING_TEMPLATE_TEXT
 
     def get_display_caption(self, photo_info: PhotoInfo) -> str:

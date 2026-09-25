@@ -552,3 +552,25 @@ def test_auto_proxy_route_definitions_are_loaded_from_resource_json() -> None:
     assert routes["bird_species_cn"][2].provider_id == "report_db"
     assert "XMP-superpicky:bird_species_cn" in routes["bird_species_cn"][0].candidate_keys
     assert "XMP-dc:Title" in routes["bird_species_cn"][0].candidate_keys
+
+
+def test_auto_render_stops_after_first_available_provider(monkeypatch, tmp_path):
+    import birdstamp.gui.template_context as context
+    photo = context.preview_photo_info(context.PhotoInfo(
+        tmp_path / "photo.jpg", raw_metadata={"XMP-dc:Title": "鸟名优先"},
+    ))
+    monkeypatch.setattr(context.FromFileTemplateContextProvider, "get_text_content",
+                        lambda *a: (_ for _ in ()).throw(AssertionError("unneeded lower-priority provider")))
+    assert context.AutoProxyTemplateContextProvider("bird_species_cn").get_text_content(photo) == "鸟名优先"
+
+
+def test_preview_snapshot_context_cache_is_local_to_one_render(tmp_path):
+    import birdstamp.gui.template_context as context
+    original = context.PhotoInfo(tmp_path / "photo.jpg", raw_metadata={"XMP-dc:Title": "旧鸟名"})
+    first = context.preview_photo_info(original)
+    provider = context.AutoProxyTemplateContextProvider("bird_species_cn")
+    assert provider.get_text_content(first) == "旧鸟名"
+    original.raw_metadata["XMP-dc:Title"] = "新鸟名"
+    second = context.preview_photo_info(original)
+    assert provider.get_text_content(second) == "新鸟名"
+    assert not original.metadata_is_snapshot and original._snapshot_contexts == {}

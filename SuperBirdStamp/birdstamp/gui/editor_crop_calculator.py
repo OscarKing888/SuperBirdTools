@@ -63,6 +63,7 @@ class _BirdStampCropMixin:
         image: Image.Image,
         raw_metadata: dict[str, Any],
         center_mode: str,
+        preview_only: bool = False,
     ) -> tuple[float, float, float, float] | None:
         mode = _normalize_center_mode(center_mode)
         focus_point = _extract_focus_point_for_display(
@@ -76,6 +77,13 @@ class _BirdStampCropMixin:
         )
         if not needs_bird_box or path is None:
             return None
+        if callable(getattr(self, "_is_placeholder_active", None)) and self._is_placeholder_active():
+            return None
+        if preview_only:
+            signature = self._source_signature(path)
+            if signature not in self._bird_box_cache:
+                self._schedule_async_bird_detect(path, image)
+            return self._bird_box_cache.get(signature)
         return self._bird_box_for_path(path, source_image=image)
 
     def _crop_edit_mode_active(self) -> bool:
@@ -105,15 +113,20 @@ class _BirdStampCropMixin:
         image: Image.Image,
         raw_metadata: dict[str, Any],
         settings: dict[str, Any],
+        preview_only: bool = False,
     ) -> tuple[tuple[float, float, float, float] | None, tuple[int, int, int, int]]:
         if editor_core.is_ratio_no_crop(settings.get("ratio")):
             return (None, (0, 0, 0, 0))
-        bird_box = self._resolve_bird_box_for_crop_plan(
-            path=path,
-            image=image,
-            raw_metadata=raw_metadata,
-            center_mode=str(settings.get("center_mode") or _CENTER_MODE_IMAGE),
-        )
+        # 手动框已固定裁切区域，不再为它启动鸟体识别。
+        bird_box = None
+        if not editor_core.normalize_extended_unit_box(settings.get("crop_box")):
+            bird_box = self._resolve_bird_box_for_crop_plan(
+                path=path,
+                image=image,
+                raw_metadata=raw_metadata,
+                center_mode=str(settings.get("center_mode") or _CENTER_MODE_IMAGE),
+                preview_only=preview_only,
+            )
         return _compute_crop_plan_for_image(
             image=image,
             raw_metadata=raw_metadata,
@@ -143,12 +156,13 @@ class _BirdStampCropMixin:
         if self.current_path is None or self.current_source_image is None:
             return None
         settings = self._render_settings_for_path(self.current_path, prefer_current_ui=True)
-        return self._compute_crop_box_for_image(
+        return self._compute_crop_plan_for_image(
             path=self.current_path,
             image=self.current_source_image,
             raw_metadata=self.current_raw_metadata,
             settings=settings,
-        )
+            preview_only=True,
+        )[0]
 
     def _selected_ratio(self) -> float | None | str:
         return _parse_ratio_value(self.ratio_combo.currentData())

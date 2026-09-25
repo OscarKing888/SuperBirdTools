@@ -18,7 +18,12 @@ _DEFAULT_PREVIEW_MAX_LONG_EDGE = 2048
 def _pillow_oriented_size(image: Image.Image) -> tuple[int, int]:
     width, height = image.size
     try:
-        orientation = int(image.getexif().get(274, 1))
+        exif = image.getexif()
+        orientation = int(exif.get(274, 1))
+        if image.format == "TIFF":
+            # 部分 Pillow 版本在 TIFF open 阶段已交换 size，不能再交换一次。
+            width = int(exif.get(256, width))
+            height = int(exif.get(257, height))
     except Exception:
         orientation = 1
     if orientation in {5, 6, 7, 8}:
@@ -49,15 +54,27 @@ def _draft_target_size(width: int, height: int, max_long_edge: int) -> tuple[int
 def _decode_standard_for_preview(path: Path, max_long_edge: int) -> Image.Image:
     with Image.open(path) as image:
         width, height = image.size
+        source_properties = {
+            "size": _pillow_oriented_size(image),
+            "width": width, "height": height,
+            "has_alpha": "A" in image.getbands() or "transparency" in image.info,
+        }
         draft_w, draft_h = _draft_target_size(width, height, max_long_edge)
         if (draft_w, draft_h) != (width, height):
             try:
                 image.draft("RGB", (draft_w, draft_h))
             except Exception:
                 pass
-        image = ImageOps.exif_transpose(image)
-        rgb = image.convert("RGB")
-        return _resize_fit_image(rgb, max_long_edge).copy()
+        # TIFF/PNG 的 draft 通常无效；先缩小再旋转和转色，避免复制数份原尺寸像素。
+        image.thumbnail((max_long_edge, max_long_edge), Image.Resampling.LANCZOS, reducing_gap=3.0)
+        oriented = ImageOps.exif_transpose(image)
+        try:
+            preview = oriented.convert("RGB")
+            preview.info["birdstamp_source_properties"] = source_properties
+            return preview
+        finally:
+            if oriented is not image:
+                oriented.close()
 
 
 def _register_heif_opener() -> bool:

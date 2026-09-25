@@ -80,6 +80,8 @@ RATIO_NO_CROP                       = editor_options.RATIO_NO_CROP
 OUTPUT_FORMAT_OPTIONS               = editor_options.OUTPUT_FORMAT_OPTIONS
 
 _SOURCE_IMAGE_CACHE_MAX = 4
+_PREVIEW_IMAGE_CACHE_MAX_BYTES = 128 * 1024 * 1024
+_PREVIEW_IMAGE_CACHE_MAX_ITEMS = 32
 _PREVIEW_DECODE_MAX_LONG_EDGE = 2048
 _PREVIEW_PIXMAP_MAX_PIXELS = 1920 * 1080 * 2
 
@@ -340,7 +342,10 @@ class _BirdStampRendererMixin:
         cache = getattr(self, "_preview_image_cache", None)
         if not isinstance(cache, dict):
             return None
-        cached = cache.get(self._preview_image_cache_signature(path))
+        signature = self._preview_image_cache_signature(path)
+        cached = cache.pop(signature, None)
+        if cached is not None:
+            cache[signature] = cached  # 预览按最近使用淘汰，来回切换不重复解码。
         return cached.copy() if cached is not None else None
 
     def _store_preview_image_cache(self, signature: str, image: Image.Image) -> None:
@@ -356,9 +361,17 @@ class _BirdStampRendererMixin:
                 except Exception:
                     pass
             return
-        if len(cache) >= _SOURCE_IMAGE_CACHE_MAX:
+        # Pillow 的 RGB 存储也可能按四字节对齐，预算按 RGBA 保守计量。
+        image_bytes = image.width * image.height * 4
+        cache_bytes = sum(entry.width * entry.height * 4 for entry in cache.values())
+        while cache and (
+            len(cache) >= _PREVIEW_IMAGE_CACHE_MAX_ITEMS
+            or cache_bytes + image_bytes > _PREVIEW_IMAGE_CACHE_MAX_BYTES
+        ):
             oldest = next(iter(cache))
             evicted = cache.pop(oldest)
+            cache_bytes -= evicted.width * evicted.height * 4
+            getattr(self, "_preview_source_size_cache", {}).pop(oldest, None)
             try:
                 evicted.close()
             except Exception:
@@ -397,11 +410,15 @@ class _BirdStampRendererMixin:
         return min(viewport_budget, _PREVIEW_PIXMAP_MAX_PIXELS)
 
     def _schedule_async_bird_detect(self, path: Path, source_image: Image.Image) -> None:
+        if getattr(self, "_bird_detect_shutdown", False) or getattr(self, "_preview_is_quick", False):
+            return
         signature = self._source_signature(path)
         if signature in self._bird_box_cache:
             return
         worker = getattr(self, "_bird_detect_worker", None)
-        if worker is not None and worker.isRunning():
+        if worker is not None:
+            if worker._signature == signature and not worker.isInterruptionRequested():
+                return
             worker.requestInterruption()
             pending = getattr(self, "_bird_detect_pending", None)
             if isinstance(pending, tuple) and len(pending) == 2:
@@ -424,12 +441,13 @@ class _BirdStampRendererMixin:
         new_worker.start()
 
     def _on_async_bird_box_ready(self, signature: str, bird_box: object) -> None:
-        if self.sender() is not getattr(self, "_bird_detect_worker", None):
+        if self.sender() is not getattr(self, "_bird_detect_worker", None) or getattr(self, "_bird_detect_shutdown", False):
             return
         self._bird_box_cache[signature] = bird_box  # type: ignore[assignment]
         if self.current_path is None or self._source_signature(self.current_path) != signature:
             return
-        self._refresh_preview_bird_overlay()
+        # 鸟体也用于裁切中心；结果到达后必须更新裁切和文字，不能只重画识别框。
+        self.render_preview()
 
     def _on_async_bird_detect_finished(self) -> None:
         if self.sender() is not getattr(self, "_bird_detect_worker", None):
@@ -1294,6 +1312,15 @@ class _BirdStampRendererMixin:
 
         template_payload = self._resolve_template_payload_for_render(settings)
         # 排版基于该阶段的导出尺寸，再映射到当前预览裁切区域。
+        if photo_info is not None:
+            photo_info = _template_context.preview_photo_info(photo_info)
+        # 复用后台解码带回的文件属性；预览字段缺失时也不再打开原图探测。
+        source = self.current_source_image
+        properties = source.info.get("birdstamp_source_properties", {}) if source is not None else {}
+        raw_metadata = dict(raw_metadata)
+        for tag, key in (("ImageWidth", "width"), ("ImageHeight", "height"), ("HasAlpha", "has_alpha")):
+            if key in properties:
+                raw_metadata.setdefault(tag, properties[key])
         return _render_template_overlay_in_crop_region(
             preview_base,
             raw_metadata=raw_metadata,
@@ -1485,6 +1512,8 @@ class _BirdStampRendererMixin:
         if getattr(self, "_crop_drag_active", False):
             # 元数据/鸟体检测的异步完成也不能在拖动中重建坐标系。
             return
+        if self.current_path and self.current_source_image is None:
+            return  # 当前照片仍在解码，设置变化留待像素到达后一起渲染。
         if not self.current_path:
             # default.jpg 不可用时的降级路径；正常情况由 _show_placeholder_preview 负责激活占位图
             self._set_status("请选择照片后再预览。")
@@ -1507,6 +1536,7 @@ class _BirdStampRendererMixin:
                         image=self.current_source_image,
                         raw_metadata=raw_metadata,
                         settings=preview_settings,
+                        preview_only=True,
                     )
                     source_size = self._crop_display_source_size() or source_image.size
                     crop_box, outer_pad = editor_core.rescale_crop_plan(
