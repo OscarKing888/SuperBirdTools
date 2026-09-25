@@ -35,7 +35,7 @@
 | --- | --- |
 | [editor.py](../birdstamp/gui/editor.py) 的 `_PhotoInputDiscoveryWorker` | 窗口保存活动和待结束 worker 引用。`finished_discovery` 仅表示业务结果完成；直到真实 `QThread.finished` 才移除待结束引用。停止或等待超时均不能提前释放线程。已退出活动集合的旧结果不再导入列表。 |
 | [EditorPreviewDecodeWorker](../birdstamp/gui/editor_preview_decode_worker.py) | 单个活动 worker + 最新待处理请求，直到真实 `finished` 才交接。先复用 Viewer 的逐文件缩略图缓存（原尺寸已知才显示），再补 2048 长边预览；两种结果都校验 token/路径/关闭状态。 |
-| [EditorPhotoListMetadataLoader](../birdstamp/gui/editor_photo_metadata_loader.py) | 分块读取元数据，窗口增量应用列表和当前照片数据；停止使用协作中断。 |
+| [EditorPhotoListMetadataLoader](../birdstamp/gui/editor_photo_metadata_loader.py) | 分块调用 `extract_many_with_xmp_priority` 读取完整 EXIF/XMP 快照，供列表、模板预览与导出复用；不能用限定标签的浏览器缓存代替完整读取。窗口增量应用列表和当前照片数据；停止使用协作中断。 |
 | [BirdDetectWorker](../birdstamp/gui/bird_detect_worker.py) | 接收独立图像副本，在后台识别并在结束时关闭副本；渲染 mixin 按源图签名接收结果。 |
 | [VideoExportWorker](../birdstamp/gui/editor_video_panel.py) | 窗口持有线程；`VideoExportJobSeed` 先在 GUI 线程快照 Qt 状态，worker 的 `_prepare_jobs` 补齐元数据与渲染作业。取消通过事件传入导出核心。 |
 

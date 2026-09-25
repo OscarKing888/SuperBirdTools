@@ -5275,25 +5275,7 @@ class BirdStampEditorWindow(
             if not isinstance(raw_metadata, dict):
                 raw_metadata = {"SourceFile": str(path)}
 
-        # 通过 app_common.exif_io 统一读取文件列表依赖的 XMP/sidecar 字段（Title/Rating/Pick 等）。
-        # 放在最后合并，确保列表显示与 Banner 模板字段优先使用 exif_io 的 XMP 结果。
-        if not can_reuse_list:
-            try:
-                with birdstamp_perf.span("metadata.read_batch", path=str(path)):
-                    batch_map = read_batch_metadata([str(resolved)])
-            except Exception:
-                batch_map = {}
-            if isinstance(batch_map, dict) and batch_map:
-                try:
-                    batch_metadata = next(iter(batch_map.values()))
-                except Exception:
-                    batch_metadata = None
-                if isinstance(batch_metadata, dict):
-                    merged = dict(raw_metadata)
-                    merged.update(batch_metadata)
-                    raw_metadata = merged
-        else:
-            birdstamp_perf.plog("[skip-read_batch] path=%s reused_list=True", path)
+        # 完整读取与后台快照都已合并 XMP，不能再用部分/过期的浏览器缓存覆盖。
 
         birdstamp_perf.plog(
             "metadata cache_miss path=%s reused_list=%s",
