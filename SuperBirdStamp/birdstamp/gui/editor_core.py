@@ -517,6 +517,8 @@ def normalize_extended_unit_box(
         bottom = float(box[3])
     except Exception:
         return None
+    if not all(math.isfinite(value) for value in (left, top, right, bottom)):
+        return None
     if right < left:
         left, right = right, left
     if bottom < top:
@@ -749,15 +751,19 @@ def draw_focus_box_overlay(
     return image
 
 
-def resize_fit(image: Image.Image, max_long_edge: int) -> Image.Image:
-    if max_long_edge <= 0:
-        return image
-    width, height = image.size
+def resize_fit_size(size: tuple[int, int], max_long_edge: int) -> tuple[int, int]:
+    width, height = size
     long_edge = max(width, height)
-    if long_edge <= max_long_edge:
-        return image
+    if max_long_edge <= 0 or long_edge <= max_long_edge:
+        return size
     scale = max_long_edge / float(long_edge)
-    new_size = (max(1, int(round(width * scale))), max(1, int(round(height * scale))))
+    return (max(1, int(round(width * scale))), max(1, int(round(height * scale))))
+
+
+def resize_fit(image: Image.Image, max_long_edge: int) -> Image.Image:
+    new_size = resize_fit_size(image.size, max_long_edge)
+    if new_size == image.size:
+        return image
     return image.resize(new_size, Image.Resampling.LANCZOS)
 
 
@@ -799,7 +805,7 @@ def parse_ratio_value(value: Any) -> float | None | str:
         ratio = float(value)
     except Exception:
         return None
-    if ratio <= 0:
+    if not math.isfinite(ratio) or ratio <= 0:
         return None
     return ratio
 
@@ -892,8 +898,11 @@ def expand_keep_region_from_center(
     keep_top = center_y - max(0, int(top))
     keep_right = center_x + max(0, int(right))
     keep_bottom = center_y + max(0, int(bottom))
-    if keep_right <= keep_left or keep_bottom <= keep_top:
-        return None
+    # 只设置上/下或左/右留边时，另一轴仍须参与比例扩展，不能丢弃整个裁切。
+    if keep_right <= keep_left:
+        keep_left, keep_right = center_x - 0.5, center_x + 0.5
+    if keep_bottom <= keep_top:
+        keep_top, keep_bottom = center_y - 0.5, center_y + 0.5
     return (keep_left, keep_top, keep_right, keep_bottom)
 
 
@@ -1188,7 +1197,8 @@ def should_use_crop_box_override(
         )
     except (TypeError, ValueError):
         return False
-    return crop_box_has_effect(crop_box)
+    # 全图框也是显式覆盖，不能退回自动裁切；外扩框同样有效。
+    return normalize_extended_unit_box(crop_box) is not None
 
 
 def compute_auto_bird_crop_plan(
@@ -1247,12 +1257,15 @@ def compute_crop_plan_for_image(
             )
         except (TypeError, ValueError, IndexError):
             crop_box = None
-        if crop_box is not None and crop_box_has_effect(crop_box):
+        crop_box = normalize_extended_unit_box(crop_box)
+        if crop_box is not None:
             box_norm, outer_pad = _crop_plan_from_override(width, height, crop_box)
             return (box_norm, outer_pad)
 
-    if is_ratio_free(ratio) or ratio is None:
+    if is_ratio_free(ratio):
         return (None, (0, 0, 0, 0))
+    if ratio is None:
+        ratio = width / float(height)
 
     inner_top = parse_padding_value(settings.get("crop_padding_top"), 0)
     inner_bottom = parse_padding_value(settings.get("crop_padding_bottom"), 0)
@@ -1349,16 +1362,18 @@ def compute_crop_plan_for_image(
             return (crop_box, outer_pad)
         return (None, (0, 0, 0, 0))
 
-    crop_box = compute_ratio_crop_box(
+    # 自定义中心与其它中心模式共用像素留边语义。
+    return compute_anchor_center_crop_plan(
         width=width,
         height=height,
-        ratio=ratio,
-        anchor=anchor,
-        keep_box=None,
+        ratio=float(ratio),
+        anchor_x=anchor[0] * width,
+        anchor_y=anchor[1] * height,
+        inner_top=inner_top,
+        inner_bottom=inner_bottom,
+        inner_left=inner_left,
+        inner_right=inner_right,
     )
-    if not crop_box_has_effect(crop_box):
-        return (None, (0, 0, 0, 0))
-    return (crop_box, (0, 0, 0, 0))
 
 
 def solve_axis_crop_start(
@@ -1441,13 +1456,7 @@ def crop_box_has_effect(crop_box: tuple[float, float, float, float] | None) -> b
     normalized = normalize_extended_unit_box(crop_box)
     if normalized is None:
         return False
-    eps = 0.0005
-    return (
-        normalized[0] > eps
-        or normalized[1] > eps
-        or normalized[2] < (1.0 - eps)
-        or normalized[3] < (1.0 - eps)
-    )
+    return any(abs(value - full) > 1e-9 for value, full in zip(normalized, (0.0, 0.0, 1.0, 1.0)))
 
 
 def constrain_box_to_ratio(
@@ -1763,6 +1772,37 @@ def _crop_plan_from_override(
     return (box_norm, (pad_t, pad_b, pad_l, pad_r))
 
 
+def crop_box_to_source(
+    crop_box: tuple[float, float, float, float],
+    source_size: tuple[int, int],
+    outer_pad: tuple[int, int, int, int],
+) -> tuple[float, float, float, float]:
+    """补边画布归一化坐标转回原图坐标；保留超出原图的部分。"""
+    width, height = source_size
+    top, bottom, left, right = outer_pad
+    padded_w, padded_h = width + left + right, height + top + bottom
+    l, t, r, b = crop_box
+    return (
+        (l * padded_w - left) / width,
+        (t * padded_h - top) / height,
+        (r * padded_w - left) / width,
+        (b * padded_h - top) / height,
+    )
+
+
+def rescale_crop_plan(
+    crop_box: tuple[float, float, float, float] | None,
+    outer_pad: tuple[int, int, int, int],
+    source_size: tuple[int, int],
+    target_size: tuple[int, int],
+) -> tuple[tuple[float, float, float, float] | None, tuple[int, int, int, int]]:
+    """将原图裁切计划映射到缩小预览，避免把原图像素补边加到缩略图上。"""
+    if source_size == target_size or (crop_box is None and not any(outer_pad)):
+        return crop_box, outer_pad
+    source_box = crop_box_to_source(crop_box or (0.0, 0.0, 1.0, 1.0), source_size, outer_pad)
+    return _crop_plan_from_override(*target_size, source_box)
+
+
 def compute_crop_plan(
     image: Image.Image,
     raw_metadata: dict[str, Any],
@@ -1775,11 +1815,13 @@ def compute_crop_plan(
     inner_left: int = 0,
     inner_right: int = 0,
     crop_box_override: tuple[float, float, float, float] | None = None,
+    custom_center: tuple[float, float] | None = None,
 ) -> tuple[tuple[float, float, float, float] | None, tuple[int, int, int, int]]:
     """Compute (crop_box, outer_pad) using the same logic as the main editor's pipeline."""
     if is_ratio_no_crop(ratio):
         return (None, (0, 0, 0, 0))
-    if crop_box_override is not None and crop_box_has_effect(crop_box_override):
+    crop_box_override = normalize_extended_unit_box(crop_box_override)
+    if crop_box_override is not None:
         box_norm, outer_pad = _crop_plan_from_override(image.width, image.height, crop_box_override)
         return (box_norm, outer_pad)
 
@@ -1799,6 +1841,8 @@ def compute_crop_plan(
         "crop_padding_left": inner_left,
         "crop_padding_right": inner_right,
         "crop_box": None,
+        "custom_center_x": custom_center[0] if custom_center is not None else None,
+        "custom_center_y": custom_center[1] if custom_center is not None else None,
     }
     return compute_crop_plan_for_image(
         image=image,
@@ -1822,6 +1866,8 @@ def apply_full_crop(
     inner_right: int = 0,
     max_long_edge: int = 0,
     fill_color: str = "#FFFFFF",
+    crop_box_override: tuple[float, float, float, float] | None = None,
+    custom_center: tuple[float, float] | None = None,
 ) -> Image.Image:
     """Apply the full main-editor crop pipeline to an image and return the result.
 
@@ -1838,6 +1884,8 @@ def apply_full_crop(
         inner_bottom=inner_bottom,
         inner_left=inner_left,
         inner_right=inner_right,
+        crop_box_override=crop_box_override,
+        custom_center=custom_center,
     )
     pt, pb, pl, pr = outer_pad
     if pt or pb or pl or pr:

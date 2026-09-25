@@ -116,7 +116,6 @@ _parse_ratio_value = editor_core.parse_ratio_value
 _is_ratio_free = editor_core.is_ratio_free
 _is_ratio_no_crop = editor_core.is_ratio_no_crop
 _parse_padding_value = editor_core.parse_padding_value
-_compute_crop_plan = editor_core.compute_crop_plan
 _constrain_box_to_ratio = editor_core.constrain_box_to_ratio
 _compute_crop_output_size = editor_core.compute_crop_output_size
 _extract_focus_box_for_display = editor_core.extract_focus_box_for_display
@@ -124,7 +123,6 @@ _resolve_focus_camera_type_from_metadata = editor_core.resolve_focus_camera_type
 _transform_source_box_after_crop_padding = editor_core.transform_source_box_after_crop_padding
 _detect_primary_bird_box = editor_core.detect_primary_bird_box
 _pad_image = editor_core.pad_image
-_resize_fit = editor_core.resize_fit
 _build_metadata_context = editor_utils.build_metadata_context
 _default_placeholder_path = editor_utils._default_placeholder_path
 _DEFAULT_CROP_EFFECT_ALPHA = editor_utils.DEFAULT_CROP_EFFECT_ALPHA
@@ -880,6 +878,9 @@ class TemplateManagerDialog(QDialog):
         canvas = self.preview_label.canvas
         if hasattr(canvas, "crop_box_changed"):
             canvas.crop_box_changed.connect(self._on_tmpl_canvas_crop_box_changed)
+        self._crop_drag_active = False
+        canvas.crop_drag_started.connect(self._on_tmpl_crop_drag_started)
+        canvas.crop_drag_finished.connect(self._on_tmpl_crop_drag_finished)
         if hasattr(self.preview_label, "display_scale_percent_changed"):
             self.preview_label.display_scale_percent_changed.connect(self._sync_preview_scale_combo)
         self._sync_preview_scale_combo(self.preview_label.current_display_scale_percent())
@@ -1387,6 +1388,8 @@ class TemplateManagerDialog(QDialog):
             return
         center_mode = self._tmpl_center_mode_value()
         self.current_payload["center_mode"] = center_mode
+        if center_mode != editor_core.CENTER_MODE_CUSTOM:
+            self.current_payload["crop_box"] = None
         self.current_payload["auto_crop_by_bird"] = True  # 固定为根据鸟体计算
         self._save_current_template()
         self._refresh_preview()
@@ -1410,11 +1413,16 @@ class TemplateManagerDialog(QDialog):
             edge = 0
         self.current_payload["max_long_edge"] = edge
         self._save_current_template()
+        self._refresh_preview()
 
     def _on_template_crop_padding_changed(self) -> None:
         if self._updating or not self.current_payload:
             return
-        self.current_payload.update(self.crop_padding_editor.get_values())
+        values = self.crop_padding_editor.get_values()
+        if any(values.get(f"crop_padding_{side}") != self.current_payload.get(f"crop_padding_{side}")
+               for side in ("top", "bottom", "left", "right")):
+            self.current_payload["crop_box"] = None
+        self.current_payload.update(values)
         self._save_current_template()
         self._refresh_preview()
 
@@ -2056,10 +2064,16 @@ class TemplateManagerDialog(QDialog):
         self.preview_label.apply_overlay_options(self._build_preview_overlay_options())
         canvas = self.preview_label.canvas
         if hasattr(canvas, "set_crop_edit_mode"):
-            canvas.set_crop_edit_mode(self.crop_edit_mode_check.isChecked())
+            canvas.set_crop_edit_mode(
+                self.crop_edit_mode_check.isChecked()
+                and not _is_ratio_no_crop(_parse_ratio_value(self.template_ratio_combo.currentData()))
+            )
         if hasattr(canvas, "set_crop_ratio_constraint"):
             r = _parse_ratio_value(self.template_ratio_combo.currentData())
             ratio_constraint = float(r) if isinstance(r, (int, float)) and not isinstance(r, bool) else None
+            if r is None:
+                source = self._preview_source_image or self.placeholder
+                ratio_constraint = source.width / source.height
             canvas.set_crop_ratio_constraint(
                 ratio_constraint,
                 _is_ratio_free(r),
@@ -2067,13 +2081,34 @@ class TemplateManagerDialog(QDialog):
 
     def _on_tmpl_canvas_crop_box_changed(self, box: tuple[float, float, float, float]) -> None:
         if self.current_payload is not None:
+            source = self._preview_source_image or self.placeholder
+            box = editor_core.crop_box_to_source(
+                box, source.size, getattr(self, "_preview_outer_pad", (0, 0, 0, 0))
+            )
             self.current_payload["crop_box"] = [box[0], box[1], box[2], box[3]]
+            self.current_payload["center_mode"] = editor_core.CENTER_MODE_CUSTOM
+            self.current_payload["custom_center_x"], self.current_payload["custom_center_y"] = editor_core.box_center(box)
+            self._set_tmpl_center_mode_value(editor_core.CENTER_MODE_CUSTOM)
+            top = bottom = round((box[3] - box[1]) * source.height * 0.5)
+            left = right = round((box[2] - box[0]) * source.width * 0.5)
+            self.current_payload.update(crop_padding_top=top, crop_padding_bottom=bottom,
+                                        crop_padding_left=left, crop_padding_right=right)
+            self.crop_padding_editor.set_values(top=top, bottom=bottom, left=left, right=right,
+                                                fill=self.current_payload.get("crop_padding_fill", "#FFFFFF"))
             if self._preview_photo_info is not None:
                 self._preview_photo_info = _template_context.ensure_editor_photo_info(
                     self._preview_photo_info,
                     crop_box=box,
                 )
-            self._refresh_preview()
+            if not self._crop_drag_active:
+                self._save_current_template()
+                self._refresh_preview()
+
+    def _on_tmpl_crop_drag_started(self) -> None:
+        self._crop_drag_active = True
+
+    def _on_tmpl_crop_drag_finished(self) -> None:
+        self._crop_drag_active = False
 
     def _on_preview_overlay_toggled(self, _checked: bool) -> None:
         self._apply_preview_overlay_options()
@@ -2131,12 +2166,6 @@ class TemplateManagerDialog(QDialog):
                 str(self.current_payload.get("center_mode") or _DEFAULT_TEMPLATE_CENTER_MODE)
             )
             fill_color = str(self.current_payload.get("crop_padding_fill") or "#FFFFFF")
-            # 使用与主界面完全一致的裁切管线，含非对称内边距传入鸟体裁切算法
-            inner_top = _parse_padding_value(self.current_payload.get("crop_padding_top"), 0)
-            inner_bottom = _parse_padding_value(self.current_payload.get("crop_padding_bottom"), 0)
-            inner_left = _parse_padding_value(self.current_payload.get("crop_padding_left"), 0)
-            inner_right = _parse_padding_value(self.current_payload.get("crop_padding_right"), 0)
-
             crop_box_override = None
             cb_raw = self.current_payload.get("crop_box")
             if (
@@ -2154,17 +2183,13 @@ class TemplateManagerDialog(QDialog):
                     self._preview_photo_info,
                     crop_box=crop_box_override,
                 )
-            crop_box, outer_pad = _compute_crop_plan(
-                source,
-                self._preview_raw_metadata,
-                ratio=ratio,
-                center_mode=center_mode,
+            crop_box, outer_pad = editor_core.compute_crop_plan_for_image(
+                image=source,
+                raw_metadata=self._preview_raw_metadata,
+                settings=self.current_payload,
+                bird_box=self._preview_source_bird_box()
+                if center_mode in {"bird", "focus"} and not _is_ratio_no_crop(ratio) else None,
                 camera_type=focus_camera_type,
-                inner_top=inner_top,
-                inner_bottom=inner_bottom,
-                inner_left=inner_left,
-                inner_right=inner_right,
-                crop_box_override=crop_box_override,
             )
             pad_top, pad_bottom, pad_left, pad_right = outer_pad
             if pad_top or pad_bottom or pad_left or pad_right:
@@ -2179,6 +2204,12 @@ class TemplateManagerDialog(QDialog):
 
             # 与主编辑器预览一致：保留完整画面，仅在裁切区域渲染模板效果；
             # 裁切范围通过 EditorPreviewCanvas 的 crop-effect overlay 显示。
+            layout_size = editor_core.resize_fit_size(
+                _compute_crop_output_size(
+                    *(self._preview_source_image or self.placeholder).size, crop_box, outer_pad
+                ),
+                int(self.current_payload.get("max_long_edge") or 0),
+            )
             image = render_template_overlay_in_crop_region(
                 source,
                 raw_metadata=self._preview_raw_metadata,
@@ -2186,6 +2217,7 @@ class TemplateManagerDialog(QDialog):
                 photo_info=self._preview_photo_info,
                 template_payload=self.current_payload,
                 crop_box=crop_box,
+                layout_size=layout_size,
             )
 
         source_width, source_height = (self._preview_source_image or self.placeholder).size
@@ -2228,6 +2260,11 @@ class TemplateManagerDialog(QDialog):
             crop_box,
             outer_pad,
         )
+        self._preview_outer_pad = outer_pad
+        if self._preview_crop_size is not None and self.current_payload:
+            self._preview_crop_size = editor_core.resize_fit_size(
+                self._preview_crop_size, int(self.current_payload.get("max_long_edge") or 0)
+            )
         self.preview_pixmap = _pil_to_qpixmap(image)
         self._refresh_preview_label()
 

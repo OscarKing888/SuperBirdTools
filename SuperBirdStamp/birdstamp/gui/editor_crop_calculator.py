@@ -106,6 +106,8 @@ class _BirdStampCropMixin:
         raw_metadata: dict[str, Any],
         settings: dict[str, Any],
     ) -> tuple[tuple[float, float, float, float] | None, tuple[int, int, int, int]]:
+        if editor_core.is_ratio_no_crop(settings.get("ratio")):
+            return (None, (0, 0, 0, 0))
         bird_box = self._resolve_bird_box_for_crop_plan(
             path=path,
             image=image,

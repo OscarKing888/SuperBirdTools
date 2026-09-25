@@ -66,7 +66,9 @@ class ImageProcTemplateCropStage(ImageProcStage):
         if precomputed_crop_plan is None:
             precomputed_crop_plan = core._normalize_precomputed_crop_plan(context.precomputed.get("crop_plan"))
 
-        if precomputed_crop_plan is None:
+        if core._is_ratio_no_crop(core._parse_ratio_value(settings.get("ratio"))):
+            crop_box, outer_pad = None, (0, 0, 0, 0)
+        elif precomputed_crop_plan is None:
             crop_box, outer_pad = core._compute_crop_plan_for_image(
                 path=context.source_path,
                 image=context.image,

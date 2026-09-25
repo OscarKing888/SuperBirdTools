@@ -20,7 +20,7 @@ from app_common.preview_canvas import (
 from birdstamp.decoders.image_decoder import decode_image, decode_image_for_preview, read_decoded_image_size
 from birdstamp import perf as birdstamp_perf
 from birdstamp.gui import editor_core, editor_options, editor_template, editor_utils, template_context as _template_context
-from birdstamp.gui.edit_modes import EDIT_MODE_NONE, EDIT_MODE_REFERENCE_REGION
+from birdstamp.gui.edit_modes import EDIT_MODE_CROP_ADJUST, EDIT_MODE_NONE, EDIT_MODE_REFERENCE_REGION
 from birdstamp.gui.editor_preview_canvas import EditorPreviewOverlayOptions, EditorPreviewOverlayState
 from birdstamp.export_stage import (
     DEFAULT_EXPORT_STAGE_ID,
@@ -151,6 +151,14 @@ class _BirdStampRendererMixin:
         if hasattr(canvas, "set_crop_ratio_constraint"):
             r = self._selected_ratio()
             ratio_constraint = float(r) if isinstance(r, (int, float)) and not isinstance(r, bool) else None
+            source_size = self._crop_display_source_size()
+            preview_source = self.current_source_image
+            if source_size and preview_source is not None:
+                if r is None:
+                    ratio_constraint = source_size[0] / source_size[1]
+                if ratio_constraint is not None:
+                    # 预览缩小后的两个轴可能有不同的像素取整比例。
+                    ratio_constraint *= (preview_source.width / source_size[0]) / (preview_source.height / source_size[1])
             canvas.set_crop_ratio_constraint(
                 ratio_constraint,
                 _is_ratio_free(r),
@@ -158,7 +166,10 @@ class _BirdStampRendererMixin:
         if hasattr(canvas, "set_edit_mode"):
             # 编辑模式由模式按钮决定；裁剪模式的 _crop_edit_mode 标志由 CropAdjustEditMode 管理。
             getter = getattr(self, "_current_edit_mode_id", None)
-            canvas.set_edit_mode(getter() if callable(getter) else EDIT_MODE_NONE)
+            mode = getter() if callable(getter) else EDIT_MODE_NONE
+            if mode == EDIT_MODE_CROP_ADJUST and _is_ratio_no_crop(self._selected_ratio()):
+                mode = EDIT_MODE_NONE
+            canvas.set_edit_mode(mode)
         if hasattr(canvas, "set_reference_regions"):
             canvas.set_reference_regions(
                 self._reference_regions_source_to_preview(getattr(self, "_dejitter_reference_regions", ()))
@@ -588,15 +599,7 @@ class _BirdStampRendererMixin:
         return _parse_bool_value(settings.get(key), True)
 
     def _resize_fit_size(self, size: tuple[int, int], max_long_edge: int) -> tuple[int, int]:
-        width, height = max(1, int(size[0])), max(1, int(size[1]))
-        edge = max(0, int(max_long_edge))
-        if edge <= 0:
-            return (width, height)
-        long_edge = max(width, height)
-        if long_edge <= edge:
-            return (width, height)
-        scale = edge / float(long_edge)
-        return (max(1, int(round(width * scale))), max(1, int(round(height * scale))))
+        return editor_core.resize_fit_size(size, max_long_edge)
 
     def _preview_pipeline_output_size(
         self,
@@ -955,7 +958,7 @@ class _BirdStampRendererMixin:
         max_long_edge = max(0, max_long_edge)
 
         def _pad_px(key: str) -> int:
-            return _parse_padding_value(settings.get(key, _DEFAULT_CROP_PADDING_PX), _DEFAULT_CROP_PADDING_PX)
+            return _parse_padding_value(settings.get(key), 0)
 
         fill = _safe_color(str(settings.get("crop_padding_fill", "#FFFFFF")), "#FFFFFF")
         try:
@@ -1284,12 +1287,13 @@ class _BirdStampRendererMixin:
         photo_info: _template_context.PhotoInfo | None,
         settings: dict[str, Any],
         crop_box: tuple[float, float, float, float] | None,
+        layout_size: tuple[int, int] | None = None,
     ) -> Image.Image:
         if not self._should_draw_template_overlay(settings):
             return preview_base
 
         template_payload = self._resolve_template_payload_for_render(settings)
-        # 直接在当前预览帧的裁切区域绘制模板，避免先按输出尺寸渲染再缩放导致 Banner 预览偏差。
+        # 排版基于该阶段的导出尺寸，再映射到当前预览裁切区域。
         return _render_template_overlay_in_crop_region(
             preview_base,
             raw_metadata=raw_metadata,
@@ -1299,6 +1303,7 @@ class _BirdStampRendererMixin:
             crop_box=crop_box,
             draw_banner=_parse_bool_value(settings.get("draw_banner"), True),
             draw_text=_parse_bool_value(settings.get("draw_text"), True),
+            layout_size=layout_size,
         )
 
     def _build_processed_image(
@@ -1370,9 +1375,11 @@ class _BirdStampRendererMixin:
         source_image: Image.Image,
         crop_box: tuple[float, float, float, float] | None,
         outer_pad: tuple[int, int, int, int],
+        crop_output_size: tuple[int, int] | None = None,
     ) -> Image.Image:
         """按当前管线渲染预览，同时保留未裁切画布上的裁切框语义。"""
         padded = False
+        layout_size = crop_output_size or _compute_crop_output_size(*source_image.size, crop_box, outer_pad)
         for stage_id in normalize_pipeline_stage_order(settings.get(PIPELINE_STAGE_ORDER_KEY)):
             if stage_id == STAGE_TEMPLATE_CROP_ID:
                 if padded:
@@ -1388,7 +1395,8 @@ class _BirdStampRendererMixin:
                 continue
 
             if stage_id == STAGE_RESIZE_LIMIT_ID:
-                image = _resize_fit(image, max(0, int(settings.get("max_long_edge") or 0)))
+                if layout_size is not None:
+                    layout_size = self._resize_fit_size(layout_size, max(0, int(settings.get("max_long_edge") or 0)))
                 continue
 
             if stage_id == STAGE_TEMPLATE_OVERLAY_ID:
@@ -1399,6 +1407,7 @@ class _BirdStampRendererMixin:
                     photo_info=self.current_photo_info,
                     settings=settings,
                     crop_box=crop_box,
+                    layout_size=layout_size,
                 )
                 continue
 
@@ -1473,6 +1482,9 @@ class _BirdStampRendererMixin:
         )
 
     def render_preview(self, *_args: Any) -> None:
+        if getattr(self, "_crop_drag_active", False):
+            # 元数据/鸟体检测的异步完成也不能在拖动中重建坐标系。
+            return
         if not self.current_path:
             # default.jpg 不可用时的降级路径；正常情况由 _show_placeholder_preview 负责激活占位图
             self._set_status("请选择照片后再预览。")
@@ -1490,11 +1502,15 @@ class _BirdStampRendererMixin:
                     source_image = self.current_source_image.copy()
                 raw_metadata = dict(self.current_raw_metadata)
                 with birdstamp_perf.span("render_preview.crop_plan"):
-                    crop_box, outer_pad = self._compute_crop_plan_for_image(
+                    source_crop_box, source_outer_pad = self._compute_crop_plan_for_image(
                         path=self.current_path,
                         image=self.current_source_image,
                         raw_metadata=raw_metadata,
                         settings=preview_settings,
+                    )
+                    source_size = self._crop_display_source_size() or source_image.size
+                    crop_box, outer_pad = editor_core.rescale_crop_plan(
+                        source_crop_box, source_outer_pad, source_size, source_image.size
                     )
                 # 预览保留完整画布用于裁切框编辑，但其它 stage 按管线顺序渲染。
                 with birdstamp_perf.span("render_preview.pipeline"):
@@ -1505,6 +1521,7 @@ class _BirdStampRendererMixin:
                         source_image=self.current_source_image,
                         crop_box=crop_box,
                         outer_pad=outer_pad,
+                        crop_output_size=_compute_crop_output_size(*source_size, source_crop_box, source_outer_pad),
                     )
             except Exception as exc:
                 self._preview_crop_size = None
@@ -1520,8 +1537,8 @@ class _BirdStampRendererMixin:
                     self.current_source_image.width,
                     self.current_source_image.height,
                 ),
-                crop_box=crop_box,
-                outer_pad=outer_pad,
+                crop_box=source_crop_box,
+                outer_pad=source_outer_pad,
                 settings=preview_settings,
             )
             pad_top, pad_bottom, pad_left, pad_right = outer_pad

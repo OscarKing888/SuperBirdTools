@@ -88,6 +88,12 @@ flowchart LR
 
 预览由 [editor_renderer.py](../birdstamp/gui/editor_renderer.py) 的 `render_preview`、`_render_preview_pipeline_image` 适配相同的阶段顺序和设置，但保留裁切外画布以供编辑，不直接把最终裁切位图作为交互画布。模板要与裁切区域对齐，焦点框也要经过相同坐标变换。[editor_preview_canvas.py](../birdstamp/gui/editor_preview_canvas.py) 承接交互显示和网格叠加。
 
+裁切框持久化使用**原图归一化坐标**，允许超出 0–1；裁切计划中的框则相对于补边后的画布，补边量为该计划尺寸下的像素数。[editor_core.py](../birdstamp/gui/editor_core.py) 的 `crop_box_to_source` 将交互框换回原图坐标，`rescale_crop_plan` 将原图计划映射到缩小预览。拖动期间不重建画布，松手后提交自定义裁切；四角保持对角点固定。留边表示从选定中心向四周扩展的原图像素距离，固定比例会居中包住该范围；单轴留边也参与计算。`原比例` 保持原图宽高比并应用留边，`不裁切` 则跳过所有裁切框、补边和旧预计算计划。
+
+模板的 `crop_box` 与 `custom_center_x/y` 随 JSON 保存。`render_template_overlay(..., layout_size=...)` 按当前导出阶段的逻辑尺寸计算文字、百分比偏移和避让，再映射到预览尺寸；因此调整输出长边或阶段顺序不会让缩略预览独立改变排版。CLI 的 `apply_full_crop` 同样接收手动裁切框和自定义中心。
+
+只添加文字可选择内置 [不裁切_仅文字.json](../config/templates/不裁切_仅文字.json)，或在已有模板上选择「不裁切」、最大长边「不限制」并关闭 Banner 背景。此时保留解码后的原图尺寸和完整构图，仍可叠加文字。相关坐标、模板保存、预览/导出排版及 CLI 回归见 [test_crop_coordinate_regressions.py](../tests/test_crop_coordinate_regressions.py)。
+
 渲染 mixin 的完整解码缓存和预览缓存分开管理，以源路径/大小/修改时间签名失效，各限制为少量图像并关闭被淘汰图像。预览解码默认限制长边 2048，显示位图另有像素预算；这些限制只影响交互，不能下传为导出尺寸。
 
 ## 5. 图片、GIF、视频导出与缓存

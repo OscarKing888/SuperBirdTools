@@ -19,6 +19,7 @@ from birdstamp.gui.editor_core import (
     clean_text,
     crop_box_has_effect,
     normalize_center_mode,
+    normalize_extended_unit_box,
     normalize_lookup,
     normalized_box_to_pixel_box,
 )
@@ -370,6 +371,9 @@ def _normalize_template_payload(payload: dict[str, Any], fallback_name: str) -> 
         "crop_padding_left": crop_padding_left,
         "crop_padding_right": crop_padding_right,
         "crop_padding_fill": crop_padding_fill,
+        "crop_box": normalize_extended_unit_box(payload.get("crop_box")),
+        "custom_center_x": _clamp_float(payload.get("custom_center_x"), -100.0, 100.0, 0.5),
+        "custom_center_y": _clamp_float(payload.get("custom_center_y"), -100.0, 100.0, 0.5),
         "fields": fields,
     }
 
@@ -476,6 +480,7 @@ def _draw_styled_text(
     color: str,
     font: Any,
     style: str,
+    output_scale: tuple[float, float] = (1.0, 1.0),
 ) -> None:
     draw_text, text_box = _measure_text_with_fallback(draw, text, font=font)
     left, top, right, bottom = text_box
@@ -501,7 +506,11 @@ def _draw_styled_text(
             (1, shear, 0, 0, 1, 0),
             resample=Image.Resampling.BICUBIC,
         )
-    image.alpha_composite(layer, (x - 5, y - 5))
+    sx, sy = output_scale
+    if output_scale != (1.0, 1.0):
+        layer = layer.resize((max(1, round(layer.width * sx)), max(1, round(layer.height * sy))),
+                             Image.Resampling.LANCZOS)
+    image.alpha_composite(layer, (round((x - 5) * sx), round((y - 5) * sy)))
 
 
 def _template_font_scale_for_canvas(width: int, height: int) -> float:
@@ -609,7 +618,7 @@ def _resolve_template_text_position_with_avoidance(
             y = max(0, min(max_y, origin_y + dy))
             rect = (x, y, x + text_width, y + text_height)
             overlaps = sum(1 for existing in occupied if _text_boxes_overlap(rect, existing, gap=gap))
-            if overlaps == 0:
+            if overlaps == 0 and text_width <= canvas_width and text_height <= canvas_height:
                 return (x, y, rect, True)
             distance = abs(dx) + abs(dy)
             score = overlaps * 100000 + distance
@@ -754,12 +763,16 @@ def render_template_overlay(
     auto_scale_font: bool = True,
     draw_banner: bool = True,
     draw_text: bool = True,
+    layout_size: tuple[int, int] | None = None,
 ) -> Image.Image:
     canvas = image.convert("RGBA")
     draw = ImageDraw.Draw(canvas)
-    font_scale = _template_font_scale_for_canvas(canvas.width, canvas.height) if auto_scale_font else 1.0
+    # 预览使用导出阶段的逻辑尺寸排版，只缩放最终字形，避免字体下限/上限与避让改变布局。
+    layout_width, layout_height = layout_size or canvas.size
+    sx, sy = canvas.width / layout_width, canvas.height / layout_height
+    font_scale = _template_font_scale_for_canvas(layout_width, layout_height) if auto_scale_font else 1.0
     occupied_boxes: list[tuple[int, int, int, int]] = []
-    text_gap = max(4, int(round(min(canvas.width, canvas.height) * 0.006)))
+    text_gap = max(4, int(round(min(layout_width, layout_height) * 0.006)))
     draw_commands: list[tuple[str, int, int, str, Any, str, tuple[int, int, int, int]]] = []
     fields = template_payload.get("fields") or []
     if not isinstance(fields, list):
@@ -798,8 +811,8 @@ def render_template_overlay(
             text_width = max(1, text_box[2] - text_box[0])
             text_height = max(1, text_box[3] - text_box[1])
             base_x, base_y = _compute_template_text_position(
-                canvas_width=canvas.width,
-                canvas_height=canvas.height,
+                canvas_width=layout_width,
+                canvas_height=layout_height,
                 text_width=text_width,
                 text_height=text_height,
                 align_h=align_h,
@@ -812,8 +825,8 @@ def render_template_overlay(
                 base_y=base_y,
                 text_width=text_width,
                 text_height=text_height,
-                canvas_width=canvas.width,
-                canvas_height=canvas.height,
+                canvas_width=layout_width,
+                canvas_height=layout_height,
                 align_h=align_h,
                 align_v=align_v,
                 occupied=occupied_boxes,
@@ -874,11 +887,12 @@ def render_template_overlay(
         elif banner_fill:
             banner_rect = _compute_template_banner_rect(
                 text_boxes=[cmd[6] for cmd in draw_commands],
-                canvas_width=canvas.width,
-                canvas_height=canvas.height,
+                canvas_width=layout_width,
+                canvas_height=layout_height,
                 top_padding=TEMPLATE_BANNER_TOP_PADDING_PX,
             )
             if banner_rect is not None:
+                banner_rect = tuple(round(v * (sx if i % 2 == 0 else sy)) for i, v in enumerate(banner_rect))
                 draw.rectangle(banner_rect, fill=banner_fill)
     if draw_text:
         for text, x, y, color, font, style, _rect in draw_commands:
@@ -891,6 +905,7 @@ def render_template_overlay(
                 color=color,
                 font=font,
                 style=style,
+                output_scale=(sx, sy),
             )
     return canvas.convert("RGB")
 
@@ -925,6 +940,7 @@ def render_template_overlay_in_crop_region(
     crop_box: tuple[float, float, float, float] | None,
     draw_banner: bool = True,
     draw_text: bool = True,
+    layout_size: tuple[int, int] | None = None,
 ) -> Image.Image:
     kw = dict(
         raw_metadata=raw_metadata,
@@ -933,6 +949,7 @@ def render_template_overlay_in_crop_region(
         template_payload=template_payload,
         draw_banner=draw_banner,
         draw_text=draw_text,
+        layout_size=layout_size,
     )
     if not crop_box_has_effect(crop_box):
         return render_template_overlay(image, **kw)

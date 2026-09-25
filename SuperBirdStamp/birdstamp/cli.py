@@ -141,12 +141,10 @@ def render(
         from birdstamp.gui.editor_utils import build_metadata_context
         from birdstamp.gui.editor_core import (
             apply_full_crop,
-            is_ratio_free as _is_ratio_free,
-            is_ratio_no_crop as _is_ratio_no_crop,
             parse_padding_value as _parse_padding,
             parse_bool_value as _parse_bool,
             parse_ratio_value as _parse_ratio,
-            resize_fit,
+            should_use_crop_box_override,
         )
     except Exception as exc:
         typer.secho(f"Render engine unavailable: {exc}", err=True, fg=typer.colors.RED)
@@ -212,23 +210,23 @@ def render(
             tpl_fill = str(template_payload.get("crop_padding_fill") or "#FFFFFF")
             # Effective max_long_edge: CLI arg overrides template; 0 = unlimited
             tpl_max_edge = max(0, int(template_payload.get("max_long_edge") or 0))
-            effective_max_edge = max_edge_val if max_edge_val > 0 else tpl_max_edge
+            effective_max_edge = max_edge_val if max_long_edge is not None or max_edge_val > 0 else tpl_max_edge
 
-            if tpl_ratio is not None and not _is_ratio_no_crop(tpl_ratio) and not _is_ratio_free(tpl_ratio):
-                image = apply_full_crop(
-                    image,
-                    raw_metadata=raw_meta,
-                    ratio=tpl_ratio,
-                    center_mode=tpl_center,
-                    inner_top=_parse_padding(template_payload.get("crop_padding_top"), 0),
-                    inner_bottom=_parse_padding(template_payload.get("crop_padding_bottom"), 0),
-                    inner_left=_parse_padding(template_payload.get("crop_padding_left"), 0),
-                    inner_right=_parse_padding(template_payload.get("crop_padding_right"), 0),
-                    max_long_edge=effective_max_edge,
-                    fill_color=tpl_fill,
-                )
-            elif effective_max_edge > 0:
-                image = resize_fit(image, effective_max_edge)
+            image = apply_full_crop(
+                image,
+                raw_metadata=raw_meta,
+                ratio=tpl_ratio,
+                center_mode=tpl_center,
+                inner_top=_parse_padding(template_payload.get("crop_padding_top"), 0),
+                inner_bottom=_parse_padding(template_payload.get("crop_padding_bottom"), 0),
+                inner_left=_parse_padding(template_payload.get("crop_padding_left"), 0),
+                inner_right=_parse_padding(template_payload.get("crop_padding_right"), 0),
+                max_long_edge=effective_max_edge,
+                fill_color=tpl_fill,
+                crop_box_override=template_payload.get("crop_box")
+                if should_use_crop_box_override(template_payload) else None,
+                custom_center=(template_payload["custom_center_x"], template_payload["custom_center_y"]),
+            )
 
             metadata_ctx = build_metadata_context(source, raw_meta)
             rendered = render_template_overlay(

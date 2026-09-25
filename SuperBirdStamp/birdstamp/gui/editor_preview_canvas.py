@@ -116,6 +116,8 @@ class EditorPreviewCanvas(PreviewCanvas):
         if self._crop_edit_mode == enabled:
             return
         self._crop_edit_mode = enabled
+        if enabled and self._crop_effect_box is None:
+            self._crop_effect_box = (0.0, 0.0, 1.0, 1.0)
         self._dragging_handle = None
         self._drag_start_box = None
         self._drag_start_pos = None
@@ -288,6 +290,8 @@ class EditorPreviewCanvas(PreviewCanvas):
         return True
 
     def _set_crop_effect_box_no_update(self, crop_effect_box: "NormalizedBox | None") -> bool:
+        if crop_effect_box is None and self._crop_edit_mode:
+            crop_effect_box = (0.0, 0.0, 1.0, 1.0)
         if self._crop_effect_box == crop_effect_box:
             return False
         self._crop_effect_box = crop_effect_box
@@ -448,42 +452,20 @@ class EditorPreviewCanvas(PreviewCanvas):
         ratio: float,
     ) -> NormalizedBox:
         """Given fixed corner (opposite to handle) and moving point, return box with aspect ratio."""
-        if handle in ("nw", "n", "w"):
-            l = moving_nx
-            t = moving_ny
-            r, b = fixed_r, fixed_b
-        elif handle in ("ne", "e"):
-            r = moving_nx
-            t = moving_ny
-            l, b = fixed_l, fixed_b
-        elif handle in ("se", "s"):
-            r = moving_nx
-            b = moving_ny
-            l, t = fixed_l, fixed_t
-        else:
-            l = moving_nx
-            b = moving_ny
-            r, t = fixed_r, fixed_t
-        w = r - l
-        h = b - t
-        if w <= 0 or h <= 0:
-            w = max(_MIN_CROP_SIZE, w)
-            h = max(_MIN_CROP_SIZE, h)
-        if ratio <= 0:
-            return self._clamp_box(l, t, r, b)
-        if w / h > ratio:
+        # 按两个轴的方向重建矩形，右上/左下角也必须固定各自的对角点。
+        move_left = "w" in handle
+        move_top = "n" in handle
+        fixed_x = fixed_r if move_left else fixed_l
+        fixed_y = fixed_b if move_top else fixed_t
+        sx, sy = (-1 if move_left else 1), (-1 if move_top else 1)
+        w = max(_MIN_CROP_SIZE, sx * (moving_nx - fixed_x))
+        h = max(_MIN_CROP_SIZE, sy * (moving_ny - fixed_y))
+        if ratio > 0:
+            w = max(w, h * ratio)
             h = w / ratio
-            if handle in ("nw", "n", "w"):
-                t = b - h
-            else:
-                b = t + h
-        else:
-            w = h * ratio
-            if handle in ("nw", "ne", "n"):
-                l = r - w
-            else:
-                r = l + w
-        return self._clamp_box(l, t, r, b)
+        moving_x, moving_y = fixed_x + sx * w, fixed_y + sy * h
+        return self._clamp_box(min(fixed_x, moving_x), min(fixed_y, moving_y),
+                               max(fixed_x, moving_x), max(fixed_y, moving_y))
 
     def _box_after_drag(
         self,
@@ -520,22 +502,22 @@ class EditorPreviewCanvas(PreviewCanvas):
         # adjust the perpendicular dimension symmetrically around box center
         # (consistent with editor_core.constrain_box_to_ratio).
         if handle == "n":
-            new_h = max(b - new_ny, _MIN_CROP_SIZE)
+            new_h = max(b - new_ny, _MIN_CROP_SIZE, _MIN_CROP_SIZE / ratio_norm)
             req_w = new_h * ratio_norm
             cx = (l + r) * 0.5
             return self._clamp_box(cx - req_w * 0.5, b - new_h, cx + req_w * 0.5, b)
         if handle == "s":
-            new_h = max(new_ny - t, _MIN_CROP_SIZE)
+            new_h = max(new_ny - t, _MIN_CROP_SIZE, _MIN_CROP_SIZE / ratio_norm)
             req_w = new_h * ratio_norm
             cx = (l + r) * 0.5
             return self._clamp_box(cx - req_w * 0.5, t, cx + req_w * 0.5, t + new_h)
         if handle == "e":
-            new_w = max(new_nx - l, _MIN_CROP_SIZE)
+            new_w = max(new_nx - l, _MIN_CROP_SIZE, _MIN_CROP_SIZE * ratio_norm)
             req_h = new_w / ratio_norm if ratio_norm > 0 else new_w
             cy = (t + b) * 0.5
             return self._clamp_box(l, cy - req_h * 0.5, l + new_w, cy + req_h * 0.5)
         if handle == "w":
-            new_w = max(r - new_nx, _MIN_CROP_SIZE)
+            new_w = max(r - new_nx, _MIN_CROP_SIZE, _MIN_CROP_SIZE * ratio_norm)
             req_h = new_w / ratio_norm if ratio_norm > 0 else new_w
             cy = (t + b) * 0.5
             return self._clamp_box(r - new_w, cy - req_h * 0.5, r, cy + req_h * 0.5)

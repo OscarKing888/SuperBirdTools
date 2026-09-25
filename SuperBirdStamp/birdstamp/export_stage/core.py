@@ -525,7 +525,7 @@ def _stabilization_eligible(settings: dict[str, Any]) -> bool:
     ratio = _parse_ratio_value(settings.get("ratio"))
     if ratio is None or _is_ratio_free(ratio) or _is_ratio_no_crop(ratio):
         return False
-    if _crop_box_has_effect(settings.get("crop_box")):
+    if _normalize_extended_unit_box(settings.get("crop_box")) is not None:
         return False
     return True
 
@@ -601,7 +601,7 @@ def _clone_render_settings(settings: dict[str, Any]) -> dict[str, Any]:
                     float(crop_box_raw[3]),
                 )
             )
-            if _crop_box_has_effect(normalized_crop_box):
+            if normalized_crop_box is not None:
                 crop_box = [float(value) for value in normalized_crop_box]
         except Exception:
             crop_box = None
@@ -650,10 +650,10 @@ def _clone_render_settings(settings: dict[str, Any]) -> dict[str, Any]:
         "ratio": ratio,
         "center_mode": _normalize_center_mode(settings.get("center_mode") or _DEFAULT_TEMPLATE_CENTER_MODE),
         "max_long_edge": max_long_edge,
-        "crop_padding_top": _parse_padding_value(settings.get("crop_padding_top"), _DEFAULT_CROP_PADDING_PX),
-        "crop_padding_bottom": _parse_padding_value(settings.get("crop_padding_bottom"), _DEFAULT_CROP_PADDING_PX),
-        "crop_padding_left": _parse_padding_value(settings.get("crop_padding_left"), _DEFAULT_CROP_PADDING_PX),
-        "crop_padding_right": _parse_padding_value(settings.get("crop_padding_right"), _DEFAULT_CROP_PADDING_PX),
+        "crop_padding_top": _parse_padding_value(settings.get("crop_padding_top"), 0),
+        "crop_padding_bottom": _parse_padding_value(settings.get("crop_padding_bottom"), 0),
+        "crop_padding_left": _parse_padding_value(settings.get("crop_padding_left"), 0),
+        "crop_padding_right": _parse_padding_value(settings.get("crop_padding_right"), 0),
         "crop_padding_fill": _safe_color(
             str(settings.get("crop_padding_fill") or "#FFFFFF"),
             "#FFFFFF",
@@ -868,7 +868,7 @@ def _uniform_crop_group_key(settings: dict[str, Any]) -> tuple[str, int] | None:
     ratio = _parse_ratio_value(settings.get("ratio"))
     if ratio is None or _is_ratio_free(ratio) or _is_ratio_no_crop(ratio):
         return None
-    if _crop_box_has_effect(settings.get("crop_box")):
+    if _normalize_extended_unit_box(settings.get("crop_box")) is not None:
         return None
     try:
         max_long_edge = max(0, int(settings.get("max_long_edge") or 0))
@@ -1143,6 +1143,8 @@ def _compute_crop_plan_for_image(
 ) -> tuple[tuple[float, float, float, float] | None, tuple[int, int, int, int]]:
     from birdstamp.gui import editor_core
 
+    if _is_ratio_no_crop(_parse_ratio_value(settings.get("ratio"))):
+        return (None, (0, 0, 0, 0))
     center_mode = str(settings.get("center_mode") or _CENTER_MODE_IMAGE)
     mode = _normalize_center_mode(center_mode)
     bird_box: tuple[float, float, float, float] | None = None

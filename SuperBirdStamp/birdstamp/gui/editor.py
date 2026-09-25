@@ -1257,7 +1257,7 @@ class BirdStampEditorWindow(
             radio = QRadioButton(label)
             radio.setProperty("center_mode", mode)
             radio.toggled.connect(
-                lambda checked, _mode=mode: self._on_crop_settings_changed()
+                lambda checked, _mode=mode: self._on_center_mode_changed(_mode)
                 if checked else None
             )
             self.center_mode_button_group.addButton(radio)
@@ -1562,10 +1562,13 @@ class BirdStampEditorWindow(
                     if not emit_changed:
                         combo.blockSignals(old_blocked)
 
+    def _on_center_mode_changed(self, mode: str) -> None:
+        if mode != _CENTER_MODE_CUSTOM:
+            self._clear_derived_crop_overrides_for_auto_center_mode()
+        self._on_crop_settings_changed()
+
     def _clear_derived_crop_overrides_for_auto_center_mode(self) -> None:
         """切换到图像/焦点/鸟体中心时，丢弃手动裁切框与自定义中心派生状态。"""
-        if self._current_edit_mode_id() == EDIT_MODE_CROP_ADJUST:
-            return
         self._crop_box_override = None
         self._custom_center = None
         if self.current_path is None or self._is_placeholder_active():
@@ -2830,6 +2833,7 @@ class BirdStampEditorWindow(
 
     def _on_canvas_crop_drag_started(self) -> None:
         self._crop_drag_active = True
+        self._preview_debounce_timer.stop()
 
     def _on_canvas_crop_drag_finished(self) -> None:
         self._crop_drag_active = False
@@ -2837,31 +2841,26 @@ class BirdStampEditorWindow(
     def _on_canvas_crop_box_changed(self, box: tuple[float, float, float, float]) -> None:
         """9 宫格裁切框变更。
 
-        - 若当前裁切框尚未平移（仅缩放），则根据图像尺寸反算 top/bottom/left/right padding。
-        - 若已经发生过平移，则将裁切中心改为自定义，并记录 custom_center_x/y。
+        - 画布坐标包含外填充，先还原为原图相对坐标。
+        - 手动缩放和平移均保存为自定义裁切，退出编辑或导出后仍保留。
         - 拖拽进行中走轻量路径，release 后一次性提交完整 settings。
         """
         start = perf_counter()
         try:
-            canvas = self.preview_label.canvas
-            has_pan = False
-            if hasattr(canvas, "has_pan"):
-                try:
-                    has_pan = bool(canvas.has_pan())  # type: ignore[call-arg]
-                except Exception:
-                    has_pan = False
-
             if self.current_source_image is not None:
-                if not has_pan:
-                    self._update_crop_padding_from_box(box, self.current_source_image.size)
-                else:
-                    self._set_custom_center_from_box(box)
+                box = editor_core.crop_box_to_source(
+                    box, self.current_source_image.size, self._current_preview_outer_pad()
+                )
+                self._set_custom_center_from_box(box)
+                self._update_crop_padding_from_box(
+                    box, self._crop_display_source_size() or self.current_source_image.size
+                )
 
             self._crop_box_override = box
             self._set_photo_crop_box_for_path(self.current_path, box)
 
             if self._crop_drag_active:
-                self._preview_debounce_timer.start()
+                # 拖动期间保持画布坐标系不变，松手后再重建带外填充的预览。
                 return
 
             self._on_crop_settings_changed()
@@ -3038,6 +3037,11 @@ class BirdStampEditorWindow(
             values = editor.get_values()
         except Exception:
             return
+        old_state = self._get_crop_padding_state()
+        if any(values.get(f"crop_padding_{side}") != old_state[side]
+               for side in ("top", "bottom", "left", "right")):
+            self._crop_box_override = None
+            self._set_photo_crop_box_for_path(self.current_path, None)
         self._set_crop_padding_state(
             top=values.get("crop_padding_top"),
             bottom=values.get("crop_padding_bottom"),
@@ -3052,7 +3056,7 @@ class BirdStampEditorWindow(
         box: tuple[float, float, float, float],
         image_size: tuple[int, int],
     ) -> None:
-        """按照当前裁切框在整张图中的位置，更新四向 padding 数值（像素）。"""
+        """留边表示从裁切中心到四条边的原图像素距离。"""
         try:
             width, height = image_size
         except Exception:
@@ -3060,10 +3064,8 @@ class BirdStampEditorWindow(
         if width <= 0 or height <= 0:
             return
         l, t, r, b = box
-        top_px = int(round(t * height))
-        bottom_px = int(round((1.0 - b) * height))
-        left_px = int(round(l * width))
-        right_px = int(round((1.0 - r) * width))
+        top_px = bottom_px = int(round((b - t) * height * 0.5))
+        left_px = right_px = int(round((r - l) * width * 0.5))
         fill_color = self._get_crop_padding_state()["fill"]
         self._set_crop_padding_state(
             top=top_px,
@@ -3099,7 +3101,7 @@ class BirdStampEditorWindow(
             and self._crop_box_override is not None
             and self.current_source_image is not None
         ):
-            w, h = self.current_source_image.size
+            w, h = self._crop_display_source_size() or self.current_source_image.size
             if w > 0 and h > 0:
                 self._crop_box_override = _constrain_box_to_ratio(
                     self._crop_box_override,
@@ -3287,6 +3289,7 @@ class BirdStampEditorWindow(
 
         center = _normalize_center_mode(p.get("center_mode", _DEFAULT_TEMPLATE_CENTER_MODE))
         self._set_center_mode_value(center, emit_changed=False)
+        self._custom_center = (p.get("custom_center_x", 0.5), p.get("custom_center_y", 0.5))
 
         try:
             max_edge = max(0, int(p.get("max_long_edge") or _DEFAULT_TEMPLATE_MAX_LONG_EDGE))
