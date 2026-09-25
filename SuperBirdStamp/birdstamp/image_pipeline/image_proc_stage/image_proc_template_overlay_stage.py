@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any, Mapping
 
 from birdstamp.gui import template_context as _template_context
+from birdstamp.render.text_scale import TEXT_SCALE_DEFAULT, TEXT_SCALE_MIN, TEXT_SCALE_MAX, normalize_text_scale
 from ..image_proc_context import ImageProcContext
 from ..image_proc_option_spec import ImageProcOptionSpec
 from birdstamp.export_stage.constants import (
@@ -25,6 +26,11 @@ class ImageProcTemplateOverlayStage(ImageProcStage):
         return (
             ImageProcOptionSpec(key="draw_banner", label="Banner 底", value_type="bool", default=True),
             ImageProcOptionSpec(key="draw_text", label="文本", value_type="bool", default=True),
+            ImageProcOptionSpec(
+                key="text_scale", label="文本缩放", value_type="float", default=TEXT_SCALE_DEFAULT,
+                minimum=TEXT_SCALE_MIN, maximum=TEXT_SCALE_MAX, step=0.01,
+                description="在随画幅自动缩放的基础上，调整当前照片的文字倍率。",
+            ),
         )
 
     def is_enabled(self, settings: Mapping[str, Any]) -> bool:
@@ -56,6 +62,7 @@ class ImageProcTemplateOverlayStage(ImageProcStage):
             template_payload=template_payload,
             draw_banner=core._parse_bool_value(settings.get("draw_banner"), True),
             draw_text=core._parse_bool_value(settings.get("draw_text"), True),
+            text_scale=normalize_text_scale(settings.get("text_scale")),
         )
         context.photo_info = photo_info
         context.metadata_context = metadata_context

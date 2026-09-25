@@ -1296,7 +1296,7 @@ class BirdStampEditorWindow(
             "将当前「模板裁切」中的所有设置<br>"
             "批量覆盖到已加载的每张照片，<br>"
             "包括裁切比例、中心模式以及<br>"
-            "当前照片上调整过的裁剪框。<br>"
+            "当前照片上调整过的裁剪框和文本缩放。<br>"
             "<i>仅影响本次会话的照片列表，不修改模板文件。</i>"
         )
         self.apply_all_btn.clicked.connect(self._apply_current_settings_to_all_photos)
@@ -1313,6 +1313,22 @@ class BirdStampEditorWindow(
         self.draw_text_check = QCheckBox("文本")
         self.draw_text_check.setChecked(True)
         self.draw_text_check.toggled.connect(self._on_output_settings_changed)
+        scale_options = editor_options.TEXT_SCALE_SLIDER
+        self.text_scale_slider = QSlider(Qt.Orientation.Horizontal)
+        self.text_scale_slider.setRange(scale_options["minimum"], scale_options["maximum"])
+        self.text_scale_slider.setSingleStep(scale_options["step"])
+        self.text_scale_slider.setPageStep(10)
+        self.text_scale_slider.setValue(scale_options["default"])
+        self.text_scale_slider.setToolTip("100% 为随画幅自动缩放；此倍率只保存到当前照片，可通过应用全部批量使用。")
+        self.text_scale_value_label = QLabel(f"{self.text_scale_slider.value()}%")
+        self.text_scale_value_label.setMinimumWidth(44)
+        self.text_scale_slider.valueChanged.connect(
+            lambda value: self.text_scale_value_label.setText(f"{value}%")
+        )
+        self.text_scale_slider.valueChanged.connect(self._on_output_settings_changed)
+        self.text_scale_reset_btn = QPushButton("100%")
+        self.text_scale_reset_btn.setToolTip("恢复自动缩放倍率")
+        self.text_scale_reset_btn.clicked.connect(lambda: self.text_scale_slider.setValue(100))
         self.draw_focus_check = QCheckBox("焦点")
         self.draw_focus_check.setChecked(False)
         self.draw_focus_check.toggled.connect(self._on_output_settings_changed)
@@ -1665,6 +1681,13 @@ class BirdStampEditorWindow(
         overlay_row_layout.addWidget(self.draw_text_check)
         overlay_row_layout.addStretch()
         overlay_form.addRow("叠加信息", overlay_row_widget)
+        scale_widget = QWidget()
+        scale_layout = QHBoxLayout(scale_widget)
+        scale_layout.setContentsMargins(0, 0, 0, 0)
+        scale_layout.addWidget(self.text_scale_slider, 1)
+        scale_layout.addWidget(self.text_scale_value_label)
+        scale_layout.addWidget(self.text_scale_reset_btn)
+        overlay_form.addRow("文本缩放", scale_widget)
         self._pipeline_stage_option_groups["template_overlay"] = overlay_group
 
         focus_group = QGroupBox()
@@ -5719,7 +5742,7 @@ class BirdStampEditorWindow(
                 self.render_preview()
 
         self._schedule_workspace_autosave()
-        self._set_status(f"已将当前裁切重载设置应用到 {len(targets)} 张照片。")
+        self._set_status(f"已将当前裁切和文本缩放设置应用到 {len(targets)} 张照片。")
 
     def _apply_current_settings_to_all_photos(self) -> None:
         targets = self._list_photo_paths()
@@ -5740,7 +5763,7 @@ class BirdStampEditorWindow(
         if self.current_path is not None:
             self.render_preview()
         self._schedule_workspace_autosave()
-        self._set_status(f"已将当前裁切重载设置应用到全部 {len(targets)} 张照片。")
+        self._set_status(f"已将当前裁切和文本缩放设置应用到全部 {len(targets)} 张照片。")
 
 
 def _ensure_positive_qt_application_font(app: Any) -> None:

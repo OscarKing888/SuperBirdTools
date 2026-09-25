@@ -98,7 +98,7 @@ flowchart LR
 
 裁切框持久化使用**原图归一化坐标**，允许超出 0–1；裁切计划中的框则相对于补边后的画布，补边量为该计划尺寸下的像素数。[editor_core.py](../birdstamp/gui/editor_core.py) 的 `crop_box_to_source` 将交互框换回原图坐标，`rescale_crop_plan` 将原图计划映射到缩小预览。拖动期间不重建画布，松手后提交自定义裁切；四角保持对角点固定。留边表示从选定中心向四周扩展的原图像素距离，固定比例会居中包住该范围；单轴留边也参与计算。`原比例` 保持原图宽高比并应用留边，`不裁切` 则跳过所有裁切框、补边和旧预计算计划。
 
-模板的 `crop_box` 与 `custom_center_x/y` 随 JSON 保存。`render_template_overlay(..., layout_size=...)` 按当前导出阶段的逻辑尺寸计算文字、百分比偏移和避让，再映射到预览尺寸；因此调整输出长边或阶段顺序不会让缩略预览独立改变排版。CLI 的 `apply_full_crop` 同样接收手动裁切框和自定义中心。
+模板的 `crop_box` 与 `custom_center_x/y` 随 JSON 保存。`render_template_overlay(..., layout_size=...)` 按当前导出阶段的逻辑尺寸计算文字、百分比偏移和避让，再映射到预览尺寸；因此调整输出长边或阶段顺序不会让缩略预览独立改变排版。CLI 的 `apply_full_crop` 同样接收手动裁切框和自定义中心。文字自动倍率与画幅尺寸成正比，取消固定倍率和字体像素上限；「模板叠加 → 文本缩放」在自动倍率上乘以逐图 `text_scale`（25%～300%，默认 100%），可单独恢复 100%，也参与全部应用和工作区保存。参数范围由 [render/text_scale.py](../birdstamp/render/text_scale.py) 统一规范化，滑块配置读取 `editor_options.json`，GUI、图片/GIF/视频管线和 CLI `render --text-scale` 共用该倍率；逐帧缓存签名包含它，自动排版算法变化同时提升源帧缓存版本。相关回归见 [test_template_text_scale.py](../tests/test_template_text_scale.py)。
 
 只添加文字可选择内置 [不裁切_仅文字.json](../config/templates/不裁切_仅文字.json)，或在已有模板上选择「不裁切」、最大长边「不限制」并关闭 Banner 背景。此时保留解码后的原图尺寸和完整构图，仍可叠加文字。相关坐标、模板保存、预览/导出排版及 CLI 回归见 [test_crop_coordinate_regressions.py](../tests/test_crop_coordinate_regressions.py)。
 

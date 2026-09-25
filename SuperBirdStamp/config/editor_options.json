@@ -1,4 +1,5 @@
 {
+  "text_scale_slider": {"minimum": 25, "maximum": 300, "default": 100, "step": 1},
   "style_options": [
     "normal",
     "bold",
