@@ -174,3 +174,47 @@ class RegionTemplateSearch:
             return None
         x, y = float(np.median([p[0] for p in cluster])), float(np.median([p[1] for p in cluster]))
         return ((x-fx)/fw, (y-fy)/fh)
+
+
+    def verify_displacement(self, image, index, displacement):
+        """核验完整候选区域的相似度；越界候选不能作为成功区域。"""
+        template = self.templates[index]
+        if template is None:
+            return 0.0
+        fw, fh = template.fine_size
+        fx, fy = template.fine_origin
+        th, tw = template.fine.shape
+        dx, dy = displacement
+        box = ((fx/fw+dx)*image.width, (fy/fh+dy)*image.height,
+               ((fx+tw)/fw+dx)*image.width, ((fy+th)/fh+dy)*image.height)
+        if box[0] < 0 or box[1] < 0 or box[2] > image.width or box[3] > image.height:
+            return 0.0
+        sample = _gray(image, (tw, th), box)
+        a, b = template.fine-template.fine.mean(), sample-sample.mean()
+        denominator = float(np.linalg.norm(a)*np.linalg.norm(b))
+        return float(np.sum(a*b)/denominator) if denominator > 1e-8 else 0.0
+
+    def locate_near(self, image, index, expected, *, cancelled=lambda: False):
+        """其它可靠选区只限定搜索窗，仍须在当前图找到完整纹理证据。"""
+        template = self.templates[index]
+        if template is None or cancelled():
+            return None
+        fw, fh = template.fine_size
+        fx, fy = template.fine_origin
+        th, tw = template.fine.shape
+        tolerance = max(1, min(image.size)*.003)
+        rx, ry = max(2, int(np.ceil(tolerance*fw/image.width))), max(2, int(np.ceil(tolerance*fh/image.height)))
+        x, y = fx+expected[0]*fw, fy+expected[1]*fh
+        if x < 0 or y < 0 or x+tw > fw or y+th > fh:
+            return None
+        l, t = max(0, int(x)-rx), max(0, int(y)-ry)
+        r, b = min(fw, int(np.ceil(x))+tw+rx), min(fh, int(np.ceil(y))+th+ry)
+        target = _gray(image, (r-l,b-t), (l/fw*image.width,t/fh*image.height,r/fw*image.width,b/fh*image.height))
+        scores = normalized_correlation(target, template.fine)
+        if scores is None:
+            return None
+        px, py, ox, oy, score = _peak(scores)
+        displacement = ((l+px+ox-fx)/fw, (t+py+oy-fy)/fh)
+        distance = np.hypot((displacement[0]-expected[0])*image.width,
+                            (displacement[1]-expected[1])*image.height)
+        return (displacement, score) if score >= .65 and distance <= tolerance else None

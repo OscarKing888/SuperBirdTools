@@ -51,6 +51,7 @@ class EditorPreviewOverlayState(PreviewOverlayState):
     bird_box: "NormalizedBox | None" = None
     crop_effect_box: "NormalizedBox | None" = None
     reference_regions: tuple["NormalizedBox", ...] = ()
+    reference_diagnostics: tuple = ()
 
 
 @dataclass(slots=True)
@@ -97,6 +98,7 @@ class EditorPreviewCanvas(FocusCenteredPreviewCanvas):
         self._last_pos: "QPointF | None" = None
         self._has_pan: bool = False
         self._reference_regions: tuple["NormalizedBox", ...] = ()
+        self._reference_diagnostics: tuple = ()
         self._show_reference_regions: bool = False
         self._reference_region_labels: tuple[str, ...] = ()
         self._edit_modes = EditModeController(self)
@@ -252,6 +254,9 @@ class EditorPreviewCanvas(FocusCenteredPreviewCanvas):
             changed = True
         if self._set_reference_regions_no_update(state.reference_regions):
             changed = True
+        if self._reference_diagnostics != state.reference_diagnostics:
+            self._reference_diagnostics = state.reference_diagnostics
+            changed = True
         return changed
 
     def _apply_overlay_options_data(self, options: "PreviewOverlayOptions") -> bool:
@@ -273,6 +278,7 @@ class EditorPreviewCanvas(FocusCenteredPreviewCanvas):
         if isinstance(mode, ReferenceRegionEditMode):
             mode.cancel(self)
         self._reference_regions = ()
+        self._reference_diagnostics = ()
         self._bird_box = None
         self._crop_effect_box = None
         self._dragging_handle = None
@@ -288,8 +294,11 @@ class EditorPreviewCanvas(FocusCenteredPreviewCanvas):
             self._paint_crop_shade(painter, draw_rect, content_rect)
         if self._crop_edit_mode and self._crop_effect_box:
             self._paint_crop_handles(painter, draw_rect, content_rect)
-        if self._show_reference_regions and self._reference_regions:
-            self._paint_reference_regions(painter, draw_rect, content_rect)
+        if self._show_reference_regions:
+            if self._reference_diagnostics:
+                self._paint_tracking_diagnostics(painter, draw_rect, content_rect)
+            elif self._reference_regions:
+                self._paint_reference_regions(painter, draw_rect, content_rect)
         self._edit_modes.paint(painter, draw_rect, content_rect)
 
     def _composition_grid_target_rect(self, draw_rect: QRectF, content_rect) -> QRectF:  # type: ignore[override]
@@ -401,6 +410,38 @@ class EditorPreviewCanvas(FocusCenteredPreviewCanvas):
             painter.drawRect(rect)
             label = self._reference_region_labels[index] if index < len(self._reference_region_labels) else str(index + 1)
             painter.drawText(QPointF(rect.left() + 7, rect.top() + painter.fontMetrics().ascent() + 5), label)
+
+    def _paint_tracking_diagnostics(self, painter, draw_rect, content_rect):
+        visible = draw_rect.intersected(QRectF(content_rect))
+        if visible.isEmpty():
+            return
+        painter.save()
+        painter.setClipRect(visible)
+        outside = 0
+        for box, label, matched in self._reference_diagnostics:
+            color = QColor('#FFB703' if matched else '#FF5252')
+            pen = QPen(color, 2)
+            if not matched:
+                pen.setStyle(Qt.PenStyle.DashLine)
+            painter.setPen(pen)
+            rect = QRectF(draw_rect.left()+box[0]*draw_rect.width(),
+                          draw_rect.top()+box[1]*draw_rect.height(),
+                          (box[2]-box[0])*draw_rect.width(),
+                          (box[3]-box[1])*draw_rect.height()).intersected(visible)
+            if rect.width() < 1 or rect.height() < 1:
+                # 裁切外仍保留编号，避免把未显示的失败区误认为成功。
+                label += ' · 画面外'
+                point = QPointF(visible.left()+8, visible.top()+20+outside*22)
+                outside += 1
+            else:
+                fill = QColor(color)
+                fill.setAlpha(36)
+                painter.fillRect(rect, fill)
+                painter.setBrush(Qt.BrushStyle.NoBrush)
+                painter.drawRect(rect)
+                point = QPointF(rect.left()+5, rect.top()+painter.fontMetrics().ascent()+3)
+            painter.drawText(point, label)
+        painter.restore()
 
     def _norm_to_widget(self, draw_rect: QRectF, nx: float, ny: float) -> tuple[float, float]:
         x = draw_rect.left() + nx * draw_rect.width()

@@ -21,6 +21,9 @@ class RegionTrackingResult:
     boxes: tuple[NormalizedBox | None, ...]
     signature: tuple[str, int, int] | None = None
     error: str = ""
+    scores: tuple[float, ...] = ()
+    reasons: tuple[str, ...] = ()
+    predicted_boxes: tuple[NormalizedBox, ...] = ()
 
     @property
     def matched_count(self) -> int:

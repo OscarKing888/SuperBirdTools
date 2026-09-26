@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 from PIL import Image
+from dataclasses import replace
+
+from .region_consensus import resolve_tracking_consensus, select_translation
 
 from .constants import DEFAULT_MIN_CONFIDENCE, DEFAULT_PATCH_SIZE
 from .de_jitter_frame import DeJitterFrame
@@ -17,12 +20,13 @@ class ReferenceRegionTracker:
 
     def __init__(self, reference: Image.Image, regions: tuple[NormalizedBox, ...]):
         self.regions = tuple(regions)
+        self.reference_size = reference.size
         self.patches = tuple(extract_region_patch(reference, box, DEFAULT_PATCH_SIZE) for box in regions)
         self.aligner = NumpyPhaseCorrelationAligner()
         self.search = RegionTemplateSearch(reference, self.regions)
 
     def track(self, image: Image.Image, *, cancelled=lambda: False) -> RegionTrackingResult:
-        boxes, errors = [], []
+        boxes, errors, scores = [], [], []
         search_image = None
         for index, (region, patch) in enumerate(zip(self.regions, self.patches)):
             if cancelled():
@@ -33,21 +37,50 @@ class ReferenceRegionTracker:
                 frame=frame, regions=(region,), reference_patches=(patch,),
                 aligner=self.aligner, min_confidence=DEFAULT_MIN_CONFIDENCE,
             )
+            if delta is not None and self.search.verify_displacement(
+                    image, index, (delta[0]/image.width, delta[1]/image.height)) < .65:
+                delta = None
             if delta is None:
                 if search_image is None:
                     search_image = self.search.search_image(image)
                 displacement, reason = self.search.locate(image, search_image, index, cancelled=cancelled)
                 if displacement is None:
                     boxes.append(None)
-                    errors.append(f'选区 {index+1}：{reason}')
+                    errors.append(reason)
+                    scores.append(0.0)
                     continue
                 dx, dy = displacement
             else:
                 dx, dy = delta[0] / image.width, delta[1] / image.height
             box = tuple(float(value) for value in (region[0] + dx, region[1] + dy, region[2] + dx, region[3] + dy))
             # 跟踪框保持原尺寸；完全离开画面的匹配不显示为成功。
-            boxes.append(box if box[2] > 0 and box[3] > 0 and box[0] < 1 and box[1] < 1 else None)
-        return RegionTrackingResult(tuple(boxes), error='；'.join(errors))
+            score = self.search.verify_displacement(image, index, (dx,dy))
+            valid = 0 <= box[0] < box[2] <= 1 and 0 <= box[1] < box[3] <= 1 and score >= .65
+            boxes.append(box if valid else None)
+            scores.append(score)
+            errors.append('' if valid else '匹配区域越界或相似度不足')
+        raw = RegionTrackingResult(tuple(boxes), scores=tuple(scores), reasons=tuple(errors))
+        result = resolve_tracking_consensus(self.regions, raw, image.size, self.reference_size)
+        translation = select_translation(self.regions, result, image.size, self.reference_size)
+        if translation is not None:
+            dx, dy, _ = translation
+            expected = (dx/image.width, dy/image.height)
+            boxes = list(result.boxes)
+            for index, region in enumerate(self.regions):
+                if cancelled():
+                    raise InterruptedError('参考区预处理已取消')
+                if boxes[index] is not None:
+                    continue
+                found = self.search.locate_near(image, index, expected, cancelled=cancelled)
+                if found is not None:
+                    (rx,ry), score = found
+                    box = tuple(float(value) for value in (region[0]+rx, region[1]+ry, region[2]+rx, region[3]+ry))
+                    if 0 <= box[0] < box[2] <= 1 and 0 <= box[1] < box[3] <= 1:
+                        boxes[index] = box
+                        scores[index] = score
+            result = resolve_tracking_consensus(self.regions, replace(result, boxes=tuple(boxes), scores=tuple(scores)),
+                                                image.size, self.reference_size)
+        return result
 
     def recover(self, image, result, previous, following, *, cancelled=lambda: False):
         """孤立遮挡帧的第二遍核验：邻帧仅限定搜索位置，不用插值代替匹配。"""
@@ -63,5 +96,5 @@ class ReferenceRegionTracker:
             if displacement is not None:
                 dx, dy = displacement
                 boxes[index] = tuple(float(value) for value in (region[0]+dx, region[1]+dy, region[2]+dx, region[3]+dy))
-        return RegionTrackingResult(tuple(boxes), signature=result.signature,
-                                    error=result.error if any(box is None for box in boxes) else '')
+        return resolve_tracking_consensus(self.regions, replace(result, boxes=tuple(boxes)),
+                                          image.size, self.reference_size)

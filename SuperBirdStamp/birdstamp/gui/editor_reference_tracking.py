@@ -72,7 +72,7 @@ class _BirdStampReferenceTrackingMixin:
         if source and not self._reference_regions_editable():
             result = self._tracking_result_for_current()
             if result is not None:
-                detail = result.error or ("未匹配区域不绘制" if result.matched_count < len(result.boxes) else "只读预览")
+                detail = result.error or ("红色虚线表示未匹配的预计位置" if result.matched_count < len(result.boxes) else "只读预览")
                 message += f"\n当前图：{result.matched_count}/{len(result.boxes)} 个区域 · {detail}"
             else:
                 message += "\n当前图暂无有效跟踪结果，请预处理。"

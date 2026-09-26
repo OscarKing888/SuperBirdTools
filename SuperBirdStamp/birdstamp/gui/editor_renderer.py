@@ -158,6 +158,8 @@ class _BirdStampRendererMixin:
 
     def _apply_preview_overlay_options_from_ui(self) -> None:
         """Apply preview overlay options to the preview canvas/composite."""
+        if hasattr(self, "ab_preview"):
+            self.ab_preview.sync()
         if self._show_dejitter_edit_preview(preserve_view=True) or self._show_sequence_preview_result(preserve_view=True):
             return
         self.preview_label.apply_overlay_options(self._build_preview_overlay_options())
@@ -860,6 +862,8 @@ class _BirdStampRendererMixin:
         preserve_view: bool = False,
         force_fit: bool = False,
     ) -> None:
+        if hasattr(self, "ab_preview"):
+            self.ab_preview.sync()
         if self._show_dejitter_edit_preview(reset_view=reset_view, preserve_view=preserve_view) or self._show_sequence_preview_result(reset_view=reset_view, preserve_view=preserve_view):
             return
         display_pixmap: QPixmap | None = self.preview_pixmap

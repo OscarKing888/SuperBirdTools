@@ -27,6 +27,7 @@ class SequencePreviewFrame:
 class EditorSequencePreviewWorker(QThread):
     ready = pyqtSignal(int, object, object)
     quick_ready = pyqtSignal(int, object, object)
+    diagnostics = pyqtSignal(int, object)
     progress = pyqtSignal(int, str)
     failed = pyqtSignal(int, str)
 
@@ -59,6 +60,8 @@ class EditorSequencePreviewWorker(QThread):
                 self.seeds, self.template_paths, cancel_event=self.cancel_event,
                 progress=lambda text: self.progress.emit(self.token, text), bird_boxes=self.bird_boxes,
                 preview_source=capture,
+                tracking_ready=lambda key, tracking, signatures: self.diagnostics.emit(
+                    self.token, (key, tracking, signatures)),
             )
             if self.cancel_event.is_set():
                 return

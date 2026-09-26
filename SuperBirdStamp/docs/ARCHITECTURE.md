@@ -26,6 +26,7 @@
 | [_BirdStampRendererMixin](../birdstamp/gui/editor_renderer.py) | 设置快照、原图/预览缓存、鸟检测结果和预览绘制。 |
 | [_BirdStampExporterMixin](../birdstamp/gui/editor_exporter.py) | 图片/GIF 导出的目标分配、作业调度、进度与错误展示。 |
 | [_BirdStampDejitterMixin](../birdstamp/gui/editor_dejitter.py) | 导出组的去抖动标签页、原生编辑/成片 Tab、整组分析签名与快/清晰两级有界成片缓存、共享画布辅助层映射。 |
+| [ABPreview](../birdstamp/gui/editor_ab_preview.py) | 独立 A/B 对照：A 自选并钉住、原图/成片独立切换、独立缩放及单 worker 所有权；B 与原编辑上下文及列表同步。 |
 | [SequenceTransport](../birdstamp/gui/editor_sequence_transport.py) | 成片播放面板、缩略图条、照片列表同步；去抖动分析后的方向键重复由精确定时器驱动，物理松键仅提交最终清晰帧一次。普通导出页保持原生键盘导航。 |
 | [_BirdStampReferenceTrackingMixin](../birdstamp/gui/editor_reference_tracking.py) | 多参考区预处理、结果签名与失效、切图跟踪预览及工作线程所有权。 |
 | [_BirdStampWorkspaceMixin](../birdstamp/gui/editor_workspace.py) | 工作区序列化、增量恢复、自动保存及恢复期间的保存门控。 |
@@ -103,7 +104,7 @@ flowchart LR
 
 独立去抖动流程位于“导出 → 去抖动”标签页，右侧使用“编辑构图 / 成片预览”按钮组。编辑视图显示原图，不应用模板裁切与补边；多参考区使用原图归一化坐标，支持八手柄调整、右键框内单区删除、页内列表多选删除。目标图的跟踪框只读。
 
-[sequence_preview.py](../birdstamp/export_stage/sequence_preview.py) 通过 `ReferenceRegionTracker` 逐图匹配并检查多区位移共识；小位移相位相关失败时，由 [RegionTemplateSearch](../birdstamp/image_dejitter/region_template_search.py) 执行有界整图相关搜索与局部细化；孤立遮挡帧仅在前后可靠结果限定的窗口内做参考子块证据核验，不使用插值代填，在原生像素坐标中求全部对齐画幅的最大公共矩形。`SequencePreview` 保存输入签名、原始尺寸和各帧像素框；失配或无共同画面会明确失败。[ImageProcSequenceAlignStage](../birdstamp/image_pipeline/image_proc_stage/image_proc_sequence_align_stage.py) 在独立 `ImageProcPipeline` 中执行同一组裁切，`ImageProcContext` 提供辅助层所需几何。普通模板、尺寸限制及叠加不参与这条管线；“不裁切”不会禁用独立分析。
+[sequence_preview.py](../birdstamp/export_stage/sequence_preview.py) 通过 `ReferenceRegionTracker` 逐图匹配，由 [region_consensus.py](../birdstamp/image_dejitter/region_consensus.py) 选择可靠一致组，剔除离群和越界，不要求严格多数，一个可靠区即可对齐；小位移相位相关失败时，由 [RegionTemplateSearch](../birdstamp/image_dejitter/region_template_search.py) 执行有界整图相关搜索与局部细化；孤立遮挡帧仅在前后可靠结果限定的窗口内做参考子块证据核验，不使用插值代填，在原生像素坐标中求全部对齐画幅的最大公共矩形。`SequencePreview` 保存输入签名、原始尺寸和各帧像素框；无法找到可靠组或无共同画面会明确失败，但保留逐区诊断供原图/A/B 检查。[editor_tracking_overlay.py](../birdstamp/gui/editor_tracking_overlay.py) 将成功黄框、失败红色预测框映射到原图或成片裁切坐标，画面外保留编号提示；该辅助层不写入独立导出。[ImageProcSequenceAlignStage](../birdstamp/image_pipeline/image_proc_stage/image_proc_sequence_align_stage.py) 在独立 `ImageProcPipeline` 中执行同一组裁切，`ImageProcContext` 提供辅助层所需几何。普通模板、尺寸限制及叠加不参与这条管线；“不裁切”不会禁用独立分析。
 
 [sequence_export.py](../birdstamp/export_stage/sequence_export.py) 经同一渲染入口及 `PngExportStage` 完成独立 PNG/JPG 整组导出，输出写入新建子目录，取消/失败撤销本次文件。普通图片/GIF/视频导出不再注入去抖动页的计划，也不会自动启用参考区策略。旧批处理核心策略仍可供非 GUI 调用。
 

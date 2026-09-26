@@ -4,11 +4,11 @@ from dataclasses import dataclass, field, replace
 import hashlib
 import json
 from pathlib import Path
-from statistics import median
 
 from birdstamp.decoders.image_decoder import decode_image
 from birdstamp.gui.editor_utils import path_key
 from birdstamp.image_dejitter import ReferenceRegionTracker
+from birdstamp.image_dejitter.region_consensus import select_translation
 from birdstamp.image_dejitter.region_tracking_result import RegionTrackingResult, image_file_signature
 from birdstamp.image_pipeline import ImageProcContext, ImageProcPipeline
 from birdstamp.image_pipeline.image_proc_stage.image_proc_sequence_align_stage import ImageProcSequenceAlignStage
@@ -72,12 +72,10 @@ def common_alignment_crop(regions, tracking, source_sizes, reference_size, stren
                    for region, box in zip(regions, result.boxes) if box is not None]
         if not offsets:
             raise ValueError(f'{Path(key).name}：参考区失配，{result.error or "没有可靠匹配"}。请在参考图调整或追加选区后重新分析，无需逐张框选。')
-        mx, my = median(x for x, y in offsets), median(y for x, y in offsets)
-        tolerance = max(1, min(width, height) * .003)
-        agreeing = [(x, y) for x, y in offsets if ((x - mx)**2 + (y - my)**2)**.5 <= tolerance]
-        if len(offsets) > 1 and len(agreeing) <= len(offsets) // 2:
-            raise ValueError(f'{Path(key).name}：多个参考区运动不一致，请保留同一主体的选区。')
-        dx, dy = median(x for x, y in agreeing), median(y for x, y in agreeing)
+        translation = select_translation(regions, result, (width, height), reference_size)
+        if translation is None:
+            raise ValueError(f'{Path(key).name}：多个参考区运动不一致且没有可区分的可靠匹配，请调整参考选区。')
+        dx, dy, _ = translation
         shifts[key] = (round(dx * blend), round(dy * blend))
     left = max(-dx for dx, dy in shifts.values())
     top = max(-dy for dx, dy in shifts.values())
@@ -90,7 +88,7 @@ def common_alignment_crop(regions, tracking, source_sizes, reference_size, stren
 
 
 def prepare_sequence_preview(seeds, template_paths=None, *, cancel_event, progress=lambda message: None,
-                             bird_boxes=None, preview_source=None) -> SequencePreview:
+                             bird_boxes=None, preview_source=None, tracking_ready=None) -> SequencePreview:
     seeds = tuple(seeds)
     if not seeds:
         raise ValueError('请先导入照片。')
@@ -141,6 +139,8 @@ def prepare_sequence_preview(seeds, template_paths=None, *, cancel_event, progre
         progress(f'核验局部遮挡 {index+1}/{len(seeds)}')
         with decode_image(path, decoder='auto') as image:
             tracking[frame_key] = tracker.recover(image, result, previous, following, cancelled=cancel_event.is_set)
+    if tracking_ready is not None and not cancel_event.is_set():
+        tracking_ready(key, dict(tracking), signatures)
     boxes, output_size = common_alignment_crop(regions, tracking, sizes, reference_size,
                                               settings.get('dejitter_reference_strength', 100))
     result = SequencePreview(key, {path_key(job.path): job for job in jobs}, signatures,

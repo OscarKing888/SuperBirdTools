@@ -262,6 +262,8 @@ class _BirdStampDejitterMixin:
         self._update_dejitter_controls()
         if hasattr(self, 'preview_label') and self._sequence_result_mode():
             self._show_sequence_preview_result(preserve_view=True)
+        if hasattr(self, "ab_preview") and not shutdown:
+            self.ab_preview.sync()
 
     def _update_dejitter_controls(self):
         if not hasattr(self, 'dejitter_effective_status'):
@@ -328,6 +330,7 @@ class _BirdStampDejitterMixin:
         self._sequence_worker = worker
         worker.ready.connect(self._on_sequence_ready)
         worker.quick_ready.connect(self._on_sequence_quick_ready)
+        worker.diagnostics.connect(self._on_sequence_diagnostics)
         worker.failed.connect(self._on_sequence_failed)
         worker.progress.connect(self._on_sequence_progress)
         worker.finished.connect(self._on_sequence_finished)
@@ -338,6 +341,21 @@ class _BirdStampDejitterMixin:
         worker = self.sender()
         return (worker is not None and worker is self._sequence_worker and token == self._sequence_epoch
                 and not self._sequence_shutdown and not worker.isInterruptionRequested())
+
+    def _on_sequence_diagnostics(self, token, payload):
+        if not self._accept_sequence_signal(token):
+            return
+        from birdstamp.export_stage.sequence_preview import file_signatures
+        key, tracking, signatures = payload
+        if (key != sequence_input_key(self._build_dejitter_seeds(self._list_photo_paths()))
+                or file_signatures(Path(path) for path, _ in signatures) != signatures):
+            return
+        # 即使共同裁切失败，也保留诊断，供原图和 A/B 对照定位问题。
+        self._reference_tracking_results = tracking
+        self._reference_tracking_definition = self._reference_tracking_input()
+        source = self._dejitter_reference_source
+        self._reference_tracking_signature = image_file_signature(Path(source)) if source else None
+        self._refresh_preview_label(preserve_view=True)
 
     def _on_sequence_progress(self, token, message):
         if self._accept_sequence_signal(token):
@@ -428,7 +446,7 @@ class _BirdStampDejitterMixin:
         if sequence is not None and key in sequence.jobs and key not in self._sequence_frames and not fast:
             self._sequence_upgrade_timer.start()
         options = self._build_preview_overlay_options()
-        options.show_reference_regions = False
+        options.show_reference_regions = True
         options.show_crop_effect = False
         self.preview_label.apply_overlay_options(options)
         self.preview_label.canvas.set_edit_mode(EDIT_MODE_NONE)
@@ -450,6 +468,9 @@ class _BirdStampDejitterMixin:
             )
             state = EditorPreviewOverlayState(focus_box=focus,
                                               bird_box=bird, crop_effect_box=(0, 0, 1, 1))
+            from .editor_tracking_overlay import tracking_overlays
+            state.reference_diagnostics = tracking_overlays(
+                self._dejitter_reference_regions, sequence.tracking.get(key), crop)
             self.preview_label.set_original_size(*frame.source_size)
             self.preview_label.set_cropped_size(*frame.output_size)
             pixmap = QPixmap.fromImage(frame.image)
@@ -553,6 +574,11 @@ class _BirdStampDejitterMixin:
         self.preview_label.canvas.set_reference_region_labels(labels)
         state = EditorPreviewOverlayState(reference_regions=self._visible_dejitter_reference_regions(),
                                           crop_effect_box=(0, 0, 1, 1))
+        from .editor_tracking_overlay import tracking_overlays
+        if not editable:
+            state.reference_diagnostics = tracking_overlays(self._dejitter_reference_regions, tracked)
+        options.show_reference_regions = bool(state.reference_regions or state.reference_diagnostics)
+        self.preview_label.apply_overlay_options(options)
         if source is not None or quick is not None:
             width, height = quick.source_size if quick else self._crop_display_source_size() or source.size
             state.focus_box = editor_core.resolve_focus_box_after_processing(

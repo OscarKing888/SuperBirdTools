@@ -2145,7 +2145,8 @@ class BirdStampEditorWindow(
             self.preview_label.display_scale_percent_changed.connect(self._sync_preview_scale_combo)
             self.preview_label.display_scale_percent_changed.connect(self._on_workspace_state_changed)
         self._sync_preview_scale_combo(self.preview_label.current_display_scale_percent())
-        right_layout.addWidget(self.preview_label, stretch=1)
+        from .editor_ab_preview import ABPreview
+        self.ab_preview = ABPreview(self, right_layout)
         from .editor_sequence_transport import SequenceTransport
         self.sequence_transport = SequenceTransport(self)
         right_layout.addWidget(self.sequence_transport.panel)
@@ -2836,6 +2837,7 @@ class BirdStampEditorWindow(
             QMessageBox.information(self, "视频导出进行中", "请先中断当前视频导出，或等待导出完成后再关闭窗口。")
             event.ignore()
             return
+        ab_stopped = self.ab_preview.shutdown()
         self._invalidate_reference_tracking("正在停止参考区预处理…", shutdown=True)
         self._invalidate_sequence_preview(shutdown=True)
         self._cancel_async_bird_detect(shutdown=True)
@@ -2855,7 +2857,7 @@ class BirdStampEditorWindow(
         ) or (
             metadata_worker is not None
             and metadata_worker.isRunning()
-        ) or not discovery_stopped or self._reference_tracking_worker is not None or self._sequence_worker is not None:
+        ) or not ab_stopped or not discovery_stopped or self._reference_tracking_worker is not None or self._sequence_worker is not None:
             self._set_status("正在安全结束后台任务...")
             event.ignore()
             QTimer.singleShot(100, self.close)
