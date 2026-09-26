@@ -1,0 +1,243 @@
+<style>
+#stamp-ux { --sb-bg:light-dark(#f5f5f6,#191919);--sb-panel:light-dark(#ffffff,#232323);--sb-raised:light-dark(#eeeeef,#313131);--sb-line:light-dark(#d3d3d6,#454545);--sb-text:light-dark(#222226,#f3f3f3);--sb-muted:light-dark(#626269,#b4b4b8);--sb-blue:light-dark(#096dd9,#48a6ff);--sb-warning:light-dark(#82530a,#f2c27a);--sb-soft:light-dark(#fff5df,#372f22);color:var(--sb-text);background:var(--sb-bg);font:14px/1.5 -apple-system,BlinkMacSystemFont,'Segoe UI','Microsoft YaHei',sans-serif;border:1px solid var(--sb-line);border-radius:12px;overflow:hidden; }
+#stamp-ux * { box-sizing:border-box; }
+#stamp-ux button,#stamp-ux select {font:inherit;color:inherit;background:var(--sb-raised);border:1px solid var(--sb-line);border-radius:6px;padding:6px 10px;min-height:34px;}
+#stamp-ux button:not(:disabled):hover { filter:brightness(1.12); }
+#stamp-ux button:disabled {opacity:.45;}
+#stamp-ux button.primary {background:var(--sb-blue);color:#fff;border-color:transparent;}
+#stamp-ux button[aria-pressed=true] {background:var(--sb-panel);box-shadow:inset 0 0 0 1px var(--sb-blue);color:var(--sb-blue);}
+#stamp-ux h2,#stamp-ux h3,#stamp-ux p {margin:0;}
+#stamp-ux h2 {font-size:15px;font-weight:600;}
+#stamp-ux h3 {font-size:14px;font-weight:600;}
+#stamp-ux small,#stamp-ux .sb-muted {font-size:12px;color:var(--sb-muted);}
+#stamp-ux .sb-chrome {padding:12px 16px;border-bottom:1px solid var(--sb-line);display:flex;align-items:center;gap:12px;flex-wrap:wrap;background:var(--sb-panel);}
+#stamp-ux .sb-tag {font-size:12px;color:var(--sb-muted);margin-left:auto;}
+#stamp-ux .sb-body {display:grid;grid-template-columns:304px minmax(0,1fr);}
+#stamp-ux .sb-sidebar {padding:14px;border-right:1px solid var(--sb-line);display:flex;flex-direction:column;gap:12px;min-width:0;}
+#stamp-ux .sb-section {background:var(--sb-panel);border:1px solid var(--sb-line);border-radius:8px;overflow:hidden;}
+#stamp-ux .sb-section-head {padding:11px 12px;display:flex;align-items:center;justify-content:space-between;gap:8px;border-bottom:1px solid var(--sb-line);}
+#stamp-ux .sb-section-body {padding:12px;display:grid;gap:11px;}
+#stamp-ux .sb-row {display:flex;align-items:center;gap:8px;flex-wrap:wrap;}
+#stamp-ux .sb-row.between {justify-content:space-between;}
+#stamp-ux .sb-grow {flex:1;min-width:0;}
+#stamp-ux .sb-method {display:grid;grid-template-columns:repeat(3,1fr);gap:4px;}
+#stamp-ux .sb-method button {padding:5px 3px;font-size:12px;}
+#stamp-ux label {display:flex;align-items:center;gap:7px;}
+#stamp-ux input {accent-color:var(--sb-blue);}
+#stamp-ux input[type=range] {width:100%;min-width:0;}
+#stamp-ux .sb-step {display:grid;grid-template-columns:22px minmax(0,1fr);gap:7px;align-items:start;}
+#stamp-ux .sb-step-no {background:var(--sb-raised);border-radius:50%;width:22px;height:22px;text-align:center;font-size:12px;line-height:22px;}
+#stamp-ux .sb-step-content {display:grid;gap:8px;}
+#stamp-ux .sb-step-content button {font-size:12px;}
+#stamp-ux .sb-notice {background:var(--sb-soft);color:var(--sb-warning);padding:9px 10px;border-radius:6px;font-size:12px;}
+#stamp-ux .sb-status {color:var(--sb-muted);font-size:12px;min-height:36px;}
+#stamp-ux .sb-divider {border:0;border-top:1px solid var(--sb-line);margin:0;}
+#stamp-ux .sb-preview {padding:14px;min-width:0;display:flex;flex-direction:column;gap:12px;}
+#stamp-ux .sb-segment {display:flex;background:var(--sb-raised);padding:3px;border-radius:8px;gap:3px;flex-wrap:wrap;}
+#stamp-ux .sb-segment button {border:0;background:transparent;font-size:12px;}
+#stamp-ux .sb-tools {display:flex;align-items:center;gap:8px;flex-wrap:wrap;min-height:35px;}
+#stamp-ux .sb-tools button {font-size:12px;}
+#stamp-ux .sb-tools small {margin-left:auto;}
+#stamp-ux .sb-canvas {position:relative;background:#101413;min-width:0;border-radius:6px;overflow:hidden;}
+#stamp-ux .sb-canvas svg.scene {display:block;width:100%;height:auto;aspect-ratio:8/5;}
+#stamp-ux .sb-canvas.output svg.scene {aspect-ratio:16/9;}
+#stamp-ux .sb-roi-layer {position:absolute;inset:0;touch-action:none;}
+#stamp-ux .sb-roi {position:absolute;border:1.5px solid #f3cc69;color:#161613;}
+#stamp-ux .sb-roi-label {position:absolute;left:-1px;top:-23px;background:#f3cc69;padding:0 5px;font-size:12px;line-height:21px;}
+#stamp-ux .sb-handle {position:absolute!important;width:9px!important;height:9px!important;min-height:0!important;padding:0!important;border-radius:1px!important;background:#f3cc69!important;border:1px solid #1e281c!important;transform:translate(-50%,-50%);}
+#stamp-ux .sb-roi-selected {box-shadow:0 0 0 1px #f3cc6944;}
+#stamp-ux .sb-canvas-caption {display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;font-size:12px;color:var(--sb-muted);}
+#stamp-ux .sb-film {display:grid;grid-template-columns:repeat(8,minmax(0,1fr));gap:5px;}
+#stamp-ux .sb-film button {padding:5px 0;font-size:12px;min-width:0;}
+#stamp-ux .sb-film button[data-failed=true] {border-bottom:3px solid var(--sb-warning);}
+#stamp-ux .sb-frame-mini {height:22px;position:relative;margin:0 5px 4px;background:light-dark(#e2e8df,#303b31);border-radius:2px;overflow:hidden;}
+#stamp-ux .sb-frame-mini:after {content:'';position:absolute;left:var(--bird-x,45%);top:6px;width:12px;height:9px;background:light-dark(#607c80,#91b1b7);border-radius:50%;}
+#stamp-ux .sb-footer {margin-top:auto;padding-top:12px;border-top:1px solid var(--sb-line);display:grid;gap:10px;}
+#stamp-ux .sb-footer button {font-size:12px;}
+#stamp-ux .sb-placeholder {min-height:280px;display:grid;align-content:center;justify-items:center;gap:12px;padding:28px;text-align:center;background:var(--sb-panel);border:1px solid var(--sb-line);border-radius:6px;}
+#stamp-ux [hidden] {display:none!important;}
+#stamp-ux[data-side=right] .sb-body {grid-template-columns:minmax(0,1fr) 304px;}
+#stamp-ux[data-side=right] .sb-sidebar {grid-column:2;grid-row:1;border-right:0;border-left:1px solid var(--sb-line);}
+#stamp-ux[data-side=right] .sb-preview {grid-column:1;grid-row:1;}
+#stamp-ux[data-compact=true] .sb-section-body {gap:8px;padding:10px;}
+@media(max-width:720px){#stamp-ux .sb-body,#stamp-ux[data-side=right] .sb-body{display:flex;flex-direction:column;}#stamp-ux .sb-preview{order:0;}#stamp-ux .sb-sidebar{order:1;border:0;border-top:1px solid var(--sb-line);}#stamp-ux .sb-sidebar{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));}#stamp-ux .sb-section.stabilization{grid-row:span 2;}}
+@media(max-width:440px){#stamp-ux .sb-sidebar{display:flex;}#stamp-ux .sb-chrome,#stamp-ux .sb-preview,#stamp-ux .sb-sidebar{padding:10px;}#stamp-ux .sb-film{gap:5px;grid-template-columns:repeat(4,minmax(0,1fr));}#stamp-ux .sb-canvas-caption span{width:100%;}#stamp-ux .sb-tag{margin-left:0;}#stamp-ux .sb-tools small{margin-left:0;}}
+@media(pointer:coarse){#stamp-ux button,#stamp-ux select{min-height:44px;}#stamp-ux .sb-handle{width:16px!important;height:16px!important;}}
+</style>
+<div id="stamp-ux" aria-label="BirdStamp 序列防抖 UX 设计原型">
+  <div class="sb-chrome"><strong>SuperBirdStamp</strong><span class="sb-muted">构图 → 序列防抖 → 叠加 → 输出</span><span class="sb-tag">交互样稿 · 示意序列</span></div>
+  <div class="sb-body">
+    <aside class="sb-sidebar">
+      <section class="sb-section">
+        <div class="sb-section-head"><h2>构图</h2><small>逐张设置</small></div>
+        <div class="sb-section-body">
+          <div class="sb-row between"><label for="sb-ratio">裁切比例</label><select id="sb-ratio"><option value="crop">16:9</option><option value="none">不裁切</option></select></div>
+          <label><input type="checkbox" checked id="sb-uniform">统一自动裁切尺寸</label>
+          <small>裁切框决定构图；防抖在此基础上补偿位置。</small>
+        </div>
+      </section>
+      <section class="sb-section stabilization" aria-label="序列防抖">
+        <div class="sb-section-head"><h2>序列防抖</h2><small>作用于整组 8 张</small></div>
+        <div class="sb-section-body">
+          <div class="sb-method" aria-label="防抖方式">
+            <button data-method="off" aria-pressed="false">关闭</button><button data-method="smooth" aria-pressed="false">构图平滑</button><button data-method="reference" aria-pressed="true">参考区对齐</button>
+          </div>
+          <div id="sb-nocrop" class="sb-notice" hidden>当前为“不裁切”，防抖不生效。<div style="margin-top:8px"><button id="sb-enable-crop">设为 16:9 并调整构图</button></div></div>
+          <div id="sb-reference" class="sb-step"><span class="sb-step-no">1</span><div class="sb-step-content">
+            <h3>确定参考</h3><small id="sb-ref-summary">第 1 张 · 2 个选区</small>
+            <div class="sb-row"><button id="sb-edit-reference">编辑参考图</button><button id="sb-add-region">追加选区</button></div>
+            <small>编辑时用四边、四角调整；Shift 拖框追加。</small>
+          </div></div>
+          <div class="sb-step" id="sb-analysis-step"><span class="sb-step-no">2</span><div class="sb-step-content">
+            <h3 id="sb-analysis-title">分析整组照片</h3>
+            <button id="sb-analyze" class="primary">重新分析并预览</button>
+            <div class="sb-status" id="sb-analysis-status" aria-live="polite">7/8 张已对齐 · 1 张待检查</div>
+          </div></div>
+          <hr class="sb-divider">
+          <div id="sb-strength-group"><div class="sb-row between"><label for="sb-strength">补偿强度</label><output id="sb-strength-value">100%</output></div><input id="sb-strength" type="range" min="0" max="100" value="100"><small>调整后更新成片，无需重新跟踪。</small></div>
+          <div class="sb-row between"><span class="sb-muted">越界处理</span><span>沿用留边颜色</span></div>
+        </div>
+      </section>
+      <section class="sb-section">
+        <div class="sb-section-head"><h2>叠加与输出</h2><small>沿用原设置</small></div>
+        <div class="sb-section-body"><label><input type="checkbox" id="sb-overlay" checked>模板文字</label><small>图像 / GIF / 视频使用同一份稳定构图。</small></div>
+      </section>
+    </aside>
+    <main class="sb-preview">
+      <div class="sb-row between"><h2 id="sb-file">DSC08649.jpg</h2><span class="sb-muted" id="sb-frame-count">3 / 8</span></div>
+      <div class="sb-row between">
+        <div class="sb-segment" aria-label="画布用途"><button data-view="edit" aria-pressed="false">编辑构图</button><button data-view="output" aria-pressed="true">成片预览</button></div>
+        <span class="sb-muted" id="sb-view-state">已应用防抖</span>
+      </div>
+      <div class="sb-tools"><button id="sb-compare">按住对比未防抖</button><label id="sb-tracking-label"><input type="checkbox" id="sb-tracking" checked>跟踪框</label><small id="sb-tools-hint">输出区域 · 无编辑辅助框</small></div>
+      <div class="sb-canvas output" id="sb-canvas">
+        <svg class="scene" id="sb-scene" viewBox="80 70 640 360" role="img" aria-label="模拟鸟类连拍，演示防抖前后构图变化">
+          <defs><linearGradient id="sb-bg-gradient" x2="1" y2="1"><stop stop-color="#5b7254"/><stop offset="1" stop-color="#263c30"/></linearGradient><radialGradient id="sb-light"><stop stop-color="#bbbd87" stop-opacity=".32"/><stop offset="1" stop-color="#bbbd87" stop-opacity="0"/></radialGradient></defs>
+          <rect x="-200" y="-200" width="1200" height="900" fill="url(#sb-bg-gradient)"/>
+          <g id="sb-subject"><circle cx="160" cy="100" r="160" fill="url(#sb-light)"/><circle cx="680" cy="330" r="220" fill="url(#sb-light)"/>
+            <path d="M-80 444 Q310 377 520 351 T920 235" fill="none" stroke="#625749" stroke-width="26"/>
+            <path d="M-80 434 Q310 370 520 342 T920 226" fill="none" stroke="#918574" stroke-width="8"/>
+            <path d="M578 345 Q592 272 664 220 M639 247 Q692 219 717 186" fill="none" stroke="#887f61" stroke-width="6"/>
+            <ellipse cx="648" cy="232" rx="18" ry="39" transform="rotate(39 648 232)" fill="#879563"/>
+            <ellipse cx="706" cy="207" rx="16" ry="34" transform="rotate(64 706 207)" fill="#688450"/>
+            <path d="M315 280 L253 369 L284 361 L342 300" fill="#4d6974"/>
+            <ellipse cx="369" cy="280" rx="77" ry="66" transform="rotate(-23 369 280)" fill="#a1a795"/>
+            <ellipse cx="351" cy="267" rx="54" ry="43" transform="rotate(-24 351 267)" fill="#496c7a"/>
+            <path d="M313 285 Q349 269 390 239 M317 299 Q350 283 396 254" fill="none" stroke="#8ba5a9" stroke-width="5"/>
+            <circle cx="409" cy="211" r="46" fill="#638797"/><path d="M379 217 Q421 244 452 213 Q447 259 408 264" fill="#d7d3b5"/>
+            <path d="M446 205 L480 214 L447 220" fill="#c5b782"/><circle cx="426" cy="202" r="7" fill="#142526"/><circle cx="428" cy="200" r="2.2" fill="#f7f9ef"/>
+            <path d="M366 334 L370 377 L383 374 M392 334 L402 371 L416 368" fill="none" stroke="#b8a681" stroke-width="5"/>
+          </g>
+          <g id="sb-crop-guide" hidden><path d="M0 0H800V500H0Z M80 70V430H720V70Z" fill="#000" fill-opacity=".38" fill-rule="evenodd"/><rect x="80" y="70" width="640" height="360" fill="none" stroke="#e6e9eb" stroke-width="1.5"/></g>
+          <g id="sb-template"><rect id="sb-template-bg" x="80" y="388" width="640" height="42" fill="#15241d" fill-opacity=".76"/><text id="sb-template-text" x="99" y="415" fill="#eceee6" font-size="15" font-family="sans-serif">林间 · 连拍示意</text></g>
+        </svg>
+        <div id="sb-rois" class="sb-roi-layer" hidden></div>
+      </div>
+      <div id="sb-placeholder" class="sb-placeholder" hidden><h3>预览需要更新</h3><p class="sb-muted">选区已变化，旧结果暂不作为成片显示。</p><button id="sb-update-preview" class="primary">分析并预览</button></div>
+      <div class="sb-canvas-caption"><span id="sb-result-summary" aria-live="polite">第 3 张 · 已对齐 · 2/2 个选区</span><span>示意画面，非实际算法结果</span></div>
+      <div class="sb-row"><button id="sb-play">播放序列</button><button id="sb-prev" aria-label="上一张">上一张</button><button id="sb-next" aria-label="下一张">下一张</button><small id="sb-play-note">切图检查位置是否稳定</small></div>
+      <div class="sb-film" id="sb-film" aria-label="照片序列"></div>
+      <div class="sb-footer">
+        <div class="sb-row between"><span id="sb-export-state" class="sb-muted">成片已更新 · 第 7 张待检查</span><button id="sb-check-failure">查看未对齐照片</button></div>
+        <div class="sb-row between"><small>输出范围：当前整组 · 8 张</small><button id="sb-export">导出整组…</button></div>
+        <div id="sb-export-notice" class="sb-notice" role="status" hidden></div>
+      </div>
+    </main>
+  </div>
+</div>
+<script>
+(() => {
+  const root=document.getElementById('stamp-ux');
+  const $=id=>root.querySelector('#'+id);
+  const shifts=[[0,0],[19,-12],[-25,18],[30,6],[-17,-20],[24,23],[-35,11],[10,-16]];
+  const initialRegions=[{x:370,y:164,w:91,h:100},{x:573,y:238,w:87,h:91}];
+  const state={frame:2,view:'output',method:'reference',strength:100,crop:true,uniform:true,overlay:true,tracking:true,phase:'ready',compare:false,regions:initialRegions.map(r=>({...r})),playing:false};
+  const design={side:'left',compact:false};
+  let analysisTimer=null,playTimer=null,drag=null,phaseIndex=0;
+  const busy=()=>state.phase==='busy';
+  const failed=()=>state.method==='reference'&&state.frame===6&&state.phase==='ready';
+  const needsAnalysis=()=>state.crop&&state.method!=='off'&&state.phase!=='ready';
+  const save=()=>{if(window.openai?.setWidgetState)window.openai.setWidgetState({modelContent:{preview:state.view,method:state.method,crop:state.crop,strength:state.strength,regionCount:state.regions.length},privateContent:{...state,playing:false,compare:false,phase:busy()?'dirty':state.phase,design}}).catch(()=>{});};
+  function restore(snapshot){const s=snapshot?.privateContent;if(!s)return;for(const k of ['frame','strength'])if(Number.isFinite(s[k]))state[k]=k==='frame'?Math.max(0,Math.min(7,s[k])):Math.max(0,Math.min(100,s[k]));for(const k of ['crop','uniform','overlay','tracking'])if(typeof s[k]==='boolean')state[k]=s[k];if(['edit','output'].includes(s.view))state.view=s.view;if(['reference','smooth','off'].includes(s.method))state.method=s.method;if(['ready','dirty'].includes(s.phase))state.phase=s.phase;if(Array.isArray(s.regions)&&s.regions.length>0&&s.regions.length<=4&&s.regions.every(r=>['x','y','w','h'].every(k=>Number.isFinite(r[k]))&&r.x>=0&&r.y>=0&&r.w>=32&&r.h>=32&&r.x+r.w<=800&&r.y+r.h<=500))state.regions=s.regions.map(r=>({...r}));if(['left','right'].includes(s.design?.side))design.side=s.design.side;design.compact=!!s.design?.compact;}
+  function stopPlay(){clearInterval(playTimer);playTimer=null;state.playing=false;}
+  function dirty(){clearTimeout(analysisTimer);stopPlay();state.phase='dirty';state.compare=false;$('sb-export-notice').hidden=true;}
+  function drawRegions(){
+    const layer=$('sb-rois');layer.replaceChildren();
+    if(state.view!=='edit'||!state.tracking||state.method!=='reference')return;
+    if(state.frame!==0&&(state.phase!=='ready'||failed()))return;
+    const [dx,dy]=shifts[state.frame];
+    state.regions.forEach((r,i)=>{
+      const box=document.createElement('div');box.className='sb-roi';box.dataset.region=String(i);Object.assign(box.style,{left:(r.x+dx)/8+'%',top:(r.y+dy)/5+'%',width:r.w/8+'%',height:r.h/5+'%'});
+      const label=document.createElement('span');label.className='sb-roi-label';label.textContent=String(i+1);box.append(label);
+      if(state.frame===0){for(const [handle,x,y] of [['nw',0,0],['n',50,0],['ne',100,0],['e',100,50],['se',100,100],['s',50,100],['sw',0,100],['w',0,50]]){const h=document.createElement('button');h.className='sb-handle';h.dataset.handle=handle;h.dataset.region=String(i);h.setAttribute('aria-label',`选区 ${i+1} ${handle} 调整点`);h.style.left=x+'%';h.style.top=y+'%';h.style.cursor=handle+'-resize';box.append(h);}}
+      layer.append(box);
+    });
+  }
+  function render(){
+    root.dataset.side=design.side;root.dataset.compact=String(design.compact);
+    $('sb-file').textContent=`DSC${String(8647+state.frame).padStart(5,'0')}.jpg`;$('sb-frame-count').textContent=`${state.frame+1} / 8`;
+    root.querySelectorAll('[data-method]').forEach(b=>{b.setAttribute('aria-pressed',String(state.method===b.dataset.method));b.disabled=busy();});
+    root.querySelectorAll('[data-view]').forEach(b=>b.setAttribute('aria-pressed',String(state.view===b.dataset.view)));
+    $('sb-ratio').value=state.crop?'crop':'none';$('sb-uniform').checked=state.uniform;$('sb-uniform').disabled=!state.crop||busy();$('sb-overlay').checked=state.overlay;$('sb-tracking').checked=state.tracking;
+    $('sb-strength').value=state.strength;$('sb-strength-value').textContent=state.strength+'%';$('sb-strength').disabled=!state.crop||state.method==='off'||busy();
+    $('sb-nocrop').hidden=state.crop;$('sb-strength-group').hidden=state.method==='off';$('sb-reference').hidden=state.method!=='reference';$('sb-analysis-step').hidden=state.method==='off';
+    $('sb-ref-summary').textContent=`第 1 张 · ${state.regions.length} 个选区`;$('sb-add-region').disabled=busy()||state.regions.length>=4;$('sb-edit-reference').disabled=busy();
+    $('sb-analyze').disabled=!state.crop;$('sb-analyze').textContent=busy()?'取消分析':state.phase==='ready'?'重新分析并预览':'分析并预览';
+    $('sb-update-preview').textContent=busy()?'取消分析':'分析并预览';
+    $('sb-analysis-title').textContent=state.method==='smooth'?'计算整组构图':'分析整组照片';
+    $('sb-analysis-status').textContent=!state.crop?'未生效 · 请先选择裁切比例':busy()?['分析参考区位置…','生成稳定裁切…','更新成片预览…'][phaseIndex]:state.phase==='dirty'?'待分析 · 选区或构图已变化':state.method==='reference'?'7/8 张已对齐 · 第 7 张待检查':'8/8 张构图已平滑';
+    const stale=state.view==='output'&&needsAnalysis();$('sb-canvas').hidden=stale;$('sb-placeholder').hidden=!stale;
+    $('sb-view-state').textContent=state.view==='edit'?'原图坐标 · 编辑用':needsAnalysis()?'结果待更新':!state.crop?'完整原图 · 防抖未生效':state.method==='off'?'未启用防抖':state.strength===0?'0% · 未补偿':state.compare?'对比：未防抖':failed()?'本帧未补偿':'已应用防抖';
+    $('sb-tools-hint').textContent=state.view==='output'?'输出区域 · 无编辑辅助框':state.frame===0?'参考图 · 8 点调整选区':'跟踪位置 · 只读';
+    $('sb-tracking-label').hidden=state.view!=='edit';$('sb-compare').hidden=state.view!=='output';$('sb-compare').disabled=needsAnalysis()||!state.crop||state.method==='off'||failed();
+    $('sb-canvas').classList.toggle('output',state.view==='output'&&state.crop);
+    const [dx,dy]=shifts[state.frame];let compensation=state.strength/100;
+    if(state.method==='smooth')compensation*=.65;
+    if(state.compare||failed()||state.method==='off'||!state.crop)compensation=0;
+    const x=80+dx*compensation,y=70+dy*compensation;
+    const output=state.view==='output'&&state.crop;
+    $('sb-scene').setAttribute('viewBox',output?`${x} ${y} 640 360`:'0 0 800 500');
+    $('sb-subject').setAttribute('transform',`translate(${dx} ${dy})`);
+    $('sb-crop-guide').style.display=state.view==='edit'&&state.crop?'':'none';$('sb-crop-guide').removeAttribute('hidden');
+    $('sb-template').style.display=state.overlay?'':'none';
+    const tx=output?x:state.crop?80:0,ty=output?y+318:state.crop?388:458,tw=state.crop?640:800;
+    $('sb-template-bg').setAttribute('x',tx);$('sb-template-bg').setAttribute('y',ty);$('sb-template-bg').setAttribute('width',tw);$('sb-template-text').setAttribute('x',tx+19);$('sb-template-text').setAttribute('y',ty+27);
+    $('sb-rois').hidden=state.view!=='edit';drawRegions();
+    $('sb-result-summary').textContent=needsAnalysis()?'未使用旧跟踪结果':!state.crop?'防抖未应用 · 未裁切':state.method==='off'?`第 ${state.frame+1} 张 · 防抖关闭`:state.strength===0?`第 ${state.frame+1} 张 · 强度为 0%，未补偿`:failed()?'第 7 张 · 参考区失配，保留未补偿构图':state.method==='smooth'?`第 ${state.frame+1} 张 · 构图平滑 ${state.strength}%`:`第 ${state.frame+1} 张 · 已对齐 · ${state.regions.length}/${state.regions.length} 个选区`;
+    $('sb-prev').disabled=state.frame===0;$('sb-next').disabled=state.frame===7;$('sb-play').textContent=state.playing?'暂停':'播放序列';$('sb-play').disabled=needsAnalysis();
+    $('sb-film').querySelectorAll('button').forEach((b,i)=>{b.setAttribute('aria-pressed',String(i===state.frame));b.dataset.failed=String(i===6&&state.method==='reference'&&state.phase==='ready');});
+    $('sb-check-failure').hidden=state.method!=='reference'||state.phase!=='ready'||!state.crop;
+    $('sb-export-state').textContent=needsAnalysis()?'结果待更新 · 分析后检查成片':!state.crop?'保留全图 · 本次不应用防抖':state.method==='reference'?'成片已更新 · 第 7 张待检查':'成片已更新';
+    $('sb-export').disabled=needsAnalysis();
+  }
+  function analyze(){if(busy()){dirty();render();save();return;}if(!state.crop)return;stopPlay();state.phase='busy';state.view='output';phaseIndex=0;render();const tick=()=>{phaseIndex++;if(phaseIndex<3){render();analysisTimer=setTimeout(tick,450);}else{state.phase='ready';render();save();}};analysisTimer=setTimeout(tick,450);}
+  function go(frame){stopPlay();state.frame=Math.max(0,Math.min(7,frame));state.compare=false;render();save();}
+  shifts.forEach(([dx],i)=>{const b=document.createElement('button');b.setAttribute('aria-label',`第 ${i+1} 张${i===0?'，参考图':''}`);b.innerHTML=`<div class="sb-frame-mini" style="--bird-x:${45+dx/3}%"></div>${i+1}${i===0?' · 参':''}`;b.addEventListener('click',()=>go(i));$('sb-film').append(b);});
+  root.querySelectorAll('[data-view]').forEach(b=>b.onclick=()=>{state.view=b.dataset.view;state.compare=false;render();save();});
+  root.querySelectorAll('[data-method]').forEach(b=>b.onclick=()=>{state.method=b.dataset.method;dirty();if(state.method==='off')state.phase='ready';render();save();});
+  $('sb-ratio').onchange=e=>{state.crop=e.target.value==='crop';dirty();render();save();};
+  $('sb-enable-crop').onclick=()=>{state.crop=true;state.view='edit';dirty();render();save();};
+  $('sb-uniform').onchange=e=>{state.uniform=e.target.checked;dirty();render();save();};
+  $('sb-overlay').onchange=e=>{state.overlay=e.target.checked;render();save();};
+  $('sb-strength').oninput=e=>{state.strength=Number(e.target.value);render();};$('sb-strength').onchange=save;
+  $('sb-tracking').onchange=e=>{state.tracking=e.target.checked;render();save();};
+  $('sb-edit-reference').onclick=()=>{stopPlay();state.frame=0;state.view='edit';state.tracking=true;render();save();};
+  $('sb-add-region').onclick=()=>{if(state.regions.length>=4)return;state.regions.push({x:180+state.regions.length*18,y:285,w:90,h:90});state.frame=0;state.view='edit';state.tracking=true;dirty();render();save();};
+  $('sb-analyze').onclick=analyze;$('sb-update-preview').onclick=analyze;
+  $('sb-prev').onclick=()=>go(state.frame-1);$('sb-next').onclick=()=>go(state.frame+1);$('sb-check-failure').onclick=()=>{state.view='output';go(6);};
+  $('sb-play').onclick=()=>{if(state.playing){stopPlay();render();return;}if(state.frame===7)state.frame=0;state.playing=true;render();playTimer=setInterval(()=>{if(state.frame===7){stopPlay();save();}else state.frame++;render();},750);};
+  const compare=value=>{if($('sb-compare').disabled)return;state.compare=value;render();};
+  $('sb-compare').onpointerdown=e=>{e.currentTarget.setPointerCapture(e.pointerId);compare(true);};
+  $('sb-compare').onpointerup=()=>compare(false);$('sb-compare').onpointercancel=()=>compare(false);$('sb-compare').onblur=()=>compare(false);
+  $('sb-compare').onkeydown=e=>{if([' ','Enter'].includes(e.key)){e.preventDefault();compare(true);}};$('sb-compare').onkeyup=()=>compare(false);
+  $('sb-export').onclick=()=>{const n=$('sb-export-notice');n.hidden=false;n.textContent=state.crop&&state.method==='reference'?'示意导出摘要：使用当前整组预览构图；第 7 张保留未补偿构图。此样稿不会生成文件。':'示意导出摘要：使用当前预览构图。此样稿不会生成文件。';};
+  const pos=e=>{const b=$('sb-rois').getBoundingClientRect();return{x:(e.clientX-b.left)*800/b.width,y:(e.clientY-b.top)*500/b.height};};
+  $('sb-rois').onpointerdown=e=>{if(state.frame!==0||state.view!=='edit'||busy())return;const h=e.target.closest('[data-handle]');if(!h&&!e.shiftKey)return;const p=pos(e);if(h){const i=Number(h.dataset.region);drag={id:e.pointerId,index:i,handle:h.dataset.handle,start:p,region:{...state.regions[i]}};}else if(state.regions.length<4){state.regions.push({x:p.x,y:p.y,w:32,h:32});drag={id:e.pointerId,index:state.regions.length-1,handle:'se',start:p,region:{x:p.x,y:p.y,w:32,h:32}};}if(drag){e.preventDefault();$('sb-rois').setPointerCapture(e.pointerId);}};
+  $('sb-rois').onpointermove=e=>{if(!drag||drag.id!==e.pointerId)return;const p=pos(e),r=drag.region;let l=r.x,t=r.y,rr=r.x+r.w,bb=r.y+r.h;const dx=p.x-drag.start.x,dy=p.y-drag.start.y;if(drag.handle.includes('w'))l=Math.max(0,Math.min(rr-32,r.x+dx));if(drag.handle.includes('e'))rr=Math.min(800,Math.max(l+32,r.x+r.w+dx));if(drag.handle.includes('n'))t=Math.max(0,Math.min(bb-32,r.y+dy));if(drag.handle.includes('s'))bb=Math.min(500,Math.max(t+32,r.y+r.h+dy));state.regions[drag.index]={x:l,y:t,w:rr-l,h:bb-t};drawRegions();};
+  const finish=()=>{if(drag){drag=null;dirty();render();save();}};$('sb-rois').onpointerup=finish;$('sb-rois').onpointercancel=finish;
+  $('sb-rois').onkeydown=e=>{const h=e.target.closest('[data-handle]');if(!h||!['ArrowLeft','ArrowRight','ArrowUp','ArrowDown'].includes(e.key))return;e.preventDefault();const r=state.regions[Number(h.dataset.region)],edge=h.dataset.handle,step=e.shiftKey?10:2;let l=r.x,t=r.y,rr=r.x+r.w,bb=r.y+r.h;const dx=e.key==='ArrowLeft'?-step:e.key==='ArrowRight'?step:0,dy=e.key==='ArrowUp'?-step:e.key==='ArrowDown'?step:0;if(edge.includes('w'))l=Math.max(0,Math.min(rr-32,l+dx));if(edge.includes('e'))rr=Math.min(800,Math.max(l+32,rr+dx));if(edge.includes('n'))t=Math.max(0,Math.min(bb-32,t+dy));if(edge.includes('s'))bb=Math.min(500,Math.max(t+32,bb+dy));Object.assign(r,{x:l,y:t,w:rr-l,h:bb-t});dirty();render();save();};
+  restore(window.openai?.widgetState);render();
+  window.addEventListener('openai:set_globals',e=>{if(e.detail?.globals?.widgetState){stopPlay();clearTimeout(analysisTimer);restore(e.detail.globals.widgetState);render();}});
+  if(globalThis.Tweak){const tweak=new Tweak({container:root,onChange:()=>{render();save();}});tweak.addSelect(design,'side',{label:'设置面板位置',options:[{label:'左侧',value:'left'},{label:'右侧',value:'right'}]});tweak.addToggle(design,'compact',{label:'紧凑设置间距'});}
+})();
+</script>

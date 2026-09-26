@@ -98,6 +98,8 @@ flowchart LR
 
 参考区去抖在源图坐标中逐帧估计平移，支持手动裁切和导出列表外的参考照片；全局开关、独立强度与参考文件签名参与缓存失效。裁切计划缓存还包含参考照片及其 XMP 的文件签名，避免导出子集时复用过期的参考位置。编辑预览仍显示原裁切；“预处理跟踪”通过 [ReferenceRegionTracker](../birdstamp/image_dejitter/reference_region_tracker.py) 和导出共用采样/匹配逻辑，切图时显示多个编号区域的实际匹配位置，目标图只读，失配区域不绘制。参考区域/列表变化使结果失效，文件签名变化也禁止展示旧结果。裁切补偿在导出预计算时生成。参考区轮廓由持久源坐标在每次重绘时恢复；[ReferenceRegionEditMode](../birdstamp/gui/edit_modes.py) 提供八手柄的暂存缩放预览，松手一次提交，切换模式或源图时取消未完成拖动。使用流程、坐标语义、算法边界与回归入口见 [参考区去抖动](DEJITTER.md)。
 
+后续 UX 方案与交互样稿见 [序列防抖 UX 设计](ux/STABILIZATION_UX.md)：规划独立序列防抖区、编辑/成片双视图及预览与导出共用稳定裁切结果。该文档为设计提案，尚未实现，不能替代上述当前行为说明。
+
 预览由 [editor_renderer.py](../birdstamp/gui/editor_renderer.py) 的 `render_preview`、`_render_preview_pipeline_image` 适配相同的阶段顺序和设置，但保留裁切外画布以供编辑，不直接把最终裁切位图作为交互画布。模板要与裁切区域对齐，焦点框也要经过相同坐标变换。[editor_preview_canvas.py](../birdstamp/gui/editor_preview_canvas.py) 承接交互显示和网格叠加。
 
 裁切框持久化使用**原图归一化坐标**，允许超出 0–1；裁切计划中的框则相对于补边后的画布，补边量为该计划尺寸下的像素数。[editor_core.py](../birdstamp/gui/editor_core.py) 的 `crop_box_to_source` 将交互框换回原图坐标，`rescale_crop_plan` 将原图计划映射到缩小预览。拖动期间不重建画布，松手后提交自定义裁切；四角保持对角点固定。留边表示从选定中心向四周扩展的原图像素距离，固定比例会居中包住该范围；单轴留边也参与计算。`原比例` 保持原图宽高比并应用留边，`不裁切` 则跳过所有裁切框、补边和旧预计算计划。
