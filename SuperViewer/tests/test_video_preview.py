@@ -136,6 +136,32 @@ def test_corrupt_file_and_info_panel(panel, tmp_path):
     info_panel.deleteLater()
 
 
+def test_missing_decoder_error_is_displayed_once(panel, tmp_path, monkeypatch):
+    from SuperViewer.superviewer import video_preview
+    path = tmp_path / '中文视频.mp4'
+    path.touch()
+    error = '无法生成视频封面：预览组件缺失'
+    def missing(*args, **kwargs):
+        raise RuntimeError(error)
+    monkeypatch.setattr(video_preview, 'probe_video', missing)
+    monkeypatch.setattr(video_preview, 'video_thumbnail_rgb', missing)
+    panel.set_image(str(path))
+    wait_until(lambda: panel._video_worker is None)
+    assert panel.video_view.message.text().count(error) == 1
+    assert panel.video_view.play.isEnabled()
+
+
+def test_read_only_video_diagnostic(clip, tmp_path):
+    import json
+    from SuperViewer.superviewer.video_diagnostics import main
+    output = tmp_path / '诊断.json'
+    assert main([str(clip), '--output', str(output)]) == 0
+    result = json.loads(output.read_text(encoding='utf-8'))
+    assert result['ok'] and result['poster'] == {'width': 320, 'height': 180}
+    assert main([str(tmp_path / 'missing.mp4'), '--output', str(output)]) == 1
+    assert not json.loads(output.read_text(encoding='utf-8'))['ok']
+
+
 # Use the existing pre-construction settings isolation and shutdown fixture.
 from SuperViewer.tests.test_directory_selection_responsiveness import window
 

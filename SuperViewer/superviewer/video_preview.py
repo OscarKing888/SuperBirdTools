@@ -93,7 +93,8 @@ class _VideoProbe(QThread):
             except Exception as exc:
                 errors.append(str(exc))
         if not self.isInterruptionRequested():
-            self.result.emit(self.token, self.path, info, image, '\n'.join(errors))
+            # 信息探测和封面提取可能遇到同一个依赖错误，只展示一次。
+            self.result.emit(self.token, self.path, info, image, '\n'.join(dict.fromkeys(errors)))
 
 
 class VideoPlayerView(QWidget):

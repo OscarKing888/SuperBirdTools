@@ -24,6 +24,10 @@ for candidate in (REPO_ROOT, SUPERVIEWER_ROOT, SUPERBIRDSTAMP_ROOT):
         sys.path.insert(0, candidate_str)
 
 
+from build_tools.viewer_ffmpeg import collect_viewer_ffmpeg
+
+video_datas, video_hiddenimports = collect_viewer_ffmpeg()
+
 def collect_tree(source: Path, dest: str) -> list[tuple[str, str]]:
     if not source.exists():
         return []
@@ -79,6 +83,7 @@ ultralytics_datas, ultralytics_binaries, ultralytics_hiddenimports = collect_all
 # --------------------------------------------------------------------------- #
 use_app_workpath("superviewer")
 superviewer_datas = [
+    *video_datas,
     *collect_tree(SUPERVIEWER_ROOT / "about.cfg", "."),
     *collect_tree(SUPERVIEWER_ROOT / "super_viewer.cfg", "."),
     *collect_tree(SUPERVIEWER_ROOT / "tags.cfg", "."),
@@ -95,7 +100,7 @@ superviewer_a = Analysis(
     binaries=[],
     datas=superviewer_datas,
     hiddenimports=collect_submodules("app_common")
-    + collect_submodules("superviewer"),
+    + collect_submodules("superviewer") + video_hiddenimports,
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],

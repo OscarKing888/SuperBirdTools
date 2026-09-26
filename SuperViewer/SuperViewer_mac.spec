@@ -21,6 +21,10 @@ for candidate in (REPO_ROOT, APP_ROOT):
         sys.path.insert(0, candidate_str)
 
 
+from build_tools.viewer_ffmpeg import collect_viewer_ffmpeg
+
+video_datas, video_hiddenimports = collect_viewer_ffmpeg()
+
 def collect_tree(source: Path, dest: str) -> list[tuple[str, str]]:
     if not source.exists():
         return []
@@ -38,7 +42,7 @@ def collect_tree(source: Path, dest: str) -> list[tuple[str, str]]:
     return items
 
 
-datas: list[tuple[str, str]] = []
+datas: list[tuple[str, str]] = list(video_datas)
 datas.extend(collect_tree(APP_ROOT / "about.cfg", "."))
 datas.extend(collect_tree(APP_ROOT / "super_viewer.cfg", "."))
 datas.extend(collect_tree(APP_ROOT / "tags.cfg", "."))
@@ -55,7 +59,7 @@ a = Analysis(
     binaries=[],
     datas=datas,
     hiddenimports=collect_submodules("app_common")
-    + collect_submodules("superviewer"),
+    + collect_submodules("superviewer") + video_hiddenimports,
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],

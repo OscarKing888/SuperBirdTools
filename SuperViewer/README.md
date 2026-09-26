@@ -101,4 +101,4 @@
 - 右侧自动切换为视频信息，显示时长、分辨率、帧率、编码、码率、音轨、文件大小与修改时间。切回照片恢复图片信息和原有预览工具。
 - 切换文件/目录或关闭窗口会停止播放；长按方向键只快速浏览封面，松开后加载最终文件的信息。
 
-使用仓库共享环境安装 `SuperViewer/requirements.txt` 中的依赖。新增的 `imageio-ffmpeg` 自带平台 FFmpeg，封面与信息读取不要求额外安装系统 ffprobe；也可通过 `SUPERVIEWER_FFMPEG` 指定 FFmpeg 路径。视频功能不会修改原视频文件。
+使用仓库共享环境安装 `SuperViewer/requirements.txt` 中的依赖。新增的 `imageio-ffmpeg` 自带平台 FFmpeg，封面与信息读取不要求额外安装系统 ffprobe；也可通过 `SUPERVIEWER_FFMPEG` 指定 FFmpeg 路径。视频功能不会修改原视频文件。构建脚本优先仓库根 `.venv`；打包会检查并显式收集 FFmpeg，缺少依赖时停止构建。可运行应用入口 `--check-video <视频路径> --output <诊断.json>` 验证实际运行环境的封面与信息读取。

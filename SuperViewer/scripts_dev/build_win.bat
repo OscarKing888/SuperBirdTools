@@ -17,13 +17,13 @@ if defined SUPERBIRDTOOLS_BUILD_ROOT (
   set "WORK_ROOT=%REPO_ROOT%\build\SuperViewer"
 )
 
-if exist "%ROOT_DIR%\.venv\Scripts\python.exe" (
-  set "PYTHON_EXE=%ROOT_DIR%\.venv\Scripts\python.exe"
+if exist "%REPO_ROOT%\.venv\Scripts\python.exe" (
+  set "PYTHON_EXE=%REPO_ROOT%\.venv\Scripts\python.exe"
   goto :build_with_exe
 )
 
-if exist "%REPO_ROOT%\.venv\Scripts\python.exe" (
-  set "PYTHON_EXE=%REPO_ROOT%\.venv\Scripts\python.exe"
+if exist "%ROOT_DIR%\.venv\Scripts\python.exe" (
+  set "PYTHON_EXE=%ROOT_DIR%\.venv\Scripts\python.exe"
   goto :build_with_exe
 )
 

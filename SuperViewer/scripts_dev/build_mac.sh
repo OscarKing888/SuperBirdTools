@@ -13,10 +13,10 @@ COLLECT_DIR="${DIST_ROOT}/SuperViewer"
 
 if [[ -n "${PYTHON_BIN:-}" ]]; then
   SELECTED_PYTHON="${PYTHON_BIN}"
-elif [[ -x "${ROOT_DIR}/.venv/bin/python3" ]]; then
-  SELECTED_PYTHON="${ROOT_DIR}/.venv/bin/python3"
 elif [[ -x "${REPO_ROOT}/.venv/bin/python3" ]]; then
   SELECTED_PYTHON="${REPO_ROOT}/.venv/bin/python3"
+elif [[ -x "${ROOT_DIR}/.venv/bin/python3" ]]; then
+  SELECTED_PYTHON="${ROOT_DIR}/.venv/bin/python3"
 elif [[ -n "${VIRTUAL_ENV:-}" && -x "${VIRTUAL_ENV}/bin/python3" ]]; then
   SELECTED_PYTHON="${VIRTUAL_ENV}/bin/python3"
 else
