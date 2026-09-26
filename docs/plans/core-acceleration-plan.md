@@ -168,8 +168,8 @@ GIF: 源帧先存 PNG(optimize=True) → export_gif 在 **GUI 线程**逐变体�
 
 | ID | 位置（调用者 / 线程） | 候选瓶颈 | 已有优化 | 证据 | 验证方法 | 判断 |
 | --- | --- | --- | --- | --- | --- | --- |
-| V1 | `PreviewPanel.set_image` → `_load_raw_embedded_preview_qimage` / `thumb_stream.get_raw_preview_jpeg`（GUI） | RAW 普通点击在 GUI 线程上：最多 3 次 ExifTool 冷启动（Windows 版是打包的 Perl，启动成本高 [待验证]）、方向二次读文件、内嵌 JPEG 全尺寸解码、3–4 次拷贝 | 不解马赛克；有 20s 超时 | [代码事实] 同步执行；耗时 [待验证] | M0 分段计时：进程启动、提取、解码、转换各自多少 ms | **P**：改用 stay-open 会话或 LibRaw `extract_thumb` 的进程内提取，并缓存路径到字节和方向。是否移出 GUI 线程涉及受保护交互，需要用户决策（见 7.3）|
-| V2 | `_load_full_preview_qimage`，≤40MP 同步（GUI） | JPEG：QImageReader 解码后多余的 `.copy()`；HEIF ≤40MP：整幅 HEVC 在 GUI 线程解码（复审报告测得 49.8MP HIF 约 1.5 s）| 阈值可配 | [代码事实]；40MP 以下 HIF 的耗时 [待验证] | 按 24/33/40MP 的 JPEG 与 HIF 分别测 `set_image` 的 load_ms | **P**：去掉多余拷贝、在工作线程转成原生像素格式。HEIF 阈值属受保护策略，只给出数据，由用户决定 |
+| V1 | `PreviewPanel.set_image` → `_load_raw_embedded_preview_qimage` / `thumb_stream.get_raw_preview_jpeg`（GUI） | RAW 普通点击在 GUI 线程上：最多 3 次 ExifTool 冷启动（Windows 版是打包的 Perl，启动成本高 [待验证]）、方向二次读文件、内嵌 JPEG 全尺寸解码、3–4 次拷贝 | 不解马赛克；有 20s 超时 | [代码事实] 同步执行；耗时 [待验证] | M0 分段计时：进程启动、提取、解码、转换各自多少 ms | **P**：改用 stay-open 会话或 LibRaw `extract_thumb` 的进程内提取，并缓存路径到字节和方向。已决定移出 GUI 线程，先显示档位缓存再异步替换（见 7.3、P-10）|
+| V2 | `_load_full_preview_qimage`，≤40MP 同步（GUI） | JPEG：QImageReader 解码后多余的 `.copy()`；HEIF ≤40MP：整幅 HEVC 在 GUI 线程解码（复审报告测得 49.8MP HIF 约 1.5 s）| 阈值可配 | [代码事实]；40MP 以下 HIF 的耗时 [待验证] | 按 24/33/40MP 的 JPEG 与 HIF 分别测 `set_image` 的 load_ms | **P**：去掉多余拷贝、在工作线程转成原生像素格式。HEIF 改用独立的同步阈值（见 7.3、P-11） |
 | V3 | `_load_quick_preview_pixmap`（GUI，缓存未命中的大图兜底） | PNG/TIFF/WebP >40MP 没有 DCT 缩放，整幅 PIL 解码加 LANCZOS 在 GUI 线程 | JPEG 用 draft；HEIF 延后 | [代码事实] | 大 PNG/TIFF 冷缓存点击计时 | **P**：优先 `QImageReader.setScaledSize`（它已经是后备路径），把 PIL 放到后面 |
 | V4 | `PreviewCanvas.paintEvent`（GUI） | Python 棋盘格循环；每帧全尺寸平滑缩放 | 无 | [代码事实]；耗时 [待验证] | 新增 paint 计时探针，在 45MP 图上测滚轮缩放和拖拽，统计每帧 ms 与 FPS | **P**：棋盘格改为缓存的 `QBrush` 纹理（不透明图直接跳过）；按缩放级别缓存缩放后的 pixmap，或只绘制可见的源矩形。**不原生化**（Qt 已是原生实现）|
 | V5 | `thumb_stream._pil_to_rgb_thumb` 等（POOL） | RAW 内嵌 JPEG 不用 draft；`exif_transpose` 放在 thumbnail 之前；渐进式 JPEG 二次全解码；内存缓存 put/get 深拷贝；GUI 线程逐项 RGB888 转原生格式 | 视口优先、档位缓存、批量刷新 | [代码事实] | 缩略图吞吐（张/秒）、`decode_ms` p50/p95、GUI flush 耗时 | **P** 先行；残差为 **N?（N1）** |
@@ -331,7 +331,7 @@ def to_qimage(buf: PixelBuffer) -> "QImage":  # 仅工作线程调用；一次�
 
 ## 5. M0–M4 任务表与依赖顺序
 
-依赖顺序：`M0-1 → M0-2 → M0-3 → M0-4 → M0-5(G0)` → P 轨（P-1…P-9，可并行评审）→ `M0-6(G1)` → 通过才进入 `M1 → M2(G2) → M3 → M4(G3)`。
+依赖顺序：`M0-1 → M0-2 → M0-3 → M0-4 → M0-5(G0)` → P 轨（P-1…P-11，可并行评审；P-10 依赖 P-1）→ `M0-6(G1)` → 通过才进入 `M1 → M2(G2) → M3 → M4(G3)`。
 所有改动遵守 AGENTS 的“每轮一个分支一个 worktree”、先提交 `app_common` 再提交 gitlink 的规则。
 
 ### M0：现状、基线、样本与选型
@@ -360,7 +360,10 @@ def to_qimage(buf: PixelBuffer) -> "QImage":  # 仅工作线程调用；一次�
 | P-9 | P | 模板对话框预览：加去抖并改用预览尺寸源图 | `birdstamp/gui/editor_template_dialog.py` | M0-5 | 无 | 模板编辑相关测试 + 手动连续调参 | 无卡顿；保存的模板 JSON 不变 | revert | S | 高 |
 
 说明：
-- **V1 的“移出 GUI 线程”与 V2 的“HEIF 同步阈值”都是受保护交互的变更，不在 P 轨内擅自改动。** M0 给出数据后由用户决策，决策后另立任务。
+| P-10 | P | **RAW 普通点击改为两段式**（用户已确认，2026-09-26）：`set_image` 不再在 GUI 线程同步调用 `_load_raw_embedded_preview_qimage`。先显示当前档位缓存（`_cached_quick_preview_pixmap`，只用精确档位）；未命中时显示“正在加载预览”占位，与大 HIF 一致，不在 GUI 线程做任何 RAW 提取。然后由现有 `_FullPreviewLoader`（单任务 + 最新 pending + token 校验）提取内嵌高清 JPEG 并替换。内嵌预览的优先级不变（JpgFromRaw/PreviewImage > rawpy > piexif 小图），仍然不解马赛克。`source_pixmap_for_path()` 与 `full_preview_ready` 只在内嵌预览到达后成立 | `SuperViewer/superviewer/preview_panel.py`；测试 `SuperViewer/tests/test_preview_panel_policy.py`（新增：RAW 点击时 GUI 线程零 RAW 提取调用、缓存命中先显示、内嵌到达后替换、快速连续点击只处理最新请求）；同步更新 `AGENTS.md` 的“Protected SuperViewer Preview Loading Flow”、`ai_rules/AI_CODING_RULES.md` §10/§15 与 `SuperViewer/docs/ARCHITECTURE.md` §3 表格 | P-1（先让提取本身变快，两段式的第二段才短）| `set_image` 签名不变；RAW 行为从“同步直接完整”变为“档位 → 异步完整” | `test_preview_panel_policy.py`、`test_fast_preview_policy.py`、`test_directory_selection_responsiveness.py`、`app_common/tests/test_file_browser_key_navigation.py`；手动或日志检查 RAW 点击、按住方向键、释放后单次提交、焦点框在完整预览到达后出现 | RAW 点击时 `set_image` 的 load_ms P95 与小 JPEG 同一量级（目标值由 M0 基线确定）；GUI 心跳 max 不再出现 RAW 提取尖峰；内嵌预览到达时间不比现状差；最终显示的分辨率与现状逐样本相同 | revert；或把 RAW 临时加回同步分支（单处改动）| M | 高（代码事实：当前同步）|
+| P-11 | P | **HEIF 独立同步阈值**：新增 `SuperViewer_SYNC_FULL_PREVIEW_HEIF_MAX_MP`，与 JPEG 的 `SuperViewer_SYNC_FULL_PREVIEW_MAX_MP`（默认 40）分开。建议默认 **4 MP**（理由见 7.3），M0 有数据后按“GUI 同步解码 P95 ≤100 ms”校准。超过阈值的 HEIF 沿用现有大 HIF 路径（精确档位缓存 → 占位 → 工作线程完整解码），不新增路径 | `SuperViewer/superviewer/preview_panel.py`（`_should_load_full_preview_sync` 按扩展名取阈值）；测试 `test_directory_selection_responsiveness.py::test_small_hif_keeps_synchronous_full_preview` 改为以新阈值参数化，另加“24 MP HIF 默认异步”用例；同步更新 `AGENTS.md`、`SuperViewer/docs/ARCHITECTURE.md` 中“默认 40 MP”的 HEIF 描述 | M0-4（校准默认值；样本到位前先用 4 MP）| 新增环境变量，原变量语义只对非 HEIF 生效 | 同上 + `test_preview_panel_policy.py` | 常见相机 HIF（24–61 MP）点击不再在 GUI 线程解码 HEVC；≤阈值的小 HIF 仍同步完整显示；JPEG 行为不变 | revert；或把 HEIF 阈值设为 40 恢复原行为（无需改代码）| S | 中（阈值默认值待验证）|
+
+说明：P-10、P-11 改变的是受保护流程，用户已于 2026-09-26 确认方向。实施时必须在同一提交中更新 AGENTS.md 与架构文档对应条款，否则会与现有规则冲突。
 - 视频由 ffmpeg 读 PNG 序列的设计服务于帧复用和取消恢复，**保持**。
 
 ### M1：最小共享扩展与后端开关（仅当 G1 通过）
@@ -500,11 +503,17 @@ def to_qimage(buf: PixelBuffer) -> "QImage":  # 仅工作线程调用；一次�
 - N 轨：运行时开关（环境变量或用户选项）立即切回 `python`。默认值改动（M4-3）是单行变更，可以单独 revert。
 - 发布：保留上一个 Release 资产（现有 workflow 不会覆盖已有资产）。
 
-### 7.3 需要用户决策的事项（不阻塞 M0）
+### 7.3 用户决策记录（2026-09-26）
 
-1. RAW 普通点击是否改为“先显示档位缓存、再异步替换为内嵌高清预览”（V1）。这会改变“RAW 点击直接显示完整预览”的交互观感。
-2. HEIF 的同步完整预览阈值是否与 JPEG 分开设置（V2）。
-3. 用于基准的真实样本，以及它们在仓库外的存放位置。
+1. **RAW 普通点击改为两段式：已确认。** 先显示档位缓存，再异步替换为内嵌高清预览，对应 P-10。
+2. **HEIF 同步阈值与 JPEG 分开：采纳推荐。** 对应 P-11，推荐理由：
+   - JPEG 的 QImageReader 解码由 libjpeg-turbo 完成，40 MP 同步可以接受；HEVC 解码单位像素成本高得多。复审报告测得 49.8 MP HIF 在 GUI 线程约 1.5 s，按此推算约 30 ms/MP [待验证]，40 MP 阈值意味着常见的 24–33 MP 相机 HIF 仍可能在 GUI 线程卡住 0.7–1 s。
+   - 两者共用一个阈值，只能在“JPEG 过度异步”和“HEIF 卡顿”之间二选一。分开后 JPEG 行为完全不变，HEIF 默认走已有的大 HIF 异步路径，不新增代码路径。
+   - 默认 4 MP：按 100 ms 的交互预算和上面的推算得出，只保留缩小导出的小 HIF 同步显示。这个值是临时的，M0 样本到位后按实测 P95 校准。设为 40 即可恢复原行为，回退成本为零。
+3. **真实样本：暂缓。** 等用户后续上传基准图后再定存放位置。影响：
+   - M0-3、M0-4、M0-5（G0）以及依赖实测的门槛（G1/G2/G3）都**阻塞在样本上**。
+   - M0-1、M0-2 可以先做。M0-1 在样本到位前用脚本在临时目录**合成**测试图（不同尺寸、方向 1..8、带 alpha、截断文件），只用于验证脚本能跑通，**不作为基线**。
+   - 不依赖实测的 P 任务（P-5 字体与模板缓存、P-8 manifest 批量写入、P-9 对话框去抖、P-10、P-11）可以先实施，验收中的数值目标待样本到位后补测；像素一致性与功能回归照常执行。
 
 ### 7.4 暂不纳入范围
 
@@ -529,7 +538,8 @@ GUI 重写或框架更换；Rust；GPU/Metal/CUDA 图像路径；自研 JPEG/RAW
 4. `benchmarks/README.md`：两平台的运行命令（PowerShell 用 here-string 传给 `.venv\Scripts\python.exe`，macOS 用 `.venv/bin/python3`）、冷热缓存说明、安全约束（只用样本副本；绝不写原图、XMP 或 `report.db`；临时目录用完即删）。
 
 **完成标准**：
-- 在至少一个目标平台（Windows x64 或 macOS arm64）用 repo 根目录的 `.venv` 跑通，输出 JSON 与 Markdown。另一平台未运行时标“未验证”。
+- 真实样本到位前（见 7.3）：用 `--synthetic` 在临时目录生成测试图，脚本端到端跑通并输出 JSON 与 Markdown，输出中明确标记 `synthetic=true`、不作为基线。云端 Linux 会话可以在新建的 `.venv` 中安装 requirements 做这一步，但结果只证明脚本可用。
+- 真实样本到位后：在至少一个目标平台（Windows x64 或 macOS arm64）用 repo 根目录的 `.venv` 跑通，输出 JSON 与 Markdown。另一平台未运行时标“未验证”。
 - 对同一样本连续两次运行，P50 差异在报告的噪声范围内；报告写明噪声大小。
 - 运行前后样本目录（含 `.superpicky/report.db` 副本和 XMP）的哈希不变。`SuperBirdStamp/config/editor_export_state.json` 与 `config/templates/*.json` 无改动（AGENTS 要求检查）。
 - 新增文件 `-m py_compile` 通过，`git diff --check` 干净；除 `benchmarks/` 外没有任何 diff。
