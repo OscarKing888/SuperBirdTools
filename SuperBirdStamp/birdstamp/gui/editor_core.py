@@ -1497,6 +1497,49 @@ def constrain_box_to_ratio(
     return normalize_extended_unit_box((new_l, new_t, new_r, new_b)) or box
 
 
+def pad_and_crop_image(
+    image: Image.Image,
+    outer_pad: tuple[int, int, int, int],
+    crop_box: tuple[float, float, float, float] | None,
+    fill: str = "#FFFFFF",
+) -> Image.Image:
+    """等价于 ``crop_image_by_normalized_box(pad_image(image, ...), crop_box)``。
+
+    裁切区落在补边画布内时，只分配裁切尺寸的画布并把原图贴到对应偏移，
+    不再生成整幅补边副本；其它情况（无补边、无需裁切、裁切超出补边画布）走原路径。
+    """
+    top, bottom, left, right = (max(0, int(v)) for v in outer_pad)
+    if not (top or bottom or left or right):
+        return crop_image_by_normalized_box(image, crop_box)
+    padded_w = image.width + left + right
+    padded_h = image.height + top + bottom
+    crop_px = normalized_box_to_pixel_box(crop_box, padded_w, padded_h)
+    if (
+        crop_px is None
+        or image.mode not in {"RGB", "RGBA", "L"}
+        or (crop_px[0] <= 0 and crop_px[1] <= 0 and crop_px[2] >= padded_w and crop_px[3] >= padded_h)
+        or crop_px[0] < 0
+        or crop_px[1] < 0
+        or crop_px[2] > padded_w
+        or crop_px[3] > padded_h
+        or crop_px[2] <= crop_px[0]
+        or crop_px[3] <= crop_px[1]
+    ):
+        padded = pad_image(image, top=top, bottom=bottom, left=left, right=right, fill=fill)
+        return crop_image_by_normalized_box(padded, crop_box)
+    crop_left, crop_top, crop_right, crop_bottom = crop_px
+    rgb = ImageColor.getrgb(fill)
+    if image.mode == "RGBA":
+        fill_color: tuple[int, ...] | int = (*rgb[:3], 255)
+    elif image.mode == "L":
+        fill_color = int(0.299 * rgb[0] + 0.587 * rgb[1] + 0.114 * rgb[2])
+    else:
+        fill_color = tuple(rgb[:3])
+    result = Image.new(image.mode, (crop_right - crop_left, crop_bottom - crop_top), fill_color)
+    result.paste(image, (left - crop_left, top - crop_top))
+    return result
+
+
 def crop_image_by_normalized_box(
     image: Image.Image,
     crop_box: tuple[float, float, float, float] | None,

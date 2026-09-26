@@ -1292,12 +1292,8 @@ def _build_processed_image(
         )
     else:
         crop_box, outer_pad = crop_plan
-    top, bottom, left, right = outer_pad
-    if top or bottom or left or right:
-        fill = str(settings.get("crop_padding_fill") or "#FFFFFF").strip() or "#FFFFFF"
-        image = _pad_image(image, top=top, bottom=bottom, left=left, right=right, fill=fill)
-
-    image = _crop_image_by_normalized_box(image, crop_box)
+    fill = str(settings.get("crop_padding_fill") or "#FFFFFF").strip() or "#FFFFFF"
+    image = _pad_and_crop_image(image, outer_pad, crop_box, fill=fill)
     image = _resize_fit(image, max(0, int(settings.get("max_long_edge") or 0)))
     return image
 
@@ -1336,7 +1332,9 @@ def render_video_frame(
     from .pipeline import build_default_image_proc_pipeline
 
     rendered_context = build_default_image_proc_pipeline(settings.get(PIPELINE_STAGE_ORDER_KEY)).process(context)
-    return rendered_context.image.convert("RGB")
+    rendered = rendered_context.image
+    # 管线输出已是独立 RGB 图时直接返回（source_image 已在上面复制），省去一次整图复制。
+    return rendered if rendered.mode == "RGB" and rendered is not job.source_image else rendered.convert("RGB")
 
 
 def _ensure_even_size(width: int, height: int) -> tuple[int, int]:

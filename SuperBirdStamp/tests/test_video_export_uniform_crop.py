@@ -197,3 +197,40 @@ def test_persisted_crop_plans_skip_second_precompute_until_inputs_change(tmp_pat
     _run(_jobs(ratio=1.5))
     assert calls == [3, 3, 3, 3]
 
+
+def test_pad_and_crop_matches_pad_then_crop() -> None:
+    from birdstamp.gui import editor_core as core
+
+    base_rgb = Image.linear_gradient("L").resize((90, 60)).convert("RGB")
+    images = {
+        "RGB": base_rgb,
+        "RGBA": base_rgb.convert("RGBA"),
+        "L": base_rgb.convert("L"),
+    }
+    pads = [(0, 0, 0, 0), (10, 5, 20, 0), (0, 12, 0, 7), (8, 8, 8, 8)]
+    boxes = [None, (0.0, 0.0, 1.0, 1.0), (0.1, 0.2, 0.7, 0.9), (0.0, 0.0, 0.5, 0.5), (0.3, 0.1, 1.0, 0.6), (-0.2, 0.1, 0.8, 1.2)]
+    for mode, image in images.items():
+        for pad in pads:
+            for box in boxes:
+                expected = core.crop_image_by_normalized_box(
+                    core.pad_image(image, top=pad[0], bottom=pad[1], left=pad[2], right=pad[3], fill="#336699"), box
+                )
+                actual = core.pad_and_crop_image(image, pad, box, fill="#336699")
+                assert actual.mode == expected.mode and actual.size == expected.size, (mode, pad, box)
+                assert actual.tobytes() == expected.tobytes(), (mode, pad, box)
+
+
+def test_render_video_frame_returns_independent_rgb_image() -> None:
+    source = Image.new("RGB", (60, 40), "#224466")
+    job = VideoFrameJob(
+        path=Path("frame.jpg"),
+        settings={"draw_banner": False, "draw_text": False, "draw_focus": False, "ratio": "no_crop", "max_long_edge": 0},
+        raw_metadata={},
+        metadata_context={},
+        source_image=source,
+    )
+    rendered = render_video_frame(job)
+    assert rendered.mode == "RGB"
+    assert rendered is not source
+    rendered.paste((255, 0, 0), (0, 0, 10, 10))
+    assert source.getpixel((0, 0)) == (0x22, 0x44, 0x66)

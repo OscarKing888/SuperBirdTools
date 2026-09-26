@@ -85,10 +85,6 @@ class ImageProcTemplateCropStage(ImageProcStage):
         context.outer_pad = outer_pad
         context.precomputed["crop_plan"] = (crop_box, outer_pad)
 
-        top, bottom, left, right = outer_pad
-        image = context.image
-        if top or bottom or left or right:
-            fill = str(settings.get("crop_padding_fill") or "#FFFFFF").strip() or "#FFFFFF"
-            image = core._pad_image(image, top=top, bottom=bottom, left=left, right=right, fill=fill)
-        context.image = core._crop_image_by_normalized_box(image, crop_box)
+        fill = str(settings.get("crop_padding_fill") or "#FFFFFF").strip() or "#FFFFFF"
+        context.image = core._pad_and_crop_image(context.image, outer_pad, crop_box, fill=fill)
         return context

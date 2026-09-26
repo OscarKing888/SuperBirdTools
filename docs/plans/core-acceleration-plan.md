@@ -592,6 +592,21 @@ def to_qimage(buf: PixelBuffer) -> "QImage":  # 仅工作线程调用；一次�
 
 回归：相关定向测试全部通过；SuperViewer/app_common 全量相对基线无新增失败；BirdStamp（271 项）与 build_tools 全量通过；BirdStamp 配置与模板文件无改动。
 
+### 7.10 P-6 / P-7 实施记录（2026-09-26）
+
+**P-6（导出解码与预计算）**
+- `_decode_standard`：就地按 EXIF 旋转后只做一次 `convert("RGB")`，去掉原来的三份整图拷贝；8 种方向与旧实现逐字节一致。rawpy 输出已是 RGB 时不再复制。32.7 MP JPG `decode_image` 631 → 440 ms（容器）。
+- 图片/GIF 导出的统一裁切/去抖预计算移到后台线程（通用 `_run_blocking_task_off_gui_thread`，GIF 编码共用），GUI 线程按序应用进度；作业不携带 GUI 位图，后台只读原图文件。
+- 视频（保留缓存）：预计算结果连同输入签名（源文件签名、逐图设置、元数据、鸟体识别模型签名、缓存版本）写入源帧缓存桶的 `crop_plans.json`；输入不变时直接复用，不再为校验帧缓存而完整解码每张原图。样本 3 张（含 ARW）全部命中缓存的第二次导出 2623 → 4 ms。设置、文件或模型变化、有脏照片或临时缓存模式时照常重算。
+- 未做：用降采样图做预计算（会改变鸟体识别和参考区 patch 结果，进而改变裁切）；跨预计算与渲染的整图缓存（批量时内存不可控，命中率低）。
+
+**P-7（导出管线整图拷贝）**
+- `pad_and_crop_image`：裁切区落在补边画布内时只分配裁切尺寸画布并贴图，与“先补边再裁切”逐字节相同（RGB/RGBA/L、多种补边与裁切框含越界回退均有测试）；32.7 MP 带补边裁切 114 → 42 ms，并免去约 171 MB 的补边中间图。
+- `render_video_frame`：管线输出已是独立 RGB 图时不再 `convert("RGB")` 复制。
+- **未做，需用户决定**：图片导出复用预览阶段的鸟体框。预览在 ≤2048 缩小图上识别，导出在原图上识别，结果可能有细微差别，复用会改变导出裁切的像素结果；收益是批量导出时省去逐张 YOLO（并且当前被锁串行）。
+
+回归：BirdStamp 276 项与 build_tools 全部通过；SuperViewer/app_common 相对基线无新增失败；BirdStamp 配置与模板无改动。
+
 ### 7.4 暂不纳入范围
 
 GUI 重写或框架更换；Rust；GPU/Metal/CUDA 图像路径；自研 JPEG/RAW/HEIF 解码器；新增色彩管理或导出 EXIF/ICC（属于产品功能，不算等价迁移）；YOLO 或推理优化；ExifTool 替换；`_panel.py` 拆分等无关重构；独立仓库 SuperBirdViewer/SuperBirdStamp 的同步；Intel 或 universal2 macOS 包；锁文件引入（建议另立议题）。
