@@ -411,6 +411,14 @@ def pil_to_qpixmap(image: Image.Image, *, max_pixels: int | None = None) -> QPix
             target_w = max(1, int(image.width * scale))
             target_h = max(1, int(image.height * scale))
             image = image.resize((target_w, target_h), Image.Resampling.LANCZOS)
+    if image.mode == "RGB":
+        # 不透明图直接走 RGB888：省去 RGBA 转换副本和 QImage 深拷贝。fromImage 在返回前
+        # 已把像素复制进 QPixmap，因此 data 只需在本调用期间存活。
+        data = image.tobytes("raw", "RGB")
+        q_image = QImage(data, image.width, image.height, image.width * 3, QImage.Format.Format_RGB888)
+        pixmap = QPixmap.fromImage(q_image)
+        del q_image, data
+        return pixmap
     rgba = image.convert("RGBA")
     data = rgba.tobytes("raw", "RGBA")
     q_image = QImage(data, rgba.width, rgba.height, QImage.Format.Format_RGBA8888)

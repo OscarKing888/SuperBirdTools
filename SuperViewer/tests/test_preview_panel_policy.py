@@ -419,3 +419,36 @@ def test_raw_fast_frame_never_extracts_in_gui_thread(monkeypatch, tmp_path: Path
         panel.shutdown()
         panel.close()
     assert app is QApplication.instance()
+
+
+def test_worker_uploads_rgb32_so_gui_pixmap_needs_no_format_conversion(monkeypatch, tmp_path: Path) -> None:
+    app = QApplication.instance() or QApplication([])
+    source = QImage(40, 30, preview_panel._qimage_rgb888_format())
+    source.fill(0x336699)
+    converted = preview_panel._qimage_for_pixmap_upload(source)
+    rgb32 = getattr(getattr(QImage, "Format", QImage), "Format_RGB32")
+    assert converted.format() == rgb32
+    assert converted == source.convertToFormat(rgb32)
+
+    photo = tmp_path / "large.png"
+    photo.write_bytes(b"placeholder")
+    monkeypatch.setattr(preview_panel, "_load_full_preview_qimage", lambda path: source)
+    received: list = []
+    loader = preview_panel._FullPreviewLoader(1, str(photo))
+    loader.loaded.connect(lambda token, path, qimg, ms: received.append(qimg))
+    loader.start()
+    assert loader.wait(3000)
+    assert _process_events_until(app, lambda: bool(received))
+    assert received[0].format() == rgb32
+    loader.deleteLater()
+
+
+def test_qt_reader_full_preview_returns_owned_rgb32_without_extra_copy(tmp_path: Path) -> None:
+    from PIL import Image
+
+    photo = tmp_path / "photo.jpg"
+    Image.new("RGB", (320, 200), (40, 90, 160)).save(photo, quality=95)
+    qimg = preview_panel._load_full_preview_qimage(str(photo))
+    assert qimg is not None and (qimg.width(), qimg.height()) == (320, 200)
+    color = qimg.pixelColor(10, 10)
+    assert abs(color.red() - 40) <= 2 and abs(color.green() - 90) <= 2 and abs(color.blue() - 160) <= 2
