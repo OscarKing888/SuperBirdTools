@@ -2136,6 +2136,9 @@ class BirdStampEditorWindow(
             self.preview_label.display_scale_percent_changed.connect(self._on_workspace_state_changed)
         self._sync_preview_scale_combo(self.preview_label.current_display_scale_percent())
         right_layout.addWidget(self.preview_label, stretch=1)
+        from .editor_sequence_transport import SequenceTransport
+        self.sequence_transport = SequenceTransport(self)
+        right_layout.addWidget(self.sequence_transport.panel)
 
         return right_panel
 
@@ -3247,7 +3250,8 @@ class BirdStampEditorWindow(
         global_changed = self._refresh_global_export_settings_snapshot()
         if global_changed:
             self._mark_all_photo_exports_dirty()
-        if self.current_path is not None and not self._is_placeholder_active():
+        # 独立去抖动页的选区/强度变化不写回逐图模板裁切，播放时 UI 仍可能停在上一张。
+        if self.current_path is not None and not self._is_placeholder_active() and not self._dejitter_tab_active():
             key = _path_key(self.current_path)
             snapshot = self._photo_override_settings_from_snapshot(self._build_current_render_settings())
             previous_snapshot = self.photo_render_overrides.get(key)
@@ -5003,6 +5007,8 @@ class BirdStampEditorWindow(
         if not isinstance(raw, str):
             return
         path = Path(raw)
+        if self._select_sequence_preview(path):
+            return
         if not path.exists():
             self._show_error("文件不存在", str(path))
             return
@@ -5170,7 +5176,7 @@ class BirdStampEditorWindow(
         with birdstamp_perf.span("select.render_preview", path=str(path)):
             self.render_preview()
 
-    def _begin_photo_selection(self, path: Path, current: QTreeWidgetItem) -> None:
+    def _begin_photo_selection(self, path: Path, current: QTreeWidgetItem, *, preserve_preview_view: bool = False) -> None:
         """选中即切换编辑目标，异步像素未到达时不会继续修改上一张照片。"""
         with birdstamp_perf.span("select.activate", path=str(path)):
             self.placeholder_path = None
@@ -5186,7 +5192,7 @@ class BirdStampEditorWindow(
             self.preview_pixmap = None
             self.preview_overlay_state = EditorPreviewOverlayState()
             self._invalidate_original_mode_cache()
-            self._refresh_preview_label(reset_view=True)
+            self._refresh_preview_label(reset_view=not preserve_preview_view, preserve_view=preserve_preview_view)
             with birdstamp_perf.span("select.metadata_snapshot", path=str(path)):
                 self.current_raw_metadata = self._metadata_snapshot_for_selection(path)
             with birdstamp_perf.span("select.context"):

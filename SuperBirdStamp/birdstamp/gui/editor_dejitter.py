@@ -2,10 +2,11 @@ from __future__ import annotations
 
 from collections import OrderedDict
 from pathlib import Path
+from time import monotonic
 
 from PyQt6.QtGui import QPixmap
-from PyQt6.QtWidgets import QButtonGroup, QCheckBox, QComboBox, QFileDialog, QListWidget, QGroupBox, QHBoxLayout, QLabel, QPushButton, QSlider, QVBoxLayout, QWidget
-from PyQt6.QtCore import Qt
+from PyQt6.QtWidgets import QTabBar, QCheckBox, QComboBox, QFileDialog, QListWidget, QGroupBox, QHBoxLayout, QLabel, QPushButton, QSlider, QVBoxLayout, QWidget
+from PyQt6.QtCore import Qt, QTimer
 
 from birdstamp.export_stage.sequence_preview import sequence_input_key
 from birdstamp.image_dejitter.region_tracking_result import image_file_signature
@@ -28,6 +29,12 @@ class _BirdStampDejitterMixin:
         self._sequence_shutdown = False
         self._sequence_preview = None
         self._sequence_frames = OrderedDict()
+        self._sequence_quick_frames = {}
+        self._sequence_validated_at = 0
+        self._sequence_upgrade_timer = QTimer(self)
+        self._sequence_upgrade_timer.setSingleShot(True)
+        self._sequence_upgrade_timer.setInterval(120)
+        self._sequence_upgrade_timer.timeout.connect(self._upgrade_sequence_frame)
         self._sequence_frame_bytes = 0
         self._sequence_pending_path = None
         self._sequence_message = '只需在一张参考图框选一次，自动匹配整组照片。'
@@ -116,20 +123,14 @@ class _BirdStampDejitterMixin:
         bar = QWidget()
         row = QHBoxLayout(bar)
         row.setContentsMargins(0, 0, 0, 0)
-        row.addWidget(QLabel('去抖动'))
-        self.dejitter_view_group = QButtonGroup(self)
-        self.dejitter_view_buttons = {}
-        for view, label in (('edit', '编辑构图'), ('result', '成片预览')):
-            button = QPushButton(label)
-            button.setCheckable(True)
-            self.dejitter_view_group.addButton(button)
-            self.dejitter_view_buttons[view] = button
-            button.clicked.connect(lambda checked, mode=view: self._set_dejitter_view(mode))
-            row.addWidget(button)
-        self.dejitter_view_buttons['edit'].setChecked(True)
-        self.dejitter_preview_status = QLabel()
-        self.dejitter_preview_status.setWordWrap(True)
-        row.addWidget(self.dejitter_preview_status, 1)
+        self.dejitter_view_tabs = QTabBar()
+        self.dejitter_view_tabs.setExpanding(False)
+        self.dejitter_view_tabs.addTab('编辑构图')
+        self.dejitter_view_tabs.addTab('成片预览')
+        self.dejitter_view_tabs.currentChanged.connect(
+            lambda index: self._set_dejitter_view('result' if index else 'edit'))
+        row.addWidget(self.dejitter_view_tabs)
+        row.addStretch(1)
         bar.setVisible(False)
         self.dejitter_view_bar = bar
         return bar
@@ -144,6 +145,8 @@ class _BirdStampDejitterMixin:
     def _on_export_tab_changed(self, _index):
         if not hasattr(self, 'dejitter_view_bar'):
             return
+        if hasattr(self, 'sequence_transport'):
+            self.sequence_transport.stop(commit=False)
         active = self._dejitter_tab_active()
         if active != self._last_dejitter_tab:
             if active:
@@ -156,12 +159,83 @@ class _BirdStampDejitterMixin:
         self._last_dejitter_tab = active
         self.dejitter_view_bar.setVisible(active)
         self._update_dejitter_controls()
+        self._restore_selected_preview_source()
         self._refresh_preview_label(preserve_view=True)
+        if hasattr(self, 'sequence_transport'):
+            self.sequence_transport.sync()
 
     def _set_dejitter_view(self, view):
+        if hasattr(self, 'sequence_transport'):
+            self.sequence_transport.stop(commit=False)
         self._dejitter_view = view
-        self.dejitter_view_buttons[view].setChecked(True)
+        if view == 'result':
+            self._cancel_preview_decode()
+            self._cancel_async_bird_detect()
+            self._preview_debounce_timer.stop()
+        self.dejitter_view_tabs.blockSignals(True)
+        self.dejitter_view_tabs.setCurrentIndex(1 if view == 'result' else 0)
+        self.dejitter_view_tabs.blockSignals(False)
+        self._restore_selected_preview_source()
         self._refresh_preview_label(reset_view=True)
+        if hasattr(self, 'sequence_transport'):
+            self.sequence_transport.sync()
+
+    def _restore_selected_preview_source(self):
+        if not self._sequence_result_mode() and self.current_source_image is None:
+            item = self.photo_list.currentItem()
+            if item is not None:
+                self._on_photo_selected(item, None)
+
+    def _sequence_fast_preview_active(self):
+        return hasattr(self, 'sequence_transport') and self.sequence_transport.active
+
+    def _select_sequence_preview(self, path):
+        # 成片切图不进入模板渲染、元数据查询或识别管线。
+        if not self._sequence_result_mode() and not (
+                self._dejitter_tab_active() and self._sequence_fast_preview_active()):
+            return False
+        transport = self.sequence_transport
+        if transport.active and not transport.selecting:
+            transport.stop(commit=False)
+        self._cancel_preview_decode()
+        self._cancel_async_bird_detect()
+        self._preview_debounce_timer.stop()
+        item = self._find_photo_item_by_path(path)
+        if not transport.active and item is not None:
+            self._begin_photo_selection(path, item, preserve_preview_view=True)
+        else:
+            self.current_path = path
+            if self.current_source_image is not None:
+                self.current_source_image.close()
+            self.current_source_image = None
+            self.current_source_full_size = None
+            self.current_raw_metadata = self._metadata_snapshot_for_selection(path)
+            self.current_file_label.setText(f'当前照片: {path}')
+        transport.sync()
+        self._refresh_preview_label(preserve_view=True)
+        return True
+
+    def _validate_sequence_preview(self):
+        sequence = self._sequence_preview
+        if sequence is None:
+            return False
+        if (tuple(sequence.jobs) != tuple(path_key(path) for path in self._list_photo_paths())
+                or not sequence.files_current()):
+            self._invalidate_sequence_preview()
+            return False
+        self._sequence_validated_at = monotonic()
+        return True
+
+    def _upgrade_sequence_frame(self):
+        if self._sequence_shutdown or self._sequence_fast_preview_active() or not self._sequence_result_mode():
+            return
+        key = path_key(self.current_path) if self.current_path else ''
+        if not self._sequence_preview or key not in self._sequence_preview.jobs or key in self._sequence_frames:
+            return
+        if self._sequence_worker is None:
+            self._launch_sequence_worker()
+        else:
+            self._sequence_pending_path = self.current_path
 
     def _on_dejitter_draw(self):
         self._set_dejitter_view('edit')
@@ -172,6 +246,10 @@ class _BirdStampDejitterMixin:
             self._refresh_preview_label(preserve_view=True)
 
     def _invalidate_sequence_preview(self, *, shutdown=False):
+        self._sequence_upgrade_timer.stop()
+        self._sequence_quick_frames.clear()
+        if hasattr(self, 'sequence_transport'):
+            self.sequence_transport.set_frames(None, {})
         self._sequence_epoch += 1
         self._sequence_shutdown |= shutdown
         self._sequence_preview = None
@@ -182,6 +260,8 @@ class _BirdStampDejitterMixin:
             self._sequence_worker.cancel()
         self._sequence_message = '设置已变化，请重新分析；旧成片已失效。'
         self._update_dejitter_controls()
+        if hasattr(self, 'preview_label') and self._sequence_result_mode():
+            self._show_sequence_preview_result(preserve_view=True)
 
     def _update_dejitter_controls(self):
         if not hasattr(self, 'dejitter_effective_status'):
@@ -206,13 +286,15 @@ class _BirdStampDejitterMixin:
             return
         worker = self._sequence_worker
         stopping = worker is not None and worker.isInterruptionRequested()
-        self.dejitter_preprocess_btn.setText('正在停止…' if stopping else ('取消导出' if self._sequence_exporting else '取消分析') if worker else '分析并预览成片')
-        self.dejitter_preprocess_btn.setEnabled(not stopping and not self._sequence_shutdown
+        upgrading = worker is not None and self._sequence_preview is not None and not self._sequence_exporting
+        self.dejitter_preprocess_btn.setText('正在停止…' if stopping else '分析并预览成片' if upgrading or not worker
+                                           else '取消导出' if self._sequence_exporting else '取消分析')
+        self.dejitter_preprocess_btn.setEnabled(not stopping and not upgrading and not self._sequence_shutdown
                                                and (worker is not None or (self.current_path is not None and bool(regions))))
         self.dejitter_export_btn.setEnabled(worker is None and self._sequence_preview is not None and not self._sequence_shutdown)
         self.dejitter_tracking_status.setText(self._sequence_message)
-        if hasattr(self, 'dejitter_preview_status'):
-            self.dejitter_preview_status.setText(self._sequence_message)
+        if hasattr(self, 'sequence_transport'):
+            self.sequence_transport.sync()
 
     def _on_dejitter_analyze(self):
         if self._sequence_shutdown:
@@ -245,6 +327,7 @@ class _BirdStampDejitterMixin:
         )
         self._sequence_worker = worker
         worker.ready.connect(self._on_sequence_ready)
+        worker.quick_ready.connect(self._on_sequence_quick_ready)
         worker.failed.connect(self._on_sequence_failed)
         worker.progress.connect(self._on_sequence_progress)
         worker.finished.connect(self._on_sequence_finished)
@@ -258,6 +341,8 @@ class _BirdStampDejitterMixin:
 
     def _on_sequence_progress(self, token, message):
         if self._accept_sequence_signal(token):
+            if self._sequence_preview is not None and not self._sequence_exporting:
+                return  # 清晰帧升级不覆盖已经完成的整组分析摘要。
             self._sequence_message = message
             self._update_dejitter_controls()
 
@@ -266,6 +351,19 @@ class _BirdStampDejitterMixin:
             self._sequence_message = f'去抖动任务失败：{message}'
             self._sequence_pending_path = None
             self._update_dejitter_controls()
+
+    def _on_sequence_quick_ready(self, token, sequence, frames):
+        if not self._accept_sequence_signal(token):
+            return
+        seeds = self._build_dejitter_seeds(self._list_photo_paths())
+        if not sequence.files_current() or sequence_input_key(seeds) != sequence.input_key:
+            self._invalidate_sequence_preview()
+            return
+        self._sequence_preview = sequence
+        self._sequence_quick_frames = frames
+        self.sequence_transport.set_frames(sequence, frames)
+        self._sequence_validated_at = monotonic()
+        self._on_sequence_ready(token, sequence, None)
 
     def _on_sequence_ready(self, token, sequence, frame):
         if not self._accept_sequence_signal(token):
@@ -279,15 +377,16 @@ class _BirdStampDejitterMixin:
         if sequence_input_key(seeds, self.template_paths) != sequence.input_key:
             self._invalidate_sequence_preview()
             return
-        key = path_key(frame.path)
-        old = self._sequence_frames.pop(key, None)
-        if old is not None:
-            self._sequence_frame_bytes -= old.image.sizeInBytes()
-        self._sequence_frames[key] = frame
-        self._sequence_frame_bytes += frame.image.sizeInBytes()
-        while len(self._sequence_frames) > 1 and self._sequence_frame_bytes > editor_options.DEJITTER_PREVIEW_CACHE_BYTES:
-            _, removed = self._sequence_frames.popitem(last=False)
-            self._sequence_frame_bytes -= removed.image.sizeInBytes()
+        if frame is not None:
+            key = path_key(frame.path)
+            old = self._sequence_frames.pop(key, None)
+            if old is not None:
+                self._sequence_frame_bytes -= old.image.sizeInBytes()
+            self._sequence_frames[key] = frame
+            self._sequence_frame_bytes += frame.image.sizeInBytes()
+            while len(self._sequence_frames) > 1 and self._sequence_frame_bytes > editor_options.DEJITTER_PREVIEW_CACHE_BYTES:
+                _, removed = self._sequence_frames.popitem(last=False)
+                self._sequence_frame_bytes -= removed.image.sizeInBytes()
         self._bird_box_cache.update(sequence.bird_boxes)
         self._reference_tracking_results = dict(sequence.tracking)
         self._reference_tracking_definition = self._reference_tracking_input()
@@ -296,6 +395,7 @@ class _BirdStampDejitterMixin:
         failed = sum(r.matched_count < len(r.boxes) for r in sequence.tracking.values())
         self._sequence_message = f'整组 {len(sequence.jobs)} 张已分析；统一 {sequence.output_size[0]} × {sequence.output_size[1]}；{failed} 张存在部分选区失配。'
         self._reference_tracking_message = self._sequence_message
+        self._set_status(self._sequence_message)
         self._update_dejitter_controls()
         self._refresh_preview_label(preserve_view=True)
 
@@ -311,21 +411,22 @@ class _BirdStampDejitterMixin:
         self._update_dejitter_controls()
         if (not self._sequence_shutdown and pending is not None and self._sequence_preview is not None
                 and self._sequence_result_mode() and self.current_path == pending
-                and path_key(pending) not in self._sequence_frames):
+                and path_key(pending) not in self._sequence_frames and not self._sequence_fast_preview_active()):
             self._launch_sequence_worker()
 
     def _show_sequence_preview_result(self, *, reset_view=False, preserve_view=False, **_kwargs):
         if not self._sequence_result_mode():
             return False
         sequence = self._sequence_preview
-        if sequence is not None and tuple(sequence.jobs) != tuple(path_key(path) for path in self._list_photo_paths()):
-            self._invalidate_sequence_preview()
-            sequence = None
-        if sequence is not None and not sequence.files_current():
-            self._invalidate_sequence_preview()
-            sequence = None
+        if sequence is not None and (not self._sequence_fast_preview_active() or monotonic() - self._sequence_validated_at > 1):
+            if not self._validate_sequence_preview():
+                sequence = None
         key = path_key(self.current_path) if self.current_path else ''
-        frame = self._sequence_frames.get(key) if sequence else None
+        fast = self._sequence_fast_preview_active()
+        frame = (self._sequence_quick_frames.get(key) if fast else
+                 self._sequence_frames.get(key) or self._sequence_quick_frames.get(key)) if sequence else None
+        if sequence is not None and key in sequence.jobs and key not in self._sequence_frames and not fast:
+            self._sequence_upgrade_timer.start()
         options = self._build_preview_overlay_options()
         options.show_reference_regions = False
         options.show_crop_effect = False
@@ -333,7 +434,8 @@ class _BirdStampDejitterMixin:
         self.preview_label.canvas.set_edit_mode(EDIT_MODE_NONE)
         state = EditorPreviewOverlayState()
         if frame is not None:
-            self._sequence_frames.move_to_end(key)
+            if key in self._sequence_frames:
+                self._sequence_frames.move_to_end(key)
             crop, (pt, pb, pl, pr) = frame.crop_plan
             width, height = frame.source_size
             job = sequence.jobs[key]
@@ -354,13 +456,11 @@ class _BirdStampDejitterMixin:
         else:
             pixmap = None
             self.preview_label.set_cropped_size(None, None)
-            if sequence is not None and key in sequence.jobs:
-                if self._sequence_worker is None:
-                    self._launch_sequence_worker()
-                else:
-                    self._sequence_pending_path = self.current_path
+            # 未分析或尚无结果时保持待更新状态；所有清晰请求由防抖定时器调度。
         self.preview_label.apply_overlay_state(state)
         self.preview_label.set_source_mode('去抖动成片' if frame else '成片待更新')
+        if frame is not None and self.preview_label.canvas._source_pixmap is None:
+            reset_view, preserve_view = True, False
         self.preview_label.set_source_pixmap(pixmap, reset_view=reset_view, preserve_view=preserve_view,
                                              preserve_scale=preserve_view)
         return True
@@ -407,6 +507,8 @@ class _BirdStampDejitterMixin:
         if sequence is None:
             self._show_error('请先分析', '请先分析整组并检查成片。')
             return
+        self.sequence_transport.stop(commit=False)
+        self._sequence_upgrade_timer.stop()
         destination = QFileDialog.getExistingDirectory(self, '去抖动导出全部：选择保存目录')
         if not destination:
             return
@@ -432,6 +534,7 @@ class _BirdStampDejitterMixin:
         if not self._dejitter_tab_active() or self._sequence_result_mode():
             return False
         source = self.current_source_image
+        quick = self._sequence_quick_frames.get(path_key(self.current_path)) if self.current_path and (source is None or self._sequence_fast_preview_active()) else None
         options = self._build_preview_overlay_options()
         options.show_crop_effect = False
         self.preview_label.apply_overlay_options(options)
@@ -444,8 +547,8 @@ class _BirdStampDejitterMixin:
         self.preview_label.canvas.set_reference_region_labels(labels)
         state = EditorPreviewOverlayState(reference_regions=self._visible_dejitter_reference_regions(),
                                           crop_effect_box=(0, 0, 1, 1))
-        if source is not None:
-            width, height = self._crop_display_source_size() or source.size
+        if source is not None or quick is not None:
+            width, height = quick.source_size if quick else self._crop_display_source_size() or source.size
             state.focus_box = editor_core.resolve_focus_box_after_processing(
                 self.current_raw_metadata, source_width=width, source_height=height, crop_box=None,
                 outer_pad=(0, 0, 0, 0), apply_ratio_crop=False,
@@ -458,7 +561,8 @@ class _BirdStampDejitterMixin:
         if source is not self._dejitter_edit_source:
             self._dejitter_edit_source = source
             self._dejitter_edit_pixmap = pil_to_qpixmap(source) if source is not None else None
-        self.preview_label.set_source_pixmap(self._dejitter_edit_pixmap,
+        pixmap = QPixmap.fromImage(quick.source_image) if quick else self._dejitter_edit_pixmap
+        self.preview_label.set_source_pixmap(pixmap,
                                              reset_view=reset_view, preserve_view=preserve_view,
                                              preserve_scale=preserve_view)
         return True

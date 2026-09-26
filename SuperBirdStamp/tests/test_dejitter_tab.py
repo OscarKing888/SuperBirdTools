@@ -116,7 +116,7 @@ def test_tab_switch_preserves_canvas_modes_and_all_auxiliary_controls(window, mo
     assert window.preview_grid_combo.currentData() == 'thirds'
     window.export_tabs.setCurrentIndex(1)
     assert canvas.edit_mode() == EDIT_MODE_NONE
-    window.dejitter_view_buttons['edit'].click()
+    window.dejitter_view_tabs.setCurrentIndex(0)
     assert canvas.edit_mode() == EDIT_MODE_REFERENCE_REGION
     assert len(canvas.reference_regions()) == 2
 
@@ -129,7 +129,7 @@ def test_result_switching_photo_maps_focus_bird_and_grid_through_final_crop(wind
     window.current_path = paths[1]
     window.current_source_image = target
     window._refresh_preview_label(preserve_view=True)
-    wait_until(lambda: window._sequence_worker is None)
+    wait_until(lambda: window._sequence_worker is None and path_key(paths[1]) in window._sequence_frames)
     result = window._sequence_frames[path_key(paths[1])]
     crop, (pt, pb, pl, pr) = result.crop_plan
     expected = editor_core.transform_source_box_after_crop_padding(
@@ -140,7 +140,7 @@ def test_result_switching_photo_maps_focus_bird_and_grid_through_final_crop(wind
     window.show_focus_box_check.setChecked(False)
     assert not window.preview_label.canvas._show_focus_box
     # 切回源图视图后显示源图跟踪坐标，不保留成片裁切坐标。
-    window.dejitter_view_buttons['edit'].click()
+    window.dejitter_view_tabs.setCurrentIndex(0)
     assert len(window.preview_label.canvas.reference_regions()) == 2
     assert window.preview_label.canvas.edit_mode() == EDIT_MODE_NONE
 
@@ -177,7 +177,7 @@ def test_result_cache_is_bounded(window, monkeypatch):
     window.current_path = paths[1]
     window.current_source_image = target
     window._refresh_preview_label()
-    wait_until(lambda: window._sequence_worker is None)
+    wait_until(lambda: window._sequence_worker is None and path_key(paths[1]) in window._sequence_frames)
     assert list(window._sequence_frames) == [path_key(paths[1])]
 
 
@@ -220,14 +220,18 @@ def test_analysis_error_is_visible_and_releases_worker(window, monkeypatch):
 
 
 @pytest.mark.parametrize('closing', [False, True])
-def test_cancel_and_close_hold_worker_until_real_finished_and_ignore_late_result(window, monkeypatch, closing):
+@pytest.mark.parametrize('signal_kind', ['quick', 'full'])
+def test_cancel_and_close_hold_worker_until_real_finished_and_ignore_late_result(window, monkeypatch, closing, signal_kind):
     setup_tab(window, monkeypatch)
     release = threading.Event()
     emitted = threading.Event()
 
     class DelayedWorker(EditorSequencePreviewWorker):
         def run(self):
-            self.ready.emit(self.token, None, None)
+            if signal_kind == 'quick':
+                self.quick_ready.emit(self.token, None, {})
+            else:
+                self.ready.emit(self.token, None, None)
             emitted.set()
             release.wait(5)
 
@@ -302,7 +306,7 @@ def test_list_deletes_selected_region_then_last_region_and_invalidates_result(wi
     assert window._dejitter_reference_regions == (REGIONS[1],)
     assert window._sequence_preview is None
     assert not window.dejitter_export_btn.isEnabled()
-    window.dejitter_view_buttons['edit'].click()
+    window.dejitter_view_tabs.setCurrentIndex(0)
     assert window.preview_label.canvas.reference_regions() == (REGIONS[1],)
     window.dejitter_region_list.item(0).setSelected(True)
     window.dejitter_delete_region_btn.click()

@@ -1,5 +1,8 @@
 {
   "dejitter_reference_strength": 100,
+  "dejitter_quick_max_edge": 768,
+  "dejitter_quick_cache_mb": 64,
+  "dejitter_playback_fps": 8,
   "dejitter_preview_max_edge": 1600,
   "dejitter_preview_cache_mb": 64,
   "text_scale_slider": {"minimum": 25, "maximum": 300, "default": 100, "step": 1},

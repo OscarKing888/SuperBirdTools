@@ -2,6 +2,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import threading
+import math
+
+from .editor_utils import path_key
 
 from PIL import Image
 from PyQt6.QtCore import QThread, pyqtSignal
@@ -18,10 +21,12 @@ class SequencePreviewFrame:
     source_size: tuple
     output_size: tuple
     crop_plan: tuple
+    source_image: QImage | None = None
 
 
 class EditorSequencePreviewWorker(QThread):
     ready = pyqtSignal(int, object, object)
+    quick_ready = pyqtSignal(int, object, object)
     progress = pyqtSignal(int, str)
     failed = pyqtSignal(int, str)
 
@@ -37,11 +42,49 @@ class EditorSequencePreviewWorker(QThread):
         self.requestInterruption()
 
     def run(self):
+        sources = {}
+        # 按组大小缩小快速预览，原图缩略图 + 对齐缩略图总量有明确上限。
+        edge = min(editor_options.DEJITTER_QUICK_MAX_EDGE,
+                   max(1, int(math.sqrt(editor_options.DEJITTER_QUICK_CACHE_BYTES /
+                                        (8 * max(1, len(self.seeds)))))))
+
+        def capture(path, image):
+            small = image.copy()
+            small.thumbnail((edge, edge), Image.Resampling.BILINEAR)
+            sources[path_key(path)] = small.convert('RGB')
+            small.close()
+
         try:
             sequence = self.sequence or prepare_sequence_preview(
                 self.seeds, self.template_paths, cancel_event=self.cancel_event,
                 progress=lambda text: self.progress.emit(self.token, text), bird_boxes=self.bird_boxes,
+                preview_source=capture,
             )
+            if self.cancel_event.is_set():
+                return
+            if sources:
+                frames = {}
+                for key, job in sequence.jobs.items():
+                    if self.cancel_event.is_set():
+                        return
+                    small = sources.pop(key)
+                    try:
+                        width, height = sequence.source_sizes[key]
+                        box = sequence.pixel_boxes[key]
+                        crop = tuple(value / (width if i % 2 == 0 else height)
+                                     for i, value in enumerate(box))
+                        scale = min(small.width / width, small.height / height)
+                        size = tuple(max(1, round(value * scale)) for value in sequence.output_size)
+                        with small.resize(size, Image.Resampling.BILINEAR,
+                                          box=tuple(value * (small.width if i % 2 == 0 else small.height)
+                                                    for i, value in enumerate(crop))) as aligned:
+                            frames[key] = SequencePreviewFrame(
+                                job.path, pil_qimage(aligned), (width, height), sequence.output_size,
+                                (crop, (0, 0, 0, 0)), pil_qimage(small))
+                    finally:
+                        small.close()
+                if not self.cancel_event.is_set():
+                    self.quick_ready.emit(self.token, sequence, frames)
             if self.cancel_event.is_set():
                 return
             self.progress.emit(self.token, '生成当前照片成片预览…')
@@ -62,6 +105,14 @@ class EditorSequencePreviewWorker(QThread):
         except Exception as exc:
             if not self.cancel_event.is_set():
                 self.failed.emit(self.token, str(exc))
+        finally:
+            for image in sources.values():
+                image.close()
+
+
+def pil_qimage(image):
+    return QImage(image.tobytes(), image.width, image.height, image.width * 3,
+                  QImage.Format.Format_RGB888).copy()
 
 
 class EditorSequenceExportWorker(QThread):

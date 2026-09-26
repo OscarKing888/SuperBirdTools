@@ -90,7 +90,7 @@ def common_alignment_crop(regions, tracking, source_sizes, reference_size, stren
 
 
 def prepare_sequence_preview(seeds, template_paths=None, *, cancel_event, progress=lambda message: None,
-                             bird_boxes=None) -> SequencePreview:
+                             bird_boxes=None, preview_source=None) -> SequencePreview:
     seeds = tuple(seeds)
     if not seeds:
         raise ValueError('请先导入照片。')
@@ -107,6 +107,8 @@ def prepare_sequence_preview(seeds, template_paths=None, *, cancel_event, progre
     with decode_image(reference, decoder='auto') as image:
         tracker = ReferenceRegionTracker(image, regions)
         reference_size = image.size
+        if preview_source is not None:
+            preview_source(reference, image)
     for index, seed in enumerate(seeds, 1):
         if cancel_event.is_set():
             raise VideoExportCancelledError('已取消去抖动分析。')
@@ -117,6 +119,8 @@ def prepare_sequence_preview(seeds, template_paths=None, *, cancel_event, progre
             with decode_image(seed.path, decoder='auto') as image:
                 tracked = tracker.track(image, cancelled=cancel_event.is_set)
                 sizes[frame_key] = image.size
+                if preview_source is not None:
+                    preview_source(seed.path, image)
         tracking[frame_key] = replace(tracked, signature=image_file_signature(seed.path))
         progress(f'对齐参考选区 {index}/{len(seeds)}')
     # 只挽救前后相邻帧均有证据的孤立遮挡，不将推测位移级联到其它失配帧。
