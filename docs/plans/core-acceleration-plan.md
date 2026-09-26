@@ -13,6 +13,7 @@
    - **P 轨（仅优化数据流）**：先做，风险低，也用作 A/B 的第二组对照（“只优化数据流版”）。
    - **N 轨（C++ 核心）**：受门槛 **G1** 约束。只有在 P 轨完成后，某阶段的剩余耗时仍主要落在“解码→缩放→方向→格式打包”这类可以融合的原生段上，并且原型微基准达到门槛，才进入 M1–M4。达不到门槛时，N 轨停止，本计划只交付 M0 和 P 轨的成果。这是预期内的合法结果。
 3. **首个执行任务是 M0-1**：建立可重复的基准脚本、样本清单和环境记录，全部复用现有 `perf_probe`。见第 8 节。
+3a. **M0-1 已完成首轮（2026-09-26）**：`benchmark/bench_imaging.py` 在 Linux 云容器上用用户提供的 JPG/ARW/HIF 跑出第一份相对数据（见 7.5）。RAW 提取与 JPEG draft 的问题都可以在 Python 层解决，N1 的预期收益下调。目标平台基线仍待在用户机器上运行。
 4. 如果 N 轨启动，首个原生切片的候选是 **N1 `decode_scaled`**：把 JPEG 或 RAW 内嵌 JPEG 的缩放解码、方向校正和显示格式打包融合为一次调用。Viewer 缩略图、Viewer 快速预览、BirdStamp 预览解码三处都能复用。它是否值得做，由 G1 决定。
 
 ---
@@ -338,10 +339,10 @@ def to_qimage(buf: PixelBuffer) -> "QImage":  # 仅工作线程调用；一次�
 
 | ID | 阶段 | 目标 | 实际/拟新增文件 | 依赖 | 接口变化 | 测试命令/步骤 | 验收标准 | 回退方式 | 复杂度 | 证据置信度 |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| M0-1 | M0 | 可重复的离线基准脚本与环境记录（见第 8 节） | 拟新增 `benchmarks/README.md`、`benchmarks/bench_imaging.py`、`benchmarks/samples.example.json`、`benchmarks/env_report.py` | 无 | 无（只调用现有函数） | `.venv` 解释器运行 `bench_imaging.py --manifest <外部样本清单> --out <临时目录>` | 见第 8 节 | 删除 `benchmarks/` | M | 高 |
+| M0-1 | M0 | 可重复的离线基准脚本与环境记录（见第 8 节）。**状态：已完成首轮**（Linux 容器，见 7.5）| `benchmark/README.md`、`benchmark/bench_imaging.py`、`benchmark/env_report.py`、`benchmark/results/` | 无 | 无（只调用现有函数） | `.venv` 解释器运行 `bench_imaging.py --manifest <外部样本清单> --out <临时目录>` | 见第 8 节 | 删除 `benchmark/` | M | 高 |
 | M0-2 | M0 | 补齐缺失的探针：canvas paint 耗时、GUI 事件循环心跳延迟、导出/GIF/视频/模板叠加分段，以及 RAW 提取的进程数与耗时 | `app_common/preview_canvas/canvas.py`、`app_common/thumb_stream.py`、`app_common/perf_probe.py`（加心跳辅助）、`birdstamp/export_stage/core.py`、`birdstamp/gif_export.py`、`gui/editor_template.py`，全部走 `perf_probe` 门控 | M0-1 | 无（探针关闭时零行为变化） | `QT_QPA_PLATFORM=offscreen` 跑 `test_preview_canvas_hot_path.py`、`test_image_pipeline.py`、`test_gif_export.py`、`test_video_export.py`；关闭探针时比对日志为空 | 探针关闭时行为和输出字节与改动前一致；开启时每段都有可解析的单行日志 | revert 单个 commit | M | 高 |
-| M0-3 | M0 | 建立样本集（在仓库外，记录 SHA-256）：高像素 JPEG（24/45/61MP）、ARW（含 JpgFromRaw 与仅有 PreviewImage 两类）、其他 RAW（CR3/NEF 各至少 1 个，如有）、HIF 24/45MP、PNG/TIFF >40MP、PSD 8/16-bit、渐进式 JPEG、方向 1..8、嵌入 ICC（sRGB/P3/AdobeRGB）、截断或损坏文件、中文路径和目录名、含 `.superpicky/report.db` 的根目录副本 | `benchmarks/samples.example.json`（只放清单格式，不放图片或私人路径） | M0-1 | 无 | 清单校验脚本逐项检查存在性与哈希 | 每类样本“已覆盖”或明确标注“未覆盖” | — | S | 中（取决于用户能提供的样本） |
-| M0-4 | M0 | 在 Windows x64 与 macOS arm64 各采集一次基线：冷/热缓存 × 每个场景（见 6.1）| 结果放仓库外；仓库内只提交 `benchmarks/results/<日期>-<平台>.json` 摘要（可选，需用户同意）| M0-2、M0-3 | 无 | 按 6.1 协议执行 | 每个指标都有 P50/P95、峰值 RSS 和样本标识；未跑到的平台标“未测” | — | M | — |
+| M0-3 | M0 | 建立样本集（在仓库外，记录 SHA-256）：高像素 JPEG（24/45/61MP）、ARW（含 JpgFromRaw 与仅有 PreviewImage 两类）、其他 RAW（CR3/NEF 各至少 1 个，如有）、HIF 24/45MP、PNG/TIFF >40MP、PSD 8/16-bit、渐进式 JPEG、方向 1..8、嵌入 ICC（sRGB/P3/AdobeRGB）、截断或损坏文件、中文路径和目录名、含 `.superpicky/report.db` 的根目录副本 | `benchmark/`（用户样本）；清单文件按需补充 | M0-1 | 无 | 清单校验脚本逐项检查存在性与哈希 | 每类样本“已覆盖”或明确标注“未覆盖” | — | S | 中（取决于用户能提供的样本） |
+| M0-4 | M0 | 在 Windows x64 与 macOS arm64 各采集一次基线：冷/热缓存 × 每个场景（见 6.1）| 结果放仓库外；仓库内只提交 `benchmark/results/<日期>-<平台>.json` 摘要（可选，需用户同意）| M0-2、M0-3 | 无 | 按 6.1 协议执行 | 每个指标都有 P50/P95、峰值 RSS 和样本标识；未跑到的平台标“未测” | — | M | — |
 | M0-5 (G0) | M0 | 热点排序与 P 轨优先级确认 | 本文 §3 增补“已测结论”列 | M0-4 | 无 | 评审 | 每个 P 任务都有“基线值 + 目标阈值”；无收益的 P 任务删除 | — | S | — |
 | M0-6 (G1) | M0 | 原生可行性判定：在 P 轨完成后的新基线上，对 N1 目标段做原型微基准（在仓库外的一次性原型，或临时分支，不合并）| 临时目录 | P 轨中相关任务（P-1、P-5、P-6）| 无 | 同样本、同输出尺寸、同滤波质量档，对比“P 轨版 vs 原型” | 满足 G1（见 6.3）才启动 M1；否则把 N 轨标记为“暂停”，并在本文记录数据 | 不启动 M1 | M | — |
 
@@ -349,9 +350,9 @@ def to_qimage(buf: PixelBuffer) -> "QImage":  # 仅工作线程调用；一次�
 
 | ID | 阶段 | 目标 | 实际/拟新增文件 | 依赖 | 接口变化 | 测试命令/步骤 | 验收标准 | 回退方式 | 复杂度 | 证据置信度 |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| P-1 | P | RAW 内嵌 JPEG 进程内或会话内提取：优先复用当前线程的 stay-open 会话，一次命令请求多个 tag，或先用 LibRaw `extract_thumb` 并校验尺寸不小于 ExifTool 候选；按 (path,size,mtime) 缓存字节与方向 | `app_common/thumb_stream.py`、`app_common/exif_io/exiftool_runner.py`（只读调用）、`SuperViewer/superviewer/focus_preview_loader.py`（方向缓存）| M0-5 | `get_raw_preview_jpeg` 签名不变 | 新增单测：每个 RAW 的进程启动次数 ≤1（或 0），分辨率优先级保持“高清相机预览 > piexif 小图”；`test_fast_preview_policy.py`、`test_preview_panel_policy.py`、`test_thumb_stream.py` | RAW 点击 load_ms P50/P95 达到 G0 设定的目标；选中的内嵌预览分辨率与改动前一致（逐样本比对宽高） | revert | M | 高（进程数）/ 待验证（耗时）|
+| P-1 | P | RAW 内嵌 JPEG 进程内或会话内提取：优先复用当前线程的 stay-open 会话，一次命令请求多个 tag，**优先 LibRaw `rawpy.extract_thumb()`**（容器实测 0.6 ms 对 ExifTool 进程 158 ms，取得同一张 JpgFromRaw，见 7.5），校验尺寸不小于 ExifTool 候选，失败时再走 stay-open 会话；按 (path,size,mtime) 缓存字节与方向 | `app_common/thumb_stream.py`、`app_common/exif_io/exiftool_runner.py`（只读调用）、`SuperViewer/superviewer/focus_preview_loader.py`（方向缓存）| M0-5 | `get_raw_preview_jpeg` 签名不变 | 新增单测：每个 RAW 的进程启动次数 ≤1（或 0），分辨率优先级保持“高清相机预览 > piexif 小图”；`test_fast_preview_policy.py`、`test_preview_panel_policy.py`、`test_thumb_stream.py` | RAW 点击 load_ms P50/P95 达到 G0 设定的目标；选中的内嵌预览分辨率与改动前一致（逐样本比对宽高） | revert | M | 高（进程数）/ 待验证（耗时）|
 | P-2 | P | 预览缓冲拷贝收敛：去掉 QImageReader 之后多余的 `.copy()`；工作线程直接产出 `RGB32`（`tobytes("raw","BGRX")` 或 `convertToFormat`，二选一以实测为准）；统一为 `app_common/imaging.to_qimage` | `SuperViewer/superviewer/preview_panel.py`、`app_common/file_browser/_browser_core.py`、`birdstamp/gui/editor_utils.py`，拟新增 `app_common/imaging/` | M0-5 | 新增内部 API，旧函数保留为薄包装 | 像素逐一比对（RGB 与改动前完全相同）；预览、缩略图、BirdStamp 预览相关测试 | GUI 线程 `QPixmap.fromImage` 耗时下降；像素完全一致 | revert | M | 中 |
-| P-3 | P | 缩略图解码顺序与重复解码：`thumbnail` 放在 `exif_transpose` 之前（对齐 BirdStamp 已有做法）；RAW 内嵌 JPEG 使用 `draft`；渐进式 JPEG 的最终帧不再二次全解码（或仅在视口可见时使用渐进路径）；内存缓存 put/get 深拷贝改为只读共享（QImage 隐式共享）| `app_common/thumb_stream.py`、`app_common/file_browser/_thumbnail.py`、`_browser_core.py` | P-2 | 无 | 缩略图像素与现状比对：定义容差（DCT 缩放 + LANCZOS 顺序变化导致的差异，逐通道 max≤2、≥99.5% 像素 ≤1，另附目视抽查）；`test_thumb_stream.py`、`test_thumbnail_memory_cache.py`（字节计量不变）| 缩略图吞吐和 decode p95 达到目标；方向 1..8 全部正确 | revert | M | 中 |
+| P-3 | P | 缩略图解码顺序与重复解码：`thumbnail` 放在 `exif_transpose` 之前（对齐 BirdStamp 已有做法）；RAW 内嵌 JPEG 使用 `draft`；JPEG `draft` 的方框按宽高比计算（现为 `(size,size)`，横图 2048 档因此失去 DCT 缩放，见 7.5）；RAW ≤1024 档优先使用 PreviewImage；渐进式 JPEG 的最终帧不再二次全解码（或仅在视口可见时使用渐进路径）；内存缓存 put/get 深拷贝改为只读共享（QImage 隐式共享）| `app_common/thumb_stream.py`、`app_common/file_browser/_thumbnail.py`、`_browser_core.py` | P-2 | 无 | 缩略图像素与现状比对：定义容差（DCT 缩放 + LANCZOS 顺序变化导致的差异，逐通道 max≤2、≥99.5% 像素 ≤1，另附目视抽查）；`test_thumb_stream.py`、`test_thumbnail_memory_cache.py`（字节计量不变）| 缩略图吞吐和 decode p95 达到目标；方向 1..8 全部正确 | revert | M | 中 |
 | P-4 | P | 画布绘制：棋盘格改为缓存的 `QBrush` 纹理（不透明图跳过）；按缩放级别缓存缩放后的 pixmap，或只绘制可见源矩形；平移时复用缓存 | `app_common/preview_canvas/canvas.py` | M0-2 | 无 | `test_preview_canvas_hot_path.py`；构图网格与焦点叠加回归（AGENTS 受保护流程）；截屏比对（offscreen 渲染到 QImage）| paint ms p95 与拖拽 FPS 达到目标；叠加导出路径输出不变 | revert | M | 中 |
 | P-5 | P | BirdStamp 预览渲染：`load_font` 的 LRU（路径、字号）、模板 payload 按 (path,mtime) 缓存、渐变只合成 banner 区域、减少 RGBA↔RGB 往返 | `birdstamp/render/typography.py`、`gui/editor_renderer.py`、`gui/editor_template.py` | M0-5 | 无 | `test_template_text_scale.py`、`test_template_overlay_banner_gradient.py`、`test_template_overlay_unicode_fallback.py`、`test_image_pipeline.py`；预览与导出像素比对（应完全一致）| `render_preview` P50/P95 达到目标；输出像素完全相同 | revert | S–M | 高（缓存缺失）/ 待验证（占比）|
 | P-6 | P | 导出解码与预计算：`_decode_standard` 去掉多余拷贝；统一裁切或去抖预计算移出 GUI 线程；在内存预算内复用解码结果，避免每图两次全解码；帧缓存全命中时跳过不必要的解码（前提是签名语义不变）| `birdstamp/decoders/image_decoder.py`、`birdstamp/export_stage/core.py`、`gui/editor.py` | M0-5 | 无 | `test_video_export_uniform_crop.py`、`test_video_export_dejitter.py`、`test_video_export.py`、`test_gif_export.py`；输出逐字节比对（PNG）| 批量导出总时长、峰值 RSS 达标；输出与改动前逐字节一致 | revert | M | 高（重复解码）|
@@ -381,7 +382,7 @@ def to_qimage(buf: PixelBuffer) -> "QImage":  # 仅工作线程调用；一次�
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | M2-1 | M2 | 原生 `decode_scaled`：JPEG 文件或字节 → DCT 缩放 → 精缩放 → 方向 → RGB32；支持截断、CMYK 判定为 Unsupported、取消、尺寸闸门 | `native/sbt_imaging/src/decode_scaled.cpp` 等 | M1 | `app_common.imaging.decode_scaled(backend="native")` | C++ 单测、模糊语料、ASan 构建；与 Python 后端的像素比对 | 6.4 的正确性矩阵全部通过 | 后端开关切到 `python` | L | — |
 | M2-2 | M2 | Viewer 接入：`thumb_stream` 的 JPEG 与 RAW 内嵌路径、`preview_panel` 的快速预览与 `_FullPreviewLoader` 的 JPEG 路径，都改为调用 `app_common.imaging` | `app_common/thumb_stream.py`、`SuperViewer/superviewer/preview_panel.py` | M2-1 | 无（内部）| AGENTS §15 全部相关回归 + 受保护预览流程手动检查（小图、大图、RAW、按住方向键、释放）| 在 `python` 模式下与 P 轨版逐像素一致；在 `native` 模式下满足 G2 | 开关 | M | — |
-| M2-3 (G2) | M2 | 三方 A/B：现有版（M0 基线）vs P 轨版 vs 原生版，在同样本、同分辨率、同缓存条件下对比 | `benchmarks/` 结果 | M2-2 | 无 | 6.1 协议 | 满足 G2；未满足则**停止扩大迁移**，保留开关默认 `python`，评估是否移除原生代码 | — | M | — |
+| M2-3 (G2) | M2 | 三方 A/B：现有版（M0 基线）vs P 轨版 vs 原生版，在同样本、同分辨率、同缓存条件下对比 | `benchmark/` 结果 | M2-2 | 无 | 6.1 协议 | 满足 G2；未满足则**停止扩大迁移**，保留开关默认 `python`，评估是否移除原生代码 | — | M | — |
 
 ### M3：BirdStamp 复用与双应用回归
 
@@ -510,10 +511,19 @@ def to_qimage(buf: PixelBuffer) -> "QImage":  # 仅工作线程调用；一次�
    - JPEG 的 QImageReader 解码由 libjpeg-turbo 完成，40 MP 同步可以接受；HEVC 解码单位像素成本高得多。复审报告测得 49.8 MP HIF 在 GUI 线程约 1.5 s，按此推算约 30 ms/MP [待验证]，40 MP 阈值意味着常见的 24–33 MP 相机 HIF 仍可能在 GUI 线程卡住 0.7–1 s。
    - 两者共用一个阈值，只能在“JPEG 过度异步”和“HEIF 卡顿”之间二选一。分开后 JPEG 行为完全不变，HEIF 默认走已有的大 HIF 异步路径，不新增代码路径。
    - 默认 4 MP：按 100 ms 的交互预算和上面的推算得出，只保留缩小导出的小 HIF 同步显示。这个值是临时的，M0 样本到位后按实测 P95 校准。设为 40 即可恢复原行为，回退成本为零。
-3. **真实样本：暂缓。** 等用户后续上传基准图后再定存放位置。影响：
-   - M0-3、M0-4、M0-5（G0）以及依赖实测的门槛（G1/G2/G3）都**阻塞在样本上**。
-   - M0-1、M0-2 可以先做。M0-1 在样本到位前用脚本在临时目录**合成**测试图（不同尺寸、方向 1..8、带 alpha、截断文件），只用于验证脚本能跑通，**不作为基线**。
-   - 不依赖实测的 P 任务（P-5 字体与模板缓存、P-8 manifest 批量写入、P-9 对话框去抖、P-10、P-11）可以先实施，验收中的数值目标待样本到位后补测；像素一致性与功能回归照常执行。
+3. **真实样本：已部分到位（2026-09-26）。** 用户在 `main` 的 `04bd8c1` 提交了 `benchmark/` 下的 JPG/ARW/HIF 各一张（JPG 走 Git LFS）。M0-1 已据此在 Linux 云容器跑出第一份结果，见 [2026-09-26 基线](../../benchmark/results/2026-09-26-linux-container.md)。影响：
+   - 目标平台（Windows x64 / macOS arm64）的基线（M0-4）仍需在用户机器上运行，G0/G1/G2/G3 的数值门槛以目标平台数据为准。
+   - 仍未覆盖的样本类别见结果文件，M0-3 继续补齐。
+   - 不依赖实测的 P 任务（P-5、P-8、P-9、P-10、P-11）可以先实施；P-1 与 P-3 已有容器内的相对证据（见 7.5）。
+
+### 7.5 已测结论摘要（Linux 容器，仅相对关系）
+
+详见 [2026-09-26 基线](../../benchmark/results/2026-09-26-linux-container.md)。对计划的影响：
+
+- **P-1 方向修正**：`rawpy.extract_thumb()` 取得与 ExifTool `-JpgFromRaw` 相同的 5616×3744 JPEG，耗时 0.6 ms，ExifTool 进程约 158 ms。P-1 改为“先 LibRaw `extract_thumb`（校验尺寸不小于 ExifTool 候选），失败时再走 ExifTool”。需要在更多机型上确认 LibRaw 挑选的是最高清的内嵌预览。
+- **P-3 新增项**：JPEG `draft((size,size))` 的方框让横图在 2048 档失去 DCT 缩放，应改为按宽高比计算方框；RAW 小档（≤1024）可直接用 PreviewImage（1616×1080，解码 8.8 ms）。
+- **HEIF**：21 MP HIF 完整解码约 1 s，内嵌缩略图在当前 libheif 下无法解码。P-11 的依据得到加强；HEIF 的持久缩略图缓存命中率需要作为 M0-2 的重点指标。
+- **N1（原生 `decode_scaled`）的预期收益下调**：20.5 MB 的 32.7 MP JPEG 在 DCT 缩放生效后仍需 229 ms，瓶颈是熵解码，换用 C++ 调用同一个 libjpeg-turbo 无法消除。G1 评估时 JPEG 与 RAW 内嵌 JPEG 需要分开计算可得收益。
 
 ### 7.4 暂不纳入范围
 
@@ -526,23 +536,23 @@ GUI 重写或框架更换；Rust；GPU/Metal/CUDA 图像路径；自研 JPEG/RAW
 **目标**：用一条命令在 Windows 或 macOS 上，对现有代码路径做可重复的离线分段测量。不改任何生产代码。
 
 **内容**：
-1. `benchmarks/env_report.py`：输出 6.1 要求的环境 JSON（CPU/内存/OS/Python/依赖版本/ExifTool 版本/线程配置/样本清单哈希）。`psutil` 缺失时记为“不可用”，不自动安装。
-2. `benchmarks/samples.example.json`：样本清单格式（`id`、`category`、`path`、`sha256`、`expected_orientation`、`notes`）。**只提交示例格式；真实清单放在仓库外。**
-3. `benchmarks/bench_imaging.py`：在 `QT_QPA_PLATFORM=offscreen` 下直接调用现有函数，逐样本记录分段耗时与峰值 RSS：
+1. `benchmark/env_report.py`：输出 6.1 要求的环境 JSON（CPU/内存/OS/Python/依赖版本/ExifTool 版本/线程配置/样本清单哈希）。`psutil` 缺失时记为“不可用”，不自动安装。
+2. ~~`benchmark/samples.example.json`~~（实施时简化）：脚本直接扫描 `--samples` 目录，按扩展名分类并记录 SHA-256，识别 Git LFS 指针并标为“未覆盖”。需要逐样本期望值（例如方向）时，再补清单文件。
+3. `benchmark/bench_imaging.py`：在 `QT_QPA_PLATFORM=offscreen` 下直接调用现有函数，逐样本记录分段耗时与峰值 RSS：
    - `thumb_stream.get_raw_preview_jpeg`（记录进程启动次数，通过包装 `run_exiftool_once` 计数）、`thumb_stream.load_thumbnail_rgb`（128/512/2048）
    - `preview_panel._load_full_preview_qimage`、`_load_raw_embedded_preview_qimage`、`_load_quick_preview_pixmap`
    - `birdstamp.decoders.image_decoder.decode_image_for_preview`、`decode_image`
    - `birdstamp.export_stage.core.render_video_frame`（用内置模板构造 `VideoFrameJob`，输出写到临时目录）
    - 模式：`--repeat N --warmup 1 --cold-copy`（每轮把样本复制到新的临时目录）
    - 输出：每个函数、每个样本的 P50/P95/max、峰值 RSS 和样本 ID 写入 JSON，另生成一份汇总表 Markdown
-4. `benchmarks/README.md`：两平台的运行命令（PowerShell 用 here-string 传给 `.venv\Scripts\python.exe`，macOS 用 `.venv/bin/python3`）、冷热缓存说明、安全约束（只用样本副本；绝不写原图、XMP 或 `report.db`；临时目录用完即删）。
+4. `benchmark/README.md`：两平台的运行命令（PowerShell 用 here-string 传给 `.venv\Scripts\python.exe`，macOS 用 `.venv/bin/python3`）、冷热缓存说明、安全约束（只用样本副本；绝不写原图、XMP 或 `report.db`；临时目录用完即删）。
 
 **完成标准**：
 - 真实样本到位前（见 7.3）：用 `--synthetic` 在临时目录生成测试图，脚本端到端跑通并输出 JSON 与 Markdown，输出中明确标记 `synthetic=true`、不作为基线。云端 Linux 会话可以在新建的 `.venv` 中安装 requirements 做这一步，但结果只证明脚本可用。
 - 真实样本到位后：在至少一个目标平台（Windows x64 或 macOS arm64）用 repo 根目录的 `.venv` 跑通，输出 JSON 与 Markdown。另一平台未运行时标“未验证”。
 - 对同一样本连续两次运行，P50 差异在报告的噪声范围内；报告写明噪声大小。
 - 运行前后样本目录（含 `.superpicky/report.db` 副本和 XMP）的哈希不变。`SuperBirdStamp/config/editor_export_state.json` 与 `config/templates/*.json` 无改动（AGENTS 要求检查）。
-- 新增文件 `-m py_compile` 通过，`git diff --check` 干净；除 `benchmarks/` 外没有任何 diff。
+- 新增文件 `-m py_compile` 通过，`git diff --check` 干净；除 `benchmark/` 外没有任何 diff。
 - 缺失的样本类别在输出中列为“未覆盖”，不编造数据。
 
 完成 M0-1 后按依赖顺序执行 M0-2（补探针）与 M0-3、M0-4（样本与双平台基线），再以 G0 决定 P 轨的实际范围。
