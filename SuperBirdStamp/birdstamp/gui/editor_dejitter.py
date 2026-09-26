@@ -30,7 +30,7 @@ class _BirdStampDejitterMixin:
         self._sequence_frames = OrderedDict()
         self._sequence_frame_bytes = 0
         self._sequence_pending_path = None
-        self._sequence_message = '框选参考区后，分析整组照片并生成成片。'
+        self._sequence_message = '只需在一张参考图框选一次，自动匹配整组照片。'
         self._ordinary_edit_mode = EDIT_MODE_NONE
         self._dejitter_edit_mode = EDIT_MODE_REFERENCE_REGION
         self._last_dejitter_tab = False
@@ -42,7 +42,7 @@ class _BirdStampDejitterMixin:
         page = QWidget()
         layout = QVBoxLayout(page)
         layout.setContentsMargins(8, 8, 8, 8)
-        intro = QLabel('独立整组流程：框选参考 → 自动对齐裁切 → 导出全部')
+        intro = QLabel('只在一张参考图框选 → 自动匹配整组 → 导出全部')
         intro.setWordWrap(True)
         layout.addWidget(intro)
         reference = QGroupBox('参考区对齐')

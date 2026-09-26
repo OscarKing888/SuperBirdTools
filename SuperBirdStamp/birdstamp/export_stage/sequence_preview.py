@@ -71,7 +71,7 @@ def common_alignment_crop(regions, tracking, source_sizes, reference_size, stren
                     ((box[1] + box[3]) * height - (region[1] + region[3]) * rh) / 2)
                    for region, box in zip(regions, result.boxes) if box is not None]
         if not offsets:
-            raise ValueError(f'{Path(key).name}：参考区失配，请调整选区后重新分析。')
+            raise ValueError(f'{Path(key).name}：参考区失配，{result.error or "没有可靠匹配"}。请在参考图调整或追加选区后重新分析，无需逐张框选。')
         mx, my = median(x for x, y in offsets), median(y for x, y in offsets)
         tolerance = max(1, min(width, height) * .003)
         agreeing = [(x, y) for x, y in offsets if ((x - mx)**2 + (y - my)**2)**.5 <= tolerance]
@@ -119,6 +119,24 @@ def prepare_sequence_preview(seeds, template_paths=None, *, cancel_event, progre
                 sizes[frame_key] = image.size
         tracking[frame_key] = replace(tracked, signature=image_file_signature(seed.path))
         progress(f'对齐参考选区 {index}/{len(seeds)}')
+    # 只挽救前后相邻帧均有证据的孤立遮挡，不将推测位移级联到其它失配帧。
+    first_pass = dict(tracking)
+    for index in range(1, len(seeds)-1):
+        path = seeds[index].path
+        frame_key = path_key(path)
+        result = first_pass[frame_key]
+        if result.matched_count == len(regions):
+            continue
+        previous = first_pass[path_key(seeds[index-1].path)]
+        following = first_pass[path_key(seeds[index+1].path)]
+        if not any(box is None and previous.boxes[i] is not None and following.boxes[i] is not None
+                   for i, box in enumerate(result.boxes)):
+            continue
+        if cancel_event.is_set():
+            raise VideoExportCancelledError('已取消去抖动分析。')
+        progress(f'核验局部遮挡 {index+1}/{len(seeds)}')
+        with decode_image(path, decoder='auto') as image:
+            tracking[frame_key] = tracker.recover(image, result, previous, following, cancelled=cancel_event.is_set)
     boxes, output_size = common_alignment_crop(regions, tracking, sizes, reference_size,
                                               settings.get('dejitter_reference_strength', 100))
     result = SequencePreview(key, {path_key(job.path): job for job in jobs}, signatures,
