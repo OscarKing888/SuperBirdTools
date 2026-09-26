@@ -37,6 +37,7 @@ from birdstamp.export_frame_cache import (
     load_frame_manifest,
     path_signature,
     reusable_frame_path,
+    ThrottledFrameManifestWriter,
     stable_json_dumps as _json_dumps_stable,
     update_frame_manifest_record,
     write_frame_manifest,
@@ -1822,6 +1823,11 @@ def _ensure_source_frame_cache(
             )
             futures[future] = (index, job, source_signature, frame_signature)
 
+    manifest_writer = ThrottledFrameManifestWriter(
+        source_plan,
+        manifest,
+        metadata_factory=lambda: _source_frame_cache_metadata(total=total),
+    )
     try:
         _submit_source_jobs()
         while futures:
@@ -1846,7 +1852,7 @@ def _ensure_source_frame_cache(
                 frame_path=frame_path,
             )
             completed += 1
-            write_frame_manifest(source_plan, manifest, metadata=_source_frame_cache_metadata(total=total))
+            manifest_writer.record_written()
             _emit_progress(
                 progress_callback,
                 phase="render",
@@ -1858,6 +1864,8 @@ def _ensure_source_frame_cache(
             _submit_source_jobs()
     finally:
         executor.shutdown(wait=True, cancel_futures=True)
+        # 取消或失败时也要把已完成帧写进 manifest，保留续做时的复用。
+        manifest_writer.flush()
 
     write_frame_manifest(source_plan, manifest, metadata=_source_frame_cache_metadata(total=total))
     return (source_bucket_key, source_plan, source_frame_paths)
@@ -2011,6 +2019,16 @@ def _ensure_video_frame_cache(
                     )
                     futures[future] = (index, source_frame_path, source_signature, frame_name)
 
+            video_manifest_writer = ThrottledFrameManifestWriter(
+                video_plan,
+                manifest,
+                metadata_factory=lambda: _video_frame_cache_metadata(
+                    total=total,
+                    target_size=target_size,
+                    background_color=options.background_color,
+                    source_bucket_key=source_bucket_key,
+                ),
+            )
             try:
                 _submit_video_frames()
                 completed = reused_count
@@ -2035,16 +2053,7 @@ def _ensure_video_frame_cache(
                         frame_path=frame_path,
                     )
                     completed += 1
-                    write_frame_manifest(
-                        video_plan,
-                        manifest,
-                        metadata=_video_frame_cache_metadata(
-                            total=total,
-                            target_size=target_size,
-                            background_color=options.background_color,
-                            source_bucket_key=source_bucket_key,
-                        ),
-                    )
+                    video_manifest_writer.record_written()
                     _emit_progress(
                         progress_callback,
                         phase="render",
@@ -2056,6 +2065,7 @@ def _ensure_video_frame_cache(
                     _submit_video_frames()
             finally:
                 executor.shutdown(wait=True, cancel_futures=True)
+                video_manifest_writer.flush()
 
     write_frame_manifest(
         video_plan,

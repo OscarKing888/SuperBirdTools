@@ -1,5 +1,6 @@
 from pathlib import Path
 import shutil
+from types import SimpleNamespace
 
 from PIL import Image
 
@@ -107,7 +108,7 @@ def test_gif_frame_cache_persistence_follows_keep_frames_choice(tmp_path) -> Non
         def _set_status(self, _message: str) -> None:
             return None
 
-        def _export_render_jobs_to_images(self, jobs, targets, *, label):
+        def _export_render_jobs_to_images(self, jobs, targets, *, label, fast_png=False):
             for target in targets:
                 target.parent.mkdir(parents=True, exist_ok=True)
                 Image.new("RGB", (8, 6), "#123456").save(target)
@@ -208,3 +209,67 @@ def test_static_image_export_uses_full_resolution_memory_budget(
         "pending_jobs": 1,
         "max_frame_pixels": 24_000_000,
     }
+
+
+def test_gif_cache_frames_request_fast_lossless_png(tmp_path) -> None:
+    requested: list[bool] = []
+
+    class _Harness(_BirdStampExporterMixin):
+        template_paths: dict[str, Path] = {}
+
+        def _dirty_photo_path_keys(self, _paths):
+            return set()
+
+        def _set_status(self, _message: str) -> None:
+            return None
+
+        def _export_render_jobs_to_images(self, jobs, targets, *, label, fast_png=False):
+            requested.append(fast_png)
+            for target in targets:
+                target.parent.mkdir(parents=True, exist_ok=True)
+                Image.new("RGB", (8, 6), "#123456").save(target)
+            return list(targets), []
+
+    source_path = _build_sample_frame(tmp_path / "source.png", (8, 6), "#abcdef")
+    job = VideoFrameJob(path=source_path, settings={}, raw_metadata={}, metadata_context={})
+    _Harness()._ensure_gif_frame_cache([job], output_path=tmp_path / "out.gif", persistent=False)
+    assert requested == [True]
+
+
+def test_fast_png_save_is_lossless_and_user_png_keeps_optimize(tmp_path) -> None:
+    image = Image.linear_gradient("L").resize((320, 200)).convert("RGB")
+    saver = _BirdStampExporterMixin()
+    fast = tmp_path / "fast.png"
+    optimized = tmp_path / "optimized.png"
+    saver._save_image(image, fast, fast_png=True)
+    saver._save_image(image, optimized)
+    with Image.open(fast) as a, Image.open(optimized) as b:
+        assert a.tobytes() == b.tobytes() == image.tobytes()
+
+
+def test_gif_encoding_runs_off_caller_thread_and_applies_progress_in_order(tmp_path, monkeypatch) -> None:
+    import threading
+
+    from birdstamp.gui import editor_exporter
+
+    caller = threading.get_ident()
+    encode_threads: list[int] = []
+    applied: list[tuple[int, int]] = []
+
+    def _fake_export_gif(frame_paths, options, *, progress_callback):
+        encode_threads.append(threading.get_ident())
+        for index in range(1, 4):
+            progress_callback(SimpleNamespace(phase="encode", current=index, total=3, output_index=1, message=f"m{index}"))
+        return [options.output_path]
+
+    monkeypatch.setattr(editor_exporter, "export_gif", _fake_export_gif)
+
+    class _Harness(_BirdStampExporterMixin):
+        def _on_gif_export_progress(self, progress, total_outputs):
+            assert threading.get_ident() == caller
+            applied.append((progress.current, progress.total))
+
+    result = _Harness()._run_gif_export_off_gui_thread([], SimpleNamespace(output_path=tmp_path / "x.gif"), 1)
+    assert result == [tmp_path / "x.gif"]
+    assert encode_threads and encode_threads[0] != caller
+    assert applied == [(1, 3), (2, 3), (3, 3)]

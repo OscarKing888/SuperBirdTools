@@ -108,7 +108,7 @@ flowchart LR
 
 ### 图片和批量作业
 
-[editor_exporter.py](../birdstamp/gui/editor_exporter.py) 的 `export_current` / `export_all` 根据终端选择调度图片或 GIF；图片进入 `_export_render_jobs_to_images`。单图和批量导出由 GUI 编排，批量图像任务使用线程池并限制在途任务；GUI 在进度更新处处理事件，因此不能把整个图片/GIF 流程描述成独立的后台 QThread。
+[editor_exporter.py](../birdstamp/gui/editor_exporter.py) 的 `export_current` / `export_all` 根据终端选择调度图片或 GIF；图片进入 `_export_render_jobs_to_images`。单图和批量导出由 GUI 编排，批量图像任务使用线程池并限制在途任务；GUI 在进度更新处处理事件，因此不能把整个图片/GIF 流程描述成独立的后台 QThread。GIF 编码由 `_run_gif_export_off_gui_thread` 放到单个后台线程执行（Pillow 编码期间释放 GIL），GUI 线程轮询完成并按序应用进度，所有控件更新仍在 GUI 线程；导出期间依旧排除用户输入。GIF 中间缓存帧以 `compress_level=1` 快速写 PNG（无损），用户直接导出的 PNG 仍用 `optimize=True`。
 
 `_build_batch_image_targets` 在启动并行写入前分配所有文件名：使用 NFC 规范化加 `casefold` 判断本批同名目标，依次追加 `_2`、`_3`。这避免不同目录的 `a.jpg`、`A.jpg` 或 Unicode 等价名称写到同一目标；它解决本批目标互撞，不提供跨进程文件锁。并行度复用导出核心的 CPU/图像像素内存预算。
 
@@ -121,7 +121,7 @@ flowchart LR
 | `rendered_source_frames` | 完成裁切、模板和焦点处理的 RGB 源帧。桶由全局导出设置与版本区分；逐帧记录源文件签名、渲染设置、元数据/模板上下文、照片信息和模板内容签名。 |
 | `video_frames` | 按视频目标尺寸和背景归一化后的 PNG 帧，宽高满足编码的偶数要求。桶关联源帧桶、目标尺寸和背景；只改 FPS 或编码器通常可复用已渲染帧。 |
 
-保留模式使用输出目录下的 `birdstamp_export_cache/<类型>/<桶>/frames` 与 manifest；临时模式在输出目录创建独立临时目录。`dirty_path_keys` 强制相关源图重渲染，manifest 验证命中条件。GIF 的 `_ensure_gif_frame_cache` 也使用渲染源帧缓存；视频由 `_ensure_source_frame_cache`、`_ensure_video_frame_cache` 分两步准备。
+保留模式使用输出目录下的 `birdstamp_export_cache/<类型>/<桶>/frames` 与 manifest；临时模式在输出目录创建独立临时目录。`dirty_path_keys` 强制相关源图重渲染，manifest 验证命中条件。视频两级缓存用 `ThrottledFrameManifestWriter` 节流写 manifest（每 32 帧或 1 秒一次），并在 `finally` 中 flush，完成、取消与失败时已完成的帧都会记录。GIF 的 `_ensure_gif_frame_cache` 也使用渲染源帧缓存；视频由 `_ensure_source_frame_cache`、`_ensure_video_frame_cache` 分两步准备。
 
 [export_video](../birdstamp/export_stage/core.py) 在每个缓存目录创建后立即接管所有权，不能等准备函数成功返回后才记录目录。成功时先在工作目录编码，再用 `os.replace` 放到最终目标；普通异常清理未完成视频，并按 `preserve_temp_files` 决定是否保留帧缓存。即使异常发生在首帧或 manifest 准备期间，临时目录也有清理责任方。
 
