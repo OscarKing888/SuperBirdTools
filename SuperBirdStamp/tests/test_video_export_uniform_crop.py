@@ -142,3 +142,58 @@ def test_auto_crop_stabilization_blends_centers_to_group_median() -> None:
         assert centers == [(50.0, 50.0), (50.0, 50.0)]
     finally:
         export_stage._detect_primary_bird_box = original_detect
+
+
+def _write_photo(path: Path, size: tuple[int, int], color: str) -> Path:
+    Image.new("RGB", size, color).save(path, quality=95)
+    return path
+
+
+def test_persisted_crop_plans_skip_second_precompute_until_inputs_change(tmp_path, monkeypatch) -> None:
+    import threading
+
+    from birdstamp.export_stage import core
+    from birdstamp.export_stage.video_export_options import VideoExportOptions
+
+    photos = [_write_photo(tmp_path / f"p{i}.jpg", (120 + 10 * i, 80), "#88aacc") for i in range(3)]
+    calls: list[int] = []
+    original_prepare = core.prepare_uniform_auto_crop_plans
+
+    def _counting_prepare(jobs, **kwargs):
+        calls.append(len(jobs))
+        return original_prepare(jobs, **kwargs)
+
+    monkeypatch.setattr(core, "prepare_uniform_auto_crop_plans", _counting_prepare)
+
+    def _jobs(ratio: float = 2.0):
+        return [VideoFrameJob(path=p, settings=_settings(ratio=ratio), raw_metadata={}, metadata_context={}) for p in photos]
+
+    def _run(jobs, *, preserve=True, dirty=frozenset()):
+        options = VideoExportOptions(output_path=tmp_path / "out.mp4", preserve_temp_files=preserve)
+        core._ensure_source_frame_cache(
+            jobs,
+            output_path=tmp_path / "out.mp4",
+            options=options,
+            template_paths={},
+            progress_callback=None,
+            cancel_event=None,
+            bird_box_cache={},
+            bird_box_lock=threading.Lock(),
+            dirty_path_keys=set(dirty),
+        )
+        return [job.crop_plan for job in jobs]
+
+    first = _run(_jobs())
+    assert calls == [3]
+    second = _run(_jobs())
+    assert calls == [3]  # unchanged inputs: no decode/precompute
+    assert second == first
+    _run(_jobs(ratio=1.5))
+    assert calls == [3, 3]  # changed settings invalidate the saved plans
+    _run(_jobs(ratio=1.5), dirty={str(photos[0])})
+    assert calls == [3, 3, 3]  # dirty photos always recompute
+    photos[1].write_bytes(photos[1].read_bytes())  # touch: new signature
+    _write_photo(photos[1], (150, 80), "#88aacc")
+    _run(_jobs(ratio=1.5))
+    assert calls == [3, 3, 3, 3]
+

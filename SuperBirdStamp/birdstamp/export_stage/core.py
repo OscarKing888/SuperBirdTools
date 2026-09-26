@@ -21,7 +21,7 @@ from PIL import Image, ImageColor
 from app_common.log import get_logger
 from birdstamp.render.text_scale import normalize_text_scale
 from birdstamp import image_dejitter as _dejitter
-from birdstamp.config import get_app_dir, get_app_resource_dir, get_user_data_dir
+from birdstamp.config import get_app_dir, get_app_resource_dir, get_user_data_dir, resolve_bundled_path
 from birdstamp.decoders.image_decoder import decode_image
 from birdstamp.export_frame_cache import (
     FrameCachePlan,
@@ -38,6 +38,8 @@ from birdstamp.export_frame_cache import (
     path_signature,
     reusable_frame_path,
     ThrottledFrameManifestWriter,
+    SOURCE_FRAME_CACHE_VERSION,
+    hash_payload as _hash_payload,
     stable_json_dumps as _json_dumps_stable,
     update_frame_manifest_record,
     write_frame_manifest,
@@ -292,6 +294,102 @@ def _global_export_settings_from_jobs(jobs: list[VideoFrameJob]) -> dict[str, An
     if not jobs:
         return global_export_settings_from_settings({})
     return global_export_settings_from_settings(_clone_render_settings(jobs[0].settings))
+
+
+_CROP_PLAN_CACHE_FILE_NAME = "crop_plans.json"
+_CROP_PLAN_CACHE_VERSION = 1
+
+
+def _bird_detector_fingerprint() -> list[Any]:
+    """鸟体识别可用性与模型文件签名；模型变化时让已保存的裁切预计算失效。"""
+    try:
+        import importlib.util
+
+        has_ultralytics = importlib.util.find_spec("ultralytics") is not None
+    except Exception:
+        has_ultralytics = False
+    models: list[list[str]] = []
+    for model_name in editor_core._BIRD_MODEL_CANDIDATES:
+        try:
+            model_path = resolve_bundled_path("models", model_name)
+            models.append([model_name, path_signature(model_path) if model_path.is_file() else ""])
+        except Exception:
+            models.append([model_name, ""])
+    return [has_ultralytics, models]
+
+
+def _crop_plan_cache_key(jobs: list[VideoFrameJob]) -> str:
+    """统一裁切/去抖预计算的全部输入：源文件签名、逐图设置、元数据、识别模型与缓存版本。"""
+    return _hash_payload(
+        {
+            "version": _CROP_PLAN_CACHE_VERSION,
+            "source_frame_cache_version": SOURCE_FRAME_CACHE_VERSION,
+            "detector": _bird_detector_fingerprint(),
+            "jobs": [
+                [
+                    str(job.path),
+                    path_signature(job.path),
+                    _clone_render_settings(job.settings),
+                    dict(job.raw_metadata or {}),
+                    job.source_image is not None,
+                ]
+                for job in jobs
+            ],
+        }
+    )
+
+
+def _crop_plan_to_json(crop_plan: Any) -> list[Any] | None:
+    """裁切计划原样转成 JSON 列表（不做归一化，保证读回后与预计算结果逐值相同）。"""
+    if not isinstance(crop_plan, (list, tuple)) or len(crop_plan) != 2:
+        return None
+    raw_box, raw_pad = crop_plan
+    box = None if raw_box is None else [float(v) for v in raw_box]
+    return [box, [int(v) for v in raw_pad]]
+
+
+def _load_cached_crop_plans(cache_dir: Path, key: str, total: int) -> list[Any] | None:
+    try:
+        payload = json.loads((cache_dir / _CROP_PLAN_CACHE_FILE_NAME).read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    if not isinstance(payload, dict) or payload.get("key") != key:
+        return None
+    plans = payload.get("plans")
+    if not isinstance(plans, list) or len(plans) != total:
+        return None
+    restored: list[Any] = []
+    for plan in plans:
+        if plan is None:
+            restored.append(None)
+            continue
+        if not isinstance(plan, list) or len(plan) != 2 or not isinstance(plan[1], list) or len(plan[1]) != 4:
+            return None
+        box = None if plan[0] is None else tuple(float(v) for v in plan[0])
+        if box is not None and len(box) != 4:
+            return None
+        restored.append((box, tuple(int(v) for v in plan[1])))
+    return restored
+
+
+def _save_cached_crop_plans(cache_dir: Path, key: str, jobs: list[VideoFrameJob]) -> None:
+    payload = {
+        "version": _CROP_PLAN_CACHE_VERSION,
+        "key": key,
+        "plans": [_crop_plan_to_json(job.crop_plan) for job in jobs],
+    }
+    target = cache_dir / _CROP_PLAN_CACHE_FILE_NAME
+    tmp_path = target.with_suffix(".json.tmp")
+    try:
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        tmp_path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+        os.replace(tmp_path, target)
+    except Exception as exc:
+        _log.warning("crop plan cache write failed: dir=%s err=%s", cache_dir, exc)
+        try:
+            tmp_path.unlink()
+        except Exception:
+            pass
 
 
 def _render_cache_key(jobs: list[VideoFrameJob], options: VideoExportOptions) -> str:
@@ -1658,35 +1756,7 @@ def _ensure_source_frame_cache(
     on_cache_created: Callable[[FrameCachePlan], None] | None = None,
 ) -> tuple[str, Any, list[Path]]:
     total = len(jobs)
-    if any(
-        crop_plan_precompute_required(job.settings)
-        and _normalize_precomputed_crop_plan(job.crop_plan) is None
-        for job in jobs
-    ):
-        _emit_progress(
-            progress_callback,
-            phase="prepare",
-            current=0,
-            total=total,
-            message=f"正在预计算统一自动裁切尺寸，共 {total} 张。",
-        )
-
-        def _on_prepare_progress(current: int, total_count: int) -> None:
-            _emit_progress(
-                progress_callback,
-                phase="prepare",
-                current=current,
-                total=total_count,
-                message=f"正在预计算统一自动裁切尺寸 {current}/{total_count}",
-            )
-
-        prepare_uniform_auto_crop_plans(
-            jobs,
-            bird_box_cache=bird_box_cache,
-            bird_box_lock=bird_box_lock,
-            progress_callback=_on_prepare_progress,
-            cancel_event=cancel_event,
-        )
+    # 缓存桶只由全局导出设置决定，与裁切计划无关；先建立它以便复用已保存的预计算结果。
     source_bucket_key = _render_cache_key(jobs, options)
     source_plan = create_frame_cache_plan(
         output_path,
@@ -1696,6 +1766,52 @@ def _ensure_source_frame_cache(
     )
     if on_cache_created is not None:
         on_cache_created(source_plan)
+    if any(
+        crop_plan_precompute_required(job.settings)
+        and _normalize_precomputed_crop_plan(job.crop_plan) is None
+        for job in jobs
+    ):
+        # 保留缓存时，统一裁切/去抖的输入完全不变就直接复用上次的裁切计划，
+        # 不再为校验帧缓存而把每张原图（含 RAW 解马赛克）完整解码一遍。
+        crop_plan_key = _crop_plan_cache_key(jobs) if options.preserve_temp_files and not dirty_path_keys else ""
+        cached_plans = _load_cached_crop_plans(source_plan.cache_dir, crop_plan_key, total) if crop_plan_key else None
+        if cached_plans is not None:
+            for job, plan in zip(jobs, cached_plans):
+                job.crop_plan = plan
+            _emit_progress(
+                progress_callback,
+                phase="prepare",
+                current=total,
+                total=total,
+                message=f"复用已保存的统一自动裁切预计算，共 {total} 张。",
+            )
+        else:
+            _emit_progress(
+                progress_callback,
+                phase="prepare",
+                current=0,
+                total=total,
+                message=f"正在预计算统一自动裁切尺寸，共 {total} 张。",
+            )
+
+            def _on_prepare_progress(current: int, total_count: int) -> None:
+                _emit_progress(
+                    progress_callback,
+                    phase="prepare",
+                    current=current,
+                    total=total_count,
+                    message=f"正在预计算统一自动裁切尺寸 {current}/{total_count}",
+                )
+
+            prepare_uniform_auto_crop_plans(
+                jobs,
+                bird_box_cache=bird_box_cache,
+                bird_box_lock=bird_box_lock,
+                progress_callback=_on_prepare_progress,
+                cancel_event=cancel_event,
+            )
+            if crop_plan_key:
+                _save_cached_crop_plans(source_plan.cache_dir, crop_plan_key, jobs)
     manifest = load_frame_manifest(source_plan)
     source_plan.frames_dir.mkdir(parents=True, exist_ok=True)
     _prune_cache_frames(source_plan.frames_dir, manifest, total=total)

@@ -106,3 +106,24 @@ def test_embedded_raw_preview_uses_draft_and_keeps_fit_size_and_orientation(monk
     top = result.getpixel((680, 20))
     bottom = result.getpixel((680, 2020))
     assert top[0] > 150 and bottom[2] > 150  # orientation 6: stored left half ends up on top
+
+
+def test_decode_standard_matches_transpose_convert_copy_for_all_orientations(tmp_path):
+    from PIL import Image as _Image, ImageOps as _ImageOps
+
+    from birdstamp.decoders import image_decoder as _decoder
+
+    base = _Image.new("RGB", (60, 40), (200, 30, 30))
+    base.paste((30, 30, 200), (30, 0, 60, 40))
+    for orientation in range(1, 9):
+        path = tmp_path / f"o{orientation}.jpg"
+        exif = _Image.Exif()
+        exif[0x0112] = orientation
+        base.save(path, quality=95, exif=exif)
+        with _Image.open(path) as image:
+            expected = _ImageOps.exif_transpose(image).convert("RGB").copy()
+        actual = _decoder._decode_standard(path)
+        assert actual.mode == "RGB"
+        assert actual.size == expected.size
+        assert actual.tobytes() == expected.tobytes(), orientation
+        actual.load()  # still usable after the source file was closed

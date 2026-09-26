@@ -273,3 +273,37 @@ def test_gif_encoding_runs_off_caller_thread_and_applies_progress_in_order(tmp_p
     assert result == [tmp_path / "x.gif"]
     assert encode_threads and encode_threads[0] != caller
     assert applied == [(1, 3), (2, 3), (3, 3)]
+
+
+def test_blocking_task_helper_relays_positional_progress_in_order_and_propagates_errors() -> None:
+    import threading
+
+    import pytest
+
+    caller = threading.get_ident()
+    worker_threads: list[int] = []
+    seen: list[tuple[int, int]] = []
+
+    def _task(values, *, bird_box_cache, progress_callback):
+        worker_threads.append(threading.get_ident())
+        for index, _value in enumerate(values, start=1):
+            progress_callback(index, len(values))
+        bird_box_cache["done"] = True
+        return len(values)
+
+    def _handler(current, total):
+        assert threading.get_ident() == caller
+        seen.append((current, total))
+
+    helper = _BirdStampExporterMixin()
+    cache: dict = {}
+    assert helper._run_blocking_task_off_gui_thread(_task, [1, 2, 3], bird_box_cache=cache, progress_handler=_handler) == 3
+    assert worker_threads and worker_threads[0] != caller
+    assert seen == [(1, 3), (2, 3), (3, 3)]
+    assert cache == {"done": True}
+
+    def _failing(*, progress_callback):
+        raise RuntimeError("boom")
+
+    with pytest.raises(RuntimeError, match="boom"):
+        helper._run_blocking_task_off_gui_thread(_failing)

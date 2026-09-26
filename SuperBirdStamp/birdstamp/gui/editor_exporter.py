@@ -17,6 +17,7 @@ import shutil
 import threading
 import time
 import unicodedata
+from typing import Any, Callable
 
 from PIL import Image
 from PyQt6.QtCore import QEventLoop, QTimer
@@ -647,24 +648,35 @@ class _BirdStampExporterMixin:
             self._reset_image_export_progress(expected_token=progress_token)
             raise
 
-    def _run_gif_export_off_gui_thread(self, frame_paths: list[Path], options, total_outputs: int) -> list[Path]:
-        """在后台线程编码 GIF（Pillow 编码期间释放 GIL），GUI 线程按序应用进度并处理重绘。
+    def _run_blocking_task_off_gui_thread(
+        self,
+        func: Callable[..., Any],
+        *args: Any,
+        progress_handler: Callable[..., None] | None = None,
+        **kwargs: Any,
+    ) -> Any:
+        """在单个后台线程执行耗时任务，GUI 线程按序应用进度并处理重绘。
 
-        与图片批量导出一致：导出期间仍排除用户输入，但窗口不再因编码而停止重绘。
-        进度回调只入队，所有 Qt 控件更新都在 GUI 线程执行。
+        ``func`` 通过关键字参数 ``progress_callback`` 上报进度（任意位置参数），回调只入队；
+        所有 Qt 控件更新都在 GUI 线程由 ``progress_handler`` 执行。与图片批量导出一致，
+        等待期间仍排除用户输入，但窗口不会因任务而停止重绘。异常原样抛给调用方。
         """
-        progress_queue: "queue.SimpleQueue[object]" = queue.SimpleQueue()
+        progress_queue: "queue.SimpleQueue[tuple[Any, ...]]" = queue.SimpleQueue()
+
+        def _enqueue(*progress_args: Any) -> None:
+            progress_queue.put(progress_args)
 
         def _drain_progress() -> None:
             while True:
                 try:
-                    progress = progress_queue.get_nowait()
+                    progress_args = progress_queue.get_nowait()
                 except queue.Empty:
                     return
-                self._on_gif_export_progress(progress, total_outputs)
+                if progress_handler is not None:
+                    progress_handler(*progress_args)
 
-        with ThreadPoolExecutor(max_workers=1, thread_name_prefix="birdstamp-gif-encode") as executor:
-            future = executor.submit(export_gif, frame_paths, options, progress_callback=progress_queue.put)
+        with ThreadPoolExecutor(max_workers=1, thread_name_prefix="birdstamp-blocking-task") as executor:
+            future = executor.submit(func, *args, progress_callback=_enqueue, **kwargs)
             while True:
                 done, _pending = _wait_futures([future], timeout=0.03)
                 _drain_progress()
@@ -673,6 +685,15 @@ class _BirdStampExporterMixin:
                 self._process_image_export_ui_events()
         _drain_progress()
         return future.result()
+
+    def _run_gif_export_off_gui_thread(self, frame_paths: list[Path], options, total_outputs: int) -> list[Path]:
+        """GIF 编码（Pillow 编码期间释放 GIL）在后台线程执行，进度按序在 GUI 线程应用。"""
+        return self._run_blocking_task_off_gui_thread(
+            export_gif,
+            frame_paths,
+            options,
+            progress_handler=lambda progress: self._on_gif_export_progress(progress, total_outputs),
+        )
 
     def _normalized_image_export_target(self, target: Path, *, default_suffix: str) -> Path:
         if target.suffix.lower() in {".png", ".jpg", ".jpeg", ".gif"}:

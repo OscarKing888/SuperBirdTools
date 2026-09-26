@@ -92,7 +92,10 @@ def _register_heif_opener() -> bool:
 
 def _decode_standard(path: Path) -> Image.Image:
     with Image.open(path) as image:
-        return ImageOps.exif_transpose(image).convert("RGB").copy()
+        # 就地按 EXIF 旋转（方向为 1 时不复制），再转成独立的 RGB 图；
+        # 原实现 exif_transpose + convert + copy 会产生三份整图像素。
+        ImageOps.exif_transpose(image, in_place=True)
+        return image.convert("RGB")
 
 
 def _decode_raw_rawpy(path: Path) -> Image.Image:
@@ -107,7 +110,8 @@ def _decode_raw_rawpy(path: Path) -> Image.Image:
             no_auto_bright=False,
             output_bps=8,
         )
-    return Image.fromarray(rgb).convert("RGB")
+    image = Image.fromarray(rgb)
+    return image if image.mode == "RGB" else image.convert("RGB")
 
 
 def _decode_raw_rawpy_for_preview(path: Path, max_long_edge: int) -> Image.Image:
