@@ -233,7 +233,7 @@ def test_small_hif_keeps_synchronous_full_preview(tmp_path, monkeypatch):
     photo = tmp_path / "small.HIF"
     photo.write_bytes(b"placeholder")
     calls = []
-    monkeypatch.setattr(preview_panel, "_expected_image_pixel_count", lambda path: 21_000_000)
+    monkeypatch.setattr(preview_panel, "_expected_image_pixel_count", lambda path: 3_000_000)
     monkeypatch.setattr(preview_panel, "_load_full_preview_qimage", lambda path: calls.append(path) or _image())
     panel = preview_panel.PreviewPanel()
     try:
@@ -244,6 +244,45 @@ def test_small_hif_keeps_synchronous_full_preview(tmp_path, monkeypatch):
     finally:
         panel.shutdown()
         panel.close()
+
+
+def test_camera_size_hif_uses_worker_under_heif_threshold(tmp_path, monkeypatch):
+    # 21 MP camera HIF is below the 40 MP JPEG threshold but above the HEIF one:
+    # the GUI thread must not decode HEVC, the owned worker replaces the placeholder.
+    photo = tmp_path / "camera.HIF"
+    photo.write_bytes(b"placeholder")
+    gui_thread = threading.get_ident()
+    decode_threads = []
+    monkeypatch.setattr(preview_panel, "_expected_image_pixel_count", lambda path: 21_000_000)
+    monkeypatch.setattr(preview_panel, "_load_quick_preview_pixmap", lambda *args: pytest.fail("GUI quick decode"))
+    monkeypatch.setattr(
+        preview_panel,
+        "_load_full_preview_qimage",
+        lambda path: decode_threads.append(threading.get_ident()) or _image(),
+    )
+    panel = preview_panel.PreviewPanel()
+    try:
+        panel.set_image(str(photo))
+        assert "正在加载" in panel._canvas.text()
+        assert decode_threads == []
+        _wait_until(lambda: panel._full_preview_loaded)
+        assert decode_threads and gui_thread not in decode_threads
+    finally:
+        panel.shutdown()
+        panel.close()
+
+
+def test_heif_sync_threshold_is_independent_from_jpeg(tmp_path, monkeypatch):
+    monkeypatch.setattr(preview_panel, "_expected_image_pixel_count", lambda path: 21_000_000)
+    assert preview_panel._should_load_full_preview_sync(str(tmp_path / "a.jpg"))
+    assert not preview_panel._should_load_full_preview_sync(str(tmp_path / "a.HIF"))
+    assert not preview_panel._should_load_full_preview_sync(str(tmp_path / "a.heic"))
+    # Raising the HEIF threshold (SuperViewer_SYNC_FULL_PREVIEW_HEIF_MAX_MP=40) restores the old behavior.
+    monkeypatch.setattr(preview_panel, "_SYNC_FULL_PREVIEW_HEIF_MAX_PIXELS", 40_000_000)
+    assert preview_panel._should_load_full_preview_sync(str(tmp_path / "a.HIF"))
+    monkeypatch.setattr(preview_panel, "_SYNC_FULL_PREVIEW_HEIF_MAX_PIXELS", 0)
+    assert not preview_panel._should_load_full_preview_sync(str(tmp_path / "a.HIF"))
+    assert preview_panel._should_load_full_preview_sync(str(tmp_path / "a.jpg"))
 
 
 def test_failed_async_hif_decode_replaces_loading_message(tmp_path, monkeypatch):

@@ -534,6 +534,14 @@ def to_qimage(buf: PixelBuffer) -> "QImage":  # 仅工作线程调用；一次�
 - **新增待决策项**：JPEG 同步阈值（当前 40 MP）。32.7 MP 高质量 JPEG 每次点击约 0.45 s 卡顿。建议 P-2 完成后复测，再决定是否按 100 ms 预算降到约 8 MP（大图先显示档位缓存，再异步替换）。属于受保护交互，需要用户确认。
 - Windows x64 基线仍未测。
 
+### 7.7 P-1 / P-10 / P-11 实施记录（2026-09-26）
+
+- **P-1**：`app_common/thumb_stream.get_raw_preview_jpeg` 先用进程内 LibRaw（`rawpy.extract_thumb`），长边 ≥1600 直接采用，否则按 ExifTool 标签顺序补查并取较大者；Windows 非 ASCII 路径改用文件对象交给 LibRaw。样本 ARW：ExifTool 进程 0 次，与 ExifTool `JpgFromRaw` 解码后逐像素一致（字节不同是 ExifTool 重写头部所致）。
+- **P-10**：`PreviewPanel.set_image` 对 RAW 不再在 GUI 线程提取或解码；只显示精确档位缓存或“正在加载预览”，由 `_FullPreviewLoader` 替换为内嵌高清预览。容器端到端：ARW `set_image` GUI 耗时 0.2 ms（原同步段 447 ms）。
+- **P-11**：新增 `SuperViewer_SYNC_FULL_PREVIEW_HEIF_MAX_MP`（默认 4 MP），JPEG 阈值不变。容器端到端：21 MP HIF `set_image` GUI 耗时 11.8 ms（仅读头；原 938 ms），随后 worker 完整显示。
+- 回归：相关 68 项定向测试通过；SuperViewer/app_common 全量与改动前基线相比没有新增失败（既有失败均为 Linux 容器环境问题：Windows 路径断言、主题测试段错误、缺 ffmpeg/ExifTool 配置）；BirdStamp 与 build_tools 全部通过。AGENTS.md、AI_CODING_RULES、Viewer 架构文档与 README 已同步受保护流程描述。
+- **待用户在 Mac/Windows 复测**：`bench_imaging.py --cases viewer.raw,thumb` 看 ExifTool 进程数应为 0；手动检查 RAW 点击（先档位图/加载提示，再高清图）、按住方向键浏览 RAW、释放后单次提交、焦点框在高清图到达后出现、中文路径 RAW（Windows）。
+
 ### 7.4 暂不纳入范围
 
 GUI 重写或框架更换；Rust；GPU/Metal/CUDA 图像路径；自研 JPEG/RAW/HEIF 解码器；新增色彩管理或导出 EXIF/ICC（属于产品功能，不算等价迁移）；YOLO 或推理优化；ExifTool 替换；`_panel.py` 拆分等无关重构；独立仓库 SuperBirdViewer/SuperBirdStamp 的同步；Intel 或 universal2 macOS 包；锁文件引入（建议另立议题）。

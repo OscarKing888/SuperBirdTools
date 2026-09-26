@@ -339,3 +339,83 @@ def test_source_pixmap_provider_rejects_quick_tier() -> None:
     finally:
         panel.shutdown()
         panel.close()
+
+
+def _raw_panel_fixture(monkeypatch, tmp_path: Path):
+    raw_path = tmp_path / "bird.arw"
+    raw_path.write_bytes(b"raw-placeholder")
+    gui_thread = threading.get_ident()
+    worker_calls: list[int] = []
+
+    def _forbidden(*_args, **_kwargs):
+        raise AssertionError("RAW preview work must not run in the GUI thread")
+
+    monkeypatch.setattr(preview_panel, "_load_raw_embedded_preview_qimage", _forbidden)
+    monkeypatch.setattr(preview_panel, "_load_quick_preview_pixmap", _forbidden)
+    monkeypatch.setattr(preview_panel.thumb_stream, "get_raw_preview_jpeg", _forbidden)
+
+    def _worker_decode(path: str):
+        assert threading.get_ident() != gui_thread
+        worker_calls.append(threading.get_ident())
+        image = QImage(96, 64, preview_panel._qimage_rgb888_format())
+        image.fill(120)
+        return image
+
+    monkeypatch.setattr(preview_panel, "_load_full_preview_qimage", _worker_decode)
+    return raw_path, worker_calls
+
+
+def test_raw_click_shows_cached_tier_then_worker_embedded_preview(monkeypatch, tmp_path: Path) -> None:
+    app = QApplication.instance() or QApplication([])
+    raw_path, worker_calls = _raw_panel_fixture(monkeypatch, tmp_path)
+    quick = QPixmap(48, 32)
+    quick.fill()
+    ready: list[str] = []
+    panel = preview_panel.PreviewPanel()
+    panel.set_quick_preview_provider(lambda path, size: quick)
+    panel.full_preview_ready.connect(ready.append)
+    try:
+        panel.set_image(str(raw_path), quick_size=256)
+        assert panel.get_preview_image_size() == (48, 32)
+        assert not panel._full_preview_loaded
+        assert panel.source_pixmap_for_path(str(raw_path)) is None
+        assert worker_calls == []
+        assert _process_events_until(app, lambda: panel._full_preview_loaded)
+        assert panel.get_preview_image_size() == (96, 64)
+        assert len(worker_calls) == 1
+        assert ready == [os.path.normpath(str(raw_path))]
+    finally:
+        panel.shutdown()
+        panel.close()
+    assert app is QApplication.instance()
+
+
+def test_uncached_raw_click_shows_loading_placeholder_without_gui_extraction(monkeypatch, tmp_path: Path) -> None:
+    app = QApplication.instance() or QApplication([])
+    raw_path, worker_calls = _raw_panel_fixture(monkeypatch, tmp_path)
+    panel = preview_panel.PreviewPanel()
+    try:
+        panel.set_image(str(raw_path), quick_size=256)
+        assert "正在加载预览" in panel._canvas.text()
+        assert worker_calls == []
+        assert _process_events_until(app, lambda: panel._full_preview_loaded)
+        assert panel.get_preview_image_size() == (96, 64)
+    finally:
+        panel.shutdown()
+        panel.close()
+    assert app is QApplication.instance()
+
+
+def test_raw_fast_frame_never_extracts_in_gui_thread(monkeypatch, tmp_path: Path) -> None:
+    app = QApplication.instance() or QApplication([])
+    raw_path, worker_calls = _raw_panel_fixture(monkeypatch, tmp_path)
+    panel = preview_panel.PreviewPanel()
+    try:
+        panel.set_image(str(raw_path), load_full=False, quick_size=256)
+        assert not panel._full_preview_timer.isActive()
+        app.processEvents()
+        assert worker_calls == []
+    finally:
+        panel.shutdown()
+        panel.close()
+    assert app is QApplication.instance()

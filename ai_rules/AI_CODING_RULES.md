@@ -124,9 +124,9 @@ These areas have repeatedly regressed during feature work. Treat them as protect
 - SuperViewer preview loading contract:
   - Do not regress to "always thumbnail" or "always full decode" behavior.
   - `PreviewPanel.set_image(path, *, load_full=True, quick_size=None)` must preserve three modes:
-    - small non-RAW images at or below `SuperViewer_SYNC_FULL_PREVIEW_MAX_MP` (default 40 MP) show full preview synchronously
+    - small non-RAW images at or below the synchronous threshold show full preview synchronously (`SuperViewer_SYNC_FULL_PREVIEW_MAX_MP`, default 40 MP; HEIF uses `SuperViewer_SYNC_FULL_PREVIEW_HEIF_MAX_MP`, default 4 MP)
     - larger non-RAW images first show the selected thumbnail-size preview, then asynchronously replace it with full preview
-    - RAW images prefer the high-resolution embedded RAW preview JPEG for ordinary preview switching; exiftool/rawpy camera previews must outrank tiny piexif EXIF thumbnails
+    - RAW images show the selected-tier cache (or a loading placeholder) first and never extract/decode RAW data in the GUI thread; the full-preview worker then shows the high-resolution embedded RAW preview JPEG. Camera previews (in-process LibRaw first, ExifTool when that preview is small or missing) must outrank tiny piexif EXIF thumbnails
   - Held direction-key navigation must call `set_image(..., load_full=False, quick_size=<current thumb size>)` from the second auto-repeat image until key release.
   - While `load_full=False`, do not start full-preview loading or focus extraction.
   - Quick-preview fallback must be bounded to the selected preview size; do not synchronously decode a full large image just because thumbnail extraction missed.
@@ -254,9 +254,9 @@ When changing `SuperViewer/main.py`, `app_common/file_browser/_panel.py`, `_work
 - Filtering by text / pick / rating / focus status
 - Copy / reveal actions on both resolved and stale-path files
 - Preview image loading from `temp_jpeg_path`
-- Normal preview click on a small non-RAW image: full preview is shown directly
+- Normal preview click on a small non-RAW image (JPEG ≤40 MP, HEIF ≤4 MP by default): full preview is shown directly
 - Normal preview click on a large non-RAW image: selected thumbnail-size preview appears first, then full preview replaces it asynchronously
-- RAW preview click: high-resolution embedded RAW preview JPEG is preferred; a tiny piexif thumbnail is only a last-resort fallback
+- RAW preview click: the GUI thread shows only the cached tier or a loading placeholder, then the worker replaces it with the high-resolution embedded RAW preview JPEG; a tiny piexif thumbnail is only a last-resort fallback
 - Held direction-key navigation: from the second repeated item until key release, preview stays at selected thumbnail size and does not start full preview/focus extraction
 - Focus overlay loading from source file when preview JPEG lacks focus metadata
 

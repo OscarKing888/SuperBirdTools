@@ -22,9 +22,9 @@ Use this skill whenever a change touches:
 - Keep `PreviewPanel.set_image(path, *, load_full=True, quick_size=None)`.
 - Keep `FileListPanel.preview_quick_size()` as the source of the selected thumbnail-size preview level.
 - Normal single-image selection:
-  - Small non-RAW images at or below `SuperViewer_SYNC_FULL_PREVIEW_MAX_MP` (default 40 MP) show full preview synchronously.
+  - Small non-RAW images at or below the synchronous threshold show full preview synchronously: `SuperViewer_SYNC_FULL_PREVIEW_MAX_MP` (default 40 MP) for JPEG and other formats, `SuperViewer_SYNC_FULL_PREVIEW_HEIF_MAX_MP` (default 4 MP) for HEIF.
   - Larger non-RAW images first show the selected thumbnail-size preview, then asynchronously replace it with full preview.
-  - RAW images prefer high-resolution embedded RAW preview JPEG for ordinary preview switching. exiftool/rawpy camera previews must outrank tiny piexif EXIF thumbnails such as 160x120; those are only last-resort fallbacks.
+  - RAW images show the selected-tier cache or a loading placeholder first (no RAW extraction in the GUI thread), then the full-preview worker replaces it with the high-resolution embedded RAW preview JPEG. exiftool/rawpy camera previews must outrank tiny piexif EXIF thumbnails such as 160x120; those are only last-resort fallbacks.
 - Held direction-key navigation:
   - From the second auto-repeat image until key release, use only the selected thumbnail-size preview.
   - Call `PreviewPanel.set_image(..., load_full=False, quick_size=<current thumb size>)`.

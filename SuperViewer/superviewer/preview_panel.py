@@ -62,6 +62,11 @@ def _env_float(name: str, default: float) -> float:
 
 _SYNC_FULL_PREVIEW_MAX_MP = max(0.0, _env_float("SuperViewer_SYNC_FULL_PREVIEW_MAX_MP", 40.0))
 _SYNC_FULL_PREVIEW_MAX_PIXELS = int(_SYNC_FULL_PREVIEW_MAX_MP * 1_000_000)
+# HEVC 解码单位像素成本远高于 JPEG（M2 Max 实测 21 MP HIF 约 380 ms，约 18 ms/MP），
+# 因此 HEIF 使用独立阈值：默认只让约 4 MP 以下的小 HIF 在 GUI 线程同步完整显示，
+# 更大的 HIF 走“精确档位缓存 → 正在加载 → worker 完整解码”。设为 40 即恢复旧行为。
+_SYNC_FULL_PREVIEW_HEIF_MAX_MP = max(0.0, _env_float("SuperViewer_SYNC_FULL_PREVIEW_HEIF_MAX_MP", 4.0))
+_SYNC_FULL_PREVIEW_HEIF_MAX_PIXELS = int(_SYNC_FULL_PREVIEW_HEIF_MAX_MP * 1_000_000)
 
 
 def _qimage_rgb888_format():
@@ -211,13 +216,30 @@ def _expected_image_pixel_count(path: str) -> int:
         return 0
 
 
+def _sync_full_preview_max_pixels(path: str) -> int:
+    if Path(path).suffix.lower() in HEIF_EXTENSIONS:
+        return _SYNC_FULL_PREVIEW_HEIF_MAX_PIXELS
+    return _SYNC_FULL_PREVIEW_MAX_PIXELS
+
+
 def _should_load_full_preview_sync(path: str) -> bool:
-    if _SYNC_FULL_PREVIEW_MAX_PIXELS <= 0:
-        return False
     if not path or Path(path).suffix.lower() in RAW_EXTENSIONS:
         return False
+    max_pixels = _sync_full_preview_max_pixels(path)
+    if max_pixels <= 0:
+        return False
     pixels = _expected_image_pixel_count(path)
-    return 0 < pixels <= _SYNC_FULL_PREVIEW_MAX_PIXELS
+    return 0 < pixels <= max_pixels
+
+
+def _defers_uncached_preview_to_worker(path: str) -> bool:
+    """这些格式的任何预览都需要完整解码或读取 RAW，GUI 线程只用已有缓存，其余交给 worker。
+
+    - HEIF：Pillow 缩略图仍会完整解码 HEVC。
+    - RAW：内嵌 JPEG 提取与解码（旧实现最多 3 次 ExifTool 进程）不能阻塞 GUI 点击。
+    """
+    ext = Path(path).suffix.lower() if path else ""
+    return ext in HEIF_EXTENSIONS or ext in RAW_EXTENSIONS
 
 
 def _qimage_pixel_count(qimg: QImage | None) -> int:
@@ -479,22 +501,21 @@ class PreviewPanel(QWidget):
         direct_full = False
         active_loader = self._full_preview_loader
         full_decode_busy = active_loader is not None and active_loader.isRunning()
-        if load_full and path and not full_decode_busy:
-            qimg = None
-            if Path(path).suffix.lower() in RAW_EXTENSIONS:
-                qimg = _load_raw_embedded_preview_qimage(path)
-            elif _should_load_full_preview_sync(path):
-                qimg = _load_full_preview_qimage(path)
+        # RAW never decodes in the GUI thread: the embedded camera preview is
+        # extracted and decoded by the owned full worker (two-stage display).
+        if load_full and path and not full_decode_busy and _should_load_full_preview_sync(path):
+            qimg = _load_full_preview_qimage(path)
             if qimg is not None and not qimg.isNull():
                 pix = QPixmap.fromImage(qimg)
                 direct_full = bool(pix is not None and not pix.isNull())
         if pix is None or pix.isNull():
             pix = self._cached_quick_preview_pixmap(path, target_size)
-        # HEIF thumbnailing through Pillow still decodes the full HEVC image.
-        # An uncached 50 MP HIF must not do that work in the GUI thread merely
-        # to produce a 512 px placeholder. The owned full worker handles it.
-        defer_heif_preview = bool(path and Path(path).suffix.lower() in HEIF_EXTENSIONS)
-        if (pix is None or pix.isNull()) and not defer_heif_preview:
+        # HEIF thumbnailing through Pillow still decodes the full HEVC image, and
+        # RAW previews need embedded-JPEG extraction. Uncached files must not do
+        # that work in the GUI thread merely to produce a placeholder frame; the
+        # owned full worker handles them.
+        defer_uncached_preview = _defers_uncached_preview_to_worker(path)
+        if (pix is None or pix.isNull()) and not defer_uncached_preview:
             pix = _load_quick_preview_pixmap(path, target_size)
         load_ms = (_time.perf_counter() - load_t0) * 1000.0
         canvas_ms = 0.0
@@ -515,7 +536,7 @@ class PreviewPanel(QWidget):
                 self._canvas.set_source_pixmap(None)
             else:
                 self._canvas.set_source_pixmap(None, log_performance=False)
-            message = "正在加载预览" if defer_heif_preview and load_full else "无法预览"
+            message = "正在加载预览" if defer_uncached_preview and load_full else "无法预览"
             self._canvas.setText(f"{message}\n{Path(path).name}")
             canvas_ms = (_time.perf_counter() - canvas_t0) * 1000.0
             status_t0 = _time.perf_counter()

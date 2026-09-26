@@ -57,10 +57,10 @@ flowchart TD
 
 | 图像情况 | `PreviewPanel` 的加载路径 |
 | --- | --- |
-| 非 RAW，像素数不超过同步阈值 | `_should_load_full_preview_sync()` 判定后同步完整解码。默认阈值为 40 MP，可由 `SuperViewer_SYNC_FULL_PREVIEW_MAX_MP` 配置 |
+| 非 RAW，像素数不超过同步阈值 | `_should_load_full_preview_sync()` 判定后同步完整解码。JPEG 等默认阈值 40 MP（`SuperViewer_SYNC_FULL_PREVIEW_MAX_MP`）；HEIF 使用独立阈值，默认 4 MP（`SuperViewer_SYNC_FULL_PREVIEW_HEIF_MAX_MP`，设为 40 恢复旧行为），因为 HEVC 单位像素解码成本远高于 JPEG |
 | 大图 | 先尝试当前档位缓存或有尺寸限制的快速预览，再通过 `_full_preview_timer` 和 `_FullPreviewLoader` 替换完整图 |
-| 大尺寸 HIF / HEIF / HEIC 缓存未命中 | 显示“正在加载预览”，由完整预览 worker 解码；不能为了生成临时小图在 GUI 线程完整解码 HEVC。失败后显示“无法预览” |
-| RAW | 普通切换优先 `_load_raw_embedded_preview_qimage()`，使用高分辨率内嵌 JPEG；不做 RAW 解马赛克。极小 EXIF 缩略图不能抢在相机高分辨率预览前面 |
+| 超过 HEIF 阈值的 HIF / HEIF / HEIC 缓存未命中 | 显示“正在加载预览”，由完整预览 worker 解码；不能为了生成临时小图在 GUI 线程完整解码 HEVC。失败后显示“无法预览” |
+| RAW | 两段式：GUI 线程只显示当前档位缓存，未命中时显示“正在加载预览”，不提取、不解码 RAW；随后 `_FullPreviewLoader` 经 `_load_raw_embedded_preview_qimage()` 取高分辨率内嵌 JPEG 替换。不做 RAW 解马赛克。内嵌 JPEG 由 `thumb_stream.get_raw_preview_jpeg()` 提取：先用进程内 LibRaw（长边 ≥1600 直接采用），否则按 ExifTool `JpgFromRaw → PreviewImage → ThumbnailImage` 补查并取较大者；极小 EXIF 缩略图只作最后兜底 |
 
 快速缓存 provider 是 `SuperViewerTaggedFileListPanel.cached_quick_preview_for_path()`：优先使用当前档位已解码的 `QPixmap`，再用共享 `_resolve_existing_sized_preview_image_path(..., exact_size_only=True)` 读取已有缓存。它不生成缓存、不返回原图冒充缩略图。缓存根和文件命名由 `_browser_core.py` 按每个源文件解析，不能简单用当前选中目录推断。
 
