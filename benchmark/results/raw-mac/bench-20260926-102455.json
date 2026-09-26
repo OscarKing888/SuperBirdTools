@@ -1,7 +1,7 @@
 {
   "started_at": "2026-09-26T10:23:21+08:00",
   "config": {
-    "samples": "/Users/oscar/Pictures/SuperApps/SuperBirdTools/benchmark",
+    "samples": "benchmark",
     "synthetic": false,
     "repeat": 10,
     "warmup": 1,
@@ -37,7 +37,7 @@
     },
     "python": {
       "version": "3.13.12 (main, Feb  3 2026, 17:53:27) [Clang 17.0.0 (clang-1700.6.3.2)]",
-      "executable": "/Users/oscar/Pictures/SuperApps/SuperBirdTools/.venv/bin/python3",
+      "executable": ".venv/bin/python3",
       "implementation": "CPython"
     },
     "packages": {
@@ -62,7 +62,7 @@
       "qt": "6.10.0"
     },
     "exiftool": {
-      "path": "/opt/homebrew/bin/exiftool",
+      "path": "<external>/exiftool",
       "version": "13.50"
     },
     "thread_env": {}

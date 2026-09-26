@@ -149,6 +149,7 @@ class CaseResult:
     exiftool_calls: list[int] = field(default_factory=list)
     exiftool_ms: list[float] = field(default_factory=list)
     peak_rss_delta_bytes: list[int] = field(default_factory=list)
+    peak_rss_bytes: list[int] = field(default_factory=list)
     output: str = ""
     error: str = ""
 
@@ -298,6 +299,18 @@ def _is_lfs_pointer(path: Path) -> bool:
         return False
 
 
+def _redact_path(value: str) -> str:
+    """结果里不记录本机绝对路径：仓库内路径改为相对路径，其余只保留文件或目录名。"""
+    try:
+        path = Path(value).resolve()
+    except Exception:
+        return "<path>"
+    try:
+        return path.relative_to(REPO_ROOT).as_posix()
+    except ValueError:
+        return f"<external>/{path.name}"
+
+
 def discover_samples(sample_dir: Path) -> list[Sample]:
     samples: list[Sample] = []
     for path in sorted(sample_dir.iterdir()):
@@ -376,6 +389,7 @@ def run_case(
             result.exiftool_ms.append(counter.elapsed_ms)
             if sampler.available:
                 result.peak_rss_delta_bytes.append(max(0, sampler.peak - baseline_rss))
+                result.peak_rss_bytes.append(sampler.peak)
             result.output = _describe(output)
             result.error = error
         del output
@@ -399,6 +413,10 @@ def summarize(result: CaseResult) -> dict[str, Any]:
         "exiftool_ms_p50": round(_percentile(result.exiftool_ms, 50), 2) if result.exiftool_ms else 0.0,
         "peak_rss_delta_mb_max": (
             round(max(result.peak_rss_delta_bytes) / (1024 * 1024), 1) if result.peak_rss_delta_bytes else None
+        ),
+        # macOS/Windows 的分配器会保留已释放内存，增量可能接近 0；绝对峰值更可比
+        "peak_rss_mb_max": (
+            round(max(result.peak_rss_bytes) / (1024 * 1024), 1) if result.peak_rss_bytes else None
         ),
         "output": result.output,
         "error": result.error,
@@ -432,19 +450,28 @@ def render_markdown(report: dict[str, Any]) -> str:
         "",
         "## 结果",
         "",
-        "| 用例 | 样本 | n | P50 ms | P95 ms | max ms | ExifTool 进程/次 | ExifTool ms P50 | 峰值 RSS 增量 MB | 输出 | 错误 |",
-        "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
+        "| 用例 | 样本 | n | P50 ms | P95 ms | max ms | ExifTool 进程/次 | ExifTool ms P50 | 峰值 RSS 增量 MB | 进程峰值 RSS MB | 输出 | 错误 |",
+        "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
     ]
     for row in report["results"]:
         lines.append(
             f"| {row['case']} | {row['sample_id']} | {row['n']} | {row['p50_ms']} | {row['p95_ms']} | "
             f"{row['max_ms']} | {row['exiftool_calls_per_run']} | {row['exiftool_ms_p50']} | "
-            f"{row['peak_rss_delta_mb_max']} | {row['output']} | {row['error']} |"
+            f"{row['peak_rss_delta_mb_max']} | {row['peak_rss_mb_max']} | {row['output']} | {row['error']} |"
         )
     if report.get("uncovered"):
         lines += ["", "## 未覆盖", ""] + [f"- {item}" for item in report["uncovered"]]
     lines += ["", "## 样本完整性", "", f"- 运行前后样本哈希一致：{report['integrity_ok']}", ""]
     return "\n".join(lines)
+
+
+def _redacted_environment() -> dict[str, Any]:
+    env = collect_environment()
+    env["python"]["executable"] = _redact_path(env["python"]["executable"])
+    exiftool = env.get("exiftool") or {}
+    if exiftool.get("path"):
+        exiftool["path"] = _redact_path(exiftool["path"])
+    return env
 
 
 def _make_synthetic_samples(target: Path) -> None:
@@ -527,14 +554,14 @@ def main(argv: list[str] | None = None) -> int:
         report = {
             "started_at": started,
             "config": {
-                "samples": str(sample_dir),
+                "samples": _redact_path(str(sample_dir)),
                 "synthetic": bool(args.synthetic),
                 "repeat": args.repeat,
                 "warmup": args.warmup,
                 "cold_copy": bool(args.cold_copy),
                 "cases": [c.name for c in cases],
             },
-            "environment": collect_environment(),
+            "environment": _redacted_environment(),
             "samples": [
                 {"sample_id": s.sample_id, "category": s.category, "sha256": s.sha256, "status": s.status}
                 for s in samples
