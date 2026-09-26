@@ -158,7 +158,7 @@ class _BirdStampRendererMixin:
 
     def _apply_preview_overlay_options_from_ui(self) -> None:
         """Apply preview overlay options to the preview canvas/composite."""
-        if self._show_sequence_preview_result(preserve_view=True):
+        if self._show_dejitter_edit_preview(preserve_view=True) or self._show_sequence_preview_result(preserve_view=True):
             return
         self.preview_label.apply_overlay_options(self._build_preview_overlay_options())
         canvas = self.preview_label.canvas
@@ -217,7 +217,7 @@ class _BirdStampRendererMixin:
         self, box: tuple[float, float, float, float]
     ) -> tuple[float, float, float, float]:
         source = getattr(self, "current_source_image", None)
-        if source is None:
+        if self._dejitter_tab_active() or source is None:
             return tuple(float(v) for v in box)  # type: ignore[return-value]
         pt, pb, pl, pr = self._current_preview_outer_pad()
         sw = max(1, int(source.width))
@@ -236,7 +236,7 @@ class _BirdStampRendererMixin:
 
     def _reference_regions_source_to_preview(self, regions) -> tuple[tuple[float, float, float, float], ...]:
         source = getattr(self, "current_source_image", None)
-        if source is None or not regions:
+        if self._dejitter_tab_active() or source is None or not regions:
             return tuple(tuple(float(v) for v in box) for box in (regions or ()) if len(box) == 4)
         pt, pb, pl, pr = self._current_preview_outer_pad()
         sw = max(1, int(source.width))
@@ -860,7 +860,7 @@ class _BirdStampRendererMixin:
         preserve_view: bool = False,
         force_fit: bool = False,
     ) -> None:
-        if self._show_sequence_preview_result(reset_view=reset_view, preserve_view=preserve_view):
+        if self._show_dejitter_edit_preview(reset_view=reset_view, preserve_view=preserve_view) or self._show_sequence_preview_result(reset_view=reset_view, preserve_view=preserve_view):
             return
         display_pixmap: QPixmap | None = self.preview_pixmap
         source_mode = "原图"

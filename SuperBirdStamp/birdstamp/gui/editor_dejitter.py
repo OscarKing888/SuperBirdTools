@@ -4,15 +4,17 @@ from collections import OrderedDict
 from pathlib import Path
 
 from PyQt6.QtGui import QPixmap
-from PyQt6.QtWidgets import QCheckBox, QComboBox, QGroupBox, QHBoxLayout, QLabel, QPushButton, QSlider, QVBoxLayout, QWidget
+from PyQt6.QtWidgets import QButtonGroup, QCheckBox, QComboBox, QFileDialog, QListWidget, QGroupBox, QHBoxLayout, QLabel, QPushButton, QSlider, QVBoxLayout, QWidget
 from PyQt6.QtCore import Qt
 
-from birdstamp.export_stage.sequence_preview import sequence_input_key, apply_sequence_plans
+from birdstamp.export_stage.sequence_preview import sequence_input_key
 from birdstamp.image_dejitter.region_tracking_result import image_file_signature
 from . import editor_core, editor_options
 from .edit_modes import EDIT_MODE_NONE, EDIT_MODE_REFERENCE_REGION
 from .editor_preview_canvas import EditorPreviewOverlayState
-from .editor_sequence_preview_worker import EditorSequencePreviewWorker
+from .editor_sequence_preview_worker import EditorSequencePreviewWorker, EditorSequenceExportWorker
+from birdstamp.export_stage.render_job_seed import RenderJobSeed
+from .editor_utils import pil_to_qpixmap
 from .editor_utils import path_key
 
 
@@ -21,6 +23,7 @@ class _BirdStampDejitterMixin:
 
     def _init_dejitter_preview(self):
         self._sequence_worker = None
+        self._sequence_exporting = False
         self._sequence_epoch = 0
         self._sequence_shutdown = False
         self._sequence_preview = None
@@ -31,20 +34,23 @@ class _BirdStampDejitterMixin:
         self._ordinary_edit_mode = EDIT_MODE_NONE
         self._dejitter_edit_mode = EDIT_MODE_REFERENCE_REGION
         self._last_dejitter_tab = False
+        self._dejitter_view = 'edit'
+        self._dejitter_edit_source = None
+        self._dejitter_edit_pixmap = None
 
     def _build_dejitter_page(self):
         page = QWidget()
         layout = QVBoxLayout(page)
         layout.setContentsMargins(8, 8, 8, 8)
-        intro = QLabel('整组照片：确定参考 → 分析 → 在右侧检查成片')
+        intro = QLabel('独立整组流程：框选参考 → 自动对齐裁切 → 导出全部')
         intro.setWordWrap(True)
         layout.addWidget(intro)
         reference = QGroupBox('参考区对齐')
         form = QVBoxLayout(reference)
         form.setContentsMargins(10, 24, 10, 12)
-        self.dejitter_reference_check = QCheckBox('启用参考区去抖动')
-        self.dejitter_reference_check.setToolTip('框选后自动启用；参考区对齐优先于自动构图平滑。')
-        form.addWidget(self.dejitter_reference_check)
+        self.dejitter_reference_check = QCheckBox('启用参考区去抖动', reference)
+        self.dejitter_reference_check.setToolTip('框选后自动启用；独立处理原图，不读取模板裁切。')
+        self.dejitter_reference_check.hide()
         self.dejitter_reference_status = QLabel('尚未选择参考区')
         self.dejitter_reference_status.setWordWrap(True)
         form.addWidget(self.dejitter_reference_status)
@@ -56,6 +62,14 @@ class _BirdStampDejitterMixin:
         buttons.addWidget(self.dejitter_edit_reference_btn)
         buttons.addWidget(self.dejitter_draw_btn)
         form.addLayout(buttons)
+        self.dejitter_region_list = QListWidget()
+        self.dejitter_region_list.setMaximumHeight(110)
+        self.dejitter_region_list.setSelectionMode(QListWidget.SelectionMode.ExtendedSelection)
+        form.addWidget(self.dejitter_region_list)
+        self.dejitter_delete_region_btn = QPushButton('删除选中选区')
+        self.dejitter_delete_region_btn.clicked.connect(self._on_delete_dejitter_regions)
+        form.addWidget(self.dejitter_delete_region_btn)
+        self.dejitter_region_list.itemSelectionChanged.connect(self._update_dejitter_controls)
         strength = QHBoxLayout()
         strength.addWidget(QLabel('补偿强度'))
         self.dejitter_reference_strength_slider = QSlider(Qt.Orientation.Horizontal)
@@ -65,22 +79,11 @@ class _BirdStampDejitterMixin:
         strength.addWidget(self.dejitter_reference_strength_slider, 1)
         strength.addWidget(self.dejitter_reference_value_label)
         form.addLayout(strength)
-        hint = QLabel('Shift 追加多个选区；四边与四角调节大小。其它照片的跟踪框只读。')
+        hint = QLabel('Shift 追加；八个手柄调节大小；右键框内删除该区，也可从列表多选删除。')
         hint.setWordWrap(True)
         form.addWidget(hint)
         layout.addWidget(reference)
 
-        smooth = QGroupBox('自动构图平滑')
-        smooth_layout = QVBoxLayout(smooth)
-        smooth_layout.setContentsMargins(10, 24, 10, 12)
-        smooth_hint = QLabel('未启用参考区对齐时生效；需在“导出设置”开启统一自动裁切尺寸。')
-        smooth_hint.setWordWrap(True)
-        smooth_layout.addWidget(smooth_hint)
-        smooth_row = QHBoxLayout()
-        smooth_row.addWidget(self.auto_crop_stabilization_slider, 1)
-        smooth_row.addWidget(self.auto_crop_stabilization_value_label)
-        smooth_layout.addLayout(smooth_row)
-        layout.addWidget(smooth)
         self.dejitter_preprocess_btn = QPushButton('分析并预览成片')
         self.dejitter_preprocess_btn.clicked.connect(self._on_reference_preprocess_clicked)
         layout.addWidget(self.dejitter_preprocess_btn)
@@ -90,7 +93,18 @@ class _BirdStampDejitterMixin:
         self.dejitter_tracking_status = QLabel()
         self.dejitter_tracking_status.setWordWrap(True)
         layout.addWidget(self.dejitter_tracking_status)
-        note = QLabel('成片与导出共用图像处理管线。参考线、焦点和鸟体框沿用右侧开关；辅助显示不写入导出照片。视频画布适配与编码不在此预览中。')
+        output = QHBoxLayout()
+        self.dejitter_output_format = QComboBox()
+        formats = [(suffix, label) for suffix, label in editor_options.OUTPUT_FORMAT_OPTIONS
+                   if suffix in {'png', 'jpg', 'jpeg'}]
+        for suffix, label in formats or [('png', 'PNG'), ('jpg', 'JPG')]:
+            self.dejitter_output_format.addItem(label, 'jpg' if suffix == 'jpeg' else suffix)
+        self.dejitter_export_btn = QPushButton('去抖动导出全部')
+        self.dejitter_export_btn.clicked.connect(self._on_dejitter_export_all)
+        output.addWidget(self.dejitter_output_format)
+        output.addWidget(self.dejitter_export_btn, 1)
+        layout.addLayout(output)
+        note = QLabel('自动保留对齐后整组共同覆盖的最大矩形，无需选择裁切比例。独立输出原图对齐结果，不叠加模板或文字；参考线、焦点和鸟体框仅用于预览。')
         note.setWordWrap(True)
         layout.addWidget(note)
         layout.addStretch(1)
@@ -103,11 +117,16 @@ class _BirdStampDejitterMixin:
         row = QHBoxLayout(bar)
         row.setContentsMargins(0, 0, 0, 0)
         row.addWidget(QLabel('去抖动'))
-        self.dejitter_view_combo = QComboBox()
-        self.dejitter_view_combo.addItem('编辑构图', 'edit')
-        self.dejitter_view_combo.addItem('成片预览', 'result')
-        self.dejitter_view_combo.currentIndexChanged.connect(self._on_dejitter_view_changed)
-        row.addWidget(self.dejitter_view_combo)
+        self.dejitter_view_group = QButtonGroup(self)
+        self.dejitter_view_buttons = {}
+        for view, label in (('edit', '编辑构图'), ('result', '成片预览')):
+            button = QPushButton(label)
+            button.setCheckable(True)
+            self.dejitter_view_group.addButton(button)
+            self.dejitter_view_buttons[view] = button
+            button.clicked.connect(lambda checked, mode=view: self._set_dejitter_view(mode))
+            row.addWidget(button)
+        self.dejitter_view_buttons['edit'].setChecked(True)
         self.dejitter_preview_status = QLabel()
         self.dejitter_preview_status.setWordWrap(True)
         row.addWidget(self.dejitter_preview_status, 1)
@@ -120,8 +139,7 @@ class _BirdStampDejitterMixin:
         return tabs is not None and tabs.currentWidget() is self.dejitter_page
 
     def _sequence_result_mode(self):
-        combo = getattr(self, 'dejitter_view_combo', None)
-        return self._dejitter_tab_active() and combo is not None and combo.currentData() == 'result'
+        return self._dejitter_tab_active() and self._dejitter_view == 'result'
 
     def _on_export_tab_changed(self, _index):
         if not hasattr(self, 'dejitter_view_bar'):
@@ -134,16 +152,19 @@ class _BirdStampDejitterMixin:
             else:
                 self._dejitter_edit_mode = self._current_edit_mode_id()
                 self._set_edit_mode_button_checked(self._ordinary_edit_mode)
+        self._edit_mode_buttons.get('crop_adjust', self._edit_mode_buttons[EDIT_MODE_NONE]).setEnabled(not active)
         self._last_dejitter_tab = active
         self.dejitter_view_bar.setVisible(active)
         self._update_dejitter_controls()
         self._refresh_preview_label(preserve_view=True)
 
-    def _on_dejitter_view_changed(self, _index):
+    def _set_dejitter_view(self, view):
+        self._dejitter_view = view
+        self.dejitter_view_buttons[view].setChecked(True)
         self._refresh_preview_label(reset_view=True)
 
     def _on_dejitter_draw(self):
-        self.dejitter_view_combo.setCurrentIndex(0)
+        self._set_dejitter_view('edit')
         if self._dejitter_reference_source and not self._reference_regions_editable():
             self._on_edit_reference_photo()
         else:
@@ -165,30 +186,30 @@ class _BirdStampDejitterMixin:
     def _update_dejitter_controls(self):
         if not hasattr(self, 'dejitter_effective_status'):
             return
-        crop_enabled = self._is_pipeline_stage_enabled('template_crop')
-        no_crop = not crop_enabled or editor_core.is_ratio_no_crop(self._selected_ratio())
-        reference = self.dejitter_reference_check.isChecked()
-        smooth = self.uniform_auto_crop_check.isChecked() and not reference and not no_crop
-        self.auto_crop_stabilization_slider.setEnabled(smooth)
-        self.auto_crop_stabilization_value_label.setEnabled(smooth)
-        self.dejitter_reference_strength_slider.setEnabled(reference and not no_crop)
+        regions = getattr(self, '_dejitter_reference_regions', ())
+        source = self._dejitter_reference_source
+        self.dejitter_reference_status.setText(f'{Path(source).name} · {len(regions)} 个选区' if source and regions else '尚未选择参考区')
+        self.dejitter_reference_strength_slider.setEnabled(bool(regions))
         self.dejitter_edit_reference_btn.setEnabled(bool(self._dejitter_reference_source))
-        if no_crop:
-            effective = ('当前“不裁切”：去抖动未生效。请在导出设置中选择裁切比例。' if crop_enabled
-                         else '模板裁切已关闭：去抖动未生效。请在导出设置中启用模板裁切。')
-        elif reference:
-            effective = ('参考区对齐：强度 0%，不补偿。' if self.dejitter_reference_strength_slider.value() == 0
-                         else '参考区对齐作用于整组照片；失配区域及多区分歧不会强行补偿。')
-        else:
-            effective = '自动构图平滑生效。' if smooth and self.auto_crop_stabilization_slider.value() else '未启用去抖动；成片仍按当前裁切及叠加设置生成。'
-        self.dejitter_effective_status.setText(effective)
+        self.dejitter_effective_status.setText(
+            ('强度 0%：不补偿位移，仅计算共同尺寸。' if self.dejitter_reference_strength_slider.value() == 0 else '自动计算整组公共裁切；不使用前面的裁切与模板设置。') if regions else '请先在参考图框选一个或多个区域。')
+        if hasattr(self, 'dejitter_region_list'):
+            labels = [f'选区 {index + 1}  ·  {round((box[2]-box[0])*100)}% × {round((box[3]-box[1])*100)}%'
+                      for index, box in enumerate(regions)]
+            if labels != [self.dejitter_region_list.item(i).text() for i in range(self.dejitter_region_list.count())]:
+                self.dejitter_region_list.blockSignals(True)
+                self.dejitter_region_list.clear()
+                self.dejitter_region_list.addItems(labels)
+                self.dejitter_region_list.blockSignals(False)
+            self.dejitter_delete_region_btn.setEnabled(bool(self.dejitter_region_list.selectedItems()))
         if not self._dejitter_tab_active():
             return
         worker = self._sequence_worker
         stopping = worker is not None and worker.isInterruptionRequested()
-        self.dejitter_preprocess_btn.setText('正在停止…' if stopping else '取消分析' if worker else '分析并预览成片')
+        self.dejitter_preprocess_btn.setText('正在停止…' if stopping else ('取消导出' if self._sequence_exporting else '取消分析') if worker else '分析并预览成片')
         self.dejitter_preprocess_btn.setEnabled(not stopping and not self._sequence_shutdown
-                                               and (worker is not None or (self.current_path is not None and not no_crop)))
+                                               and (worker is not None or (self.current_path is not None and bool(regions))))
+        self.dejitter_export_btn.setEnabled(worker is None and self._sequence_preview is not None and not self._sequence_shutdown)
         self.dejitter_tracking_status.setText(self._sequence_message)
         if hasattr(self, 'dejitter_preview_status'):
             self.dejitter_preview_status.setText(self._sequence_message)
@@ -198,7 +219,7 @@ class _BirdStampDejitterMixin:
             return
         if self._sequence_worker is not None:
             self._invalidate_sequence_preview()
-            self._sequence_message = '已取消分析，可重新执行。'
+            self._sequence_message = '已取消任务；导出中的本次文件会撤销，等待线程结束后可重新执行。'
             self._update_dejitter_controls()
             self._refresh_preview_label(preserve_view=True)
             return
@@ -206,14 +227,14 @@ class _BirdStampDejitterMixin:
         if not paths or self.current_path is None:
             self._show_error('无法分析', '请先导入并选择照片。')
             return
-        if self.dejitter_reference_check.isChecked() and not self._reference_tracking_input():
+        if not self._reference_tracking_input():
             self._show_error('缺少参考区', '请先框选一个或多个参考区。')
             return
         self._invalidate_sequence_preview()
         self._sequence_message = '正在准备整组分析…'
-        seeds = self._build_video_export_job_seeds(paths, reuse_sequence_plans=False)
+        seeds = self._build_dejitter_seeds(paths)
         self._launch_sequence_worker(seeds=seeds)
-        self.dejitter_view_combo.setCurrentIndex(1)
+        self._set_dejitter_view('result')
         self._refresh_preview_label(preserve_view=True)
 
     def _launch_sequence_worker(self, *, seeds=()):
@@ -242,7 +263,7 @@ class _BirdStampDejitterMixin:
 
     def _on_sequence_failed(self, token, message):
         if self._accept_sequence_signal(token):
-            self._sequence_message = f'成片预览失败：{message}'
+            self._sequence_message = f'去抖动任务失败：{message}'
             self._sequence_pending_path = None
             self._update_dejitter_controls()
 
@@ -254,7 +275,7 @@ class _BirdStampDejitterMixin:
             return
         self._sequence_preview = sequence
         # 元数据到达、用户切图可能改变顺序/设置；完整签名也要在接收时验证。
-        seeds = self._build_video_export_job_seeds(self._list_photo_paths(), reuse_sequence_plans=False)
+        seeds = self._build_dejitter_seeds(self._list_photo_paths())
         if sequence_input_key(seeds, self.template_paths) != sequence.input_key:
             self._invalidate_sequence_preview()
             return
@@ -273,7 +294,7 @@ class _BirdStampDejitterMixin:
         source = self._dejitter_reference_source
         self._reference_tracking_signature = image_file_signature(Path(source)) if source else None
         failed = sum(r.matched_count < len(r.boxes) for r in sequence.tracking.values())
-        self._sequence_message = f'整组 {len(sequence.jobs)} 张已分析；{failed} 张存在参考区失配。'
+        self._sequence_message = f'整组 {len(sequence.jobs)} 张已分析；统一 {sequence.output_size[0]} × {sequence.output_size[1]}；{failed} 张存在部分选区失配。'
         self._reference_tracking_message = self._sequence_message
         self._update_dejitter_controls()
         self._refresh_preview_label(preserve_view=True)
@@ -283,6 +304,7 @@ class _BirdStampDejitterMixin:
         if worker is None or worker is not self._sequence_worker:
             return
         self._sequence_worker = None
+        self._sequence_exporting = False
         worker.deleteLater()
         pending = self._sequence_pending_path
         self._sequence_pending_path = None
@@ -324,9 +346,7 @@ class _BirdStampDejitterMixin:
                 self._bird_box_cache.get(self._source_signature(self.current_path)), crop_box=crop,
                 source_width=width, source_height=height, pt=pt, pb=pb, pl=pl, pr=pr,
             )
-            # 管线已经画过的焦点不再重复叠加；独立辅助开关仍沿用当前界面。
-            focus_exported = job.settings.get('draw_focus') and job.settings.get('stage_focus_overlay_enabled', True)
-            state = EditorPreviewOverlayState(focus_box=None if focus_exported else focus,
+            state = EditorPreviewOverlayState(focus_box=focus,
                                               bird_box=bird, crop_effect_box=(0, 0, 1, 1))
             self.preview_label.set_original_size(*frame.source_size)
             self.preview_label.set_cropped_size(*frame.output_size)
@@ -349,13 +369,96 @@ class _BirdStampDejitterMixin:
         sequence = self._sequence_preview
         if sequence is None:
             return None
-        seeds = self._build_video_export_job_seeds(self._list_photo_paths(), reuse_sequence_plans=False)
+        seeds = self._build_dejitter_seeds(self._list_photo_paths())
         if sequence_input_key(seeds, self.template_paths) != sequence.input_key:
             self._invalidate_sequence_preview()
             return None
         return sequence
 
-    def _reuse_sequence_plans(self, jobs):
+    def _build_dejitter_seeds(self, paths):
+        settings = self._dejitter_reference_settings()
+        seeds = []
+        for path in paths:
+            key = path_key(path)
+            raw = self.raw_metadata_cache.get(key) or self.photo_list_metadata_cache.get(key) or {}
+            if self.current_path is not None and path_key(self.current_path) == key:
+                raw = self.current_raw_metadata or raw
+            seeds.append(RenderJobSeed(path, dict(settings), dict(raw), key in self.raw_metadata_cache))
+        return seeds
+
+    def _on_delete_dejitter_regions(self):
+        rows = {self.dejitter_region_list.row(item) for item in self.dejitter_region_list.selectedItems()}
+        if not rows:
+            return
+        self._dejitter_reference_regions = tuple(box for index, box in enumerate(self._dejitter_reference_regions)
+                                                if index not in rows)
+        if not self._dejitter_reference_regions:
+            self._dejitter_reference_source = None
+            self.dejitter_reference_check.setChecked(False)
+        self._invalidate_reference_tracking('选区已删除，请重新分析。')
+        self._update_dejitter_reference_clear_enabled()
+        self._refresh_preview_label(preserve_view=True)
+        self._on_output_settings_changed()
+
+    def _on_dejitter_export_all(self):
+        if self._sequence_worker is not None:
+            return
         sequence = self._valid_sequence_for_export()
-        if sequence is not None:
-            apply_sequence_plans(sequence, jobs)
+        if sequence is None:
+            self._show_error('请先分析', '请先分析整组并检查成片。')
+            return
+        destination = QFileDialog.getExistingDirectory(self, '去抖动导出全部：选择保存目录')
+        if not destination:
+            return
+        worker = EditorSequenceExportWorker(token=self._sequence_epoch, sequence=sequence,
+                                            destination=destination,
+                                            output_format=self.dejitter_output_format.currentData(), parent=self)
+        self._sequence_worker = worker
+        self._sequence_exporting = True
+        worker.progress.connect(self._on_sequence_progress)
+        worker.failed.connect(self._on_sequence_failed)
+        worker.completed.connect(self._on_sequence_exported)
+        worker.finished.connect(self._on_sequence_finished)
+        worker.start()
+        self._update_dejitter_controls()
+
+    def _on_sequence_exported(self, token, folder):
+        if self._accept_sequence_signal(token):
+            self._sequence_message = f'整组导出完成：{folder}'
+            self._set_status(self._sequence_message)
+            self._update_dejitter_controls()
+
+    def _show_dejitter_edit_preview(self, *, reset_view=False, preserve_view=False, **_kwargs):
+        if not self._dejitter_tab_active() or self._sequence_result_mode():
+            return False
+        source = self.current_source_image
+        options = self._build_preview_overlay_options()
+        options.show_crop_effect = False
+        self.preview_label.apply_overlay_options(options)
+        editable = self._reference_regions_editable()
+        mode = self._current_edit_mode_id()
+        self.preview_label.canvas.set_edit_mode(EDIT_MODE_REFERENCE_REGION
+                                                if editable and mode == EDIT_MODE_REFERENCE_REGION else EDIT_MODE_NONE)
+        tracked = self._tracking_result_for_current()
+        labels = tuple(str(i + 1) for i, box in enumerate(tracked.boxes) if box is not None) if tracked and not editable else ()
+        self.preview_label.canvas.set_reference_region_labels(labels)
+        state = EditorPreviewOverlayState(reference_regions=self._visible_dejitter_reference_regions(),
+                                          crop_effect_box=(0, 0, 1, 1))
+        if source is not None:
+            width, height = self._crop_display_source_size() or source.size
+            state.focus_box = editor_core.resolve_focus_box_after_processing(
+                self.current_raw_metadata, source_width=width, source_height=height, crop_box=None,
+                outer_pad=(0, 0, 0, 0), apply_ratio_crop=False,
+                camera_type=editor_core.resolve_focus_camera_type_from_metadata(self.current_raw_metadata))
+            state.bird_box = self._bird_box_cache.get(self._source_signature(self.current_path)) if self.current_path else None
+            self.preview_label.set_original_size(width, height)
+        self.preview_label.set_cropped_size(None, None)
+        self.preview_label.apply_overlay_state(state)
+        self.preview_label.set_source_mode('去抖动原图')
+        if source is not self._dejitter_edit_source:
+            self._dejitter_edit_source = source
+            self._dejitter_edit_pixmap = pil_to_qpixmap(source) if source is not None else None
+        self.preview_label.set_source_pixmap(self._dejitter_edit_pixmap,
+                                             reset_view=reset_view, preserve_view=preserve_view,
+                                             preserve_scale=preserve_view)
+        return True

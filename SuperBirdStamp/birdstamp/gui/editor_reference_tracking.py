@@ -152,7 +152,7 @@ class _BirdStampReferenceTrackingMixin:
 
     def _on_edit_reference_photo(self) -> None:
         if self._dejitter_tab_active():
-            self.dejitter_view_combo.setCurrentIndex(0)
+            self._set_dejitter_view('edit')
         source = getattr(self, "_dejitter_reference_source", None)
         if not source:
             return

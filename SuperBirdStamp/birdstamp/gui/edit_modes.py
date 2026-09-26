@@ -231,7 +231,15 @@ class ReferenceRegionEditMode(EditMode):
     def on_mouse_press(self, canvas, event) -> bool:
         if event.button() == Qt.MouseButton.RightButton:
             self.cancel(canvas)
-            canvas.commit_reference_region(None, append=False)
+            rect = canvas.display_rect()
+            point = self._point_norm(canvas, event) if rect is not None and rect.contains(event.position()) else None
+            if point is not None:
+                x, y = point
+                for index in reversed(range(len(canvas.reference_regions()))):
+                    l, t, r, b = canvas.reference_regions()[index]
+                    if l <= x <= r and t <= y <= b:
+                        canvas.delete_reference_region(index)
+                        break
             event.accept()
             return True
         if event.button() != Qt.MouseButton.LeftButton:

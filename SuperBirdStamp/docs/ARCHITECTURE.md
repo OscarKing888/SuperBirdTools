@@ -18,7 +18,7 @@
 
 ## 2. 编辑器状态与线程归属
 
-主窗口 [BirdStampEditorWindow](../birdstamp/gui/editor.py) 组合五个 mixin：
+主窗口 [BirdStampEditorWindow](../birdstamp/gui/editor.py) 组合六个 mixin：
 
 | 组成 | 主要职责 |
 | --- | --- |
@@ -38,7 +38,7 @@
 | [editor.py](../birdstamp/gui/editor.py) 的 `_PhotoInputDiscoveryWorker` | 窗口保存活动和待结束 worker 引用。`finished_discovery` 仅表示业务结果完成；直到真实 `QThread.finished` 才移除待结束引用。停止或等待超时均不能提前释放线程。已退出活动集合的旧结果不再导入列表。 |
 | [EditorPreviewDecodeWorker](../birdstamp/gui/editor_preview_decode_worker.py) | 单个活动 worker + 最新待处理请求，直到真实 `finished` 才交接。先复用 Viewer 的逐文件缩略图缓存（原尺寸已知才显示），再补 2048 长边预览；两种结果都校验 token/路径/关闭状态。 |
 | [EditorPhotoListMetadataLoader](../birdstamp/gui/editor_photo_metadata_loader.py) | 分块调用 `extract_many_with_xmp_priority` 读取完整 EXIF/XMP 快照，供列表、模板预览与导出复用；不能用限定标签的浏览器缓存代替完整读取。窗口增量应用列表和当前照片数据；停止使用协作中断。 |
-| [EditorSequencePreviewWorker](../birdstamp/gui/editor_sequence_preview_worker.py) | 使用共享 RenderJobSeed 在后台准备整组裁切与跟踪，按需通过真实导出管线生成成片；仅单个活动线程，切图合并为最新请求，取消后拒绝迟到结果且等待真实 finished。 |
+| [EditorSequencePreviewWorker](../birdstamp/gui/editor_sequence_preview_worker.py) | 使用共享 RenderJobSeed 在后台准备原图跟踪与公共裁切，按需通过独立去抖动管线生成成片；仅单个活动线程，切图合并为最新请求，取消后拒绝迟到结果且等待真实 finished。 |
 | [BirdDetectWorker](../birdstamp/gui/bird_detect_worker.py) | 接收独立图像副本，在后台识别并在结束时关闭副本；渲染 mixin 按源图签名接收结果。 |
 | [EditorReferenceTrackingWorker](../birdstamp/gui/editor_reference_tracking_worker.py) | 不可变参考区/路径快照，后台逐帧解码匹配，逐区结果只含坐标与签名；token/worker 身份拒绝过期结果。取消和关闭保留线程到真实 `finished`，期间不启动替代线程。 |
 | [VideoExportWorker](../birdstamp/gui/editor_video_panel.py) | 窗口持有线程；`VideoExportJobSeed` 先在 GUI 线程快照 Qt 状态，worker 的 `_prepare_jobs` 补齐元数据与渲染作业。取消通过事件传入导出核心。 |
@@ -98,9 +98,13 @@ flowchart LR
 
 [export_stage/core.py](../birdstamp/export_stage/core.py) 的 `render_video_frame_context` 构造上下文并运行阶段管线，返回实际图像及裁切几何；`render_video_frame` 包装它返回导出位图。`prepare_uniform_auto_crop_plans` 在整批图像间预计算统一裁切（图片/GIF 导出时经 `_run_blocking_task_off_gui_thread` 在后台线程执行；视频保留缓存时，输入签名不变会直接复用源帧缓存桶下 `crop_plans.json` 中的裁切计划，不再重新解码原图）；去抖策略通过 [resolve_dejitter_strategy](../birdstamp/image_dejitter/strategy_registry.py) 选择中值中心或参考区域策略。改变这些批量计算时，要同时检查其输出是否进入缓存签名。
 
-参考区去抖在源图坐标中逐帧估计平移，支持手动裁切和导出列表外的参考照片；全局开关、独立强度与参考文件签名参与缓存失效。裁切计划缓存还包含参考照片及其 XMP 的文件签名，避免导出子集时复用过期的参考位置。“编辑构图”仍显示原裁切；“分析并预览成片”通过 [ReferenceRegionTracker](../birdstamp/image_dejitter/reference_region_tracker.py) 和导出共用采样/匹配逻辑，切图时显示多个编号区域的实际匹配位置，目标图只读，失配区域不绘制。参考区域/列表变化使结果失效，文件签名变化也禁止展示旧结果。裁切补偿在整组分析中生成，成片与导出复用同一计划。参考区轮廓由持久源坐标在每次重绘时恢复；[ReferenceRegionEditMode](../birdstamp/gui/edit_modes.py) 提供八手柄的暂存缩放预览，松手一次提交，切换模式或源图时取消未完成拖动。使用流程、坐标语义、算法边界与回归入口见 [参考区去抖动](DEJITTER.md)。
+独立去抖动流程位于“导出 → 去抖动”标签页，右侧使用“编辑构图 / 成片预览”按钮组。编辑视图显示原图，不应用模板裁切与补边；多参考区使用原图归一化坐标，支持八手柄调整、右键框内单区删除、页内列表多选删除。目标图的跟踪框只读。
 
-导出组包含“导出设置 / 去抖动”两个标签页；后者同步控制右侧共享画布的“编辑构图 / 成片预览”。[sequence_preview.py](../birdstamp/export_stage/sequence_preview.py) 保存整组输入签名及 `VideoFrameJob`，通过真实图像管线生成最终位图后才缩小显示。已分析裁切计划经签名验证后注入图片/GIF/视频作业，`crop_plan_prepared` 防止导出子集或磁盘缓存重新计算构图。参数、顺序、源文件/XMP/模板变化会使结果失效。辅助参考线、焦点和鸟体框沿用原开关，按实际裁切/补边映射到成片，并与导出叠加选项分开；视频画布适配、GIF 时序与最终编码尚不在此源帧预览范围内。缓存上限和显示长边由 `editor_options.json` 配置；回归见 [test_dejitter_tab.py](../tests/test_dejitter_tab.py)。设计记录及后续项见 [序列防抖 UX 设计](ux/STABILIZATION_UX.md)。
+[sequence_preview.py](../birdstamp/export_stage/sequence_preview.py) 通过 `ReferenceRegionTracker` 逐图匹配并检查多区位移共识，在原生像素坐标中求全部对齐画幅的最大公共矩形。`SequencePreview` 保存输入签名、原始尺寸和各帧像素框；失配或无共同画面会明确失败。[ImageProcSequenceAlignStage](../birdstamp/image_pipeline/image_proc_stage/image_proc_sequence_align_stage.py) 在独立 `ImageProcPipeline` 中执行同一组裁切，`ImageProcContext` 提供辅助层所需几何。普通模板、尺寸限制及叠加不参与这条管线；“不裁切”不会禁用独立分析。
+
+[sequence_export.py](../birdstamp/export_stage/sequence_export.py) 经同一渲染入口及 `PngExportStage` 完成独立 PNG/JPG 整组导出，输出写入新建子目录，取消/失败撤销本次文件。普通图片/GIF/视频导出不再注入去抖动页的计划，也不会自动启用参考区策略。旧批处理核心策略仍可供非 GUI 调用。
+
+[editor_dejitter.py](../birdstamp/gui/editor_dejitter.py) 管理页内状态和有界最终位图缓存；原图/XMP/参考区/强度/照片列表变化使结果失效，普通模板参数变化不影响独立结果。焦点、鸟体框和参考线沿用同一画布的辅助开关，按实际裁切坐标映射但不写入独立导出。[EditorSequencePreviewWorker / EditorSequenceExportWorker](../birdstamp/gui/editor_sequence_preview_worker.py) 共用单活动任务所有权，真实 `finished` 之前不销毁或替换线程。回归见 [test_dejitter_tab.py](../tests/test_dejitter_tab.py)，操作与边界见 [参考区去抖动](DEJITTER.md)，设计记录见 [UX 文档](ux/STABILIZATION_UX.md)。
 
 预览由 [editor_renderer.py](../birdstamp/gui/editor_renderer.py) 的 `render_preview`、`_render_preview_pipeline_image` 适配相同的阶段顺序和设置，但保留裁切外画布以供编辑，不直接把最终裁切位图作为交互画布。模板要与裁切区域对齐，焦点框也要经过相同坐标变换。[editor_preview_canvas.py](../birdstamp/gui/editor_preview_canvas.py) 承接交互显示和网格叠加。
 

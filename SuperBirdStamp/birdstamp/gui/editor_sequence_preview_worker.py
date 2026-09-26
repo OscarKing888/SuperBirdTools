@@ -62,3 +62,32 @@ class EditorSequencePreviewWorker(QThread):
         except Exception as exc:
             if not self.cancel_event.is_set():
                 self.failed.emit(self.token, str(exc))
+
+
+class EditorSequenceExportWorker(QThread):
+    completed = pyqtSignal(int, str)
+    progress = pyqtSignal(int, str)
+    failed = pyqtSignal(int, str)
+
+    def __init__(self, *, token, sequence, destination, output_format, parent=None):
+        super().__init__(parent)
+        self.token, self.sequence = token, sequence
+        self.destination, self.output_format = destination, output_format
+        self.cancel_event = threading.Event()
+
+    def cancel(self):
+        self.cancel_event.set()
+        self.requestInterruption()
+
+    def run(self):
+        from birdstamp.export_stage.sequence_export import export_aligned_sequence
+        try:
+            folder = export_aligned_sequence(
+                self.sequence, self.destination, output_format=self.output_format,
+                cancel_event=self.cancel_event,
+                progress=lambda text: self.progress.emit(self.token, text),
+            )
+            self.completed.emit(self.token, str(folder))
+        except Exception as exc:
+            if not self.cancel_event.is_set():
+                self.failed.emit(self.token, str(exc))

@@ -34,7 +34,7 @@ def window(tmp_path, monkeypatch):
     _APP.processEvents()
 
 
-def test_selection_with_padding_roundtrips_and_enters_global_export(window):
+def test_selection_with_padding_roundtrips_but_is_separate_from_template_export(window):
     box = (.2, .3, .7, .8)
     preview_box = window._reference_regions_source_to_preview((box,))[0]
     window._on_canvas_reference_region_changed((preview_box,))
@@ -46,8 +46,9 @@ def test_selection_with_padding_roundtrips_and_enters_global_export(window):
     assert window._current_global_export_settings()['dejitter_reference_source'] == str(window.current_path)
     target = {'dejitter_reference_source': 'old.png', 'dejitter_reference_regions': []}
     window._apply_global_export_settings_to_render_settings(target)
-    assert target['dejitter_reference_source'] == str(window.current_path)
-    np.testing.assert_allclose(target['dejitter_reference_regions'][0], box)
+    assert target['dejitter_reference_source'] is None
+    assert target['dejitter_reference_regions'] == []
+    assert target['dejitter_strategy'] == 'median'
     assert not any(key.startswith('dejitter_') for key in window._photo_override_settings_from_snapshot(settings))
 
 

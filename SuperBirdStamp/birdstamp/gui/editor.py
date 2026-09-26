@@ -1664,6 +1664,10 @@ class BirdStampEditorWindow(
         template_form.addRow("留边", self.crop_padding_editor)
 
         template_form.addRow("批量构图", self.uniform_auto_crop_check)
+        smooth_row = QHBoxLayout()
+        smooth_row.addWidget(self.auto_crop_stabilization_slider)
+        smooth_row.addWidget(self.auto_crop_stabilization_value_label)
+        template_form.addRow("构图平滑", smooth_row)
         self.dejitter_page = self._build_dejitter_page()
         self._pipeline_stage_option_groups["template_crop"] = template_group
 
@@ -2936,7 +2940,7 @@ class BirdStampEditorWindow(
                 "reference",
                 "去抖动参考区",
                 "去抖动参考区：拖拽框选特征参考区，导出去抖动以此为锚点；"
-                "拖动四边/四角的 8 个手柄调节大小；按住 Shift 追加，右键清除。",
+                "拖动四边/四角的 8 个手柄调节大小；按住 Shift 追加，右键框内删除该选区。",
             ),
             (
                 EDIT_MODE_CROP_ADJUST,
@@ -2990,11 +2994,12 @@ class BirdStampEditorWindow(
     def _on_edit_mode_changed(self, *args) -> None:
         """编辑模式按钮切换：刷新预览叠加并自动保存工作区。"""
         if self._sequence_result_mode():
-            self.dejitter_view_combo.setCurrentIndex(0)
+            self._set_dejitter_view('edit')
         self._refresh_preview_label(preserve_view=True)
         self._schedule_workspace_autosave()
 
     def _on_dejitter_options_changed(self, *_args) -> None:
+        self._invalidate_sequence_preview()
         self._update_dejitter_reference_clear_enabled()
         self._on_output_settings_changed()
 
@@ -3239,7 +3244,6 @@ class BirdStampEditorWindow(
         return {_path_key(path) for path in paths if _path_key(path) in self._photo_export_dirty_keys}
 
     def _on_output_settings_changed(self, *_args: Any) -> None:
-        self._invalidate_sequence_preview()
         global_changed = self._refresh_global_export_settings_snapshot()
         if global_changed:
             self._mark_all_photo_exports_dirty()
@@ -5424,16 +5428,10 @@ class BirdStampEditorWindow(
     def _apply_global_export_settings_to_render_settings(self, settings: dict[str, Any]) -> None:
         """导出时强制使用当前界面的全局管线/叠加开关，避免照片级快照污染。"""
         global_export = self._current_global_export_settings()
-        settings.update(self._dejitter_reference_settings())
-        source = settings.get("dejitter_reference_source")
-        if source:
-            reference_settings = self._render_settings_for_path(Path(source), prefer_current_ui=True)
-            settings["dejitter_reference_crop_settings"] = {
-                key: reference_settings.get(key) for key in (
-                    "ratio", "center_mode", "crop_box", "custom_center_x", "custom_center_y",
-                    "crop_padding_top", "crop_padding_bottom", "crop_padding_left", "crop_padding_right",
-                )
-            }
+        # 普通模板导出与独立去抖动页分开，不能带入参考区裁切计划。
+        settings.update(dejitter_strategy='median', dejitter_reference_enabled=False,
+                        dejitter_reference_regions=[], dejitter_reference_source=None)
+        settings.pop('dejitter_reference_crop_settings', None)
         settings["draw_banner"] = bool(global_export.get("draw_banner", True))
         settings["draw_text"] = bool(global_export.get("draw_text", True))
         settings["draw_focus"] = bool(global_export.get("draw_focus", False))
@@ -5505,7 +5503,6 @@ class BirdStampEditorWindow(
             )
             if callable(progress_callback):
                 progress_callback(index, total)
-        self._reuse_sequence_plans(jobs)
         if precompute_crop_plans and crop_plan_precompute_required(current_render_settings):
             if callable(progress_callback):
                 progress_callback(0, total)
@@ -5579,8 +5576,6 @@ class BirdStampEditorWindow(
                     photo_info=photo_info_snapshot,
                 )
             )
-        if reuse_sequence_plans:
-            self._reuse_sequence_plans(seeds)
         return seeds
 
     def _cleanup_video_export_worker(self, worker: VideoExportWorker | None = None) -> None:

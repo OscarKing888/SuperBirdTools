@@ -2,7 +2,7 @@ import os
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PyQt6.QtCore import Qt  # noqa: E402
+from PyQt6.QtCore import Qt, QRectF, QPointF  # noqa: E402
 
 from birdstamp.gui.edit_modes import (  # noqa: E402
     EDIT_MODE_CROP_ADJUST,
@@ -139,18 +139,22 @@ def test_crop_adjust_mode_does_not_consume_mouse_events() -> None:
     assert mode.on_mouse_release(canvas, event) is False
 
 
-def test_reference_region_right_click_clears_selection() -> None:
+def test_reference_region_right_click_deletes_only_hit_region(monkeypatch) -> None:
     canvas = _CropCanvas()
+    canvas.reference_regions = lambda: ((.1, .1, .4, .4), (.6, .6, .9, .9))
+    deleted = []
+    canvas.delete_reference_region = deleted.append
+    canvas.display_rect = lambda: QRectF(0, 0, 100, 100)
     mode = ReferenceRegionEditMode()
+    monkeypatch.setattr(mode, '_point_norm', lambda *args: (.7, .7))
     event = _FakeMouseEvent(Qt.MouseButton.RightButton)
-
-    consumed = mode.on_mouse_press(canvas, event)
-
-    assert consumed is True
-    assert event.accepted is True
-    assert canvas.committed == [None]
-    assert canvas.append_flags == [False]
-    assert canvas.updated == 1
+    event.position = lambda: QPointF(70, 70)
+    assert mode.on_mouse_press(canvas, event)
+    assert deleted == [1]
+    assert not canvas.committed
+    monkeypatch.setattr(mode, '_point_norm', lambda *args: (.5, .5))
+    assert mode.on_mouse_press(canvas, event)
+    assert deleted == [1]
 
 
 def test_three_modes_register_and_switch_exclusively() -> None:
@@ -167,3 +171,15 @@ def test_three_modes_register_and_switch_exclusively() -> None:
     assert controller.set_active(EDIT_MODE_CROP_ADJUST) is True
     assert controller.is_active(EDIT_MODE_CROP_ADJUST)
     assert controller.is_active(EDIT_MODE_REFERENCE_REGION) is False
+
+
+def test_reference_region_right_click_outside_image_does_not_delete_boundary_region():
+    canvas = _CropCanvas()
+    canvas.display_rect = lambda: QRectF(10, 10, 100, 100)
+    canvas.reference_regions = lambda: ((0, 0, 1, 1),)
+    deleted = []
+    canvas.delete_reference_region = deleted.append
+    event = _FakeMouseEvent(Qt.MouseButton.RightButton)
+    event.position = lambda: QPointF(0, 0)
+    assert ReferenceRegionEditMode().on_mouse_press(canvas, event)
+    assert not deleted

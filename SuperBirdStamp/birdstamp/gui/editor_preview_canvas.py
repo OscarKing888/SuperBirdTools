@@ -181,6 +181,14 @@ class EditorPreviewCanvas(PreviewCanvas):
             self.reference_region_changed.emit(self._reference_regions)
             self.update()
 
+    def delete_reference_region(self, index: int) -> None:
+        if not 0 <= index < len(self._reference_regions):
+            return
+        regions = tuple(box for i, box in enumerate(self._reference_regions) if i != index)
+        if self._set_reference_regions_no_update(regions):
+            self.reference_region_changed.emit(self._reference_regions)
+            self.update()
+
     def set_reference_region_labels(self, labels: tuple[str, ...]) -> None:
         if self._reference_region_labels != labels:
             self._reference_region_labels = labels
