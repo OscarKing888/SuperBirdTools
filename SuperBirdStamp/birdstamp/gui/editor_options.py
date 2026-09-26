@@ -390,6 +390,18 @@ def _dejitter_strength(value: Any) -> int:
 
 _EDITOR_OPTIONS = load_editor_options()
 DEJITTER_REFERENCE_STRENGTH = _EDITOR_OPTIONS["dejitter_reference_strength"]
+
+
+def _bounded_preview_option(key: str, default: int, minimum: int, maximum: int) -> int:
+    try:
+        return max(minimum, min(maximum, int(_load_builtin_editor_options_raw().get(key, default))))
+    except (TypeError, ValueError, OverflowError):
+        return default
+
+
+# 成片预览只缩小最终位图；有界像素缓存不参与原尺寸导出。
+DEJITTER_PREVIEW_MAX_EDGE = _bounded_preview_option("dejitter_preview_max_edge", 1600, 256, 4096)
+DEJITTER_PREVIEW_CACHE_BYTES = _bounded_preview_option("dejitter_preview_cache_mb", 64, 8, 256) * 1024 * 1024
 TEXT_SCALE_SLIDER: dict[str, int] = _EDITOR_OPTIONS["text_scale_slider"]
 STYLE_OPTIONS: tuple[str, ...] = _EDITOR_OPTIONS["style_options"]
 RATIO_OPTIONS: list[tuple[str, float | None | str]] = _EDITOR_OPTIONS["ratio_options"]

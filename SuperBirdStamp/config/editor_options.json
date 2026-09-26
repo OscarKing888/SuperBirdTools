@@ -1,5 +1,7 @@
 {
   "dejitter_reference_strength": 100,
+  "dejitter_preview_max_edge": 1600,
+  "dejitter_preview_cache_mb": 64,
   "text_scale_slider": {"minimum": 25, "maximum": 300, "default": 100, "step": 1},
   "style_options": [
     "normal",

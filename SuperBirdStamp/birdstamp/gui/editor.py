@@ -65,6 +65,7 @@ from PyQt6.QtWidgets import (
     QToolButton,
     QTreeWidget,
     QTreeWidgetItem,
+    QTabWidget,
     QVBoxLayout,
     QWidget,
 )
@@ -160,6 +161,7 @@ from birdstamp.gui.editor_workspace import _BirdStampWorkspaceMixin
 from birdstamp.gui.editor_crop_calculator import _BirdStampCropMixin
 from birdstamp.gui.editor_renderer import _BirdStampRendererMixin
 from birdstamp.gui.editor_reference_tracking import _BirdStampReferenceTrackingMixin
+from birdstamp.gui.editor_dejitter import _BirdStampDejitterMixin
 from birdstamp.gui.editor_exporter import _BirdStampExporterMixin
 from birdstamp.export_stage import (
     DEFAULT_EXPORT_STAGE_ID,
@@ -693,6 +695,7 @@ class BirdStampEditorWindow(
     _BirdStampCropMixin,
     _BirdStampRendererMixin,
     _BirdStampReferenceTrackingMixin,
+    _BirdStampDejitterMixin,
     _BirdStampExporterMixin,
     _BirdStampWorkspaceMixin,
 ):
@@ -753,6 +756,7 @@ class BirdStampEditorWindow(
         self._preview_decode_token = 0
         self._preview_decode_shutdown = False
         self._init_reference_tracking()
+        self._init_dejitter_preview()
         self.last_rendered: Image.Image | None = None
         self.current_path: Path | None = None
         self.current_photo_info: _template_context.PhotoInfo | None = None
@@ -1533,7 +1537,11 @@ class BirdStampEditorWindow(
         export_root.addWidget(self.video_export_panel)
 
         export_section = CollapsibleSection("导出", expanded=True)
-        export_section.set_content_widget(export_content)
+        self.export_tabs = QTabWidget()
+        self.export_tabs.addTab(export_content, "导出设置")
+        self.export_tabs.addTab(self.dejitter_page, "去抖动")
+        self.export_tabs.currentChanged.connect(self._on_export_tab_changed)
+        export_section.set_content_widget(self.export_tabs)
         left_layout.addWidget(export_section)
         left_layout.addStretch(1)
         self._on_photos_section_toggled(self._photos_section.is_expanded())
@@ -1655,54 +1663,8 @@ class BirdStampEditorWindow(
         template_form.addRow("裁切中心", self.center_mode_widget)
         template_form.addRow("留边", self.crop_padding_editor)
 
-        auto_crop_row_widget = QWidget()
-        auto_crop_row_layout = QHBoxLayout(auto_crop_row_widget)
-        auto_crop_row_layout.setContentsMargins(0, 0, 0, 0)
-        auto_crop_row_layout.setSpacing(10)
-        auto_crop_row_layout.addWidget(self.uniform_auto_crop_check)
-        auto_crop_row_layout.addWidget(QLabel("防抖"))
-        auto_crop_row_layout.addWidget(self.auto_crop_stabilization_slider, 1)
-        auto_crop_row_layout.addWidget(self.auto_crop_stabilization_value_label)
-        auto_crop_row_layout.addStretch()
-        template_form.addRow("批量预计算", auto_crop_row_widget)
-        self.dejitter_reference_check = QCheckBox("启用参考区去抖动")
-        self.dejitter_reference_check.setToolTip("框选后自动启用；关闭可保留参考区。导出图片、GIF 和视频共用此设置。")
-        self.dejitter_reference_strength_slider = QSlider(Qt.Orientation.Horizontal)
-        self.dejitter_reference_strength_slider.setRange(0, 100)
-        self.dejitter_reference_strength_slider.setValue(editor_options.DEJITTER_REFERENCE_STRENGTH)
-        self.dejitter_reference_strength_slider.setToolTip("0% 不补偿，100% 跟随参考区位移；与中位中心防抖独立。")
-        self.dejitter_reference_value_label = QLabel("100%")
-        reference_row = QWidget()
-        reference_layout = QHBoxLayout(reference_row)
-        reference_layout.setContentsMargins(0, 0, 0, 0)
-        reference_layout.addWidget(self.dejitter_reference_check)
-        reference_layout.addWidget(self.dejitter_reference_strength_slider, 1)
-        reference_layout.addWidget(self.dejitter_reference_value_label)
-        template_form.addRow("参考区去抖", reference_row)
-        self.dejitter_reference_status = QLabel("尚未选择参考区")
-        self.dejitter_reference_status.setWordWrap(True)
-        template_form.addRow("参考照片", self.dejitter_reference_status)
-        tracking_row = QWidget()
-        tracking_layout = QHBoxLayout(tracking_row)
-        tracking_layout.setContentsMargins(0, 0, 0, 0)
-        self.dejitter_preprocess_btn = QPushButton("预处理跟踪")
-        self.dejitter_preprocess_btn.setToolTip("按参考图上的各编号选区跟踪列表中的照片，完成后切图查看匹配位置。")
-        self.dejitter_preprocess_btn.clicked.connect(self._on_reference_preprocess_clicked)
-        self.dejitter_edit_reference_btn = QPushButton("编辑参考图")
-        self.dejitter_edit_reference_btn.clicked.connect(self._on_edit_reference_photo)
-        tracking_layout.addWidget(self.dejitter_preprocess_btn)
-        tracking_layout.addWidget(self.dejitter_edit_reference_btn)
-        template_form.addRow("跟踪预览", tracking_row)
-        self.dejitter_tracking_status = QLabel()
-        self.dejitter_tracking_status.setWordWrap(True)
-        self.dejitter_tracking_status.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Minimum)
-        template_form.addRow("跟踪状态", self.dejitter_tracking_status)
-        reference_hint = QLabel("Shift 追加选区；调整后需重新预处理。跟踪框只读，裁切补偿在导出时应用。")
-        reference_hint.setWordWrap(True)
-        reference_hint.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Minimum)
-        template_form.addRow("去抖说明", reference_hint)
-        self.dejitter_reference_check.toggled.connect(self._on_dejitter_options_changed)
-        self.dejitter_reference_strength_slider.valueChanged.connect(self._on_dejitter_options_changed)
+        template_form.addRow("批量构图", self.uniform_auto_crop_check)
+        self.dejitter_page = self._build_dejitter_page()
         self._pipeline_stage_option_groups["template_crop"] = template_group
 
         resize_group = QGroupBox()
@@ -2057,6 +2019,8 @@ class BirdStampEditorWindow(
 
         self.current_file_label = QLabel("当前照片: 未选择")
         right_layout.addWidget(self.current_file_label)
+
+        right_layout.addWidget(self._build_dejitter_view_bar())
 
         preview_toolbar = QHBoxLayout()
         preview_toolbar.setContentsMargins(0, 0, 0, 0)
@@ -2856,6 +2820,7 @@ class BirdStampEditorWindow(
             event.ignore()
             return
         self._invalidate_reference_tracking("正在停止参考区预处理…", shutdown=True)
+        self._invalidate_sequence_preview(shutdown=True)
         self._cancel_async_bird_detect(shutdown=True)
         self._cancel_preview_decode(shutdown=True)
         self._stop_photo_list_metadata_loader(wait=False, reset_progress=True)
@@ -2873,7 +2838,7 @@ class BirdStampEditorWindow(
         ) or (
             metadata_worker is not None
             and metadata_worker.isRunning()
-        ) or not discovery_stopped or self._reference_tracking_worker is not None:
+        ) or not discovery_stopped or self._reference_tracking_worker is not None or self._sequence_worker is not None:
             self._set_status("正在安全结束后台任务...")
             event.ignore()
             QTimer.singleShot(100, self.close)
@@ -3024,6 +2989,8 @@ class BirdStampEditorWindow(
 
     def _on_edit_mode_changed(self, *args) -> None:
         """编辑模式按钮切换：刷新预览叠加并自动保存工作区。"""
+        if self._sequence_result_mode():
+            self.dejitter_view_combo.setCurrentIndex(0)
         self._refresh_preview_label(preserve_view=True)
         self._schedule_workspace_autosave()
 
@@ -3272,6 +3239,7 @@ class BirdStampEditorWindow(
         return {_path_key(path) for path in paths if _path_key(path) in self._photo_export_dirty_keys}
 
     def _on_output_settings_changed(self, *_args: Any) -> None:
+        self._invalidate_sequence_preview()
         global_changed = self._refresh_global_export_settings_snapshot()
         if global_changed:
             self._mark_all_photo_exports_dirty()
@@ -5537,6 +5505,7 @@ class BirdStampEditorWindow(
             )
             if callable(progress_callback):
                 progress_callback(index, total)
+        self._reuse_sequence_plans(jobs)
         if precompute_crop_plans and crop_plan_precompute_required(current_render_settings):
             if callable(progress_callback):
                 progress_callback(0, total)
@@ -5560,7 +5529,7 @@ class BirdStampEditorWindow(
                 )
         return jobs
 
-    def _build_video_export_job_seeds(self, paths: list[Path]) -> list[VideoExportJobSeed]:
+    def _build_video_export_job_seeds(self, paths: list[Path], *, reuse_sequence_plans: bool = True) -> list[VideoExportJobSeed]:
         """Capture Qt-owned state quickly; metadata/context work stays in the worker."""
         seeds: list[VideoExportJobSeed] = []
         current_key = _path_key(self.current_path) if self.current_path is not None else ""
@@ -5610,6 +5579,8 @@ class BirdStampEditorWindow(
                     photo_info=photo_info_snapshot,
                 )
             )
+        if reuse_sequence_plans:
+            self._reuse_sequence_plans(seeds)
         return seeds
 
     def _cleanup_video_export_worker(self, worker: VideoExportWorker | None = None) -> None:

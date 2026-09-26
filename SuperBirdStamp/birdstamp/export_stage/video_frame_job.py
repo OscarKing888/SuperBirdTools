@@ -20,5 +20,6 @@ class VideoFrameJob:
     source_image: Image.Image | None = None
     crop_plan: tuple[tuple[float, float, float, float] | None, tuple[int, int, int, int]] | None = None
     source_paths: tuple[Path, ...] = ()
-
+    # 仅由已校验的整组预览快照设置；导出子集必须沿用整组构图。
+    crop_plan_prepared: bool = False
 

@@ -158,6 +158,8 @@ class _BirdStampRendererMixin:
 
     def _apply_preview_overlay_options_from_ui(self) -> None:
         """Apply preview overlay options to the preview canvas/composite."""
+        if self._show_sequence_preview_result(preserve_view=True):
+            return
         self.preview_label.apply_overlay_options(self._build_preview_overlay_options())
         canvas = self.preview_label.canvas
         if hasattr(canvas, "set_crop_ratio_constraint"):
@@ -858,6 +860,8 @@ class _BirdStampRendererMixin:
         preserve_view: bool = False,
         force_fit: bool = False,
     ) -> None:
+        if self._show_sequence_preview_result(reset_view=reset_view, preserve_view=preserve_view):
+            return
         display_pixmap: QPixmap | None = self.preview_pixmap
         source_mode = "原图"
 

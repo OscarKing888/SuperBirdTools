@@ -1025,6 +1025,9 @@ def prepare_uniform_auto_crop_plans(
     if total <= 0:
         return 0
 
+    if all(job.crop_plan_prepared for job in jobs):
+        return sum(job.crop_plan is not None for job in jobs)
+
     global_settings = _clone_render_settings(jobs[0].settings)
     strategy = _dejitter.resolve_dejitter_strategy(global_settings.get(DEJITTER_STRATEGY_KEY))
     reference_regions = tuple(
@@ -1319,6 +1322,19 @@ def render_video_frame(
     bird_box_cache: dict[str, tuple[float, float, float, float] | None] | None = None,
     bird_box_lock: threading.Lock | None = None,
 ) -> Image.Image:
+    return render_video_frame_context(
+        job, template_paths=template_paths, bird_box_cache=bird_box_cache, bird_box_lock=bird_box_lock,
+    ).image
+
+
+def render_video_frame_context(
+    job: VideoFrameJob,
+    *,
+    template_paths: dict[str, Path] | None = None,
+    bird_box_cache: dict[str, tuple[float, float, float, float] | None] | None = None,
+    bird_box_lock: threading.Lock | None = None,
+) -> ImageProcContext:
+    """与导出完全相同的处理入口，同时提供成片辅助框所需的源尺寸/裁切几何。"""
     cache = bird_box_cache if isinstance(bird_box_cache, dict) else {}
     settings = _clone_render_settings(job.settings)
     raw_metadata = dict(job.raw_metadata or {})
@@ -1348,7 +1364,8 @@ def render_video_frame(
     rendered_context = build_default_image_proc_pipeline(settings.get(PIPELINE_STAGE_ORDER_KEY)).process(context)
     rendered = rendered_context.image
     # 管线输出已是独立 RGB 图时直接返回（source_image 已在上面复制），省去一次整图复制。
-    return rendered if rendered.mode == "RGB" and rendered is not job.source_image else rendered.convert("RGB")
+    rendered_context.image = rendered if rendered.mode == "RGB" and rendered is not job.source_image else rendered.convert("RGB")
+    return rendered_context
 
 
 def _ensure_even_size(width: int, height: int) -> tuple[int, int]:
@@ -1779,7 +1796,7 @@ def _ensure_source_frame_cache(
     if on_cache_created is not None:
         on_cache_created(source_plan)
     if any(
-        crop_plan_precompute_required(job.settings)
+        not job.crop_plan_prepared and crop_plan_precompute_required(job.settings)
         and _normalize_precomputed_crop_plan(job.crop_plan) is None
         for job in jobs
     ):

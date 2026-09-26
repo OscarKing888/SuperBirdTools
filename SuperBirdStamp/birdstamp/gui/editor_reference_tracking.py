@@ -42,6 +42,7 @@ class _BirdStampReferenceTrackingMixin:
         return result
 
     def _invalidate_reference_tracking(self, message="参考区或照片列表已变化，请重新预处理。", *, shutdown=False) -> None:
+        self._invalidate_sequence_preview(shutdown=shutdown)
         had_results = bool(self._reference_tracking_results)
         self._reference_tracking_token += 1
         self._reference_tracking_shutdown = self._reference_tracking_shutdown or shutdown
@@ -76,8 +77,12 @@ class _BirdStampReferenceTrackingMixin:
             else:
                 message += "\n当前图暂无有效跟踪结果，请预处理。"
         self.dejitter_tracking_status.setText(message)
+        self._update_dejitter_controls()
 
     def _on_reference_preprocess_clicked(self) -> None:
+        if self._dejitter_tab_active():
+            self._on_dejitter_analyze()
+            return
         if self._reference_tracking_shutdown:
             return
         if self._reference_tracking_worker is not None:
@@ -146,6 +151,8 @@ class _BirdStampReferenceTrackingMixin:
             self._update_reference_tracking_controls()
 
     def _on_edit_reference_photo(self) -> None:
+        if self._dejitter_tab_active():
+            self.dejitter_view_combo.setCurrentIndex(0)
         source = getattr(self, "_dejitter_reference_source", None)
         if not source:
             return
