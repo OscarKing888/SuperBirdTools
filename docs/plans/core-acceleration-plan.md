@@ -607,6 +607,13 @@ def to_qimage(buf: PixelBuffer) -> "QImage":  # 仅工作线程调用；一次�
 
 回归：BirdStamp 276 项与 build_tools 全部通过；SuperViewer/app_common 相对基线无新增失败；BirdStamp 配置与模板无改动。
 
+### 7.11 P-4 实施记录（2026-09-26）
+
+- 实测（容器，1400×1000 画布、32.7 MP 图）：Python 逐格棋盘格每次重绘 49.7 ms，是唯一明显热点；整幅原图平滑缩放绘制每次只需 3.6 ms（Qt raster 已高效），缓存缩放副本只能降到 1.6 ms，且每次换图/缩放要多花约 10 ms 建缓存，**未实施**。
+- 已实施：`draw_checker_background` 改为一次 `fillRect` + 按格子尺寸缓存的 2×2 纹理画刷，画刷原点对齐矩形左上角。与原逐格绘制在整数/小数矩形、负偏移、格子 8/5、DPR 1/1.5/2 且带裁剪区的组合下逐像素一致；1400×1000 画布 49.7 → 0.44 ms。
+- 新增 `app_common/tests/test_preview_canvas_hot_path.py`（AGENTS.md 预览回归清单中引用但此前不存在）：像素一致性、非逐格调用、画布绘制含构图网格与叠加导出的冒烟检查。
+- 回归：SuperViewer/app_common 相对基线无新增失败；BirdStamp 与 build_tools 全部通过。受保护的构图网格/焦点框/叠加导出流程代码未改动。
+
 ### 7.4 暂不纳入范围
 
 GUI 重写或框架更换；Rust；GPU/Metal/CUDA 图像路径；自研 JPEG/RAW/HEIF 解码器；新增色彩管理或导出 EXIF/ICC（属于产品功能，不算等价迁移）；YOLO 或推理优化；ExifTool 替换；`_panel.py` 拆分等无关重构；独立仓库 SuperBirdViewer/SuperBirdStamp 的同步；Intel 或 universal2 macOS 包；锁文件引入（建议另立议题）。
