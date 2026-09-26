@@ -15,7 +15,7 @@ FRAME_CACHE_ROOT_NAME = "birdstamp_export_cache"
 SOURCE_FRAME_BUCKET_KIND = "rendered_source_frames"
 VIDEO_FRAME_BUCKET_KIND = "video_frames"
 # 裁切坐标和模板排版算法更新，所有导出方式均重新生成源帧。
-SOURCE_FRAME_CACHE_VERSION = 5
+SOURCE_FRAME_CACHE_VERSION = 6
 VIDEO_FRAME_CACHE_VERSION = 1
 _DEFAULT_PIPELINE_STAGE_ORDER = (
     "template_crop",
@@ -167,6 +167,7 @@ def global_export_settings_from_settings(settings: dict[str, Any] | None) -> dic
         "uniform_auto_crop": uniform_auto_crop,
         "auto_crop_stabilization": _parse_int_range(raw.get("auto_crop_stabilization"), 0, 0, 100)
         if uniform_auto_crop else 0,
+        "dejitter_reference_strength": _parse_int_range(raw.get("dejitter_reference_strength"), 100, 0, 100),
         "dejitter_strategy": dejitter_reference["strategy"],
         "dejitter_reference_enabled": dejitter_reference["enabled"],
         "dejitter_reference_regions": dejitter_reference["regions"],

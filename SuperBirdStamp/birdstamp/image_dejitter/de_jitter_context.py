@@ -26,6 +26,7 @@ class DeJitterContext:
     reference_patches: tuple[np.ndarray, ...] = ()
     reference_raw_center: tuple[float, float] | None = None
     reference_source: Path | None = None
+    reference_source_size: tuple[int, int] | None = None
     aligner: FeatureAligner | None = None
     min_confidence: float = DEFAULT_MIN_CONFIDENCE
     extra: dict[str, Any] = field(default_factory=dict)

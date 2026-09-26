@@ -1662,6 +1662,30 @@ class BirdStampEditorWindow(
         auto_crop_row_layout.addWidget(self.auto_crop_stabilization_value_label)
         auto_crop_row_layout.addStretch()
         template_form.addRow("批量预计算", auto_crop_row_widget)
+        self.dejitter_reference_check = QCheckBox("启用参考区去抖动")
+        self.dejitter_reference_check.setToolTip("框选后自动启用；关闭可保留参考区。导出图片、GIF 和视频共用此设置。")
+        self.dejitter_reference_strength_slider = QSlider(Qt.Orientation.Horizontal)
+        self.dejitter_reference_strength_slider.setRange(0, 100)
+        self.dejitter_reference_strength_slider.setValue(editor_options.DEJITTER_REFERENCE_STRENGTH)
+        self.dejitter_reference_strength_slider.setToolTip("0% 不补偿，100% 跟随参考区位移；与中位中心防抖独立。")
+        self.dejitter_reference_value_label = QLabel("100%")
+        reference_row = QWidget()
+        reference_layout = QHBoxLayout(reference_row)
+        reference_layout.setContentsMargins(0, 0, 0, 0)
+        reference_layout.addWidget(self.dejitter_reference_check)
+        reference_layout.addWidget(self.dejitter_reference_strength_slider, 1)
+        reference_layout.addWidget(self.dejitter_reference_value_label)
+        template_form.addRow("参考区去抖", reference_row)
+        self.dejitter_reference_status = QLabel("尚未选择参考区")
+        self.dejitter_reference_status.setWordWrap(True)
+        template_form.addRow("参考照片", self.dejitter_reference_status)
+        reference_hint = QLabel("用预览工具栏框选鸟头或背景纹理（Shift 追加）。先调整裁剪框，"
+                               "需要相同构图时点应用全部。编辑预览显示原裁切；去抖在导出时计算，"
+                               "越界使用留边颜色，不裁切模式不去抖。")
+        reference_hint.setWordWrap(True)
+        template_form.addRow("去抖说明", reference_hint)
+        self.dejitter_reference_check.toggled.connect(self._on_dejitter_options_changed)
+        self.dejitter_reference_strength_slider.valueChanged.connect(self._on_dejitter_options_changed)
         self._pipeline_stage_option_groups["template_crop"] = template_group
 
         resize_group = QGroupBox()
@@ -2037,7 +2061,7 @@ class BirdStampEditorWindow(
         self.dejitter_reference_clear_btn = QPushButton("清除参考区")
         self.dejitter_reference_clear_btn.setToolTip("清除已框选的去抖动特征参考区（也可在参考区模式下右键清除）。")
         self.dejitter_reference_clear_btn.clicked.connect(self._on_dejitter_reference_clear)
-        # preview_toolbar.addWidget(self.dejitter_reference_clear_btn)
+        preview_toolbar.addWidget(self.dejitter_reference_clear_btn)
 
         self.crop_effect_alpha_label = QLabel("Alpha")
         preview_toolbar.addWidget(self.crop_effect_alpha_label)
@@ -2985,14 +3009,19 @@ class BirdStampEditorWindow(
         self._refresh_preview_label(preserve_view=True)
         self._schedule_workspace_autosave()
 
+    def _on_dejitter_options_changed(self, *_args) -> None:
+        self._update_dejitter_reference_clear_enabled()
+        self._on_output_settings_changed()
+
     def _on_dejitter_reference_clear(self) -> None:
         if not self._dejitter_reference_regions:
             return
         self._dejitter_reference_regions = ()
         self._dejitter_reference_source = None
+        self.dejitter_reference_check.setChecked(False)
         self._update_dejitter_reference_clear_enabled()
         self._apply_preview_overlay_options_from_ui()
-        self._schedule_workspace_autosave()
+        self._on_output_settings_changed()
 
     def _on_canvas_reference_region_changed(
         self, regions: tuple[tuple[float, float, float, float], ...]
@@ -3001,22 +3030,35 @@ class BirdStampEditorWindow(
         source_regions: list[tuple[float, float, float, float]] = []
         for box in regions or ():
             if isinstance(box, (list, tuple)) and len(box) == 4:
-                source_regions.append(
-                    self._reference_region_preview_to_source(tuple(float(v) for v in box))
-                )
+                converted = self._reference_region_preview_to_source(tuple(float(v) for v in box))
+                # 补边内的框选没有源图纹理，不能变成零面积参考区。
+                if converted[2] - converted[0] > 1e-4 and converted[3] - converted[1] > 1e-4:
+                    source_regions.append(converted)
         self._dejitter_reference_regions = tuple(source_regions)
         if source_regions and self.current_path is not None:
             self._dejitter_reference_source = str(self.current_path)
         elif not source_regions:
             self._dejitter_reference_source = None
+        self.dejitter_reference_check.setChecked(bool(source_regions))
         self._update_dejitter_reference_clear_enabled()
         self._apply_preview_overlay_options_from_ui()
-        self._schedule_workspace_autosave()
+        self._on_output_settings_changed()
 
     def _update_dejitter_reference_clear_enabled(self) -> None:
         btn = getattr(self, "dejitter_reference_clear_btn", None)
         if btn is not None:
             btn.setEnabled(bool(getattr(self, "_dejitter_reference_regions", ())))
+        check = getattr(self, "dejitter_reference_check", None)
+        if check is not None:
+            regions = getattr(self, "_dejitter_reference_regions", ())
+            check.setEnabled(bool(regions))
+            self.dejitter_reference_strength_slider.setEnabled(bool(regions) and check.isChecked())
+            self.dejitter_reference_value_label.setText(f"{self.dejitter_reference_strength_slider.value()}%")
+            source = getattr(self, "_dejitter_reference_source", None)
+            state = "已启用" if check.isChecked() else "已停用"
+            self.dejitter_reference_status.setText(
+                f"{Path(source).name} · {len(regions)} 个区域 · {state}" if source and regions else "尚未选择参考区")
+            self.dejitter_reference_status.setToolTip(str(source or ""))
 
     def _get_crop_padding_state(self) -> dict[str, Any]:
         state = self._crop_padding_state if isinstance(self._crop_padding_state, dict) else {}
@@ -3173,6 +3215,7 @@ class BirdStampEditorWindow(
             "max_long_edge": self._selected_max_long_edge(),
             "uniform_auto_crop": bool(self.uniform_auto_crop_check.isChecked()),
             "auto_crop_stabilization": int(self.auto_crop_stabilization_slider.value()),
+            **self._dejitter_reference_settings(),
         }
 
     def _refresh_global_export_settings_snapshot(self) -> bool:
@@ -4922,6 +4965,12 @@ class BirdStampEditorWindow(
         self._next_photo_sequence_number = 0
         self.placeholder_path = None
         self.current_path = None
+        self._dejitter_reference_regions = ()
+        self._dejitter_reference_source = None
+        self.dejitter_reference_check.blockSignals(True)
+        self.dejitter_reference_check.setChecked(False)
+        self.dejitter_reference_check.blockSignals(False)
+        self._update_dejitter_reference_clear_enabled()
         self.current_photo_info = None
         current_source = self.current_source_image
         self.current_source_image = None
@@ -5381,6 +5430,16 @@ class BirdStampEditorWindow(
     def _apply_global_export_settings_to_render_settings(self, settings: dict[str, Any]) -> None:
         """导出时强制使用当前界面的全局管线/叠加开关，避免照片级快照污染。"""
         global_export = self._current_global_export_settings()
+        settings.update(self._dejitter_reference_settings())
+        source = settings.get("dejitter_reference_source")
+        if source:
+            reference_settings = self._render_settings_for_path(Path(source), prefer_current_ui=True)
+            settings["dejitter_reference_crop_settings"] = {
+                key: reference_settings.get(key) for key in (
+                    "ratio", "center_mode", "crop_box", "custom_center_x", "custom_center_y",
+                    "crop_padding_top", "crop_padding_bottom", "crop_padding_left", "crop_padding_right",
+                )
+            }
         settings["draw_banner"] = bool(global_export.get("draw_banner", True))
         settings["draw_text"] = bool(global_export.get("draw_text", True))
         settings["draw_focus"] = bool(global_export.get("draw_focus", False))

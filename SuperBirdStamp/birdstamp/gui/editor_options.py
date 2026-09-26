@@ -350,6 +350,7 @@ def load_editor_options() -> dict[str, Any]:
         default_video_height = _FALLBACK_DEFAULT_VIDEO_HEIGHT
 
     return {
+        "dejitter_reference_strength": max(0, min(100, _dejitter_strength(raw.get("dejitter_reference_strength")))),
         "text_scale_slider": _normalize_text_scale_slider(raw.get("text_scale_slider")),
         "style_options": style_options,
         "ratio_options": ratio_options,
@@ -380,7 +381,15 @@ def load_editor_options() -> dict[str, Any]:
     }
 
 
+def _dejitter_strength(value: Any) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError, OverflowError):
+        return 100
+
+
 _EDITOR_OPTIONS = load_editor_options()
+DEJITTER_REFERENCE_STRENGTH = _EDITOR_OPTIONS["dejitter_reference_strength"]
 TEXT_SCALE_SLIDER: dict[str, int] = _EDITOR_OPTIONS["text_scale_slider"]
 STYLE_OPTIONS: tuple[str, ...] = _EDITOR_OPTIONS["style_options"]
 RATIO_OPTIONS: list[tuple[str, float | None | str]] = _EDITOR_OPTIONS["ratio_options"]

@@ -423,6 +423,10 @@ def source_frame_signature_for_job(
     template_signature_state: Mapping[str, Mapping[str, Any]] | None = None,
 ) -> str:
     render_settings = _clone_render_settings(job.settings)
+    if dejitter_reference_active(render_settings):
+        source = render_settings.get(DEJITTER_REFERENCE_SOURCE_KEY)
+        if source:
+            render_settings["_reference_file_signature"] = path_signature(Path(source))
     crop_payload = _serialize_crop_plan(job.crop_plan)
     if crop_payload is not None:
         render_settings["_precomputed_crop_plan"] = crop_payload
@@ -522,13 +526,16 @@ def _normalize_reference_regions(value: Any) -> list[list[float]]:
 
 
 def _stabilization_eligible(settings: dict[str, Any]) -> bool:
-    """是否可对该帧做裁切中心稳定化（固定比例、无手动裁切框覆盖）。"""
+    """保留自动中位中心稳定化的资格规则，不覆盖手动裁切。"""
     ratio = _parse_ratio_value(settings.get("ratio"))
-    if ratio is None or _is_ratio_free(ratio) or _is_ratio_no_crop(ratio):
-        return False
-    if _normalize_extended_unit_box(settings.get("crop_box")) is not None:
-        return False
-    return True
+    return (ratio is not None and not _is_ratio_free(ratio) and not _is_ratio_no_crop(ratio)
+            and _normalize_extended_unit_box(settings.get("crop_box")) is None)
+
+
+def _reference_stabilization_eligible(settings: dict[str, Any]) -> bool:
+    """是否可对该帧做参考区裁切中心稳定化。"""
+    # 手动框、自由比例和原比例同样可以平移；只有“不裁切”明确禁止改动构图。
+    return not _is_ratio_no_crop(_parse_ratio_value(settings.get("ratio")))
 
 
 def dejitter_reference_active(settings: dict[str, Any] | None) -> bool:
@@ -614,7 +621,7 @@ def _clone_render_settings(settings: dict[str, Any]) -> dict[str, Any]:
     reference_source_raw = settings.get(DEJITTER_REFERENCE_SOURCE_KEY)
     reference_source = (
         str(reference_source_raw).strip()
-        if reference_active and reference_source_raw
+        if reference_regions and reference_source_raw
         else None
     )
     return {
@@ -663,9 +670,12 @@ def _clone_render_settings(settings: dict[str, Any]) -> dict[str, Any]:
         "crop_box": crop_box,
         "custom_center_x": float(custom_center_x) if custom_center_x is not None else None,
         "custom_center_y": float(custom_center_y) if custom_center_y is not None else None,
+        "dejitter_reference_strength": _parse_percent_setting(settings.get("dejitter_reference_strength"), 100),
+        "dejitter_reference_crop_settings": dict(settings["dejitter_reference_crop_settings"])
+        if isinstance(settings.get("dejitter_reference_crop_settings"), dict) else {},
         DEJITTER_STRATEGY_KEY: dejitter_strategy,
         DEJITTER_REFERENCE_ENABLED_KEY: reference_active,
-        DEJITTER_REFERENCE_REGIONS_KEY: reference_regions if reference_active else [],
+        DEJITTER_REFERENCE_REGIONS_KEY: reference_regions,
         DEJITTER_REFERENCE_SOURCE_KEY: reference_source,
     }
 
@@ -942,7 +952,9 @@ def prepare_uniform_auto_crop_plans(
     reference_source = Path(reference_source_text) if reference_source_text else None
 
     any_uniform = any(_parse_bool_value(job.settings.get("uniform_auto_crop"), False) for job in jobs)
-    if not any_uniform and not use_reference:
+    if not any_uniform and (not use_reference
+                            or global_settings["dejitter_reference_strength"] == 0
+                            or not any(_reference_stabilization_eligible(job.settings) for job in jobs)):
         return 0
 
     cache = bird_box_cache if isinstance(bird_box_cache, dict) else {}
@@ -953,10 +965,51 @@ def prepare_uniform_auto_crop_plans(
     reference_patches: tuple["np.ndarray | None", ...] = ()
     reference_raw_center: tuple[float, float] | None = None
     patch_size = _dejitter.DEFAULT_PATCH_SIZE
+    reference_source_size = None
+    if use_reference:
+        # 参考照片不必包含在本次导出子集中，读取失败必须明确报告。
+        reference_job = next((job for job in jobs if reference_source is not None
+                              and _path_key(job.path) == _path_key(reference_source)), None)
+        if reference_job is None:
+            if reference_source is None:
+                raise ValueError("参考区去抖动缺少参考照片，请重新框选参考区。")
+            reference_job = VideoFrameJob(
+                path=reference_source,
+                settings=global_settings.get("dejitter_reference_crop_settings") or global_settings,
+                raw_metadata={}, metadata_context={},
+            )
+        _raise_if_cancel_requested(cancel_event)
+        if all(reference_job is not job for job in jobs) and reference_job.settings.get("center_mode") == _CENTER_MODE_FOCUS:
+            from app_common.exif_io import extract_many_with_xmp_priority
+            metadata = extract_many_with_xmp_priority([reference_job.path], mode="auto")
+            reference_job.raw_metadata = dict(metadata.get(reference_job.path.resolve()) or {})
+        _raise_if_cancel_requested(cancel_event)
+        try:
+            reference_image, close_reference = _open_job_image_for_crop_plan(reference_job)
+        except Exception as exc:
+            raise ValueError(f"无法读取去抖动参考照片 {reference_source}，请重新选择参考照片。") from exc
+        try:
+            reference_patches = tuple(_extract_region_patch(reference_image, box, patch_size)
+                                      for box in reference_regions)
+            reference_source_size = reference_image.size
+            reference_plan = _compute_crop_plan_for_image(
+                path=reference_job.path, image=reference_image,
+                raw_metadata=reference_job.raw_metadata,
+                settings=_clone_render_settings(reference_job.settings),
+                bird_box_cache=cache, bird_box_lock=bird_box_lock,
+            )
+            reference_raw_center = _crop_plan_center_in_source_pixels(
+                source_width=reference_image.width, source_height=reference_image.height,
+                crop_plan=reference_plan,
+            )
+        finally:
+            if close_reference:
+                reference_image.close()
     prepared = 0
+    unmatched = 0
 
     for index, job in enumerate(jobs, start=1):
-        _raise_if_cancel_requested(cancel_event, message="视频导出已中断，正在停止统一裁切预计算。")
+        _raise_if_cancel_requested(cancel_event, message="导出已中断，正在停止裁切与去抖动预计算。")
         settings = _clone_render_settings(job.settings)
         job_uniform = _parse_bool_value(settings.get("uniform_auto_crop"), False)
         if not job_uniform and not use_reference:
@@ -995,15 +1048,15 @@ def prepare_uniform_auto_crop_plans(
                 and _path_key(job.path) == _path_key(reference_source)
             )
             region_patches: tuple["np.ndarray | None", ...] = ()
-            if use_reference and _stabilization_eligible(settings):
+            if use_reference and _reference_stabilization_eligible(settings):
                 region_patches = tuple(
                     _extract_region_patch(image, box, patch_size) for box in reference_regions
                 )
 
-            # 参考区模式需要固定比例/无覆盖才稳定化；统一裁切沿用 group_key 资格。
+            # 参考区允许手动裁切；统一尺寸仍沿用自动裁切分组资格。
             do_uniform = group_key is not None
             do_stabilize = crop_size is not None and center is not None and (
-                do_uniform or (use_reference and _stabilization_eligible(settings))
+                do_uniform or (use_reference and _reference_stabilization_eligible(settings))
             )
             if do_stabilize:
                 frame = _dejitter.DeJitterFrame(
@@ -1027,15 +1080,24 @@ def prepare_uniform_auto_crop_plans(
                     "source_width": int(image.width),
                     "source_height": int(image.height),
                 }
+                if use_reference:
+                    # 逐帧匹配并释放 patch，长序列不累计保存所有帧的灰度数组。
+                    manual = _normalize_extended_unit_box(settings.get("crop_box")) is not None
+                    context = _dejitter.DeJitterContext(
+                        frames=[frame], strength=global_settings["dejitter_reference_strength"],
+                        reference_regions=reference_regions, reference_patches=reference_patches,
+                        reference_raw_center=None if manual else reference_raw_center,
+                        reference_source_size=reference_source_size, reference_source=reference_source,
+                    )
+                    strategy.stabilize(context)
+                    unmatched += int(bool(context.extra.get("unmatched")))
+                    frame.region_patches = ()
                 candidates.append(candidate)
                 frames.append(frame)
                 if do_uniform:
                     grouped_candidates.setdefault(group_key, []).append(candidate)
                     grouped_sizes.setdefault(group_key, []).append(crop_size)
 
-            if is_reference_frame and center is not None:
-                reference_patches = region_patches
-                reference_raw_center = center
         finally:
             if close_image:
                 try:
@@ -1045,16 +1107,10 @@ def prepare_uniform_auto_crop_plans(
         if callable(progress_callback):
             progress_callback(index, total)
 
-    _run_dejitter_stabilization(
-        strategy=strategy,
-        frames=frames,
-        grouped_candidates=grouped_candidates,
-        use_reference=use_reference,
-        reference_regions=reference_regions,
-        reference_patches=reference_patches,
-        reference_raw_center=reference_raw_center,
-        reference_source=reference_source,
-    )
+    if unmatched:
+        _log.warning("参考区去抖动：%s/%s 帧匹配不可靠，保留这些帧的原裁切中心。", unmatched, len(frames))
+    if not use_reference:
+        _run_median_stabilization(grouped_candidates)
 
     target_sizes = {
         group_key: _resolve_uniform_group_target_size(
@@ -1093,45 +1149,13 @@ def prepare_uniform_auto_crop_plans(
     return prepared
 
 
-def _run_dejitter_stabilization(
-    *,
-    strategy: "_dejitter.DeJitterStrategy",
-    frames: list["_dejitter.DeJitterFrame"],
-    grouped_candidates: dict[tuple[str, int], list[dict[str, Any]]],
-    use_reference: bool,
-    reference_regions: tuple[tuple[float, float, float, float], ...],
-    reference_patches: tuple["np.ndarray | None", ...],
-    reference_raw_center: tuple[float, float] | None,
-    reference_source: Path | None,
-) -> None:
-    """根据策略执行去抖动稳定化，把稳定中心写回各 frame。"""
-    if not frames:
-        return
-    if use_reference:
-        strength = max((int(frame.strength) for frame in frames), default=0)
-        context = _dejitter.DeJitterContext(
-            frames=frames,
-            strength=strength,
-            reference_regions=reference_regions,
-            reference_patches=reference_patches,
-            reference_raw_center=reference_raw_center,
-            reference_source=reference_source,
-            aligner=_dejitter.NumpyPhaseCorrelationAligner(),
-        )
-        strategy.stabilize(context)
-        return
-
-    # 非参考区路径：保留原有"按比例组中位中心混合"语义。
-    median_strategy = (
-        strategy
-        if isinstance(strategy, _dejitter.MedianCenterStabilizationStrategy)
-        else _dejitter.MedianCenterStabilizationStrategy()
-    )
+def _run_median_stabilization(grouped_candidates: dict[tuple[str, int], list[dict[str, Any]]]) -> None:
+    """非参考区路径保留原有按比例组中位中心混合语义。"""
+    strategy = _dejitter.MedianCenterStabilizationStrategy()
     for group_candidates in grouped_candidates.values():
         group_frames = [candidate["frame"] for candidate in group_candidates]
         strength = max((int(frame.strength) for frame in group_frames), default=0)
-        context = _dejitter.DeJitterContext(frames=group_frames, strength=strength)
-        median_strategy.stabilize(context)
+        strategy.stabilize(_dejitter.DeJitterContext(frames=group_frames, strength=strength))
 
 
 def _compute_crop_plan_for_image(
@@ -1667,7 +1691,7 @@ def _ensure_source_frame_cache(
             phase="prepare",
             current=0,
             total=total,
-            message=f"正在预计算统一自动裁切尺寸，共 {total} 张。",
+            message=f"正在预计算裁切与去抖动，共 {total} 张。",
         )
 
         def _on_prepare_progress(current: int, total_count: int) -> None:
@@ -1676,7 +1700,7 @@ def _ensure_source_frame_cache(
                 phase="prepare",
                 current=current,
                 total=total_count,
-                message=f"正在预计算统一自动裁切尺寸 {current}/{total_count}",
+                message=f"正在预计算裁切与去抖动 {current}/{total_count}",
             )
 
         prepare_uniform_auto_crop_plans(

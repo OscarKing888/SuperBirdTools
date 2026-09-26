@@ -121,6 +121,13 @@ class _BirdStampRendererMixin:
             fill=_safe_color(str(settings.get("crop_padding_fill", "#FFFFFF")), "#FFFFFF"),
         )
 
+    def _visible_dejitter_reference_regions(self):
+        source = getattr(self, "_dejitter_reference_source", None)
+        current = getattr(self, "current_path", None)
+        if source and current and _path_key(Path(source)) == _path_key(current):
+            return getattr(self, "_dejitter_reference_regions", ())
+        return ()
+
     def _dejitter_reference_mode_active(self) -> bool:
         getter = getattr(self, "_current_edit_mode_id", None)
         if callable(getter):
@@ -131,7 +138,7 @@ class _BirdStampRendererMixin:
         """Build editor preview overlay options from the current toolbar UI state."""
         preview_grid_combo = getattr(self, "preview_grid_combo", None)
         preview_grid_line_width_combo = getattr(self, "preview_grid_line_width_combo", None)
-        reference_regions = getattr(self, "_dejitter_reference_regions", ()) or ()
+        reference_regions = self._visible_dejitter_reference_regions()
         show_reference = self._dejitter_reference_mode_active() or bool(reference_regions)
         return EditorPreviewOverlayOptions(
             show_focus_box=bool(self.show_focus_box_check.isChecked()),
@@ -175,7 +182,7 @@ class _BirdStampRendererMixin:
             canvas.set_edit_mode(mode)
         if hasattr(canvas, "set_reference_regions"):
             canvas.set_reference_regions(
-                self._reference_regions_source_to_preview(getattr(self, "_dejitter_reference_regions", ()))
+                self._reference_regions_source_to_preview(self._visible_dejitter_reference_regions())
             )
 
     # ------------------------------------------------------------------
@@ -951,13 +958,16 @@ class _BirdStampRendererMixin:
             for box in (getattr(self, "_dejitter_reference_regions", ()) or ())
             if len(box) == 4
         ]
-        active = bool(regions)
+        check = getattr(self, "dejitter_reference_check", None)
+        active = bool(regions) and (check.isChecked() if check is not None else True)
+        slider = getattr(self, "dejitter_reference_strength_slider", None)
         source = getattr(self, "_dejitter_reference_source", None)
         return {
-            DEJITTER_STRATEGY_KEY: "reference_region" if active else "median",
+            "dejitter_reference_strength": int(slider.value()) if slider is not None else 100,
+            DEJITTER_STRATEGY_KEY: "reference_region" if regions else "median",
             DEJITTER_REFERENCE_ENABLED_KEY: active,
             DEJITTER_REFERENCE_REGIONS_KEY: regions,
-            DEJITTER_REFERENCE_SOURCE_KEY: str(source) if (active and source) else None,
+            DEJITTER_REFERENCE_SOURCE_KEY: str(source) if (regions and source) else None,
         }
 
     def _photo_override_settings_from_snapshot(self, settings: dict[str, Any]) -> dict[str, Any]:
@@ -975,6 +985,8 @@ class _BirdStampRendererMixin:
         normalized.pop("max_long_edge", None)
         normalized.pop("uniform_auto_crop", None)
         normalized.pop("auto_crop_stabilization", None)
+        normalized.pop("dejitter_reference_strength", None)
+        normalized.pop("dejitter_reference_crop_settings", None)
         normalized.pop(DEJITTER_STRATEGY_KEY, None)
         normalized.pop(DEJITTER_REFERENCE_ENABLED_KEY, None)
         normalized.pop(DEJITTER_REFERENCE_REGIONS_KEY, None)
@@ -1044,28 +1056,14 @@ class _BirdStampRendererMixin:
 
     @staticmethod
     def _clone_dejitter_reference_settings(settings: dict[str, Any]) -> dict[str, Any]:
-        regions: list[list[float]] = []
-        raw_regions = settings.get(DEJITTER_REFERENCE_REGIONS_KEY)
-        if isinstance(raw_regions, (list, tuple)):
-            for item in raw_regions:
-                if isinstance(item, (list, tuple)) and len(item) == 4:
-                    try:
-                        regions.append([float(item[0]), float(item[1]), float(item[2]), float(item[3])])
-                    except (TypeError, ValueError):
-                        continue
-        strategy = str(settings.get(DEJITTER_STRATEGY_KEY) or "median").strip().lower()
-        enabled = _parse_bool_value(settings.get(DEJITTER_REFERENCE_ENABLED_KEY), False) and bool(regions)
-        if enabled:
-            strategy = "reference_region"
-        elif strategy not in {"median", "reference_region"}:
-            strategy = "median"
-        source = settings.get(DEJITTER_REFERENCE_SOURCE_KEY)
-        return {
-            DEJITTER_STRATEGY_KEY: strategy,
-            DEJITTER_REFERENCE_ENABLED_KEY: enabled,
-            DEJITTER_REFERENCE_REGIONS_KEY: regions if enabled else [],
-            DEJITTER_REFERENCE_SOURCE_KEY: str(source) if (enabled and source) else None,
-        }
+        from birdstamp.export_stage import core
+
+        normalized = core._clone_render_settings(settings)
+        return {key: normalized[key] for key in (
+            DEJITTER_STRATEGY_KEY, DEJITTER_REFERENCE_ENABLED_KEY,
+            DEJITTER_REFERENCE_REGIONS_KEY, DEJITTER_REFERENCE_SOURCE_KEY,
+            "dejitter_reference_strength", "dejitter_reference_crop_settings",
+        )}
 
     def _normalize_render_settings(self, raw: Any, fallback: dict[str, Any]) -> dict[str, Any]:
         settings = self._clone_render_settings(fallback)
@@ -1253,7 +1251,6 @@ class _BirdStampRendererMixin:
             fallback_name=template_name,
         )
         self._crop_box_override = _template_context.normalize_crop_box(normalized.get("crop_box"))
-        self._restore_dejitter_reference_from_settings(normalized)
         if normalized["center_mode"] == _CENTER_MODE_CUSTOM:
             cx = normalized.get("custom_center_x")
             cy = normalized.get("custom_center_y")
@@ -1276,9 +1273,24 @@ class _BirdStampRendererMixin:
                     except (TypeError, ValueError):
                         continue
         enabled = _parse_bool_value(settings.get(DEJITTER_REFERENCE_ENABLED_KEY), False) and bool(regions)
-        self._dejitter_reference_regions = tuple(regions) if enabled else ()
+        self._dejitter_reference_regions = tuple(regions)
         source = settings.get(DEJITTER_REFERENCE_SOURCE_KEY)
-        self._dejitter_reference_source = str(source) if (enabled and source) else None
+        self._dejitter_reference_source = str(source) if (regions and source) else None
+        for name, value in (("dejitter_reference_check", enabled),
+                            ("dejitter_reference_strength_slider", settings.get("dejitter_reference_strength", 100))):
+            widget = getattr(self, name, None)
+            if widget is not None:
+                widget.blockSignals(True)
+                try:
+                    if name.endswith("check"):
+                        widget.setChecked(bool(value))
+                    else:
+                        widget.setValue(int(value))
+                finally:
+                    widget.blockSignals(False)
+        update = getattr(self, "_update_dejitter_reference_clear_enabled", None)
+        if callable(update):
+            update()
         # 参考区被禁用且当前正处于参考区模式时，回退到「选择模式」。
         if not enabled:
             getter = getattr(self, "_current_edit_mode_id", None)

@@ -31,7 +31,7 @@ class ReferenceRegionStabilizationStrategy(DeJitterStrategy):
             return
         blend = clamp_percent(context.strength, 0) / 100.0
         if blend <= 0:
-            blend = 1.0
+            return
 
         for frame in frames:
             displacement = self._estimate_frame_displacement(
@@ -43,9 +43,14 @@ class ReferenceRegionStabilizationStrategy(DeJitterStrategy):
             )
             raw_center = frame.center
             if displacement is None:
+                context.extra["unmatched"] = context.extra.get("unmatched", 0) + 1
                 frame.stable_center = raw_center
                 continue
             base_center = context.reference_raw_center or raw_center
+            if context.reference_source_size and context.reference_raw_center:
+                rw, rh = context.reference_source_size
+                base_center = (base_center[0] * frame.source_width / rw,
+                               base_center[1] * frame.source_height / rh)
             target_x = float(base_center[0]) + displacement[0]
             target_y = float(base_center[1]) + displacement[1]
             stable_x = float(raw_center[0]) * (1.0 - blend) + target_x * blend
@@ -77,7 +82,7 @@ class ReferenceRegionStabilizationStrategy(DeJitterStrategy):
             if patch_h < 2 or patch_w < 2:
                 continue
             dx_patch, dy_patch, confidence = aligner.estimate_translation(ref_patch, target_patch)
-            if confidence < float(min_confidence):
+            if not np.isfinite((dx_patch, dy_patch, confidence)).all() or confidence < float(min_confidence):
                 continue
             box = regions[index]
             region_px_w = max(1.0, (float(box[2]) - float(box[0])) * float(frame.source_width))
@@ -96,4 +101,11 @@ class ReferenceRegionStabilizationStrategy(DeJitterStrategy):
         median_y = median_float(dys)
         if median_x is None or median_y is None:
             return None
-        return (median_x, median_y)
+        # 两个区域冲突时不取中间的虚假位移；多个区域必须形成严格多数共识。
+        tolerance = max(1.0, min(frame.source_width, frame.source_height) * 0.003)
+        agreeing = [i for i, (dx, dy) in enumerate(zip(dxs, dys))
+                    if np.hypot(dx - median_x, dy - median_y) <= tolerance]
+        if len(dxs) > 1 and len(agreeing) <= len(dxs) // 2:
+            return None
+        return (median_float([dxs[i] for i in agreeing]),
+                median_float([dys[i] for i in agreeing]))

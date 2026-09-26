@@ -56,6 +56,11 @@ class ImageProcTemplateCropStage(ImageProcStage):
             ImageProcOptionSpec(key="crop_padding_left", label="左留边", value_type="int", default=0),
             ImageProcOptionSpec(key="crop_padding_right", label="右留边", value_type="int", default=0),
             ImageProcOptionSpec(key="crop_padding_fill", label="留边颜色", value_type="color", default="#FFFFFF"),
+            ImageProcOptionSpec(key="dejitter_reference_enabled", label="参考区去抖动", value_type="bool",
+                                default=False, description="导出前按源图参考区预计算裁切位移。"),
+            ImageProcOptionSpec(key="dejitter_reference_strength", label="参考区补偿强度", value_type="int",
+                                default=100, minimum=0, maximum=100, step=1,
+                                description="0% 不补偿；100% 跟随参考区平移，不改变手动裁切尺寸。"),
         )
 
     def process(self, context: ImageProcContext) -> ImageProcContext:

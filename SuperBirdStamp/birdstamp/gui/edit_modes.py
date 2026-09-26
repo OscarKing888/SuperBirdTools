@@ -211,16 +211,14 @@ class ReferenceRegionEditMode(EditMode):
         if not self._drawing or event.button() != Qt.MouseButton.LeftButton:
             return False
         start = self._start_norm
-        end = self._current_norm or self._start_norm
+        end = self._point_norm(canvas, event) or self._current_norm or self._start_norm
         append = self._append
         self._reset()
         if start is not None and end is not None:
             box = normalized_rect_from_points(start, end)
             if rect_has_area(box):
                 canvas.commit_reference_region(box, append=append)
-            else:
-                # 点击（无面积）视为清除全部参考区。
-                canvas.commit_reference_region(None, append=False)
+            # 无面积点击保留原参考区；使用右键或“清除参考区”明确清除。
         canvas.update()
         event.accept()
         return True

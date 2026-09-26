@@ -99,7 +99,7 @@ def test_reference_region_strategy_follows_feature_displacement() -> None:
         region_patches=(target_patch,),
     )
     context = DeJitterContext(
-        frames=[reference_frame, target_frame],
+        frames=[reference_frame, target_frame], strength=100,
         reference_regions=(region,),
         reference_patches=(ref_patch,),
         reference_raw_center=(50.0, 50.0),
@@ -124,3 +124,49 @@ def test_reference_region_strategy_noop_without_regions() -> None:
     context = DeJitterContext(frames=[frame], reference_regions=(), reference_patches=())
     ReferenceRegionStabilizationStrategy().stabilize(context)
     assert frame.stable_center is None
+
+
+def test_aligner_subpixel_shift_and_brightness_change():
+    from PIL import Image, ImageFilter
+    rng = np.random.default_rng(71)
+    base = Image.fromarray((rng.random((220, 220)) * 255).astype('uint8')).filter(ImageFilter.GaussianBlur(1.2))
+    ref = np.asarray(base.crop((14, 14, 206, 206)), dtype=float)
+    shifted = base.transform(base.size, Image.Transform.AFFINE, (1, 0, -3.35, 0, 1, 2.65), Image.Resampling.BICUBIC)
+    target = np.asarray(shifted.crop((14, 14, 206, 206)), dtype=float) * 1.15 + 17
+    dx, dy, confidence = NumpyPhaseCorrelationAligner().estimate_translation(ref, target)
+    assert abs(dx - 3.35) < 0.2
+    assert abs(dy + 2.65) < 0.2
+    assert confidence > 8
+
+
+def test_aligner_rejects_missing_texture_nonfinite_and_unrelated_images():
+    rng = np.random.default_rng(19)
+    ref = rng.random((192, 192))
+    aligner = NumpyPhaseCorrelationAligner()
+    for a, b in [(ref, rng.random(ref.shape)), (ref, np.full_like(ref, np.nan)),
+                 (np.ones_like(ref), np.ones_like(ref)), (np.zeros_like(ref), ref)]:
+        assert aligner.estimate_translation(a, b) == (0, 0, 0)
+
+
+def test_reference_strength_zero_and_mixed_source_sizes():
+    ref, shifted = _shifted_patches(10, 6)
+    frame = DeJitterFrame(200, 150, (90, 60), (.45, .4), region_patches=(shifted,))
+    context = DeJitterContext(frames=[frame], strength=0, reference_regions=((0, 0, 1, 1),),
+                             reference_patches=(ref,), reference_raw_center=(45, 40), reference_source_size=(100, 100))
+    strategy = ReferenceRegionStabilizationStrategy()
+    strategy.stabilize(context)
+    assert frame.stable_center is None
+    context.strength = 100
+    strategy.stabilize(context)
+    np.testing.assert_allclose(frame.stable_center, (90 + 10 * 200 / 192, 60 + 6 * 150 / 192), atol=.3)
+
+
+def test_conflicting_regions_reject_invented_average():
+    ref, right = _shifted_patches(10, 0)
+    _, left = _shifted_patches(-10, 0)
+    frame = DeJitterFrame(100, 100, (50, 50), (.5, .5), region_patches=(right, left))
+    context = DeJitterContext(frames=[frame], strength=100, reference_regions=((0, 0, 1, 1),) * 2,
+                             reference_patches=(ref, ref), reference_raw_center=(70, 70))
+    ReferenceRegionStabilizationStrategy().stabilize(context)
+    assert frame.stable_center == (50, 50)
+    assert context.extra['unmatched'] == 1

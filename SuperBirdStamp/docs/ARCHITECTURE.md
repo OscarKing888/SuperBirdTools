@@ -92,7 +92,7 @@ flowchart LR
 | [ImageProcPipeline](../birdstamp/image_pipeline/image_proc_pipeline.py) | 按顺序执行启用阶段，提供单帧和批量入口。 |
 | [ImageProcExportStage](../birdstamp/image_pipeline/image_proc_export_stage.py) | PNG/GIF/Video 终端选择的描述基类。其 `process` 本身不编码文件，实际编码由 exporter/core 调度。 |
 
-[export_stage/core.py](../birdstamp/export_stage/core.py) 的 `render_video_frame` 构造上下文并运行阶段管线。`prepare_uniform_auto_crop_plans` 在整批图像间预计算统一裁切；去抖策略通过 [resolve_dejitter_strategy](../birdstamp/image_dejitter/strategy_registry.py) 选择中值中心或参考区域策略。改变这些批量计算时，要同时检查其输出是否进入缓存签名。
+[export_stage/core.py](../birdstamp/export_stage/core.py) 的 `render_video_frame` 构造上下文并运行阶段管线。`prepare_uniform_auto_crop_plans` 在整批图像间预计算统一裁切；去抖策略通过 [resolve_dejitter_strategy](../birdstamp/image_dejitter/strategy_registry.py) 选择中值中心或参考区域策略。改变这些批量计算时，要同时检查其输出是否进入缓存签名。 参考区去抖在源图坐标中逐帧估计平移，支持手动裁切和导出列表外的参考照片；全局开关、独立强度与参考文件签名参与缓存失效。编辑预览仍显示原裁切，去抖结果在导出预计算时生成。使用流程、坐标语义、算法边界与回归入口见 [参考区去抖动](DEJITTER.md)。
 
 预览由 [editor_renderer.py](../birdstamp/gui/editor_renderer.py) 的 `render_preview`、`_render_preview_pipeline_image` 适配相同的阶段顺序和设置，但保留裁切外画布以供编辑，不直接把最终裁切位图作为交互画布。模板要与裁切区域对齐，焦点框也要经过相同坐标变换。[editor_preview_canvas.py](../birdstamp/gui/editor_preview_canvas.py) 承接交互显示和网格叠加。
 
