@@ -48,6 +48,8 @@
 
 `render_preview` 的鸟体中心及缺失焦点回退通过后台识别计算，结果到达后重算裁切与文字；中间缩略图不参与检测，手动裁切框不会被覆盖。导出仍使用完整裁切管线。预览模板通过 `template_context.preview_photo_info` 消费已合并 XMP 的元数据快照，字段缺失时等待后台元数据刷新，不在 GUI 抢占 ExifTool 或打开原图探测。字段解析按优先级命中即返回，同次预览复用 provider context；导出和模板管理器保留完整读取规则。
 
+预览工具栏的“自动焦点居中”复用 [FocusCenteredPreviewCanvas](../../app_common/preview_canvas/focus_centered.py)，与 SuperViewer 共用实现。普通编辑、去抖动原图和成片都以各自画面坐标中的焦点居中，无焦点时回退图像中心；隐藏焦点框不影响锁定。切图/小图升级/加载占位保持相对适应窗口的缩放，滚轮和窗口变化继续锁定，关闭后恢复拖动。它只改变视口，不改变裁切或导出；默认值来自 `editor_options.json` 的 `preview_auto_focus_center`，开关随工作区 preview 状态保存。回归见 [test_editor_focus_center.py](../tests/test_editor_focus_center.py)。
+
 启动示意位图只用于快速出窗；未恢复工作区时，`_show_startup_placeholder_if_idle` 延后加载带真实 EXIF 的内置示例，且不能覆盖已开始导入或选中的照片。恢复后没有有效照片时也加载该示例。示例图与普通照片都支持后台鸟体识别及焦点显示。重新勾选「显示鸟体框」会按需启动识别；仅更新辅助框时保持当前缩放/平移，只有自动裁切依赖鸟体中心时才重排预览。开关、空工作区、迟到元数据和补边坐标回归见 [test_editor_preview_boxes.py](../tests/test_editor_preview_boxes.py)。
 
 普通格式解码在旋转/转色前缩小像素，并携带原尺寸和文件属性，避免再次打开 TIFF 读取尺寸。TIFF 原尺寸读取兼容 Pillow 已应用 Orientation 的情形，不能重复交换宽高。性能探针 `select.activate`、`select.render_preview`、`preview.cached_thumbnail`、`preview.source_size`、`preview.decode` 区分点击耗时和后台读取耗时。

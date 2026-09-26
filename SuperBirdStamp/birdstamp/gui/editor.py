@@ -2069,6 +2069,15 @@ class BirdStampEditorWindow(
         self.show_focus_box_check.toggled.connect(self._on_preview_toolbar_toggled)
         preview_toolbar.addWidget(self.show_focus_box_check)
 
+        self.auto_focus_center_check = QCheckBox("自动焦点居中")
+        self.auto_focus_center_check.setChecked(editor_options.PREVIEW_AUTO_FOCUS_CENTER)
+        self.auto_focus_center_check.setToolTip(
+            "切图和缩放时将焦点保持在预览中央；无焦点时使用图像中心，边缘可留白。"
+            "与对焦点框是否显示无关；仅改变预览视野，不改变裁切或导出。关闭后可自由拖动。"
+        )
+        self.auto_focus_center_check.toggled.connect(self._on_auto_focus_center_toggled)
+        preview_toolbar.addWidget(self.auto_focus_center_check)
+
         self.show_bird_box_check = QCheckBox("显示鸟体框")
         self.show_bird_box_check.setChecked(True)
         self.show_bird_box_check.toggled.connect(self._on_preview_toolbar_toggled)
@@ -2122,6 +2131,7 @@ class BirdStampEditorWindow(
         self._dejitter_reference_source: str | None = None
         self._preview_outer_pad: tuple[int, int, int, int] = (0, 0, 0, 0)
         canvas = self.preview_label.canvas
+        canvas.set_auto_focus_center(self.auto_focus_center_check.isChecked())
         if hasattr(canvas, "crop_box_changed"):
             canvas.crop_box_changed.connect(self._on_canvas_crop_box_changed)
         if hasattr(canvas, "crop_drag_started"):
@@ -2852,6 +2862,10 @@ class BirdStampEditorWindow(
             return
         self._shutdown_workspace_autosave()
         super().closeEvent(event)
+
+    def _on_auto_focus_center_toggled(self, enabled: bool) -> None:
+        self.preview_label.canvas.set_auto_focus_center(enabled)
+        self._schedule_workspace_autosave()
 
     def _on_preview_toolbar_toggled(self, _checked: bool) -> None:
         if self.sender() is self.show_bird_box_check and self.show_bird_box_check.isChecked():

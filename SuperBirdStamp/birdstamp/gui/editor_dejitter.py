@@ -535,6 +535,12 @@ class _BirdStampDejitterMixin:
             return False
         source = self.current_source_image
         quick = self._sequence_quick_frames.get(path_key(self.current_path)) if self.current_path and (source is None or self._sequence_fast_preview_active()) else None
+        raw_metadata = self.current_raw_metadata
+        if self._sequence_preview is not None and self.current_path is not None:
+            job = self._sequence_preview.jobs.get(path_key(self.current_path))
+            if job is not None:
+                # 分析已读取的焦点同样供原图快切使用，不在播放时重新读取 EXIF。
+                raw_metadata = {**job.raw_metadata, **raw_metadata}
         options = self._build_preview_overlay_options()
         options.show_crop_effect = False
         self.preview_label.apply_overlay_options(options)
@@ -550,9 +556,9 @@ class _BirdStampDejitterMixin:
         if source is not None or quick is not None:
             width, height = quick.source_size if quick else self._crop_display_source_size() or source.size
             state.focus_box = editor_core.resolve_focus_box_after_processing(
-                self.current_raw_metadata, source_width=width, source_height=height, crop_box=None,
+                raw_metadata, source_width=width, source_height=height, crop_box=None,
                 outer_pad=(0, 0, 0, 0), apply_ratio_crop=False,
-                camera_type=editor_core.resolve_focus_camera_type_from_metadata(self.current_raw_metadata))
+                camera_type=editor_core.resolve_focus_camera_type_from_metadata(raw_metadata))
             state.bird_box = self._bird_box_cache.get(self._source_signature(self.current_path)) if self.current_path else None
             self.preview_label.set_original_size(width, height)
         self.preview_label.set_cropped_size(None, None)

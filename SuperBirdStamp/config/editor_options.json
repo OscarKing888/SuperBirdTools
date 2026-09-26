@@ -1,4 +1,5 @@
 {
+  "preview_auto_focus_center": false,
   "dejitter_reference_strength": 100,
   "dejitter_quick_max_edge": 768,
   "dejitter_quick_cache_mb": 64,

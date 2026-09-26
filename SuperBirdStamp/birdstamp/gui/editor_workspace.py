@@ -413,6 +413,7 @@ class _BirdStampWorkspaceMixin:
             "edit_mode": edit_mode,
             "crop_effect_alpha": int(self.crop_effect_alpha_slider.value()),
             "show_focus_box": bool(self.show_focus_box_check.isChecked()),
+            "auto_focus_center": bool(self.auto_focus_center_check.isChecked()),
             "show_bird_box": bool(self.show_bird_box_check.isChecked()),
             "composition_grid_mode": self.preview_grid_combo.currentData(),
             "composition_grid_line_width": self.preview_grid_line_width_combo.currentData(),
@@ -426,6 +427,7 @@ class _BirdStampWorkspaceMixin:
             self.show_crop_effect_check,
             self.crop_effect_alpha_slider,
             self.show_focus_box_check,
+            self.auto_focus_center_check,
             self.show_bird_box_check,
             self.preview_grid_combo,
             self.preview_grid_line_width_combo,
@@ -441,6 +443,8 @@ class _BirdStampWorkspaceMixin:
                 max(self.crop_effect_alpha_slider.minimum(), min(self.crop_effect_alpha_slider.maximum(), alpha))
             )
             self.show_focus_box_check.setChecked(bool(state.get("show_focus_box", True)))
+            from .editor_options import PREVIEW_AUTO_FOCUS_CENTER
+            self.auto_focus_center_check.setChecked(state.get("auto_focus_center", PREVIEW_AUTO_FOCUS_CENTER) is True)
             self.show_bird_box_check.setChecked(bool(state.get("show_bird_box", True)))
 
             grid_mode = state.get("composition_grid_mode")
@@ -456,6 +460,7 @@ class _BirdStampWorkspaceMixin:
             _restore_widget_signals(widgets_state)
 
         self.crop_effect_alpha_value_label.setText(str(int(self.crop_effect_alpha_slider.value())))
+        self.preview_label.canvas.set_auto_focus_center(self.auto_focus_center_check.isChecked())
         self._apply_preview_overlay_options_from_ui()
         preview_scale = state.get("preview_scale_percent")
         try:

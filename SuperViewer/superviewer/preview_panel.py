@@ -6,7 +6,6 @@ from __future__ import annotations
 import time as _time
 import io as _io
 import os
-import math
 from pathlib import Path
 from typing import Callable
 
@@ -18,7 +17,7 @@ from app_common.log import get_logger
 from app_common.perf_probe import perf_log
 from app_common.psd_composite import read_psd_composite_size
 from app_common.preview_canvas import (
-    PreviewCanvas,
+    FocusCenteredPreviewCanvas as _FocusCenteredPreviewCanvas,
     PreviewOverlayOptions,
     PreviewOverlayState,
     format_preview_scale_percent,
@@ -446,48 +445,6 @@ class _FullPreviewLoader(QThread):
         )
 
 
-class _FocusCenteredPreviewCanvas(PreviewCanvas):
-    """Viewer 的可选焦点锁定；构图和导出仍由共享画布绘制。"""
-
-    _auto_focus_center = False
-
-    def set_auto_focus_center(self, enabled: bool) -> None:
-        self._auto_focus_center = bool(enabled)
-        self.recenter_focus()
-        self._update_cursor()
-
-    def recenter_focus(self) -> None:
-        self._clamp_offset()
-        self.update()
-
-    def _clamp_offset(self) -> None:
-        if not self._auto_focus_center or self._source_pixmap is None:
-            super()._clamp_offset()
-            return
-        center = (0.5, 0.5)
-        try:
-            left, top, right, bottom = map(float, self._focus_box)
-            if (
-                all(math.isfinite(v) for v in (left, top, right, bottom))
-                and 0 <= left <= right <= 1 and 0 <= top <= bottom <= 1
-            ):
-                center = ((left + right) / 2, (top + bottom) / 2)
-        except (TypeError, ValueError):
-            pass
-        # 允许边缘留白，否则靠近图像边缘的焦点无法真正居中。
-        self._apply_view_center_ratio(center)
-
-    def _can_pan(self) -> bool:
-        return not self._auto_focus_center and super()._can_pan()
-
-    def set_source_pixmap(self, pixmap, **kwargs) -> None:
-        zoom = self._zoom
-        super().set_source_pixmap(pixmap, **kwargs)
-        if self._auto_focus_center and self._source_pixmap is None:
-            # RAW/HEIF 的加载占位不能丢失放大程度。
-            self._zoom = zoom
-
-
 class PreviewPanel(QWidget):
     """预览区：内嵌 app_common.preview_canvas.PreviewCanvas，提供 set_image 等接口。"""
 
@@ -886,8 +843,6 @@ class PreviewPanel(QWidget):
     def set_focus_box(self, focus_box) -> None:
         """更新对焦点框（归一化坐标），传 None 表示清除。"""
         self._canvas.apply_overlay_state(PreviewOverlayState(focus_box=focus_box))
-        if self._canvas._auto_focus_center:
-            self._canvas.recenter_focus()
 
     def set_auto_focus_center(self, enabled: bool) -> None:
         """自动以焦点（缺失时为图像中心）为缩放和切图基准。"""

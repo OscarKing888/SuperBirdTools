@@ -399,6 +399,8 @@ def _bounded_preview_option(key: str, default: int, minimum: int, maximum: int) 
         return default
 
 
+PREVIEW_AUTO_FOCUS_CENTER = _load_builtin_editor_options_raw().get("preview_auto_focus_center", False) is True
+
 # 成片两级预览共用最终源像素框；有界小图缓存不参与原尺寸导出。
 DEJITTER_QUICK_MAX_EDGE = _bounded_preview_option("dejitter_quick_max_edge", 768, 128, 1024)
 DEJITTER_QUICK_CACHE_BYTES = _bounded_preview_option("dejitter_quick_cache_mb", 64, 8, 256) * 1024 * 1024

@@ -19,7 +19,7 @@ from PyQt6.QtCore import QPointF, QRectF, Qt, pyqtSignal
 from PyQt6.QtGui import QColor, QPainterPath, QPen, QPixmap
 from PyQt6.QtWidgets import QWidget
 
-from app_common.preview_canvas import PreviewCanvas, PreviewOverlayOptions, PreviewOverlayState
+from app_common.preview_canvas import FocusCenteredPreviewCanvas, PreviewOverlayOptions, PreviewOverlayState
 from app_common.perf_probe import elapsed_ms, perf_counter
 from birdstamp.gui.edit_modes import (
     EDIT_MODE_CROP_ADJUST,
@@ -63,7 +63,7 @@ class EditorPreviewOverlayOptions(PreviewOverlayOptions):
     show_reference_regions: bool = False
 
 
-class EditorPreviewCanvas(PreviewCanvas):
+class EditorPreviewCanvas(FocusCenteredPreviewCanvas):
     """PreviewCanvas specialised for the BirdStamp photo editor.
 
     Adds bird-detection-box and crop-effect-shade overlays on top of the
