@@ -542,6 +542,35 @@ def to_qimage(buf: PixelBuffer) -> "QImage":  # 仅工作线程调用；一次�
 - 回归：相关 68 项定向测试通过；SuperViewer/app_common 全量与改动前基线相比没有新增失败（既有失败均为 Linux 容器环境问题：Windows 路径断言、主题测试段错误、缺 ffmpeg/ExifTool 配置）；BirdStamp 与 build_tools 全部通过。AGENTS.md、AI_CODING_RULES、Viewer 架构文档与 README 已同步受保护流程描述。
 - **待用户在 Mac/Windows 复测**：`bench_imaging.py --cases viewer.raw,thumb` 看 ExifTool 进程数应为 0；手动检查 RAW 点击（先档位图/加载提示，再高清图）、按住方向键浏览 RAW、释放后单次提交、焦点框在高清图到达后出现、中文路径 RAW（Windows）。
 
+### 7.8 P-2 / P-3 实施记录（2026-09-26）
+
+**P-2（减少整图拷贝与 GUI 线程格式转换）**
+- `preview_panel._load_full_preview_qimage`：去掉 `QImageReader.read()` 之后多余的 `.copy()`（`read()` 本身返回自有像素）。33 MP JPEG 在 GUI 线程少复制约 87 ms；输出为 RGB32，`QPixmap.fromImage` 约 0 ms。
+- `_FullPreviewLoader`：worker 内把 RGB888 转成 RGB32（HIF 约 19 ms），GUI 线程 `fromImage` 从约 42 ms 降到约 0 ms；像素一致。
+- PIL 路径改用 `ImageOps.exif_transpose(..., in_place=True)`：方向为 1 时不再复制整幅图（21 MP 约 24 ms）。
+- BirdStamp `pil_to_qpixmap`：RGB 图走 RGB888，省去 RGBA 副本与 QImage 深拷贝；2048 预览 13.9 → 3.9 ms，像素一致；RGBA 路径不变。
+- 缩略图 QImage 仍以 RGB888 存放（内存缓存按字节计量，改 RGB32 会让可缓存数量减少 25%），未改。
+
+**P-3（缩略图解码顺序与重复工作）**
+- `thumb_stream`：JPEG draft 请求框按宽高比计算（`draft_box_for_long_edge`）；RAW 内嵌 JPEG 也做 draft；先 `thumbnail` 再就地按 EXIF 旋转；渐进式 JPEG 的最终帧复用解析器已解码的图，不再二次完整解码；方向 1–8 回归测试通过。
+- 更正：7.5 中“横图 2048 档失去 DCT 缩放”只在部分尺寸出现（5616×3744 会，7008×4672 不会）。样本 JPG 各档输出与改动前逐像素一致。
+- BirdStamp `_decode_embedded_raw_preview`：内嵌 JPEG 先 draft 再旋转与缩放，输出尺寸与旧实现一致。
+- `ThumbnailMemoryCache.get`：返回隐式共享 `QImage`（写时复制），不再每次命中深拷贝；写入仍深拷贝。
+- **画质差异（需知悉）**：RAW 内嵌预览经 DCT 缩放后再 LANCZOS，与旧的全尺寸解码相比 max 差 4–8 级、≤2 级像素占 99.80–99.98%、PSNR 52–54 dB，超出计划 6.4 中“max ≤2”的严格容差。这与 JPEG 文件缩略图一直采用的 draft 策略相同，属于策略对齐，并非新的画质降级；如需恢复严格一致，可把 RAW 路径的 draft 请求放大到 2 倍目标尺寸（速度约减半）。
+
+**容器前后对比（P50 ms，同一环境；未改动的 `decode_image_full` 在两次间波动 2–11%，以下只列明显超出噪声的项）**
+
+| 用例 | 样本 | P-1 前 | P-1~P-3 后 |
+| --- | --- | --- | --- |
+| RAW 内嵌 JPEG 提取 | ARW | 158.3（1 次 ExifTool 进程） | 1.2（0 次） |
+| 缩略图 128 / 512 / 2048 | ARW | 337 / 362 / 600 | 22 / 26 / 116 |
+| Viewer 快速预览兜底 512 | ARW | 349 | 26 |
+| BirdStamp 预览解码 2048 | ARW | 656 | 146 |
+| Viewer 同步完整预览 | JPG 32.7 MP | 698 | 543 |
+| 缩略图 128 | HIF | 863 | 692 |
+
+回归：定向 104 项通过；SuperViewer/app_common 全量无新增失败（相对基线）；BirdStamp 与 build_tools 全量通过。
+
 ### 7.4 暂不纳入范围
 
 GUI 重写或框架更换；Rust；GPU/Metal/CUDA 图像路径；自研 JPEG/RAW/HEIF 解码器；新增色彩管理或导出 EXIF/ICC（属于产品功能，不算等价迁移）；YOLO 或推理优化；ExifTool 替换；`_panel.py` 拆分等无关重构；独立仓库 SuperBirdViewer/SuperBirdStamp 的同步；Intel 或 universal2 macOS 包；锁文件引入（建议另立议题）。

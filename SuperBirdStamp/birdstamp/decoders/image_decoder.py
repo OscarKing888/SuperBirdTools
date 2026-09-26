@@ -143,11 +143,23 @@ def _decode_embedded_raw_preview(path: Path, max_long_edge: int) -> Image.Image 
         return None
     try:
         with Image.open(io.BytesIO(preview_bytes)) as source:
-            transposed = ImageOps.exif_transpose(source)
-            rgb = transposed.convert("RGB")
-        resized = _resize_fit_image(rgb, max_long_edge)
-        if resized is not rgb:
-            rgb.close()
+            # 目标尺寸按未缩小的原始方向尺寸计算，保证与旧的“全尺寸解码后 fit”结果尺寸一致。
+            oriented_w, oriented_h = _pillow_oriented_size(source)
+            target = _draft_target_size(oriented_w, oriented_h, max_long_edge) if max_long_edge > 0 else (oriented_w, oriented_h)
+            width, height = source.size
+            draft_w, draft_h = _draft_target_size(width, height, max_long_edge) if max_long_edge > 0 else (width, height)
+            if (draft_w, draft_h) != (width, height):
+                try:
+                    # 相机内嵌 JPEG 常为 20 MP 以上；DCT 缩放解码到不小于目标的尺寸即可。
+                    source.draft("RGB", (draft_w, draft_h))
+                except Exception:
+                    pass
+            ImageOps.exif_transpose(source, in_place=True)
+            rgb = source.convert("RGB")
+        if rgb.size == target:
+            return rgb
+        resized = rgb.resize(target, Image.Resampling.LANCZOS)
+        rgb.close()
         return resized
     except Exception:
         return None
