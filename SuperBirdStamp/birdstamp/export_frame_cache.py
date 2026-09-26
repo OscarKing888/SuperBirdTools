@@ -5,10 +5,11 @@ import json
 import math
 import os
 import tempfile
+import time
 from datetime import date, datetime
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Callable, Mapping
 
 FRAME_CACHE_MANIFEST_VERSION = 1
 FRAME_CACHE_ROOT_NAME = "birdstamp_export_cache"
@@ -435,3 +436,45 @@ __all__ = [
     "update_frame_manifest_record",
     "write_frame_manifest",
 ]
+
+
+class ThrottledFrameManifestWriter:
+    """按时间或帧数节流的 manifest 写入器。
+
+    每帧都重写整份 JSON 会让写入总量随帧数平方增长。这里每累计 max_pending 帧或
+    间隔 min_interval_s 秒才写一次；调用方必须在 finally 中 flush()，保证完成、取消
+    或失败时已记录的帧都进入 manifest（与逐帧写入时的可复用语义一致）。
+    """
+
+    def __init__(
+        self,
+        plan: FrameCachePlan,
+        manifest: dict[str, Any],
+        *,
+        metadata_factory: Callable[[], dict[str, Any]],
+        min_interval_s: float = 1.0,
+        max_pending: int = 32,
+        clock: Callable[[], float] = time.monotonic,
+    ) -> None:
+        self._plan = plan
+        self._manifest = manifest
+        self._metadata_factory = metadata_factory
+        self._min_interval_s = max(0.0, float(min_interval_s))
+        self._max_pending = max(1, int(max_pending))
+        self._clock = clock
+        self._pending = 0
+        self._last_write = clock()
+        self.write_count = 0
+
+    def record_written(self) -> None:
+        self._pending += 1
+        if self._pending >= self._max_pending or (self._clock() - self._last_write) >= self._min_interval_s:
+            self.flush()
+
+    def flush(self) -> None:
+        if self._pending <= 0:
+            return
+        write_frame_manifest(self._plan, self._manifest, metadata=self._metadata_factory())
+        self._pending = 0
+        self._last_write = self._clock()
+        self.write_count += 1

@@ -471,6 +471,19 @@ def _measure_text_with_fallback(
         return fallback_text, draw.textbbox((0, 0), fallback_text, font=font)
 
 
+def _composite_rgba_layer(image: Image.Image, layer: Image.Image, dest: tuple[int, int]) -> None:
+    """把 RGBA 图层按 alpha 合成到 image 的 dest 位置（原地修改）。
+
+    RGBA 画布沿用 alpha_composite；不透明的 RGB 画布用 alpha 作蒙版 paste。两者在目标
+    不透明时逐像素相同（已对全部 256^3 的源值/目标值/alpha 组合验证），RGB 路径省去整幅
+    画布的 RGB→RGBA→RGB 往返。
+    """
+    if image.mode == "RGBA":
+        image.alpha_composite(layer, dest)
+        return
+    image.paste(layer.convert("RGB"), dest, mask=layer.getchannel("A"))
+
+
 def _draw_styled_text(
     image: Image.Image,
     draw: ImageDraw.ImageDraw,
@@ -511,7 +524,7 @@ def _draw_styled_text(
     if output_scale != (1.0, 1.0):
         layer = layer.resize((max(1, round(layer.width * sx)), max(1, round(layer.height * sy))),
                              Image.Resampling.LANCZOS)
-    image.alpha_composite(layer, (round((x - 5) * sx), round((y - 5) * sy)))
+    _composite_rgba_layer(image, layer, (round((x - 5) * sx), round((y - 5) * sy)))
 
 
 def _template_font_scale_for_canvas(width: int, height: int) -> float:
@@ -723,9 +736,8 @@ def _draw_vertical_gradient_scrim(
     gradient.putdata(pixels)
     if width > 1:
         gradient = gradient.resize((width, height), resample=Image.Resampling.BILINEAR)
-    overlay = Image.new("RGBA", image.size, color=(0, 0, 0, 0))
-    overlay.paste(gradient, (left, top))
-    image.alpha_composite(overlay)
+    # 只合成渐变所在区域：整幅透明 overlay 以外的像素本就不变（结果逐像素相同）。
+    _composite_rgba_layer(image, gradient, (left, top))
 
 
 BANNER_BACKGROUND_STYLE_SOLID = _BANNER_BACKGROUND_STYLE_SOLID
@@ -755,6 +767,16 @@ def normalize_banner_background_style(value: Any) -> str:
     return _normalize_banner_background_style(value)
 
 
+def _banner_fill_is_opaque(template_payload: dict[str, Any]) -> bool:
+    fill = template_banner_fill_color(template_payload.get("banner_color"))
+    if not fill:
+        return True
+    try:
+        return ImageColor.getcolor(fill, "RGBA")[3] >= 255
+    except Exception:
+        return False
+
+
 def render_template_overlay(
     image: Image.Image,
     *,
@@ -768,7 +790,10 @@ def render_template_overlay(
     text_scale: float = 1.0,
     layout_size: tuple[int, int] | None = None,
 ) -> Image.Image:
-    canvas = image.convert("RGBA")
+    # 不透明 RGB 输入直接在 RGB 副本上绘制，省去整幅 RGBA 往返；半透明 Banner 色会把 alpha
+    # 写进 RGBA 画布并影响其上文字的合成结果，这种情况保留原 RGBA 路径以保证输出一致。
+    use_rgb_canvas = image.mode == "RGB" and _banner_fill_is_opaque(template_payload)
+    canvas = image.copy() if use_rgb_canvas else image.convert("RGBA")
     draw = ImageDraw.Draw(canvas)
     # 预览使用导出阶段的逻辑尺寸排版，只缩放最终字形，避免字体下限/上限与避让改变布局。
     layout_width, layout_height = layout_size or canvas.size
@@ -913,7 +938,7 @@ def render_template_overlay(
                 style=style,
                 output_scale=(sx, sy),
             )
-    return canvas.convert("RGB")
+    return canvas if canvas.mode == "RGB" else canvas.convert("RGB")
 
 
 def default_template_payload(name: str = "default") -> dict[str, Any]:

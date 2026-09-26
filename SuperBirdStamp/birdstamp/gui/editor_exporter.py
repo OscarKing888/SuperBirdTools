@@ -9,13 +9,15 @@
 """
 from __future__ import annotations
 
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor, as_completed, wait as _wait_futures
+import queue
 from dataclasses import dataclass
 from pathlib import Path
 import shutil
 import threading
 import time
 import unicodedata
+from typing import Any, Callable
 
 from PIL import Image
 from PyQt6.QtCore import QEventLoop, QTimer
@@ -60,6 +62,9 @@ _IMAGE_EXPORT_PROGRESS_HIDE_DELAY_MS = 600
 class _ImageExportTask:
     job: VideoFrameJob
     target_path: Path
+    # GIF 中间缓存帧只供随后编码读取：用快速 PNG 压缩（无损，像素相同），
+    # 避免 optimize=True 在 1920 px 帧上耗时约 9 s。用户可见的 PNG 导出不受影响。
+    fast_png: bool = False
 
 
 class _BirdStampExporterMixin:
@@ -505,7 +510,9 @@ class _BirdStampExporterMixin:
             self._set_status(f"GIF 导出复用缓存帧 {reused_count}/{total}")
 
         if missing_jobs:
-            ok_paths, failed = self._export_render_jobs_to_images(missing_jobs, missing_targets, label="GIF 帧导出")
+            ok_paths, failed = self._export_render_jobs_to_images(
+                missing_jobs, missing_targets, label="GIF 帧导出", fast_png=True
+            )
             ok_path_set = {path.resolve(strict=False) for path in ok_paths}
             for index, job, source_signature, frame_signature in missing_records:
                 frame_path = frame_paths[index - 1]
@@ -629,11 +636,7 @@ class _BirdStampExporterMixin:
                 scale_factors=tuple(scale_factors),
                 background_color=self._gif_background_color_for_export(),
             )
-            written_paths = export_gif(
-                frame_paths,
-                options,
-                progress_callback=lambda progress: self._on_gif_export_progress(progress, total_outputs),
-            )
+            written_paths = self._run_gif_export_off_gui_thread(frame_paths, options, total_outputs)
             self._finish_image_export_progress(
                 current=timing.encoded_frame_count,
                 total=timing.encoded_frame_count,
@@ -644,6 +647,53 @@ class _BirdStampExporterMixin:
         except Exception:
             self._reset_image_export_progress(expected_token=progress_token)
             raise
+
+    def _run_blocking_task_off_gui_thread(
+        self,
+        func: Callable[..., Any],
+        *args: Any,
+        progress_handler: Callable[..., None] | None = None,
+        **kwargs: Any,
+    ) -> Any:
+        """在单个后台线程执行耗时任务，GUI 线程按序应用进度并处理重绘。
+
+        ``func`` 通过关键字参数 ``progress_callback`` 上报进度（任意位置参数），回调只入队；
+        所有 Qt 控件更新都在 GUI 线程由 ``progress_handler`` 执行。与图片批量导出一致，
+        等待期间仍排除用户输入，但窗口不会因任务而停止重绘。异常原样抛给调用方。
+        """
+        progress_queue: "queue.SimpleQueue[tuple[Any, ...]]" = queue.SimpleQueue()
+
+        def _enqueue(*progress_args: Any) -> None:
+            progress_queue.put(progress_args)
+
+        def _drain_progress() -> None:
+            while True:
+                try:
+                    progress_args = progress_queue.get_nowait()
+                except queue.Empty:
+                    return
+                if progress_handler is not None:
+                    progress_handler(*progress_args)
+
+        with ThreadPoolExecutor(max_workers=1, thread_name_prefix="birdstamp-blocking-task") as executor:
+            future = executor.submit(func, *args, progress_callback=_enqueue, **kwargs)
+            while True:
+                done, _pending = _wait_futures([future], timeout=0.03)
+                _drain_progress()
+                if done:
+                    break
+                self._process_image_export_ui_events()
+        _drain_progress()
+        return future.result()
+
+    def _run_gif_export_off_gui_thread(self, frame_paths: list[Path], options, total_outputs: int) -> list[Path]:
+        """GIF 编码（Pillow 编码期间释放 GIL）在后台线程执行，进度按序在 GUI 线程应用。"""
+        return self._run_blocking_task_off_gui_thread(
+            export_gif,
+            frame_paths,
+            options,
+            progress_handler=lambda progress: self._on_gif_export_progress(progress, total_outputs),
+        )
 
     def _normalized_image_export_target(self, target: Path, *, default_suffix: str) -> Path:
         if target.suffix.lower() in {".png", ".jpg", ".jpeg", ".gif"}:
@@ -686,7 +736,7 @@ class _BirdStampExporterMixin:
             bird_box_lock=bird_box_lock,
         )
         try:
-            self._save_image(rendered, task.target_path)
+            self._save_image(rendered, task.target_path, fast_png=task.fast_png)
         finally:
             try:
                 rendered.close()
@@ -710,13 +760,14 @@ class _BirdStampExporterMixin:
         targets: list[Path],
         *,
         label: str,
+        fast_png: bool = False,
     ) -> tuple[list[Path], list[str]]:
         if len(jobs) != len(targets):
             raise ValueError("导出任务与目标路径数量不一致。")
         if not jobs:
             return ([], [])
 
-        tasks = [_ImageExportTask(job=job, target_path=target) for job, target in zip(jobs, targets)]
+        tasks = [_ImageExportTask(job=job, target_path=target, fast_png=fast_png) for job, target in zip(jobs, targets)]
         template_paths = dict(getattr(self, "template_paths", {}) or {})
         bird_box_cache: dict[str, tuple[float, float, float, float] | None] = {}
         bird_box_lock = threading.Lock()
@@ -795,10 +846,13 @@ class _BirdStampExporterMixin:
             raise RuntimeError(failed[0])
         return (ok_paths, failed)
 
-    def _save_image(self, image: Image.Image, path: Path) -> None:
+    def _save_image(self, image: Image.Image, path: Path, *, fast_png: bool = False) -> None:
         suffix = path.suffix.lower()
         if suffix == ".png":
-            image.save(path, format="PNG", optimize=True)
+            if fast_png:
+                image.save(path, format="PNG", compress_level=1)
+            else:
+                image.save(path, format="PNG", optimize=True)
             return
 
         if suffix not in {".jpg", ".jpeg"}:

@@ -278,6 +278,31 @@ def _apply_orientation_to_pil_image(img: Image.Image, orientation: int) -> Image
     return img.transpose(method) if method is not None else img
 
 
+def _exif_transpose_in_place(img: Image.Image) -> None:
+    """按 EXIF 方向就地旋转；方向为 1 时不复制整幅像素（exif_transpose 默认总会 copy）。"""
+    try:
+        ImageOps.exif_transpose(img, in_place=True)
+    except Exception:
+        pass
+
+
+def _qimage_for_pixmap_upload(qimg: QImage | None) -> QImage | None:
+    """在 worker 线程把 RGB888 转成 RGB32，GUI 线程 QPixmap.fromImage 就无需再转换格式。"""
+    if qimg is None or qimg.isNull():
+        return qimg
+    try:
+        rgb888 = _qimage_rgb888_format()
+        if qimg.format() == rgb888:
+            fmt_container = getattr(QImage, "Format", QImage)
+            rgb32 = getattr(fmt_container, "Format_RGB32", None) or getattr(QImage, "Format_RGB32")
+            converted = qimg.convertToFormat(rgb32)
+            if not converted.isNull():
+                return converted
+    except Exception:
+        pass
+    return qimg
+
+
 def _qimage_from_pil_image(img: Image.Image) -> QImage | None:
     try:
         if img.mode == "P":
@@ -334,10 +359,7 @@ def _load_full_preview_qimage_pil(path: str) -> QImage | None:
         _register_heif_pil_opener()
     try:
         with Image.open(path) as img:
-            try:
-                img = ImageOps.exif_transpose(img)
-            except Exception:
-                pass
+            _exif_transpose_in_place(img)
             return _qimage_from_pil_image(img)
     except Exception:
         if Path(path).suffix.lower() in PHOTOSHOP_EXTENSIONS:
@@ -376,7 +398,9 @@ def _load_full_preview_qimage(path: str) -> QImage | None:
             expected_pixels = 0
         qimg = reader.read()
         if qimg is not None and not qimg.isNull():
-            qt_qimg = qimg.copy()
+            # read() returns an image that owns its pixels; a deep copy here only
+            # duplicated a full-size buffer (~87 ms for 33 MP) on the GUI thread.
+            qt_qimg = qimg
     except Exception:
         pass
 
@@ -413,6 +437,7 @@ class _FullPreviewLoader(QThread):
             # potentially hundreds-of-megabytes stale object to the GUI loop.
             qimg = None
             return
+        qimg = _qimage_for_pixmap_upload(qimg)
         self.loaded.emit(
             self._token,
             self._path,

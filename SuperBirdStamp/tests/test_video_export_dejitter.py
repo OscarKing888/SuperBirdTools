@@ -104,6 +104,59 @@ def _center(job):
     return export_stage._crop_plan_center_in_source_pixels(source_width=160, source_height=120, crop_plan=job.crop_plan)
 
 
+def test_cached_dejitter_plans_follow_external_reference_changes(tmp_path, monkeypatch):
+    """保留视频缓存且只导出子集时，外部参考照片变化仍须重新计算去抖。"""
+    import threading
+
+    import pytest
+
+    from birdstamp.export_stage import core, VideoExportOptions
+
+    sequence = _sequence(tmp_path)
+    reference = sequence[0].path
+    frame = sequence[1]
+    prepare_calls = []
+    original_prepare = core.prepare_uniform_auto_crop_plans
+
+    def counting_prepare(jobs, **kwargs):
+        prepare_calls.append(len(jobs))
+        return original_prepare(jobs, **kwargs)
+
+    monkeypatch.setattr(core, "prepare_uniform_auto_crop_plans", counting_prepare)
+
+    def fresh_jobs():
+        return [VideoFrameJob(path=frame.path, settings=dict(frame.settings),
+                              raw_metadata={}, metadata_context={})]
+
+    def cached_plan():
+        jobs = fresh_jobs()
+        output = tmp_path / "去抖子集.mp4"
+        core._ensure_source_frame_cache(
+            jobs, output_path=output,
+            options=VideoExportOptions(output_path=output, preserve_temp_files=True),
+            template_paths={}, progress_callback=None, cancel_event=None,
+            bird_box_cache={}, bird_box_lock=threading.Lock(), dirty_path_keys=set(),
+        )
+        return jobs[0].crop_plan
+
+    first = cached_plan()
+    assert cached_plan() == first
+    assert prepare_calls == [1]
+
+    with Image.open(reference) as image:
+        replacement = Image.fromarray(np.roll(np.array(image), 4, axis=1))
+    replacement.save(reference)
+    expected = fresh_jobs()
+    original_prepare(expected)
+    assert expected[0].crop_plan != first
+    assert cached_plan() == expected[0].crop_plan
+    assert prepare_calls == [1, 1]
+
+    reference.unlink()
+    with pytest.raises(ValueError, match="无法读取去抖动参考照片"):
+        cached_plan()
+
+
 def test_manual_crop_follows_reference_and_rendered_pixels_align(tmp_path):
     jobs = _sequence(tmp_path)
     prepare_uniform_auto_crop_plans(jobs)

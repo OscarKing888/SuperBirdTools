@@ -71,3 +71,59 @@ def test_rotated_tiff_preview_and_header_size_match(tmp_path):
                 assert image.info["birdstamp_source_properties"]["size"] == (400, 600)
             finally:
                 image.close()
+
+
+def test_embedded_raw_preview_uses_draft_and_keeps_fit_size_and_orientation(monkeypatch, tmp_path):
+    import io as _io
+
+    from PIL import Image as _Image
+
+    from birdstamp.decoders import image_decoder as _decoder
+
+    embedded = _Image.new("RGB", (5616, 3744), (200, 30, 30))
+    embedded.paste((30, 30, 200), (2808, 0, 5616, 3744))
+    exif = _Image.Exif()
+    exif[0x0112] = 6
+    buffer = _io.BytesIO()
+    embedded.save(buffer, format="JPEG", quality=90, exif=exif)
+    monkeypatch.setattr("app_common.thumb_stream.get_raw_preview_jpeg", lambda path: buffer.getvalue())
+
+    from PIL import JpegImagePlugin as _JpegImagePlugin
+
+    drafts = []
+    original_draft = _JpegImagePlugin.JpegImageFile.draft
+
+    def _tracking_draft(self, mode, size):
+        drafts.append(size)
+        return original_draft(self, mode, size)
+
+    monkeypatch.setattr(_JpegImagePlugin.JpegImageFile, "draft", _tracking_draft)
+    result = _decoder._decode_embedded_raw_preview(tmp_path / "bird.arw", 2048)
+
+    assert result is not None
+    assert result.size == (1365, 2048)  # same size as the old full decode + fit, rotated to portrait
+    assert drafts and drafts[0] == (2048, 1365)
+    top = result.getpixel((680, 20))
+    bottom = result.getpixel((680, 2020))
+    assert top[0] > 150 and bottom[2] > 150  # orientation 6: stored left half ends up on top
+
+
+def test_decode_standard_matches_transpose_convert_copy_for_all_orientations(tmp_path):
+    from PIL import Image as _Image, ImageOps as _ImageOps
+
+    from birdstamp.decoders import image_decoder as _decoder
+
+    base = _Image.new("RGB", (60, 40), (200, 30, 30))
+    base.paste((30, 30, 200), (30, 0, 60, 40))
+    for orientation in range(1, 9):
+        path = tmp_path / f"o{orientation}.jpg"
+        exif = _Image.Exif()
+        exif[0x0112] = orientation
+        base.save(path, quality=95, exif=exif)
+        with _Image.open(path) as image:
+            expected = _ImageOps.exif_transpose(image).convert("RGB").copy()
+        actual = _decoder._decode_standard(path)
+        assert actual.mode == "RGB"
+        assert actual.size == expected.size
+        assert actual.tobytes() == expected.tobytes(), orientation
+        actual.load()  # still usable after the source file was closed

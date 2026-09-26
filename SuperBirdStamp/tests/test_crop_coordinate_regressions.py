@@ -342,6 +342,65 @@ class CropCanvasTests(unittest.TestCase):
                 _APP.processEvents()
 
 
+    def test_template_dialog_renders_large_source_at_preview_size_with_same_coordinates(self):
+        with tempfile.TemporaryDirectory() as directory, \
+                patch.object(config, "get_user_data_dir", return_value=Path(directory) / "user"), \
+                patch.object(TemplateManagerDialog, "_load_preview_source"), \
+                patch.object(TemplateManagerDialog, "_preview_source_bird_box", return_value=None):
+            template_dir = Path(directory) / "templates"
+            template_dir.mkdir()
+            payload = dict(name="default", ratio="free", center_mode="custom", fields=[],
+                           crop_box=[-0.2, 0.1, 0.8, 0.9], max_long_edge=0,
+                           crop_padding_top=0, crop_padding_bottom=0, crop_padding_left=0, crop_padding_right=0)
+            template.save_template_payload(template_dir / "default.json", payload)
+            dialog = TemplateManagerDialog(template_dir, Image.new("RGB", (5000, 4000), "red"))
+            try:
+                dialog._on_template_selected(dialog.template_list.findItems("default", Qt.MatchFlag.MatchExactly)[0], None)
+                pixmap = dialog.preview_pixmap
+                self.assertLessEqual(max(pixmap.width(), pixmap.height()), 2048 * 1.25)
+                self.assertLess(pixmap.width(), 5000)
+                # 裁切尺寸信息仍按原图像素计算：外扩 20% 的 1.0 x 0.8 区域。
+                self.assertEqual(dialog._preview_crop_size, (5000, 3200))
+                self.assertEqual(dialog._preview_display_size, (2048, 1638))
+                dialog._on_tmpl_canvas_crop_box_changed(dialog.preview_overlay_state.crop_effect_box)
+                loaded = template.load_template_payload(template_dir / "default.json")
+                for got, expected in zip(loaded["crop_box"], payload["crop_box"]):
+                    self.assertAlmostEqual(got, expected, delta=1e-3)
+            finally:
+                dialog.close()
+                dialog.deleteLater()
+                _APP.processEvents()
+
+    def test_template_dialog_debounces_high_frequency_edits(self):
+        with tempfile.TemporaryDirectory() as directory, \
+                patch.object(config, "get_user_data_dir", return_value=Path(directory) / "user"), \
+                patch.object(TemplateManagerDialog, "_load_preview_source"), \
+                patch.object(TemplateManagerDialog, "_preview_source_bird_box", return_value=None):
+            template_dir = Path(directory) / "templates"
+            template_dir.mkdir()
+            template.save_template_payload(template_dir / "default.json", dict(name="default", fields=[]))
+            dialog = TemplateManagerDialog(template_dir, Image.new("RGB", (800, 600), "red"))
+            renders = []
+            original = dialog._preview_display_source
+            dialog._preview_display_source = lambda full: renders.append(1) or original(full)
+            try:
+                for _ in range(5):
+                    dialog._schedule_preview_refresh()
+                self.assertEqual(renders, [])
+                timer = dialog._preview_refresh_timer
+                deadline = __import__("time").monotonic() + 3
+                while timer.isActive() and __import__("time").monotonic() < deadline:
+                    _APP.processEvents()
+                self.assertEqual(len(renders), 1)
+                dialog._schedule_preview_refresh()
+                dialog._refresh_preview()  # 直接刷新会取消已排队的防抖刷新
+                self.assertFalse(timer.isActive())
+                self.assertEqual(len(renders), 2)
+            finally:
+                dialog.close()
+                dialog.deleteLater()
+                _APP.processEvents()
+
 class TemplateLayoutTests(unittest.TestCase):
     def test_all_bundled_templates_preview_matches_export_layout(self):
         template_dir = Path(__file__).parents[1] / "config" / "templates"

@@ -542,6 +542,78 @@ def to_qimage(buf: PixelBuffer) -> "QImage":  # 仅工作线程调用；一次�
 - 回归：相关 68 项定向测试通过；SuperViewer/app_common 全量与改动前基线相比没有新增失败（既有失败均为 Linux 容器环境问题：Windows 路径断言、主题测试段错误、缺 ffmpeg/ExifTool 配置）；BirdStamp 与 build_tools 全部通过。AGENTS.md、AI_CODING_RULES、Viewer 架构文档与 README 已同步受保护流程描述。
 - **待用户在 Mac/Windows 复测**：`bench_imaging.py --cases viewer.raw,thumb` 看 ExifTool 进程数应为 0；手动检查 RAW 点击（先档位图/加载提示，再高清图）、按住方向键浏览 RAW、释放后单次提交、焦点框在高清图到达后出现、中文路径 RAW（Windows）。
 
+### 7.8 P-2 / P-3 实施记录（2026-09-26）
+
+**P-2（减少整图拷贝与 GUI 线程格式转换）**
+- `preview_panel._load_full_preview_qimage`：去掉 `QImageReader.read()` 之后多余的 `.copy()`（`read()` 本身返回自有像素）。33 MP JPEG 在 GUI 线程少复制约 87 ms；输出为 RGB32，`QPixmap.fromImage` 约 0 ms。
+- `_FullPreviewLoader`：worker 内把 RGB888 转成 RGB32（HIF 约 19 ms），GUI 线程 `fromImage` 从约 42 ms 降到约 0 ms；像素一致。
+- PIL 路径改用 `ImageOps.exif_transpose(..., in_place=True)`：方向为 1 时不再复制整幅图（21 MP 约 24 ms）。
+- BirdStamp `pil_to_qpixmap`：RGB 图走 RGB888，省去 RGBA 副本与 QImage 深拷贝；2048 预览 13.9 → 3.9 ms，像素一致；RGBA 路径不变。
+- 缩略图 QImage 仍以 RGB888 存放（内存缓存按字节计量，改 RGB32 会让可缓存数量减少 25%），未改。
+
+**P-3（缩略图解码顺序与重复工作）**
+- `thumb_stream`：JPEG draft 请求框按宽高比计算（`draft_box_for_long_edge`）；RAW 内嵌 JPEG 也做 draft；先 `thumbnail` 再就地按 EXIF 旋转；渐进式 JPEG 的最终帧复用解析器已解码的图，不再二次完整解码；方向 1–8 回归测试通过。
+- 更正：7.5 中“横图 2048 档失去 DCT 缩放”只在部分尺寸出现（5616×3744 会，7008×4672 不会）。样本 JPG 各档输出与改动前逐像素一致。
+- BirdStamp `_decode_embedded_raw_preview`：内嵌 JPEG 先 draft 再旋转与缩放，输出尺寸与旧实现一致。
+- `ThumbnailMemoryCache.get`：返回隐式共享 `QImage`（写时复制），不再每次命中深拷贝；写入仍深拷贝。
+- **画质差异（需知悉）**：RAW 内嵌预览经 DCT 缩放后再 LANCZOS，与旧的全尺寸解码相比 max 差 4–8 级、≤2 级像素占 99.80–99.98%、PSNR 52–54 dB，超出计划 6.4 中“max ≤2”的严格容差。这与 JPEG 文件缩略图一直采用的 draft 策略相同，属于策略对齐，并非新的画质降级；如需恢复严格一致，可把 RAW 路径的 draft 请求放大到 2 倍目标尺寸（速度约减半）。
+
+**容器前后对比（P50 ms，同一环境；未改动的 `decode_image_full` 在两次间波动 2–11%，以下只列明显超出噪声的项）**
+
+| 用例 | 样本 | P-1 前 | P-1~P-3 后 |
+| --- | --- | --- | --- |
+| RAW 内嵌 JPEG 提取 | ARW | 158.3（1 次 ExifTool 进程） | 1.2（0 次） |
+| 缩略图 128 / 512 / 2048 | ARW | 337 / 362 / 600 | 22 / 26 / 116 |
+| Viewer 快速预览兜底 512 | ARW | 349 | 26 |
+| BirdStamp 预览解码 2048 | ARW | 656 | 146 |
+| Viewer 同步完整预览 | JPG 32.7 MP | 698 | 543 |
+| 缩略图 128 | HIF | 863 | 692 |
+
+回归：定向 104 项通过；SuperViewer/app_common 全量无新增失败（相对基线）；BirdStamp 与 build_tools 全量通过。
+
+### 7.9 P-5 / P-8 / P-9 实施记录（2026-09-26）
+
+**P-5（BirdStamp 模板叠加）**
+- 实测后修正计划假设：`ImageFont.truetype` 首次约 16 ms、之后 0.05–0.13 ms；模板 JSON 读取与规范化约 0.07 ms。字体缓存与模板缓存收益太小，**未实施**（字体对象跨导出线程共享还需线程隔离，复杂度不值得）。Mac 上 PingFang 的实际成本可在下轮基准确认。
+- 剖析显示预览耗时的约 75% 在 `_draw_styled_text`：文字按导出逻辑尺寸绘制后再 LANCZOS 缩到预览尺寸。这是预览与导出排版一致的前提，改动会改变像素，**保持不变**。
+- 已实施：不透明 RGB 输入直接在 RGB 画布上绘制（`_composite_rgba_layer` 以 alpha 蒙版 paste，对全部 256³ 组合与 alpha_composite 逐位相同），省去整幅 RGB→RGBA→RGB 往返；渐变 Banner 只合成渐变区域。半透明 Banner 色保留原 RGBA 路径。
+- 结果：8 个内置模板 × 普通/渐变 × 预览/导出尺寸共 32 组输出与改动前逐字节相同；导出尺寸（7008 px）叠加通常快 2–3.5 倍，预览尺寸快 5–35%。
+
+**P-8（GIF / 视频编排）**
+- GIF 中间缓存帧改用 `compress_level=1`：1920 px 帧 8957 ms → 170 ms（无损，文件大 34%）；用户可见 PNG 仍 `optimize=True`。
+- GIF 编码移到后台线程：实测编码期间主线程心跳 p99 7 ms、最大 47 ms（Pillow 释放 GIL）；进度按序在 GUI 线程应用。
+- 视频 manifest 节流：每 32 帧或 1 秒写一次，`finally` 中 flush；写入次数从 N 次降到约 N/32。
+
+**P-9（模板管理器预览）**
+- 按不超过 2048 长边的缩小图渲染；裁切计划按原图计算后用 `rescale_crop_plan` 映射，画布拖拽用显示尺寸与显示补边换算回原图坐标，保存的 `crop_box` 与补边像素值语义不变。
+- 字段文本/数值、补边、渐变拖动 120 ms 防抖；模板切换、比例/模式切换、增删字段仍同步刷新；直接刷新会取消排队的防抖。
+- 21 MP 示例图单次刷新 504 → 64 ms。
+- 未改：这些输入每次仍会写一次模板 JSON（`_save_current_template`），需要时可另立任务合并保存。
+
+回归：相关定向测试全部通过；SuperViewer/app_common 全量相对基线无新增失败；BirdStamp（271 项）与 build_tools 全量通过；BirdStamp 配置与模板文件无改动。
+
+### 7.10 P-6 / P-7 实施记录（2026-09-26）
+
+**P-6（导出解码与预计算）**
+- `_decode_standard`：就地按 EXIF 旋转后只做一次 `convert("RGB")`，去掉原来的三份整图拷贝；8 种方向与旧实现逐字节一致。rawpy 输出已是 RGB 时不再复制。32.7 MP JPG `decode_image` 631 → 440 ms（容器）。
+- 图片/GIF 导出的统一裁切/去抖预计算移到后台线程（通用 `_run_blocking_task_off_gui_thread`，GIF 编码共用），GUI 线程按序应用进度；作业不携带 GUI 位图，后台只读原图文件。
+- 视频（保留缓存）：预计算结果连同输入签名（源文件签名、逐图设置、元数据、鸟体识别模型签名、缓存版本）写入源帧缓存桶的 `crop_plans.json`；输入不变时直接复用，不再为校验帧缓存而完整解码每张原图。样本 3 张（含 ARW）全部命中缓存的第二次导出 2623 → 4 ms。设置、文件或模型变化、有脏照片或临时缓存模式时照常重算。
+- 未做：用降采样图做预计算（会改变鸟体识别和参考区 patch 结果，进而改变裁切）；跨预计算与渲染的整图缓存（批量时内存不可控，命中率低）。
+
+**P-7（导出管线整图拷贝）**
+- `pad_and_crop_image`：裁切区落在补边画布内时只分配裁切尺寸画布并贴图，与“先补边再裁切”逐字节相同（RGB/RGBA/L、多种补边与裁切框含越界回退均有测试）；32.7 MP 带补边裁切 114 → 42 ms，并免去约 171 MB 的补边中间图。
+- `render_video_frame`：管线输出已是独立 RGB 图时不再 `convert("RGB")` 复制。
+- **未做，需用户决定**：图片导出复用预览阶段的鸟体框。预览在 ≤2048 缩小图上识别，导出在原图上识别，结果可能有细微差别，复用会改变导出裁切的像素结果；收益是批量导出时省去逐张 YOLO（并且当前被锁串行）。
+
+回归：BirdStamp 276 项与 build_tools 全部通过；SuperViewer/app_common 相对基线无新增失败；BirdStamp 配置与模板无改动。
+
+### 7.11 P-4 实施记录（2026-09-26）
+
+- 实测（容器，1400×1000 画布、32.7 MP 图）：Python 逐格棋盘格每次重绘 49.7 ms，是唯一明显热点；整幅原图平滑缩放绘制每次只需 3.6 ms（Qt raster 已高效），缓存缩放副本只能降到 1.6 ms，且每次换图/缩放要多花约 10 ms 建缓存，**未实施**。
+- 已实施：`draw_checker_background` 改为一次 `fillRect` + 按格子尺寸缓存的 2×2 纹理画刷，画刷原点对齐矩形左上角。与原逐格绘制在整数/小数矩形、负偏移、格子 8/5、DPR 1/1.5/2 且带裁剪区的组合下逐像素一致；1400×1000 画布 49.7 → 0.44 ms。
+- 新增 `app_common/tests/test_preview_canvas_hot_path.py`（AGENTS.md 预览回归清单中引用但此前不存在）：像素一致性、非逐格调用、画布绘制含构图网格与叠加导出的冒烟检查。
+- 回归：SuperViewer/app_common 相对基线无新增失败；BirdStamp 与 build_tools 全部通过。受保护的构图网格/焦点框/叠加导出流程代码未改动。
+
 ### 7.4 暂不纳入范围
 
 GUI 重写或框架更换；Rust；GPU/Metal/CUDA 图像路径；自研 JPEG/RAW/HEIF 解码器；新增色彩管理或导出 EXIF/ICC（属于产品功能，不算等价迁移）；YOLO 或推理优化；ExifTool 替换；`_panel.py` 拆分等无关重构；独立仓库 SuperBirdViewer/SuperBirdStamp 的同步；Intel 或 universal2 macOS 包；锁文件引入（建议另立议题）。

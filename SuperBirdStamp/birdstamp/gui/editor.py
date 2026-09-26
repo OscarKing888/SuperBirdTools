@@ -5514,12 +5514,24 @@ class BirdStampEditorWindow(
         if precompute_crop_plans and crop_plan_precompute_required(current_render_settings):
             if callable(progress_callback):
                 progress_callback(0, total)
-            prepare_uniform_auto_crop_plans(
-                jobs,
-                bird_box_cache=self._bird_box_cache,
-                bird_box_lock=None,
-                progress_callback=progress_callback,
-            )
+            # 预计算会逐张完整解码原图并做鸟体识别；放到后台线程，GUI 线程只应用进度。
+            # 作业不携带 GUI 持有的位图（source_image 为 None），后台只读原图文件。
+            runner = getattr(self, "_run_blocking_task_off_gui_thread", None)
+            if callable(runner):
+                runner(
+                    prepare_uniform_auto_crop_plans,
+                    jobs,
+                    bird_box_cache=self._bird_box_cache,
+                    bird_box_lock=None,
+                    progress_handler=progress_callback if callable(progress_callback) else None,
+                )
+            else:
+                prepare_uniform_auto_crop_plans(
+                    jobs,
+                    bird_box_cache=self._bird_box_cache,
+                    bird_box_lock=None,
+                    progress_callback=progress_callback,
+                )
         return jobs
 
     def _build_video_export_job_seeds(self, paths: list[Path]) -> list[VideoExportJobSeed]:

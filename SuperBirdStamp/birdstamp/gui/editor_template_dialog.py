@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from PIL import Image
-from PyQt6.QtCore import QEvent, Qt, pyqtSignal
+from PyQt6.QtCore import QEvent, Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import QColor, QImage, QIntValidator, QLinearGradient, QPainter, QPixmap
 from PyQt6.QtWidgets import (
     QButtonGroup,
@@ -147,6 +147,12 @@ _load_template_payload = editor_template.load_template_payload
 _save_template_payload = editor_template.save_template_payload
 _default_template_payload = editor_template.default_template_payload
 render_template_overlay_in_crop_region = editor_template.render_template_overlay_in_crop_region
+
+
+# 模板管理器预览：与主编辑器一致，按不超过 2048 长边的缩小图渲染；排版仍按导出逻辑尺寸。
+_TEMPLATE_PREVIEW_MAX_LONG_EDGE = 2048
+# 文本/数值/渐变拖动等高频输入合并为一次预览刷新。
+_TEMPLATE_PREVIEW_DEBOUNCE_MS = 120
 
 
 def _pil_to_qpixmap(image: Image.Image) -> QPixmap:
@@ -1424,7 +1430,7 @@ class TemplateManagerDialog(QDialog):
             self.current_payload["crop_box"] = None
         self.current_payload.update(values)
         self._save_current_template()
-        self._refresh_preview()
+        self._schedule_preview_refresh()
 
     # ------------------------------------------------------------------
     # Font helpers
@@ -1571,7 +1577,7 @@ class TemplateManagerDialog(QDialog):
             return
         self.current_payload.update(self._gradient_editor.get_values())
         self._save_current_template()
-        self._refresh_preview()
+        self._schedule_preview_refresh()
 
     def _set_banner_bg_style_value(self, value: Any) -> None:
         style = _normalize_banner_background_style(value)
@@ -1928,7 +1934,7 @@ class TemplateManagerDialog(QDialog):
                 item.setText(self._field_source_display_text(field, idx))
 
         self._save_current_template()
-        self._refresh_preview()
+        self._schedule_preview_refresh()
 
     def _add_field(self) -> None:
         if not self.current_payload:
@@ -2082,8 +2088,9 @@ class TemplateManagerDialog(QDialog):
     def _on_tmpl_canvas_crop_box_changed(self, box: tuple[float, float, float, float]) -> None:
         if self.current_payload is not None:
             source = self._preview_source_image or self.placeholder
+            display_size = getattr(self, "_preview_display_size", None) or source.size
             box = editor_core.crop_box_to_source(
-                box, source.size, getattr(self, "_preview_outer_pad", (0, 0, 0, 0))
+                box, display_size, getattr(self, "_preview_outer_pad", (0, 0, 0, 0))
             )
             self.current_payload["crop_box"] = [box[0], box[1], box[2], box[3]]
             self.current_payload["center_mode"] = editor_core.CENTER_MODE_CUSTOM
@@ -2153,8 +2160,36 @@ class TemplateManagerDialog(QDialog):
     # Preview
     # ------------------------------------------------------------------
 
+    def _schedule_preview_refresh(self) -> None:
+        timer = getattr(self, "_preview_refresh_timer", None)
+        if timer is None:
+            timer = QTimer(self)
+            timer.setSingleShot(True)
+            timer.setInterval(_TEMPLATE_PREVIEW_DEBOUNCE_MS)
+            timer.timeout.connect(self._refresh_preview)
+            self._preview_refresh_timer = timer
+        timer.start()
+
+    def _preview_display_source(self, full_source: Image.Image) -> Image.Image:
+        """原图的预览尺寸副本（长边不超过 2048），按原图对象缓存，原图不变时复用。"""
+        cached = getattr(self, "_preview_display_cache", None)
+        if cached is not None and cached[0] is full_source:
+            return cached[1]
+        target = editor_core.resize_fit_size(full_source.size, _TEMPLATE_PREVIEW_MAX_LONG_EDGE)
+        if tuple(target) == tuple(full_source.size):
+            display = full_source
+        else:
+            display = full_source.resize(tuple(target), Image.Resampling.LANCZOS)
+        self._preview_display_cache = (full_source, display)
+        return display
+
     def _refresh_preview(self) -> None:
-        source = (self._preview_source_image or self.placeholder).copy()
+        pending_timer = getattr(self, "_preview_refresh_timer", None)
+        if pending_timer is not None:
+            pending_timer.stop()
+        full_source = self._preview_source_image or self.placeholder
+        display_source = self._preview_display_source(full_source)
+        source = display_source.copy()
         image = source
         crop_box: tuple[float, float, float, float] | None = None
         outer_pad: tuple[int, int, int, int] = (0, 0, 0, 0)
@@ -2184,14 +2219,18 @@ class TemplateManagerDialog(QDialog):
                     crop_box=crop_box_override,
                 )
             crop_box, outer_pad = editor_core.compute_crop_plan_for_image(
-                image=source,
+                image=full_source,
                 raw_metadata=self._preview_raw_metadata,
                 settings=self.current_payload,
                 bird_box=self._preview_source_bird_box()
                 if center_mode in {"bird", "focus"} and not _is_ratio_no_crop(ratio) else None,
                 camera_type=focus_camera_type,
             )
-            pad_top, pad_bottom, pad_left, pad_right = outer_pad
+            # 裁切计划按原图像素计算，再映射到预览尺寸（补边按比例缩小），与主编辑器一致。
+            display_crop_box, display_outer_pad = editor_core.rescale_crop_plan(
+                crop_box, outer_pad, full_source.size, display_source.size
+            )
+            pad_top, pad_bottom, pad_left, pad_right = display_outer_pad
             if pad_top or pad_bottom or pad_left or pad_right:
                 source = _pad_image(
                     source,
@@ -2216,9 +2255,11 @@ class TemplateManagerDialog(QDialog):
                 metadata_context=self._preview_metadata_context,
                 photo_info=self._preview_photo_info,
                 template_payload=self.current_payload,
-                crop_box=crop_box,
+                crop_box=display_crop_box,
                 layout_size=layout_size,
             )
+        else:
+            display_crop_box, display_outer_pad = crop_box, outer_pad
 
         source_width, source_height = (self._preview_source_image or self.placeholder).size
         pad_top, pad_bottom, pad_left, pad_right = outer_pad
@@ -2252,7 +2293,7 @@ class TemplateManagerDialog(QDialog):
         self.preview_overlay_state = EditorPreviewOverlayState(
             focus_box=preview_focus_box,
             bird_box=preview_bird_box,
-            crop_effect_box=crop_box,
+            crop_effect_box=display_crop_box,
         )
         self._preview_crop_size = _compute_crop_output_size(
             source_width,
@@ -2260,12 +2301,14 @@ class TemplateManagerDialog(QDialog):
             crop_box,
             outer_pad,
         )
-        self._preview_outer_pad = outer_pad
+        # 画布发回的裁切框相对于显示中的（预览尺寸）补边画布，换算时用同一套尺寸与补边。
+        self._preview_outer_pad = display_outer_pad
+        self._preview_display_size = display_source.size
         if self._preview_crop_size is not None and self.current_payload:
             self._preview_crop_size = editor_core.resize_fit_size(
                 self._preview_crop_size, int(self.current_payload.get("max_long_edge") or 0)
             )
-        self.preview_pixmap = _pil_to_qpixmap(image)
+        self.preview_pixmap = editor_utils.pil_to_qpixmap(image) if image.mode == "RGB" else _pil_to_qpixmap(image)
         self._refresh_preview_label()
 
     def _refresh_preview_label(self) -> None:

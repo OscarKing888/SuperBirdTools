@@ -663,3 +663,29 @@ def test_export_video_dirty_path_bypasses_matching_preserved_frame() -> None:
             export_stage._run_ffmpeg_command = original_run_ffmpeg
             export_stage.render_video_frame = original_render_video_frame
             _close_video_jobs(jobs)
+
+
+def test_throttled_manifest_writer_batches_and_flushes_pending_records(tmp_path, monkeypatch) -> None:
+    from birdstamp import export_frame_cache
+
+    writes: list[dict] = []
+    monkeypatch.setattr(export_frame_cache, "write_frame_manifest", lambda plan, manifest, *, metadata: writes.append(dict(metadata)))
+    now = [0.0]
+    writer = export_frame_cache.ThrottledFrameManifestWriter(
+        object(), {}, metadata_factory=lambda: {"total": 100}, min_interval_s=1.0, max_pending=32, clock=lambda: now[0]
+    )
+    for _ in range(31):
+        writer.record_written()
+    assert writes == []
+    writer.record_written()  # 32nd frame reaches the batch size
+    assert len(writes) == 1
+    for _ in range(5):
+        writer.record_written()
+    now[0] = 1.5  # time budget elapsed
+    writer.record_written()
+    assert len(writes) == 2
+    writer.record_written()
+    writer.flush()  # cancel / failure / completion path persists the tail
+    assert len(writes) == 3
+    writer.flush()  # nothing pending: no extra rewrite
+    assert len(writes) == 3

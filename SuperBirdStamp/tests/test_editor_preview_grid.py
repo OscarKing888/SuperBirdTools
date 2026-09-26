@@ -31,3 +31,19 @@ def test_editor_composition_grid_stays_inside_crop_and_exports() -> None:
         assert preview.save_source_pixmap_with_overlays(target, "PNG")
         assert os.path.isfile(target)
     preview.close()
+
+
+def test_pil_to_qpixmap_rgb_fast_path_matches_rgba_round_trip():
+    from PIL import Image as _Image
+    from PyQt6.QtGui import QImage as _QImage, QPixmap as _QPixmap
+
+    from birdstamp.gui.editor_utils import pil_to_qpixmap
+
+    image = _Image.linear_gradient("L").resize((320, 180)).convert("RGB")
+    rgba = image.convert("RGBA")
+    data = rgba.tobytes("raw", "RGBA")
+    reference = _QPixmap.fromImage(_QImage(data, rgba.width, rgba.height, _QImage.Format.Format_RGBA8888).copy())
+    fast = pil_to_qpixmap(image)
+    fmt = _QImage.Format.Format_RGB32
+    assert fast.size() == reference.size()
+    assert fast.toImage().convertToFormat(fmt) == reference.toImage().convertToFormat(fmt)

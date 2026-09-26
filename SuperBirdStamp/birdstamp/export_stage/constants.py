@@ -29,6 +29,7 @@ _parse_padding_value = editor_core.parse_padding_value
 _normalize_center_mode = editor_core.normalize_center_mode
 _resize_fit = editor_core.resize_fit
 _pad_image = editor_core.pad_image
+_pad_and_crop_image = editor_core.pad_and_crop_image
 _crop_image_by_normalized_box = editor_core.crop_image_by_normalized_box
 _compute_crop_output_size = editor_core.compute_crop_output_size
 _compute_ratio_crop_box = editor_core.compute_ratio_crop_box
@@ -139,6 +140,7 @@ __all__ = [
     "_normalize_template_payload",
     "_normalize_unit_box",
     "_pad_image",
+    "_pad_and_crop_image",
     "_parse_bool_value",
     "_parse_padding_value",
     "_parse_ratio_value",
