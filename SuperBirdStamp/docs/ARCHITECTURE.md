@@ -18,13 +18,14 @@
 
 ## 2. 编辑器状态与线程归属
 
-主窗口 [BirdStampEditorWindow](../birdstamp/gui/editor.py) 组合四个 mixin：
+主窗口 [BirdStampEditorWindow](../birdstamp/gui/editor.py) 组合五个 mixin：
 
 | 组成 | 主要职责 |
 | --- | --- |
 | [_BirdStampCropMixin](../birdstamp/gui/editor_crop_calculator.py) | 裁切框、中心和边距等交互计算。 |
 | [_BirdStampRendererMixin](../birdstamp/gui/editor_renderer.py) | 设置快照、原图/预览缓存、鸟检测结果和预览绘制。 |
 | [_BirdStampExporterMixin](../birdstamp/gui/editor_exporter.py) | 图片/GIF 导出的目标分配、作业调度、进度与错误展示。 |
+| [_BirdStampReferenceTrackingMixin](../birdstamp/gui/editor_reference_tracking.py) | 多参考区预处理、结果签名与失效、切图跟踪预览及工作线程所有权。 |
 | [_BirdStampWorkspaceMixin](../birdstamp/gui/editor_workspace.py) | 工作区序列化、增量恢复、自动保存及恢复期间的保存门控。 |
 
 窗口保存显式状态：`current_path` 指向源文件；`current_source_image` 可为受限尺寸的预览解码结果，完整尺寸另存于 `current_source_full_size`；原始元数据、模板上下文和 `PhotoInfo` 分别保存在当前照片状态中。`photo_render_overrides` 保存逐图设置，全局导出设置另行合并。不要用预览 JPEG 的路径或像素尺寸替代原图的元数据、裁切坐标或导出输入。
@@ -37,6 +38,7 @@
 | [EditorPreviewDecodeWorker](../birdstamp/gui/editor_preview_decode_worker.py) | 单个活动 worker + 最新待处理请求，直到真实 `finished` 才交接。先复用 Viewer 的逐文件缩略图缓存（原尺寸已知才显示），再补 2048 长边预览；两种结果都校验 token/路径/关闭状态。 |
 | [EditorPhotoListMetadataLoader](../birdstamp/gui/editor_photo_metadata_loader.py) | 分块调用 `extract_many_with_xmp_priority` 读取完整 EXIF/XMP 快照，供列表、模板预览与导出复用；不能用限定标签的浏览器缓存代替完整读取。窗口增量应用列表和当前照片数据；停止使用协作中断。 |
 | [BirdDetectWorker](../birdstamp/gui/bird_detect_worker.py) | 接收独立图像副本，在后台识别并在结束时关闭副本；渲染 mixin 按源图签名接收结果。 |
+| [EditorReferenceTrackingWorker](../birdstamp/gui/editor_reference_tracking_worker.py) | 不可变参考区/路径快照，后台逐帧解码匹配，逐区结果只含坐标与签名；token/worker 身份拒绝过期结果。取消和关闭保留线程到真实 `finished`，期间不启动替代线程。 |
 | [VideoExportWorker](../birdstamp/gui/editor_video_panel.py) | 窗口持有线程；`VideoExportJobSeed` 先在 GUI 线程快照 Qt 状态，worker 的 `_prepare_jobs` 补齐元数据与渲染作业。取消通过事件传入导出核心。 |
 
 列表点击由 `_begin_photo_selection` 立即切换编辑目标，只应用一次逐图设置；不重写列表行、不重新排序。后台像素升级沿用最新设置和元数据，裁切拖动中延后替换像素，避免坐标系突变。已解码预览使用 128 MiB / 32 项上限的 LRU（像素按 4 字节计量），淘汰时同步移除原尺寸缓存；原图导出缓存保持独立。
@@ -94,7 +96,7 @@ flowchart LR
 
 [export_stage/core.py](../birdstamp/export_stage/core.py) 的 `render_video_frame` 构造上下文并运行阶段管线。`prepare_uniform_auto_crop_plans` 在整批图像间预计算统一裁切（图片/GIF 导出时经 `_run_blocking_task_off_gui_thread` 在后台线程执行；视频保留缓存时，输入签名不变会直接复用源帧缓存桶下 `crop_plans.json` 中的裁切计划，不再重新解码原图）；去抖策略通过 [resolve_dejitter_strategy](../birdstamp/image_dejitter/strategy_registry.py) 选择中值中心或参考区域策略。改变这些批量计算时，要同时检查其输出是否进入缓存签名。
 
-参考区去抖在源图坐标中逐帧估计平移，支持手动裁切和导出列表外的参考照片；全局开关、独立强度与参考文件签名参与缓存失效。裁切计划缓存还包含参考照片及其 XMP 的文件签名，避免导出子集时复用过期的参考位置。编辑预览仍显示原裁切，去抖结果在导出预计算时生成。参考区轮廓由持久源坐标在每次重绘时恢复；[ReferenceRegionEditMode](../birdstamp/gui/edit_modes.py) 提供八手柄的暂存缩放预览，松手一次提交，切换模式或源图时取消未完成拖动。使用流程、坐标语义、算法边界与回归入口见 [参考区去抖动](DEJITTER.md)。
+参考区去抖在源图坐标中逐帧估计平移，支持手动裁切和导出列表外的参考照片；全局开关、独立强度与参考文件签名参与缓存失效。裁切计划缓存还包含参考照片及其 XMP 的文件签名，避免导出子集时复用过期的参考位置。编辑预览仍显示原裁切；“预处理跟踪”通过 [ReferenceRegionTracker](../birdstamp/image_dejitter/reference_region_tracker.py) 和导出共用采样/匹配逻辑，切图时显示多个编号区域的实际匹配位置，目标图只读，失配区域不绘制。参考区域/列表变化使结果失效，文件签名变化也禁止展示旧结果。裁切补偿在导出预计算时生成。参考区轮廓由持久源坐标在每次重绘时恢复；[ReferenceRegionEditMode](../birdstamp/gui/edit_modes.py) 提供八手柄的暂存缩放预览，松手一次提交，切换模式或源图时取消未完成拖动。使用流程、坐标语义、算法边界与回归入口见 [参考区去抖动](DEJITTER.md)。
 
 预览由 [editor_renderer.py](../birdstamp/gui/editor_renderer.py) 的 `render_preview`、`_render_preview_pipeline_image` 适配相同的阶段顺序和设置，但保留裁切外画布以供编辑，不直接把最终裁切位图作为交互画布。模板要与裁切区域对齐，焦点框也要经过相同坐标变换。[editor_preview_canvas.py](../birdstamp/gui/editor_preview_canvas.py) 承接交互显示和网格叠加。
 

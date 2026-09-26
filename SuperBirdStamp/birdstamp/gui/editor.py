@@ -159,6 +159,7 @@ from birdstamp.gui.editor_video_panel import (
 from birdstamp.gui.editor_workspace import _BirdStampWorkspaceMixin
 from birdstamp.gui.editor_crop_calculator import _BirdStampCropMixin
 from birdstamp.gui.editor_renderer import _BirdStampRendererMixin
+from birdstamp.gui.editor_reference_tracking import _BirdStampReferenceTrackingMixin
 from birdstamp.gui.editor_exporter import _BirdStampExporterMixin
 from birdstamp.export_stage import (
     DEFAULT_EXPORT_STAGE_ID,
@@ -691,6 +692,7 @@ class BirdStampEditorWindow(
     QMainWindow,
     _BirdStampCropMixin,
     _BirdStampRendererMixin,
+    _BirdStampReferenceTrackingMixin,
     _BirdStampExporterMixin,
     _BirdStampWorkspaceMixin,
 ):
@@ -750,6 +752,7 @@ class BirdStampEditorWindow(
         self._preview_decode_pending: tuple[int, Path] | None = None
         self._preview_decode_token = 0
         self._preview_decode_shutdown = False
+        self._init_reference_tracking()
         self.last_rendered: Image.Image | None = None
         self.current_path: Path | None = None
         self.current_photo_info: _template_context.PhotoInfo | None = None
@@ -1679,10 +1682,24 @@ class BirdStampEditorWindow(
         self.dejitter_reference_status = QLabel("尚未选择参考区")
         self.dejitter_reference_status.setWordWrap(True)
         template_form.addRow("参考照片", self.dejitter_reference_status)
-        reference_hint = QLabel("用预览工具栏框选鸟头或背景纹理（Shift 追加）。先调整裁剪框，"
-                               "需要相同构图时点应用全部。编辑预览显示原裁切；去抖在导出时计算，"
-                               "越界使用留边颜色，不裁切模式不去抖。")
+        tracking_row = QWidget()
+        tracking_layout = QHBoxLayout(tracking_row)
+        tracking_layout.setContentsMargins(0, 0, 0, 0)
+        self.dejitter_preprocess_btn = QPushButton("预处理跟踪")
+        self.dejitter_preprocess_btn.setToolTip("按参考图上的各编号选区跟踪列表中的照片，完成后切图查看匹配位置。")
+        self.dejitter_preprocess_btn.clicked.connect(self._on_reference_preprocess_clicked)
+        self.dejitter_edit_reference_btn = QPushButton("编辑参考图")
+        self.dejitter_edit_reference_btn.clicked.connect(self._on_edit_reference_photo)
+        tracking_layout.addWidget(self.dejitter_preprocess_btn)
+        tracking_layout.addWidget(self.dejitter_edit_reference_btn)
+        template_form.addRow("跟踪预览", tracking_row)
+        self.dejitter_tracking_status = QLabel()
+        self.dejitter_tracking_status.setWordWrap(True)
+        self.dejitter_tracking_status.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Minimum)
+        template_form.addRow("跟踪状态", self.dejitter_tracking_status)
+        reference_hint = QLabel("Shift 追加选区；调整后需重新预处理。跟踪框只读，裁切补偿在导出时应用。")
         reference_hint.setWordWrap(True)
+        reference_hint.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Minimum)
         template_form.addRow("去抖说明", reference_hint)
         self.dejitter_reference_check.toggled.connect(self._on_dejitter_options_changed)
         self.dejitter_reference_strength_slider.valueChanged.connect(self._on_dejitter_options_changed)
@@ -2838,6 +2855,7 @@ class BirdStampEditorWindow(
             QMessageBox.information(self, "视频导出进行中", "请先中断当前视频导出，或等待导出完成后再关闭窗口。")
             event.ignore()
             return
+        self._invalidate_reference_tracking("正在停止参考区预处理…", shutdown=True)
         self._cancel_async_bird_detect(shutdown=True)
         self._cancel_preview_decode(shutdown=True)
         self._stop_photo_list_metadata_loader(wait=False, reset_progress=True)
@@ -2855,7 +2873,7 @@ class BirdStampEditorWindow(
         ) or (
             metadata_worker is not None
             and metadata_worker.isRunning()
-        ) or not discovery_stopped:
+        ) or not discovery_stopped or self._reference_tracking_worker is not None:
             self._set_status("正在安全结束后台任务...")
             event.ignore()
             QTimer.singleShot(100, self.close)
@@ -3016,6 +3034,7 @@ class BirdStampEditorWindow(
     def _on_dejitter_reference_clear(self) -> None:
         if not self._dejitter_reference_regions:
             return
+        self._invalidate_reference_tracking("参考区已清除。")
         self._dejitter_reference_regions = ()
         self._dejitter_reference_source = None
         self.dejitter_reference_check.setChecked(False)
@@ -3027,6 +3046,9 @@ class BirdStampEditorWindow(
         self, regions: tuple[tuple[float, float, float, float], ...]
     ) -> None:
         """参考区由画布交互提交（预览/含外填充归一化）→ 转为源图归一化存储。"""
+        if not self._reference_regions_editable():
+            return  # 其它照片上的跟踪框不能回写为参考选区。
+        self._invalidate_reference_tracking()
         source_regions: list[tuple[float, float, float, float]] = []
         for box in regions or ():
             if isinstance(box, (list, tuple)) and len(box) == 4:
@@ -3059,6 +3081,7 @@ class BirdStampEditorWindow(
             self.dejitter_reference_status.setText(
                 f"{Path(source).name} · {len(regions)} 个区域 · {state}" if source and regions else "尚未选择参考区")
             self.dejitter_reference_status.setToolTip(str(source or ""))
+        self._update_reference_tracking_controls()
 
     def _get_crop_padding_state(self) -> dict[str, Any]:
         state = self._crop_padding_state if isinstance(self._crop_padding_state, dict) else {}
@@ -4410,6 +4433,7 @@ class BirdStampEditorWindow(
         if key in existing_keys:
             return (False, None)
         existing_keys.add(key)
+        self._invalidate_reference_tracking()
 
         current_settings = self._photo_override_settings_from_snapshot(default_settings)
         self.photo_render_overrides[key] = current_settings
@@ -4895,6 +4919,7 @@ class BirdStampEditorWindow(
         selected_items = self.photo_list.selectedItems()
         if not selected_items:
             return
+        self._invalidate_reference_tracking()
 
         removed_keys: list[str] = []
         for item in selected_items:
@@ -4944,6 +4969,7 @@ class BirdStampEditorWindow(
         self._set_status(f"已删除 {len(selected_items)} 项。")
 
     def _clear_photos_state(self, *, status_message: str | None = None, show_placeholder: bool = True) -> None:
+        self._invalidate_reference_tracking("请框选参考区后预处理。")
         self._cancel_workspace_restore_in_progress()
         self._stop_photo_input_discovery_workers(wait=True)
         self._stop_received_photo_import(reset_progress=True)

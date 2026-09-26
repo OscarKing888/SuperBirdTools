@@ -98,6 +98,7 @@ class EditorPreviewCanvas(PreviewCanvas):
         self._has_pan: bool = False
         self._reference_regions: tuple["NormalizedBox", ...] = ()
         self._show_reference_regions: bool = False
+        self._reference_region_labels: tuple[str, ...] = ()
         self._edit_modes = EditModeController(self)
         self._edit_modes.register(ReferenceRegionEditMode())
         self._edit_modes.register(CropAdjustEditMode())
@@ -178,6 +179,11 @@ class EditorPreviewCanvas(PreviewCanvas):
         regions[index] = box
         if self._set_reference_regions_no_update(regions):
             self.reference_region_changed.emit(self._reference_regions)
+            self.update()
+
+    def set_reference_region_labels(self, labels: tuple[str, ...]) -> None:
+        if self._reference_region_labels != labels:
+            self._reference_region_labels = labels
             self.update()
 
     def set_show_reference_regions(self, enabled: bool) -> None:
@@ -372,7 +378,7 @@ class EditorPreviewCanvas(PreviewCanvas):
         pen = QPen(QColor("#FFB703"))
         pen.setWidth(2)
         pen.setJoinStyle(Qt.PenJoinStyle.MiterJoin)
-        for box in self.displayed_reference_regions():
+        for index, box in enumerate(self.displayed_reference_regions()):
             rect = QRectF(
                 draw_rect.left() + box[0] * draw_rect.width(),
                 draw_rect.top() + box[1] * draw_rect.height(),
@@ -385,6 +391,8 @@ class EditorPreviewCanvas(PreviewCanvas):
             painter.setBrush(Qt.BrushStyle.NoBrush)
             painter.setPen(pen)
             painter.drawRect(rect)
+            label = self._reference_region_labels[index] if index < len(self._reference_region_labels) else str(index + 1)
+            painter.drawText(QPointF(rect.left() + 7, rect.top() + painter.fontMetrics().ascent() + 5), label)
 
     def _norm_to_widget(self, draw_rect: QRectF, nx: float, ny: float) -> tuple[float, float]:
         x = draw_rect.left() + nx * draw_rect.width()

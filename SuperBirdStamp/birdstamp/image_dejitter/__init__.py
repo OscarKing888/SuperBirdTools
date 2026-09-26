@@ -33,6 +33,8 @@ from .normalized_box import NormalizedBox
 from .numpy_phase_correlation_aligner import NumpyPhaseCorrelationAligner
 from .reference_region_stabilization_strategy import ReferenceRegionStabilizationStrategy
 from .strategy_registry import normalize_strategy_id, resolve_dejitter_strategy
+from .reference_region_tracker import ReferenceRegionTracker
+from .region_tracking_result import RegionTrackingResult
 
 __all__ = [
     "DEFAULT_MIN_CONFIDENCE",
@@ -48,6 +50,8 @@ __all__ = [
     "NormalizedBox",
     "NumpyPhaseCorrelationAligner",
     "ReferenceRegionStabilizationStrategy",
+    "ReferenceRegionTracker",
+    "RegionTrackingResult",
     "normalize_strategy_id",
     "resolve_dejitter_strategy",
 ]

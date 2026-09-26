@@ -5,11 +5,14 @@
 1. 选择一张清晰、代表当前连拍的参考照片。调整裁剪框；需要统一构图时使用“应用全部”。
 2. 点击预览工具栏的“去抖动参考区”，拖框圈出鸟头、鸟体上形态稳定的纹理，或静止的树枝/背景。Shift 拖框可追加同一照片上的区域。在此模式下，四角与四边中点显示 8 个手柄；拖四角改变宽高，拖边中点仅移动对应边，松手后保存。
 3. “模板裁切 → 参考区去抖”自动启用，默认补偿强度为 100%。0% 表示不补偿。它与“批量统一自动裁切尺寸”旁的中位中心防抖独立。
-4. 导出图片、GIF 或视频时，统一调用 `prepare_uniform_auto_crop_plans()`，再经默认图像处理管线裁切、缩放、叠加文字与焦点。
+4. 点击“预处理跟踪”，后台处理当前照片列表；处理完成后切换照片，查看各编号区域实际跟随到的位置。按钮可停止处理。“编辑参考图”可返回原参考照片继续追加或拖动手柄。
+5. 导出图片、GIF 或视频时，统一调用 `prepare_uniform_auto_crop_plans()`，再经默认图像处理管线裁切、缩放、叠加文字与焦点。
 
-关闭开关会保留参考区；右键或“清除参考区”明确删除。误点击不会清除。参考照片、区域和强度随工作区保存，切换照片不会覆盖这些全局设置；清空照片列表会清除参考。参考区轮廓在原参考照片上持续显示，重绘、切换编辑模式和暂时关闭去抖开关都不会清空它；8 个调节手柄只在参考区编辑模式显示。切换至其它照片不绘制未经匹配的跟踪位置，返回参考照片恢复轮廓。
+关闭开关会保留参考区；右键或“清除参考区”明确删除。误点击不会清除。参考照片、区域和强度随工作区保存，切换照片不会覆盖这些全局设置；清空照片列表会清除参考。参考区轮廓在原参考照片上持续显示，重绘、切换编辑模式和暂时关闭去抖开关都不会清空它；8 个调节手柄只在参考区编辑模式显示。预处理后其它照片显示匹配成功的跟踪框及原区域编号；这些框只读，不能误改参考选区。失配区域不绘制，跟踪状态显示成功数和失败提示。
 
-**编辑预览仍是原始构图和裁剪框，不播放稳定后的序列。** 去抖位移在导出预计算时生成，界面说明会明确这一点。可先导出少量照片或 GIF 检查结果。
+**跟踪预览展示各区域的原图位置，图像本身仍是原始构图，不播放稳定后的序列。** 去抖裁剪补偿仍在导出时应用。预览和导出共用源图采样与区域平移匹配；多区域预览逐区显示，导出去抖还会检查各区位移的一致性，不能把“每区均匹配到”理解成“所有区域能用同一个位移稳定”。
+
+预处理结果只保留当前会话中每张照片的归一化框与文件签名，不缓存整批图像。修改参考区、增删照片、清空/恢复工作区会清除结果；源文件或参考照片变化后旧结果不可用，需重新预处理。重新打开工作区保留选区，但需要再次预处理。后台线程逐张解码并关闭图像；取消与关闭窗口会拒绝迟到结果，直到真实线程结束才释放所有权。
 
 ## 裁剪和坐标语义
 
@@ -32,9 +35,10 @@
 
 ## 接口、缓存和验证
 
+- 跟踪核心：[ReferenceRegionTracker](../birdstamp/image_dejitter/reference_region_tracker.py) 接收参考图与多个源图归一化区域，`track(image)` 返回按区域原顺序保存的匹配框（`None` 表示失配）；接口独立于 Qt，适合批处理复用。GUI 由 [EditorReferenceTrackingWorker](../birdstamp/gui/editor_reference_tracking_worker.py) 调度，控制状态位于 [editor_reference_tracking.py](../birdstamp/gui/editor_reference_tracking.py)。
 - 核心入口：[prepare_uniform_auto_crop_plans](../birdstamp/export_stage/core.py)，输入 `VideoFrameJob` 列表，输出各作业的 `crop_plan`。处理在模板裁切前进行，不另建图片/GIF/视频各自的去抖算法。
 - 设置：`dejitter_strategy="reference_region"`、`dejitter_reference_enabled`、`dejitter_reference_regions`、`dejitter_reference_source`、`dejitter_reference_strength`。导出子集可附 `dejitter_reference_crop_settings`；省略时沿用首个作业的构图设置。
 - GUI 默认强度由 `config/editor_options.json` 读取。阶段参数在 `ImageProcTemplateCropStage.parameter_options()` 中描述。旧工作区没有独立强度时默认 100%，中位中心防抖语义保持不变。
 - 全局设置、强度、参考文件签名及预计算裁剪结果参与源帧缓存失效；源帧缓存版本提升为 6。引用文件同路径替换也会使帧签名改变。
 - 现有单图 `birdstamp render` CLI 不包含序列参考区交互，此轮不扩展它的参数契约；批处理代码可直接使用上述共享核心接口。
-- 回归：[test_dejitter.py](../tests/test_dejitter.py)、[test_video_export_dejitter.py](../tests/test_video_export_dejitter.py)、[test_editor_dejitter.py](../tests/test_editor_dejitter.py)，覆盖已知整数/小数位移、亮度变化、失配、多区冲突、手动裁剪像素对齐、子集导出、取消、缓存和工作区状态。真实相机序列仍应按素材检验参考区选择；合成数据通过不代表任何素材均能匹配。
+- 回归：[test_dejitter.py](../tests/test_dejitter.py)、[test_video_export_dejitter.py](../tests/test_video_export_dejitter.py)、[test_editor_dejitter.py](../tests/test_editor_dejitter.py)，覆盖已知整数/小数位移、亮度变化、失配、多区冲突、手动裁剪像素对齐、子集导出、取消、缓存和工作区状态。跟踪及线程所有权回归见 [test_reference_tracking.py](../tests/test_reference_tracking.py)，包含多选区、部分失配、文件变化、取消和关闭窗口的迟到结果。真实相机序列仍应按素材检验参考区选择；合成数据通过不代表任何素材均能匹配。

@@ -126,7 +126,9 @@ class _BirdStampRendererMixin:
         current = getattr(self, "current_path", None)
         if source and current and _path_key(Path(source)) == _path_key(current):
             return getattr(self, "_dejitter_reference_regions", ())
-        return ()
+        getter = getattr(self, "_tracking_result_for_current", None)
+        result = getter() if callable(getter) else None
+        return tuple(box for box in result.boxes if box is not None) if result else ()
 
     def _dejitter_reference_mode_active(self) -> bool:
         getter = getattr(self, "_current_edit_mode_id", None)
@@ -177,9 +179,20 @@ class _BirdStampRendererMixin:
             # 编辑模式由模式按钮决定；裁剪模式的 _crop_edit_mode 标志由 CropAdjustEditMode 管理。
             getter = getattr(self, "_current_edit_mode_id", None)
             mode = getter() if callable(getter) else EDIT_MODE_NONE
+            editable = getattr(self, "_reference_regions_editable", lambda: True)()
+            if mode == EDIT_MODE_REFERENCE_REGION and not editable:
+                mode = EDIT_MODE_NONE
             if mode == EDIT_MODE_CROP_ADJUST and _is_ratio_no_crop(self._selected_ratio()):
                 mode = EDIT_MODE_NONE
             canvas.set_edit_mode(mode)
+        if hasattr(canvas, "set_reference_region_labels"):
+            result = getattr(self, "_tracking_result_for_current", lambda: None)()
+            editable = getattr(self, "_reference_regions_editable", lambda: True)()
+            labels = tuple(str(i + 1) for i, box in enumerate(result.boxes) if box is not None) if result and not editable else ()
+            canvas.set_reference_region_labels(labels)
+        updater = getattr(self, "_update_reference_tracking_controls", None)
+        if callable(updater):
+            updater()
         if hasattr(canvas, "set_reference_regions"):
             canvas.set_reference_regions(
                 self._reference_regions_source_to_preview(self._visible_dejitter_reference_regions())
@@ -1263,6 +1276,9 @@ class _BirdStampRendererMixin:
 
     def _restore_dejitter_reference_from_settings(self, settings: dict[str, Any]) -> None:
         """从 render settings 恢复去抖动参考区状态（源图归一化坐标）。"""
+        invalidate = getattr(self, "_invalidate_reference_tracking", None)
+        if callable(invalidate):
+            invalidate()
         regions = []
         raw_regions = settings.get(DEJITTER_REFERENCE_REGIONS_KEY)
         if isinstance(raw_regions, (list, tuple)):
