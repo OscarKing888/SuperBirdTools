@@ -571,6 +571,27 @@ def to_qimage(buf: PixelBuffer) -> "QImage":  # 仅工作线程调用；一次�
 
 回归：定向 104 项通过；SuperViewer/app_common 全量无新增失败（相对基线）；BirdStamp 与 build_tools 全量通过。
 
+### 7.9 P-5 / P-8 / P-9 实施记录（2026-09-26）
+
+**P-5（BirdStamp 模板叠加）**
+- 实测后修正计划假设：`ImageFont.truetype` 首次约 16 ms、之后 0.05–0.13 ms；模板 JSON 读取与规范化约 0.07 ms。字体缓存与模板缓存收益太小，**未实施**（字体对象跨导出线程共享还需线程隔离，复杂度不值得）。Mac 上 PingFang 的实际成本可在下轮基准确认。
+- 剖析显示预览耗时的约 75% 在 `_draw_styled_text`：文字按导出逻辑尺寸绘制后再 LANCZOS 缩到预览尺寸。这是预览与导出排版一致的前提，改动会改变像素，**保持不变**。
+- 已实施：不透明 RGB 输入直接在 RGB 画布上绘制（`_composite_rgba_layer` 以 alpha 蒙版 paste，对全部 256³ 组合与 alpha_composite 逐位相同），省去整幅 RGB→RGBA→RGB 往返；渐变 Banner 只合成渐变区域。半透明 Banner 色保留原 RGBA 路径。
+- 结果：8 个内置模板 × 普通/渐变 × 预览/导出尺寸共 32 组输出与改动前逐字节相同；导出尺寸（7008 px）叠加通常快 2–3.5 倍，预览尺寸快 5–35%。
+
+**P-8（GIF / 视频编排）**
+- GIF 中间缓存帧改用 `compress_level=1`：1920 px 帧 8957 ms → 170 ms（无损，文件大 34%）；用户可见 PNG 仍 `optimize=True`。
+- GIF 编码移到后台线程：实测编码期间主线程心跳 p99 7 ms、最大 47 ms（Pillow 释放 GIL）；进度按序在 GUI 线程应用。
+- 视频 manifest 节流：每 32 帧或 1 秒写一次，`finally` 中 flush；写入次数从 N 次降到约 N/32。
+
+**P-9（模板管理器预览）**
+- 按不超过 2048 长边的缩小图渲染；裁切计划按原图计算后用 `rescale_crop_plan` 映射，画布拖拽用显示尺寸与显示补边换算回原图坐标，保存的 `crop_box` 与补边像素值语义不变。
+- 字段文本/数值、补边、渐变拖动 120 ms 防抖；模板切换、比例/模式切换、增删字段仍同步刷新；直接刷新会取消排队的防抖。
+- 21 MP 示例图单次刷新 504 → 64 ms。
+- 未改：这些输入每次仍会写一次模板 JSON（`_save_current_template`），需要时可另立任务合并保存。
+
+回归：相关定向测试全部通过；SuperViewer/app_common 全量相对基线无新增失败；BirdStamp（271 项）与 build_tools 全量通过；BirdStamp 配置与模板文件无改动。
+
 ### 7.4 暂不纳入范围
 
 GUI 重写或框架更换；Rust；GPU/Metal/CUDA 图像路径；自研 JPEG/RAW/HEIF 解码器；新增色彩管理或导出 EXIF/ICC（属于产品功能，不算等价迁移）；YOLO 或推理优化；ExifTool 替换；`_panel.py` 拆分等无关重构；独立仓库 SuperBirdViewer/SuperBirdStamp 的同步；Intel 或 universal2 macOS 包；锁文件引入（建议另立议题）。
