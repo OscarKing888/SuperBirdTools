@@ -223,6 +223,16 @@ def load_main_splitter_state_from_settings() -> dict | None:
     return None
 
 
+def load_auto_focus_center_from_settings() -> bool:
+    return _load_settings().get("preview_auto_focus_center", False) is True
+
+
+def save_auto_focus_center_to_settings(enabled: bool) -> None:
+    data = _load_settings()
+    data["preview_auto_focus_center"] = bool(enabled)
+    _save_settings(data)
+
+
 def save_main_splitter_state_to_settings(state: dict | None) -> None:
     """Save the main-window splitter sizes/collapse state."""
     data = _load_settings()

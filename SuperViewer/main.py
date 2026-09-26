@@ -107,6 +107,8 @@ try:
         _apply_runtime_app_identity,
         _get_product_display_name,
         _get_resource_path,
+        load_auto_focus_center_from_settings,
+        save_auto_focus_center_to_settings,
         load_main_splitter_state_from_settings,
         load_last_selected_directory_from_settings,
         save_main_splitter_state_to_settings,
@@ -185,6 +187,8 @@ except ImportError:
         _apply_runtime_app_identity,
         _get_product_display_name,
         _get_resource_path,
+        load_auto_focus_center_from_settings,
+        save_auto_focus_center_to_settings,
         load_main_splitter_state_from_settings,
         load_last_selected_directory_from_settings,
         save_main_splitter_state_to_settings,
@@ -373,6 +377,14 @@ class MainWindow(QMainWindow):
         self.check_show_focus.setToolTip("在预览图上叠加显示相机对焦点（来自原始 RAW/HEIF 元数据）。")
         self.check_show_focus.toggled.connect(self._on_preview_overlay_toggled)
         overlay_row.addWidget(self.check_show_focus)
+        self.check_auto_focus_center = QCheckBox("自动焦点居中")
+        self.check_auto_focus_center.setChecked(load_auto_focus_center_from_settings())
+        self.check_auto_focus_center.setToolTip(
+            "切图及缩放时将焦点保持在预览中央；无焦点时以图像中心为准。"
+            "连续浏览使用已缓存焦点，未缓存时暂用图像中心。关闭后可自由拖动。"
+        )
+        self.check_auto_focus_center.toggled.connect(self._on_auto_focus_center_toggled)
+        overlay_row.addWidget(self.check_auto_focus_center)
         self.combo_preview_grid = QComboBox(self)
         self.combo_preview_grid.setFixedWidth(PREVIEW_GRID_MODE_COMBO_WIDTH)
         valid_preview_grid_modes = set(PREVIEW_COMPOSITION_GRID_MODES)
@@ -424,6 +436,7 @@ class MainWindow(QMainWindow):
         self.preview_panel = PreviewPanel(central)
         self.preview_panel.set_quick_preview_provider(self._file_list.cached_quick_preview_for_path)
         self.preview_panel.full_preview_ready.connect(self._on_full_preview_ready)
+        self.preview_panel.set_auto_focus_center(self.check_auto_focus_center.isChecked())
         self.preview_panel.set_show_focus_enabled(self.check_show_focus.isChecked())
         self.preview_panel.set_composition_grid_mode(self.combo_preview_grid.currentData())
         self.preview_panel.set_composition_grid_line_width(self.combo_preview_grid_line_width.currentData())
@@ -1027,7 +1040,7 @@ class MainWindow(QMainWindow):
             video = is_video(path)
             self.media_info_stack.setCurrentWidget(self.video_info_panel if video else self.image_info_tabs)
             self.video_info_panel.set_path(path if video else '')
-            for control in (self.check_show_focus, self.combo_preview_grid,
+            for control in (self.check_show_focus, self.check_auto_focus_center, self.combo_preview_grid,
                             self.combo_preview_grid_line_width, self.combo_preview_scale):
                 control.setEnabled(not video)
         self.image_info_tabs.on_photo_selected('' if is_video(path) else path)
@@ -1102,12 +1115,19 @@ class MainWindow(QMainWindow):
         """「显示对焦点」开关：同步 canvas 并按需加载/清除当前图的对焦点框。"""
         enabled = self.check_show_focus.isChecked()
         self.preview_panel.set_show_focus_enabled(enabled)
-        if enabled:
-            if self._current_exif_path:
-                self._update_preview_focus_box(self._current_exif_path)
-        else:
-            self._stop_focus_loader()
-            self.preview_panel.set_focus_box(None)
+        self._refresh_preview_focus_options()
+
+    def _on_auto_focus_center_toggled(self, enabled: bool) -> None:
+        self.preview_panel.set_auto_focus_center(enabled)
+        save_auto_focus_center_to_settings(enabled)
+        self._refresh_preview_focus_options()
+
+    def _refresh_preview_focus_options(self) -> None:
+        # 播放期间的选项变化也只能读内存，不能恢复 EXIF/完整预览任务。
+        playing = self._file_list._key_navigation_playback_active
+        path = self.preview_panel.current_path() if playing else self._current_exif_path
+        if path:
+            self._update_preview_focus_box(path, allow_async_load=not playing)
 
     def _find_source_file_by_stem(self, path: str) -> str | None:
         """Resolve a RAW/HEIF sibling from the directory-listing index."""
@@ -1157,16 +1177,21 @@ class MainWindow(QMainWindow):
     def _update_preview_focus_box(self, path: str, *, allow_async_load: bool = True) -> None:
         """根据当前预览图尺寸与元数据，异步加载并更新 PreviewCanvas 的对焦点框。
 
-        `allow_async_load=False` 时仅清除显示、不启动新线程（用于方向键高速浏览）。
+        `allow_async_load=False` 时只使用当前源图的内存缓存，不解析来源或启动线程。
         """
+        auto_center_control = getattr(self, "check_auto_focus_center", None)
+        auto_center = bool(auto_center_control and auto_center_control.isChecked())
         if not allow_async_load or is_video(path):
-            # This is a frame-rate-sensitive path.  Return before resolving a
-            # sibling RAW/HEIF source, scanning cache directories, or consulting
-            # metadata; set_image()/set_quick_pixmap() already cleared the box.
             self._stop_focus_loader()
-            self.preview_panel.set_focus_box(None)
+            focus_box = None
+            if auto_center and not is_video(path):
+                # 磁盘缓存帧的 path 是散列 JPEG；选择身份来自列表，不扫描源文件。
+                source_path = self._file_list.get_selected_display_path() or path
+                if not is_video(source_path):
+                    _checked, focus_box = self._get_cached_focus_box_for_preview(source_path)
+            self.preview_panel.set_focus_box(focus_box)
             return
-        if not self.check_show_focus.isChecked():
+        if not self.check_show_focus.isChecked() and not auto_center:
             self._stop_focus_loader()
             self.preview_panel.set_focus_box(None)
             return

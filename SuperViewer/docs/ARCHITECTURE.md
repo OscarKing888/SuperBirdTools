@@ -81,7 +81,9 @@ Viewer 在列表子类中启用 `enable_key_navigation_playback`、`enable_in_me
 
 ## 4. 焦点来源与显示
 
-入口为 `MainWindow._update_preview_focus_box()`。快切传入 `allow_async_load=False`，该方法在解析路径、查元数据之前就停止旧焦点任务并返回。普通预览先看开关与已缓存焦点，再创建 `FocusBoxLoader`。
+入口为 `MainWindow._update_preview_focus_box()`。快切传入 `allow_async_load=False`，停止旧焦点任务；开启自动居中时，仅按列表当前源图身份查询 `get_cached_focus_box_state_for_path()` 的内存缓存（磁盘缩略图路径可能是散列 JPEG），不解析来源、不扫描目录、不读文件元数据。普通预览在“显示对焦点”或“自动焦点居中”任一开启时查询缓存，必要时创建 `FocusBoxLoader`。
+
+预览工具栏的“自动焦点居中”默认关闭，状态通过 [`paths_settings.py`](../superviewer/paths_settings.py) 的 `preview_auto_focus_center` 保存。开启后，[`preview_panel.py`](../superviewer/preview_panel.py) 的 `_FocusCenteredPreviewCanvas` 将归一化焦点框中心锁定到预览中央，无焦点/未缓存时使用图像中心；靠边焦点允许留白。切图、缩略图升级、RAW/HEIF 加载占位保持相对于适应窗口的放大程度，滚轮及缩放菜单也以焦点为基准；关闭后恢复自由拖动。焦点框是否可见不影响居中。该功能只改变交互视口，继续复用共享构图/导出，不改变导出裁剪，也不需要 CLI 参数。回归见 [焦点居中测试](../tests/test_preview_focus_center.py)。
 
 `_resolve_focus_metadata_source_path()` 和列表 `focus_source_for_sibling()` 优先把预览 JPEG 对应到源 RAW/HEIF。`FocusBoxLoader` 先尝试源图，再尝试不同的预览路径；文件元数据都无法给出焦点时才使用报告中的 `focus_x/focus_y`。
 
