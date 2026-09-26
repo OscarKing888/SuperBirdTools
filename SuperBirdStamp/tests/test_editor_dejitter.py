@@ -95,3 +95,26 @@ def test_clearing_photo_list_resets_reference(window):
     assert not window._dejitter_reference_regions
     assert window._dejitter_reference_source is None
     assert not window.dejitter_reference_check.isChecked()
+
+
+def test_reference_outline_survives_refresh_and_mode_changes(window):
+    from PyQt6.QtGui import QColor, QPixmap
+    from birdstamp.gui.edit_modes import EDIT_MODE_NONE, EDIT_MODE_CROP_ADJUST
+    from birdstamp.gui.editor_preview_canvas import EditorPreviewOverlayState
+    window.preview_pixmap = QPixmap(260, 140)
+    window.preview_pixmap.fill(QColor('black'))
+    window.preview_overlay_state = EditorPreviewOverlayState()
+    window._on_canvas_reference_region_changed(((.2, .3, .7, .8),))
+    expected = window.preview_label.canvas.reference_regions()
+    for mode in (EDIT_MODE_NONE, EDIT_MODE_REFERENCE_REGION, EDIT_MODE_CROP_ADJUST):
+        window._set_edit_mode_button_checked(mode)
+        # 渲染器重建的叠加状态没有参考区，不能覆盖持久源坐标。
+        window.preview_overlay_state = EditorPreviewOverlayState()
+        window._refresh_preview_label(preserve_view=True)
+        assert window.preview_label.canvas.reference_regions() == expected
+        assert window.preview_label.canvas._show_reference_regions
+        image = window.preview_label.canvas.render_source_pixmap_with_overlays().toImage()
+        assert image.pixelColor(52, 60) != QColor('black')
+    window.dejitter_reference_check.setChecked(False)
+    window._refresh_preview_label(preserve_view=True)
+    assert window.preview_label.canvas.reference_regions() == expected

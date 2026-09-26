@@ -94,7 +94,7 @@ flowchart LR
 
 [export_stage/core.py](../birdstamp/export_stage/core.py) 的 `render_video_frame` 构造上下文并运行阶段管线。`prepare_uniform_auto_crop_plans` 在整批图像间预计算统一裁切（图片/GIF 导出时经 `_run_blocking_task_off_gui_thread` 在后台线程执行；视频保留缓存时，输入签名不变会直接复用源帧缓存桶下 `crop_plans.json` 中的裁切计划，不再重新解码原图）；去抖策略通过 [resolve_dejitter_strategy](../birdstamp/image_dejitter/strategy_registry.py) 选择中值中心或参考区域策略。改变这些批量计算时，要同时检查其输出是否进入缓存签名。
 
-参考区去抖在源图坐标中逐帧估计平移，支持手动裁切和导出列表外的参考照片；全局开关、独立强度与参考文件签名参与缓存失效。裁切计划缓存还包含参考照片及其 XMP 的文件签名，避免导出子集时复用过期的参考位置。编辑预览仍显示原裁切，去抖结果在导出预计算时生成。使用流程、坐标语义、算法边界与回归入口见 [参考区去抖动](DEJITTER.md)。
+参考区去抖在源图坐标中逐帧估计平移，支持手动裁切和导出列表外的参考照片；全局开关、独立强度与参考文件签名参与缓存失效。裁切计划缓存还包含参考照片及其 XMP 的文件签名，避免导出子集时复用过期的参考位置。编辑预览仍显示原裁切，去抖结果在导出预计算时生成。参考区轮廓由持久源坐标在每次重绘时恢复；[ReferenceRegionEditMode](../birdstamp/gui/edit_modes.py) 提供八手柄的暂存缩放预览，松手一次提交，切换模式或源图时取消未完成拖动。使用流程、坐标语义、算法边界与回归入口见 [参考区去抖动](DEJITTER.md)。
 
 预览由 [editor_renderer.py](../birdstamp/gui/editor_renderer.py) 的 `render_preview`、`_render_preview_pipeline_image` 适配相同的阶段顺序和设置，但保留裁切外画布以供编辑，不直接把最终裁切位图作为交互画布。模板要与裁切区域对齐，焦点框也要经过相同坐标变换。[editor_preview_canvas.py](../birdstamp/gui/editor_preview_canvas.py) 承接交互显示和网格叠加。
 

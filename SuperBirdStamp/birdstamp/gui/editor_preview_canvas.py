@@ -102,6 +102,7 @@ class EditorPreviewCanvas(PreviewCanvas):
         self._edit_modes.register(ReferenceRegionEditMode())
         self._edit_modes.register(CropAdjustEditMode())
         self._drag_probe = DragProbe()
+        self.setMouseTracking(True)
 
     def paintEvent(self, event) -> None:  # type: ignore[override]
         start = perf_counter()
@@ -162,6 +163,22 @@ class EditorPreviewCanvas(PreviewCanvas):
 
     def reference_regions(self) -> tuple["NormalizedBox", ...]:
         return self._reference_regions
+
+    def displayed_reference_regions(self) -> tuple["NormalizedBox", ...]:
+        mode = self._edit_modes.active_mode()
+        if isinstance(mode, ReferenceRegionEditMode):
+            return mode.preview_regions(self._reference_regions)
+        return self._reference_regions
+
+    def replace_reference_region(self, index: int, box: "NormalizedBox") -> None:
+        """只替换命中的区域；松手后一次提交，保留其它区域。"""
+        if not 0 <= index < len(self._reference_regions):
+            return
+        regions = list(self._reference_regions)
+        regions[index] = box
+        if self._set_reference_regions_no_update(regions):
+            self.reference_region_changed.emit(self._reference_regions)
+            self.update()
 
     def set_show_reference_regions(self, enabled: bool) -> None:
         if self._set_show_reference_regions_no_update(enabled):
@@ -238,6 +255,10 @@ class EditorPreviewCanvas(PreviewCanvas):
         return changed
 
     def _on_source_cleared(self) -> None:
+        mode = self._edit_modes.active_mode()
+        if isinstance(mode, ReferenceRegionEditMode):
+            mode.cancel(self)
+        self._reference_regions = ()
         self._bird_box = None
         self._crop_effect_box = None
         self._dragging_handle = None
@@ -329,6 +350,9 @@ class EditorPreviewCanvas(PreviewCanvas):
         coerced = self._coerce_reference_regions(regions)
         if coerced == self._reference_regions:
             return False
+        mode = self._edit_modes.active_mode()
+        if isinstance(mode, ReferenceRegionEditMode):
+            mode.cancel(self)
         self._reference_regions = coerced
         return True
 
@@ -348,7 +372,7 @@ class EditorPreviewCanvas(PreviewCanvas):
         pen = QPen(QColor("#FFB703"))
         pen.setWidth(2)
         pen.setJoinStyle(Qt.PenJoinStyle.MiterJoin)
-        for box in self._reference_regions:
+        for box in self.displayed_reference_regions():
             rect = QRectF(
                 draw_rect.left() + box[0] * draw_rect.width(),
                 draw_rect.top() + box[1] * draw_rect.height(),

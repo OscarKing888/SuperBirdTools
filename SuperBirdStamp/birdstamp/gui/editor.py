@@ -2953,7 +2953,7 @@ class BirdStampEditorWindow(
                 "reference",
                 "去抖动参考区",
                 "去抖动参考区：拖拽框选特征参考区，导出去抖动以此为锚点；"
-                "按住 Shift 追加，右键清除。",
+                "拖动四边/四角的 8 个手柄调节大小；按住 Shift 追加，右键清除。",
             ),
             (
                 EDIT_MODE_CROP_ADJUST,

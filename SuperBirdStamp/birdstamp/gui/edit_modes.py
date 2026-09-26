@@ -142,23 +142,28 @@ class EditModeController:
 
 
 class ReferenceRegionEditMode(EditMode):
-    """去抖动特征参考区框选模式：拖拽绘制矩形。
-
-    画布通过 ``commit_reference_region(box, append)`` 接收最终框。按住 Shift 拖拽
-    可追加多个参考区（为多区域去抖动预留），否则替换为单个参考区。
-    """
+    """参考区框选和八手柄缩放；拖动仅更新显示，松手后提交持久状态。"""
 
     mode_id = EDIT_MODE_REFERENCE_REGION
     label = "去抖动参考区"
+    handles = ("nw", "n", "ne", "e", "se", "s", "sw", "w")
+    _cursors = {
+        "nw": Qt.CursorShape.SizeFDiagCursor, "se": Qt.CursorShape.SizeFDiagCursor,
+        "ne": Qt.CursorShape.SizeBDiagCursor, "sw": Qt.CursorShape.SizeBDiagCursor,
+        "n": Qt.CursorShape.SizeVerCursor, "s": Qt.CursorShape.SizeVerCursor,
+        "e": Qt.CursorShape.SizeHorCursor, "w": Qt.CursorShape.SizeHorCursor,
+    }
 
     def __init__(self) -> None:
-        self._drawing = False
-        self._start_norm: tuple[float, float] | None = None
-        self._current_norm: tuple[float, float] | None = None
-        self._append = False
+        self._reset()
 
     def deactivate(self, canvas) -> None:
+        self.cancel(canvas)
+
+    def cancel(self, canvas) -> None:
         self._reset()
+        if hasattr(canvas, "unsetCursor"):
+            canvas.unsetCursor()
         canvas.update()
 
     def _reset(self) -> None:
@@ -166,6 +171,54 @@ class ReferenceRegionEditMode(EditMode):
         self._start_norm = None
         self._current_norm = None
         self._append = False
+        self._resize_index = None
+        self._resize_handle = None
+        self._resize_start = None
+        self._resize_box = None
+
+    @staticmethod
+    def handle_positions(box: NormalizedBox):
+        l, t, r, b = box
+        cx, cy = (l + r) / 2, (t + b) / 2
+        return ((l, t), (cx, t), (r, t), (r, cy), (r, b), (cx, b), (l, b), (l, cy))
+
+    @staticmethod
+    def resize_box(box: NormalizedBox, handle: str, point: tuple[float, float]) -> NormalizedBox:
+        l, t, r, b = box
+        x, y = map(_clamp_unit, point)
+        # 固定对侧边/角，禁止翻转；参考区不受裁切比例约束。
+        min_w, min_h = min(.01, r - l), min(.01, b - t)
+        if "w" in handle:
+            l = min(x, r - min_w)
+        if "e" in handle:
+            r = max(x, l + min_w)
+        if "n" in handle:
+            t = min(y, b - min_h)
+        if "s" in handle:
+            b = max(y, t + min_h)
+        return (l, t, r, b)
+
+    def preview_regions(self, regions):
+        if self._resize_index is None or self._resize_box is None:
+            return regions
+        return tuple(self._resize_box if i == self._resize_index else box
+                     for i, box in enumerate(regions))
+
+    def _hit_handle(self, canvas, event):
+        rect = canvas.display_rect()
+        if rect is None or rect.width() <= 0 or rect.height() <= 0:
+            return None
+        pos = event.position()
+        # 后添加的区域在上层；同一区域选择最近手柄，避免小框的手柄命中歧义。
+        for index in reversed(range(len(canvas.reference_regions()))):
+            distances = []
+            for handle, (nx, ny) in zip(self.handles, self.handle_positions(canvas.reference_regions()[index])):
+                distance = (pos.x() - rect.left() - nx * rect.width()) ** 2 + (pos.y() - rect.top() - ny * rect.height()) ** 2
+                distances.append((distance, handle))
+            distance, handle = min(distances)
+            if distance <= 8 ** 2:
+                return index, handle
+        return None
 
     def _point_norm(self, canvas, event) -> tuple[float, float] | None:
         draw_rect = canvas.display_rect()
@@ -177,10 +230,8 @@ class ReferenceRegionEditMode(EditMode):
 
     def on_mouse_press(self, canvas, event) -> bool:
         if event.button() == Qt.MouseButton.RightButton:
-            # 右键直接清除当前已框选的参考区。
-            self._reset()
+            self.cancel(canvas)
             canvas.commit_reference_region(None, append=False)
-            canvas.update()
             event.accept()
             return True
         if event.button() != Qt.MouseButton.LeftButton:
@@ -188,57 +239,83 @@ class ReferenceRegionEditMode(EditMode):
         point = self._point_norm(canvas, event)
         if point is None:
             return False
-        self._drawing = True
-        self._start_norm = point
-        self._current_norm = point
-        self._append = bool(event.modifiers() & Qt.KeyboardModifier.ShiftModifier)
+        hit = self._hit_handle(canvas, event)
+        self._reset()
+        if hit is not None:
+            self._resize_index, self._resize_handle = hit
+            self._resize_start = canvas.reference_regions()[self._resize_index]
+            self._resize_box = self._resize_start
+            canvas.setCursor(self._cursors[self._resize_handle])
+        else:
+            self._drawing = True
+            self._start_norm = self._current_norm = point
+            self._append = bool(event.modifiers() & Qt.KeyboardModifier.ShiftModifier)
         canvas.update()
         event.accept()
         return True
 
     def on_mouse_move(self, canvas, event) -> bool:
-        if not self._drawing or self._start_norm is None:
-            return False
         point = self._point_norm(canvas, event)
-        if point is None:
-            return True
-        self._current_norm = point
+        if self._resize_index is not None:
+            if point is not None:
+                self._resize_box = self.resize_box(self._resize_start, self._resize_handle, point)
+        elif self._drawing:
+            if point is not None:
+                self._current_norm = point
+        else:
+            hit = self._hit_handle(canvas, event)
+            canvas.setCursor(self._cursors[hit[1]] if hit else Qt.CursorShape.CrossCursor)
+            return False
         canvas.update()
         event.accept()
         return True
 
     def on_mouse_release(self, canvas, event) -> bool:
-        if not self._drawing or event.button() != Qt.MouseButton.LeftButton:
+        if event.button() != Qt.MouseButton.LeftButton:
             return False
-        start = self._start_norm
-        end = self._point_norm(canvas, event) or self._current_norm or self._start_norm
-        append = self._append
-        self._reset()
-        if start is not None and end is not None:
-            box = normalized_rect_from_points(start, end)
-            if rect_has_area(box):
-                canvas.commit_reference_region(box, append=append)
-            # 无面积点击保留原参考区；使用右键或“清除参考区”明确清除。
+        if self._resize_index is not None:
+            point = self._point_norm(canvas, event)
+            box = self.resize_box(self._resize_start, self._resize_handle, point) if point else self._resize_box
+            index = self._resize_index
+            self._reset()
+            canvas.replace_reference_region(index, box)
+        elif self._drawing:
+            start = self._start_norm
+            end = self._point_norm(canvas, event) or self._current_norm or start
+            append = self._append
+            self._reset()
+            if start is not None and end is not None:
+                box = normalized_rect_from_points(start, end)
+                if rect_has_area(box):
+                    canvas.commit_reference_region(box, append=append)
+        else:
+            return False
         canvas.update()
         event.accept()
         return True
 
     def paint(self, canvas, painter, draw_rect, content_rect) -> None:
-        if not self._drawing or self._start_norm is None or self._current_norm is None:
-            return
-        box = normalized_rect_from_points(self._start_norm, self._current_norm)
-        rect = QRectF(
-            draw_rect.left() + box[0] * draw_rect.width(),
-            draw_rect.top() + box[1] * draw_rect.height(),
-            max(0.0, (box[2] - box[0]) * draw_rect.width()),
-            max(0.0, (box[3] - box[1]) * draw_rect.height()),
-        )
+        painter.save()
+        painter.setClipRect(QRectF(content_rect))
         pen = QPen(QColor("#FFD166"))
         pen.setWidth(2)
-        pen.setStyle(Qt.PenStyle.DashLine)
-        painter.setBrush(Qt.BrushStyle.NoBrush)
-        painter.setPen(pen)
-        painter.drawRect(rect)
+        if self._drawing and self._start_norm is not None and self._current_norm is not None:
+            box = normalized_rect_from_points(self._start_norm, self._current_norm)
+            pen.setStyle(Qt.PenStyle.DashLine)
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.setPen(pen)
+            painter.drawRect(QRectF(draw_rect.left() + box[0] * draw_rect.width(),
+                                    draw_rect.top() + box[1] * draw_rect.height(),
+                                    (box[2] - box[0]) * draw_rect.width(),
+                                    (box[3] - box[1]) * draw_rect.height()))
+        else:
+            painter.setPen(QPen(QColor("#6B4700"), 1))
+            painter.setBrush(QColor("#FFD166"))
+            for box in self.preview_regions(canvas.reference_regions()):
+                for nx, ny in self.handle_positions(box):
+                    x, y = draw_rect.left() + nx * draw_rect.width(), draw_rect.top() + ny * draw_rect.height()
+                    painter.drawRect(QRectF(x - 4, y - 4, 8, 8))
+        painter.restore()
 
 
 class CropAdjustEditMode(EditMode):

@@ -845,14 +845,14 @@ class _BirdStampRendererMixin:
         preserve_view: bool = False,
         force_fit: bool = False,
     ) -> None:
-        self._apply_preview_overlay_options_from_ui()
-
         display_pixmap: QPixmap | None = self.preview_pixmap
         source_mode = "原图"
 
-        self.preview_label.apply_overlay_state(
-            self.preview_overlay_state if self.preview_pixmap else EditorPreviewOverlayState()
-        )
+        state = self.preview_overlay_state if self.preview_pixmap else EditorPreviewOverlayState()
+        state.reference_regions = self._reference_regions_source_to_preview(self._visible_dejitter_reference_regions())
+        self.preview_label.apply_overlay_state(state)
+        # 先应用图像叠加状态，再从持久源坐标恢复参考区，避免空的旧状态清掉选区。
+        self._apply_preview_overlay_options_from_ui()
         if self.current_source_image is not None:
             display_size = self._crop_display_source_size()
             if display_size is not None:
