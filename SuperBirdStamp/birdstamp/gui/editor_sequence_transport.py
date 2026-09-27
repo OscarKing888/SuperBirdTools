@@ -76,9 +76,20 @@ class SequenceTransport(QObject):
         self.strip.currentRowChanged.connect(self._seek)
         layout.addWidget(self.strip)
         self.panel.hide()
-        for surface in (editor, editor.photo_list._tree_widget,
-                        editor.photo_list._tree_widget.viewport(), editor.preview_label.canvas,
-                        self.strip, self.strip.viewport()):
+        # 画布点击后接收方向键，不能继续把按键交给此前有焦点的照片列表或输入框。
+        canvas = editor.preview_label.canvas
+        self._ordinary_canvas_focus_policy = canvas.focusPolicy()
+        self.panel.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        editor.preview_label.setFocusProxy(canvas)
+        for button in (self.play, self.previous, self.next):
+            button.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        self._navigation_surfaces = (editor.photo_list._tree_widget,
+                                     editor.photo_list._tree_widget.viewport(), canvas,
+                                     self.strip, self.strip.viewport())
+        self._result_surfaces = (self.panel, editor.preview_label, editor.dejitter_view_tabs,
+                                 self.play, self.previous, self.next, self.loop)
+        # 窗口只监听失活；避免子控件未处理的按键冒泡后误触发 B 图导航（尤其 A 图）。
+        for surface in (editor, *self._navigation_surfaces, *self._result_surfaces):
             surface.installEventFilter(self)
 
     @property
@@ -113,6 +124,8 @@ class SequenceTransport(QObject):
         return next((i for i, path in enumerate(self.paths) if path == current), -1)
 
     def sync(self):
+        self.editor.preview_label.canvas.setFocusPolicy(
+            Qt.FocusPolicy.StrongFocus if self.editor._dejitter_tab_active() else self._ordinary_canvas_focus_policy)
         index = self.index()
         self.strip.blockSignals(True)
         self.strip.setCurrentRow(index)
@@ -238,6 +251,9 @@ class SequenceTransport(QObject):
             return False
         if kind not in (QEvent.Type.KeyPress, QEvent.Type.KeyRelease):
             return False
+        if watched not in self._navigation_surfaces:
+            if watched not in self._result_surfaces or not self.editor._sequence_result_mode():
+                return False
         key = event.key()
         directions = {Qt.Key.Key_Left: -1, Qt.Key.Key_Up: -1,
                       Qt.Key.Key_Right: 1, Qt.Key.Key_Down: 1}
