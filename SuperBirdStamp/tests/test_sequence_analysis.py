@@ -8,6 +8,7 @@ import pytest
 
 from birdstamp.export_stage import sequence_analysis, sequence_preview
 from birdstamp.export_stage.render_job_seed import RenderJobSeed
+from birdstamp.export_stage.sequence_photo_error import SequencePhotoError
 from birdstamp.export_stage.video_frame_job import VideoFrameJob
 from birdstamp.export_stage.video_export_cancelled_error import VideoExportCancelledError
 from birdstamp.gui.editor_utils import path_key
@@ -178,7 +179,10 @@ def test_cancel_or_error_joins_all_actions_and_stops_refill(tmp_path, monkeypatc
         thread.join(10)
     assert not thread.is_alive()
     assert len(errors) == 1
-    assert isinstance(errors[0], VideoExportCancelledError if cancel else OSError)
+    assert isinstance(errors[0], VideoExportCancelledError if cancel else SequencePhotoError)
+    if not cancel:
+        assert errors[0].source_path == seeds[1].path
+        assert isinstance(errors[0].__cause__, OSError)
     assert set(calls) == {seeds[1].path, seeds[2].path}
     assert all(pool.is_finished() for pool in pools)
 

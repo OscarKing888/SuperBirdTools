@@ -10,6 +10,7 @@ from PyQt6.QtCore import QThread, pyqtSignal
 from PyQt6.QtGui import QImage
 
 from birdstamp.export_stage.sequence_preview import prepare_sequence_preview, render_sequence_preview_frame
+from birdstamp.export_stage.sequence_photo_error import SequencePhotoError, sequence_photo_errors
 from . import editor_options
 from birdstamp.image_dejitter.sequence_geometry import aligned_crop_plan, render_aligned_thumbnail
 from .sequence_preview_frame import SequencePreviewFrame
@@ -31,6 +32,7 @@ class EditorSequencePreviewWorker(QThread):
         self.cancel_event = threading.Event()
         self.restore_only = restore_only
         self.cache = cache
+        self.failure_path = None
 
     def cancel(self):
         self.cancel_event.set()
@@ -87,16 +89,13 @@ class EditorSequencePreviewWorker(QThread):
                 for index, (key, job) in enumerate(sequence.jobs.items(), 1):
                     if self.cancel_event.is_set():
                         return
-                    small = sources.pop(key)
-                    try:
+                    with sequence_photo_errors(job.path), sources.pop(key) as small:
                         width, height = sequence.source_sizes[key]
                         box = sequence.pixel_boxes[key]
                         with render_aligned_thumbnail(small, (width,height), box, edge) as aligned:
                             frames[key] = SequencePreviewFrame(
                                 job.path, pil_qimage(aligned), (width,height), sequence.output_size,
                                 aligned_crop_plan((width,height), box), pil_qimage(small))
-                    finally:
-                        small.close()
                     report_counts(index, len(sequence.jobs), '生成快速预览')
                 if not self.cancel_event.is_set():
                     if self.cache:
@@ -115,7 +114,7 @@ class EditorSequencePreviewWorker(QThread):
             self.progress.emit(self.token, '生成当前照片成片预览…')
             report_counts(0, 0, '生成清晰预览')
             context = render_sequence_preview_frame(sequence, self.path)
-            with context.image as image:
+            with sequence_photo_errors(self.path), context.image as image:
                 output_size = image.size
                 image.thumbnail((editor_options.DEJITTER_PREVIEW_MAX_EDGE,) * 2, Image.Resampling.LANCZOS)
                 rgb = image.convert('RGB')
@@ -133,6 +132,7 @@ class EditorSequencePreviewWorker(QThread):
                     self.ready.emit(self.token, sequence, frame)
         except Exception as exc:
             if not self.cancel_event.is_set():
+                self.failure_path = exc.source_path if isinstance(exc, SequencePhotoError) else None
                 self.failed.emit(self.token, str(exc))
         finally:
             for image in sources.values():

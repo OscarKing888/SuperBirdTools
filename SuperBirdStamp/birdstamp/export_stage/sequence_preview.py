@@ -16,6 +16,7 @@ from birdstamp.image_pipeline import ImageProcContext, ImageProcPipeline
 from birdstamp.image_pipeline.image_proc_stage.image_proc_sequence_align_stage import ImageProcSequenceAlignStage
 from .render_job_seed import prepare_render_jobs
 from .sequence_analysis import analyze_sequence_frames
+from .sequence_photo_error import SequencePhotoError, sequence_photo_errors
 from .video_export_cancelled_error import VideoExportCancelledError
 
 
@@ -76,19 +77,24 @@ def common_alignment_crop(regions, tracking, source_sizes, reference_size, stren
                     ((box[1] + box[3]) * height - (region[1] + region[3]) * rh) / 2)
                    for region, box in zip(regions, result.boxes) if box is not None]
         if not offsets:
-            raise ValueError(f'{Path(key).name}：参考区失配，{result.error or "没有可靠匹配"}。请在参考图调整或追加选区后重新分析，无需逐张框选。')
+            raise SequencePhotoError(key, f'参考区失配，{result.error or "没有可靠匹配"}。请在参考图调整或追加选区后重新分析，无需逐张框选。')
         translation = select_translation(regions, result, (width, height), reference_size)
         if translation is None:
-            raise ValueError(f'{Path(key).name}：多个参考区运动不一致且没有可区分的可靠匹配，请调整参考选区。')
+            raise SequencePhotoError(key, '多个参考区运动不一致且没有可区分的可靠匹配，请调整参考选区。')
         dx, dy, _ = translation
         shifts[key] = (round(dx * blend), round(dy * blend))
     lower, upper = (min, max) if pad_to_union else (max, min)
-    left = lower(-dx for dx, dy in shifts.values())
-    top = lower(-dy for dx, dy in shifts.values())
-    right = upper(source_sizes[key][0] - dx for key, (dx, dy) in shifts.items())
-    bottom = upper(source_sizes[key][1] - dy for key, (dx, dy) in shifts.items())
-    if right <= left or bottom <= top:
-        raise ValueError('对齐后没有整组共同覆盖的画面，请开启补边保留完整画面，或调整照片范围及参考区。')
+    bounds = None
+    for key, (dx, dy) in shifts.items():
+        width, height = source_sizes[key]
+        current = (-dx, -dy, width - dx, height - dy)
+        bounds = current if bounds is None else (
+            lower(bounds[0], current[0]), lower(bounds[1], current[1]),
+            upper(bounds[2], current[2]), upper(bounds[3], current[3]))
+        left, top, right, bottom = bounds
+        if right <= left or bottom <= top:
+            # 分析结果已按列表排序，记录加入后首次使共同画幅为空的照片。
+            raise SequencePhotoError(key, '对齐后没有整组共同覆盖的画面，请开启补边保留完整画面，或调整照片范围及参考区。')
     boxes = {key: (left + dx, top + dy, right + dx, bottom + dy) for key, (dx, dy) in shifts.items()}
     return boxes, (right - left, bottom - top)
 
@@ -116,7 +122,7 @@ def prepare_sequence_preview(seeds, template_paths=None, *, cancel_event, progre
     reference = Path(reference)
     progress_counts(0, 0, '准备参考图')
     progress('正在准备参考图…')
-    with decode_image(reference, decoder='auto') as image:
+    with sequence_photo_errors(reference), decode_image(reference, decoder='auto') as image:
         if cancel_event.is_set():
             raise VideoExportCancelledError('已取消去抖动分析。')
         tracker = ReferenceRegionTracker(image, regions)
@@ -151,7 +157,7 @@ def render_sequence_preview_frame(sequence: SequencePreview, path: Path, *, vali
         raise ValueError('照片或 XMP 已变化，请重新分析。')
     key = path_key(path)
     job = sequence.jobs[key]
-    with decode_image(path, decoder='auto') as image:
+    with sequence_photo_errors(path), decode_image(path, decoder='auto') as image:
         if image.size != sequence.source_sizes[key]:
             raise ValueError('照片尺寸已变化，请重新分析。')
         context = ImageProcContext(image=image, settings=job.settings, source_path=path,

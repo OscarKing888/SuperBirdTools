@@ -12,6 +12,7 @@ from birdstamp.decoders.image_decoder import decode_image
 from birdstamp.gui.editor_utils import path_key
 from birdstamp.image_dejitter.region_tracking_result import RegionTrackingResult, image_file_signature
 from .core import estimate_video_job_max_pixels, resolve_video_render_workers
+from .sequence_photo_error import sequence_photo_errors
 from .video_export_cancelled_error import VideoExportCancelledError
 
 _LOG = get_logger('sequence_analysis')
@@ -70,7 +71,7 @@ def analyze_sequence_frames(jobs, tracker, reference, *, cancel_event, preview_s
 
     def run_phase(actions, stage, total, completed=0):
         actions = iter(actions)
-        pending = set()
+        pending = {}
 
         def report():
             progress_counts(completed, total, stage)
@@ -82,15 +83,16 @@ def analyze_sequence_frames(jobs, tracker, reference, *, cancel_event, preview_s
                 action = next(actions, None)
                 if action is None:
                     break
-                pending.add(pool.submit_action(action, kind=WorkKind.METADATA))
+                pending[pool.submit_action(action, kind=WorkKind.METADATA)] = action.path
 
         report()
         refill()
         while pending:
             check()
-            done, pending = wait(pending, timeout=0.1, return_when=FIRST_COMPLETED)
+            done, _ = wait(pending, timeout=0.1, return_when=FIRST_COMPLETED)
             for future in done:
-                key, result, size = future.result()
+                with sequence_photo_errors(pending.pop(future)):
+                    key, result, size = future.result()
                 tracking[key], sizes[key] = result, size
                 completed += 1
                 report()

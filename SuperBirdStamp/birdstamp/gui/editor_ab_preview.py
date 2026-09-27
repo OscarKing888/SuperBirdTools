@@ -138,6 +138,39 @@ class ABPreview(QObject):
         if item is not None:
             self.editor.photo_list.setCurrentItem(item)
 
+    def compare_analysis_failure(self, failed_path):
+        """左侧钉住列表第一张，右侧通过正常选图流程显示失败照片的原图。"""
+        if self.stopping or failed_path is None:
+            return
+        editor = self.editor
+        paths = tuple(editor._list_photo_paths())
+        failed = next((path for path in paths if path_key(path) == path_key(failed_path)), None)
+        item = editor._find_photo_item_by_path(failed) if failed is not None else None
+        if not paths or item is None:
+            return
+        # 先固定 A，避免原来的“跟随 B”设置在右侧切图时带走第一张。
+        self.pin.blockSignals(True)
+        self.pin.setChecked(True)
+        self.pin.blockSignals(False)
+        self.mode.blockSignals(True)
+        self.mode.setCurrentIndex(0)
+        self.mode.blockSignals(False)
+        self.path = paths[0]
+        editor.sequence_transport.stop(commit=False)
+        editor.export_tabs.setCurrentWidget(editor.dejitter_page)
+        if editor.photo_list.currentItem() is item:
+            # 同一张失败也重走加载，避免保留文件损坏/变化前的旧像素。
+            editor._on_photo_selected(item, None)
+        else:
+            editor.photo_list.setCurrentItem(item)
+        if self.enabled.isChecked():
+            self.sync(force=True)
+        else:
+            self.enabled.setChecked(True)
+        editor._set_dejitter_view('edit')
+        editor._sequence_upgrade_timer.stop()
+        editor._sequence_pending_path = None
+
     def sync(self, *, force=False, follow=True):
         if self.stopping:
             return

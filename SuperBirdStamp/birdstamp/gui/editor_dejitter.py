@@ -477,10 +477,15 @@ class _BirdStampDejitterMixin:
 
     def _on_sequence_failed(self, token, message):
         if self._accept_sequence_signal(token):
+            worker = self._sequence_worker
+            analysis_failed = (self._sequence_progress_kind == 'analysis'
+                               and not getattr(worker, 'restore_only', False))
             self._finish_sequence_progress('导出失败' if self._sequence_exporting else '分析失败')
             self._sequence_message = f'去抖动任务失败：{message}'
             self._sequence_pending_path = None
             self._update_dejitter_controls()
+            if analysis_failed:
+                self.ab_preview.compare_analysis_failure(getattr(worker, 'failure_path', None))
 
     def _on_sequence_quick_ready(self, token, sequence, frames):
         if not self._accept_sequence_signal(token):
