@@ -2238,10 +2238,14 @@ class BirdStampEditorWindow(
             QGroupBox {{
                 border: 1px solid {border_color.name()};
                 border-radius: 10px;
-                margin-top: 10px;
+                /* 标题跨在边框上，内外各留半行；em 随字体/DPI 缩放，避免内容遮住标题。 */
+                margin-top: 0.5em;
+                padding-top: 0.5em;
                 background: {base_color.name()};
             }}
             QGroupBox::title {{
+                subcontrol-origin: margin;
+                subcontrol-position: top left;
                 left: 10px;
                 padding: 0 4px;
                 font-weight: 600;
