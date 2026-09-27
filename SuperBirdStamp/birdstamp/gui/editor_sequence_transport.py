@@ -5,7 +5,7 @@ from PyQt6.QtCore import QEvent, QObject, QSize, Qt, QTimer
 from PyQt6.QtGui import QIcon, QPixmap
 from PyQt6.QtWidgets import (
     QCheckBox, QHBoxLayout, QLabel, QListWidget, QListWidgetItem,
-    QPushButton, QSpinBox, QStyle, QToolButton, QVBoxLayout, QWidget,
+    QSpinBox, QStyle, QToolButton, QVBoxLayout, QWidget,
 )
 
 from . import editor_options
@@ -34,10 +34,19 @@ class SequenceTransport(QObject):
         self.play.setMinimumSize(36, 32)
         self._update_play_button()
         self.play.clicked.connect(self.toggle)
-        self.previous = QPushButton('上一张')
+        self.previous = QToolButton()
         self.previous.clicked.connect(lambda: self.step(-1))
-        self.next = QPushButton('下一张')
+        self.next = QToolButton()
         self.next.clicked.connect(lambda: self.step(1))
+        for button, label, icon in (
+                (self.previous, '上一张', QStyle.StandardPixmap.SP_MediaSkipBackward),
+                (self.next, '下一张', QStyle.StandardPixmap.SP_MediaSkipForward)):
+            button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
+            button.setIcon(button.style().standardIcon(icon))
+            button.setIconSize(self.play.iconSize())
+            button.setMinimumSize(self.play.minimumSize())
+            button.setToolTip(label)
+            button.setAccessibleName(label)
         self.position = QLabel('0 / 0')
         self.fps = QSpinBox()
         self.fps.setRange(1, 30)
