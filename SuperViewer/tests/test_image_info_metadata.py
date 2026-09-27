@@ -50,3 +50,18 @@ def test_basic_info_includes_camera_and_analysis_metadata(tmp_path) -> None:
     assert info["锐度"] == "0.96"
     assert info["美学"] == "0.83"
     assert info["对焦"] == "精焦"
+
+
+def test_report_metadata_rows_include_superpicky_v10_fields() -> None:
+    from SuperViewer.superviewer.exif_helpers import build_report_metadata_rows
+
+    report = {
+        "picked": 1,
+        "aesthetic_index": 78.5,
+        "alt_species_cn": "白鹭",
+        "alt_species_en": "Little Egret",
+        "alt_confidence": 0.63,
+    }
+    rows = {row[3]: row[5] for row in build_report_metadata_rows(report)}
+    for key, value in report.items():
+        assert rows[key] == value

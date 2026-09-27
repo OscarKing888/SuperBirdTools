@@ -543,6 +543,61 @@ def test_auto_proxy_returns_na_when_all_sources_are_missing() -> None:
     assert provider.get_text_content(photo) == MISSING_TEMPLATE_TEXT
 
 
+def test_v10_report_fields_are_registered_and_keep_distinct_meanings(tmp_path: Path) -> None:
+    row = {
+        "picked": 1,
+        "aesthetic_index": 78.5,
+        "alt_species_cn": "白鹭",
+        "alt_species_en": "Little Egret",
+        "alt_confidence": 0.63,
+        "adj_topiq": 90,
+    }
+    photo = PhotoInfo(tmp_path / "sample.jpg", raw_metadata={}, metadata_is_snapshot=True)
+    options = {key for source, key, _label in get_template_context_field_options() if source == "auto"}
+    assert row.keys() - {"adj_topiq"} <= options
+    assert canonical_meta_field_key("picked") == "picked"
+    set_report_db_row_resolver(lambda _path: dict(row))
+    try:
+        context = build_template_context(photo)
+        for key, value in row.items():
+            assert build_template_context_provider("auto", key).get_text_content(photo) == str(value)
+            if key != "adj_topiq":
+                assert context[key] == str(value)
+        assert build_template_context_provider("auto", "pick").get_text_content(photo) == "1"
+        assert context["bird_species_cn"] == ""
+        assert context["bird_species_en"] == ""
+    finally:
+        set_report_db_row_resolver(None)
+
+
+def test_v10_template_fields_prefer_xmp_including_zero(tmp_path: Path) -> None:
+    path = tmp_path / "sample.jpg"
+    path.write_bytes(b"not decoded")
+    path.with_suffix(".xmp").write_text(
+        '''<x:xmpmeta xmlns:x="adobe:ns:meta/">
+  <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+    <rdf:Description rdf:about=""
+      xmlns:superpicky="https://superbirdtools.local/xmp/superpicky/1.0/"
+      xmlns:xmpDM="http://ns.adobe.com/xmp/1.0/DynamicMedia/"
+      superpicky:picked="0" superpicky:aesthetic_index="0"
+      superpicky:alt_species_cn="灰鹭" superpicky:alt_species_en="Grey Heron"
+      superpicky:alt_confidence="0" xmpDM:pick="-1" />
+  </rdf:RDF>
+</x:xmpmeta>''', encoding="utf-8",
+    )
+    row = {"picked": 1, "aesthetic_index": 78.5, "alt_species_cn": "白鹭", "alt_species_en": "Little Egret", "alt_confidence": 0.63}
+    expected = {"picked": "0", "pick": "-1", "aesthetic_index": "0", "alt_species_cn": "灰鹭", "alt_species_en": "Grey Heron", "alt_confidence": "0"}
+    set_report_db_row_resolver(lambda _path: dict(row))
+    try:
+        photo = PhotoInfo.from_path(path, raw_metadata={"XMP-superpicky:aesthetic_index": 90})
+        context = build_template_context(photo)
+        for key, value in expected.items():
+            assert context[key] == value
+            assert build_template_context_provider("auto", key).get_text_content(photo) == value
+    finally:
+        set_report_db_row_resolver(None)
+
+
 def test_auto_proxy_route_definitions_are_loaded_from_resource_json() -> None:
     routes = AutoProxyTemplateContextProvider.route_definitions()
 

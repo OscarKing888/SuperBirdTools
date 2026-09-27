@@ -73,6 +73,8 @@ A/B 的布局与显隐约定见 [A/B 预览工具栏布局](ux/AB_PREVIEW_LAYOUT
 
 `set_report_db_row_resolver` 将编辑器的 report.db 查询能力注入模板层。report.db 是只读兼容输入；用户元数据编辑通过共享 [PhotoMetaDataXMP](../../app_common/exif_io/photo_meta.py) 写同名 XMP sidecar，不能写回原图或数据库。`XMP-superpicky:*` 自定义字段和标准 XMP 字段共同参与兼容取值。sidecar 读取缓存以路径、大小和纳秒修改时间为签名，文件元数据缓存也包含 sidecar 签名，修改或删除 sidecar 后需要得到新值。
 
+慧眼选鸟 v10 的 `picked`（生产者精选结果）、`aesthetic_index`（鸟种颜值）、`alt_species_cn/en` / `alt_confidence`（待确定候选）均为独立规范字段，通过默认 AutoProxy 路由保持 Exif/XMP → FromFile → ReportDB → Editor 优先级。`pick` 仍表示当前界面标记，report 回退复用 `report_pick_value()`；`picked` 不再作为 `pick` 的别名。候选字段不会替换已确认的鸟种，`aesthetic_index` 不会替换照片美学评分 `aesthetic`。
+
 [editor_template.py](../birdstamp/gui/editor_template.py) 负责模板目录、默认模板初始化、JSON 规范化和 `render_template_overlay` 绘制；[editor_template_dialog.py](../birdstamp/gui/editor_template_dialog.py) 负责编辑 UI。字体与中文回退绘制见 [render/typography.py](../birdstamp/render/typography.py)。CLI 的标准化元数据模型则位于 [models.py](../birdstamp/models.py) 与 [meta/normalize.py](../birdstamp/meta/normalize.py)。
 
 模板文本的描边和阴影由 [render/text_effects.py](../birdstamp/render/text_effects.py) 的 `normalize_text_effects` / `styled_text_layer` 规范化及绘制。每项保存独立开关、颜色、描边宽度、阴影不透明度/偏移/柔化；旧模板缺省关闭，新增文本项的默认值读取 `editor_options.json` 的 `text_effects`。效果尺寸随实际字号缩放，排版避让包含效果边界；预览按导出逻辑画幅绘制后缩放，图片/GIF/视频和 CLI `render --template` 沿用同一模板渲染入口，源帧缓存版本随渲染变化更新。回归见 [test_overlay_text_effects.py](../tests/test_overlay_text_effects.py)。

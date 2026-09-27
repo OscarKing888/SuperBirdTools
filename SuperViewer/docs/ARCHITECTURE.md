@@ -120,6 +120,8 @@ Viewer 在列表子类中启用 `enable_key_navigation_playback`、`enable_in_me
 
 `report.db` 只是兼容读取与补全来源。列表、元信息和焦点查询不能调用建库、schema migration 或修改 PRAGMA 的写连接。用户数据编辑不更新报告表。
 
+[`report_db.py`](../../app_common/report_db.py) 的字段表覆盖慧眼选鸟 v10：`picked`、`aesthetic_index`、`alt_species_cn/en`、`alt_confidence` 进入元数据与 XMP 缺失字段补全。读取按实际列兼容旧库，无需修改数据库版本。`report_pick_value()` 将新版 `picked` 或旧版 `pick` 转为界面标记，负星级仍表示排除；XMP 手工标记（包括 0）优先。候选鸟种保留待确定语义，鸟种颜值与照片美学评分分开。XMP 补全只写标准 `xmpDM:pick`，编辑标记时清理旧 Pick 别名，避免旧值覆盖用户操作。回归见 [版本兼容测试](../../app_common/tests/test_report_db_version_compat.py)。
+
 ## 6. 标签树、过滤与命令历史
 
 `PhotoTagConfig.load_tree()` / `load_tree_and_tags()` 解析缩进式 `tags.cfg`，返回 `TagTreeNode` 树及去重后的叶子词表。空行和 `#` 注释被忽略，平面配置仍可用；分组只有导航作用，只有叶子会成为 XMP Subject。标签库配置优先从照片库 `.superpicky/tags.cfg` 解析，回退到应用配置。

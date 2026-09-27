@@ -14,7 +14,7 @@ from typing import Any, Callable, Dict, Optional
 from PIL import Image
 
 from app_common.exif_io.config import load_exif_settings
-from app_common.report_db import PHOTO_COLUMNS
+from app_common.report_db import PHOTO_COLUMNS, report_pick_value
 from birdstamp.config import resolve_bundled_path
 from birdstamp.meta.normalize import format_settings_line, normalize_metadata
 
@@ -1382,7 +1382,8 @@ _CANONICAL_META_FIELD_DEFINITIONS: tuple[TemplateContextField, ...] = (
     TemplateContextField("alpha_channel", "Alpha通道", aliases=("alpha", "has_alpha")),
     TemplateContextField("red_eye", "红眼", aliases=("redeye",)),
     TemplateContextField("rating", "星级", aliases=("stars", "star")),
-    TemplateContextField("pick", "标记", aliases=("flag", "mark", "picked")),
+    TemplateContextField("pick", "标记", aliases=("flag", "mark")),
+    TemplateContextField("picked", "慧眼选鸟精选结果"),
     TemplateContextField("label", "颜色标签", aliases=("color_label",)),
     TemplateContextField("sharpness", "锐度", aliases=("adj_sharpness", "sharp")),
     TemplateContextField("head_sharp", "头部锐度"),
@@ -1410,6 +1411,10 @@ _CANONICAL_META_FIELD_DEFINITIONS: tuple[TemplateContextField, ...] = (
     TemplateContextField("rarity_index", "稀有度指数"),
     TemplateContextField("iucn_category", "IUCN 类别"),
     TemplateContextField("gbif_rarity_100", "GBIF 稀有度"),
+    TemplateContextField("aesthetic_index", "鸟种颜值（0–100）"),
+    TemplateContextField("alt_species_cn", "待确定鸟种中文名"),
+    TemplateContextField("alt_species_en", "待确定鸟种英文名"),
+    TemplateContextField("alt_confidence", "待确定鸟种置信度"),
     TemplateContextField("created_at", "报告创建时间", aliases=("report_created_at",)),
     TemplateContextField("updated_at", "报告更新时间", aliases=("report_updated_at",)),
     TemplateContextField("stem", "文件名（不含扩展名）"),
@@ -2649,7 +2654,7 @@ class ReportDBTemplateContextProvider(TemplateContextProvider):
         set_if_value("shutter_speed", first_row_value("shutter_speed"), "exposure_time")
         set_if_value("sharpness", first_row_value("adj_sharpness", "head_sharp"))
         set_if_value("aesthetic", first_row_value("adj_topiq", "nima_score"))
-        set_if_value("pick", first_row_value("pick"), "flag")
+        set_if_value("pick", report_pick_value(row), "flag")
         return context
 
     def _read_text_value(self, photo_info: PhotoInfo, field: TemplateContextField | None) -> str:
