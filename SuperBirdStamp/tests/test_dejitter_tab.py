@@ -214,7 +214,9 @@ def test_analysis_error_is_visible_and_releases_worker(window, monkeypatch):
     paths[1].write_bytes(b'broken')
     window.dejitter_preprocess_btn.click()
     wait_until(lambda: window._sequence_worker is None)
-    assert window._sequence_preview is None
+    assert window._sequence_preview.partial
+    assert tuple(window._sequence_preview.jobs) == (path_key(paths[0]),)
+    assert path_key(paths[0]) in window._sequence_quick_frames
     assert '失败' in window._sequence_message
     assert window.dejitter_preprocess_btn.isEnabled()
 

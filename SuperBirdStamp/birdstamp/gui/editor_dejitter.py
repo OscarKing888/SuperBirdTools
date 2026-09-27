@@ -224,6 +224,10 @@ class _BirdStampDejitterMixin:
             self._cancel_preview_decode()
             self._cancel_async_bird_detect()
             self._preview_debounce_timer.stop()
+            sequence = self._sequence_preview
+            if (sequence is not None and sequence.partial
+                    and (self.current_path is None or path_key(self.current_path) not in sequence.jobs)):
+                self.sequence_transport._select(0)
         self.dejitter_view_tabs.blockSignals(True)
         self.dejitter_view_tabs.setCurrentIndex(1 if view == 'result' else 0)
         self.dejitter_view_tabs.blockSignals(False)
@@ -271,7 +275,7 @@ class _BirdStampDejitterMixin:
         sequence = self._sequence_preview
         if sequence is None:
             return False
-        if (tuple(sequence.jobs) != tuple(path_key(path) for path in self._list_photo_paths())
+        if (tuple(sequence.all_jobs) != tuple(path_key(path) for path in self._list_photo_paths())
                 or not sequence.files_current()):
             self._invalidate_sequence_preview()
             return False
@@ -358,7 +362,10 @@ class _BirdStampDejitterMixin:
                                            else '取消导出' if self._sequence_exporting else '取消分析')
         self.dejitter_preprocess_btn.setEnabled(not stopping and not upgrading and not self._sequence_shutdown
                                                and (worker is not None or (self.current_path is not None and bool(regions))))
-        self.dejitter_export_btn.setEnabled(worker is None and self._sequence_preview is not None and not self._sequence_shutdown)
+        sequence = self._sequence_preview
+        partial = sequence is not None and sequence.partial
+        self.dejitter_export_btn.setEnabled(worker is None and sequence is not None and not partial and not self._sequence_shutdown)
+        self.dejitter_export_btn.setToolTip('当前仅保留失败前的成片预览，请完成整组分析后导出全部。' if partial else '')
         self.dejitter_tracking_status.setText(self._sequence_message)
         if hasattr(self, 'sequence_transport'):
             self.sequence_transport.sync()
@@ -482,6 +489,15 @@ class _BirdStampDejitterMixin:
                                and not getattr(worker, 'restore_only', False))
             self._finish_sequence_progress('导出失败' if self._sequence_exporting else '分析失败')
             self._sequence_message = f'去抖动任务失败：{message}'
+            sequence = self._sequence_preview
+            if analysis_failed and sequence is not None and sequence.partial:
+                completed, total = len(sequence.jobs), len(sequence.all_jobs)
+                label = f'分析失败 · 已生成前 {completed}/{total} 张成片预览'
+                self.dejitter_analysis_progress.setRange(0, total)
+                self.dejitter_analysis_progress.setValue(completed)
+                self.dejitter_analysis_progress.setFormat(label)
+                self.dejitter_analysis_progress.setToolTip(label)
+                self._sequence_message += f'\n已生成前 {completed}/{total} 张成片预览，切换“成片预览”查看。'
             self._sequence_pending_path = None
             self._update_dejitter_controls()
             if analysis_failed:
@@ -512,8 +528,8 @@ class _BirdStampDejitterMixin:
         if sequence_input_key(seeds, self.template_paths) != sequence.input_key:
             self._invalidate_sequence_preview()
             return
-        self._sequence_cache_key = sequence.input_key
-        if frame is not None and self._sequence_progress_kind == 'analysis':
+        self._sequence_cache_key = None if sequence.partial else sequence.input_key
+        if frame is not None and self._sequence_progress_kind == 'analysis' and not sequence.partial:
             self._finish_sequence_progress('分析完成', complete=True)
         self._schedule_workspace_autosave()
         if frame is not None:
@@ -535,6 +551,10 @@ class _BirdStampDejitterMixin:
         padded = self.dejitter_pad_to_union_check.isChecked()
         kind = '补边画幅' if padded else '共同裁切'
         self._sequence_message = f'整组 {len(sequence.jobs)} 张已分析；{kind} {sequence.output_size[0]} × {sequence.output_size[1]}；{failed} 张存在部分选区失配。'
+        if sequence.partial:
+            self._sequence_message = (f'已生成前 {len(sequence.jobs)}/{len(sequence.all_jobs)} 张成片预览；'
+                                      f'{kind} {sequence.output_size[0]} × {sequence.output_size[1]}。\n'
+                                      f'后续分析失败：{sequence.failure}')
         self._reference_tracking_message = self._sequence_message
         self._set_status(self._sequence_message)
         self._update_dejitter_controls()
@@ -607,7 +627,9 @@ class _BirdStampDejitterMixin:
             self.preview_label.set_cropped_size(None, None)
             # 未分析或尚无结果时保持待更新状态；所有清晰请求由防抖定时器调度。
         self.preview_label.apply_overlay_state(state)
-        self.preview_label.set_source_mode('去抖动成片' if frame else '成片待更新')
+        missing = (f'该照片未生成成片 · 可预览前 {len(sequence.jobs)} 张'
+                   if sequence is not None and sequence.partial and key not in sequence.jobs else '成片待更新')
+        self.preview_label.set_source_mode('去抖动成片' if frame else missing)
         if frame is not None and self.preview_label.canvas._source_pixmap is None:
             reset_view, preserve_view = True, False
         self.preview_label.set_source_pixmap(pixmap, reset_view=reset_view, preserve_view=preserve_view,
@@ -616,7 +638,7 @@ class _BirdStampDejitterMixin:
 
     def _valid_sequence_for_export(self):
         sequence = self._sequence_preview
-        if sequence is None:
+        if sequence is None or sequence.partial:
             return None
         seeds = self._build_dejitter_seeds(self._list_photo_paths())
         if sequence_input_key(seeds, self.template_paths) != sequence.input_key:

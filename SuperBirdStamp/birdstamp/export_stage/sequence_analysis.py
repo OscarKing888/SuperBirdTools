@@ -12,7 +12,7 @@ from birdstamp.decoders.image_decoder import decode_image
 from birdstamp.gui.editor_utils import path_key
 from birdstamp.image_dejitter.region_tracking_result import RegionTrackingResult, image_file_signature
 from .core import estimate_video_job_max_pixels, resolve_video_render_workers
-from .sequence_photo_error import sequence_photo_errors
+from .sequence_photo_error import SequencePhotoError, sequence_photo_errors
 from .video_export_cancelled_error import VideoExportCancelledError
 
 _LOG = get_logger('sequence_analysis')
@@ -43,9 +43,12 @@ class SequenceAnalysisAction(WorkerAction):
 
 def analyze_sequence_frames(jobs, tracker, reference, *, cancel_event, preview_source=None,
                             progress=lambda message: None,
-                            progress_counts=lambda current, total, stage: None, analysis_workers=0):
-    """preview_source 在池线程调用；进度及结果汇总只由调用线程执行。"""
+                            progress_counts=lambda current, total, stage: None, analysis_workers=0,
+                            photo_errors=None):
+    """preview_source 在池线程调用；传入 photo_errors 可保留失败前已派发的结果。"""
     keys = tuple(path_key(job.path) for job in jobs)
+    positions = {key: index for index, key in enumerate(keys)}
+    failure_index = len(keys)
     tracking, sizes = {}, {}
     reference_key = path_key(reference)
     if reference_key in keys:
@@ -70,6 +73,7 @@ def analyze_sequence_frames(jobs, tracker, reference, *, cancel_event, preview_s
     pool.set_thumbnail_mode(False)
 
     def run_phase(actions, stage, total, completed=0):
+        nonlocal failure_index
         actions = iter(actions)
         pending = {}
 
@@ -83,6 +87,8 @@ def analyze_sequence_frames(jobs, tracker, reference, *, cancel_event, preview_s
                 action = next(actions, None)
                 if action is None:
                     break
+                if positions[path_key(action.path)] >= failure_index:
+                    break
                 pending[pool.submit_action(action, kind=WorkKind.METADATA)] = action.path
 
         report()
@@ -91,8 +97,19 @@ def analyze_sequence_frames(jobs, tracker, reference, *, cancel_event, preview_s
             check()
             done, _ = wait(pending, timeout=0.1, return_when=FIRST_COMPLETED)
             for future in done:
-                with sequence_photo_errors(pending.pop(future)):
-                    key, result, size = future.result()
+                path = pending.pop(future)
+                try:
+                    with sequence_photo_errors(path):
+                        key, result, size = future.result()
+                except SequencePhotoError as exc:
+                    check()
+                    if photo_errors is None:
+                        raise
+                    key = path_key(path)
+                    photo_errors[key] = exc
+                    failure_index = min(failure_index, positions[key])
+                    # 不再提交失败帧之后的任务；已派发的前序帧必须等到真实完成。
+                    continue
                 tracking[key], sizes[key] = result, size
                 completed += 1
                 report()
@@ -104,12 +121,14 @@ def analyze_sequence_frames(jobs, tracker, reference, *, cancel_event, preview_s
                    for job in jobs if path_key(job.path) != reference_key)
         run_phase(actions, '对齐照片', len(jobs), len(tracking))
         # 用列表顺序恢复字典；完成顺序不能改变邻帧或最终输出的语义。
-        tracking = {key: tracking[key] for key in keys}
-        sizes = {key: sizes[key] for key in keys}
+        tracking = {key: tracking[key] for key in keys if key in tracking}
+        sizes = {key: sizes[key] for key in keys if key in sizes}
         first_pass = dict(tracking)
         recovery_actions = []
-        for index in range(1, len(jobs) - 1):
+        for index in range(1, min(failure_index, len(jobs) - 1)):
             check()
+            if any(key not in first_pass for key in keys[index - 1:index + 2]):
+                continue
             result = first_pass[keys[index]]
             if result.matched_count == len(tracker.regions):
                 continue
@@ -121,8 +140,8 @@ def analyze_sequence_frames(jobs, tracker, reference, *, cancel_event, preview_s
         if recovery_actions:
             run_phase(recovery_actions, '核验遮挡', len(recovery_actions))
         check()
-        _LOG.info('sequence analysis complete photos=%s recovery=%s workers=%s elapsed_s=%.3f',
-                  len(jobs), len(recovery_actions), workers, monotonic() - started)
+        _LOG.info('sequence analysis complete photos=%s tracked=%s read_errors=%s recovery=%s workers=%s elapsed_s=%.3f',
+                  len(jobs), len(tracking), len(photo_errors or {}), len(recovery_actions), workers, monotonic() - started)
         return tracking, sizes
     except BaseException as exc:
         stopped.set()

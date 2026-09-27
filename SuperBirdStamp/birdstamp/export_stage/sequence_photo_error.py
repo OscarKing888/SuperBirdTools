@@ -8,7 +8,8 @@ from .video_export_cancelled_error import VideoExportCancelledError
 class SequencePhotoError(ValueError):
     def __init__(self, source_path, message):
         self.source_path = Path(source_path)
-        super().__init__(f'{self.source_path.name}：{message}')
+        self.message = str(message)
+        super().__init__(f'{self.source_path.name}：{self.message}')
 
 
 @contextmanager

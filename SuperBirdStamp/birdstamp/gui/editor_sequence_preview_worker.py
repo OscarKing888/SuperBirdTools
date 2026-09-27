@@ -76,7 +76,7 @@ class EditorSequencePreviewWorker(QThread):
             sequence = sequence or prepare_sequence_preview(
                 self.seeds, self.template_paths, cancel_event=self.cancel_event,
                 progress=lambda text: self.progress.emit(self.token, text), bird_boxes=self.bird_boxes,
-                preview_source=capture,
+                preview_source=capture, allow_partial=True,
                 progress_counts=report_counts,
                 tracking_ready=lambda key, tracking, signatures: self.diagnostics.emit(
                     self.token, (key, tracking, signatures)),
@@ -98,12 +98,17 @@ class EditorSequencePreviewWorker(QThread):
                                 aligned_crop_plan((width,height), box), pil_qimage(small))
                     report_counts(index, len(sequence.jobs), '生成快速预览')
                 if not self.cancel_event.is_set():
-                    if self.cache:
+                    if self.cache and not sequence.partial:
                         self.progress.emit(self.token, '保存成片分析与快速预览缓存…')
                         report_counts(0, 0, '保存预览缓存')
                         self.cache.save(sequence, frames, cancelled=self.cancel_event.is_set)
                     if not self.cancel_event.is_set():
                         self.quick_ready.emit(self.token, sequence, frames)
+                if sequence.partial:
+                    if not self.cancel_event.is_set():
+                        self.failure_path = sequence.failure.source_path
+                        self.failed.emit(self.token, str(sequence.failure))
+                    return
             if self.cancel_event.is_set():
                 return
             cached_frame = self.cache.load_sharp(sequence, self.path) if self.cache else None

@@ -61,16 +61,29 @@ class SequencePreview:
     pixel_boxes: dict = field(default_factory=dict)
     source_sizes: dict = field(default_factory=dict)
     output_size: tuple[int, int] = (0, 0)
+    # 部分预览仍对完整输入检查签名；jobs 只含可预览的连续成功前缀。
+    input_jobs: dict = field(default_factory=dict)
+    failure: SequencePhotoError | None = None
+
+    @property
+    def partial(self) -> bool:
+        return self.failure is not None
+
+    @property
+    def all_jobs(self):
+        return self.input_jobs or self.jobs
 
     def files_current(self) -> bool:
-        return file_signatures(sequence_files(self.jobs.values())) == self.signatures
+        return file_signatures(sequence_files(self.all_jobs.values())) == self.signatures
 
 
 def common_alignment_crop(regions, tracking, source_sizes, reference_size, strength=100, *, pad_to_union=False):
     """选区并集提供平移证据；最终对全部画面求交集，补边时改求并集。"""
     shifts = {}
+    bounds = None
     rw, rh = reference_size
     blend = max(0, min(100, float(strength))) / 100
+    lower, upper = (min, max) if pad_to_union else (max, min)
     for key, result in tracking.items():
         width, height = source_sizes[key]
         offsets = [(((box[0] + box[2]) * width - (region[0] + region[2]) * rw) / 2,
@@ -82,11 +95,8 @@ def common_alignment_crop(regions, tracking, source_sizes, reference_size, stren
         if translation is None:
             raise SequencePhotoError(key, '多个参考区运动不一致且没有可区分的可靠匹配，请调整参考选区。')
         dx, dy, _ = translation
-        shifts[key] = (round(dx * blend), round(dy * blend))
-    lower, upper = (min, max) if pad_to_union else (max, min)
-    bounds = None
-    for key, (dx, dy) in shifts.items():
-        width, height = source_sizes[key]
+        dx, dy = round(dx * blend), round(dy * blend)
+        shifts[key] = (dx, dy)
         current = (-dx, -dy, width - dx, height - dy)
         bounds = current if bounds is None else (
             lower(bounds[0], current[0]), lower(bounds[1], current[1]),
@@ -102,7 +112,8 @@ def common_alignment_crop(regions, tracking, source_sizes, reference_size, stren
 def prepare_sequence_preview(seeds, template_paths=None, *, cancel_event, progress=lambda message: None,
                              bird_boxes=None, preview_source=None, tracking_ready=None,
                              progress_counts=lambda current, total, stage: None,
-                             analysis_workers=0) -> SequencePreview:
+                             analysis_workers=0, allow_partial=False) -> SequencePreview:
+    """allow_partial 供交互预览保留失败前缀；默认保持整组失败即抛错的契约。"""
     seeds = tuple(seeds)
     if not seeds:
         raise ValueError('请先导入照片。')
@@ -129,20 +140,54 @@ def prepare_sequence_preview(seeds, template_paths=None, *, cancel_event, progre
         reference_size = image.size
         if preview_source is not None:
             preview_source(reference, image)
+    photo_errors = {}
     tracking, sizes = analyze_sequence_frames(
         jobs, tracker, reference, cancel_event=cancel_event, preview_source=preview_source,
-        progress=progress, progress_counts=progress_counts, analysis_workers=analysis_workers)
+        progress=progress, progress_counts=progress_counts, analysis_workers=analysis_workers,
+        photo_errors=photo_errors if allow_partial else None)
     if cancel_event.is_set():
         raise VideoExportCancelledError('已取消去抖动分析。')
     if tracking_ready is not None and not cancel_event.is_set():
         tracking_ready(key, dict(tracking), signatures)
     progress_counts(0, 0, '计算共同画幅')
-    boxes, output_size = common_alignment_crop(regions, tracking, sizes, reference_size,
-                                              settings.get('dejitter_reference_strength', 100),
-                                              pad_to_union=settings.get('dejitter_pad_to_union', False) is True)
-    result = SequencePreview(key, {path_key(job.path): job for job in jobs}, signatures,
+    input_jobs = {path_key(job.path): job for job in jobs}
+    failure = next((photo_errors[k] for k in input_jobs if k in photo_errors), None)
+    accepted = {}
+    for job_key, job in input_jobs.items():
+        if failure is not None and job_key == path_key(failure.source_path):
+            break
+        accepted[job_key] = job
+
+    def crop(selected):
+        return common_alignment_crop(regions, {k: tracking[k] for k in selected}, sizes, reference_size,
+                                     settings.get('dejitter_reference_strength', 100),
+                                     pad_to_union=settings.get('dejitter_pad_to_union', False) is True)
+
+    if failure is not None and not accepted:
+        raise failure
+    try:
+        boxes, output_size = crop(accepted)
+    except SequencePhotoError as exc:
+        if not allow_partial:
+            raise
+        failure = exc
+        prefix = {}
+        for job_key, job in accepted.items():
+            if job_key == path_key(exc.source_path):
+                break
+            prefix[job_key] = job
+        if not prefix:
+            raise
+        accepted = prefix
+        # 只复用成功帧的跟踪坐标重算画幅，不重新解码或匹配。
+        boxes, output_size = crop(accepted)
+    if failure is not None:
+        # 预览持有错误说明即可；异常栈可能引用 action、线程池及大幅图像临时数组。
+        failure = SequencePhotoError(failure.source_path, failure.message)
+    result = SequencePreview(key, accepted, signatures,
                              tracking=tracking, bird_boxes=dict(bird_boxes or {}),
-                             pixel_boxes=boxes, source_sizes=sizes, output_size=output_size)
+                             pixel_boxes=boxes, source_sizes={k: sizes[k] for k in accepted},
+                             output_size=output_size, input_jobs=input_jobs if failure else {}, failure=failure)
     if not result.files_current():
         raise ValueError('照片或 XMP 在分析期间发生变化，请重新分析。')
     if cancel_event.is_set():

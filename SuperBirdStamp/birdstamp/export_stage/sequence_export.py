@@ -61,6 +61,8 @@ def export_aligned_sequence(sequence, destination, *, output_format='png', cance
         raise ValueError('去抖动输出仅支持 PNG / JPG。')
     if cancel_event.is_set():
         raise VideoExportCancelledError('已取消整组导出。')
+    if sequence.partial:
+        raise ValueError('当前仅有失败前的部分成片预览，请完成整组分析后再导出全部。')
     if not sequence.files_current():
         raise ValueError('照片已变化，请重新分析。')
     source_paths = tuple(job.path for job in sequence.jobs.values())

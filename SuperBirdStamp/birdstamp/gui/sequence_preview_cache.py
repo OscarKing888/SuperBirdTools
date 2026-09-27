@@ -49,6 +49,8 @@ class SequencePreviewCache:
 
     def save(self, sequence, frames, *, cancelled=lambda: False):
         """先完整写临时桶，再发布 manifest；取消/失败不会发布半成品。"""
+        if sequence.partial:
+            return
         staging = None
         try:
             self.root.mkdir(parents=True, exist_ok=True)
@@ -150,6 +152,8 @@ class SequencePreviewCache:
         return self._folder(sequence.input_key) / f'sharp-{name}.png'
 
     def save_sharp(self, sequence, frame):
+        if sequence.partial:
+            return
         try:
             path = self._sharp_path(sequence, frame.path)
             if not (path.parent / 'manifest.json').is_file():
@@ -160,6 +164,8 @@ class SequencePreviewCache:
             _log.warning('清晰成片缓存写入失败：%s', exc)
 
     def load_sharp(self, sequence, path):
+        if sequence.partial:
+            return None
         try:
             image_path = self._sharp_path(sequence, path)
             if not image_path.exists():
