@@ -922,8 +922,6 @@ class _BirdStampRendererMixin:
         center_mode = self._selected_center_mode()
         custom_center = getattr(self, "_custom_center", None)
         padding = self._crop_padding_state_for_render()
-        uniform_auto_crop_check = getattr(self, "uniform_auto_crop_check", None)
-        auto_crop_stabilization_slider = getattr(self, "auto_crop_stabilization_slider", None)
         pipeline_stage_order_getter = getattr(self, "_current_pipeline_stage_order", None)
         pipeline_stage_order = (
             pipeline_stage_order_getter()
@@ -954,10 +952,6 @@ class _BirdStampRendererMixin:
             STAGE_FOCUS_OVERLAY_ENABLED_KEY: _stage_enabled(STAGE_FOCUS_OVERLAY_ID),
             PIPELINE_STAGE_ORDER_KEY: list(normalize_pipeline_stage_order(pipeline_stage_order)),
             EXPORT_STAGE_ID_KEY: normalize_export_stage_id(export_stage_id),
-            "uniform_auto_crop": bool(uniform_auto_crop_check.isChecked())
-            if uniform_auto_crop_check is not None else False,
-            "auto_crop_stabilization": int(auto_crop_stabilization_slider.value())
-            if auto_crop_stabilization_slider is not None else 0,
             "ratio": self._selected_ratio(),
             "center_mode": center_mode,
             "max_long_edge": self._selected_max_long_edge(),
@@ -985,7 +979,9 @@ class _BirdStampRendererMixin:
         source = getattr(self, "_dejitter_reference_source", None)
         return {
             "dejitter_reference_strength": int(slider.value()) if slider is not None else 100,
-            DEJITTER_STRATEGY_KEY: "reference_region" if regions else "median",
+            "dejitter_pad_to_union": bool(getattr(self, "dejitter_pad_to_union_check", None)
+                                           and self.dejitter_pad_to_union_check.isChecked()),
+            DEJITTER_STRATEGY_KEY: "reference_region" if regions else "none",
             DEJITTER_REFERENCE_ENABLED_KEY: active,
             DEJITTER_REFERENCE_REGIONS_KEY: regions,
             DEJITTER_REFERENCE_SOURCE_KEY: str(source) if (regions and source) else None,
@@ -1007,6 +1003,7 @@ class _BirdStampRendererMixin:
         normalized.pop("uniform_auto_crop", None)
         normalized.pop("auto_crop_stabilization", None)
         normalized.pop("dejitter_reference_strength", None)
+        normalized.pop("dejitter_pad_to_union", None)
         normalized.pop("dejitter_reference_crop_settings", None)
         normalized.pop(DEJITTER_STRATEGY_KEY, None)
         normalized.pop(DEJITTER_REFERENCE_ENABLED_KEY, None)
@@ -1035,15 +1032,6 @@ class _BirdStampRendererMixin:
             return _parse_padding_value(settings.get(key), 0)
 
         fill = _safe_color(str(settings.get("crop_padding_fill", "#FFFFFF")), "#FFFFFF")
-        try:
-            auto_crop_stabilization = int(round(float(settings.get("auto_crop_stabilization", 0))))
-        except Exception:
-            auto_crop_stabilization = 0
-        auto_crop_stabilization = max(0, min(100, auto_crop_stabilization))
-        uniform_auto_crop = _parse_bool_value(settings.get("uniform_auto_crop"), False)
-        if not uniform_auto_crop:
-            auto_crop_stabilization = 0
-
         custom_center_x = settings.get("custom_center_x")
         custom_center_y = settings.get("custom_center_y")
         return {
@@ -1059,8 +1047,6 @@ class _BirdStampRendererMixin:
             STAGE_FOCUS_OVERLAY_ENABLED_KEY: _parse_bool_value(settings.get(STAGE_FOCUS_OVERLAY_ENABLED_KEY), True),
             PIPELINE_STAGE_ORDER_KEY: list(normalize_pipeline_stage_order(settings.get(PIPELINE_STAGE_ORDER_KEY))),
             EXPORT_STAGE_ID_KEY: normalize_export_stage_id(settings.get(EXPORT_STAGE_ID_KEY)),
-            "uniform_auto_crop": uniform_auto_crop,
-            "auto_crop_stabilization": auto_crop_stabilization,
             "ratio": ratio,
             "center_mode": _normalize_center_mode(settings.get("center_mode")),
             "max_long_edge": max_long_edge,
@@ -1083,7 +1069,7 @@ class _BirdStampRendererMixin:
         return {key: normalized[key] for key in (
             DEJITTER_STRATEGY_KEY, DEJITTER_REFERENCE_ENABLED_KEY,
             DEJITTER_REFERENCE_REGIONS_KEY, DEJITTER_REFERENCE_SOURCE_KEY,
-            "dejitter_reference_strength", "dejitter_reference_crop_settings",
+            "dejitter_reference_strength", "dejitter_reference_crop_settings", "dejitter_pad_to_union",
         )}
 
     def _normalize_render_settings(self, raw: Any, fallback: dict[str, Any]) -> dict[str, Any]:
@@ -1117,15 +1103,6 @@ class _BirdStampRendererMixin:
                 settings["crop_box"] = None
         if "center_mode" in raw:
             settings["center_mode"] = _normalize_center_mode(raw.get("center_mode"))
-        if "uniform_auto_crop" in raw:
-            settings["uniform_auto_crop"] = _parse_bool_value(raw.get("uniform_auto_crop"), False)
-        if "auto_crop_stabilization" in raw:
-            try:
-                stabilization = int(round(float(raw.get("auto_crop_stabilization"))))
-            except Exception:
-                stabilization = int(settings.get("auto_crop_stabilization", 0))
-            settings["auto_crop_stabilization"] = max(0, min(100, stabilization))
-
         if "custom_center_x" in raw:
             try:
                 settings["custom_center_x"] = float(raw.get("custom_center_x"))
@@ -1152,8 +1129,6 @@ class _BirdStampRendererMixin:
                 settings[key] = _parse_pad(key)
         if "crop_padding_fill" in raw:
             settings["crop_padding_fill"] = _safe_color(str(raw.get("crop_padding_fill", "#FFFFFF")), "#FFFFFF")
-        if not _parse_bool_value(settings.get("uniform_auto_crop"), False):
-            settings["auto_crop_stabilization"] = 0
         if any(
             key in raw
             for key in (
@@ -1161,6 +1136,7 @@ class _BirdStampRendererMixin:
                 DEJITTER_REFERENCE_ENABLED_KEY,
                 DEJITTER_REFERENCE_REGIONS_KEY,
                 DEJITTER_REFERENCE_SOURCE_KEY,
+                "dejitter_reference_strength", "dejitter_pad_to_union",
             )
         ):
             settings.update(self._clone_dejitter_reference_settings(raw))
@@ -1301,6 +1277,7 @@ class _BirdStampRendererMixin:
         source = settings.get(DEJITTER_REFERENCE_SOURCE_KEY)
         self._dejitter_reference_source = str(source) if (regions and source) else None
         for name, value in (("dejitter_reference_check", enabled),
+                            ("dejitter_pad_to_union_check", _parse_bool_value(settings.get("dejitter_pad_to_union"), False)),
                             ("dejitter_reference_strength_slider", settings.get("dejitter_reference_strength", 100))):
             widget = getattr(self, name, None)
             if widget is not None:

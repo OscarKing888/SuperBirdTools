@@ -52,6 +52,7 @@ class EditorPreviewOverlayState(PreviewOverlayState):
     crop_effect_box: "NormalizedBox | None" = None
     reference_regions: tuple["NormalizedBox", ...] = ()
     reference_diagnostics: tuple = ()
+    alignment_crop_box: "NormalizedBox | None" = None
 
 
 @dataclass(slots=True)
@@ -99,6 +100,7 @@ class EditorPreviewCanvas(FocusCenteredPreviewCanvas):
         self._has_pan: bool = False
         self._reference_regions: tuple["NormalizedBox", ...] = ()
         self._reference_diagnostics: tuple = ()
+        self._alignment_crop_box = None
         self._show_reference_regions: bool = False
         self._reference_region_labels: tuple[str, ...] = ()
         self._edit_modes = EditModeController(self)
@@ -257,6 +259,9 @@ class EditorPreviewCanvas(FocusCenteredPreviewCanvas):
         if self._reference_diagnostics != state.reference_diagnostics:
             self._reference_diagnostics = state.reference_diagnostics
             changed = True
+        if self._alignment_crop_box != state.alignment_crop_box:
+            self._alignment_crop_box = state.alignment_crop_box
+            changed = True
         return changed
 
     def _apply_overlay_options_data(self, options: "PreviewOverlayOptions") -> bool:
@@ -279,6 +284,7 @@ class EditorPreviewCanvas(FocusCenteredPreviewCanvas):
             mode.cancel(self)
         self._reference_regions = ()
         self._reference_diagnostics = ()
+        self._alignment_crop_box = None
         self._bird_box = None
         self._crop_effect_box = None
         self._dragging_handle = None
@@ -299,7 +305,21 @@ class EditorPreviewCanvas(FocusCenteredPreviewCanvas):
                 self._paint_tracking_diagnostics(painter, draw_rect, content_rect)
             elif self._reference_regions:
                 self._paint_reference_regions(painter, draw_rect, content_rect)
+        if self._show_crop_effect and self._alignment_crop_box:
+            self._paint_alignment_crop(painter, draw_rect, content_rect)
         self._edit_modes.paint(painter, draw_rect, content_rect)
+
+    def _paint_alignment_crop(self, painter, draw_rect, content_rect):
+        l,t,r,b = self._alignment_crop_box
+        rect = QRectF(draw_rect.left()+l*draw_rect.width(), draw_rect.top()+t*draw_rect.height(),
+                      (r-l)*draw_rect.width(), (b-t)*draw_rect.height())
+        painter.save()
+        painter.setClipRect(QRectF(content_rect))
+        painter.setPen(QPen(QColor('#45D6E8'), 2, Qt.PenStyle.DashLine))
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        painter.drawRect(rect)
+        painter.drawText(QPointF(rect.left()+6, rect.top()+painter.fontMetrics().ascent()+6), '成片保留范围')
+        painter.restore()
 
     def _composition_grid_target_rect(self, draw_rect: QRectF, content_rect) -> QRectF:  # type: ignore[override]
         """构图线优先限制在当前裁切范围内，避免覆盖到裁切外区域。"""

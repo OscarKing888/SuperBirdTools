@@ -48,7 +48,7 @@ def test_selection_with_padding_roundtrips_but_is_separate_from_template_export(
     window._apply_global_export_settings_to_render_settings(target)
     assert target['dejitter_reference_source'] is None
     assert target['dejitter_reference_regions'] == []
-    assert target['dejitter_strategy'] == 'median'
+    assert target['dejitter_strategy'] == 'none'
     assert not any(key.startswith('dejitter_') for key in window._photo_override_settings_from_snapshot(settings))
 
 
@@ -119,3 +119,14 @@ def test_reference_outline_survives_refresh_and_mode_changes(window):
     window.dejitter_reference_check.setChecked(False)
     window._refresh_preview_label(preserve_view=True)
     assert window.preview_label.canvas.reference_regions() == expected
+
+
+def test_retired_composition_ui_and_workspace_flags_are_ignored(window):
+    assert not hasattr(window, 'uniform_auto_crop_check')
+    assert not hasattr(window, 'auto_crop_stabilization_slider')
+    old = dict(uniform_auto_crop=True, auto_crop_stabilization=100, dejitter_strategy='median')
+    window._apply_workspace_global_export_state(old)
+    settings = window._normalize_render_settings(old, fallback=window._build_current_render_settings())
+    assert 'uniform_auto_crop' not in settings and 'auto_crop_stabilization' not in settings
+    assert settings['dejitter_strategy'] == 'none'
+    assert 'uniform_auto_crop' not in window._current_global_export_settings()

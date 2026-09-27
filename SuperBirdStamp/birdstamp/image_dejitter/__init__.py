@@ -9,7 +9,6 @@ Module layout:
 - ``feature_aligner`` — ``FeatureAligner`` ABC
 - ``numpy_phase_correlation_aligner`` — ``NumpyPhaseCorrelationAligner``
 - ``de_jitter_strategy`` — ``DeJitterStrategy`` ABC
-- ``median_center_stabilization_strategy`` — ``MedianCenterStabilizationStrategy``
 - ``reference_region_stabilization_strategy`` — ``ReferenceRegionStabilizationStrategy``
 - ``strategy_registry`` — ``normalize_strategy_id``, ``resolve_dejitter_strategy``
 
@@ -21,14 +20,13 @@ from .constants import (
     DEFAULT_MIN_CONFIDENCE,
     DEFAULT_PATCH_SIZE,
     DEFAULT_STRATEGY,
-    STRATEGY_MEDIAN,
+    STRATEGY_NONE,
     STRATEGY_REFERENCE_REGION,
 )
 from .de_jitter_context import DeJitterContext
 from .de_jitter_frame import DeJitterFrame
 from .de_jitter_strategy import DeJitterStrategy
 from .feature_aligner import FeatureAligner
-from .median_center_stabilization_strategy import MedianCenterStabilizationStrategy
 from .normalized_box import NormalizedBox
 from .numpy_phase_correlation_aligner import NumpyPhaseCorrelationAligner
 from .reference_region_stabilization_strategy import ReferenceRegionStabilizationStrategy
@@ -40,13 +38,12 @@ __all__ = [
     "DEFAULT_MIN_CONFIDENCE",
     "DEFAULT_PATCH_SIZE",
     "DEFAULT_STRATEGY",
-    "STRATEGY_MEDIAN",
+    "STRATEGY_NONE",
     "STRATEGY_REFERENCE_REGION",
     "DeJitterContext",
     "DeJitterFrame",
     "DeJitterStrategy",
     "FeatureAligner",
-    "MedianCenterStabilizationStrategy",
     "NormalizedBox",
     "NumpyPhaseCorrelationAligner",
     "ReferenceRegionStabilizationStrategy",

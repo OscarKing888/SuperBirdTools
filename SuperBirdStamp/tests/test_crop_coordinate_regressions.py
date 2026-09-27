@@ -109,10 +109,9 @@ class CropCoordinateTests(unittest.TestCase):
             self.assertEqual(loaded["custom_center_y"], 0.6)
             self.assertEqual(template.normalize_template_payload(loaded, "fallback"), loaded)
 
-    def test_uniform_crop_preserves_explicit_full_frame(self):
+    def test_retired_uniform_setting_cannot_override_explicit_full_frame(self):
         settings = dict(ratio=1, center_mode="custom", crop_box=[0, 0, 1, 1], uniform_auto_crop=True)
-        self.assertIsNone(export_core._uniform_crop_group_key(settings))
-        self.assertFalse(export_core._stabilization_eligible(settings))
+        self.assertFalse(export_core.crop_plan_precompute_required(settings))
         jobs = [VideoFrameJob(path=Path(str(i)), source_image=Image.new("RGB", size),
                               settings=settings, raw_metadata={}, metadata_context={})
                 for i, size in enumerate(((120, 80), (80, 120)))]

@@ -3,7 +3,6 @@ import numpy as np
 from birdstamp.image_dejitter import (
     DeJitterContext,
     DeJitterFrame,
-    MedianCenterStabilizationStrategy,
     NumpyPhaseCorrelationAligner,
     ReferenceRegionStabilizationStrategy,
     normalize_strategy_id,
@@ -37,46 +36,14 @@ def test_numpy_aligner_handles_mismatched_shapes() -> None:
     assert (dx, dy, confidence) == (0.0, 0.0, 0.0)
 
 
-def test_strategy_registry_defaults_to_median() -> None:
-    assert normalize_strategy_id("bogus") == "median"
-    assert isinstance(resolve_dejitter_strategy("median"), MedianCenterStabilizationStrategy)
+def test_strategy_registry_disables_retired_median() -> None:
+    assert normalize_strategy_id("bogus") == "none"
+    assert normalize_strategy_id("median") == "none"
+    assert resolve_dejitter_strategy("median") is None
     assert isinstance(
         resolve_dejitter_strategy("reference_region"),
         ReferenceRegionStabilizationStrategy,
     )
-
-
-def test_median_strategy_blends_centers_to_median() -> None:
-    frames = [
-        DeJitterFrame(
-            source_width=100,
-            source_height=100,
-            center=(25.0, 25.0),
-            center_norm=(0.25, 0.25),
-            strength=100,
-        ),
-        DeJitterFrame(
-            source_width=100,
-            source_height=100,
-            center=(75.0, 75.0),
-            center_norm=(0.75, 0.75),
-            strength=100,
-        ),
-    ]
-    context = DeJitterContext(frames=frames, strength=100)
-    MedianCenterStabilizationStrategy().stabilize(context)
-    assert frames[0].stable_center == (50.0, 50.0)
-    assert frames[1].stable_center == (50.0, 50.0)
-
-
-def test_median_strategy_noop_when_strength_zero() -> None:
-    frames = [
-        DeJitterFrame(100, 100, (25.0, 25.0), (0.25, 0.25), strength=0),
-        DeJitterFrame(100, 100, (75.0, 75.0), (0.75, 0.75), strength=0),
-    ]
-    MedianCenterStabilizationStrategy().stabilize(DeJitterContext(frames=frames, strength=0))
-    assert frames[0].stable_center is None
-    assert frames[1].stable_center is None
 
 
 def test_reference_region_strategy_follows_feature_displacement() -> None:

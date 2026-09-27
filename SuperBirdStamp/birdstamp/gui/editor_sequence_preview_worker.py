@@ -12,6 +12,7 @@ from PyQt6.QtGui import QImage
 
 from birdstamp.export_stage.sequence_preview import prepare_sequence_preview, render_sequence_preview_frame
 from . import editor_options
+from birdstamp.image_dejitter.sequence_geometry import aligned_crop_plan, render_aligned_thumbnail
 
 
 @dataclass(slots=True)
@@ -74,16 +75,10 @@ class EditorSequencePreviewWorker(QThread):
                     try:
                         width, height = sequence.source_sizes[key]
                         box = sequence.pixel_boxes[key]
-                        crop = tuple(value / (width if i % 2 == 0 else height)
-                                     for i, value in enumerate(box))
-                        scale = min(small.width / width, small.height / height)
-                        size = tuple(max(1, round(value * scale)) for value in sequence.output_size)
-                        with small.resize(size, Image.Resampling.BILINEAR,
-                                          box=tuple(value * (small.width if i % 2 == 0 else small.height)
-                                                    for i, value in enumerate(crop))) as aligned:
+                        with render_aligned_thumbnail(small, (width,height), box, edge) as aligned:
                             frames[key] = SequencePreviewFrame(
-                                job.path, pil_qimage(aligned), (width, height), sequence.output_size,
-                                (crop, (0, 0, 0, 0)), pil_qimage(small))
+                                job.path, pil_qimage(aligned), (width,height), sequence.output_size,
+                                aligned_crop_plan((width,height), box), pil_qimage(small))
                     finally:
                         small.close()
                 if not self.cancel_event.is_set():

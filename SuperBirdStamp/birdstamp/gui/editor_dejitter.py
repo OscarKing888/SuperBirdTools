@@ -17,6 +17,7 @@ from .editor_sequence_preview_worker import EditorSequencePreviewWorker, EditorS
 from birdstamp.export_stage.render_job_seed import RenderJobSeed
 from .editor_utils import pil_to_qpixmap
 from .editor_utils import path_key
+from birdstamp.image_dejitter.sequence_geometry import source_normalized_crop
 
 
 class _BirdStampDejitterMixin:
@@ -91,6 +92,11 @@ class _BirdStampDejitterMixin:
         form.addWidget(hint)
         layout.addWidget(reference)
 
+        self.dejitter_pad_to_union_check = QCheckBox('补边保留完整画面（供二次裁切）')
+        self.dejitter_pad_to_union_check.setChecked(editor_options.DEJITTER_PAD_TO_UNION)
+        self.dejitter_pad_to_union_check.setToolTip('关闭：裁掉所有空白，取整组交集。开启：保留整组画面并集，统一画幅，缺失区域补黑。')
+        self.dejitter_pad_to_union_check.toggled.connect(self._on_dejitter_options_changed)
+        layout.addWidget(self.dejitter_pad_to_union_check)
         self.dejitter_preprocess_btn = QPushButton('分析并预览成片')
         self.dejitter_preprocess_btn.clicked.connect(self._on_reference_preprocess_clicked)
         layout.addWidget(self.dejitter_preprocess_btn)
@@ -111,7 +117,7 @@ class _BirdStampDejitterMixin:
         output.addWidget(self.dejitter_output_format)
         output.addWidget(self.dejitter_export_btn, 1)
         layout.addLayout(output)
-        note = QLabel('自动保留对齐后整组共同覆盖的最大矩形，无需选择裁切比例。独立输出原图对齐结果，不叠加模板或文字；参考线、焦点和鸟体框仅用于预览。')
+        note = QLabel('默认保留对齐后整组共同区域；交集太小时可开启补边，导出完整画面后再裁切。独立输出原图对齐结果，不叠加模板或文字；参考线、焦点和鸟体框仅用于预览。')
         note.setWordWrap(True)
         layout.addWidget(note)
         layout.addStretch(1)
@@ -273,8 +279,12 @@ class _BirdStampDejitterMixin:
         self.dejitter_reference_status.setText(f'{Path(source).name} · {len(regions)} 个选区' if source and regions else '尚未选择参考区')
         self.dejitter_reference_strength_slider.setEnabled(bool(regions))
         self.dejitter_edit_reference_btn.setEnabled(bool(self._dejitter_reference_source))
-        self.dejitter_effective_status.setText(
-            ('强度 0%：不补偿位移，仅计算共同尺寸。' if self.dejitter_reference_strength_slider.value() == 0 else '自动计算整组公共裁切；不使用前面的裁切与模板设置。') if regions else '请先在参考图框选一个或多个区域。')
+        detail = ('保留对齐后全部图像范围，缺失区域补黑；可在导出后进行二次裁切。'
+                  if self.dejitter_pad_to_union_check.isChecked() else
+                  '取对齐后整组画面交集；编辑构图中可查看最终保留范围。')
+        if self.dejitter_reference_strength_slider.value() == 0:
+            detail = '强度 0%：不补偿位移。' + detail
+        self.dejitter_effective_status.setText(detail if regions else '请先在参考图框选一个或多个区域。')
         if hasattr(self, 'dejitter_region_list'):
             labels = [f'选区 {index + 1}  ·  {round((box[2]-box[0])*100)}% × {round((box[3]-box[1])*100)}%'
                       for index, box in enumerate(regions)]
@@ -411,7 +421,9 @@ class _BirdStampDejitterMixin:
         source = self._dejitter_reference_source
         self._reference_tracking_signature = image_file_signature(Path(source)) if source else None
         failed = sum(r.matched_count < len(r.boxes) for r in sequence.tracking.values())
-        self._sequence_message = f'整组 {len(sequence.jobs)} 张已分析；统一 {sequence.output_size[0]} × {sequence.output_size[1]}；{failed} 张存在部分选区失配。'
+        padded = self.dejitter_pad_to_union_check.isChecked()
+        kind = '补边画幅' if padded else '共同裁切'
+        self._sequence_message = f'整组 {len(sequence.jobs)} 张已分析；{kind} {sequence.output_size[0]} × {sequence.output_size[1]}；{failed} 张存在部分选区失配。'
         self._reference_tracking_message = self._sequence_message
         self._set_status(self._sequence_message)
         self._update_dejitter_controls()
@@ -470,7 +482,8 @@ class _BirdStampDejitterMixin:
                                               bird_box=bird, crop_effect_box=(0, 0, 1, 1))
             from .editor_tracking_overlay import tracking_overlays
             state.reference_diagnostics = tracking_overlays(
-                self._dejitter_reference_regions, sequence.tracking.get(key), crop)
+                self._dejitter_reference_regions, sequence.tracking.get(key),
+                source_normalized_crop(frame.source_size, sequence.pixel_boxes[key]))
             self.preview_label.set_original_size(*frame.source_size)
             self.preview_label.set_cropped_size(*frame.output_size)
             pixmap = QPixmap.fromImage(frame.image)
@@ -554,6 +567,9 @@ class _BirdStampDejitterMixin:
     def _show_dejitter_edit_preview(self, *, reset_view=False, preserve_view=False, **_kwargs):
         if not self._dejitter_tab_active() or self._sequence_result_mode():
             return False
+        if self._sequence_preview is not None and (not self._sequence_fast_preview_active()
+                or monotonic() - self._sequence_validated_at > 1):
+            self._validate_sequence_preview()
         source = self.current_source_image
         quick = self._sequence_quick_frames.get(path_key(self.current_path)) if self.current_path and (source is None or self._sequence_fast_preview_active()) else None
         raw_metadata = self.current_raw_metadata
@@ -575,6 +591,14 @@ class _BirdStampDejitterMixin:
         state = EditorPreviewOverlayState(reference_regions=self._visible_dejitter_reference_regions(),
                                           crop_effect_box=(0, 0, 1, 1))
         from .editor_tracking_overlay import tracking_overlays
+        if self._sequence_preview is not None and self.current_path is not None:
+            key = path_key(self.current_path)
+            box = self._sequence_preview.pixel_boxes.get(key)
+            size = self._sequence_preview.source_sizes.get(key)
+            if box and size and not self.dejitter_pad_to_union_check.isChecked():
+                state.crop_effect_box = source_normalized_crop(size, box)
+                state.alignment_crop_box = state.crop_effect_box
+                options.show_crop_effect = self.show_crop_effect_check.isChecked()
         if not editable:
             state.reference_diagnostics = tracking_overlays(self._dejitter_reference_regions, tracked)
         options.show_reference_regions = bool(state.reference_regions or state.reference_diagnostics)

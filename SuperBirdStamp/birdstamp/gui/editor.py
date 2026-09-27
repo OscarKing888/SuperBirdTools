@@ -1340,35 +1340,6 @@ class BirdStampEditorWindow(
         self.draw_focus_check.setChecked(False)
         self.draw_focus_check.toggled.connect(self._on_output_settings_changed)
 
-        self.uniform_auto_crop_check = QCheckBox("批量统一自动裁切尺寸")
-        self.uniform_auto_crop_check.setToolTip(
-            "导出多张图片/GIF/视频前预计算自动裁切，并按同一比例组取最大裁切视野。"
-        )
-        self.uniform_auto_crop_check.setChecked(False)
-        self.uniform_auto_crop_check.toggled.connect(self._on_output_settings_changed)
-        self.uniform_auto_crop_check.toggled.connect(self._save_image_export_preferences)
-        self.auto_crop_stabilization_slider = QSlider(Qt.Orientation.Horizontal)
-        self.auto_crop_stabilization_slider.setRange(0, 100)
-        self.auto_crop_stabilization_slider.setSingleStep(5)
-        self.auto_crop_stabilization_slider.setPageStep(10)
-        self.auto_crop_stabilization_slider.setTickPosition(QSlider.TickPosition.TicksBelow)
-        self.auto_crop_stabilization_slider.setTickInterval(25)
-        self.auto_crop_stabilization_slider.setToolTip(
-            "0 为关闭；数值越高，批量自动裁切中心越接近稳定中位点，GIF/视频抖动越少。"
-        )
-        self.auto_crop_stabilization_slider.setValue(0)
-        self.auto_crop_stabilization_slider.setEnabled(False)
-        self.auto_crop_stabilization_value_label = QLabel("0%")
-        self.auto_crop_stabilization_value_label.setMinimumWidth(36)
-        self.auto_crop_stabilization_value_label.setEnabled(False)
-        self.auto_crop_stabilization_slider.valueChanged.connect(
-            lambda value: self.auto_crop_stabilization_value_label.setText(f"{int(value)}%")
-        )
-        self.auto_crop_stabilization_slider.valueChanged.connect(lambda _value: self._on_output_settings_changed())
-        self.auto_crop_stabilization_slider.valueChanged.connect(lambda _value: self._save_image_export_preferences())
-        self.uniform_auto_crop_check.toggled.connect(self.auto_crop_stabilization_slider.setEnabled)
-        self.uniform_auto_crop_check.toggled.connect(self.auto_crop_stabilization_value_label.setEnabled)
-
         self.max_edge_combo = QComboBox()
         seen_edges: set[int] = set()
         for value in MAX_LONG_EDGE_OPTIONS:
@@ -1663,11 +1634,6 @@ class BirdStampEditorWindow(
         template_form.addRow("裁切中心", self.center_mode_widget)
         template_form.addRow("留边", self.crop_padding_editor)
 
-        template_form.addRow("批量构图", self.uniform_auto_crop_check)
-        smooth_row = QHBoxLayout()
-        smooth_row.addWidget(self.auto_crop_stabilization_slider)
-        smooth_row.addWidget(self.auto_crop_stabilization_value_label)
-        template_form.addRow("构图平滑", smooth_row)
         self.dejitter_page = self._build_dejitter_page()
         self._pipeline_stage_option_groups["template_crop"] = template_group
 
@@ -2467,40 +2433,6 @@ class BirdStampEditorWindow(
         if output_format:
             self._set_selected_output_suffix(output_format, save=False)
 
-        uniform_auto_crop = self._load_editor_export_state_value("uniform_auto_crop", None)
-        if uniform_auto_crop is not None and hasattr(self, "uniform_auto_crop_check"):
-            enabled = (
-                uniform_auto_crop
-                if isinstance(uniform_auto_crop, bool)
-                else str(uniform_auto_crop).strip().lower() not in {"0", "false", "no", "off", ""}
-            )
-            self.uniform_auto_crop_check.blockSignals(True)
-            try:
-                self.uniform_auto_crop_check.setChecked(bool(enabled))
-            finally:
-                self.uniform_auto_crop_check.blockSignals(False)
-            if hasattr(self, "auto_crop_stabilization_slider"):
-                enabled = bool(self.uniform_auto_crop_check.isChecked())
-                self.auto_crop_stabilization_slider.setEnabled(enabled)
-                self.auto_crop_stabilization_value_label.setEnabled(enabled)
-
-        auto_crop_stabilization = self._load_editor_export_state_value("auto_crop_stabilization", None)
-        if auto_crop_stabilization is not None and hasattr(self, "auto_crop_stabilization_slider"):
-            try:
-                stabilization_value = int(round(float(auto_crop_stabilization)))
-            except Exception:
-                stabilization_value = 0
-            self.auto_crop_stabilization_slider.blockSignals(True)
-            try:
-                value = max(0, min(100, stabilization_value))
-                enabled = bool(self.uniform_auto_crop_check.isChecked())
-                self.auto_crop_stabilization_slider.setValue(value)
-                self.auto_crop_stabilization_slider.setEnabled(enabled)
-                self.auto_crop_stabilization_value_label.setText(f"{value}%")
-                self.auto_crop_stabilization_value_label.setEnabled(enabled)
-            finally:
-                self.auto_crop_stabilization_slider.blockSignals(False)
-
         gif_fps = self._load_editor_export_state_value("gif_fps", None)
         gif_loop = self._load_editor_export_state_value("gif_loop", None)
         gif_keep_frames = self._load_editor_export_state_value("gif_keep_frame_images", None)
@@ -2551,14 +2483,6 @@ class BirdStampEditorWindow(
         self._save_editor_export_state_value("gif_loop", gif_request.loop)
         self._save_editor_export_state_value("gif_keep_frame_images", gif_request.keep_frame_images)
         self._save_editor_export_state_value("gif_scale_factors", list(gif_request.scale_factors))
-        if hasattr(self, "uniform_auto_crop_check"):
-            self._save_editor_export_state_value("uniform_auto_crop", bool(self.uniform_auto_crop_check.isChecked()))
-        if hasattr(self, "auto_crop_stabilization_slider"):
-            self._save_editor_export_state_value(
-                "auto_crop_stabilization",
-                int(self.auto_crop_stabilization_slider.value()),
-            )
-
     def _on_image_export_format_changed(self, *_args: Any) -> None:
         self._refresh_image_export_action_states()
         self._save_image_export_preferences()
@@ -3227,8 +3151,6 @@ class BirdStampEditorWindow(
             STAGE_TEMPLATE_OVERLAY_ENABLED_KEY: bool(stage_enabled.get(STAGE_TEMPLATE_OVERLAY_ID, True)),
             STAGE_FOCUS_OVERLAY_ENABLED_KEY: bool(stage_enabled.get(STAGE_FOCUS_OVERLAY_ID, True)),
             "max_long_edge": self._selected_max_long_edge(),
-            "uniform_auto_crop": bool(self.uniform_auto_crop_check.isChecked()),
-            "auto_crop_stabilization": int(self.auto_crop_stabilization_slider.value()),
             **self._dejitter_reference_settings(),
         }
 
@@ -5451,19 +5373,15 @@ class BirdStampEditorWindow(
         """导出时强制使用当前界面的全局管线/叠加开关，避免照片级快照污染。"""
         global_export = self._current_global_export_settings()
         # 普通模板导出与独立去抖动页分开，不能带入参考区裁切计划。
-        settings.update(dejitter_strategy='median', dejitter_reference_enabled=False,
+        settings.update(dejitter_strategy='none', dejitter_reference_enabled=False,
                         dejitter_reference_regions=[], dejitter_reference_source=None)
         settings.pop('dejitter_reference_crop_settings', None)
+        settings.pop('uniform_auto_crop', None)
+        settings.pop('auto_crop_stabilization', None)
         settings["draw_banner"] = bool(global_export.get("draw_banner", True))
         settings["draw_text"] = bool(global_export.get("draw_text", True))
         settings["draw_focus"] = bool(global_export.get("draw_focus", False))
         settings["max_long_edge"] = max(0, int(global_export.get("max_long_edge") or 0))
-        settings["uniform_auto_crop"] = bool(global_export.get("uniform_auto_crop", False))
-        try:
-            stabilization = int(round(float(global_export.get("auto_crop_stabilization", 0))))
-        except Exception:
-            stabilization = 0
-        settings["auto_crop_stabilization"] = max(0, min(100, stabilization))
         settings[PIPELINE_STAGE_ORDER_KEY] = list(
             normalize_pipeline_stage_order(global_export.get(PIPELINE_STAGE_ORDER_KEY))
         )

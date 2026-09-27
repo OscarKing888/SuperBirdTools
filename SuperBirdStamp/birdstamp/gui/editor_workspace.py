@@ -555,8 +555,6 @@ class _BirdStampWorkspaceMixin:
             self.draw_text_check,
             self.draw_focus_check,
             self.max_edge_combo,
-            self.uniform_auto_crop_check,
-            self.auto_crop_stabilization_slider,
         )
         try:
             self.draw_banner_check.setChecked(bool(state.get("draw_banner", True)))
@@ -575,17 +573,6 @@ class _BirdStampWorkspaceMixin:
                 )
                 if max_edge_idx >= 0:
                     self.max_edge_combo.setCurrentIndex(max_edge_idx)
-            self.uniform_auto_crop_check.setChecked(bool(state.get("uniform_auto_crop", False)))
-            try:
-                stabilization = int(round(float(state.get("auto_crop_stabilization", 0))))
-            except Exception:
-                stabilization = 0
-            stabilization = max(0, min(100, stabilization))
-            enabled = bool(self.uniform_auto_crop_check.isChecked())
-            self.auto_crop_stabilization_slider.setValue(stabilization)
-            self.auto_crop_stabilization_slider.setEnabled(enabled)
-            self.auto_crop_stabilization_value_label.setText(f"{stabilization}%")
-            self.auto_crop_stabilization_value_label.setEnabled(enabled)
             enabled_setter = getattr(self, "_set_pipeline_stage_enabled_map", None)
             if callable(enabled_setter):
                 enabled_setter(state.get(PIPELINE_STAGE_ENABLED_KEY, state), save=False, mark_dirty=False)
@@ -845,8 +832,6 @@ class _BirdStampWorkspaceMixin:
                     PIPELINE_STAGE_ORDER_KEY: current_render_settings.get(PIPELINE_STAGE_ORDER_KEY),
                     PIPELINE_STAGE_ENABLED_KEY: current_render_settings,
                     "max_long_edge": current_render_settings.get("max_long_edge"),
-                    "uniform_auto_crop": current_render_settings.get("uniform_auto_crop"),
-                    "auto_crop_stabilization": current_render_settings.get("auto_crop_stabilization"),
                 }
             image_export_state = editor_state.get("image_export")
             video_export_state = editor_state.get("video_export")

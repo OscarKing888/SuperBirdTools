@@ -17,7 +17,7 @@ from .video_export_cancelled_error import VideoExportCancelledError
 
 
 REFERENCE_KEYS = ('dejitter_reference_regions', 'dejitter_reference_source',
-                  'dejitter_reference_strength')
+                  'dejitter_reference_strength', 'dejitter_pad_to_union')
 
 
 def sequence_files(seeds, template_paths=None) -> tuple[Path, ...]:
@@ -37,7 +37,7 @@ def file_signatures(paths):
 
 
 def sequence_input_key(seeds, template_paths=None) -> str:
-    # 独立流程只依赖原图、参考选区和强度；模板/手动裁切/输出叠加不参与。
+    # 独立流程只依赖原图、参考选区、强度和补边选项；模板/手动裁切/输出叠加不参与。
     seeds = tuple(seeds)
     payload = [(path_key(seed.path), {key: seed.settings.get(key) for key in REFERENCE_KEYS}) for seed in seeds]
     data = (payload, file_signatures(sequence_files(seeds)))
@@ -60,8 +60,8 @@ class SequencePreview:
         return file_signatures(Path(path) for path, _ in self.signatures) == self.signatures
 
 
-def common_alignment_crop(regions, tracking, source_sizes, reference_size, strength=100):
-    """在参考原图像素坐标内求交集；整数平移避免二次重采样和空白边。"""
+def common_alignment_crop(regions, tracking, source_sizes, reference_size, strength=100, *, pad_to_union=False):
+    """选区并集提供平移证据；最终对全部画面求交集，补边时改求并集。"""
     shifts = {}
     rw, rh = reference_size
     blend = max(0, min(100, float(strength))) / 100
@@ -77,12 +77,13 @@ def common_alignment_crop(regions, tracking, source_sizes, reference_size, stren
             raise ValueError(f'{Path(key).name}：多个参考区运动不一致且没有可区分的可靠匹配，请调整参考选区。')
         dx, dy, _ = translation
         shifts[key] = (round(dx * blend), round(dy * blend))
-    left = max(-dx for dx, dy in shifts.values())
-    top = max(-dy for dx, dy in shifts.values())
-    right = min(source_sizes[key][0] - dx for key, (dx, dy) in shifts.items())
-    bottom = min(source_sizes[key][1] - dy for key, (dx, dy) in shifts.items())
+    lower, upper = (min, max) if pad_to_union else (max, min)
+    left = lower(-dx for dx, dy in shifts.values())
+    top = lower(-dy for dx, dy in shifts.values())
+    right = upper(source_sizes[key][0] - dx for key, (dx, dy) in shifts.items())
+    bottom = upper(source_sizes[key][1] - dy for key, (dx, dy) in shifts.items())
     if right <= left or bottom <= top:
-        raise ValueError('对齐后没有整组共同覆盖的画面，请调整照片范围或参考区。')
+        raise ValueError('对齐后没有整组共同覆盖的画面，请开启补边保留完整画面，或调整照片范围及参考区。')
     boxes = {key: (left + dx, top + dy, right + dx, bottom + dy) for key, (dx, dy) in shifts.items()}
     return boxes, (right - left, bottom - top)
 
@@ -142,7 +143,8 @@ def prepare_sequence_preview(seeds, template_paths=None, *, cancel_event, progre
     if tracking_ready is not None and not cancel_event.is_set():
         tracking_ready(key, dict(tracking), signatures)
     boxes, output_size = common_alignment_crop(regions, tracking, sizes, reference_size,
-                                              settings.get('dejitter_reference_strength', 100))
+                                              settings.get('dejitter_reference_strength', 100),
+                                              pad_to_union=settings.get('dejitter_pad_to_union', False) is True)
     result = SequencePreview(key, {path_key(job.path): job for job in jobs}, signatures,
                              tracking=tracking, bird_boxes=dict(bird_boxes or {}),
                              pixel_boxes=boxes, source_sizes=sizes, output_size=output_size)

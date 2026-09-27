@@ -134,7 +134,6 @@ def path_signature(path: Path) -> str:
 
 def global_export_settings_from_settings(settings: dict[str, Any] | None) -> dict[str, Any]:
     raw = settings if isinstance(settings, dict) else {}
-    uniform_auto_crop = _parse_bool_value(raw.get("uniform_auto_crop"), False)
     try:
         max_long_edge = max(0, int(raw.get("max_long_edge") or 0))
     except Exception:
@@ -165,9 +164,6 @@ def global_export_settings_from_settings(settings: dict[str, Any] | None) -> dic
         "pipeline_stage_order": stage_order,
         **stage_enabled,
         "max_long_edge": max_long_edge,
-        "uniform_auto_crop": uniform_auto_crop,
-        "auto_crop_stabilization": _parse_int_range(raw.get("auto_crop_stabilization"), 0, 0, 100)
-        if uniform_auto_crop else 0,
         "dejitter_reference_strength": _parse_int_range(raw.get("dejitter_reference_strength"), 100, 0, 100),
         "dejitter_strategy": dejitter_reference["strategy"],
         "dejitter_reference_enabled": dejitter_reference["enabled"],
@@ -178,9 +174,9 @@ def global_export_settings_from_settings(settings: dict[str, Any] | None) -> dic
 
 def _normalize_dejitter_reference(raw: dict[str, Any]) -> dict[str, Any]:
     """提取去抖动参考区相关的缓存敏感字段（影响整批源帧缓存桶）。"""
-    strategy = str(raw.get("dejitter_strategy") or "median").strip().lower() or "median"
-    if strategy not in {"median", "reference_region"}:
-        strategy = "median"
+    strategy = str(raw.get("dejitter_strategy") or "none").strip().lower() or "none"
+    if strategy not in {"none", "reference_region"}:
+        strategy = "none"
     enabled = _parse_bool_value(raw.get("dejitter_reference_enabled"), False)
     regions: list[list[float]] = []
     raw_regions = raw.get("dejitter_reference_regions")

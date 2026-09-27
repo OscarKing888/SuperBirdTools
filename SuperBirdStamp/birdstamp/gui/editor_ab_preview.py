@@ -13,6 +13,7 @@ from .editor_tracking_overlay import tracking_overlays
 from .editor_utils import path_key
 from birdstamp.image_dejitter.region_tracking_result import image_file_signature
 from . import editor_core, editor_options
+from birdstamp.image_dejitter.sequence_geometry import source_normalized_crop
 
 
 class ABPreview(QObject):
@@ -270,28 +271,33 @@ class ABPreview(QObject):
         metadata = dict(editor.raw_metadata_cache.get(key) or editor.photo_list_metadata_cache.get(key) or {})
         if sequence and key in sequence.jobs:
             metadata.update(sequence.jobs[key].raw_metadata)
-        crop = self.frame.crop_plan[0] if self.frame else None
+        crop, pad = self.frame.crop_plan if self.frame else (None, (0,0,0,0))
         width, height = self.size
         state = EditorPreviewOverlayState(crop_effect_box=(0, 0, 1, 1))
         state.focus_box = editor_core.resolve_focus_box_after_processing(
             metadata, source_width=width, source_height=height, crop_box=crop,
-            outer_pad=(0, 0, 0, 0), apply_ratio_crop=crop is not None,
+            outer_pad=pad, apply_ratio_crop=crop is not None,
             camera_type=editor_core.resolve_focus_camera_type_from_metadata(metadata))
         bird = editor._bird_box_cache.get(editor._source_signature(self.path))
         state.bird_box = editor_core.transform_source_box_after_crop_padding(
-            bird, crop_box=crop, source_width=width, source_height=height, pt=0, pb=0, pl=0, pr=0) if crop else bird
+            bird, crop_box=crop, source_width=width, source_height=height, pt=pad[0], pb=pad[1], pl=pad[2], pr=pad[3]) if crop else bird
         regions = editor._dejitter_reference_regions
         tracking = editor._reference_tracking_results.get(key) if editor._reference_tracking_input() == editor._reference_tracking_definition else None
         if tracking and (tracking.signature != image_file_signature(self.path) or
                          image_file_signature(Path(editor._dejitter_reference_source)) != editor._reference_tracking_signature):
             tracking = None
-        state.reference_diagnostics = tracking_overlays(regions, tracking, crop)
+        source_crop = source_normalized_crop(self.size, sequence.pixel_boxes[key]) if self.frame and sequence else None
+        state.reference_diagnostics = tracking_overlays(regions, tracking, source_crop)
         if not crop and editor._dejitter_reference_source and path_key(Path(editor._dejitter_reference_source)) == key:
             state.reference_regions = regions
             state.reference_diagnostics = ()
         options = editor._build_preview_overlay_options()
         options.show_reference_regions = True
         options.show_crop_effect = False
+        if not self.frame and sequence and key in sequence.pixel_boxes and not editor.dejitter_pad_to_union_check.isChecked():
+            state.crop_effect_box = source_normalized_crop(self.size, sequence.pixel_boxes[key])
+            state.alignment_crop_box = state.crop_effect_box
+            options.show_crop_effect = editor.show_crop_effect_check.isChecked()
         self.preview.apply_overlay_options(options)
         self.preview.apply_overlay_state(state)
         self.preview.set_original_size(width, height)

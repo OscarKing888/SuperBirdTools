@@ -116,6 +116,17 @@ class SequenceTransport(QObject):
             result = sequence.tracking.get(path_key(self.paths[index]))
             if result:
                 detail = f'当前第 {index + 1} 张：{result.matched_count}/{len(result.boxes)} 个选区匹配'
+                key = path_key(self.paths[index])
+                width, height = sequence.source_sizes[key]
+                output_width, output_height = sequence.output_size
+                padded = sequence.jobs[key].settings.get('dejitter_pad_to_union', False) is True
+                if padded:
+                    detail += ' · 补边保留完整画面'
+                else:
+                    retained = output_width*output_height/(width*height)*100
+                    detail += f' · 保留原图 {retained:.1f}%'
+                    if retained < 50:
+                        detail += '，共同范围较小，可开启补边后再裁切'
                 if result.matched_count < len(result.boxes):
                     detail += '，请检查成片'
                 self.editor.dejitter_tracking_status.setText(self.editor._sequence_message + '\n' + detail +
