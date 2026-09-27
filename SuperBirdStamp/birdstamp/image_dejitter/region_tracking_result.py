@@ -24,6 +24,7 @@ class RegionTrackingResult:
     scores: tuple[float, ...] = ()
     reasons: tuple[str, ...] = ()
     predicted_boxes: tuple[NormalizedBox, ...] = ()
+    manual_indices: tuple[int, ...] = ()
 
     @property
     def matched_count(self) -> int:

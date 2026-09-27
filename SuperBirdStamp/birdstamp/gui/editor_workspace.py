@@ -545,6 +545,7 @@ class _BirdStampWorkspaceMixin:
                 "video_export": self._collect_workspace_video_export_state(workspace_path),
                 "preview": self._collect_workspace_preview_state(),
                 "sequence_preview": self._collect_sequence_workspace_state(),
+                "dejitter_manual_matches": list(self._dejitter_manual_matches.values()),
             },
         }
 
@@ -822,6 +823,7 @@ class _BirdStampWorkspaceMixin:
             restore_dejitter = getattr(self, "_restore_dejitter_reference_from_settings", None)
             if callable(restore_dejitter):
                 restore_dejitter(current_render_settings)
+            self._restore_manual_region_matches(editor_state.get('dejitter_manual_matches'))
             update_clear = getattr(self, "_update_dejitter_reference_clear_enabled", None)
             if callable(update_clear):
                 update_clear()

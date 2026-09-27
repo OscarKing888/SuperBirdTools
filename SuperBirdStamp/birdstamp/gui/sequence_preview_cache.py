@@ -129,7 +129,7 @@ class SequencePreviewCache:
                     tuple(tuple(b) if b is not None else None for b in tracking['boxes']),
                     tuple(tracking['signature']) if tracking['signature'] else None,
                     tracking['error'], tuple(tracking['scores']), tuple(tracking['reasons']),
-                    tuple(tuple(b) for b in tracking['predicted_boxes']))
+                    tuple(tuple(b) for b in tracking['predicted_boxes']), tuple(tracking.get('manual_indices', ())))
                 image = self._read_image(folder / f'quick-{index}.png', budget)
                 budget -= image.sizeInBytes()
                 source = self._read_image(folder / f'source-{index}.png', budget)

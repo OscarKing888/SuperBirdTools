@@ -13,6 +13,9 @@ def tracking_overlays(regions, result, crop=None):
             box = result.predicted_boxes[index] if index < len(result.predicted_boxes) else region
         transformed = ((box[0]-left)/(right-left), (box[1]-top)/(bottom-top),
                        (box[2]-left)/(right-left), (box[3]-top)/(bottom-top))
-        label = str(index+1) if matched else f"{index+1} · {'预计位置' if located else '未定位'}"
+        if matched:
+            label = f'{index+1} · 手动' if index in result.manual_indices else str(index+1)
+        else:
+            label = f"{index+1} · {'预计位置' if located else '未定位'}"
         overlays.append((transformed, label, matched))
     return tuple(overlays)

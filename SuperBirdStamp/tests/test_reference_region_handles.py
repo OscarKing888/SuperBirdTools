@@ -3,7 +3,7 @@ import os
 os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
 
 import pytest
-from PyQt6.QtCore import QEvent, QPointF, Qt
+from PyQt6.QtCore import QEvent, QPointF, QRectF, Qt
 from PyQt6.QtGui import QColor, QMouseEvent, QPixmap
 from PyQt6.QtWidgets import QApplication
 
@@ -32,11 +32,12 @@ def canvas():
     _APP.processEvents()
 
 
-def send(canvas, kind, point, modifiers=Qt.KeyboardModifier.NoModifier):
-    rect = canvas.display_rect()
+def send(canvas, kind, point, modifiers=Qt.KeyboardModifier.NoModifier, *, buttons=None):
+    rect = canvas.display_rect() or QRectF(canvas.rect())
     pos = QPointF(rect.left() + point[0] * rect.width(), rect.top() + point[1] * rect.height())
     button = Qt.MouseButton.NoButton if kind == QEvent.Type.MouseMove else Qt.MouseButton.LeftButton
-    buttons = Qt.MouseButton.NoButton if kind == QEvent.Type.MouseButtonRelease else Qt.MouseButton.LeftButton
+    if buttons is None:
+        buttons = Qt.MouseButton.NoButton if kind == QEvent.Type.MouseButtonRelease else Qt.MouseButton.LeftButton
     event = QMouseEvent(kind, pos, canvas.mapToGlobal(pos), button, buttons, modifiers)
     _APP.sendEvent(canvas, event)
 
@@ -100,9 +101,66 @@ def test_new_selection_and_shift_append_still_work(canvas):
     send(canvas, QEvent.Type.MouseButtonRelease, (.15, .15), Qt.KeyboardModifier.ShiftModifier)
     assert len(canvas.reference_regions()) == 3
     assert canvas.reference_regions()[0] == BOX
-    send(canvas, QEvent.Type.MouseButtonPress, (.4, .4))
-    send(canvas, QEvent.Type.MouseButtonRelease, (.6, .6))
-    assert canvas.reference_regions() == ((.4, .4, .6, .6),)
+    send(canvas, QEvent.Type.MouseButtonPress, (.05, .8))
+    send(canvas, QEvent.Type.MouseButtonRelease, (.2, .95))
+    assert canvas.reference_regions()[0] == pytest.approx((.05, .8, .2, .95))
+    assert len(canvas.reference_regions()) == 1
+
+
+def test_interior_drag_preserves_size_and_clamps_to_source(canvas):
+    commits = []
+    canvas.reference_region_changed.connect(commits.append)
+    send(canvas, QEvent.Type.MouseButtonPress, (.5, .5))
+    assert canvas.cursor().shape() == Qt.CursorShape.SizeAllCursor
+    send(canvas, QEvent.Type.MouseMove, (.9, .1))
+    assert not commits
+    assert canvas.displayed_reference_regions()[0] == pytest.approx((.5, 0, 1, .5))
+    send(canvas, QEvent.Type.MouseButtonRelease, (.9, .1))
+    assert len(commits) == 1
+    assert commits[0][1] == (.8, .8, .95, .95)
+
+
+@pytest.mark.parametrize('handle,point', list(zip(ReferenceRegionEditMode.handles,
+                                              ReferenceRegionEditMode.handle_positions(BOX))))
+def test_hover_direction_and_interior_cursor(canvas, handle, point):
+    send(canvas, QEvent.Type.MouseMove, (.5, .5), buttons=Qt.MouseButton.NoButton)
+    assert canvas.cursor().shape() == Qt.CursorShape.SizeAllCursor
+    send(canvas, QEvent.Type.MouseMove, point, buttons=Qt.MouseButton.NoButton)
+    assert canvas.cursor().shape() == ReferenceRegionEditMode._cursors[handle]
+
+
+@pytest.mark.parametrize('handle', ReferenceRegionEditMode.handles)
+@pytest.mark.parametrize('modifiers', [Qt.KeyboardModifier.ShiftModifier, Qt.KeyboardModifier.AltModifier,
+                                     Qt.KeyboardModifier.ShiftModifier | Qt.KeyboardModifier.AltModifier])
+def test_modifiers_preserve_current_ratio_or_center_in_non_square_source(canvas, handle, modifiers):
+    box = (.2, .3, .6, .5)
+    canvas.set_reference_regions((box,))
+    index = ReferenceRegionEditMode.handles.index(handle)
+    start = ReferenceRegionEditMode.handle_positions(box)[index]
+    dx = -.12 if 'w' in handle else .12 if 'e' in handle else 0
+    dy = -.12 if 'n' in handle else .12 if 's' in handle else 0
+    end = start[0] + dx, start[1] + dy
+    send(canvas, QEvent.Type.MouseButtonPress, start)
+    send(canvas, QEvent.Type.MouseButtonRelease, end, modifiers)
+    l, t, r, b = canvas.reference_regions()[0]
+    if modifiers & Qt.KeyboardModifier.ShiftModifier:
+        assert (r-l)/(b-t) == pytest.approx(2)
+    if modifiers & Qt.KeyboardModifier.AltModifier:
+        assert ((l+r)/2, (t+b)/2) == pytest.approx((.4, .4))
+    else:
+        assert (r if 'w' in handle else l if 'e' in handle else (l+r)/2) == pytest.approx(
+            .6 if 'w' in handle else .2 if 'e' in handle else .4)
+        assert (b if 'n' in handle else t if 's' in handle else (t+b)/2) == pytest.approx(
+            .5 if 'n' in handle else .3 if 's' in handle else .4)
+    assert all(0 <= value <= 1 for value in (l,t,r,b))
+
+
+def test_combined_modifiers_preserve_ratio_and_center_at_boundary(canvas):
+    canvas.set_reference_regions(((.1, .2, .5, .4),))
+    send(canvas, QEvent.Type.MouseButtonPress, (.5, .4))
+    send(canvas, QEvent.Type.MouseButtonRelease, (1, 1),
+         Qt.KeyboardModifier.ShiftModifier | Qt.KeyboardModifier.AltModifier)
+    assert canvas.reference_regions()[0] == pytest.approx((0, .15, .6, .45))
 
 
 def test_source_clear_and_external_region_change_cancel_resize(canvas):

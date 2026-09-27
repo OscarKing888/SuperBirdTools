@@ -12,6 +12,7 @@ from birdstamp.gui.editor_utils import path_key
 from birdstamp.image_dejitter import ReferenceRegionTracker
 from birdstamp.image_dejitter.region_consensus import select_translation
 from birdstamp.image_dejitter.region_tracking_result import image_file_signature
+from birdstamp.image_dejitter.manual_region_matches import MANUAL_MATCHES_KEY
 from birdstamp.image_pipeline import ImageProcContext, ImageProcPipeline
 from birdstamp.image_pipeline.image_proc_stage.image_proc_sequence_align_stage import ImageProcSequenceAlignStage
 from .render_job_seed import prepare_render_jobs
@@ -46,6 +47,9 @@ def sequence_input_key(seeds, template_paths=None) -> str:
     # 独立流程只依赖原图、参考选区、强度和补边选项；模板/手动裁切/输出叠加不参与。
     seeds = tuple(seeds)
     payload = [(path_key(seed.path), {key: seed.settings.get(key) for key in REFERENCE_KEYS}) for seed in seeds]
+    for seed, (_, settings) in zip(seeds, payload):
+        if seed.settings.get(MANUAL_MATCHES_KEY):
+            settings[MANUAL_MATCHES_KEY] = seed.settings[MANUAL_MATCHES_KEY]
     data = (payload, file_signatures(sequence_files(seeds)))
     return hashlib.sha256(json.dumps(data, ensure_ascii=False, sort_keys=True, default=str).encode('utf-8')).hexdigest()
 

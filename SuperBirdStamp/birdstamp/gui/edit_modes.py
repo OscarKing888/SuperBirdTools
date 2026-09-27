@@ -21,6 +21,7 @@ from typing import TYPE_CHECKING
 
 from PyQt6.QtCore import QRectF, Qt
 from PyQt6.QtGui import QColor, QPen
+from .reference_region_geometry import move_region, resize_region
 
 if TYPE_CHECKING:  # pragma: no cover - 仅类型提示
     from PyQt6.QtGui import QMouseEvent, QPainter
@@ -142,7 +143,7 @@ class EditModeController:
 
 
 class ReferenceRegionEditMode(EditMode):
-    """参考区框选和八手柄缩放；拖动仅更新显示，松手后提交持久状态。"""
+    """参考区框选、框内移动及八手柄缩放；松手后一次提交持久状态。"""
 
     mode_id = EDIT_MODE_REFERENCE_REGION
     label = "去抖动参考区"
@@ -152,6 +153,7 @@ class ReferenceRegionEditMode(EditMode):
         "ne": Qt.CursorShape.SizeBDiagCursor, "sw": Qt.CursorShape.SizeBDiagCursor,
         "n": Qt.CursorShape.SizeVerCursor, "s": Qt.CursorShape.SizeVerCursor,
         "e": Qt.CursorShape.SizeHorCursor, "w": Qt.CursorShape.SizeHorCursor,
+        "move": Qt.CursorShape.SizeAllCursor,
     }
 
     def __init__(self) -> None:
@@ -175,6 +177,7 @@ class ReferenceRegionEditMode(EditMode):
         self._resize_handle = None
         self._resize_start = None
         self._resize_box = None
+        self._drag_origin = None
 
     @staticmethod
     def handle_positions(box: NormalizedBox):
@@ -183,20 +186,9 @@ class ReferenceRegionEditMode(EditMode):
         return ((l, t), (cx, t), (r, t), (r, cy), (r, b), (cx, b), (l, b), (l, cy))
 
     @staticmethod
-    def resize_box(box: NormalizedBox, handle: str, point: tuple[float, float]) -> NormalizedBox:
-        l, t, r, b = box
-        x, y = map(_clamp_unit, point)
-        # 固定对侧边/角，禁止翻转；参考区不受裁切比例约束。
-        min_w, min_h = min(.01, r - l), min(.01, b - t)
-        if "w" in handle:
-            l = min(x, r - min_w)
-        if "e" in handle:
-            r = max(x, l + min_w)
-        if "n" in handle:
-            t = min(y, b - min_h)
-        if "s" in handle:
-            b = max(y, t + min_h)
-        return (l, t, r, b)
+    def resize_box(box: NormalizedBox, handle: str, point: tuple[float, float],
+                   *, keep_ratio=False, symmetric=False) -> NormalizedBox:
+        return resize_region(box, handle, point, keep_ratio=keep_ratio, symmetric=symmetric)
 
     def preview_regions(self, regions):
         if self._resize_index is None or self._resize_box is None:
@@ -228,6 +220,26 @@ class ReferenceRegionEditMode(EditMode):
         nx, ny = canvas.widget_to_norm(draw_rect, pos.x(), pos.y())
         return (_clamp_unit(nx), _clamp_unit(ny))
 
+    def _hit_region(self, canvas, event):
+        hit = self._hit_handle(canvas, event)
+        if hit is not None:
+            return hit
+        rect = canvas.display_rect()
+        point = self._point_norm(canvas, event) if rect is not None and rect.contains(event.position()) else None
+        if point is not None:
+            for index in reversed(range(len(canvas.reference_regions()))):
+                l, t, r, b = canvas.reference_regions()[index]
+                if l <= point[0] <= r and t <= point[1] <= b:
+                    return index, 'move'
+        return None
+
+    def _drag_box(self, point, modifiers):
+        if self._resize_handle == 'move':
+            return move_region(self._resize_start, (point[0] - self._drag_origin[0], point[1] - self._drag_origin[1]))
+        return self.resize_box(self._resize_start, self._resize_handle, point,
+                               keep_ratio=bool(modifiers & Qt.KeyboardModifier.ShiftModifier),
+                               symmetric=bool(modifiers & Qt.KeyboardModifier.AltModifier))
+
     def on_mouse_press(self, canvas, event) -> bool:
         if event.button() == Qt.MouseButton.RightButton:
             self.cancel(canvas)
@@ -247,14 +259,17 @@ class ReferenceRegionEditMode(EditMode):
         point = self._point_norm(canvas, event)
         if point is None:
             return False
-        hit = self._hit_handle(canvas, event)
+        hit = self._hit_region(canvas, event)
         self._reset()
         if hit is not None:
             self._resize_index, self._resize_handle = hit
             self._resize_start = canvas.reference_regions()[self._resize_index]
             self._resize_box = self._resize_start
+            self._drag_origin = point
             canvas.setCursor(self._cursors[self._resize_handle])
         else:
+            if not getattr(canvas, 'reference_region_creation_enabled', True) or not canvas.display_rect().contains(event.position()):
+                return False
             self._drawing = True
             self._start_norm = self._current_norm = point
             self._append = bool(event.modifiers() & Qt.KeyboardModifier.ShiftModifier)
@@ -266,14 +281,15 @@ class ReferenceRegionEditMode(EditMode):
         point = self._point_norm(canvas, event)
         if self._resize_index is not None:
             if point is not None:
-                self._resize_box = self.resize_box(self._resize_start, self._resize_handle, point)
+                self._resize_box = self._drag_box(point, event.modifiers())
         elif self._drawing:
             if point is not None:
                 self._current_norm = point
         else:
-            hit = self._hit_handle(canvas, event)
-            canvas.setCursor(self._cursors[hit[1]] if hit else Qt.CursorShape.CrossCursor)
-            return False
+            hit = self._hit_region(canvas, event)
+            canvas.setCursor(self._cursors[hit[1]] if hit else Qt.CursorShape.CrossCursor
+                             if getattr(canvas, 'reference_region_creation_enabled', True) else Qt.CursorShape.ArrowCursor)
+            return not getattr(canvas, '_dragging', False)
         canvas.update()
         event.accept()
         return True
@@ -283,7 +299,7 @@ class ReferenceRegionEditMode(EditMode):
             return False
         if self._resize_index is not None:
             point = self._point_norm(canvas, event)
-            box = self.resize_box(self._resize_start, self._resize_handle, point) if point else self._resize_box
+            box = self._drag_box(point, event.modifiers()) if point else self._resize_box
             index = self._resize_index
             self._reset()
             canvas.replace_reference_region(index, box)

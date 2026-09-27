@@ -10,6 +10,7 @@ from .editor_preview_canvas import EditorPreviewCanvas, EditorPreviewOverlayStat
 from .editor_preview_decode_worker import EditorPreviewDecodeWorker
 from .editor_sequence_preview_worker import EditorSequencePreviewWorker, pil_qimage
 from .editor_tracking_overlay import tracking_overlays
+from .edit_modes import EDIT_MODE_NONE, EDIT_MODE_REFERENCE_REGION
 from .editor_utils import path_key
 from .editor_preview_viewport import PreviewViewportPanel, align_viewport_rows
 from birdstamp.image_dejitter.region_tracking_result import image_file_signature
@@ -48,6 +49,8 @@ class ABPreview(QObject):
         self.pin.setChecked(True)
         self.pin.setToolTip('保持 A 图不随 B 图切换；仍可用 A 的下拉框主动选图。')
         self.preview = PreviewWithStatusBar(canvas=EditorPreviewCanvas())
+        self.preview.canvas.reference_region_changed.connect(self._edit_reference_regions)
+        self.preview.canvas.reference_match_edited.connect(self._edit_match)
         self.a_panel = PreviewViewportPanel('A', self.preview, self.pin)
         self.photos, self.mode, self.center = self.a_panel.photos, self.a_panel.mode, self.a_panel.center
         self.mode.addItems(['原图', '去抖动成片'])
@@ -233,6 +236,7 @@ class ABPreview(QObject):
         self.upgrade.start()
 
     def _cancel(self):
+        self.preview.canvas.set_edit_mode(EDIT_MODE_NONE)
         self.token += 1
         self.pending = False
         self.upgrade.stop()
@@ -306,6 +310,18 @@ class ABPreview(QObject):
         if self.pending and not self.stopping:
             self.upgrade.start()
 
+    def _can_edit(self):
+        return (self._accept(self.token) and self.image is not None and self.mode.currentIndex() == 0
+                and self.editor._region_edit_enabled(self.path, original=True))
+
+    def _edit_reference_regions(self, regions):
+        if self._can_edit():
+            self.editor._commit_source_reference_regions(self.path, regions)
+
+    def _edit_match(self, index, box):
+        if self._can_edit():
+            self.editor._commit_manual_region_match(self.path, index, box, original=True)
+
     def _display(self):
         if self.image is None or self.size is None:
             return
@@ -326,13 +342,18 @@ class ABPreview(QObject):
         state.bird_box = editor_core.transform_source_box_after_crop_padding(
             bird, crop_box=crop, source_width=width, source_height=height, pt=pad[0], pb=pad[1], pl=pad[2], pr=pad[3]) if crop else bird
         regions = editor._dejitter_reference_regions
-        tracking = editor._reference_tracking_results.get(key) if editor._reference_tracking_input() == editor._reference_tracking_definition else None
-        if tracking and (tracking.signature != image_file_signature(self.path) or
-                         image_file_signature(Path(editor._dejitter_reference_source)) != editor._reference_tracking_signature):
-            tracking = None
+        tracking = editor._tracking_result_for_path(self.path)
+        canvas = self.preview.canvas
+        can_edit = self._can_edit()
+        reference = editor._is_reference_photo(self.path)
+        canvas.reference_region_creation_enabled = reference
+        canvas.set_edit_mode(EDIT_MODE_REFERENCE_REGION if can_edit else EDIT_MODE_NONE)
         source_crop = source_normalized_crop(self.size, sequence.pixel_boxes[key]) if self.frame and sequence else None
-        state.reference_diagnostics = tracking_overlays(regions, tracking, source_crop)
-        if not crop and editor._dejitter_reference_source and path_key(Path(editor._dejitter_reference_source)) == key:
+        state.reference_diagnostics = tracking_overlays(
+            regions, editor._tracking_diagnostics_for_path(self.path) if can_edit else tracking, source_crop)
+        if can_edit:
+            state.reference_regions = editor._editable_regions_for_path(self.path)
+        if not crop and reference:
             state.reference_regions = regions
             state.reference_diagnostics = ()
         options = editor._build_preview_overlay_options()

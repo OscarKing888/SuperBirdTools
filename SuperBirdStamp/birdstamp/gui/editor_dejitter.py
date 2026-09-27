@@ -10,6 +10,7 @@ from PyQt6.QtCore import Qt, QTimer
 
 from birdstamp.export_stage.sequence_preview import sequence_input_key
 from birdstamp.image_dejitter.region_tracking_result import image_file_signature
+from birdstamp.image_dejitter.manual_region_matches import MANUAL_MATCHES_KEY
 from . import editor_core, editor_options
 from .edit_modes import EDIT_MODE_NONE, EDIT_MODE_REFERENCE_REGION
 from .editor_preview_canvas import EditorPreviewOverlayState
@@ -125,7 +126,8 @@ class _BirdStampDejitterMixin:
         strength.addWidget(self.dejitter_reference_strength_slider, 1)
         strength.addWidget(self.dejitter_reference_value_label)
         form.addLayout(strength)
-        hint = QLabel('Shift 追加；八个手柄调节大小；右键框内删除该区，也可从列表多选删除。')
+        hint = QLabel('框内拖动；手柄缩放（Shift 保持比例，Alt 对称）。\n'
+                      '参考图：空白处 Shift 追加，右键删除；其它原图：修正匹配位置，右键恢复自动匹配。')
         hint.setWordWrap(True)
         form.addWidget(hint)
         layout.addWidget(reference)
@@ -428,6 +430,7 @@ class _BirdStampDejitterMixin:
             return
         # 即使共同裁切失败，也保留诊断，供原图和 A/B 对照定位问题。
         self._reference_tracking_results = tracking
+        self._reference_tracking_manual_matches = dict(self._dejitter_manual_matches)
         self._reference_tracking_definition = self._reference_tracking_input()
         source = self._dejitter_reference_source
         self._reference_tracking_signature = image_file_signature(Path(source)) if source else None
@@ -544,6 +547,7 @@ class _BirdStampDejitterMixin:
                 self._sequence_frame_bytes -= removed.image.sizeInBytes()
         self._bird_box_cache.update(sequence.bird_boxes)
         self._reference_tracking_results = dict(sequence.tracking)
+        self._reference_tracking_manual_matches = dict(self._dejitter_manual_matches)
         self._reference_tracking_definition = self._reference_tracking_input()
         source = self._dejitter_reference_source
         self._reference_tracking_signature = image_file_signature(Path(source)) if source else None
@@ -654,13 +658,15 @@ class _BirdStampDejitterMixin:
             raw = self.raw_metadata_cache.get(key) or self.photo_list_metadata_cache.get(key) or {}
             if self.current_path is not None and path_key(self.current_path) == key:
                 raw = self.current_raw_metadata or raw
-            seeds.append(RenderJobSeed(path, dict(settings), dict(raw), key in self.raw_metadata_cache))
+            seeds.append(RenderJobSeed(path, {**settings, MANUAL_MATCHES_KEY: self._manual_record_for_path(path)},
+                                       dict(raw), key in self.raw_metadata_cache))
         return seeds
 
     def _on_delete_dejitter_regions(self):
         rows = {self.dejitter_region_list.row(item) for item in self.dejitter_region_list.selectedItems()}
         if not rows:
             return
+        self._dejitter_manual_matches.clear()
         self._dejitter_reference_regions = tuple(box for index, box in enumerate(self._dejitter_reference_regions)
                                                 if index not in rows)
         if not self._dejitter_reference_regions:
@@ -722,13 +728,17 @@ class _BirdStampDejitterMixin:
         options.show_crop_effect = False
         self.preview_label.apply_overlay_options(options)
         editable = self._reference_regions_editable()
-        mode = self._current_edit_mode_id()
+        canvas = self.preview_label.canvas
+        canvas.set_reference_edit_source(path_key(self.current_path) if self.current_path else None)
+        canvas.reference_region_creation_enabled = editable
+        can_edit = self._region_edit_enabled(self.current_path) and (source is not None or quick is not None)
         self.preview_label.canvas.set_edit_mode(EDIT_MODE_REFERENCE_REGION
-                                                if editable and mode == EDIT_MODE_REFERENCE_REGION else EDIT_MODE_NONE)
+                                                if can_edit else EDIT_MODE_NONE)
         tracked = self._tracking_result_for_current()
-        labels = tuple(str(i + 1) for i, box in enumerate(tracked.boxes) if box is not None) if tracked and not editable else ()
+        labels = () if can_edit else tuple(str(i + 1) for i, box in enumerate(tracked.boxes) if box is not None) if tracked and not editable else ()
         self.preview_label.canvas.set_reference_region_labels(labels)
-        state = EditorPreviewOverlayState(reference_regions=self._visible_dejitter_reference_regions(),
+        state = EditorPreviewOverlayState(reference_regions=(self._editable_regions_for_path(self.current_path)
+                                                            if can_edit else self._visible_dejitter_reference_regions()),
                                           crop_effect_box=(0, 0, 1, 1))
         from .editor_tracking_overlay import tracking_overlays
         if self._sequence_preview is not None and self.current_path is not None:
@@ -740,7 +750,8 @@ class _BirdStampDejitterMixin:
                 state.alignment_crop_box = state.crop_effect_box
                 options.show_crop_effect = self.show_crop_effect_check.isChecked()
         if not editable:
-            state.reference_diagnostics = tracking_overlays(self._dejitter_reference_regions, tracked)
+            state.reference_diagnostics = tracking_overlays(
+                self._dejitter_reference_regions, self._tracking_diagnostics_for_path(self.current_path) if can_edit else tracked)
         options.show_reference_regions = bool(state.reference_regions or state.reference_diagnostics)
         self.preview_label.apply_overlay_options(options)
         if source is not None or quick is not None:

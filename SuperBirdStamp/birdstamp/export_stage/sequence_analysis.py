@@ -11,6 +11,8 @@ from app_common.log import get_logger
 from birdstamp.decoders.image_decoder import decode_image
 from birdstamp.gui.editor_utils import path_key
 from birdstamp.image_dejitter.region_tracking_result import RegionTrackingResult, image_file_signature
+from birdstamp.image_dejitter.manual_region_matches import MANUAL_MATCHES_KEY, valid_manual_boxes, apply_manual_boxes
+from birdstamp.image_dejitter.region_consensus import resolve_tracking_consensus
 from .core import estimate_video_job_max_pixels, resolve_video_render_workers
 from .sequence_photo_error import SequencePhotoError, sequence_photo_errors
 from .video_export_cancelled_error import VideoExportCancelledError
@@ -21,21 +23,27 @@ _LOG = get_logger('sequence_analysis')
 class SequenceAnalysisAction(WorkerAction):
     """一张照片的跟踪或遮挡核验；共享参考模板只读，原图由 action 独占。"""
 
-    def __init__(self, path, tracker, *, cancelled, preview_source=None, recovery=None):
+    def __init__(self, path, tracker, *, cancelled, preview_source=None, recovery=None, manual_boxes=()):
         super().__init__(cancelled=cancelled)
         self.path, self.tracker = path, tracker
         self.preview_source, self.recovery = preview_source, recovery
+        self.manual_boxes = manual_boxes
 
     def execute(self):
         if self.is_cancelled():
             raise VideoExportCancelledError('已取消去抖动分析。')
         with decode_image(self.path, decoder='auto') as image:
             if self.recovery is None:
-                result = self.tracker.track(image, cancelled=self.is_cancelled)
+                result = (RegionTrackingResult((None,) * len(self.manual_boxes))
+                          if self.manual_boxes and all(box is not None for box in self.manual_boxes)
+                          else self.tracker.track(image, cancelled=self.is_cancelled))
                 if self.preview_source is not None and not self.is_cancelled():
                     self.preview_source(self.path, image)
             else:
                 result = self.tracker.recover(image, *self.recovery, cancelled=self.is_cancelled)
+            if any(box is not None for box in self.manual_boxes):
+                result = resolve_tracking_consensus(self.tracker.regions, apply_manual_boxes(result, self.manual_boxes),
+                                                    image.size, self.tracker.reference_size)
             if self.is_cancelled():
                 raise VideoExportCancelledError('已取消去抖动分析。')
             return (path_key(self.path), replace(result, signature=image_file_signature(self.path)), image.size)
@@ -51,6 +59,8 @@ def analyze_sequence_frames(jobs, tracker, reference, *, cancel_event, preview_s
     failure_index = len(keys)
     tracking, sizes = {}, {}
     reference_key = path_key(reference)
+    manual_boxes = {path_key(job.path): valid_manual_boxes(job.settings.get(MANUAL_MATCHES_KEY),
+                                                         job.path, reference, tracker.regions) for job in jobs}
     if reference_key in keys:
         tracking[reference_key] = RegionTrackingResult(tracker.regions, signature=image_file_signature(reference))
         sizes[reference_key] = tracker.reference_size
@@ -117,7 +127,8 @@ def analyze_sequence_frames(jobs, tracker, reference, *, cancel_event, preview_s
 
     try:
         _LOG.info('sequence analysis start photos=%s workers=%s', len(jobs), workers)
-        actions = (SequenceAnalysisAction(job.path, tracker, cancelled=cancelled, preview_source=preview_source)
+        actions = (SequenceAnalysisAction(job.path, tracker, cancelled=cancelled, preview_source=preview_source,
+                                           manual_boxes=manual_boxes[path_key(job.path)])
                    for job in jobs if path_key(job.path) != reference_key)
         run_phase(actions, '对齐照片', len(jobs), len(tracking))
         # 用列表顺序恢复字典；完成顺序不能改变邻帧或最终输出的语义。
@@ -136,7 +147,8 @@ def analyze_sequence_frames(jobs, tracker, reference, *, cancel_event, preview_s
             if any(box is None and previous.boxes[i] is not None and following.boxes[i] is not None
                    for i, box in enumerate(result.boxes)):
                 recovery_actions.append(SequenceAnalysisAction(
-                    jobs[index].path, tracker, cancelled=cancelled, recovery=(result, previous, following)))
+                    jobs[index].path, tracker, cancelled=cancelled, recovery=(result, previous, following),
+                    manual_boxes=manual_boxes[keys[index]]))
         if recovery_actions:
             run_phase(recovery_actions, '核验遮挡', len(recovery_actions))
         check()

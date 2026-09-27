@@ -75,6 +75,7 @@ class EditorPreviewCanvas(FocusCenteredPreviewCanvas):
 
     crop_box_changed = pyqtSignal(tuple)  # (l, t, r, b) normalized
     reference_region_changed = pyqtSignal(tuple)  # tuple of (l, t, r, b) normalized boxes
+    reference_match_edited = pyqtSignal(int, object)  # 原编号、源图框；None 撤销该编号的手动修正。
     crop_drag_started = pyqtSignal()
     crop_drag_finished = pyqtSignal()
 
@@ -103,6 +104,7 @@ class EditorPreviewCanvas(FocusCenteredPreviewCanvas):
         self._alignment_crop_box = None
         self._show_reference_regions: bool = False
         self._reference_region_labels: tuple[str, ...] = ()
+        self.reference_region_creation_enabled = True
         self._edit_modes = EditModeController(self)
         self._edit_modes.register(ReferenceRegionEditMode())
         self._edit_modes.register(CropAdjustEditMode())
@@ -175,6 +177,14 @@ class EditorPreviewCanvas(FocusCenteredPreviewCanvas):
         if self._set_reference_regions_no_update(regions):
             self.update()
 
+    def set_reference_edit_source(self, source) -> None:
+        """快预览切图可能复用同样的框；路径变化仍必须取消上一张的鼠标手势。"""
+        if source != getattr(self, '_reference_edit_source', None):
+            mode = self._edit_modes.active_mode()
+            if isinstance(mode, ReferenceRegionEditMode):
+                mode.cancel(self)
+            self._reference_edit_source = source
+
     def reference_regions(self) -> tuple["NormalizedBox", ...]:
         return self._reference_regions
 
@@ -188,6 +198,10 @@ class EditorPreviewCanvas(FocusCenteredPreviewCanvas):
         """只替换命中的区域；松手后一次提交，保留其它区域。"""
         if not 0 <= index < len(self._reference_regions):
             return
+        if not self.reference_region_creation_enabled:
+            if self._reference_regions[index] != box:
+                self.reference_match_edited.emit(index, box)
+            return
         regions = list(self._reference_regions)
         regions[index] = box
         if self._set_reference_regions_no_update(regions):
@@ -196,6 +210,9 @@ class EditorPreviewCanvas(FocusCenteredPreviewCanvas):
 
     def delete_reference_region(self, index: int) -> None:
         if not 0 <= index < len(self._reference_regions):
+            return
+        if not self.reference_region_creation_enabled:
+            self.reference_match_edited.emit(index, None)
             return
         regions = tuple(box for i, box in enumerate(self._reference_regions) if i != index)
         if self._set_reference_regions_no_update(regions):
@@ -288,6 +305,7 @@ class EditorPreviewCanvas(FocusCenteredPreviewCanvas):
         return changed
 
     def _on_source_cleared(self) -> None:
+        self._reference_edit_source = None
         mode = self._edit_modes.active_mode()
         if isinstance(mode, ReferenceRegionEditMode):
             mode.cancel(self)
@@ -447,7 +465,10 @@ class EditorPreviewCanvas(FocusCenteredPreviewCanvas):
         painter.save()
         painter.setClipRect(visible)
         outside = 0
-        for box, label, matched in self._reference_diagnostics:
+        editable = self.displayed_reference_regions() if self.edit_mode() == EDIT_MODE_REFERENCE_REGION else ()
+        for index, (box, label, matched) in enumerate(self._reference_diagnostics):
+            if index < len(editable):
+                box = editable[index]
             color = QColor('#FFB703' if matched else '#FF5252')
             pen = QPen(color, 2)
             if not matched:

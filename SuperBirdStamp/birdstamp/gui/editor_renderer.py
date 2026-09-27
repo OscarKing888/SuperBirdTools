@@ -1260,6 +1260,7 @@ class _BirdStampRendererMixin:
 
     def _restore_dejitter_reference_from_settings(self, settings: dict[str, Any]) -> None:
         """从 render settings 恢复去抖动参考区状态（源图归一化坐标）。"""
+        self._dejitter_manual_matches.clear()
         invalidate = getattr(self, "_invalidate_reference_tracking", None)
         if callable(invalidate):
             invalidate()

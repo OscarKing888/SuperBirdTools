@@ -142,7 +142,8 @@ def test_result_switching_photo_maps_focus_bird_and_grid_through_final_crop(wind
     # 切回源图视图后显示源图跟踪坐标，不保留成片裁切坐标。
     window.dejitter_view_tabs.setCurrentIndex(0)
     assert len(window.preview_label.canvas.reference_regions()) == 2
-    assert window.preview_label.canvas.edit_mode() == EDIT_MODE_NONE
+    assert window.preview_label.canvas.edit_mode() == EDIT_MODE_REFERENCE_REGION
+    assert not window.preview_label.canvas.reference_region_creation_enabled
 
 
 def test_no_crop_allows_analysis_without_erasing_selection(window, monkeypatch):

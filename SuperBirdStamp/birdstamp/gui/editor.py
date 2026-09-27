@@ -2028,6 +2028,7 @@ class BirdStampEditorWindow(
             canvas.crop_drag_finished.connect(self._on_canvas_crop_drag_finished)
         if hasattr(canvas, "reference_region_changed"):
             canvas.reference_region_changed.connect(self._on_canvas_reference_region_changed)
+        canvas.reference_match_edited.connect(lambda index, box: self._commit_manual_region_match(self.current_path, index, box))
         self._update_dejitter_reference_clear_enabled()
         if hasattr(self.preview_label, "display_scale_percent_changed"):
             self.preview_label.display_scale_percent_changed.connect(self._sync_preview_scale_combo)
@@ -2815,7 +2816,8 @@ class BirdStampEditorWindow(
                 "reference",
                 "去抖动参考区",
                 "去抖动参考区：拖拽框选特征参考区，导出去抖动以此为锚点；"
-                "拖动四边/四角的 8 个手柄调节大小；按住 Shift 追加，右键框内删除该选区。",
+                "框内拖动，手柄缩放（Shift 保持比例，Alt 对称）；"
+                "参考图空白处 Shift 追加，右键删除；其它原图右键恢复自动匹配。",
             ),
             (
                 EDIT_MODE_CROP_ADJUST,
@@ -2831,7 +2833,8 @@ class BirdStampEditorWindow(
             btn.setCheckable(True)
             btn.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
             btn.setIcon(_make_preview_tool_icon(icon_kind, color=icon_color))
-            btn.setToolTip(f"{tip}\n作用于当前编辑照片；A/B 模式下为 B 视口。")
+            btn.setToolTip(f"{tip}\n" + ('A/B 两侧原图均可编辑参考选区或修正当前照片的匹配位置。'
+                                       if mode_id == EDIT_MODE_REFERENCE_REGION else '作用于当前编辑照片；A/B 模式下为 B 视口。'))
             btn.setAccessibleName(text)
             self.edit_mode_group.addButton(btn)
             self._edit_mode_buttons[mode_id] = btn
@@ -2881,6 +2884,7 @@ class BirdStampEditorWindow(
     def _on_dejitter_reference_clear(self) -> None:
         if not self._dejitter_reference_regions:
             return
+        self._dejitter_manual_matches.clear()
         self._invalidate_reference_tracking("参考区已清除。")
         self._dejitter_reference_regions = ()
         self._dejitter_reference_source = None
@@ -2895,7 +2899,6 @@ class BirdStampEditorWindow(
         """参考区由画布交互提交（预览/含外填充归一化）→ 转为源图归一化存储。"""
         if not self._reference_regions_editable():
             return  # 其它照片上的跟踪框不能回写为参考选区。
-        self._invalidate_reference_tracking()
         source_regions: list[tuple[float, float, float, float]] = []
         for box in regions or ():
             if isinstance(box, (list, tuple)) and len(box) == 4:
@@ -2903,15 +2906,7 @@ class BirdStampEditorWindow(
                 # 补边内的框选没有源图纹理，不能变成零面积参考区。
                 if converted[2] - converted[0] > 1e-4 and converted[3] - converted[1] > 1e-4:
                     source_regions.append(converted)
-        self._dejitter_reference_regions = tuple(source_regions)
-        if source_regions and self.current_path is not None:
-            self._dejitter_reference_source = str(self.current_path)
-        elif not source_regions:
-            self._dejitter_reference_source = None
-        self.dejitter_reference_check.setChecked(bool(source_regions))
-        self._update_dejitter_reference_clear_enabled()
-        self._apply_preview_overlay_options_from_ui()
-        self._on_output_settings_changed()
+        self._commit_source_reference_regions(self.current_path, source_regions)
 
     def _update_dejitter_reference_clear_enabled(self) -> None:
         btn = getattr(self, "dejitter_reference_clear_btn", None)
@@ -4839,6 +4834,7 @@ class BirdStampEditorWindow(
         self.current_path = None
         self._dejitter_reference_regions = ()
         self._dejitter_reference_source = None
+        self._dejitter_manual_matches.clear()
         self.dejitter_reference_check.blockSignals(True)
         self.dejitter_reference_check.setChecked(False)
         self.dejitter_reference_check.blockSignals(False)
