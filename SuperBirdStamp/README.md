@@ -19,6 +19,10 @@ GUI 启动优先使用仓库根 `run.sh` / `run.bat`，完整打包优先使用�
   sidecar values take priority. `report.db` is read-only fallback/hydration input.
 - Render JSON banner templates from `config/templates/`.
 - GUI exports PNG/JPEG, GIF, and video.
+- PNG/JPEG exports and saved PNG frames preserve source EXIF, including camera MakerNotes,
+  through ExifTool. Output orientation/dimensions and thumbnails reflect the rendered image.
+  Stabilization exports also copy same-stem XMP sidecars under the output image names.
+  EXIF preservation is automatic in the GUI and CLI; ExifTool is required for image export.
 - GUI image/GIF/video rendering converges through
   `VideoFrameJob -> render_video_frame() -> build_default_image_proc_pipeline()`.
   The builder is in `birdstamp.export_stage.pipeline`; the default non-export stages

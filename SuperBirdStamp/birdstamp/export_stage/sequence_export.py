@@ -4,6 +4,8 @@ import shutil
 import tempfile
 from pathlib import Path
 
+from birdstamp.export_metadata import save_export_image, copy_export_sidecar
+
 from .png_export_stage import PngExportStage
 from .sequence_preview import render_sequence_preview_frame
 from .video_export_cancelled_error import VideoExportCancelledError
@@ -26,8 +28,9 @@ def export_aligned_sequence(sequence, destination, *, output_format='png', cance
             context = terminal.process(render_sequence_preview_frame(sequence, job.path))
             target = folder / f'{index:04d}_{job.path.stem}.{output_format}'
             with context.image as image:
-                image.save(target, format='PNG' if output_format == 'png' else 'JPEG',
+                save_export_image(image, target, source_path=job.path, format='PNG' if output_format == 'png' else 'JPEG',
                            **({'quality': 95, 'subsampling': 0} if output_format == 'jpg' else {}))
+            copy_export_sidecar(job.path, target)
             progress(f'去抖动导出 {index}/{total}')
         if cancel_event.is_set():
             raise VideoExportCancelledError('已取消整组导出，本次输出已撤销。')

@@ -241,8 +241,10 @@ def test_fast_png_save_is_lossless_and_user_png_keeps_optimize(tmp_path) -> None
     saver = _BirdStampExporterMixin()
     fast = tmp_path / "fast.png"
     optimized = tmp_path / "optimized.png"
-    saver._save_image(image, fast, fast_png=True)
-    saver._save_image(image, optimized)
+    source = tmp_path / "original.png"
+    image.save(source)
+    saver._save_image(image, fast, fast_png=True, source_path=source)
+    saver._save_image(image, optimized, source_path=source)
     with Image.open(fast) as a, Image.open(optimized) as b:
         assert a.tobytes() == b.tobytes() == image.tobytes()
 

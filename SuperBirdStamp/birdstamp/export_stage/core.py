@@ -1487,7 +1487,9 @@ def _save_normalized_temp_frame(
     target_size: tuple[int, int],
     *,
     background_color: str,
+    source_path: Path,
 ) -> None:
+    from birdstamp.export_metadata import save_export_image
     normalized = normalize_frame_size(
         image,
         target_size,
@@ -1495,7 +1497,7 @@ def _save_normalized_temp_frame(
     )
     try:
         # 临时中间帧优先追求速度，不做 optimize 压缩。
-        normalized.save(frame_path, format="PNG", compress_level=1)
+        save_export_image(normalized, frame_path, source_path=source_path, format="PNG", compress_level=1)
     finally:
         try:
             normalized.close()
@@ -1503,12 +1505,13 @@ def _save_normalized_temp_frame(
             pass
 
 
-def _save_rendered_source_frame(image: Image.Image, frame_path: Path) -> None:
+def _save_rendered_source_frame(image: Image.Image, frame_path: Path, *, source_path: Path) -> None:
+    from birdstamp.export_metadata import save_export_image
     frame_path.parent.mkdir(parents=True, exist_ok=True)
     source_frame = image.convert("RGB")
     try:
         # 渲染源帧作为缓存中间产物，优先保留复用速度。
-        source_frame.save(frame_path, format="PNG", compress_level=1)
+        save_export_image(source_frame, frame_path, source_path=source_path, format="PNG", compress_level=1)
     finally:
         try:
             source_frame.close()
@@ -1602,7 +1605,7 @@ def _render_and_cache_source_frame(
     source_signature = _source_signature(job.path)
     try:
         _raise_if_cancel_requested(cancel_event, message="视频导出已中断，正在保留已完成源帧。")
-        _save_rendered_source_frame(rendered, frame_path)
+        _save_rendered_source_frame(rendered, frame_path, source_path=job.path)
     finally:
         try:
             rendered.close()
@@ -1636,6 +1639,7 @@ def _normalize_and_cache_video_frame(
             frame_path,
             target_size,
             background_color=background_color,
+            source_path=source_frame_path,
         )
     return (index, label, frame_path, source_signature, frame_signature)
 
@@ -2151,6 +2155,7 @@ def _render_and_save_video_frame(
             frame_path,
             target_size,
             background_color=background_color,
+            source_path=job.path,
         )
     finally:
         try:

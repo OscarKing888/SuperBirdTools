@@ -126,6 +126,10 @@ flowchart LR
 
 [editor_exporter.py](../birdstamp/gui/editor_exporter.py) 的 `export_current` / `export_all` 根据终端选择调度图片或 GIF；图片进入 `_export_render_jobs_to_images`。单图和批量导出由 GUI 编排，批量图像任务使用线程池并限制在途任务；GUI 在进度更新处处理事件，因此不能把整个图片/GIF 流程描述成独立的后台 QThread。GIF 编码由 `_run_gif_export_off_gui_thread` 放到单个后台线程执行（Pillow 编码期间释放 GIL），GUI 线程轮询完成并按序应用进度，所有控件更新仍在 GUI 线程；导出期间依旧排除用户输入。GIF 中间缓存帧以 `compress_level=1` 快速写 PNG（无损），用户直接导出的 PNG 仍用 `optimize=True`。
 
+所有 PNG/JPG 写入（普通单图/批量、CLI、独立去抖动、GIF 和视频保存的 PNG 帧）统一经过 [export_metadata.py](../birdstamp/export_metadata.py) 的 `save_export_image`，必须传入实际 `source_path`。ExifTool 从原文件复制 EXIF 块及可写元数据，包含 MakerNotes/未知 EXIF 标签；随后单独校正成片方向与尺寸并生成成片缩略图。不能用模板筛选后的元数据字典重建 EXIF。临时文件完成图片和 EXIF 后才替换目标，元数据失败不冒充成功、不覆盖已有完整目标，也禁止覆盖原图。使用共享 ExifTool runner（超时、Windows 隐藏窗口、应用关闭/atexit 清理）；中文内容通过文件复制保留，不拼入命令行。原图没有 EXIF 时可正常导出。源帧和视频帧缓存版本同步更新，避免复用旧的无 EXIF 缓存。
+
+独立去抖动另外使用 `copy_export_sidecar`，通过共享严格同目录/同名查找器定位 `.xmp`（扩展名不区分大小写），原样复制到导出图的新同名 `.xmp`；缺少时不生成空文件，失败/取消随本次目录一起回滚。分析签名记录实际 sidecar 路径，之后增加、删除或修改 `.XMP` 同样使结果失效。GIF/视频成品不作为逐张原始 EXIF 容器，其保留的 PNG 帧各自携带元数据。回归见 [test_export_metadata.py](../tests/test_export_metadata.py)。
+
 `_build_batch_image_targets` 在启动并行写入前分配所有文件名：使用 NFC 规范化加 `casefold` 判断本批同名目标，依次追加 `_2`、`_3`。这避免不同目录的 `a.jpg`、`A.jpg` 或 Unicode 等价名称写到同一目标；它解决本批目标互撞，不提供跨进程文件锁。并行度复用导出核心的 CPU/图像像素内存预算。
 
 ### 两级帧缓存和视频生命周期

@@ -67,12 +67,13 @@ def _resolve_output_format(fmt: str) -> tuple[str, str]:
     raise ValueError(f"output format must be jpeg/jpg or png, got: {fmt!r}")
 
 
-def _save_image(image, path: Path, pil_format: str, quality: int) -> None:
+def _save_image(image, path: Path, pil_format: str, quality: int, *, source_path: Path) -> None:
+    from birdstamp.export_metadata import save_export_image
     path.parent.mkdir(parents=True, exist_ok=True)
     if pil_format == "JPEG":
-        image.save(path, format="JPEG", quality=max(1, min(100, quality)), optimize=True, progressive=True)
+        save_export_image(image, path, source_path=source_path, format="JPEG", quality=max(1, min(100, quality)), optimize=True, progressive=True)
     else:
-        image.save(path, format="PNG", optimize=True)
+        save_export_image(image, path, source_path=source_path, format="PNG", optimize=True)
 
 
 def _find_template_path(template_arg: str | None) -> Path | None:
@@ -240,7 +241,7 @@ def render(
                 text_scale=text_scale,
             )
             rendered = rendered.convert("RGB")
-            _save_image(rendered, output_file, pil_format=pil_format, quality=quality_val)
+            _save_image(rendered, output_file, pil_format=pil_format, quality=quality_val, source_path=source)
             return _Result(source=source, status="ok", output=output_file, elapsed=time.perf_counter() - t0)
         except Exception as exc:
             return _Result(source=source, status="failed", error=str(exc), elapsed=time.perf_counter() - t0)

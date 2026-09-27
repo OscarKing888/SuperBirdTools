@@ -15,9 +15,9 @@ FRAME_CACHE_MANIFEST_VERSION = 1
 FRAME_CACHE_ROOT_NAME = "birdstamp_export_cache"
 SOURCE_FRAME_BUCKET_KIND = "rendered_source_frames"
 VIDEO_FRAME_BUCKET_KIND = "video_frames"
-# 裁切坐标和模板排版算法更新，所有导出方式均重新生成源帧。
-SOURCE_FRAME_CACHE_VERSION = 6
-VIDEO_FRAME_CACHE_VERSION = 1
+# 图片帧开始完整保留 EXIF，避免复用旧的无元数据缓存。
+SOURCE_FRAME_CACHE_VERSION = 7
+VIDEO_FRAME_CACHE_VERSION = 2
 _DEFAULT_PIPELINE_STAGE_ORDER = (
     "template_crop",
     "resize_limit",

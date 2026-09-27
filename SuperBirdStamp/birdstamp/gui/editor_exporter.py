@@ -736,7 +736,7 @@ class _BirdStampExporterMixin:
             bird_box_lock=bird_box_lock,
         )
         try:
-            self._save_image(rendered, task.target_path, fast_png=task.fast_png)
+            self._save_image(rendered, task.target_path, fast_png=task.fast_png, source_path=task.job.path)
         finally:
             try:
                 rendered.close()
@@ -846,15 +846,16 @@ class _BirdStampExporterMixin:
             raise RuntimeError(failed[0])
         return (ok_paths, failed)
 
-    def _save_image(self, image: Image.Image, path: Path, *, fast_png: bool = False) -> None:
+    def _save_image(self, image: Image.Image, path: Path, *, fast_png: bool = False, source_path: Path) -> None:
+        from birdstamp.export_metadata import save_export_image
         suffix = path.suffix.lower()
         if suffix == ".png":
             if fast_png:
-                image.save(path, format="PNG", compress_level=1)
+                save_export_image(image, path, source_path=source_path, format="PNG", compress_level=1)
             else:
-                image.save(path, format="PNG", optimize=True)
+                save_export_image(image, path, source_path=source_path, format="PNG", optimize=True)
             return
 
         if suffix not in {".jpg", ".jpeg"}:
             path = path.with_suffix(".jpg")
-        image.save(path, format="JPEG", quality=92, optimize=True, progressive=True)
+        save_export_image(image, path, source_path=source_path, format="JPEG", quality=92, optimize=True, progressive=True)

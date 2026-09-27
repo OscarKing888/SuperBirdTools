@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 
 from birdstamp.decoders.image_decoder import decode_image
+from app_common.exif_io import find_same_stem_xmp_sidecar
 from birdstamp.gui.editor_utils import path_key
 from birdstamp.image_dejitter import ReferenceRegionTracker
 from birdstamp.image_dejitter.region_consensus import select_translation
@@ -28,7 +29,9 @@ def sequence_files(seeds, template_paths=None) -> tuple[Path, ...]:
         if reference:
             paths.append(Path(reference))
         for path in paths:
-            files.update((path.resolve(strict=False), path.with_suffix('.xmp').resolve(strict=False)))
+            sidecar = find_same_stem_xmp_sidecar(str(path))
+            files.update((path.resolve(strict=False),
+                          (Path(sidecar) if sidecar else path.with_suffix('.xmp')).resolve(strict=False)))
     return tuple(sorted(files, key=str))
 
 
@@ -57,7 +60,7 @@ class SequencePreview:
     output_size: tuple[int, int] = (0, 0)
 
     def files_current(self) -> bool:
-        return file_signatures(Path(path) for path, _ in self.signatures) == self.signatures
+        return file_signatures(sequence_files(self.jobs.values())) == self.signatures
 
 
 def common_alignment_crop(regions, tracking, source_sizes, reference_size, strength=100, *, pad_to_union=False):
