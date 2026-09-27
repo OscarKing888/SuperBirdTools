@@ -5,7 +5,7 @@ from PyQt6.QtCore import QEvent, QObject, QSize, Qt, QTimer
 from PyQt6.QtGui import QIcon, QPixmap
 from PyQt6.QtWidgets import (
     QCheckBox, QHBoxLayout, QLabel, QListWidget, QListWidgetItem,
-    QPushButton, QSpinBox, QVBoxLayout, QWidget,
+    QPushButton, QSpinBox, QStyle, QToolButton, QVBoxLayout, QWidget,
 )
 
 from . import editor_options
@@ -28,7 +28,11 @@ class SequenceTransport(QObject):
         layout = QVBoxLayout(self.panel)
         layout.setContentsMargins(0, 0, 0, 0)
         row = QHBoxLayout()
-        self.play = QPushButton('播放序列')
+        self.play = QToolButton()
+        self.play.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
+        self.play.setIconSize(QSize(20, 20))
+        self.play.setMinimumSize(36, 32)
+        self._update_play_button()
         self.play.clicked.connect(self.toggle)
         self.previous = QPushButton('上一张')
         self.previous.clicked.connect(lambda: self.step(-1))
@@ -168,14 +172,22 @@ class SequenceTransport(QObject):
         if worker is not None and self.editor._sequence_preview is not None and not self.editor._sequence_exporting:
             worker.cancel()
         self.editor._sequence_pending_path = None
-        self.play.setText('暂停' if mode == 'play' else '播放序列')
+        self._update_play_button()
         self.timer.start()
+
+    def _update_play_button(self):
+        playing = self.mode == 'play'
+        label = '暂停' if playing else '播放序列'
+        icon = QStyle.StandardPixmap.SP_MediaPause if playing else QStyle.StandardPixmap.SP_MediaPlay
+        self.play.setIcon(self.play.style().standardIcon(icon))
+        self.play.setToolTip(label)
+        self.play.setAccessibleName(label)
 
     def stop(self, *, commit=True):
         was_active = self.active
         self.timer.stop()
         self.mode, self.key = None, None
-        self.play.setText('播放序列')
+        self._update_play_button()
         if was_active and commit and not self.editor._sequence_shutdown:
             item = self.editor.photo_list.currentItem()
             if item is not None:
