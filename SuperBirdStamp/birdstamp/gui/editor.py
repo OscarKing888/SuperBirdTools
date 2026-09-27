@@ -2002,7 +2002,9 @@ class BirdStampEditorWindow(
 
         right_layout.addWidget(self._build_dejitter_view_bar())
 
-        preview_toolbar = QHBoxLayout()
+        self.preview_toolbar_widget = QWidget()
+        self.preview_toolbar_widget.setToolTip('显示选项同时作用于 A/B；编辑模式工具作用于当前编辑照片（B）。')
+        preview_toolbar = QHBoxLayout(self.preview_toolbar_widget)
         preview_toolbar.setContentsMargins(0, 0, 0, 0)
         preview_toolbar.setSpacing(8)
 
@@ -2047,7 +2049,6 @@ class BirdStampEditorWindow(
             "与对焦点框是否显示无关；仅改变预览视野，不改变裁切或导出。关闭后可自由拖动。"
         )
         self.auto_focus_center_check.toggled.connect(self._on_auto_focus_center_toggled)
-        preview_toolbar.addWidget(self.auto_focus_center_check)
 
         self.show_bird_box_check = QCheckBox("显示鸟体框")
         self.show_bird_box_check.setChecked(True)
@@ -2089,10 +2090,9 @@ class BirdStampEditorWindow(
             fixed_width=_PREVIEW_SCALE_COMBO_WIDTH,
         )
         self.preview_scale_combo.activated.connect(self._on_preview_scale_preset_activated)
-        preview_toolbar.addWidget(self.preview_scale_combo)
 
         preview_toolbar.addStretch(1)
-        right_layout.addLayout(preview_toolbar)
+        right_layout.addWidget(self.preview_toolbar_widget)
 
         self.preview_label = PreviewWithStatusBar(canvas=EditorPreviewCanvas())
         self.preview_label.setObjectName("PreviewLabel")
@@ -2914,7 +2914,7 @@ class BirdStampEditorWindow(
             btn.setCheckable(True)
             btn.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
             btn.setIcon(_make_preview_tool_icon(icon_kind, color=icon_color))
-            btn.setToolTip(tip)
+            btn.setToolTip(f"{tip}\n作用于当前编辑照片；A/B 模式下为 B 视口。")
             btn.setAccessibleName(text)
             self.edit_mode_group.addButton(btn)
             self._edit_mode_buttons[mode_id] = btn

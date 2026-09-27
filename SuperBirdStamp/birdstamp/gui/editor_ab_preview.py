@@ -3,7 +3,7 @@ from pathlib import Path
 
 from PyQt6.QtCore import QObject, Qt, QTimer
 from PyQt6.QtGui import QPixmap
-from PyQt6.QtWidgets import QCheckBox, QComboBox, QHBoxLayout, QLabel, QPushButton, QSplitter, QToolButton, QVBoxLayout, QWidget
+from PyQt6.QtWidgets import QCheckBox, QLabel, QSplitter, QToolButton
 
 from app_common.preview_canvas import PreviewWithStatusBar
 from .editor_preview_canvas import EditorPreviewCanvas, EditorPreviewOverlayState
@@ -11,6 +11,7 @@ from .editor_preview_decode_worker import EditorPreviewDecodeWorker
 from .editor_sequence_preview_worker import EditorSequencePreviewWorker, pil_qimage
 from .editor_tracking_overlay import tracking_overlays
 from .editor_utils import path_key
+from .editor_preview_viewport import PreviewViewportPanel, align_viewport_rows
 from birdstamp.image_dejitter.region_tracking_result import image_file_signature
 from . import editor_core, editor_options
 from birdstamp.image_dejitter.sequence_geometry import source_normalized_crop
@@ -43,56 +44,33 @@ class ABPreview(QObject):
                                 'A 可独立选图并钉住；B 随照片列表切换。两侧可独立缩放和拖动。')
         self.splitter = QSplitter(Qt.Orientation.Horizontal)
         self.splitter.setChildrenCollapsible(False)
-        self.a_panel = QWidget()
-        a = QVBoxLayout(self.a_panel)
-        a.setContentsMargins(0, 0, 0, 0)
-        head = QHBoxLayout()
-        head.addWidget(QLabel('A'))
-        self.photos = QComboBox()
-        self.photos.setMinimumWidth(110)
-        self.photos.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
-        head.addWidget(self.photos, 1)
         self.pin = QCheckBox('钉住')
         self.pin.setChecked(True)
         self.pin.setToolTip('保持 A 图不随 B 图切换；仍可用 A 的下拉框主动选图。')
-        head.addWidget(self.pin)
-        self.mode = QComboBox()
-        self.mode.addItems(['原图', '去抖动成片'])
-        head.addWidget(self.mode)
-        a.addLayout(head)
-        tools = QHBoxLayout()
-        self.center = QCheckBox('自动焦点居中')
-        self.center.setChecked(editor_options.PREVIEW_AUTO_FOCUS_CENTER)
-        tools.addWidget(self.center)
-        fit = QPushButton('适应窗口')
-        tools.addWidget(fit)
-        tools.addStretch()
-        a.addLayout(tools)
         self.preview = PreviewWithStatusBar(canvas=EditorPreviewCanvas())
-        a.addWidget(self.preview, 1)
-        b_panel = QWidget()
-        b = QVBoxLayout(b_panel)
-        b.setContentsMargins(0, 0, 0, 0)
-        self.b_header = QWidget()
-        b_head = QVBoxLayout(self.b_header)
-        b_head.setContentsMargins(0, 0, 0, 0)
-        b_row = QHBoxLayout()
-        b_row.addWidget(QLabel('B'))
-        self.b_photos = QComboBox()
-        self.b_photos.setMinimumWidth(110)
-        self.b_photos.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
+        self.a_panel = PreviewViewportPanel('A', self.preview, self.pin)
+        self.photos, self.mode, self.center = self.a_panel.photos, self.a_panel.mode, self.a_panel.center
+        self.mode.addItems(['原图', '去抖动成片'])
+        self.mode.setToolTip('A 独立选择原图或已分析的去抖动成片。')
+        follows = QLabel('随列表')
+        follows.setToolTip('B 是当前编辑照片，与照片列表同步；可在 A 钉住独立参考图。')
+        self.b_panel = PreviewViewportPanel('B', editor.preview_label, follows,
+                                            center=editor.auto_focus_center_check, scale=editor.preview_scale_combo)
+        self.b_header = self.b_panel.header
+        self.b_photos = self.b_panel.photos
         self.b_photos.setToolTip('选择当前编辑照片，与照片列表同步。')
-        b_row.addWidget(self.b_photos, 1)
-        b_head.addLayout(b_row)
-        b_tools = QHBoxLayout()
-        b_fit = QPushButton('适应窗口')
-        b_tools.addWidget(b_fit)
-        b_tools.addStretch()
-        b_head.addLayout(b_tools)
-        b.addWidget(self.b_header)
-        b.addWidget(editor.preview_label, 1)
+        self.b_mode = self.b_panel.mode
+        self.b_mode.addItems(['编辑预览', '原图', '去抖动成片'])
+        self.b_mode.setToolTip('B 跟随当前编辑/去抖动模式；在去抖动页可切换原图与成片。')
+        self.b_mode.activated.connect(self._choose_b_mode)
         self.splitter.addWidget(self.a_panel)
-        self.splitter.addWidget(b_panel)
+        self.splitter.addWidget(self.b_panel)
+        self.geometry_timer = QTimer(self)
+        self.geometry_timer.setSingleShot(True)
+        self.geometry_timer.timeout.connect(self._align_rows)
+        for panel in (self.a_panel, self.b_panel):
+            panel.metrics_changed.connect(self._schedule_alignment)
+        self._align_rows()
         self.splitter.setSizes([500, 500])
         layout.addWidget(self.splitter, 1)
         self.a_panel.setVisible(self.enabled.isChecked())
@@ -100,17 +78,46 @@ class ABPreview(QObject):
         self.enabled.toggled.connect(self._toggle)
         self.photos.currentIndexChanged.connect(self._choose)
         self.b_photos.currentIndexChanged.connect(self._choose_b)
-        b_fit.clicked.connect(lambda: editor._refresh_preview_label(reset_view=True, force_fit=True))
         self.mode.currentIndexChanged.connect(lambda: self.sync(force=True))
         self.pin.toggled.connect(lambda: self.sync())
-        self.center.toggled.connect(self.preview.canvas.set_auto_focus_center)
-        self.preview.canvas.set_auto_focus_center(self.center.isChecked())
-        fit.clicked.connect(lambda: self.preview.set_source_pixmap(
-            QPixmap.fromImage(self.image) if self.image is not None else None, reset_view=True))
+        self._sync_controls()
+
+    def _schedule_alignment(self):
+        if not self.stopping and not self.geometry_timer.isActive():
+            self.geometry_timer.start(0)
+
+    def _align_rows(self):
+        align_viewport_rows(self.a_panel, self.b_panel)
+
+    def _sync_controls(self):
+        editor = self.editor
+        dejitter = editor._dejitter_tab_active()
+        result = editor._sequence_result_mode()
+        self.b_mode.setCurrentIndex(2 if result else 1 if dejitter else 0)
+        self.b_mode.setEnabled(dejitter)
+        model = self.b_mode.model()
+        for index, available in enumerate((not dejitter, dejitter, dejitter)):
+            item = model.item(index)
+            if item.isEnabled() != available:
+                item.setEnabled(available)
+        self.photos.setEnabled(bool(self.paths))
+        self.b_photos.setEnabled(bool(self.paths))
+        # 公共遮罩在两边都是成片时没有可裁切的外圈；禁用但不改变工具栏高度。
+        crop_available = not result or (self.enabled.isChecked() and self.mode.currentIndex() == 0)
+        editor.show_crop_effect_check.setEnabled(crop_available)
+        for widget in (editor.crop_effect_alpha_label, editor.crop_effect_alpha_slider,
+                       editor.crop_effect_alpha_value_label):
+            widget.setEnabled(crop_available and editor.show_crop_effect_check.isChecked())
+
+    def _choose_b_mode(self, index):
+        if self.editor._dejitter_tab_active() and index in (1, 2):
+            self.editor._set_dejitter_view('result' if index == 2 else 'edit')
 
     def _toggle(self, enabled):
         self.a_panel.setVisible(enabled)
         self.b_header.setVisible(enabled)
+        self._schedule_alignment()
+        self._sync_controls()
         if enabled:
             self.splitter.setSizes([500, 500])
             self.sync(force=True)
@@ -132,7 +139,10 @@ class ABPreview(QObject):
             self.editor.photo_list.setCurrentItem(item)
 
     def sync(self, *, force=False, follow=True):
-        if not self.enabled.isChecked() or self.stopping:
+        if self.stopping:
+            return
+        self._sync_controls()
+        if not self.enabled.isChecked():
             return
         editor = self.editor
         paths = tuple(editor._list_photo_paths())
@@ -159,6 +169,7 @@ class ABPreview(QObject):
         self.b_photos.blockSignals(True)
         self.b_photos.setCurrentIndex(self.b_photos.findData(str(current)))
         self.b_photos.blockSignals(False)
+        self._sync_controls()
         sequence = editor._sequence_preview
         result = self.mode.currentIndex() == 1
         request = (self.path, result, id(sequence) if result else None,
@@ -309,5 +320,6 @@ class ABPreview(QObject):
 
     def shutdown(self):
         self.stopping = True
+        self.geometry_timer.stop()
         self._cancel()
         return self.worker is None

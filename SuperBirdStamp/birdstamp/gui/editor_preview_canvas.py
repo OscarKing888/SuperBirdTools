@@ -109,6 +109,15 @@ class EditorPreviewCanvas(FocusCenteredPreviewCanvas):
         self._drag_probe = DragProbe()
         self.setMouseTracking(True)
 
+    def fit_to_window(self) -> None:
+        """显式适应窗口只重置视野；启用焦点锁定时也可重置缩放，不重新渲染。"""
+        if self._source_pixmap is None:
+            return
+        content = self.contentsRect()
+        scale = min(content.width() / max(1, self._source_pixmap.width()),
+                    content.height() / max(1, self._source_pixmap.height()))
+        self.set_display_scale_percent(scale * 100, preserve_view=False)
+
     def paintEvent(self, event) -> None:  # type: ignore[override]
         start = perf_counter()
         super().paintEvent(event)
