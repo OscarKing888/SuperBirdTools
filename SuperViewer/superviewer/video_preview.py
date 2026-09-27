@@ -7,8 +7,10 @@ from pathlib import Path
 from datetime import datetime
 
 from app_common.video import format_duration, is_video, probe_video, video_thumbnail_rgb
+from app_common.audio_waveform import audio_waveform
 from app_common.log import get_logger
 from .preview_panel import PreviewPanel, _qimage_rgb888_format
+from .waveform_slider import WaveformSlider
 from .qt_compat import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QSlider, QComboBox,
     QStackedWidget, QTableWidget, QTableWidgetItem, QThread, QImage, QPixmap,
@@ -75,6 +77,7 @@ class VideoInfoPanel(QWidget):
 
 class _VideoProbe(QThread):
     result = pyqtSignal(int, str, object, object, str)
+    waveform_ready = pyqtSignal(int, str, object, str)
 
     def __init__(self, token, path, need_poster, parent):
         super().__init__(parent)
@@ -95,6 +98,20 @@ class _VideoProbe(QThread):
         if not self.isInterruptionRequested():
             # 信息探测和封面提取可能遇到同一个依赖错误，只展示一次。
             self.result.emit(self.token, self.path, info, image, '\n'.join(dict.fromkeys(errors)))
+        if self.isInterruptionRequested():
+            return
+        peaks, status = (), '音频波形不可用'
+        if info.get('audio_tracks') == 0:
+            status = '无音轨'
+        elif info.get('audio_tracks') and info.get('duration', 0) > 0:
+            try:
+                peaks = audio_waveform(self.path, info['duration'], cancelled=self.isInterruptionRequested)
+                status = '' if any(peaks) else '静音音轨'
+            except Exception as exc:
+                if not self.isInterruptionRequested():
+                    _log.warning('Audio waveform failed path=%r: %s', self.path, exc)
+        if not self.isInterruptionRequested():
+            self.waveform_ready.emit(self.token, self.path, peaks, status)
 
 
 class VideoPlayerView(QWidget):
@@ -108,6 +125,7 @@ class VideoPlayerView(QWidget):
         self._duration = 0
         self._position = 0
         self._source_set = False
+        self._pending_seek = None
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         self.stack = QStackedWidget()
@@ -121,11 +139,10 @@ class VideoPlayerView(QWidget):
         self.message.setWordWrap(True)
         layout.addWidget(self.message)
         timeline = QHBoxLayout()
-        self.seek = QSlider(_Horizontal)
-        self.seek.setRange(0, 10000)
+        self.seek = WaveformSlider()
         self.seek.setEnabled(False)
-        self.seek.setToolTip('拖动定位视频')
-        self.seek.sliderReleased.connect(self._seek)
+        self.seek.position_selected.connect(self._seek)
+        self.seek.sliderMoved.connect(self._scrub_time)
         self.time_label = QLabel('00:00 / —')
         self.time_label.setMinimumWidth(125)
         timeline.addWidget(self.seek, 1)
@@ -170,6 +187,7 @@ class VideoPlayerView(QWidget):
         self.restart.setEnabled(True)
         self._duration = self._position = 0
         self.seek.setValue(0)
+        self.seek.set_waveform(status='正在生成音频波形…')
         self._update_time()
 
     def set_poster(self, pixmap):
@@ -204,7 +222,7 @@ class VideoPlayerView(QWidget):
             self.player.durationChanged.connect(self._duration_changed)
             self.player.playbackStateChanged.connect(self._state_changed)
             self.player.mediaStatusChanged.connect(self._media_status)
-            self.player.seekableChanged.connect(self.seek.setEnabled)
+            self.player.seekableChanged.connect(self._seekable_changed)
             self.player.errorOccurred.connect(self._error)
             self._set_audio()
             self._set_speed()
@@ -227,8 +245,13 @@ class VideoPlayerView(QWidget):
             self.stack.setCurrentWidget(self.video)
             self.message.setText('正在播放')
             self.player.play()
+            self._apply_pending_seek()
 
     def _restart(self):
+        self._pending_seek = None
+        self._position = 0
+        self.seek.setValue(0)
+        self._update_time()
         if self.player is not None and self._source_set:
             self.player.setPosition(0)
             self.stack.setCurrentWidget(self.video)
@@ -245,6 +268,10 @@ class VideoPlayerView(QWidget):
     def _media_status(self, status):
         if not self._source_set:
             return
+        if status == self.player.MediaStatus.LoadedMedia and self.player.audioTracks():
+            # 波形读取首条音轨，播放使用同一音轨，避免多音轨素材错位。
+            self.player.setActiveAudioTrack(0)
+        self._apply_pending_seek()
         if status == self.player.MediaStatus.EndOfMedia:
             self.message.setText('播放结束 · 点击播放或重播')
         elif status == self.player.MediaStatus.LoadingMedia:
@@ -268,28 +295,59 @@ class VideoPlayerView(QWidget):
         if self.player is not None:
             self.player.setPlaybackRate(float(self.speed.currentData()))
 
-    def _seek(self):
-        if self.player is not None and self._source_set:
-            self.player.setPosition(round(self.seek.value() / 10000 * self._duration))
+    def _seek(self, *_args):
+        if not self._duration:
+            return
+        self._position = round(self.seek.value() / 10000 * self._duration)
+        self._pending_seek = self._position
+        self._update_time()
+        self._apply_pending_seek()
+
+    def _scrub_time(self, value):
+        position = round(value / 10000 * self._duration)
+        self._update_time(position)
+
+    def set_duration_hint(self, milliseconds):
+        if not self._source_set or not self._duration:
+            self._duration = max(0, milliseconds)
+            self.seek.set_duration(self._duration)
+            self.seek.setEnabled(self._duration > 0)
+            self._update_time()
+
+    def _seekable_changed(self, enabled):
+        if self._source_set:
+            self.seek.setEnabled(enabled and self._duration > 0)
+            self._apply_pending_seek()
+
+    def _apply_pending_seek(self):
+        if (self._pending_seek is not None and self.player is not None
+                and self._source_set and self.player.isSeekable()):
+            position, self._pending_seek = self._pending_seek, None
+            self.player.setPosition(position)
 
     def _position_changed(self, value):
-        if self._source_set:
+        if self._source_set and self._pending_seek is None:
             self._position = value
             if not self.seek.isSliderDown():
                 self.seek.setValue(round(value / max(1, self._duration) * 10000))
-            self._update_time()
+                self._update_time()
 
     def _duration_changed(self, value):
         if self._source_set and value > 0:
             self._duration = value
+            self.seek.set_duration(value)
+            self.seek.setEnabled(self.player.isSeekable())
             self._update_time()
 
-    def _update_time(self):
-        self.time_label.setText(f'{format_duration(self._position / 1000)} / {format_duration(self._duration / 1000) if self._duration else "—"}')
+    def _update_time(self, position=None):
+        position = self._position if position is None else position
+        self.time_label.setText(f'{format_duration(position / 1000)} / {format_duration(self._duration / 1000) if self._duration else "—"}')
 
     def stop(self):
         had_source = self._source_set
         self._source_set = False
+        self._pending_seek = None
+        self.seek.cancel_drag()
         if self.player is not None and had_source:
             # 通过 Qt 元调用释放 Python GIL；FFmpeg 音频线程销毁连接时
             # 会回调 sipQAudioOutput，直接持有 GIL 调用 stop 可导致互等。
@@ -297,6 +355,8 @@ class VideoPlayerView(QWidget):
             self._invoke(self.player, 'setSource', Qt.ConnectionType.DirectConnection,
                          self._arg(self._url, self._url()))
         self.seek.setEnabled(False)
+        self.seek.set_duration(0)
+        self.seek.set_waveform()
         self.play.setText('▶ 播放')
         self.stack.setCurrentWidget(self.poster)
 
@@ -352,6 +412,7 @@ class MediaPreviewPanel(PreviewPanel):
             self.video_view.set_poster(cached)
         if not load_full:
             self.video_view.message.setText('快速浏览 · 松开方向键后可播放')
+            self.video_view.seek.set_waveform(status='松开方向键后显示音频波形')
             self.video_view.play.setEnabled(False)
             self.video_view.restart.setEnabled(False)
             return
@@ -372,6 +433,7 @@ class MediaPreviewPanel(PreviewPanel):
         worker = _VideoProbe(*request, self)
         self._video_worker = worker
         worker.result.connect(self._video_result)
+        worker.waveform_ready.connect(self._waveform_result)
         worker.finished.connect(lambda: self._video_finished(worker))
         worker.start()
 
@@ -385,9 +447,13 @@ class MediaPreviewPanel(PreviewPanel):
             self.video_view.message.setText(error + '\n可尝试点击播放')
             if self.video_view._poster is None:
                 self.video_view.poster.setText('▶ 视频封面不可用')
-        self.video_view._duration = round(float(info.get('duration') or 0) * 1000)
-        self.video_view._update_time()
+        self.video_view.set_duration_hint(round(float(info.get('duration') or 0) * 1000))
         self.video_info_ready.emit(path, info, error)
+
+    def _waveform_result(self, token, path, peaks, status):
+        if self._shutdown_requested or token != self._video_token or path != self._video_path:
+            return
+        self.video_view.seek.set_waveform(peaks, status)
 
     def _video_finished(self, worker):
         if self._video_worker is not worker:
