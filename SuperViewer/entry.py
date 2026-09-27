@@ -21,6 +21,9 @@ def main() -> None:
         # 无窗口的只读打包诊断：不会扫描目录或写入用户的缩略图缓存。
         from superviewer.video_diagnostics import main as check_video
         raise SystemExit(check_video(sys.argv[2:]))
+    if len(sys.argv) > 1 and sys.argv[1] == "--check-about":
+        from about_diagnostics import main as check_about
+        raise SystemExit(check_about("SuperViewer", sys.argv[2:]))
     try:
         from .main import main as run_main
     except ImportError:

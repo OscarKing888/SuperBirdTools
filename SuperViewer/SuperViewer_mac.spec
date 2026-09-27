@@ -25,6 +25,11 @@ from build_tools.viewer_ffmpeg import collect_viewer_ffmpeg
 
 video_datas, video_hiddenimports = collect_viewer_ffmpeg()
 
+from app_identity import load_app_identity
+
+APP_INFO = load_app_identity("SuperViewer", REPO_ROOT / "app_metadata.json")
+
+
 def collect_tree(source: Path, dest: str) -> list[tuple[str, str]]:
     if not source.exists():
         return []
@@ -43,6 +48,7 @@ def collect_tree(source: Path, dest: str) -> list[tuple[str, str]]:
 
 
 datas: list[tuple[str, str]] = list(video_datas)
+datas.extend(collect_tree(REPO_ROOT / "app_metadata.json", "."))
 datas.extend(collect_tree(APP_ROOT / "about.cfg", "."))
 datas.extend(collect_tree(APP_ROOT / "super_viewer.cfg", "."))
 datas.extend(collect_tree(APP_ROOT / "tags.cfg", "."))
@@ -102,7 +108,8 @@ app = BUNDLE(
     icon=str(ICON_PATH) if ICON_PATH.exists() else None,
     bundle_identifier=None,
     info_plist={
-        "CFBundleShortVersionString": "0.1.0",
-        "CFBundleVersion": "1",
+        "CFBundleShortVersionString": APP_INFO.bundle_version,
+        "CFBundleVersion": APP_INFO.build_number,
+        "CFBundleDisplayName": APP_INFO.product_name,
     },
 )

@@ -2,40 +2,16 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from app_identity import load_app_identity
+
 import pytest
 
 from build_tools.set_build_version import apply_build_version, normalize_version
 
 
 def _write_version_fixture(repo_root: Path) -> None:
-    viewer_root = repo_root / "SuperViewer"
-    bird_root = repo_root / "SuperBirdStamp"
-    (bird_root / "birdstamp").mkdir(parents=True)
-    (viewer_root / "superviewer").mkdir(parents=True)
-
-    (viewer_root / "superviewer" / "__init__.py").write_text(
-        '__version__ = "0.1.0"\n',
-        encoding="utf-8",
-    )
-    (bird_root / "birdstamp" / "__init__.py").write_text(
-        '__version__ = "0.1.0"\n',
-        encoding="utf-8",
-    )
-    spec_text = (
-        'info_plist={\n'
-        '    "CFBundleShortVersionString": "0.1.0",\n'
-        '    "CFBundleVersion": "1",\n'
-        "}\n"
-    )
-    (bird_root / "BirdStamp_mac.spec").write_text(spec_text, encoding="utf-8")
-    (bird_root / "BirdStamp_mac_console.spec").write_text(
-        spec_text,
-        encoding="utf-8",
-    )
-    (viewer_root / "SuperViewer_mac.spec").write_text(
-        spec_text,
-        encoding="utf-8",
-    )
+    source = Path(__file__).resolve().parents[2] / "app_metadata.json"
+    (repo_root / "app_metadata.json").write_text(source.read_text(encoding="utf-8"), encoding="utf-8")
 
 
 @pytest.mark.parametrize(
@@ -70,20 +46,19 @@ def test_apply_build_version_updates_all_packaged_version_sources(
         build_number=37,
     )
 
-    assert len(changed) == 5
-    assert '__version__ = "2.4.0-rc.2"' in (
-        tmp_path / "SuperViewer" / "superviewer" / "__init__.py"
-    ).read_text(encoding="utf-8")
-    assert '__version__ = "2.4.0-rc.2"' in (
-        tmp_path / "SuperBirdStamp" / "birdstamp" / "__init__.py"
-    ).read_text(encoding="utf-8")
-    for spec_path in (
-        Path("SuperBirdStamp") / "BirdStamp_mac.spec",
-        Path("SuperBirdStamp") / "BirdStamp_mac_console.spec",
-        Path("SuperViewer") / "SuperViewer_mac.spec",
-    ):
-        spec_text = (tmp_path / spec_path).read_text(
-            encoding="utf-8"
-        )
-        assert '"CFBundleShortVersionString": "2.4.0"' in spec_text
-        assert '"CFBundleVersion": "37"' in spec_text
+    assert changed == (tmp_path / "app_metadata.json",)
+    for app_id in ("SuperViewer", "SuperBirdStamp"):
+        identity = load_app_identity(app_id, changed[0])
+        assert identity.version == "2.4.0-rc.2"
+        assert identity.bundle_version == "2.4.0"
+        assert identity.build_number == "37"
+        assert "2.4.0-rc.2" in identity.window_title()
+
+
+def test_invalid_build_number_leaves_config_untouched(tmp_path):
+    _write_version_fixture(tmp_path)
+    path = tmp_path / "app_metadata.json"
+    before = path.read_bytes()
+    with pytest.raises(ValueError):
+        apply_build_version(tmp_path, "1.2.3", build_number="bad")
+    assert path.read_bytes() == before

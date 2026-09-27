@@ -78,6 +78,7 @@ from app_common.superviewer_user_options import (
 # 开发时从包内相对导入，打包后 entry/main 作为顶层脚本无父包，改用绝对导入 superviewer
 try:
     from .superviewer import (
+        APP_INFO as _SUPERVIEWER_APP_INFO,
         DEFAULT_APP_NAME as _SUPERVIEWER_DEFAULT_APP_NAME,
         __version__ as _SUPERVIEWER_VERSION,
     )
@@ -158,6 +159,7 @@ try:
     )
 except ImportError:
     from superviewer import (
+        APP_INFO as _SUPERVIEWER_APP_INFO,
         DEFAULT_APP_NAME as _SUPERVIEWER_DEFAULT_APP_NAME,
         __version__ as _SUPERVIEWER_VERSION,
     )
@@ -275,11 +277,11 @@ _log = get_logger("main")
 
 
 def _load_superviewer_about_info() -> dict:
-    return load_about_info(
+    return _SUPERVIEWER_APP_INFO.about_info(load_about_info(
         _get_about_config_resource_path(),
         app_name=_SUPERVIEWER_DEFAULT_APP_NAME,
         version=_SUPERVIEWER_VERSION,
-    )
+    ))
 
 
 def _norm_paths_for_compare(paths: object) -> set[str]:
@@ -747,8 +749,7 @@ class MainWindow(QMainWindow):
         about_cfg_path = _get_about_config_resource_path()
         info = _load_superviewer_about_info()
         about_images = load_about_images(about_cfg_path)
-        logo_path = _get_resource_path("icons/app_icon.png") or _get_app_icon_path()
-        show_about_dialog(self, info, logo_path=logo_path, images=about_images)
+        show_about_dialog(self, info, images=about_images)
 
     def _on_preview_grid_mode_changed(self, index: int) -> None:
         mode = self.combo_preview_grid.itemData(index)

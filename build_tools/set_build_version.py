@@ -1,58 +1,14 @@
 from __future__ import annotations
 
 import argparse
-import re
+import json
+import sys
 from pathlib import Path
 
 
-_PRERELEASE_IDENTIFIER = (
-    r"(?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*)"
-)
-_SEMVER_RE = re.compile(
-    rf"""
-    (?P<major>0|[1-9]\d*)
-    \.
-    (?P<minor>0|[1-9]\d*)
-    \.
-    (?P<patch>0|[1-9]\d*)
-    (?:-{_PRERELEASE_IDENTIFIER}(?:\.{_PRERELEASE_IDENTIFIER})*)?
-    (?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?
-    """,
-    re.VERBOSE,
-)
-
-_PACKAGE_VERSION_RE = re.compile(
-    r'^(\s*__version__\s*=\s*["\'])([^"\']*)(["\']\s*)$',
-    re.MULTILINE,
-)
-_MAC_SHORT_VERSION_RE = re.compile(
-    r'("CFBundleShortVersionString"\s*:\s*")([^"]*)(")',
-)
-_MAC_BUILD_VERSION_RE = re.compile(
-    r'("CFBundleVersion"\s*:\s*")([^"]*)(")',
-)
-
-
-def normalize_version(value: str) -> str:
-    """Return a validated SemVer value without an optional leading ``v``."""
-
-    normalized = str(value or "").strip()
-    if normalized[:1].lower() == "v":
-        normalized = normalized[1:]
-    if _SEMVER_RE.fullmatch(normalized) is None:
-        raise ValueError(
-            "version must use SemVer, for example 1.2.3 or 1.2.3-rc.1"
-        )
-    return normalized
-
-
-def normalize_build_number(value: str | int) -> str:
-    """Return an Apple-compatible, positive integer bundle build number."""
-
-    normalized = str(value).strip()
-    if re.fullmatch(r"[1-9]\d*", normalized) is None:
-        raise ValueError("build number must be a positive integer")
-    return normalized
+# 兼容直接执行本脚本（CI --check-only 不需要 Qt 或第三方包）。
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from app_identity import normalize_build_number, normalize_version
 
 
 def _read_text(path: Path) -> str:
@@ -65,98 +21,26 @@ def _write_text(path: Path, value: str) -> None:
         stream.write(value)
 
 
-def _replace_single_value(
-    source: str,
-    path: Path,
-    pattern: re.Pattern[str],
-    value: str,
-) -> str:
-    updated, count = pattern.subn(
-        lambda match: f"{match.group(1)}{value}{match.group(3)}",
-        source,
-    )
-    if count != 1:
-        raise RuntimeError(
-            f"expected exactly one version field in {path}, found {count}"
-        )
-    return updated
-
-
 def apply_build_version(
     repo_root: Path,
     version: str,
     *,
     build_number: str | int = "1",
 ) -> tuple[Path, ...]:
-    """Synchronize the build version fields consumed by both packaged apps."""
-
-    root = Path(repo_root).resolve()
+    """只更新统一配置，应用和各平台 spec 均直接读取它。"""
     normalized_version = normalize_version(version)
     normalized_build_number = normalize_build_number(build_number)
-    plist_version = normalized_version.split("-", 1)[0].split("+", 1)[0]
-
-    targets = (
-        (
-            root / "SuperViewer" / "superviewer" / "__init__.py",
-            _PACKAGE_VERSION_RE,
-            normalized_version,
-        ),
-        (
-            root / "SuperBirdStamp" / "birdstamp" / "__init__.py",
-            _PACKAGE_VERSION_RE,
-            normalized_version,
-        ),
-        (
-            root / "SuperViewer" / "SuperViewer_mac.spec",
-            _MAC_SHORT_VERSION_RE,
-            plist_version,
-        ),
-        (
-            root / "SuperViewer" / "SuperViewer_mac.spec",
-            _MAC_BUILD_VERSION_RE,
-            normalized_build_number,
-        ),
-        (
-            root / "SuperBirdStamp" / "BirdStamp_mac.spec",
-            _MAC_SHORT_VERSION_RE,
-            plist_version,
-        ),
-        (
-            root / "SuperBirdStamp" / "BirdStamp_mac.spec",
-            _MAC_BUILD_VERSION_RE,
-            normalized_build_number,
-        ),
-        (
-            root / "SuperBirdStamp" / "BirdStamp_mac_console.spec",
-            _MAC_SHORT_VERSION_RE,
-            plist_version,
-        ),
-        (
-            root / "SuperBirdStamp" / "BirdStamp_mac_console.spec",
-            _MAC_BUILD_VERSION_RE,
-            normalized_build_number,
-        ),
-    )
-
-    missing = sorted({str(path) for path, _, _ in targets if not path.is_file()})
-    if missing:
-        raise FileNotFoundError("missing version source(s): " + ", ".join(missing))
-
-    updates: dict[Path, str] = {}
-    for path, pattern, replacement in targets:
-        source = updates.get(path)
-        if source is None:
-            source = _read_text(path)
-        updates[path] = _replace_single_value(
-            source,
-            path,
-            pattern,
-            replacement,
-        )
-
-    for path, updated in updates.items():
-        _write_text(path, updated)
-    return tuple(updates)
+    path = Path(repo_root).resolve() / "app_metadata.json"
+    source = _read_text(path)
+    data = json.loads(source)
+    if not isinstance(data, dict) or not isinstance(data.get("apps"), dict):
+        raise ValueError(f"Invalid app metadata: {path}")
+    data["version"] = normalized_version
+    data["build_number"] = normalized_build_number
+    newline = "\r\n" if "\r\n" in source else "\n"
+    updated = (json.dumps(data, ensure_ascii=False, indent=2) + "\n").replace("\n", newline)
+    _write_text(path, updated)
+    return (path,)
 
 
 def _default_repo_root() -> Path:

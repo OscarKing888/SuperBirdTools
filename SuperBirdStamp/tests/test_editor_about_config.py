@@ -5,6 +5,7 @@ from pathlib import Path
 
 import birdstamp
 from birdstamp.gui import editor
+from app_common.about_dialog import config
 
 
 def test_birdstamp_about_cfg_is_valid_and_applied(monkeypatch, tmp_path) -> None:
@@ -36,12 +37,29 @@ def test_invalid_birdstamp_override_logs_parse_location(
     cfg_path.write_text('{"about": {"作者": "broken"}', encoding="utf-8")
     warnings: list[str] = []
     monkeypatch.setattr(
-        editor._log,
+        config._log,
         "warning",
         lambda message, *args: warnings.append(message % args),
     )
 
-    assert editor._load_about_override_info(cfg_path) == {}
+    monkeypatch.setattr(editor, "_user_about_cfg_path", lambda: cfg_path)
+    assert editor._load_birdstamp_about_info()["version"] == birdstamp.__version__
     assert warnings
     assert str(cfg_path) in warnings[0]
     assert "line 1 column" in warnings[0]
+
+
+def test_user_text_override_keeps_bundled_images_and_central_identity(monkeypatch, tmp_path):
+    path = tmp_path / 'about.cfg'
+    path.write_text(json.dumps({'about': {'作者': '中文作者', 'version': 'old', 'app_name': 'old'}}, ensure_ascii=False), encoding='utf-8')
+    monkeypatch.setattr(editor, '_user_about_cfg_path', lambda: path)
+    info = editor._load_birdstamp_about_info()
+    assert info['作者'] == '中文作者'
+    assert info['version'] == birdstamp.APP_INFO.version
+    assert info['app_name'] == birdstamp.APP_INFO.app_name
+    assert editor._build_birdstamp_main_window_title(info) == birdstamp.APP_INFO.window_title(info)
+    images = editor._load_birdstamp_about_images()
+    assert len(images) == 2
+    assert all(Path(image['path']).parent == Path(editor._bundled_about_cfg_path()).parent / 'images' for image in images)
+    path.write_text('{"images": []}', encoding='utf-8')
+    assert editor._load_birdstamp_about_images() == []

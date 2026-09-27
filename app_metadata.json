@@ -1,0 +1,15 @@
+{
+  "version": "0.1.0",
+  "build_number": "1",
+  "window_title": "{app_name} - {version} - {author}",
+  "apps": {
+    "SuperViewer": {
+      "product_name": "极速鸟瞰",
+      "subtitle": "慧眼选鸟结果快速浏览筛选工具"
+    },
+    "SuperBirdStamp": {
+      "product_name": "极速鸟框",
+      "subtitle": "鸟类照片智能裁切与模板叠加工具"
+    }
+  }
+}

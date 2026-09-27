@@ -157,6 +157,29 @@ SuperBirdStamp\\build_win.bat
 - Windows 单独 build 仍输出 `dist/SuperViewer/`、`dist/SuperBirdStamp/`
 - Windows `build_all.bat` 默认走根级 merged spec，目标是让两个 app 在同一个 `dist/` 下共享尽可能多的运行库
 
+## 应用名称、版本与 About 配置
+
+只需修改根目录 [app_metadata.json](app_metadata.json)：`version` 是两应用共用的 SemVer 版本，`build_number` 是 macOS 构建号；`apps` 下分别配置 `product_name`（短名称）和 `subtitle`（副标题）。`window_title` 是共用标题模板，也可在某个 app 内单独覆盖，支持 `{app_name}`、`{product_name}`、`{subtitle}`、`{version}`、`{author}`。修改后重启应用；发行包需要重新构建。
+
+[app_identity.py](app_identity.py) 供 About、主窗口、Qt 应用信息和打包共用。macOS plist 与 Windows EXE 版本资源直接读取同一配置。可执行文件名、工作区格式标识和用户数据目录仍是稳定的 `SuperViewer` / `SuperBirdStamp`。版本也可以通过原有脚本更新（现在只写一份 JSON）：
+
+```bash
+.venv/bin/python3 build_tools/set_build_version.py 0.2.0 --build-number 2
+```
+
+Windows 使用 `.venv\Scripts\python.exe` 执行同一脚本。不要再修改两个包的 `__version__` 或 spec 中的版本常量。
+
+两个应用各自的 [Viewer about.cfg](SuperViewer/about.cfg) 和 [BirdStamp about.cfg](SuperBirdStamp/about.cfg) 继续配置作者、链接、二维码图片。`app_name` / `version` 保留占位符，实际值取自统一配置。`images` 中的 `path` 相对于该配置文件，`size` 指显示长边，`label` 是说明，`url` 是点击链接；`images: []` 隐藏图片。二维码按窗口宽度换行，超出屏幕高度时滚动。BirdStamp 兼容用户配置目录中的 `about.cfg` 覆盖，省略图片字段时继承内置图片。完整规则见 [共享 About 文档](app_common/about_dialog/README.md)。
+
+只读检查可直接运行，生成截图不需要打开或修改工作区：
+
+```bash
+.venv/bin/python3 SuperViewer/entry.py --check-about --output-dir /tmp/about-check
+.venv/bin/python3 SuperBirdStamp/entry.py --check-about --output-dir /tmp/about-check
+```
+
+打包后的可执行文件也接受同样的 `--check-about` 参数；Windows 将输出路径替换为本机目录。
+
 ## GitHub Actions 自动构建
 
 `.github/workflows/build-release.yml` 提供两种入口：
@@ -169,7 +192,7 @@ git tag v0.2.0
 git push origin v0.2.0
 ```
 
-构建时会把版本同步到 SuperViewer、SuperBirdStamp 及 BirdStamp 的 macOS bundle；这些改动只发生在 runner 的临时 checkout 中。CI 还会在打包前移除 BirdStamp 的 autosave/export-state 运行态文件，避免把本机照片路径放入发布包。
+构建时只更新 `app_metadata.json`，SuperViewer、SuperBirdStamp、两者的 macOS bundle 和 Windows EXE 版本资源均读取该配置；改动只发生在 runner 的临时 checkout 中。CI 还会在打包前移除 BirdStamp 的 autosave/export-state 运行态文件，避免把本机照片路径放入发布包。
 
 Windows merged 包中的 `SuperViewer/` 与 `SuperBirdStamp/` 相互引用，必须保持在同一个 zip 中分发。macOS 产物当前是原生 arm64。自动构建产物均未做 Windows 代码签名或 macOS Developer ID 签名/公证，首次运行时可能出现系统安全提示。
 

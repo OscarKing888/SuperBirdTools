@@ -25,6 +25,8 @@ from build_tools.viewer_ffmpeg import collect_viewer_ffmpeg
 
 video_datas, video_hiddenimports = collect_viewer_ffmpeg()
 
+from build_tools.windows_version import version_resource
+
 def collect_tree(source: Path, dest: str) -> list[tuple[str, str]]:
     if not source.exists():
         return []
@@ -43,6 +45,7 @@ def collect_tree(source: Path, dest: str) -> list[tuple[str, str]]:
 
 
 datas: list[tuple[str, str]] = list(video_datas)
+datas.extend(collect_tree(REPO_ROOT / "app_metadata.json", "."))
 datas.extend(collect_tree(APP_ROOT / "about.cfg", "."))
 datas.extend(collect_tree(APP_ROOT / "super_viewer.cfg", "."))
 datas.extend(collect_tree(APP_ROOT / "tags.cfg", "."))
@@ -75,6 +78,7 @@ exe = EXE(
     [],
     exclude_binaries=True,
     name="SuperViewer",
+    version=version_resource("SuperViewer", REPO_ROOT / "app_metadata.json"),
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,

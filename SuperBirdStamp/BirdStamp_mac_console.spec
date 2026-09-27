@@ -28,6 +28,11 @@ for candidate in (REPO_ROOT, APP_ROOT):
         sys.path.insert(0, candidate_str)
 
 
+from app_identity import load_app_identity
+
+APP_INFO = load_app_identity("SuperBirdStamp", REPO_ROOT / "app_metadata.json")
+
+
 def collect_tree(source: Path, dest: str) -> list[tuple[str, str]]:
     if not source.exists():
         return []
@@ -50,6 +55,7 @@ block_cipher = None
 ultralytics_datas, ultralytics_binaries, ultralytics_hiddenimports = collect_all("ultralytics")
 
 project_datas = [
+    *collect_tree(REPO_ROOT / "app_metadata.json", "."),
     *collect_tree(APP_ROOT / "about.cfg", "."),
     *collect_tree(APP_ROOT / "models", "models"),
     *collect_tree(APP_ROOT / "icons", "icons"),
@@ -151,8 +157,9 @@ app = BUNDLE(
         "NSPrincipalClass": "NSApplication",
         "NSHighResolutionCapable": True,
         "NSCameraUsageDescription": "BirdStamp does not require camera access.",
-        "CFBundleShortVersionString": "0.1.0",
-        "CFBundleVersion": "1",
+        "CFBundleShortVersionString": APP_INFO.bundle_version,
+        "CFBundleVersion": APP_INFO.build_number,
+        "CFBundleDisplayName": APP_INFO.product_name,
         "LSMinimumSystemVersion": "12.0",
         "CFBundleDocumentTypes": [
             {

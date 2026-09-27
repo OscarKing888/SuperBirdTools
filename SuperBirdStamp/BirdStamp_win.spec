@@ -29,6 +29,8 @@ for candidate in (REPO_ROOT, APP_ROOT):
         sys.path.insert(0, candidate_str)
 
 
+from build_tools.windows_version import version_resource
+
 def collect_tree(source: Path, dest: str) -> list[tuple[str, str]]:
     if not source.exists():
         return []
@@ -57,6 +59,7 @@ ultralytics_datas, ultralytics_binaries, ultralytics_hiddenimports = collect_all
 # Project-specific data files
 # --------------------------------------------------------------------------- #
 project_datas = [
+    *collect_tree(REPO_ROOT / "app_metadata.json", "."),
     *collect_tree(APP_ROOT / "about.cfg", "."),
     *collect_tree(APP_ROOT / "models", "models"),
     *collect_tree(APP_ROOT / "icons", "icons"),
@@ -131,6 +134,7 @@ exe = EXE(
     [],
     exclude_binaries=True,
     name="SuperBirdStamp",
+    version=version_resource("SuperBirdStamp", REPO_ROOT / "app_metadata.json"),
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,

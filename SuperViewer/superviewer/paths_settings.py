@@ -9,6 +9,8 @@ import os
 import re
 import sys
 
+from . import APP_INFO
+
 
 CONFIG_FILENAME = "super_viewer.cfg"
 ABOUT_CONFIG_FILENAME = "about.cfg"
@@ -160,7 +162,7 @@ def _get_config_resource_path() -> str:
 def _get_about_config_resource_path() -> str:
     """返回独立 about.cfg 路径；不再从 super_viewer.cfg 读取 About 信息。"""
     return _get_resource_path(ABOUT_CONFIG_FILENAME) or os.path.join(
-        _get_app_dir(),
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
         ABOUT_CONFIG_FILENAME,
     )
 
@@ -251,30 +253,12 @@ def _build_windows_app_id(app_name: str) -> str:
 
 def _get_product_display_name(about_info: dict | None = None) -> str:
     """Return the short product name used for window/app titles."""
-    raw_name = ""
-    if isinstance(about_info, dict):
-        raw_name = _sanitize_display_string(about_info.get("app_name", "")) or ""
-    if not raw_name:
-        raw_name = "Super Viewer"
-    short_name = raw_name.split(" - ", 1)[0].strip()
-    return short_name or "Super Viewer"
+    return APP_INFO.product_name
 
 
 def _build_main_window_title(about_info: dict | None = None) -> str:
-    """Build the visible main window title from about config fields."""
-    if not isinstance(about_info, dict):
-        return "Super Viewer"
-
-    app_name = _sanitize_display_string(about_info.get("app_name", "")) or "Super Viewer"
-    version = _sanitize_display_string(about_info.get("version", "")) or ""
-    author = _sanitize_display_string(about_info.get("作者", "")) or ""
-
-    parts: list[str] = [app_name]
-    if version:
-        parts.append(version)
-    if author:
-        parts.append(author)
-    return " - ".join(parts)
+    """主窗口标题统一读取 app_metadata.json 的模板。"""
+    return APP_INFO.window_title(about_info)
 
 
 def _set_macos_process_name_via_objc(name: str) -> bool:

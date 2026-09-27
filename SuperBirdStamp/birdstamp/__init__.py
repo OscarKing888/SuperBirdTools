@@ -1,4 +1,6 @@
-__all__ = ["__version__"]
+from app_identity import load_app_identity
 
-__version__ = "0.1.0"
+APP_INFO = load_app_identity("SuperBirdStamp")
+__version__ = APP_INFO.version
 
+__all__ = ["APP_INFO", "__version__"]

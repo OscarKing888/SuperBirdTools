@@ -43,6 +43,9 @@ def _reexec_into_repo_venv_if_needed(repo_root: Path) -> None:
 def main() -> None:
     repo_root = _bootstrap_repo_root()
     _reexec_into_repo_venv_if_needed(repo_root)
+    if len(sys.argv) > 1 and sys.argv[1] == "--check-about":
+        from about_diagnostics import main as check_about
+        raise SystemExit(check_about("SuperBirdStamp", sys.argv[2:]))
     try:
         from .main import main as run_main
     except ImportError:

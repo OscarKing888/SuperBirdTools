@@ -16,6 +16,8 @@
 
 当前 CLI `render` 直接组合解码、裁切/缩放和模板叠加，并未通过 `VideoFrameJob` 运行 GUI 导出阶段管线。新增渲染能力时，需要明确是否同步到该命令，不能假设 GUI 改动已自动覆盖 CLI。
 
+应用身份由根 [app_metadata.json](../../app_metadata.json) 经 [load_app_identity](../../app_identity.py) 读取，包入口导出 `APP_INFO` / `__version__`，窗口标题和 Qt 应用名使用同一对象。应用自己的 [about.cfg](../about.cfg) 仅管理 About 内容与图片，共享 [config.py](../../app_common/about_dialog/config.py) 处理覆盖和路径，[AboutDialog](../../app_common/about_dialog/dialog.py) 负责屏幕边界、自适应换行和滚动。只读启动检查 [about_diagnostics.py](../../about_diagnostics.py) 通过 `entry.py --check-about` 调用应用实际配置入口，不构造主窗口或恢复工作区。
+
 ## 2. 编辑器状态与线程归属
 
 主窗口 [BirdStampEditorWindow](../birdstamp/gui/editor.py) 组合六个 mixin：

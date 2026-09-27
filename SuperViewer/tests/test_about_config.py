@@ -41,3 +41,21 @@ def test_superviewer_about_images_resolve_from_independent_cfg() -> None:
         "download.png",
         "osk.jpg",
     ]
+
+
+def test_viewer_about_resource_does_not_depend_on_launcher_directory(monkeypatch, tmp_path):
+    from SuperViewer.superviewer import paths_settings
+    monkeypatch.setattr(paths_settings, '_get_app_dir', lambda: str(tmp_path))
+    path = Path(paths_settings._get_about_config_resource_path())
+    assert path == Path(__file__).resolve().parents[1] / 'about.cfg'
+
+
+def test_viewer_title_and_about_use_central_identity(monkeypatch, tmp_path):
+    from SuperViewer.superviewer import APP_INFO, paths_settings
+    path = tmp_path / 'about.cfg'
+    path.write_text('{"about":{"app_name":"旧名称","version":"old","作者":"中文作者"}}', encoding='utf-8')
+    monkeypatch.setattr(main_module, '_get_about_config_resource_path', lambda: str(path))
+    info = main_module._load_superviewer_about_info()
+    assert info['app_name'] == APP_INFO.app_name
+    assert info['version'] == APP_INFO.version
+    assert paths_settings._build_main_window_title(info) == APP_INFO.window_title(info)
