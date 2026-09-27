@@ -99,6 +99,11 @@ Windows：
 build_all.bat
 ```
 
+macOS 全量构建统一选择并向两个子脚本传递 Python 解释器；默认优先根目录 `.venv`，
+可通过 `PYTHON_BIN` 显式覆盖。BirdStamp 单独构建也优先根目录 `.venv`，仅在其不存在时
+回退到 app 自己的 `.venv`，避免分析依赖和自动安装依赖时使用不同环境。
+`lap` 已列入 BirdStamp requirements，供 Ultralytics 跟踪模块及打包收集使用。
+
 同机重复构建默认保留 PyInstaller 缓存：macOS 使用 `build/SuperViewer_mac` 和
 `build/BirdStamp_mac`，Windows 使用 `build/merged_win`，复用未失效的
 Analysis/PYZ/EXE 及原生库处理缓存。升级 Python 或依赖、修改 spec/hooks、增删模块、

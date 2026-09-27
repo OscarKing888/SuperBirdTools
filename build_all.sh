@@ -47,7 +47,10 @@ resolve_python() {
 }
 
 BUILD_PYTHON="$(resolve_python)"
+# Keep both app builders and post-processing on the same interpreter.
+export PYTHON_BIN="$BUILD_PYTHON"
 
+echo "[build_all] python=${BUILD_PYTHON}"
 echo "[build_all] dist=${DIST_ROOT}"
 echo "[build_all] build=${BUILD_ROOT}"
 

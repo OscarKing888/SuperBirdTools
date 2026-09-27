@@ -6,6 +6,8 @@ numpy>=2.0
 
 # Bird body detection (YOLO)
 ultralytics>=8.3,<9.0
+# Ultralytics tracker modules are imported during PyInstaller collection.
+lap>=0.5.12
 torch>=2.2
 torchvision>=0.17
 

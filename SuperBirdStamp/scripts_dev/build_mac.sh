@@ -51,16 +51,17 @@ fi
 
 if [[ -n "${PYTHON_BIN:-}" ]]; then
     PYTHON="$PYTHON_BIN"
-elif [[ -x "$PROJECT_ROOT/.venv/bin/python3" ]]; then
-    PYTHON="$PROJECT_ROOT/.venv/bin/python3"
 elif [[ -x "$REPO_ROOT/.venv/bin/python3" ]]; then
     PYTHON="$REPO_ROOT/.venv/bin/python3"
+elif [[ -x "$PROJECT_ROOT/.venv/bin/python3" ]]; then
+    PYTHON="$PROJECT_ROOT/.venv/bin/python3"
 elif [[ -n "${VIRTUAL_ENV:-}" && -x "${VIRTUAL_ENV}/bin/python3" ]]; then
     PYTHON="$VIRTUAL_ENV/bin/python3"
 else
     PYTHON="python3"
 fi
 
+echo "[INFO] Using Python: $PYTHON"
 if ! "$PYTHON" -c "import PyInstaller" 2>/dev/null; then
     echo "PyInstaller not found. Installing..."
     "$PYTHON" -m pip install pyinstaller pyinstaller-hooks-contrib
