@@ -5,7 +5,7 @@ from pathlib import Path
 from time import monotonic
 
 from PyQt6.QtGui import QPixmap
-from PyQt6.QtWidgets import QTabBar, QCheckBox, QComboBox, QFileDialog, QListWidget, QGroupBox, QHBoxLayout, QLabel, QPushButton, QSlider, QVBoxLayout, QWidget
+from PyQt6.QtWidgets import QTabBar, QCheckBox, QComboBox, QFileDialog, QListWidget, QGroupBox, QHBoxLayout, QLabel, QProgressBar, QPushButton, QSlider, QVBoxLayout, QWidget
 from PyQt6.QtCore import Qt, QTimer
 
 from birdstamp.export_stage.sequence_preview import sequence_input_key
@@ -27,6 +27,7 @@ class _BirdStampDejitterMixin:
     def _init_dejitter_preview(self):
         self._sequence_worker = None
         self._sequence_exporting = False
+        self._sequence_progress_kind = None
         self._sequence_epoch = 0
         self._sequence_shutdown = False
         self._sequence_preview = None
@@ -137,6 +138,10 @@ class _BirdStampDejitterMixin:
         self.dejitter_preprocess_btn = QPushButton('分析并预览成片')
         self.dejitter_preprocess_btn.clicked.connect(self._on_reference_preprocess_clicked)
         layout.addWidget(self.dejitter_preprocess_btn)
+        self.dejitter_analysis_progress = QProgressBar()
+        self.dejitter_analysis_progress.setAccessibleName('去抖动分析进度')
+        self.dejitter_analysis_progress.hide()
+        layout.addWidget(self.dejitter_analysis_progress)
         self.dejitter_effective_status = QLabel()
         self.dejitter_effective_status.setWordWrap(True)
         layout.addWidget(self.dejitter_effective_status)
@@ -154,6 +159,10 @@ class _BirdStampDejitterMixin:
         output.addWidget(self.dejitter_output_format)
         output.addWidget(self.dejitter_export_btn, 1)
         layout.addLayout(output)
+        self.dejitter_export_progress = QProgressBar()
+        self.dejitter_export_progress.setAccessibleName('去抖动导出进度')
+        self.dejitter_export_progress.hide()
+        layout.addWidget(self.dejitter_export_progress)
         note = QLabel('默认保留对齐后整组共同区域；交集太小时可开启补边，导出完整画面后再裁切。独立输出原图对齐结果，不叠加模板或文字；参考线、焦点和鸟体框仅用于预览。')
         note.setWordWrap(True)
         layout.addWidget(note)
@@ -289,6 +298,11 @@ class _BirdStampDejitterMixin:
             self._refresh_preview_label(preserve_view=True)
 
     def _invalidate_sequence_preview(self, *, shutdown=False):
+        if self._sequence_progress_kind is not None:
+            self._finish_sequence_progress('已取消')
+        elif hasattr(self, 'dejitter_analysis_progress'):
+            self.dejitter_analysis_progress.hide()
+            self.dejitter_export_progress.hide()
         self._sequence_restore_timer.stop()
         self._sequence_restore_state = None
         if not shutdown:
@@ -373,6 +387,8 @@ class _BirdStampDejitterMixin:
         self._refresh_preview_label(preserve_view=True)
 
     def _launch_sequence_worker(self, *, seeds=(), restore_only=False, path=None):
+        if self._sequence_preview is None:
+            self._begin_sequence_progress('analysis')
         worker = EditorSequencePreviewWorker(
             token=self._sequence_epoch, path=path or self.current_path, seeds=seeds,
             restore_only=restore_only, cache=SequencePreviewCache(),
@@ -385,6 +401,7 @@ class _BirdStampDejitterMixin:
         worker.diagnostics.connect(self._on_sequence_diagnostics)
         worker.failed.connect(self._on_sequence_failed)
         worker.progress.connect(self._on_sequence_progress)
+        worker.progress_counts.connect(self._on_sequence_progress_counts)
         worker.finished.connect(self._on_sequence_finished)
         worker.start()
         self._update_dejitter_controls()
@@ -411,13 +428,56 @@ class _BirdStampDejitterMixin:
 
     def _on_sequence_progress(self, token, message):
         if self._accept_sequence_signal(token):
-            if self._sequence_preview is not None and not self._sequence_exporting:
+            if (self._sequence_preview is not None and not self._sequence_exporting
+                    and self._sequence_progress_kind != 'analysis'):
                 return  # 清晰帧升级不覆盖已经完成的整组分析摘要。
             self._sequence_message = message
             self._update_dejitter_controls()
 
+    def _begin_sequence_progress(self, kind):
+        self._sequence_progress_kind = kind
+        bar = self.dejitter_export_progress if kind == 'export' else self.dejitter_analysis_progress
+        bar.setRange(0, 0)
+        bar.setValue(0)
+        bar.setFormat('正在准备…')
+        bar.setToolTip('正在准备…')
+        bar.show()
+
+    def _on_sequence_progress_counts(self, token, current, total, stage):
+        if not self._accept_sequence_signal(token) or self._sequence_progress_kind is None:
+            return
+        bar = (self.dejitter_export_progress if self._sequence_progress_kind == 'export'
+               else self.dejitter_analysis_progress)
+        bar.setRange(0, max(0, total))
+        bar.setValue(max(0, min(current, total)))
+        bar.setFormat(f'{stage} %v/%m · %p%' if total > 0 else stage)
+        bar.setToolTip(stage)
+        if total <= 0:
+            self._sequence_message = f'{stage}…'
+            self._update_dejitter_controls()
+
+    def _finish_sequence_progress(self, label, *, complete=False):
+        kind = self._sequence_progress_kind
+        if kind is None:
+            return
+        bar = self.dejitter_export_progress if kind == 'export' else self.dejitter_analysis_progress
+        if complete:
+            total = max(1, len(self._sequence_preview.jobs))
+            bar.setRange(0, total)
+            bar.setValue(total)
+            bar.setFormat(f'{label} %v/%m · %p%')
+        else:
+            # 取消/失败要停止忙碌动画，不能显示一个永远在转或冒充完成的进度。
+            if bar.maximum() == 0:
+                bar.setRange(0, 1)
+                bar.setValue(0)
+            bar.setFormat(label)
+        bar.setToolTip(label)
+        self._sequence_progress_kind = None
+
     def _on_sequence_failed(self, token, message):
         if self._accept_sequence_signal(token):
+            self._finish_sequence_progress('导出失败' if self._sequence_exporting else '分析失败')
             self._sequence_message = f'去抖动任务失败：{message}'
             self._sequence_pending_path = None
             self._update_dejitter_controls()
@@ -448,6 +508,8 @@ class _BirdStampDejitterMixin:
             self._invalidate_sequence_preview()
             return
         self._sequence_cache_key = sequence.input_key
+        if frame is not None and self._sequence_progress_kind == 'analysis':
+            self._finish_sequence_progress('分析完成', complete=True)
         self._schedule_workspace_autosave()
         if frame is not None:
             key = path_key(frame.path)
@@ -477,6 +539,7 @@ class _BirdStampDejitterMixin:
         worker = self.sender()
         if worker is None or worker is not self._sequence_worker:
             return
+        self._finish_sequence_progress('已取消' if worker.isInterruptionRequested() else '任务已结束')
         self._sequence_worker = None
         self._sequence_exporting = False
         worker.deleteLater()
@@ -598,7 +661,9 @@ class _BirdStampDejitterMixin:
                                             output_format=self.dejitter_output_format.currentData(), parent=self)
         self._sequence_worker = worker
         self._sequence_exporting = True
+        self._begin_sequence_progress('export')
         worker.progress.connect(self._on_sequence_progress)
+        worker.progress_counts.connect(self._on_sequence_progress_counts)
         worker.failed.connect(self._on_sequence_failed)
         worker.completed.connect(self._on_sequence_exported)
         worker.finished.connect(self._on_sequence_finished)
@@ -607,6 +672,7 @@ class _BirdStampDejitterMixin:
 
     def _on_sequence_exported(self, token, folder):
         if self._accept_sequence_signal(token):
+            self._finish_sequence_progress('导出完成', complete=True)
             self._sequence_message = f'整组导出完成：{folder}'
             self._set_status(self._sequence_message)
             self._update_dejitter_controls()

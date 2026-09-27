@@ -1,19 +1,21 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field
 import hashlib
 import json
 from pathlib import Path
 
 from birdstamp.decoders.image_decoder import decode_image
 from app_common.exif_io import find_same_stem_xmp_sidecar
+from app_common.exif_io.exiftool_runner import exiftool_worker_session, exiftool_read_request
 from birdstamp.gui.editor_utils import path_key
 from birdstamp.image_dejitter import ReferenceRegionTracker
 from birdstamp.image_dejitter.region_consensus import select_translation
-from birdstamp.image_dejitter.region_tracking_result import RegionTrackingResult, image_file_signature
+from birdstamp.image_dejitter.region_tracking_result import image_file_signature
 from birdstamp.image_pipeline import ImageProcContext, ImageProcPipeline
 from birdstamp.image_pipeline.image_proc_stage.image_proc_sequence_align_stage import ImageProcSequenceAlignStage
 from .render_job_seed import prepare_render_jobs
+from .sequence_analysis import analyze_sequence_frames
 from .video_export_cancelled_error import VideoExportCancelledError
 
 
@@ -92,10 +94,14 @@ def common_alignment_crop(regions, tracking, source_sizes, reference_size, stren
 
 
 def prepare_sequence_preview(seeds, template_paths=None, *, cancel_event, progress=lambda message: None,
-                             bird_boxes=None, preview_source=None, tracking_ready=None) -> SequencePreview:
+                             bird_boxes=None, preview_source=None, tracking_ready=None,
+                             progress_counts=lambda current, total, stage: None,
+                             analysis_workers=0) -> SequencePreview:
     seeds = tuple(seeds)
     if not seeds:
         raise ValueError('请先导入照片。')
+    if cancel_event.is_set():
+        raise VideoExportCancelledError('已取消去抖动分析。')
     signatures = file_signatures(sequence_files(seeds))
     key = sequence_input_key(seeds)
     settings = seeds[0].settings
@@ -103,48 +109,28 @@ def prepare_sequence_preview(seeds, template_paths=None, *, cancel_event, progre
     reference = settings.get('dejitter_reference_source')
     if not reference or not regions:
         raise ValueError('请先框选一个或多个参考区。')
-    jobs = prepare_render_jobs(seeds, cancelled=cancel_event.is_set, progress=progress)
-    tracking, sizes = {}, {}
+    progress_counts(0, 0, '准备元数据')
+    # 保留整批元数据原有的 120 秒预算，同时允许取消自己的独立会话。
+    with exiftool_worker_session(), exiftool_read_request(cancel_event.is_set, timeout=120):
+        jobs = prepare_render_jobs(seeds, cancelled=cancel_event.is_set, progress=progress)
     reference = Path(reference)
+    progress_counts(0, 0, '准备参考图')
+    progress('正在准备参考图…')
     with decode_image(reference, decoder='auto') as image:
+        if cancel_event.is_set():
+            raise VideoExportCancelledError('已取消去抖动分析。')
         tracker = ReferenceRegionTracker(image, regions)
         reference_size = image.size
         if preview_source is not None:
             preview_source(reference, image)
-    for index, seed in enumerate(seeds, 1):
-        if cancel_event.is_set():
-            raise VideoExportCancelledError('已取消去抖动分析。')
-        frame_key = path_key(seed.path)
-        if frame_key == path_key(reference):
-            tracked, sizes[frame_key] = RegionTrackingResult(regions), reference_size
-        else:
-            with decode_image(seed.path, decoder='auto') as image:
-                tracked = tracker.track(image, cancelled=cancel_event.is_set)
-                sizes[frame_key] = image.size
-                if preview_source is not None:
-                    preview_source(seed.path, image)
-        tracking[frame_key] = replace(tracked, signature=image_file_signature(seed.path))
-        progress(f'对齐参考选区 {index}/{len(seeds)}')
-    # 只挽救前后相邻帧均有证据的孤立遮挡，不将推测位移级联到其它失配帧。
-    first_pass = dict(tracking)
-    for index in range(1, len(seeds)-1):
-        path = seeds[index].path
-        frame_key = path_key(path)
-        result = first_pass[frame_key]
-        if result.matched_count == len(regions):
-            continue
-        previous = first_pass[path_key(seeds[index-1].path)]
-        following = first_pass[path_key(seeds[index+1].path)]
-        if not any(box is None and previous.boxes[i] is not None and following.boxes[i] is not None
-                   for i, box in enumerate(result.boxes)):
-            continue
-        if cancel_event.is_set():
-            raise VideoExportCancelledError('已取消去抖动分析。')
-        progress(f'核验局部遮挡 {index+1}/{len(seeds)}')
-        with decode_image(path, decoder='auto') as image:
-            tracking[frame_key] = tracker.recover(image, result, previous, following, cancelled=cancel_event.is_set)
+    tracking, sizes = analyze_sequence_frames(
+        jobs, tracker, reference, cancel_event=cancel_event, preview_source=preview_source,
+        progress=progress, progress_counts=progress_counts, analysis_workers=analysis_workers)
+    if cancel_event.is_set():
+        raise VideoExportCancelledError('已取消去抖动分析。')
     if tracking_ready is not None and not cancel_event.is_set():
         tracking_ready(key, dict(tracking), signatures)
+    progress_counts(0, 0, '计算共同画幅')
     boxes, output_size = common_alignment_crop(regions, tracking, sizes, reference_size,
                                               settings.get('dejitter_reference_strength', 100),
                                               pad_to_union=settings.get('dejitter_pad_to_union', False) is True)
@@ -153,6 +139,8 @@ def prepare_sequence_preview(seeds, template_paths=None, *, cancel_event, progre
                              pixel_boxes=boxes, source_sizes=sizes, output_size=output_size)
     if not result.files_current():
         raise ValueError('照片或 XMP 在分析期间发生变化，请重新分析。')
+    if cancel_event.is_set():
+        raise VideoExportCancelledError('已取消去抖动分析。')
     return result
 
 

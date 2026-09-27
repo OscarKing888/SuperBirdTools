@@ -54,7 +54,8 @@ class SequenceExportAction(WorkerAction):
 
 
 def export_aligned_sequence(sequence, destination, *, output_format='png', cancel_event,
-                            progress=lambda message: None, render_workers=0):
+                            progress=lambda message: None, render_workers=0,
+                            progress_counts=lambda current, total, stage: None):
     """有界并行导出；线程池退出后才回滚，避免迟到写入重新创建输出目录。"""
     if output_format not in {'png', 'jpg'}:
         raise ValueError('去抖动输出仅支持 PNG / JPG。')
@@ -99,6 +100,7 @@ def export_aligned_sequence(sequence, destination, *, output_format='png', cance
         _LOG.info('sequence export start photos=%s workers=%s format=%s reused_plans=%s',
                   total, workers, output_format, total)
         progress(f'去抖动导出 0/{total} · 最多 {workers} 张并行')
+        progress_counts(0, total, '导出图片')
         refill()
         while pending:
             if cancel_event.is_set():
@@ -110,7 +112,9 @@ def export_aligned_sequence(sequence, destination, *, output_format='png', cance
                 write_seconds += write_time
                 completed += 1
                 progress(f'去抖动导出 {completed}/{total} · 最多 {workers} 张并行')
+                progress_counts(completed, total, '导出图片')
             refill()
+        progress_counts(0, 0, '校验导出结果')
         pool.shutdown()
         pool = None
         if cancel_event.is_set():

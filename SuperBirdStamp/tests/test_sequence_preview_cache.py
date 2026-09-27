@@ -120,6 +120,8 @@ def test_workspace_restores_into_new_window_and_close_keeps_cache_reference(wind
         assert fresh._sequence_preview.pixel_boxes == window._sequence_preview.pixel_boxes
         assert fresh._sequence_result_mode()
         assert len(fresh._sequence_quick_frames) == len(paths)
+        assert fresh.dejitter_analysis_progress.value() == fresh.dejitter_analysis_progress.maximum() == len(paths)
+        assert '分析完成' in fresh.dejitter_analysis_progress.format()
         fresh._invalidate_sequence_preview(shutdown=True)
         saved = fresh._collect_workspace_payload(workspace_path)
         assert saved['editor_state']['sequence_preview']['input_key'] == input_key
