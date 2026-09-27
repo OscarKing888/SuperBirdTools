@@ -114,6 +114,9 @@ a = Analysis(
         "nbformat",
         "matplotlib",
         "tkinter",
+        # PyInstaller 6.19 appends this to non-empty excludes in-place.
+        # Declare it here so unchanged builds reuse the Analysis cache.
+        "__main__",
     ],
     win_no_prefer_redirects=False,
     win_private_assemblies=False,

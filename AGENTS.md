@@ -75,6 +75,7 @@ Follow [ai_rules/AI_CODING_RULES.md](ai_rules/AI_CODING_RULES.md) as the cross-t
 - Use `build_all.sh` for macOS full builds and `build_all.bat` for Windows full builds when the goal is to produce both apps together.
 - On macOS, full build output should end up with `dist/SuperViewer.app` and `dist/SuperBirdStamp.app` at repo root.
 - On macOS, aggregate size reduction is implemented via post-build hardlink deduplication; do not describe this as true cross-bundle shared runtime.
+- A normal local `build_all.sh` run is incremental: preserve both app workpaths and PyInstaller's native-library cache. Only explicit `--clean` may clean them; the aggregate clean must clear the shared native-library cache once before the first app, not again between apps. Keep non-empty macOS Analysis excludes stable (including `__main__` for PyInstaller 6.19) so unchanged builds can reuse Analysis. CI release builds must continue to use `build_all.sh --clean`.
 - On Windows, `build_all.bat` should prefer the merged spec workflow (`build_all_win_merged.spec`) so shared runtime files are referenced instead of duplicated when possible.
 - Windows merged build outputs must be distributed together; do not assume one merged app directory is independently relocatable.
 - When invoking PyInstaller directly on Windows, use `.\.venv\Scripts\python.exe -m PyInstaller ...`; for normal full builds prefer `.\build_all.bat` so the merged spec and repo-root `dist/` / `build/` layout are used consistently.

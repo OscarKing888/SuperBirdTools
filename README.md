@@ -99,18 +99,31 @@ Windows：
 build_all.bat
 ```
 
-Windows 同机重复构建默认保留 `build/merged_win`，让 PyInstaller 复用未失效的
-Analysis/PYZ/EXE 缓存。升级 Python 或依赖、修改 spec/hooks、增删模块、切换
-CPU/CUDA 环境、缓存异常或准备正式发布时，使用全量清理：
+同机重复构建默认保留 PyInstaller 缓存：macOS 使用 `build/SuperViewer_mac` 和
+`build/BirdStamp_mac`，Windows 使用 `build/merged_win`，复用未失效的
+Analysis/PYZ/EXE 及原生库处理缓存。升级 Python 或依赖、修改 spec/hooks、增删模块、
+切换 CPU/CUDA 环境、缓存异常或准备正式发布时，使用全量清理：
+
+```bash
+bash build_all.sh --clean
+```
 
 ```bat
 build_all.bat --clean
 ```
 
-增量缓存以整个 PyInstaller 构建阶段为单位；修改 SuperBirdStamp 代码后，其
-Analysis 仍可能完整重跑。`dist/` 的 COLLECT 阶段也会在每次构建时重新收集，
-所以增量模式主要节省模块图分析和动态库扫描时间。不要在日常构建前手工删除
-`build/merged_win`。merged spec 会隔离两个 app 的 Analysis/PYZ 工作目录，
+日志中的 `Processing standard module hook` 是依赖分析钩子，不是重新编译
+Python 标准库或 Torch/Qt 的 C/C++ 代码。PyInstaller 会分析导入关系、生成 Python
+字节码归档、收集已经安装的原生库，并在 macOS 上处理库路径与代码签名。
+
+增量缓存以整个 PyInstaller 构建阶段为单位；修改任一已收集的 Python 文件后，
+所属 app 的 Analysis 仍可能完整重跑，不能保证只处理改动的业务代码。
+`dist/` 的 COLLECT 阶段及 macOS BUNDLE 阶段每次都会重新收集，
+所以增量模式主要节省模块图分析、动态库扫描及未变更原生库的处理时间。
+命中缓存时日志仍有 `checking Analysis/PYZ/PKG/EXE`，但不应再次出现相应的
+`Building ...`；如失效，前面的 `Building because ...` 会说明原因。
+不要在日常构建前手工删除 `build/` 或添加 `--clean`。两个平台的 CI 发布构建
+仍使用 `--clean`。Windows merged spec 会隔离两个 app 的 Analysis/PYZ 工作目录，
 避免它们因覆盖同一个 `base_library.zip` 而互相使缓存失效。构建前请关闭正在
 运行的 `dist` 版本及其子进程，否则 Windows 会阻止 COLLECT 重新生成产物目录。
 

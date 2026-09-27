@@ -11,6 +11,14 @@ WORK_ROOT="${SUPERBIRDTOOLS_BUILD_ROOT:-${REPO_ROOT}/build/SuperViewer}"
 APP_DIR="${DIST_ROOT}/SuperViewer.app"
 COLLECT_DIR="${DIST_ROOT}/SuperViewer"
 
+PYINSTALLER_ARGS=(--noconfirm)
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --clean) PYINSTALLER_ARGS+=(--clean); shift ;;
+    *) echo "Unknown option: $1" >&2; exit 1 ;;
+  esac
+done
+
 if [[ -n "${PYTHON_BIN:-}" ]]; then
   SELECTED_PYTHON="${PYTHON_BIN}"
 elif [[ -x "${REPO_ROOT}/.venv/bin/python3" ]]; then
@@ -24,8 +32,7 @@ else
 fi
 
 "${SELECTED_PYTHON}" -m PyInstaller \
-  --noconfirm \
-  --clean \
+  "${PYINSTALLER_ARGS[@]}" \
   --distpath "${DIST_ROOT}" \
   --workpath "${WORK_ROOT}" \
   SuperViewer_mac.spec

@@ -20,7 +20,10 @@ while [[ $# -gt 0 ]]; do
 done
 
 if [[ $CLEAN -eq 1 ]]; then
+  echo "[build_all] Clean build requested; removing local build outputs."
   rm -rf "$DIST_ROOT" "$BUILD_ROOT"
+else
+  echo "[build_all] Incremental build cache enabled: ${BUILD_ROOT}"
 fi
 mkdir -p "$DIST_ROOT" "$BUILD_ROOT"
 
@@ -48,7 +51,13 @@ BUILD_PYTHON="$(resolve_python)"
 echo "[build_all] dist=${DIST_ROOT}"
 echo "[build_all] build=${BUILD_ROOT}"
 
-bash "${ROOT_DIR}/SuperViewer/scripts_dev/build_mac.sh"
+# Clear PyInstaller's shared native-library cache only once, before Viewer.
+# BirdStamp can then reuse libraries processed by Viewer in this same build.
+if [[ $CLEAN -eq 1 ]]; then
+  bash "${ROOT_DIR}/SuperViewer/scripts_dev/build_mac.sh" --clean
+else
+  bash "${ROOT_DIR}/SuperViewer/scripts_dev/build_mac.sh"
+fi
 
 BIRD_ARGS=()
 if [[ -n "$TARGET_ARCH" ]]; then
