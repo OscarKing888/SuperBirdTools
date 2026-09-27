@@ -156,8 +156,10 @@ def prepare_sequence_preview(seeds, template_paths=None, *, cancel_event, progre
     return result
 
 
-def render_sequence_preview_frame(sequence: SequencePreview, path: Path):
-    if not sequence.files_current():
+def render_sequence_preview_frame(sequence: SequencePreview, path: Path, *, validate_files=True,
+                                  source_paths=None):
+    # 批量导出在整批前后校验签名；逐帧重扫整组会使文件检查变成 O(N²)。
+    if validate_files and not sequence.files_current():
         raise ValueError('照片或 XMP 已变化，请重新分析。')
     key = path_key(path)
     job = sequence.jobs[key]
@@ -165,7 +167,8 @@ def render_sequence_preview_frame(sequence: SequencePreview, path: Path):
         if image.size != sequence.source_sizes[key]:
             raise ValueError('照片尺寸已变化，请重新分析。')
         context = ImageProcContext(image=image, settings=job.settings, source_path=path,
-                                   source_paths=tuple(job.path for job in sequence.jobs.values()),
+                                   source_paths=(source_paths if source_paths is not None else
+                                                 tuple(job.path for job in sequence.jobs.values())),
                                    raw_metadata=job.raw_metadata,
                                    precomputed={'sequence_crop_pixels': sequence.pixel_boxes[key]})
         return ImageProcPipeline((ImageProcSequenceAlignStage(),)).process(context)

@@ -287,10 +287,10 @@ def test_export_error_rolls_back_partial_folder(sequence, tmp_path, monkeypatch)
     from birdstamp.export_stage import sequence_export
     seeds, result = sequence
     original = sequence_export.render_sequence_preview_frame
-    def fail_on_second(seq, path):
+    def fail_on_second(seq, path, **kwargs):
         if path == seeds[1].path:
             raise OSError('模拟磁盘/解码故障')
-        return original(seq, path)
+        return original(seq, path, **kwargs)
     monkeypatch.setattr(sequence_export, 'render_sequence_preview_frame', fail_on_second)
     before = set(tmp_path.iterdir())
     with pytest.raises(OSError):
