@@ -2019,11 +2019,6 @@ class BirdStampEditorWindow(
         self.show_crop_effect_check.toggled.connect(self._on_preview_toolbar_toggled)
         preview_toolbar.addWidget(self.show_crop_effect_check)
 
-        self.dejitter_reference_clear_btn = QPushButton("清除参考区")
-        self.dejitter_reference_clear_btn.setToolTip("清除已框选的去抖动特征参考区（也可在参考区模式下右键清除）。")
-        self.dejitter_reference_clear_btn.clicked.connect(self._on_dejitter_reference_clear)
-        preview_toolbar.addWidget(self.dejitter_reference_clear_btn)
-
         self.crop_effect_alpha_label = QLabel("Alpha")
         preview_toolbar.addWidget(self.crop_effect_alpha_label)
 

@@ -6,6 +6,7 @@ from functools import lru_cache
 from typing import Any
 
 from birdstamp.config import resolve_bundled_path
+from birdstamp.render.text_effects import normalize_text_effects
 from birdstamp.render.text_scale import TEXT_SCALE_DEFAULT, TEXT_SCALE_MIN, TEXT_SCALE_MAX
 
 # Sentinel for "no crop" and "free aspect ratio" crop modes.
@@ -408,6 +409,7 @@ DEJITTER_QUICK_MAX_EDGE = _bounded_preview_option("dejitter_quick_max_edge", 768
 DEJITTER_QUICK_CACHE_BYTES = _bounded_preview_option("dejitter_quick_cache_mb", 64, 8, 256) * 1024 * 1024
 DEJITTER_PLAYBACK_FPS = _bounded_preview_option("dejitter_playback_fps", 8, 1, 30)
 DEJITTER_PREVIEW_MAX_EDGE = _bounded_preview_option("dejitter_preview_max_edge", 1600, 256, 4096)
+DEJITTER_DISK_CACHE_BYTES = _bounded_preview_option("dejitter_disk_cache_mb", 512, 128, 4096) * 1024 * 1024
 DEJITTER_PREVIEW_CACHE_BYTES = _bounded_preview_option("dejitter_preview_cache_mb", 64, 8, 256) * 1024 * 1024
 TEXT_SCALE_SLIDER: dict[str, int] = _EDITOR_OPTIONS["text_scale_slider"]
 STYLE_OPTIONS: tuple[str, ...] = _EDITOR_OPTIONS["style_options"]
@@ -436,3 +438,6 @@ COLOR_PRESETS: list[tuple[str, str]] = _EDITOR_OPTIONS["color_presets"]
 DEFAULT_FIELD_TAG: str = _EDITOR_OPTIONS["default_field_tag"]
 TAG_OPTIONS: list[tuple[str, str]] = _EDITOR_OPTIONS["tag_options"]
 SAMPLE_RAW_METADATA: dict[str, Any] = _EDITOR_OPTIONS["sample_raw_metadata"]
+
+# 新建文本项的效果默认值，旧模板缺省时仍保持关闭。
+TEXT_EFFECT_DEFAULTS = normalize_text_effects(_load_builtin_editor_options_raw().get("text_effects", {}))

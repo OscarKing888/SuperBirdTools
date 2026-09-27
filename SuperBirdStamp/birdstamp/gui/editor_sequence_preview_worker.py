@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
 import threading
 import math
 
@@ -13,16 +12,7 @@ from PyQt6.QtGui import QImage
 from birdstamp.export_stage.sequence_preview import prepare_sequence_preview, render_sequence_preview_frame
 from . import editor_options
 from birdstamp.image_dejitter.sequence_geometry import aligned_crop_plan, render_aligned_thumbnail
-
-
-@dataclass(slots=True)
-class SequencePreviewFrame:
-    path: object
-    image: QImage
-    source_size: tuple
-    output_size: tuple
-    crop_plan: tuple
-    source_image: QImage | None = None
+from .sequence_preview_frame import SequencePreviewFrame
 
 
 class EditorSequencePreviewWorker(QThread):
@@ -32,12 +22,14 @@ class EditorSequencePreviewWorker(QThread):
     progress = pyqtSignal(int, str)
     failed = pyqtSignal(int, str)
 
-    def __init__(self, *, token, path, seeds=(), template_paths=None, sequence=None, bird_boxes=None, parent=None):
+    def __init__(self, *, token, path, seeds=(), template_paths=None, sequence=None, bird_boxes=None, restore_only=False, cache=None, parent=None):
         super().__init__(parent)
         self.token, self.path = token, path
         self.seeds, self.template_paths = tuple(seeds), dict(template_paths or {})
         self.sequence, self.bird_boxes = sequence, dict(bird_boxes or {})
         self.cancel_event = threading.Event()
+        self.restore_only = restore_only
+        self.cache = cache
 
     def cancel(self):
         self.cancel_event.set()
@@ -57,7 +49,16 @@ class EditorSequencePreviewWorker(QThread):
             small.close()
 
         try:
-            sequence = self.sequence or prepare_sequence_preview(
+            sequence = self.sequence
+            if sequence is None:
+                cached = self.cache.load(self.seeds, cancelled=self.cancel_event.is_set) if self.cache else None
+                if cached is not None:
+                    sequence, frames = cached
+                    if not self.cancel_event.is_set():
+                        self.quick_ready.emit(self.token, sequence, frames)
+                elif self.restore_only:
+                    raise ValueError('已有成片缓存缺失或已失效，请重新分析。')
+            sequence = sequence or prepare_sequence_preview(
                 self.seeds, self.template_paths, cancel_event=self.cancel_event,
                 progress=lambda text: self.progress.emit(self.token, text), bird_boxes=self.bird_boxes,
                 preview_source=capture,
@@ -82,8 +83,17 @@ class EditorSequencePreviewWorker(QThread):
                     finally:
                         small.close()
                 if not self.cancel_event.is_set():
-                    self.quick_ready.emit(self.token, sequence, frames)
+                    if self.cache:
+                        self.progress.emit(self.token, '保存成片分析与快速预览缓存…')
+                        self.cache.save(sequence, frames, cancelled=self.cancel_event.is_set)
+                    if not self.cancel_event.is_set():
+                        self.quick_ready.emit(self.token, sequence, frames)
             if self.cancel_event.is_set():
+                return
+            cached_frame = self.cache.load_sharp(sequence, self.path) if self.cache else None
+            if cached_frame is not None:
+                if not self.cancel_event.is_set() and sequence.files_current():
+                    self.ready.emit(self.token, sequence, cached_frame)
                 return
             self.progress.emit(self.token, '生成当前照片成片预览…')
             context = render_sequence_preview_frame(sequence, self.path)
@@ -99,7 +109,10 @@ class EditorSequencePreviewWorker(QThread):
                         rgb.close()
             frame = SequencePreviewFrame(self.path, qimage, context.source_size, output_size, context.crop_plan)
             if not self.cancel_event.is_set():
-                self.ready.emit(self.token, sequence, frame)
+                if self.cache:
+                    self.cache.save_sharp(sequence, frame)
+                if not self.cancel_event.is_set():
+                    self.ready.emit(self.token, sequence, frame)
         except Exception as exc:
             if not self.cancel_event.is_set():
                 self.failed.emit(self.token, str(exc))

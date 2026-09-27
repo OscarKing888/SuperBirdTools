@@ -26,3 +26,7 @@
 
 SuperBirdStamp/tools/ffmpeg/macos/ffmpeg
 SuperBirdStamp/tools/ffmpeg/windows/ffmpeg.exe
+
+# BirdStamp saved palettes and derived sequence previews
+/SuperBirdStamp/[Cc]onfig/color_palettes.json
+/SuperBirdStamp/[Cc]onfig/cache/

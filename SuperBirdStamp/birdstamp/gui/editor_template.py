@@ -13,6 +13,7 @@ from PIL import Image, ImageColor, ImageDraw
 
 from birdstamp.config import get_config_path, resolve_bundled_path
 from birdstamp.render.text_scale import normalize_text_scale
+from birdstamp.render.text_effects import normalize_text_effects, effect_geometry, styled_text_layer
 from birdstamp.render.typography import load_font
 
 from birdstamp.gui.editor_core import (
@@ -284,6 +285,7 @@ def _normalize_template_field(data: dict[str, Any], index: int) -> dict[str, Any
         "font_size": _clamp_int(data.get("font_size"), 8, 300, 24),
         "font_type": font_type,
         "style": style,
+        **normalize_text_effects(data),
     }
 
 
@@ -495,36 +497,22 @@ def _draw_styled_text(
     font: Any,
     style: str,
     output_scale: tuple[float, float] = (1.0, 1.0),
+    effects: dict | None = None,
+    effect_scale: float = 1.0,
 ) -> None:
     draw_text, text_box = _measure_text_with_fallback(draw, text, font=font)
-    left, top, right, bottom = text_box
-    width = max(1, right - left)
-    height = max(1, bottom - top)
-    layer = Image.new("RGBA", (width + 10, height + 10), (0, 0, 0, 0))
-    layer_draw = ImageDraw.Draw(layer)
-    text_pos = (5 - left, 5 - top)
-    is_bold = style in {"bold", "bold_italic"}
-    is_italic = style in {"italic", "bold_italic"}
-    if is_bold:
-        offsets = [(0, 0), (1, 0), (0, 1)]
-        for dx, dy in offsets:
-            layer_draw.text((text_pos[0] + dx, text_pos[1] + dy), draw_text, font=font, fill=color)
-    else:
-        layer_draw.text(text_pos, draw_text, font=font, fill=color)
-    if is_italic:
-        shear = -0.28
-        new_width = int(round(layer.width + abs(shear) * layer.height))
-        layer = layer.transform(
-            (max(1, new_width), layer.height),
-            Image.Transform.AFFINE,
-            (1, shear, 0, 0, 1, 0),
-            resample=Image.Resampling.BICUBIC,
-        )
+    layer, origin = styled_text_layer(draw_text, text_box, font=font, color=color, style=style,
+                                      effects=normalize_text_effects(effects or {}), scale=effect_scale)
     sx, sy = output_scale
     if output_scale != (1.0, 1.0):
-        layer = layer.resize((max(1, round(layer.width * sx)), max(1, round(layer.height * sy))),
-                             Image.Resampling.LANCZOS)
-    _composite_rgba_layer(image, layer, (round((x - 5) * sx), round((y - 5) * sy)))
+        resized = layer.resize((max(1, round(layer.width * sx)), max(1, round(layer.height * sy))),
+                               Image.Resampling.LANCZOS)
+        layer.close()
+        layer = resized
+    try:
+        _composite_rgba_layer(image, layer, (round((x-origin[0])*sx), round((y-origin[1])*sy)))
+    finally:
+        layer.close()
 
 
 def _template_font_scale_for_canvas(width: int, height: int) -> float:
@@ -803,7 +791,7 @@ def render_template_overlay(
     font_scale *= normalize_text_scale(text_scale)
     occupied_boxes: list[tuple[int, int, int, int]] = []
     text_gap = max(1, int(round(min(layout_width, layout_height) * 0.006)))
-    draw_commands: list[tuple[str, int, int, str, Any, str, tuple[int, int, int, int]]] = []
+    draw_commands: list[tuple] = []
     fields = template_payload.get("fields") or []
     if not isinstance(fields, list):
         fields = []
@@ -813,6 +801,7 @@ def render_template_overlay(
         if not isinstance(raw_field, dict):
             continue
         field = _normalize_template_field(raw_field, field_index)
+        effects = normalize_text_effects(field)
         text_source = field.get("text_source") or {}
         provider = build_template_context_provider(
             str(text_source.get("type") or TEMPLATE_SOURCE_FROM_FILE),
@@ -841,6 +830,10 @@ def render_template_overlay(
             measured_text, text_box = _measure_text_with_fallback(draw, text, font=font)
             text_width = max(1, text_box[2] - text_box[0])
             text_height = max(1, text_box[3] - text_box[1])
+            effect_scale = candidate_size / font_size_base
+            _, _, _, _, (ml, mt, mr, mb) = effect_geometry(effects, effect_scale)
+            text_width += ml + mr
+            text_height += mt + mb
             base_x, base_y = _compute_template_text_position(
                 canvas_width=layout_width,
                 canvas_height=layout_height,
@@ -864,8 +857,8 @@ def render_template_overlay(
                 gap=text_gap,
             )
             chosen_font = font
-            chosen_x = x
-            chosen_y = y
+            chosen_x = x + ml
+            chosen_y = y + mt
             chosen_rect = rect
             rendered_text = measured_text
             if non_overlap:
@@ -879,6 +872,8 @@ def render_template_overlay(
                 chosen_font,
                 str(field.get("style") or "normal"),
                 chosen_rect,
+                effects,
+                effect_scale,
             )
         )
         occupied_boxes.append(chosen_rect)
@@ -926,7 +921,7 @@ def render_template_overlay(
                 banner_rect = tuple(round(v * (sx if i % 2 == 0 else sy)) for i, v in enumerate(banner_rect))
                 draw.rectangle(banner_rect, fill=banner_fill)
     if draw_text:
-        for text, x, y, color, font, style, _rect in draw_commands:
+        for text, x, y, color, font, style, _rect, effects, effect_scale in draw_commands:
             _draw_styled_text(
                 canvas,
                 draw,
@@ -937,6 +932,8 @@ def render_template_overlay(
                 font=font,
                 style=style,
                 output_scale=(sx, sy),
+                effects=effects,
+                effect_scale=effect_scale,
             )
     return canvas if canvas.mode == "RGB" else canvas.convert("RGB")
 

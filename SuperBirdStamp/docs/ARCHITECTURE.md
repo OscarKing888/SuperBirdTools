@@ -71,6 +71,10 @@
 
 [editor_template.py](../birdstamp/gui/editor_template.py) 负责模板目录、默认模板初始化、JSON 规范化和 `render_template_overlay` 绘制；[editor_template_dialog.py](../birdstamp/gui/editor_template_dialog.py) 负责编辑 UI。字体与中文回退绘制见 [render/typography.py](../birdstamp/render/typography.py)。CLI 的标准化元数据模型则位于 [models.py](../birdstamp/models.py) 与 [meta/normalize.py](../birdstamp/meta/normalize.py)。
 
+模板文本的描边和阴影由 [render/text_effects.py](../birdstamp/render/text_effects.py) 的 `normalize_text_effects` / `styled_text_layer` 规范化及绘制。每项保存独立开关、颜色、描边宽度、阴影不透明度/偏移/柔化；旧模板缺省关闭，新增文本项的默认值读取 `editor_options.json` 的 `text_effects`。效果尺寸随实际字号缩放，排版避让包含效果边界；预览按导出逻辑画幅绘制后缩放，图片/GIF/视频和 CLI `render --template` 沿用同一模板渲染入口，源帧缓存版本随渲染变化更新。回归见 [test_overlay_text_effects.py](../tests/test_overlay_text_effects.py)。
+
+[color_editor.py](../birdstamp/gui/color_editor.py) 的 `ColorEditor` 统一文本、描边、阴影、Banner、渐变端点及外圈填充的预设/色值/可点击色块；调色板和屏幕吸色使用图标按钮。`AdvancedColorDialog` 提供高级选色和命名调色板，`PaletteStore` 原子保存到用户配置目录的 `color_palettes.json`，所有入口跨会话复用（最多 32 个色板，每板 16 色）。文本和 Banner 支持透明度；渐变和阴影的不透明度仍由各自参数管理。回归见 [test_color_editor.py](../tests/test_color_editor.py)。
+
 ## 4. 预览与导出图像管线
 
 ```mermaid
@@ -170,6 +174,10 @@ flowchart LR
 2. `_restore_workspace_payload` 安装恢复上下文和待恢复队列；定时器驱动 `_process_workspace_restore_photo_batch`，按数量与耗时预算添加照片。
 3. `_finish_workspace_restore_payload` 完成排序、选中项、元数据加载和剩余 UI 状态，清除恢复上下文后才重新允许保存。
 4. 恢复期间，自动保存和 `_save_workspace_to_path` 手动保存都受门控。中途关闭由 `_shutdown_workspace_autosave` 保留上一次完整 autosave、停止恢复定时器并屏蔽晚到回调，不能用半恢复的列表覆盖原工作区。
+
+工作区的 `editor_state.sequence_preview` 保存有效分析签名及去抖动页/编辑或成片视图状态。工作区照片和参数全部恢复后，[_BirdStampDejitterMixin._restore_sequence_workspace_state](../birdstamp/gui/editor_dejitter.py) 交给原有单 worker 后台加载 [SequencePreviewCache](../birdstamp/gui/sequence_preview_cache.py)，不会重新跟踪已缓存的分析。缓存保存整组跟踪诊断、原生裁切几何、原图/成片快速位图和已生成的清晰帧；只从匹配文件及参数签名的完整 manifest 恢复，旧工作区、丢失/损坏/过期缓存仍可正常打开。未缓存的清晰帧按需生成。关闭清理内存时保留工作区缓存引用，恢复中途关闭沿用原有自动保存门控。
+
+磁盘缓存位于用户配置目录 `cache/sequence_preview`；默认总预算 512 MiB（`editor_options.json` 的 `dejitter_disk_cache_mb`），最多保留 8 组，优先淘汰旧清晰帧和旧组，保留当前组的有界快速预览。临时桶在完整写入后发布，取消/磁盘故障不丢弃内存分析。缓存属于本机派生数据，移动照片或只复制 workspace 到其他机器需要重新分析。回归见 [test_sequence_preview_cache.py](../tests/test_sequence_preview_cache.py)。
 
 [config.py](../birdstamp/config.py) 区分只读资源与可写状态：`resolve_bundled_path` 定位内置资源；`get_user_data_dir` 在开发模式返回应用目录，打包后返回平台用户目录；`get_config_path` 返回其 `Config/config.yaml`。模板经 [template_directory](../birdstamp/gui/editor_template.py) 进入同级 `templates`，运行状态和 `editor_autosave.birdstamp-workspace.json` 也位于配置目录。默认编辑选项来自 [editor_options.json](../config/editor_options.json)。自动保存、导出状态和用户路径不应打包为发行默认值。
 

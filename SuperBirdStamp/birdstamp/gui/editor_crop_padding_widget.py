@@ -4,14 +4,12 @@ from __future__ import annotations
 from typing import Any
 
 from PyQt6.QtCore import Qt, QSize, pyqtSignal
-from PyQt6.QtGui import QColor, QIntValidator
+from PyQt6.QtGui import QIntValidator
 from PyQt6.QtWidgets import (
-    QColorDialog,
     QComboBox,
     QGridLayout,
     QHBoxLayout,
     QLabel,
-    QPushButton,
     QSizePolicy,
     QSlider,
     QToolButton,
@@ -19,15 +17,12 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-from birdstamp.gui import editor_core, editor_options, editor_utils
+from birdstamp.gui import editor_core, editor_utils
 from birdstamp.gui.editor_collapsible import refresh_layout_chain
+from birdstamp.gui.color_editor import ColorEditor
 
-COLOR_PRESETS = editor_options.COLOR_PRESETS
 _DEFAULT_CROP_PADDING_PX = editor_core.DEFAULT_CROP_PADDING_PX
-_build_color_preview_swatch = editor_utils.build_color_preview_swatch
-_set_color_preview_swatch = editor_utils.set_color_preview_swatch
 _safe_color = editor_utils.safe_color
-_start_screen_color_picker = editor_utils.start_screen_color_picker
 
 
 class CropPaddingEditorWidget(QWidget):
@@ -153,28 +148,11 @@ class CropPaddingEditorWidget(QWidget):
         grid.addWidget(bot_w, 2, 1, Qt.AlignmentFlag.AlignCenter)
         details_layout.addWidget(grid_widget)
 
-        fill_row = QHBoxLayout()
-        fill_row.setSpacing(4)
-        self.fill_combo = QComboBox()
-        for lbl, val in COLOR_PRESETS:
-            self.fill_combo.addItem(lbl, val)
-        if self.fill_combo.count() == 0:
-            self.fill_combo.addItem("白色", "#FFFFFF")
-        idx_white = self.fill_combo.findData("#FFFFFF")
-        if idx_white >= 0:
-            self.fill_combo.setCurrentIndex(idx_white)
-        self.fill_combo.currentIndexChanged.connect(self._on_fill_combo_changed)
-        fill_row.addWidget(self.fill_combo, stretch=1)
-        self.fill_swatch = _build_color_preview_swatch()
-        fill_row.addWidget(self.fill_swatch)
-        self._refresh_fill_swatch()
-        pick_btn = QPushButton("调色板")
-        pick_btn.clicked.connect(self._pick_fill_color)
-        fill_row.addWidget(pick_btn)
-        screen_btn = QPushButton("吸管")
-        screen_btn.clicked.connect(self._pick_fill_screen)
-        fill_row.addWidget(screen_btn)
-        details_layout.addLayout(fill_row)
+        self.fill_editor = ColorEditor("#FFFFFF")
+        self.fill_combo = self.fill_editor.combo
+        self.fill_swatch = self.fill_editor.swatch
+        self.fill_editor.colorChanged.connect(self._emit_changed)
+        details_layout.addWidget(self.fill_editor)
 
         layout.addWidget(self._details_widget)
         self._details_attached = True
@@ -350,40 +328,12 @@ class CropPaddingEditorWidget(QWidget):
             self._blocking = False
         self._emit_changed()
 
-    def _on_fill_combo_changed(self, *_: Any) -> None:
-        self._refresh_fill_swatch()
-        self._emit_changed()
-
-    def _refresh_fill_swatch(self) -> None:
-        _set_color_preview_swatch(
-            self.fill_swatch,
-            str(self.fill_combo.currentData() or "#FFFFFF"),
-            fallback="#FFFFFF",
-        )
-
     def _emit_changed(self, *_: Any) -> None:
         if not self._blocking:
             self.changed.emit()
 
     def _set_fill_value(self, color: str) -> None:
-        normalized = _safe_color(color, "#FFFFFF")
-        for idx in range(self.fill_combo.count()):
-            if str(self.fill_combo.itemData(idx) or "").strip().lower() == normalized.lower():
-                self.fill_combo.setCurrentIndex(idx)
-                self._refresh_fill_swatch()
-                return
-        self.fill_combo.addItem(normalized.upper(), normalized)
-        self.fill_combo.setCurrentIndex(self.fill_combo.count() - 1)
-        self._refresh_fill_swatch()
-
-    def _pick_fill_color(self) -> None:
-        current = _safe_color(str(self.fill_combo.currentData() or "#FFFFFF"), "#FFFFFF")
-        chosen = QColorDialog.getColor(QColor(current), self, "选择图像外圈填充色")
-        if chosen.isValid():
-            self._set_fill_value(chosen.name())
-
-    def _pick_fill_screen(self) -> None:
-        _start_screen_color_picker(parent=self, on_picked=lambda h: self._set_fill_value(h))
+        self.fill_editor.set_value(color, emit=True)
 
     def set_values(self, *, top: int, bottom: int, left: int, right: int, fill: str) -> None:
         """Set all values without emitting changed."""
@@ -416,7 +366,6 @@ class CropPaddingEditorWidget(QWidget):
                 self._set_fill_value(fill)
             finally:
                 self.fill_combo.blockSignals(False)
-            self._refresh_fill_swatch()
             if not (top == bottom == left == right):
                 self.set_details_expanded(True)
         finally:
@@ -429,7 +378,7 @@ class CropPaddingEditorWidget(QWidget):
             "crop_padding_left": self._parse_padding_text(self.left_spin.currentText()),
             "crop_padding_right": self._parse_padding_text(self.right_spin.currentText()),
             "crop_padding_fill": _safe_color(
-                str(self.fill_combo.currentData() or "#FFFFFF"), "#FFFFFF"
+                self.fill_editor.value(), "#FFFFFF"
             ),
         }
 

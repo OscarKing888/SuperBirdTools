@@ -16,7 +16,7 @@ FRAME_CACHE_ROOT_NAME = "birdstamp_export_cache"
 SOURCE_FRAME_BUCKET_KIND = "rendered_source_frames"
 VIDEO_FRAME_BUCKET_KIND = "video_frames"
 # 图片帧开始完整保留 EXIF，避免复用旧的无元数据缓存。
-SOURCE_FRAME_CACHE_VERSION = 7
+SOURCE_FRAME_CACHE_VERSION = 8
 VIDEO_FRAME_CACHE_VERSION = 2
 _DEFAULT_PIPELINE_STAGE_ORDER = (
     "template_crop",

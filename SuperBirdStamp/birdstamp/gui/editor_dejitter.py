@@ -14,6 +14,7 @@ from . import editor_core, editor_options
 from .edit_modes import EDIT_MODE_NONE, EDIT_MODE_REFERENCE_REGION
 from .editor_preview_canvas import EditorPreviewOverlayState
 from .editor_sequence_preview_worker import EditorSequencePreviewWorker, EditorSequenceExportWorker
+from .sequence_preview_cache import SequencePreviewCache
 from birdstamp.export_stage.render_job_seed import RenderJobSeed
 from .editor_utils import pil_to_qpixmap
 from .editor_utils import path_key
@@ -29,6 +30,11 @@ class _BirdStampDejitterMixin:
         self._sequence_epoch = 0
         self._sequence_shutdown = False
         self._sequence_preview = None
+        self._sequence_cache_key = None
+        self._sequence_restore_state = None
+        self._sequence_restore_timer = QTimer(self)
+        self._sequence_restore_timer.setSingleShot(True)
+        self._sequence_restore_timer.timeout.connect(self._try_restore_sequence_cache)
         self._sequence_frames = OrderedDict()
         self._sequence_quick_frames = {}
         self._sequence_validated_at = 0
@@ -45,6 +51,37 @@ class _BirdStampDejitterMixin:
         self._dejitter_view = 'edit'
         self._dejitter_edit_source = None
         self._dejitter_edit_pixmap = None
+
+    def _collect_sequence_workspace_state(self):
+        return dict(input_key=self._sequence_cache_key,
+                    active=self._dejitter_tab_active(), view=self._dejitter_view)
+
+    def _restore_sequence_workspace_state(self, state):
+        if not isinstance(state, dict) or not state.get('input_key') or self._sequence_shutdown:
+            return
+        self._sequence_restore_state = dict(state)
+        # 异步读盘期间自动保存也保留引用，防止下次启动丢失已有分析。
+        self._sequence_cache_key = state['input_key']
+        self._sequence_restore_timer.start(0)
+
+    def _try_restore_sequence_cache(self):
+        state = self._sequence_restore_state
+        if self._sequence_shutdown or not state or self._sequence_worker is not None:
+            return
+        self._sequence_restore_state = None
+        paths = self._list_photo_paths()
+        seeds = self._build_dejitter_seeds(paths)
+        if not paths or not seeds or sequence_input_key(seeds) != state.get('input_key'):
+            self._sequence_cache_key = None
+            self._sequence_message = '照片或分析参数已变化，请重新分析。'
+            self._update_dejitter_controls()
+            return
+        self._sequence_message = '正在加载已有成片缓存…'
+        if state.get('active'):
+            self.export_tabs.setCurrentWidget(self.dejitter_page)
+        self._set_dejitter_view('result' if state.get('view') == 'result' else 'edit')
+        selected = self.current_path if self.current_path in paths else paths[0]
+        self._launch_sequence_worker(seeds=seeds, restore_only=True, path=selected)
 
     def _build_dejitter_page(self):
         page = QWidget()
@@ -252,6 +289,10 @@ class _BirdStampDejitterMixin:
             self._refresh_preview_label(preserve_view=True)
 
     def _invalidate_sequence_preview(self, *, shutdown=False):
+        self._sequence_restore_timer.stop()
+        self._sequence_restore_state = None
+        if not shutdown:
+            self._sequence_cache_key = None
         self._sequence_upgrade_timer.stop()
         self._sequence_quick_frames.clear()
         if hasattr(self, 'sequence_transport'):
@@ -331,9 +372,10 @@ class _BirdStampDejitterMixin:
         self._set_dejitter_view('result')
         self._refresh_preview_label(preserve_view=True)
 
-    def _launch_sequence_worker(self, *, seeds=()):
+    def _launch_sequence_worker(self, *, seeds=(), restore_only=False, path=None):
         worker = EditorSequencePreviewWorker(
-            token=self._sequence_epoch, path=self.current_path, seeds=seeds,
+            token=self._sequence_epoch, path=path or self.current_path, seeds=seeds,
+            restore_only=restore_only, cache=SequencePreviewCache(),
             template_paths=self.template_paths, sequence=self._sequence_preview,
             bird_boxes=self._bird_box_cache, parent=self,
         )
@@ -405,6 +447,8 @@ class _BirdStampDejitterMixin:
         if sequence_input_key(seeds, self.template_paths) != sequence.input_key:
             self._invalidate_sequence_preview()
             return
+        self._sequence_cache_key = sequence.input_key
+        self._schedule_workspace_autosave()
         if frame is not None:
             key = path_key(frame.path)
             old = self._sequence_frames.pop(key, None)
@@ -436,6 +480,9 @@ class _BirdStampDejitterMixin:
         self._sequence_worker = None
         self._sequence_exporting = False
         worker.deleteLater()
+        if self._sequence_restore_state is not None:
+            self._try_restore_sequence_cache()
+            return
         pending = self._sequence_pending_path
         self._sequence_pending_path = None
         self._update_dejitter_controls()

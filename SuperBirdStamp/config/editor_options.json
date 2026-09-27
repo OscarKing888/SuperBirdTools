@@ -135,5 +135,17 @@
     "EXIF:Model": "Sony ILCE-1M2",
     "EXIF:LensModel": "FE 600mm F4 GM OSS",
     "settings_text": "f/8  1/2000s  ISO800  600mm"
+  },
+  "dejitter_disk_cache_mb": 512,
+  "text_effects": {
+    "stroke_enabled": false,
+    "stroke_color": "#000000",
+    "stroke_width": 2.0,
+    "shadow_enabled": false,
+    "shadow_color": "#000000",
+    "shadow_opacity": 70.0,
+    "shadow_offset_x": 3.0,
+    "shadow_offset_y": 3.0,
+    "shadow_blur": 3.0
   }
 }

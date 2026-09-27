@@ -544,6 +544,7 @@ class _BirdStampWorkspaceMixin:
                 "image_export": self._collect_workspace_image_export_state(workspace_path),
                 "video_export": self._collect_workspace_video_export_state(workspace_path),
                 "preview": self._collect_workspace_preview_state(),
+                "sequence_preview": self._collect_sequence_workspace_state(),
             },
         }
 
@@ -786,6 +787,7 @@ class _BirdStampWorkspaceMixin:
             if warning_lines:
                 QMessageBox.warning(self, "工作区加载完成", "\n\n".join(warning_lines))
 
+            self._restore_sequence_workspace_state(context.get("sequence_preview_state"))
             if bool(context.get("autosave_after_restore", True)):
                 self._schedule_workspace_autosave()
 
@@ -928,6 +930,7 @@ class _BirdStampWorkspaceMixin:
                 "mark_as_current_workspace": mark_as_current_workspace,
                 "autosave_after_restore": autosave_after_restore,
                 "preview_scale_percent": preview_scale_percent,
+                "sequence_preview_state": editor_state.get("sequence_preview"),
                 "selected_photos": selected_photos,
                 "total_photo_entries": len(pending_photo_entries),
             }

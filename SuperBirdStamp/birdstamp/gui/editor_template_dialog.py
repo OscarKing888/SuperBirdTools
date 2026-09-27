@@ -42,7 +42,6 @@ from PyQt6.QtWidgets import (
     QSplitter,
     QVBoxLayout,
     QWidget,
-    QColorDialog,
 )
 
 from app_common.preview_canvas import (
@@ -55,6 +54,8 @@ from app_common.preview_canvas import (
     sync_preview_scale_preset_combo,
 )
 from birdstamp.gui import editor_core, editor_options, editor_template, editor_utils, template_context as _template_context
+from birdstamp.gui.color_editor import ColorEditor
+from birdstamp.render.text_effects import normalize_text_effects, TEXT_EFFECT_RANGES
 from birdstamp.gui.editor_crop_padding_widget import _CropPaddingEditorWidget
 from birdstamp.gui.editor_preview_canvas import (
     EditorPreviewCanvas,
@@ -69,7 +70,6 @@ RATIO_OPTIONS = editor_options.RATIO_OPTIONS
 RATIO_FREE = editor_options.RATIO_FREE
 RATIO_NO_CROP = editor_options.RATIO_NO_CROP
 MAX_LONG_EDGE_OPTIONS = editor_options.MAX_LONG_EDGE_OPTIONS
-COLOR_PRESETS = editor_options.COLOR_PRESETS
 TAG_OPTIONS = editor_options.TAG_OPTIONS
 SAMPLE_RAW_METADATA = editor_options.SAMPLE_RAW_METADATA
 DEFAULT_FIELD_TAG = editor_options.DEFAULT_FIELD_TAG
@@ -84,15 +84,11 @@ _template_font_choices = editor_utils.template_font_choices
 _configure_form_layout = editor_utils.configure_form_layout
 _configure_spinbox_minimum_width = editor_utils.configure_spinbox_minimum_width
 _normalize_template_banner_color = editor_utils.normalize_template_banner_color
-_build_color_preview_swatch = editor_utils.build_color_preview_swatch
-_set_color_preview_swatch = editor_utils.set_color_preview_swatch
 _safe_color = editor_utils.safe_color
-_start_screen_color_picker = editor_utils.start_screen_color_picker
 _build_placeholder_image = editor_utils.build_placeholder_image
 _sanitize_template_name = editor_utils.sanitize_template_name
 _DEFAULT_TEMPLATE_BANNER_COLOR = editor_utils.DEFAULT_TEMPLATE_BANNER_COLOR
 _TEMPLATE_BANNER_COLOR_NONE = editor_utils.TEMPLATE_BANNER_COLOR_NONE
-_TEMPLATE_BANNER_COLOR_CUSTOM = editor_utils.TEMPLATE_BANNER_COLOR_CUSTOM
 _PREVIEW_GRID_MODE_ITEMS = editor_utils.PREVIEW_GRID_MODE_ITEMS
 _PREVIEW_GRID_MODE_COMBO_WIDTH = editor_utils.PREVIEW_GRID_MODE_COMBO_WIDTH
 _PREVIEW_GRID_LINE_WIDTH_COMBO_WIDTH = editor_utils.PREVIEW_GRID_LINE_WIDTH_COMBO_WIDTH
@@ -398,14 +394,11 @@ class _GradientEditorWidget(QWidget):
         top_row.setSpacing(4)
         top_lbl = QLabel("顶端")
         top_row.addWidget(top_lbl)
-        self._top_swatch = _build_color_preview_swatch()
-        top_row.addWidget(self._top_swatch)
-        top_pick = QPushButton("选色")
-        top_pick.clicked.connect(self._pick_top_color)
-        top_row.addWidget(top_pick)
-        top_screen = QPushButton("吸管")
-        top_screen.clicked.connect(self._pick_top_screen)
-        top_row.addWidget(top_screen)
+        self._top_color = ColorEditor()
+        self._top_color.colorChanged.connect(lambda value: self._on_stop_color("top", value))
+        top_row.addWidget(self._top_color, 1)
+        layout.addLayout(top_row)
+        top_row = QHBoxLayout()
         top_row.addWidget(QLabel("不透明度"))
         self._top_opacity_slider = QSlider(Qt.Orientation.Horizontal)
         self._top_opacity_slider.setRange(0, 100)
@@ -423,14 +416,11 @@ class _GradientEditorWidget(QWidget):
         bot_row.setSpacing(4)
         bot_lbl = QLabel("底端")
         bot_row.addWidget(bot_lbl)
-        self._bot_swatch = _build_color_preview_swatch()
-        bot_row.addWidget(self._bot_swatch)
-        bot_pick = QPushButton("选色")
-        bot_pick.clicked.connect(self._pick_bot_color)
-        bot_row.addWidget(bot_pick)
-        bot_screen = QPushButton("吸管")
-        bot_screen.clicked.connect(self._pick_bot_screen)
-        bot_row.addWidget(bot_screen)
+        self._bot_color = ColorEditor()
+        self._bot_color.colorChanged.connect(lambda value: self._on_stop_color("bot", value))
+        bot_row.addWidget(self._bot_color, 1)
+        layout.addLayout(bot_row)
+        bot_row = QHBoxLayout()
         bot_row.addWidget(QLabel("不透明度"))
         self._bot_opacity_slider = QSlider(Qt.Orientation.Horizontal)
         self._bot_opacity_slider.setRange(0, 100)
@@ -498,8 +488,8 @@ class _GradientEditorWidget(QWidget):
             self._bot_opacity_spin.setValue(bot_op)
             self._height_slider.setValue(h_pct)
             self._height_spin.setValue(h_pct)
-            _set_color_preview_swatch(self._top_swatch, self._top_hex)
-            _set_color_preview_swatch(self._bot_swatch, self._bot_hex)
+            self._top_color.set_value(self._top_hex)
+            self._bot_color.set_value(self._bot_hex)
             self._bar.set_top(QColor(self._top_hex), float(top_op))
             self._bar.set_bottom(QColor(self._bot_hex), float(bot_op))
         finally:
@@ -582,37 +572,11 @@ class _GradientEditorWidget(QWidget):
             self._blocking = False
         self.changed.emit()
 
-    def _pick_top_color(self) -> None:
-        color = QColorDialog.getColor(QColor(self._top_hex), self, "选择顶端颜色")
-        if color.isValid():
-            self._top_hex = color.name()
-            _set_color_preview_swatch(self._top_swatch, self._top_hex)
+    def _on_stop_color(self, stop: str, value: str) -> None:
+        setattr(self, f"_{stop}_hex", value)
+        if not self._blocking:
             self._refresh_bar()
             self.changed.emit()
-
-    def _pick_top_screen(self) -> None:
-        def _apply(hex_: str) -> None:
-            self._top_hex = _safe_color(hex_, _BANNER_GRADIENT_TOP_COLOR_DEFAULT)
-            _set_color_preview_swatch(self._top_swatch, self._top_hex)
-            self._refresh_bar()
-            self.changed.emit()
-        _start_screen_color_picker(parent=self, on_picked=_apply)
-
-    def _pick_bot_color(self) -> None:
-        color = QColorDialog.getColor(QColor(self._bot_hex), self, "选择底端颜色")
-        if color.isValid():
-            self._bot_hex = color.name()
-            _set_color_preview_swatch(self._bot_swatch, self._bot_hex)
-            self._refresh_bar()
-            self.changed.emit()
-
-    def _pick_bot_screen(self) -> None:
-        def _apply(hex_: str) -> None:
-            self._bot_hex = _safe_color(hex_, _BANNER_GRADIENT_BOTTOM_COLOR_DEFAULT)
-            _set_color_preview_swatch(self._bot_swatch, self._bot_hex)
-            self._refresh_bar()
-            self.changed.emit()
-        _start_screen_color_picker(parent=self, on_picked=_apply)
 
 
 # ---------------------------------------------------------------------------
@@ -975,44 +939,13 @@ class TemplateManagerDialog(QDialog):
         return group
 
     def _build_banner_color_row(self) -> QWidget:
-        """Banner 颜色行：预设下拉 + 文本输入 + 色块 + 调色板 + 吸管。"""
-        row = QWidget()
-        layout = QHBoxLayout(row)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(6)
-
-        self.template_banner_color_combo = QComboBox()
-        self.template_banner_color_combo.addItem("无(透明)", _TEMPLATE_BANNER_COLOR_NONE)
-        for label, value in COLOR_PRESETS:
-            self.template_banner_color_combo.addItem(f"{label} {value}", value)
-        self.template_banner_color_combo.addItem("自定义", _TEMPLATE_BANNER_COLOR_CUSTOM)
-        self.template_banner_color_combo.currentIndexChanged.connect(
-            self._on_template_banner_color_preset_changed
-        )
-        self.template_banner_color_combo.currentIndexChanged.connect(
-            self._refresh_template_banner_color_swatch
-        )
-        layout.addWidget(self.template_banner_color_combo, stretch=1)
-
-        self.template_banner_color_edit = QLineEdit(_DEFAULT_TEMPLATE_BANNER_COLOR)
-        self.template_banner_color_edit.textChanged.connect(self._on_template_banner_color_text_changed)
-        self.template_banner_color_edit.textChanged.connect(self._refresh_template_banner_color_swatch)
-        layout.addWidget(self.template_banner_color_edit, stretch=1)
-
-        self.template_banner_color_swatch = _build_color_preview_swatch()
-        layout.addWidget(self.template_banner_color_swatch)
-        self._refresh_template_banner_color_swatch()
-
-        btn_palette = QPushButton("调色板")
-        btn_palette.clicked.connect(self._pick_template_banner_color)
-        layout.addWidget(btn_palette)
-
-        btn_screen = QPushButton("吸管")
-        btn_screen.clicked.connect(self._pick_template_banner_color_from_screen)
-        layout.addWidget(btn_screen)
-
-        self._banner_color_row_widget = row
-        return row
+        self.banner_color_editor = ColorEditor(_DEFAULT_TEMPLATE_BANNER_COLOR, allow_none=True, allow_alpha=True)
+        self.banner_color_editor.colorChanged.connect(self._apply_template_banner_color)
+        self.template_banner_color_combo = self.banner_color_editor.combo
+        self.template_banner_color_edit = self.banner_color_editor.edit
+        self.template_banner_color_swatch = self.banner_color_editor.swatch
+        self._banner_color_row_widget = self.banner_color_editor
+        return self.banner_color_editor
 
     def _build_fields_group(self) -> QGroupBox:
         """文本项 GroupBox：列表 + 新增/删除按钮。"""
@@ -1084,6 +1017,29 @@ class TemplateManagerDialog(QDialog):
         form.addRow("Y偏移(%)", self.field_y_spin)
 
         form.addRow("文本颜色", self._build_field_color_row())
+        self.field_effect_widgets = {}
+        defaults = editor_options.TEXT_EFFECT_DEFAULTS
+        for prefix, caption in (("stroke", "描边"), ("shadow", "阴影")):
+            check = QCheckBox(f"启用{caption}")
+            check.toggled.connect(self._apply_field_changes)
+            self.field_effect_widgets[f"{prefix}_enabled"] = check
+            form.addRow(caption, check)
+            color = ColorEditor(defaults[f"{prefix}_color"])
+            color.colorChanged.connect(self._apply_field_changes)
+            self.field_effect_widgets[f"{prefix}_color"] = color
+            form.addRow(f"{caption}颜色", color)
+        for key, label in (("stroke_width", "描边宽度"), ("shadow_opacity", "阴影不透明度"),
+                           ("shadow_offset_x", "阴影 X 偏移"), ("shadow_offset_y", "阴影 Y 偏移"),
+                           ("shadow_blur", "阴影柔化")):
+            spin = QDoubleSpinBox()
+            spin.setRange(*TEXT_EFFECT_RANGES[key])
+            spin.setDecimals(1)
+            spin.setSuffix(" %" if key == "shadow_opacity" else " px")
+            spin.setToolTip("随文字缩放；数值以模板基础字号为基准")
+            spin.valueChanged.connect(self._apply_field_changes)
+            self.field_effect_widgets[key] = spin
+            form.addRow(label, spin)
+        self._set_field_effect_values(defaults)
 
         self.field_font_combo = _FilterableComboBox()
         self.field_font_combo.setMaxVisibleItems(24)
@@ -1111,39 +1067,29 @@ class TemplateManagerDialog(QDialog):
 
         return group
 
+    def _set_field_effect_values(self, field) -> None:
+        for key, value in normalize_text_effects(field).items():
+            widget = self.field_effect_widgets[key]
+            if isinstance(widget, ColorEditor):
+                widget.set_value(value)
+            elif isinstance(widget, QCheckBox):
+                widget.setChecked(value)
+            else:
+                widget.setValue(value)
+        self._sync_effect_enabled()
+
+    def _sync_effect_enabled(self) -> None:
+        for key, widget in self.field_effect_widgets.items():
+            if not key.endswith("_enabled"):
+                widget.setEnabled(self.field_effect_widgets[key.split("_")[0]+"_enabled"].isChecked())
+
     def _build_field_color_row(self) -> QWidget:
-        """文本颜色行：预设下拉 + 文本输入 + 色块 + 调色板 + 吸管。"""
-        row = QWidget()
-        layout = QHBoxLayout(row)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(6)
-
-        self.field_color_combo = QComboBox()
-        for label, value in COLOR_PRESETS:
-            self.field_color_combo.addItem(f"{label} {value}", value)
-        self.field_color_combo.addItem("自定义", "custom")
-        self.field_color_combo.currentIndexChanged.connect(self._on_color_preset_changed)
-        self.field_color_combo.currentIndexChanged.connect(self._refresh_field_color_swatch)
-        layout.addWidget(self.field_color_combo, stretch=1)
-
-        self.field_color_edit = QLineEdit("#FFFFFF")
-        self.field_color_edit.textChanged.connect(self._apply_field_changes)
-        self.field_color_edit.textChanged.connect(self._refresh_field_color_swatch)
-        layout.addWidget(self.field_color_edit, stretch=1)
-
-        self.field_color_swatch = _build_color_preview_swatch()
-        layout.addWidget(self.field_color_swatch)
-        self._refresh_field_color_swatch()
-
-        btn_palette = QPushButton("调色板")
-        btn_palette.clicked.connect(self._pick_field_color)
-        layout.addWidget(btn_palette)
-
-        btn_screen = QPushButton("吸管")
-        btn_screen.clicked.connect(self._pick_field_color_from_screen)
-        layout.addWidget(btn_screen)
-
-        return row
+        self.field_color_editor = ColorEditor(allow_alpha=True)
+        self.field_color_editor.colorChanged.connect(self._apply_field_changes)
+        self.field_color_combo = self.field_color_editor.combo
+        self.field_color_edit = self.field_color_editor.edit
+        self.field_color_swatch = self.field_color_editor.swatch
+        return self.field_color_editor
 
     def resizeEvent(self, event: Any) -> None:  # type: ignore[override]
         super().resizeEvent(event)
@@ -1493,51 +1439,8 @@ class TemplateManagerDialog(QDialog):
     # Banner color
     # ------------------------------------------------------------------
 
-    def _refresh_template_banner_color_swatch(self, *_args: Any) -> None:
-        selected = str(self.template_banner_color_combo.currentData() or "").strip().lower()
-        if selected == _TEMPLATE_BANNER_COLOR_NONE:
-            value = _TEMPLATE_BANNER_COLOR_NONE
-        elif selected and selected != _TEMPLATE_BANNER_COLOR_CUSTOM:
-            value = selected
-        else:
-            typed = self.template_banner_color_edit.text().strip()
-            value = typed if typed else _DEFAULT_TEMPLATE_BANNER_COLOR
-        _set_color_preview_swatch(
-            self.template_banner_color_swatch,
-            value,
-            fallback=_DEFAULT_TEMPLATE_BANNER_COLOR,
-            allow_none=True,
-        )
-
-    def _template_banner_color_combo_index_for_value(self, value: str) -> int:
-        target = str(value or "").strip().lower()
-        for idx in range(self.template_banner_color_combo.count()):
-            data = str(self.template_banner_color_combo.itemData(idx) or "").strip().lower()
-            if data == target:
-                return idx
-        return -1
-
     def _set_template_banner_color_value(self, value: Any) -> None:
-        normalized = _normalize_template_banner_color(value)
-        custom_idx = self._template_banner_color_combo_index_for_value(_TEMPLATE_BANNER_COLOR_CUSTOM)
-        if custom_idx < 0:
-            custom_idx = max(0, self.template_banner_color_combo.count() - 1)
-
-        if normalized == _TEMPLATE_BANNER_COLOR_NONE:
-            idx = self._template_banner_color_combo_index_for_value(_TEMPLATE_BANNER_COLOR_NONE)
-            if idx < 0:
-                idx = custom_idx
-            self.template_banner_color_combo.setCurrentIndex(idx)
-            self.template_banner_color_edit.setText("")
-            self._refresh_template_banner_color_swatch()
-            return
-
-        idx = self._template_banner_color_combo_index_for_value(normalized)
-        if idx < 0:
-            idx = custom_idx
-        self.template_banner_color_combo.setCurrentIndex(idx)
-        self.template_banner_color_edit.setText(normalized)
-        self._refresh_template_banner_color_swatch()
+        self.banner_color_editor.set_value(_normalize_template_banner_color(value))
 
     def _set_template_draw_banner_background_value(self, value: Any) -> None:
         self.template_draw_banner_bg_check.setChecked(_parse_bool_value(value, True))
@@ -1587,91 +1490,12 @@ class TemplateManagerDialog(QDialog):
                 break
         self._update_banner_style_ui_visibility()
 
-    def _apply_template_banner_color(self) -> None:
+    def _apply_template_banner_color(self, *_args: Any) -> None:
         if self._updating or not self.current_payload:
             return
-
-        selected = str(self.template_banner_color_combo.currentData() or "").strip().lower()
-        if selected == _TEMPLATE_BANNER_COLOR_NONE:
-            banner_color = _TEMPLATE_BANNER_COLOR_NONE
-        elif selected == _TEMPLATE_BANNER_COLOR_CUSTOM:
-            typed = self.template_banner_color_edit.text().strip()
-            banner_color = _normalize_template_banner_color(
-                typed if typed else _DEFAULT_TEMPLATE_BANNER_COLOR
-            )
-            if banner_color == _TEMPLATE_BANNER_COLOR_NONE:
-                banner_color = _normalize_template_banner_color(_DEFAULT_TEMPLATE_BANNER_COLOR)
-        else:
-            banner_color = _normalize_template_banner_color(selected)
-
-        self.current_payload["banner_color"] = banner_color
+        self.current_payload["banner_color"] = self.banner_color_editor.value()
         self._save_current_template()
-        self._refresh_preview()
-        self._refresh_template_banner_color_swatch()
-
-    def _on_template_banner_color_preset_changed(self, *_args: Any) -> None:
-        if self._updating or not self.current_payload:
-            return
-
-        selected = str(self.template_banner_color_combo.currentData() or "").strip().lower()
-        self._updating = True
-        try:
-            if selected == _TEMPLATE_BANNER_COLOR_NONE:
-                self.template_banner_color_edit.setText("")
-            elif selected and selected != _TEMPLATE_BANNER_COLOR_CUSTOM:
-                self.template_banner_color_edit.setText(selected)
-        finally:
-            self._updating = False
-        self._apply_template_banner_color()
-
-    def _on_template_banner_color_text_changed(self, *_args: Any) -> None:
-        if self._updating or not self.current_payload:
-            return
-
-        selected = str(self.template_banner_color_combo.currentData() or "").strip().lower()
-        text = self.template_banner_color_edit.text().strip()
-        should_switch_to_custom = False
-        if text:
-            if selected == _TEMPLATE_BANNER_COLOR_NONE:
-                should_switch_to_custom = True
-            elif selected not in {_TEMPLATE_BANNER_COLOR_CUSTOM, ""} and text.lower() != selected:
-                should_switch_to_custom = True
-        if should_switch_to_custom:
-            custom_idx = self._template_banner_color_combo_index_for_value(_TEMPLATE_BANNER_COLOR_CUSTOM)
-            if custom_idx >= 0:
-                self.template_banner_color_combo.blockSignals(True)
-                try:
-                    self.template_banner_color_combo.setCurrentIndex(custom_idx)
-                finally:
-                    self.template_banner_color_combo.blockSignals(False)
-        self._apply_template_banner_color()
-
-    def _pick_template_banner_color(self) -> None:
-        initial_text = self.template_banner_color_edit.text().strip() or _DEFAULT_TEMPLATE_BANNER_COLOR
-        initial = QColor(initial_text)
-        chosen = QColorDialog.getColor(initial, self, "选择 Banner 颜色")
-        if not chosen.isValid():
-            return
-
-        custom_idx = self._template_banner_color_combo_index_for_value(_TEMPLATE_BANNER_COLOR_CUSTOM)
-        if custom_idx >= 0:
-            self.template_banner_color_combo.setCurrentIndex(custom_idx)
-        self.template_banner_color_edit.setText(chosen.name())
-
-    def _pick_template_banner_color_from_screen(self) -> None:
-        def _apply(color_hex: str) -> None:
-            custom_idx = self._template_banner_color_combo_index_for_value(_TEMPLATE_BANNER_COLOR_CUSTOM)
-            if custom_idx >= 0:
-                self.template_banner_color_combo.setCurrentIndex(custom_idx)
-            self.template_banner_color_edit.setText(
-                _safe_color(color_hex, _DEFAULT_TEMPLATE_BANNER_COLOR)
-            )
-
-        _start_screen_color_picker(parent=self, on_picked=_apply)
-
-    # ------------------------------------------------------------------
-    # Field list / editor
-    # ------------------------------------------------------------------
+        self._schedule_preview_refresh()
 
     def _build_field_fallback_combo_items(self) -> list[tuple[str, tuple[str, str]]]:
         items: list[tuple[str, tuple[str, str]]] = []
@@ -1768,19 +1592,20 @@ class TemplateManagerDialog(QDialog):
         self._updating = True
         try:
             if not field:
+                self._set_field_effect_values(editor_options.TEXT_EFFECT_DEFAULTS)
                 self._set_fallback_combo_value("")
                 self.field_align_h_combo.setCurrentText("left")
                 self.field_align_v_combo.setCurrentText("top")
                 self.field_x_spin.setValue(0.0)
                 self.field_y_spin.setValue(0.0)
-                self.field_color_edit.setText("#FFFFFF")
+                self.field_color_editor.set_value("#FFFFFF")
                 self._set_field_font_combo_value(_DEFAULT_TEMPLATE_FONT_TYPE)
                 self.field_font_size_spin.setValue(24)
                 self.field_style_combo.setCurrentText(STYLE_OPTIONS[0])
-                self.field_color_combo.setCurrentIndex(0)
                 return
 
             normalized = _normalize_template_field(field, 0)
+            self._set_field_effect_values(normalized)
             text_source = normalized.get("text_source") or {}
             self._set_fallback_combo_value(
                 str(text_source.get("key") or ""),
@@ -1791,49 +1616,13 @@ class TemplateManagerDialog(QDialog):
             self.field_align_v_combo.setCurrentText(normalized["align_vertical"])
             self.field_x_spin.setValue(float(normalized["x_offset_pct"]))
             self.field_y_spin.setValue(float(normalized["y_offset_pct"]))
-            self.field_color_edit.setText(normalized["color"])
+            self.field_color_editor.set_value(normalized["color"])
             self._set_field_font_combo_value(normalized.get("font_type"))
             self.field_font_size_spin.setValue(int(normalized["font_size"]))
             self.field_style_combo.setCurrentText(normalized["style"])
 
-            preset_index = self.field_color_combo.count() - 1
-            for idx in range(self.field_color_combo.count() - 1):
-                value = str(self.field_color_combo.itemData(idx) or "")
-                if value.lower() == normalized["color"].lower():
-                    preset_index = idx
-                    break
-            self.field_color_combo.setCurrentIndex(preset_index)
         finally:
             self._updating = False
-            self._refresh_field_color_swatch()
-
-    def _refresh_field_color_swatch(self, *_args: Any) -> None:
-        _set_color_preview_swatch(
-            self.field_color_swatch, self.field_color_edit.text().strip(), fallback="#FFFFFF"
-        )
-
-    def _on_color_preset_changed(self, *_args: Any) -> None:
-        if self._updating:
-            return
-        value = str(self.field_color_combo.currentData() or "")
-        if value and value != "custom":
-            self.field_color_edit.setText(value)
-
-    def _pick_field_color(self) -> None:
-        initial = QColor(self.field_color_edit.text().strip() or "#ffffff")
-        chosen = QColorDialog.getColor(initial, self, "选择文本颜色")
-        if not chosen.isValid():
-            return
-        self.field_color_edit.setText(chosen.name())
-
-    def _pick_field_color_from_screen(self) -> None:
-        def _apply(color_hex: str) -> None:
-            custom_idx = self.field_color_combo.findData("custom")
-            if custom_idx >= 0:
-                self.field_color_combo.setCurrentIndex(custom_idx)
-            self.field_color_edit.setText(_safe_color(color_hex, "#FFFFFF"))
-
-        _start_screen_color_picker(parent=self, on_picked=_apply)
 
     def _set_fallback_combo_value(
         self,
@@ -1920,7 +1709,10 @@ class TemplateManagerDialog(QDialog):
         field["align_vertical"] = align_v if align_v in ALIGN_OPTIONS_VERTICAL else "top"
         field["x_offset_pct"] = round(self.field_x_spin.value(), 2)
         field["y_offset_pct"] = round(self.field_y_spin.value(), 2)
-        field["color"] = _safe_color(self.field_color_edit.text(), "#FFFFFF")
+        field["color"] = self.field_color_editor.value()
+        for key, widget in self.field_effect_widgets.items():
+            field[key] = widget.isChecked() if isinstance(widget, QCheckBox) else widget.value()
+        self._sync_effect_enabled()
         field["font_type"] = _normalize_template_font_type(self.field_font_combo.currentData())
         field["font_size"] = int(self.field_font_size_spin.value())
         style = self.field_style_combo.currentText().strip().lower()
@@ -1944,7 +1736,7 @@ class TemplateManagerDialog(QDialog):
             fields = []
             self.current_payload["fields"] = fields
 
-        default_field = _normalize_template_field({}, len(fields))
+        default_field = _normalize_template_field(editor_options.TEXT_EFFECT_DEFAULTS, len(fields))
         fields.append(default_field)
         self._populate_field_list(fields)
         self.field_list.setCurrentRow(len(fields) - 1)
