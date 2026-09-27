@@ -81,6 +81,8 @@ Viewer 在列表子类中启用 `enable_key_navigation_playback`、`enable_in_me
 3. `file_fast_preview_pixmap_requested` 直接复用已解码帧；文件路径回退走 `file_fast_preview_requested`。主窗口调用 `set_quick_pixmap()` 或 `set_image(..., load_full=False, quick_size=...)`。
 4. 快切中不启动完整预览或焦点提取，不提交每帧的信息/EXIF 刷新。物理按键释放时只提交最终选择一次。
 
+预览图键盘焦点由 [`PreviewKeyRouter`](../superviewer/preview_key_router.py) 接入：点击画布即可获得焦点，按键转交当前列表/缩略图视图，保留原始修饰键、自动重复标记和 press/release。Copy/Cut/Paste 复用文件列表已有的局部快捷键对象；全局菜单快捷键不重复注册。文件列表仍是唯一的选择与长按节拍所有者；画布失焦、隐藏或窗口失活时停止长按。路由只安装到图片画布，输入框、预览工具栏及视频控件保留原生行为，Tab 保留焦点导航。回归见 [`test_preview_key_router.py`](../tests/test_preview_key_router.py)，包括双视图导航、多选、评级/排除/精选、删除、剪贴板、8/24/60 FPS 与松键单次提交。
+
 新增预览回调必须检查它是否会在播放期间触发。后台元数据和完整预览完成信号也要保留当前选择及播放状态检查，不能绕过上述规则。
 
 ## 4. 焦点来源与显示

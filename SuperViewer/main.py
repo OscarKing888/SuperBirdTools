@@ -132,6 +132,7 @@ try:
     )
     from .superviewer.super_viewer_user_options_dialog import SuperViewerUserOptionsDialog
     from .superviewer.tagged_file_list import SuperViewerTaggedFileListPanel
+    from .superviewer.preview_key_router import PreviewKeyRouter
     from .superviewer.tag_history_actions import TagHistoryActions
     from .superviewer.metadata_edit_sync import sync_saved_xmp_edit
     from .superviewer.ui_theme import get_ui_theme_manager, install_app_theme, panel_theme_colors
@@ -213,6 +214,7 @@ except ImportError:
     )
     from superviewer.super_viewer_user_options_dialog import SuperViewerUserOptionsDialog
     from superviewer.tagged_file_list import SuperViewerTaggedFileListPanel
+    from superviewer.preview_key_router import PreviewKeyRouter
     from superviewer.tag_history_actions import TagHistoryActions
     from superviewer.metadata_edit_sync import sync_saved_xmp_edit
     from superviewer.ui_theme import get_ui_theme_manager, install_app_theme, panel_theme_colors
@@ -436,6 +438,7 @@ class MainWindow(QMainWindow):
         overlay_row.addStretch(1)
         left_layout.addLayout(overlay_row)
         self.preview_panel = PreviewPanel(central)
+        self._preview_key_router = PreviewKeyRouter(self.preview_panel._canvas, self._file_list, self)
         self.preview_panel.set_quick_preview_provider(self._file_list.cached_quick_preview_for_path)
         self.preview_panel.full_preview_ready.connect(self._on_full_preview_ready)
         self.preview_panel.set_auto_focus_center(self.check_auto_focus_center.isChecked())
