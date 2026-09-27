@@ -392,10 +392,10 @@ def _app_icon_paths() -> tuple[Path, Path]:
     return (window_icon, png_path if png_path.exists() else window_icon)
 
 
-def _make_edit_mode_icon(kind: str, *, size: int = 18, color: "QColor | None" = None) -> QIcon:
-    """程序化绘制编辑模式工具按钮图标（随主题色），避免引入图标资源文件。
+def _make_preview_tool_icon(kind: str, *, size: int = 18, color: "QColor | None" = None) -> QIcon:
+    """程序化绘制预览工具按钮图标（随主题色），避免引入图标资源文件。
 
-    kind: "selection" 箭头指针 / "reference" 虚线参考框+中心点 / "crop" 四角裁切框。
+    kind: "selection" 箭头指针 / "reference" 虚线参考框+中心点 / "crop" 四角裁切框 / "compare" 左右对照。
     """
     pen_color = color if isinstance(color, QColor) else QColor("#3C3C3C")
     pixmap = QPixmap(size, size)
@@ -435,6 +435,16 @@ def _make_edit_mode_icon(kind: str, *, size: int = 18, color: "QColor | None" = 
             painter.setBrush(pen_color)
             r = size * 0.09
             painter.drawEllipse(QPointF(size * 0.5, size * 0.5), r, r)
+        elif kind == "compare":
+            # 左右分屏框，以半透明填充区分 A/B 两侧。
+            frame = QRectF(size * 0.12, size * 0.18, size * 0.76, size * 0.64)
+            fill = QColor(pen_color)
+            fill.setAlpha(70)
+            painter.fillRect(QRectF(frame.left(), frame.top(), frame.width() / 2, frame.height()), fill)
+            painter.setPen(pen)
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.drawRoundedRect(frame, 1.5, 1.5)
+            painter.drawLine(QPointF(size * 0.5, frame.top()), QPointF(size * 0.5, frame.bottom()))
         else:  # crop
             # 四角裁切框（两个 L 形角标）
             painter.setPen(pen)
@@ -2113,6 +2123,9 @@ class BirdStampEditorWindow(
         self._sync_preview_scale_combo(self.preview_label.current_display_scale_percent())
         from .editor_ab_preview import ABPreview
         self.ab_preview = ABPreview(self, right_layout)
+        preview_toolbar.insertWidget(
+            preview_toolbar.indexOf(self.show_crop_effect_check), self.ab_preview.enabled,
+        )
         from .editor_sequence_transport import SequenceTransport
         self.sequence_transport = SequenceTransport(self)
         right_layout.addWidget(self.sequence_transport.panel)
@@ -2326,6 +2339,9 @@ class BirdStampEditorWindow(
             }}
             """
         )
+        ab_preview = getattr(self, "ab_preview", None)
+        if ab_preview is not None:
+            ab_preview.enabled.setIcon(_make_preview_tool_icon("compare", color=text_color))
 
     def _set_status(self, message: str) -> None:
         self.statusBar().showMessage(message)
@@ -2902,7 +2918,7 @@ class BirdStampEditorWindow(
             btn = QToolButton()
             btn.setCheckable(True)
             btn.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
-            btn.setIcon(_make_edit_mode_icon(icon_kind, color=icon_color))
+            btn.setIcon(_make_preview_tool_icon(icon_kind, color=icon_color))
             btn.setToolTip(tip)
             btn.setAccessibleName(text)
             self.edit_mode_group.addButton(btn)

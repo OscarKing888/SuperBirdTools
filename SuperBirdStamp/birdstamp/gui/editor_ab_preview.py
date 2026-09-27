@@ -3,7 +3,7 @@ from pathlib import Path
 
 from PyQt6.QtCore import QObject, Qt, QTimer
 from PyQt6.QtGui import QPixmap
-from PyQt6.QtWidgets import QCheckBox, QComboBox, QHBoxLayout, QLabel, QPushButton, QSplitter, QVBoxLayout, QWidget
+from PyQt6.QtWidgets import QCheckBox, QComboBox, QHBoxLayout, QLabel, QPushButton, QSplitter, QToolButton, QVBoxLayout, QWidget
 
 from app_common.preview_canvas import PreviewWithStatusBar
 from .editor_preview_canvas import EditorPreviewCanvas, EditorPreviewOverlayState
@@ -34,13 +34,13 @@ class ABPreview(QObject):
         self.upgrade.setSingleShot(True)
         self.upgrade.setInterval(120)
         self.upgrade.timeout.connect(self._start)
-        bar = QHBoxLayout()
-        self.enabled = QCheckBox('A/B 对照')
+        self.enabled = QToolButton()
+        self.enabled.setCheckable(True)
+        self.enabled.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
+        self.enabled.setAccessibleName('A/B 对照')
         self.enabled.setChecked(editor_options.PREVIEW_AB_ENABLED)
-        self.enabled.setToolTip('A 可独立选图并钉住；B 随照片列表切换。两侧可独立缩放和拖动。')
-        bar.addWidget(self.enabled)
-        bar.addStretch()
-        layout.addLayout(bar)
+        self.enabled.setToolTip('A/B 对照：开启或关闭左右对照预览。\n'
+                                'A 可独立选图并钉住；B 随照片列表切换。两侧可独立缩放和拖动。')
         self.splitter = QSplitter(Qt.Orientation.Horizontal)
         self.splitter.setChildrenCollapsible(False)
         self.a_panel = QWidget()
