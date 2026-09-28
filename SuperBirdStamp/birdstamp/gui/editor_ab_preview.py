@@ -1,9 +1,9 @@
-"""独立 A/B 对照：A 自选/钉住照片，B 保持编辑器的选图与编辑上下文。"""
+"""A/B 对照：照片列表刷新激活侧，独立视图模式与可选视野联动。"""
 from pathlib import Path
 
 from PyQt6.QtCore import QObject, Qt, QTimer
 from PyQt6.QtGui import QPixmap
-from PyQt6.QtWidgets import QCheckBox, QLabel, QSplitter, QToolButton
+from PyQt6.QtWidgets import QSplitter, QToolButton
 
 from app_common.preview_canvas import PreviewWithStatusBar
 from .editor_preview_canvas import EditorPreviewCanvas, EditorPreviewOverlayState
@@ -23,6 +23,7 @@ class ABPreview(QObject):
         super().__init__(editor)
         self.editor = editor
         self.path = None
+        self.active_side = 'b'
         self.paths = ()
         self.worker = None
         self.token = 0
@@ -42,29 +43,26 @@ class ABPreview(QObject):
         self.enabled.setAccessibleName('A/B 对照')
         self.enabled.setChecked(editor_options.PREVIEW_AB_ENABLED)
         self.enabled.setToolTip('A/B 对照：开启或关闭左右对照预览。\n'
-                                'A 可独立选图并钉住；B 随照片列表切换。两侧可独立缩放和拖动。')
+                                '点击任一视图激活，再从照片列表选图；另一侧保持当前照片。')
+        self.linked = QToolButton()
+        self.linked.setText('同步缩放/移动')
+        self.linked.setCheckable(True)
+        self.linked.setToolTip('联动两侧的缩放和图像相对位置。\n'
+                               '启用联动会关闭自动焦点居中；重新开启焦点居中则退出联动。')
         self.splitter = QSplitter(Qt.Orientation.Horizontal)
         self.splitter.setChildrenCollapsible(False)
-        self.pin = QCheckBox('钉住')
-        self.pin.setChecked(True)
-        self.pin.setToolTip('保持 A 图不随 B 图切换；仍可用 A 的下拉框主动选图。')
         self.preview = PreviewWithStatusBar(canvas=EditorPreviewCanvas())
+        self.preview.canvas.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self.preview.canvas.reference_region_changed.connect(self._edit_reference_regions)
         self.preview.canvas.reference_match_edited.connect(self._edit_match)
-        self.a_panel = PreviewViewportPanel('A', self.preview, self.pin)
-        self.photos, self.mode, self.center = self.a_panel.photos, self.a_panel.mode, self.a_panel.center
-        self.mode.addItems(['原图', '去抖动成片'])
+        self.a_panel = PreviewViewportPanel('A', self.preview)
+        self.mode, self.center = self.a_panel.mode, self.a_panel.center
         self.mode.setToolTip('A 独立选择原图或已分析的去抖动成片。')
-        follows = QLabel('随列表')
-        follows.setToolTip('B 是当前编辑照片，与照片列表同步；可在 A 钉住独立参考图。')
-        self.b_panel = PreviewViewportPanel('B', editor.preview_label, follows,
+        self.b_panel = PreviewViewportPanel('B', editor.preview_label,
                                             center=editor.auto_focus_center_check, scale=editor.preview_scale_combo)
         self.b_header = self.b_panel.header
-        self.b_photos = self.b_panel.photos
-        self.b_photos.setToolTip('选择当前编辑照片，与照片列表同步。')
         self.b_mode = self.b_panel.mode
-        self.b_mode.addItems(['编辑预览', '原图', '去抖动成片'])
-        self.b_mode.setToolTip('B 跟随当前编辑/去抖动模式；在去抖动页可切换原图与成片。')
+        self.b_mode.setToolTip('选择 B 的原图或已分析的去抖动成片。')
         self.b_mode.activated.connect(self._choose_b_mode)
         self.splitter.addWidget(self.a_panel)
         self.splitter.addWidget(self.b_panel)
@@ -79,10 +77,14 @@ class ABPreview(QObject):
         self.a_panel.setVisible(self.enabled.isChecked())
         self.b_header.setVisible(self.enabled.isChecked())
         self.enabled.toggled.connect(self._toggle)
-        self.photos.currentIndexChanged.connect(self._choose)
-        self.b_photos.currentIndexChanged.connect(self._choose_b)
         self.mode.currentIndexChanged.connect(lambda: self.sync(force=True))
-        self.pin.toggled.connect(lambda: self.sync())
+        self.a_panel.activated.connect(lambda: self.activate('a'))
+        self.b_panel.activated.connect(lambda: self.activate('b'))
+        from .editor_ab_view_link import ABViewLink
+        self.view_link = ABViewLink(self)
+        self.linked.setChecked(editor_options.PREVIEW_AB_LINKED)
+        self.a_panel.set_active(False)
+        self.b_panel.set_active(True)
         self._sync_controls()
 
     def _schedule_alignment(self):
@@ -94,17 +96,13 @@ class ABPreview(QObject):
 
     def _sync_controls(self):
         editor = self.editor
-        dejitter = editor._dejitter_tab_active()
         result = editor._sequence_result_mode()
-        self.b_mode.setCurrentIndex(2 if result else 1 if dejitter else 0)
-        self.b_mode.setEnabled(dejitter)
-        model = self.b_mode.model()
-        for index, available in enumerate((not dejitter, dejitter, dejitter)):
-            item = model.item(index)
-            if item.isEnabled() != available:
-                item.setEnabled(available)
-        self.photos.setEnabled(bool(self.paths))
-        self.b_photos.setEnabled(bool(self.paths))
+        self.b_mode.setCurrentIndex(1 if result else 0)
+        self.b_mode.setVisible(self.enabled.isChecked() or editor._dejitter_tab_active())
+        self.linked.setVisible(self.enabled.isChecked())
+        crop_tool = editor._edit_mode_buttons.get('crop_adjust')
+        if crop_tool is not None:
+            crop_tool.setEnabled(not self.enabled.isChecked() and not editor._dejitter_tab_active())
         # 公共遮罩在两边都是成片时没有可裁切的外圈；禁用但不改变工具栏高度。
         crop_available = not result or (self.enabled.isChecked() and self.mode.currentIndex() == 0)
         editor.show_crop_effect_check.setEnabled(crop_available)
@@ -113,8 +111,8 @@ class ABPreview(QObject):
             widget.setEnabled(crop_available and editor.show_crop_effect_check.isChecked())
 
     def _choose_b_mode(self, index):
-        if self.editor._dejitter_tab_active() and index in (1, 2):
-            self.editor._set_dejitter_view('result' if index == 2 else 'edit')
+        self.activate('b')
+        self.editor._set_dejitter_view('result' if index == 1 else 'edit')
 
     def _toggle(self, enabled):
         self.a_panel.setVisible(enabled)
@@ -124,25 +122,46 @@ class ABPreview(QObject):
         if enabled:
             self.splitter.setSizes([500, 500])
             self.sync(force=True)
+            self.view_link.toggle(self.linked.isChecked())
         else:
             self._cancel()
             self.request = None
+            self.activate('b')
+        self.editor._restore_selected_preview_source()
+        self.editor._refresh_preview_label(preserve_view=True)
 
-    def _choose(self):
-        value = self.photos.currentData()
-        if value:
-            self.path = Path(value)
-            # 主动选 A 不改变 B，也不受“钉住”限制。
-            self.sync(force=True, follow=False)
+    def selected_path(self):
+        return self.path if self.enabled.isChecked() and self.active_side == 'a' else self.editor.current_path
 
-    def _choose_b(self):
-        value = self.b_photos.currentData()
-        item = self.editor._find_photo_item_by_path(Path(value)) if value else None
-        if item is not None:
-            self.editor.photo_list.setCurrentItem(item)
+    def activate(self, side, *, sync_selection=True):
+        if self.stopping or (side == 'a' and not self.enabled.isChecked()) or side == self.active_side:
+            return
+        self.editor.sequence_transport.stop(commit=False)
+        self.active_side = side
+        self.a_panel.set_active(side == 'a')
+        self.b_panel.set_active(side == 'b')
+        if sync_selection:
+            item = self.editor._find_photo_item_by_path(self.selected_path()) if self.selected_path() else None
+            if item is not None:
+                previous = self.editor.photo_list.blockSignals(True)
+                self.editor.photo_list.setCurrentItem(item)
+                self.editor.photo_list.blockSignals(previous)
+        self.editor.sequence_transport.sync()
+
+    def select_a(self, path):
+        self.path = Path(path)
+        self.sync()
+        self.editor.sequence_transport.sync()
+
+    def route_photo_selection(self, path):
+        if (self.enabled.isChecked() and self.active_side == 'a'
+                and not self.editor._workspace_restore_in_progress() and not self.stopping):
+            self.select_a(path)
+            return True
+        return False
 
     def compare_analysis_failure(self, failed_path):
-        """左侧钉住列表第一张，右侧通过正常选图流程显示失败照片的原图。"""
+        """左侧显示列表第一张，激活右侧并通过正常选图流程显示失败原图。"""
         if self.stopping or failed_path is None:
             return
         editor = self.editor
@@ -151,10 +170,7 @@ class ABPreview(QObject):
         item = editor._find_photo_item_by_path(failed) if failed is not None else None
         if not paths or item is None:
             return
-        # 先固定 A，避免原来的“跟随 B”设置在右侧切图时带走第一张。
-        self.pin.blockSignals(True)
-        self.pin.setChecked(True)
-        self.pin.blockSignals(False)
+        self.activate('b', sync_selection=False)
         self.mode.blockSignals(True)
         self.mode.setCurrentIndex(0)
         self.mode.blockSignals(False)
@@ -174,7 +190,7 @@ class ABPreview(QObject):
         editor._sequence_upgrade_timer.stop()
         editor._sequence_pending_path = None
 
-    def sync(self, *, force=False, follow=True):
+    def sync(self, *, force=False):
         if self.stopping:
             return
         self._sync_controls()
@@ -182,29 +198,12 @@ class ABPreview(QObject):
             return
         editor = self.editor
         paths = tuple(editor._list_photo_paths())
-        if paths != self.paths:
-            self.paths = paths
-            self.photos.blockSignals(True)
-            self.photos.clear()
-            self.b_photos.blockSignals(True)
-            self.b_photos.clear()
-            for path in paths:
-                self.photos.addItem(path.name, str(path))
-                self.b_photos.addItem(path.name, str(path))
-            self.photos.blockSignals(False)
-            self.b_photos.blockSignals(False)
+        self.paths = paths
         if self.path not in paths:
             reference = getattr(editor, '_dejitter_reference_source', None)
             self.path = Path(reference) if reference and Path(reference) in paths else next(iter(paths), None)
-        if follow and not self.pin.isChecked() and editor.current_path in paths:
-            self.path = editor.current_path
-        self.photos.blockSignals(True)
-        self.photos.setCurrentIndex(self.photos.findData(str(self.path)))
-        self.photos.blockSignals(False)
-        current = editor.current_path
-        self.b_photos.blockSignals(True)
-        self.b_photos.setCurrentIndex(self.b_photos.findData(str(current)))
-        self.b_photos.blockSignals(False)
+        self.a_panel.set_path(self.path)
+        self.b_panel.set_path(editor.current_path)
         self._sync_controls()
         sequence = editor._sequence_preview
         result = self.mode.currentIndex() == 1

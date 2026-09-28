@@ -28,7 +28,7 @@
 | [_BirdStampRendererMixin](../birdstamp/gui/editor_renderer.py) | 设置快照、原图/预览缓存、鸟检测结果和预览绘制。 |
 | [_BirdStampExporterMixin](../birdstamp/gui/editor_exporter.py) | 图片/GIF 导出的目标分配、作业调度、进度与错误展示。 |
 | [_BirdStampDejitterMixin](../birdstamp/gui/editor_dejitter.py) | 导出组的去抖动标签页、原生编辑/成片 Tab、整组分析签名与快/清晰两级有界成片缓存、共享画布辅助层映射。 |
-| [ABPreview](../birdstamp/gui/editor_ab_preview.py) | 独立 A/B 对照：预览工具栏「显示裁切效果」前的分屏图标开关带悬停提示；A 自选并钉住、原图/成片独立切换、独立缩放及单 worker 所有权；B 与原编辑上下文及列表同步。 |
+| [ABPreview](../birdstamp/gui/editor_ab_preview.py) | 独立 A/B 对照：预览工具栏「显示裁切效果」前的分屏图标开关带悬停提示；点击激活侧接收照片列表选择，原图/成片独立切换及可选视野联动；A 保持单 worker 所有权，B 保留原编辑上下文。 |
 | [SequenceTransport](../birdstamp/gui/editor_sequence_transport.py) | 成片播放面板、缩略图条、照片列表同步；去抖动分析后的方向键重复由精确定时器驱动，物理松键仅提交最终清晰帧一次。普通导出页保持原生键盘导航。 |
 | [_BirdStampReferenceTrackingMixin](../birdstamp/gui/editor_reference_tracking.py) | 多参考区预处理、结果签名与失效、切图跟踪预览及工作线程所有权。 |
 | [_BirdStampWorkspaceMixin](../birdstamp/gui/editor_workspace.py) | 工作区序列化、增量恢复、自动保存及恢复期间的保存门控。 |
@@ -51,7 +51,9 @@
 
 `render_preview` 的鸟体中心及缺失焦点回退通过后台识别计算，结果到达后重算裁切与文字；中间缩略图不参与检测，手动裁切框不会被覆盖。导出仍使用完整裁切管线。预览模板通过 `template_context.preview_photo_info` 消费已合并 XMP 的元数据快照，字段缺失时等待后台元数据刷新，不在 GUI 抢占 ExifTool 或打开原图探测。字段解析按优先级命中即返回，同次预览复用 provider context；导出和模板管理器保留完整读取规则。
 
-A/B 的布局与显隐约定见 [A/B 预览工具栏布局](ux/AB_PREVIEW_LAYOUT.md)。[editor_preview_viewport.py](../birdstamp/gui/editor_preview_viewport.py) 的 `PreviewViewportPanel` 统一照片/模式行、焦点居中/适应/缩放行、画布及状态栏；`align_viewport_rows` 按 Qt 当前字体和样式同步两侧行高与尾部列宽。[ABPreview](../birdstamp/gui/editor_ab_preview.py) 管理共享显示选项、B 模式与顶部页签同步，保留 A 独立选图和线程所有权。关闭对照只收起 A 面板与 B 的照片选择行，B 的视口操作行继续可用；空图/待分析仅禁用依赖像素的按钮。`EditorPreviewCanvas.fit_to_window` 只改变视口缩放，开启焦点锁定时同样有效，不启动解码或模板渲染。几何和独立操作回归见 [test_ab_preview_layout.py](../tests/test_ab_preview_layout.py)。
+A/B 的布局与显隐约定见 [A/B 预览工具栏布局](ux/AB_PREVIEW_LAYOUT.md)。[editor_preview_viewport.py](../birdstamp/gui/editor_preview_viewport.py) 的 `PreviewViewportPanel` 统一文件标题行、原图/成片/焦点居中/适应/缩放工具行、画布及状态栏；移除文件下拉框和钉住功能。`align_viewport_rows` 按 Qt 字体和样式同步两侧行高。面板点击和焦点激活由 [ABPreview](../birdstamp/gui/editor_ab_preview.py) 记录，编辑器选图入口先将 A 的选择交给独立加载器，其余沿用 B 的原编辑上下文；程序恢复 B 原图显式指定目标，避免被激活侧拦截。播放条和方向键使用激活侧路径，切换激活侧停止旧播放。A/B 内两侧均可显示原图/成片，单视口普通导出恢复模板编辑预览。
+
+[ABViewLink](../birdstamp/gui/editor_ab_view_link.py) 监听 `EditorPreviewCanvas` 的视野交互与画布换帧信号，按适应窗口倍率及归一化中心同步；反馈保护阻止递归，源图/清晰帧升级和分栏调整重用已同步视野，不重新解码或改变裁切。联动默认值从 `editor_options.json.preview_ab_linked` 读取，和自动焦点居中互斥。关闭对照只收起 A 面板与 B 标题行，B 操作行继续可用；空图仅禁用依赖像素的操作。回归见 [test_ab_preview_layout.py](../tests/test_ab_preview_layout.py)、[test_ab_view_link.py](../tests/test_ab_view_link.py)、[test_editor_ab_preview.py](../tests/test_editor_ab_preview.py)。
 
 预览工具栏的“自动焦点居中”复用 [FocusCenteredPreviewCanvas](../../app_common/preview_canvas/focus_centered.py)，与 SuperViewer 共用实现。普通编辑、去抖动原图和成片都以各自画面坐标中的焦点居中，无焦点时回退图像中心；隐藏焦点框不影响锁定。切图/小图升级/加载占位保持相对适应窗口的缩放，滚轮和窗口变化继续锁定，关闭后恢复拖动。它只改变视口，不改变裁切或导出；默认值来自 `editor_options.json` 的 `preview_auto_focus_center`，开关随工作区 preview 状态保存。回归见 [test_editor_focus_center.py](../tests/test_editor_focus_center.py)。
 
@@ -124,7 +126,7 @@ flowchart LR
 
 去抖动页在分析、导出按钮下各有独立进度条。[EditorSequencePreviewWorker / EditorSequenceExportWorker](../birdstamp/gui/editor_sequence_preview_worker.py) 将结构化进度作为 Qt 信号交给 [_BirdStampDejitterMixin](../birdstamp/gui/editor_dejitter.py)：有总数的阶段显示实际完成数/总数及百分比，读取缓存/元数据、参考图准备及最终校验阶段显示忙碌状态；完整成片或有效导出结果到达才隐藏对应进度条，在原位置显示绿色“完成✅”，完成数量保留在提示文字中。新任务隐藏旧完成文字并恢复进度条，分析失效时清除两处完成提示；取消和失败保留各自进度状态，不显示完成。旧任务信号仍受 worker 身份、epoch 和 shutdown 检查保护；按需清晰帧升级不重置整组完成提示。回归见 [test_dejitter_progress.py](../tests/test_dejitter_progress.py)。
 
-[SequencePhotoError](../birdstamp/export_stage/sequence_photo_error.py) 为分析解码、匹配、共同画幅及逐帧预览错误携带完整源路径；线程池从失败 future 的 action 路径归属照片，不解析错误文字或同名文件。`EditorSequencePreviewWorker.failure_path` 在失败信号前保存该路径；主动分析失败由 [ABPreview.compare_analysis_failure](../birdstamp/gui/editor_ab_preview.py) 自动切换原图对照，A 钉住当前列表第一张，B 通过正常列表选图加载失败照片，保留诊断。仅接收当前有效分析任务，缓存恢复、按需清晰帧升级、导出、取消和迟到错误不改变对照；整组签名错误不猜测单张来源。回归见 [test_sequence_photo_error.py](../tests/test_sequence_photo_error.py) 和 [test_dejitter_failure_ab.py](../tests/test_dejitter_failure_ab.py)。
+[SequencePhotoError](../birdstamp/export_stage/sequence_photo_error.py) 为分析解码、匹配、共同画幅及逐帧预览错误携带完整源路径；线程池从失败 future 的 action 路径归属照片，不解析错误文字或同名文件。`EditorSequencePreviewWorker.failure_path` 在失败信号前保存该路径；主动分析失败由 [ABPreview.compare_analysis_failure](../birdstamp/gui/editor_ab_preview.py) 自动切换原图对照，A 显示当前列表第一张，激活 B 并通过正常列表选图加载失败照片，保留诊断。仅接收当前有效分析任务，缓存恢复、按需清晰帧升级、导出、取消和迟到错误不改变对照；整组签名错误不猜测单张来源。回归见 [test_sequence_photo_error.py](../tests/test_sequence_photo_error.py) 和 [test_dejitter_failure_ab.py](../tests/test_dejitter_failure_ab.py)。
 
 交互分析调用 `prepare_sequence_preview(..., allow_partial=True)`：解码失败后停止向失败位置之后提交任务，等待已派发的前序帧完成，按列表顺序取最早错误；几何检查同样逐帧验证，复用坐标重算失败前连续成功前缀的画幅。`SequencePreview.jobs` 只包含可预览前缀，`input_jobs` / `all_jobs` 保留整组身份与文件/XMP 校验，`failure` / `partial` 标记未完成的整组。worker 先发布成功前缀的小图，再报告失败触发 A/B；切回成片自动选首个可用帧，播放与清晰升级仅处理成功帧。部分进度显示 N/M，整组导出禁用且核心也拒绝部分结果；部分预览及清晰帧不写完整磁盘缓存，工作区不记录可恢复缓存键。默认非 GUI 调用仍失败即抛错，取消不生成部分结果。回归见 [test_sequence_partial_preview.py](../tests/test_sequence_partial_preview.py) 和 [test_dejitter_failure_ab.py](../tests/test_dejitter_failure_ab.py)。
 

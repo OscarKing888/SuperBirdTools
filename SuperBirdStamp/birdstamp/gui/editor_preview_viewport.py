@@ -1,16 +1,48 @@
-"""A/B 共用的视口布局：选择行、视口操作行、画布和状态栏。"""
+"""A/B 共用视口：照片标题、模式/视野工具栏、画布和状态栏。"""
 from PyQt6.QtCore import QEvent, pyqtSignal
-from PyQt6.QtWidgets import QCheckBox, QComboBox, QHBoxLayout, QLabel, QPushButton, QSizePolicy, QVBoxLayout, QWidget
+from PyQt6.QtWidgets import QButtonGroup, QComboBox, QHBoxLayout, QLabel, QPushButton, QSizePolicy, QToolButton, QVBoxLayout, QWidget
 
 from app_common.preview_canvas import configure_preview_scale_preset_combo, sync_preview_scale_preset_combo
 from . import editor_options
 
 
+class PreviewModeButtons(QWidget):
+    currentIndexChanged = pyqtSignal(int)
+    activated = pyqtSignal(int)
+
+    def __init__(self):
+        super().__init__()
+        row = QHBoxLayout(self)
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(0)
+        self.group = QButtonGroup(self)
+        for index, text in enumerate(('原图', '去抖动成片')):
+            button = QToolButton()
+            button.setText(text)
+            button.setCheckable(True)
+            button.setChecked(index == 0)
+            self.group.addButton(button, index)
+            row.addWidget(button)
+        self.group.idToggled.connect(lambda index, checked: self.currentIndexChanged.emit(index) if checked else None)
+        self.group.idClicked.connect(self.activated)
+
+    def currentIndex(self):
+        return self.group.checkedId()
+
+    def currentText(self):
+        return self.group.checkedButton().text()
+
+    def setCurrentIndex(self, index):
+        self.group.button(index).setChecked(True)
+
+
 class PreviewViewportPanel(QWidget):
     metrics_changed = pyqtSignal()
+    activated = pyqtSignal()
 
-    def __init__(self, name, preview, relationship, *, center=None, scale=None):
+    def __init__(self, name, preview, *, center=None, scale=None):
         super().__init__()
+        self.name = name
         self.preview = preview
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -18,20 +50,18 @@ class PreviewViewportPanel(QWidget):
         self.header, head = self._row()
         self.name_label = QLabel(name)
         head.addWidget(self.name_label)
-        self.photos = QComboBox()
-        self.photos.setMinimumWidth(110)
-        self.photos.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
-        self.photos.setToolTip(f'选择 {name} 视口照片')
-        head.addWidget(self.photos, 1)
-        self.relationship = relationship
-        head.addWidget(relationship)
-        self.mode = QComboBox()
-        head.addWidget(self.mode)
+        self.filename = QLabel('未选择')
+        self.filename.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+        head.addWidget(self.filename, 1)
         layout.addWidget(self.header)
 
         self.toolbar, tools = self._row()
-        self.center = center if center is not None else QCheckBox('自动焦点居中')
+        self.mode = PreviewModeButtons()
+        tools.addWidget(self.mode)
+        self.center = center if center is not None else QToolButton()
         if center is None:
+            self.center.setText('自动焦点居中')
+            self.center.setCheckable(True)
             self.center.setChecked(editor_options.PREVIEW_AUTO_FOCUS_CENTER)
             self.center.setToolTip('仅将本视口的焦点保持在中央；无焦点时使用图像中心。')
             self.center.toggled.connect(preview.canvas.set_auto_focus_center)
@@ -60,6 +90,18 @@ class PreviewViewportPanel(QWidget):
         self.toolbar.installEventFilter(self)
         preview.display_scale_percent_changed.connect(self._update_available)
         self._update_available()
+        for widget in (self, *self.findChildren(QWidget)):
+            widget.installEventFilter(self)
+
+    def set_path(self, path):
+        self.filename.setText(path.name if path else '未选择')
+        self.filename.setToolTip(str(path) if path else '')
+
+    def set_active(self, active):
+        self.name_label.setText(f'{self.name} · 当前' if active else self.name)
+        self.name_label.setStyleSheet('color: #2196f3; font-weight: 600;' if active else '')
+        self.header.setToolTip('当前视图响应照片列表选择' if active else '点击激活此视图，再从照片列表选图')
+        self.metrics_changed.emit()
 
     @staticmethod
     def _row():
@@ -86,6 +128,8 @@ class PreviewViewportPanel(QWidget):
         self.scale.setEnabled(available)
 
     def eventFilter(self, watched, event):
+        if event.type() in (QEvent.Type.MouseButtonPress, QEvent.Type.FocusIn):
+            self.activated.emit()
         if watched is self.preview._status_label and event.type() == QEvent.Type.ToolTip:
             watched.setToolTip(watched.text())
         if event.type() in (QEvent.Type.LayoutRequest, QEvent.Type.FontChange, QEvent.Type.StyleChange):
@@ -95,7 +139,7 @@ class PreviewViewportPanel(QWidget):
 
 def align_viewport_rows(first, second):
     """按当前字体/平台度量同步行高和尾部列宽，不使用某台机器的固定像素高度。"""
-    for key in ('mode', 'relationship', 'name_label'):
+    for key in ('mode', 'name_label'):
         widgets = (getattr(first, key), getattr(second, key))
         width = max(widget.sizeHint().width() for widget in widgets)
         for widget in widgets:

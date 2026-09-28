@@ -60,7 +60,7 @@ def test_a_reference_edits_source_coordinates_while_b_shows_other_original(windo
 def test_target_manual_match_preserves_reference_and_enters_analysis(window,monkeypatch,side):
     paths,target,ab = setup_ab(window,monkeypatch)
     if side == 'a':
-        ab.photos.setCurrentIndex(1)
+        ab.select_a(paths[1])
         finish(ab)
         canvas = ab.preview.canvas
     else:
@@ -115,7 +115,7 @@ def test_a_transition_cancels_drag_without_late_commit(window,monkeypatch,change
     send(canvas,QEvent.Type.MouseButtonPress,(.25,.35))
     send(canvas,QEvent.Type.MouseMove,(.3,.4))
     if change == 'path':
-        ab.photos.setCurrentIndex(1)
+        ab.select_a(paths[1])
         finish(ab)
     elif change == 'mode':
         ab.mode.setCurrentIndex(1)

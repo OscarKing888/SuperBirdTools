@@ -78,6 +78,8 @@ class EditorPreviewCanvas(FocusCenteredPreviewCanvas):
     reference_match_edited = pyqtSignal(int, object)  # 原编号、源图框；None 撤销该编号的手动修正。
     crop_drag_started = pyqtSignal()
     crop_drag_finished = pyqtSignal()
+    viewport_interacted = pyqtSignal()
+    viewport_content_changed = pyqtSignal()
 
     def __init__(
         self,
@@ -119,6 +121,40 @@ class EditorPreviewCanvas(FocusCenteredPreviewCanvas):
         scale = min(content.width() / max(1, self._source_pixmap.width()),
                     content.height() / max(1, self._source_pixmap.height()))
         self.set_display_scale_percent(scale * 100, preserve_view=False)
+
+    def viewport_state(self):
+        center = self._view_center_ratio()
+        return (self._zoom, center) if center is not None else None
+
+    def apply_viewport_state(self, state):
+        if state is None or self._source_pixmap is None:
+            return
+        zoom, center = state
+        self._zoom = max(self._min_zoom, min(self._max_zoom, zoom))
+        self._apply_view_center_ratio(center)
+        self._clamp_offset()
+        self._update_cursor()
+        self.update()
+        self._emit_display_scale_percent_changed()
+
+    def set_source_pixmap(self, pixmap, **kwargs):
+        super().set_source_pixmap(pixmap, **kwargs)
+        self.viewport_content_changed.emit()
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self.viewport_content_changed.emit()
+
+    def set_display_scale_percent(self, value, *, preserve_view=True):
+        changed = super().set_display_scale_percent(value, preserve_view=preserve_view)
+        if changed:
+            self.viewport_interacted.emit()
+        return changed
+
+    def wheelEvent(self, event):
+        super().wheelEvent(event)
+        if event.isAccepted():
+            self.viewport_interacted.emit()
 
     def paintEvent(self, event) -> None:  # type: ignore[override]
         start = perf_counter()
@@ -764,6 +800,7 @@ class EditorPreviewCanvas(FocusCenteredPreviewCanvas):
             return
         super().mouseMoveEvent(event)
         if getattr(self, "_dragging", False):
+            self.viewport_interacted.emit()
             self._drag_probe.add_move_handler(elapsed_ms(start))
 
     def mouseReleaseEvent(self, event) -> None:  # type: ignore[override]

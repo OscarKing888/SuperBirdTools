@@ -18,7 +18,7 @@ from birdstamp.gui.editor_sequence_preview_worker import EditorSequencePreviewWo
 
 
 @pytest.mark.parametrize('already_open', [False, True])
-def test_failed_analysis_pins_first_and_selects_exact_failed_original(window, monkeypatch, already_open):
+def test_failed_analysis_compares_first_and_selects_exact_failed_original(window, monkeypatch, already_open):
     paths, target, seeds = setup_tab(window, monkeypatch)
     failed = paths[0].parent / '子目录' / paths[1].name
     failed.parent.mkdir()
@@ -30,7 +30,7 @@ def test_failed_analysis_pins_first_and_selects_exact_failed_original(window, mo
     populate(window, paths)
     ab = window.ab_preview
     ab.enabled.setChecked(already_open)
-    ab.pin.setChecked(False)
+    ab.activate('a')
     ab.mode.setCurrentIndex(1)
     ab.path = paths[1]
     window.dejitter_preprocess_btn.click()
@@ -40,14 +40,14 @@ def test_failed_analysis_pins_first_and_selects_exact_failed_original(window, mo
     sequence = window._sequence_preview
     assert sequence.partial and tuple(sequence.jobs) == tuple(path_key(p) for p in paths[:2])
     assert len(window._sequence_quick_frames) == 2
-    assert ab.enabled.isChecked() and ab.pin.isChecked()
+    assert ab.enabled.isChecked() and ab.active_side == 'b'
     assert ab.path == paths[0] and ab.mode.currentIndex() == 0
     assert ab.image is not None and ab.frame is None
     assert ab.image.pixelColor(0, 0).getRgb()[:3] == target.getpixel((0, 0))
     assert window.current_path == failed
     assert window.photo_list.currentItem() is window._find_photo_item_by_path(failed)
-    assert ab.b_photos.currentData() == str(failed)
-    assert ab.b_mode.currentIndex() == 1 and not window._sequence_result_mode()
+    assert ab.b_panel.filename.toolTip() == str(failed)
+    assert ab.b_mode.currentIndex() == 0 and not window._sequence_result_mode()
     assert window.current_source_image.getpixel((0, 0)) == (255, 0, 0)
     diagnostics = window.preview_label.canvas._reference_diagnostics
     assert len(diagnostics) == 2 and all(not row[2] for row in diagnostics)

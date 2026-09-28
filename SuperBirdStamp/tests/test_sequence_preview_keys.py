@@ -122,11 +122,9 @@ def test_input_widgets_and_a_canvas_do_not_navigate_b(window, monkeypatch):
     ab = window.ab_preview
     ab.enabled.setChecked(True)
     wait_until(lambda: ab.worker is None and not ab.pending)
-    # A 的画布不由 B 的序列快捷键接管，也不能经窗口冒泡触发 B 切图。
+    # A 激活后快捷键导航 A，不能经窗口冒泡触发 B 切图。
+    QTest.mouseClick(ab.a_panel.header, Qt.MouseButton.LeftButton)
     QTest.keyClick(ab.preview.canvas, Qt.Key.Key_Down)
-    assert window.current_path == paths[0] and ab.path == paths[0]
-    ab.photos.setFocus()
-    QTest.keyClick(ab.photos, Qt.Key.Key_Down)
     assert ab.path == paths[1] and window.current_path == paths[0]
     wait_until(lambda: ab.worker is None and not ab.pending)
     window.export_tabs.setCurrentIndex(0)

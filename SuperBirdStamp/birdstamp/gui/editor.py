@@ -1959,7 +1959,9 @@ class BirdStampEditorWindow(
         self.show_focus_box_check.toggled.connect(self._on_preview_toolbar_toggled)
         preview_toolbar.addWidget(self.show_focus_box_check)
 
-        self.auto_focus_center_check = QCheckBox("自动焦点居中")
+        self.auto_focus_center_check = QToolButton()
+        self.auto_focus_center_check.setText("自动焦点居中")
+        self.auto_focus_center_check.setCheckable(True)
         self.auto_focus_center_check.setChecked(editor_options.PREVIEW_AUTO_FOCUS_CENTER)
         self.auto_focus_center_check.setToolTip(
             "切图和缩放时将焦点保持在预览中央；无焦点时使用图像中心，边缘可留白。"
@@ -2038,6 +2040,9 @@ class BirdStampEditorWindow(
         self.ab_preview = ABPreview(self, right_layout)
         preview_toolbar.insertWidget(
             preview_toolbar.indexOf(self.show_crop_effect_check), self.ab_preview.enabled,
+        )
+        preview_toolbar.insertWidget(
+            preview_toolbar.indexOf(self.show_crop_effect_check), self.ab_preview.linked,
         )
         from .editor_sequence_transport import SequenceTransport
         self.sequence_transport = SequenceTransport(self)
@@ -4810,6 +4815,7 @@ class BirdStampEditorWindow(
         self._set_status(f"已删除 {len(selected_items)} 项。")
 
     def _clear_photos_state(self, *, status_message: str | None = None, show_placeholder: bool = True) -> None:
+        self.ab_preview.activate('b', sync_selection=False)
         self._invalidate_reference_tracking("请框选参考区后预处理。")
         self._cancel_workspace_restore_in_progress()
         self._stop_photo_input_discovery_workers(wait=True)
@@ -4866,13 +4872,15 @@ class BirdStampEditorWindow(
     def _clear_photos(self) -> None:
         self._clear_photos_state(status_message="已清空照片列表。")
 
-    def _on_photo_selected(self, current: QTreeWidgetItem | None, _previous: QTreeWidgetItem | None) -> None:
+    def _on_photo_selected(self, current: QTreeWidgetItem | None, _previous: QTreeWidgetItem | None, *, target_view=None) -> None:
         if not current or getattr(self, "_preview_decode_shutdown", False):
             return
         raw = current.data(PHOTO_COL_ROW, PHOTO_LIST_PATH_ROLE)
         if not isinstance(raw, str):
             return
         path = Path(raw)
+        if target_view is None and self.ab_preview.route_photo_selection(path):
+            return
         if self._select_sequence_preview(path):
             return
         if not path.exists():

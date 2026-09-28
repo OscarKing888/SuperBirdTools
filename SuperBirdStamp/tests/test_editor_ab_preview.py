@@ -1,8 +1,13 @@
-"""A/B 独立选图、页签隔离、诊断叠加和解码线程归属。"""
+"""A/B 激活侧选图、页签隔离、诊断叠加和解码线程归属。"""
 from dataclasses import replace
+import threading
+
+import pytest
 
 from PIL import Image
 from PyQt6.QtGui import QCloseEvent
+from PyQt6.QtCore import Qt
+from PyQt6.QtTest import QTest
 
 from test_editor_dejitter import window, _APP
 from test_reference_tracking import install_sequence, wait_until
@@ -14,32 +19,41 @@ def finish(ab):
     wait_until(lambda: ab.worker is None and not ab.pending)
 
 
-def test_pinned_a_and_independent_photo_picker_do_not_change_b(window, monkeypatch):
+def test_photo_list_refreshes_only_clicked_active_view(window, monkeypatch):
+    from test_sequence_transport import populate
     paths, target = install_sequence(window, monkeypatch)
+    monkeypatch.setattr(window, '_schedule_async_bird_detect', lambda *args: None)
+    populate(window, paths)
+    window.show()
     ab = window.ab_preview
     ab.enabled.setChecked(True)
     finish(ab)
     assert ab.path == paths[0]
     assert ab.image is not None
-    window.current_path = paths[1]
-    window.current_source_image = target
-    window._refresh_preview_label()
-    assert ab.path == paths[0]
-    ab.photos.setCurrentIndex(1)
+    assert not hasattr(ab, 'pin') and not hasattr(ab.a_panel, 'photos') and not hasattr(ab.b_panel, 'photos')
+    QTest.mouseClick(ab.a_panel.header, Qt.MouseButton.LeftButton)
+    assert ab.active_side == 'a'
+    window.photo_list.setCurrentItem(window._find_photo_item_by_path(paths[1]))
     finish(ab)
     assert ab.path == paths[1]
+    assert window.current_path == paths[0]
+    QTest.mouseClick(ab.b_panel.header, Qt.MouseButton.LeftButton)
+    assert ab.active_side == 'b'
+    window.photo_list.setCurrentItem(window._find_photo_item_by_path(paths[1]))
+    wait_until(lambda: window._preview_decode_worker is None)
     assert window.current_path == paths[1]
-    ab.photos.setCurrentIndex(0)
+    assert ab.path == paths[1]
+    QTest.mouseClick(ab.a_panel.header, Qt.MouseButton.LeftButton)
+    window.photo_list.setCurrentItem(window._find_photo_item_by_path(paths[0]))
     finish(ab)
     window.export_tabs.setCurrentWidget(window.dejitter_page)
     window._set_dejitter_view('result')
     assert ab.enabled.isChecked() and ab.path == paths[0]
     assert ab.image is not None and ab.frame is None
-    ab.pin.setChecked(False)
-    finish(ab)
-    assert ab.path == paths[1]
     ab.enabled.setChecked(False)
     assert window.current_path == paths[1]
+    finish(ab)
+    wait_until(lambda: window._preview_decode_worker is None and window._sequence_worker is None)
 
 
 def test_a_result_mode_independent_of_b_edit_mode_and_invalidates(window, monkeypatch):
@@ -63,6 +77,38 @@ def test_a_result_mode_independent_of_b_edit_mode_and_invalidates(window, monkey
     ab.mode.setCurrentIndex(0)
     finish(ab)
     assert ab.image is not None
+
+
+def test_mode_buttons_show_source_and_aligned_pixels_on_ordinary_export_tab(window, monkeypatch):
+    from test_sequence_transport import populate
+    paths, _, _ = setup_tab(window, monkeypatch)
+    populate(window, paths)
+    analyze(window)
+    window.export_tabs.setCurrentIndex(0)
+    wait_until(lambda: window._preview_decode_worker is None)
+    window.show()
+    ab = window.ab_preview
+    ab.enabled.setChecked(True)
+    finish(ab)
+    QTest.mouseClick(ab.b_mode.group.button(0), Qt.MouseButton.LeftButton)
+    assert not window._edit_mode_buttons['crop_adjust'].isEnabled()
+    wait_until(lambda: window.current_source_image is not None and window._preview_decode_worker is None)
+    pixmap = window.preview_label.canvas._source_pixmap
+    assert (pixmap.width(), pixmap.height()) == (200, 160)
+    assert not window._sequence_result_mode() and ab.active_side == 'b'
+    QTest.mouseClick(ab.b_mode.group.button(1), Qt.MouseButton.LeftButton)
+    wait_until(lambda: window._sequence_worker is None)
+    pixmap = window.preview_label.canvas._source_pixmap
+    assert (pixmap.width(), pixmap.height()) == window._sequence_preview.output_size
+    assert window.export_tabs.currentIndex() == 0
+    assert ab.mode.currentIndex() == 0 and ab.path == paths[0]
+    QTest.mouseClick(ab.mode.group.button(1), Qt.MouseButton.LeftButton)
+    finish(ab)
+    assert ab.active_side == 'a' and ab.frame is not None
+    assert window._sequence_result_mode()
+    ab.enabled.setChecked(False)
+    assert window._edit_mode_buttons['crop_adjust'].isEnabled()
+    wait_until(lambda: window._preview_decode_worker is None and window._sequence_worker is None)
 
 
 def test_late_decode_is_closed_without_replacing_a(window, monkeypatch):
@@ -91,7 +137,7 @@ def test_a_keeps_owned_worker_until_finished_and_close_waits(window, monkeypatch
         def requestInterruption(self): self.cancelled = True
     worker = SlowWorker()
     ab.worker = worker
-    ab.photos.setCurrentIndex(1)
+    ab.select_a(paths[1])
     assert ab.worker is worker and worker.cancelled
     assert not ab.shutdown()
     assert ab.worker is worker
@@ -116,16 +162,15 @@ def test_result_preview_has_yellow_and_red_regions_in_crop_coordinates(window, m
     assert frame.image is not None
 
 
-def test_unpinned_a_playback_defers_full_decode_until_stop(window, monkeypatch):
+def test_active_a_playback_defers_full_decode_until_stop(window, monkeypatch):
     paths, _, _ = setup_tab(window, monkeypatch)
     analyze(window)
     ab = window.ab_preview
     ab.enabled.setChecked(True)
     finish(ab)
     monkeypatch.setattr(window, '_sequence_fast_preview_active', lambda: True)
-    ab.pin.setChecked(False)
-    window.current_path = paths[1]
-    ab.sync()
+    ab.activate('a')
+    ab.select_a(paths[1])
     assert ab.image is window._sequence_quick_frames[path_key(paths[1])].source_image
     ab._start()
     assert ab.worker is None and ab.pending
@@ -151,7 +196,7 @@ def test_failed_analysis_retains_per_region_diagnostics(window, monkeypatch):
     assert window.preview_label.canvas._reference_diagnostics
 
 
-def test_b_picker_selects_list_photo_without_replacing_pinned_a(window, monkeypatch):
+def test_active_b_list_selection_does_not_replace_a(window, monkeypatch):
     from test_sequence_transport import populate
     paths, _, _ = setup_tab(window, monkeypatch)
     populate(window, paths)
@@ -159,7 +204,8 @@ def test_b_picker_selects_list_photo_without_replacing_pinned_a(window, monkeypa
     ab = window.ab_preview
     ab.enabled.setChecked(True)
     finish(ab)
-    ab.b_photos.setCurrentIndex(1)
+    ab.activate('b')
+    window.photo_list.setCurrentItem(window._find_photo_item_by_path(paths[1]))
     assert window.current_path == paths[1]
     assert window.photo_list.currentItem() is window._find_photo_item_by_path(paths[1])
     assert ab.path == paths[0]
@@ -190,6 +236,50 @@ def test_a_rejects_file_changed_during_decode(window, monkeypatch):
     paths[0].write_bytes(b'changed')
     ab._decoded(ab.token, str(paths[0]), Image.new('RGB',(10,10),'red'), (10,10))
     assert ab.image is previous
+
+
+@pytest.mark.parametrize('closing', [False, True])
+def test_active_a_rapid_selection_and_close_reject_late_decoder(window, monkeypatch, closing):
+    from birdstamp.gui import editor_ab_preview
+    from birdstamp.gui.editor_preview_decode_worker import EditorPreviewDecodeWorker
+    paths, target = install_sequence(window, monkeypatch)
+    started, release = threading.Event(), threading.Event()
+    delivered = []
+
+    class DelayedWorker(EditorPreviewDecodeWorker):
+        def run(self):
+            with Image.open(self._path) as source:
+                image = source.convert('RGB')
+            delivered.append(image)
+            if self._path == paths[0]:
+                started.set()
+                release.wait(6)
+            self.decoded.emit(self._token, str(self._path), image, image.size)
+
+    monkeypatch.setattr(editor_ab_preview, 'EditorPreviewDecodeWorker', DelayedWorker)
+    ab = window.ab_preview
+    ab.enabled.setChecked(True)
+    try:
+        wait_until(started.is_set)
+        old = ab.worker
+        ab.activate('a')
+        assert ab.route_photo_selection(paths[1])
+        assert ab.worker is old and old.isInterruptionRequested()
+        assert ab.image is None
+        if closing:
+            event = QCloseEvent()
+            window.closeEvent(event)
+            assert not event.isAccepted() and ab.worker is old
+    finally:
+        release.set()
+        finish(ab)
+    with pytest.raises(ValueError):
+        delivered[0].getpixel((0, 0))
+    if closing:
+        assert ab.image is None and not ab.pending
+    else:
+        assert ab.path == paths[1] and window.current_path == paths[0]
+        assert ab.image.pixelColor(0, 0).getRgb()[:3] == target.getpixel((0, 0))
 
 
 def test_canvas_renders_yellow_success_and_red_failure_and_clears_them():

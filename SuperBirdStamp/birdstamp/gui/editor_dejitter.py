@@ -222,7 +222,8 @@ class _BirdStampDejitterMixin:
         return tabs is not None and tabs.currentWidget() is self.dejitter_page
 
     def _sequence_result_mode(self):
-        return self._dejitter_tab_active() and self._dejitter_view == 'result'
+        ab = getattr(self, 'ab_preview', None)
+        return (self._dejitter_tab_active() or (ab is not None and ab.enabled.isChecked())) and self._dejitter_view == 'result'
 
     def _on_export_tab_changed(self, _index):
         if not hasattr(self, 'dejitter_view_bar'):
@@ -268,9 +269,15 @@ class _BirdStampDejitterMixin:
 
     def _restore_selected_preview_source(self):
         if not self._sequence_result_mode() and self.current_source_image is None:
-            item = self.photo_list.currentItem()
+            ab = getattr(self, 'ab_preview', None)
+            item = (self._find_photo_item_by_path(self.current_path)
+                    if ab is not None and ab.enabled.isChecked() and self.current_path is not None
+                    else self.photo_list.currentItem())
             if item is not None:
-                self._on_photo_selected(item, None)
+                if ab is not None and ab.enabled.isChecked() and ab.active_side == 'a':
+                    self._on_photo_selected(item, None, target_view='b')
+                else:
+                    self._on_photo_selected(item, None)
 
     def _sequence_fast_preview_active(self):
         return hasattr(self, 'sequence_transport') and self.sequence_transport.active
@@ -769,7 +776,8 @@ class _BirdStampDejitterMixin:
             self._update_dejitter_controls()
 
     def _show_dejitter_edit_preview(self, *, reset_view=False, preserve_view=False, **_kwargs):
-        if not self._dejitter_tab_active() or self._sequence_result_mode():
+        ab = getattr(self, 'ab_preview', None)
+        if not (self._dejitter_tab_active() or (ab is not None and ab.enabled.isChecked())) or self._sequence_result_mode():
             return False
         if self._sequence_preview is not None and (not self._sequence_fast_preview_active()
                 or monotonic() - self._sequence_validated_at > 1):

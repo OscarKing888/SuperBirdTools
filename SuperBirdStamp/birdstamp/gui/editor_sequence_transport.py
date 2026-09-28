@@ -84,7 +84,7 @@ class SequenceTransport(QObject):
         for button in (self.play, self.previous, self.next):
             button.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self._navigation_surfaces = (editor.photo_list._tree_widget,
-                                     editor.photo_list._tree_widget.viewport(), canvas,
+                                     editor.photo_list._tree_widget.viewport(), canvas, editor.ab_preview.preview.canvas,
                                      self.strip, self.strip.viewport())
         self._result_surfaces = (self.panel, editor.preview_label, editor.dejitter_view_tabs,
                                  self.play, self.previous, self.next, self.loop)
@@ -120,7 +120,7 @@ class SequenceTransport(QObject):
         self.sync()
 
     def index(self):
-        current = self.editor.current_path
+        current = self.editor.ab_preview.selected_path()
         return next((i for i, path in enumerate(self.paths) if path == current), -1)
 
     def sync(self):
@@ -159,7 +159,12 @@ class SequenceTransport(QObject):
         self.previous.setEnabled(ready and index > 0)
         self.next.setEnabled(ready and index < len(self.paths) - 1)
         self.strip.setEnabled(ready)
-        self.panel.setVisible(self.editor._sequence_result_mode())
+        self.panel.setVisible(self.result_mode())
+
+    def result_mode(self):
+        ab = self.editor.ab_preview
+        return (ab.mode.currentIndex() == 1 if ab.enabled.isChecked() and ab.active_side == 'a'
+                else self.editor._sequence_result_mode())
 
     def _select(self, index):
         if not 0 <= index < len(self.paths):
@@ -172,8 +177,9 @@ class SequenceTransport(QObject):
                 self.editor.photo_list.setCurrentItem(item)
                 self.editor.photo_list._tree_widget.scrollToItem(item)
             else:
-                self.editor.current_path = path
-                self.editor._refresh_preview_label(preserve_view=True)
+                if not self.editor.ab_preview.route_photo_selection(path):
+                    self.editor.current_path = path
+                    self.editor._refresh_preview_label(preserve_view=True)
             self.sync()
         finally:
             self.selecting = False
@@ -252,7 +258,7 @@ class SequenceTransport(QObject):
         if kind not in (QEvent.Type.KeyPress, QEvent.Type.KeyRelease):
             return False
         if watched not in self._navigation_surfaces:
-            if watched not in self._result_surfaces or not self.editor._sequence_result_mode():
+            if watched not in self._result_surfaces or not self.result_mode():
                 return False
         key = event.key()
         directions = {Qt.Key.Key_Left: -1, Qt.Key.Key_Up: -1,

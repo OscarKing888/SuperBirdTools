@@ -29,7 +29,7 @@ def assert_aligned(window):
                 return False
         return True
     wait_until(aligned)
-    for name in ('mode', 'relationship', 'name_label'):
+    for name in ('mode', 'name_label'):
         assert getattr(ab.a_panel, name).width() == getattr(ab.b_panel, name).width()
 
 
@@ -71,8 +71,10 @@ def test_modes_transport_resize_and_font_changes_keep_canvas_edges_aligned(windo
         ab.mode.setCurrentIndex(a_mode)
         finish(ab)
         assert_aligned(window)
-        assert ab.b_mode.currentText() == ('编辑预览' if tab == 0 else '原图' if view == 'edit' else '去抖动成片')
-        assert ab.b_mode.isEnabled() == (tab == 1)
+        assert ab.b_mode.currentText() == ('原图' if view == 'edit' else '去抖动成片')
+        assert ab.b_mode.isEnabled()
+        assert ab.mode.parentWidget() is ab.center.parentWidget() is ab.a_panel.toolbar
+        assert ab.b_mode.parentWidget() is window.auto_focus_center_check.parentWidget() is ab.b_panel.toolbar
         assert not ab.a_panel.toolbar.isHidden() and not ab.b_panel.toolbar.isHidden()
     assert not window.show_crop_effect_check.isEnabled()
     assert not window.crop_effect_alpha_slider.isEnabled()
@@ -132,12 +134,12 @@ def test_b_mode_control_follows_global_tabs_without_changing_a(window, monkeypat
     ab = window.ab_preview
     ab.enabled.setChecked(True)
     finish(ab)
-    ab.b_mode.setCurrentIndex(1)
-    ab.b_mode.activated.emit(1)
+    ab.b_mode.setCurrentIndex(0)
+    ab.b_mode.activated.emit(0)
     assert window._dejitter_view == 'edit'
     assert window.dejitter_view_tabs.currentIndex() == 0
-    ab.b_mode.setCurrentIndex(2)
-    ab.b_mode.activated.emit(2)
+    ab.b_mode.setCurrentIndex(1)
+    ab.b_mode.activated.emit(1)
     assert window._sequence_result_mode()
     assert ab.mode.currentIndex() == 0
     assert ab.path == paths[0]

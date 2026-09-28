@@ -403,6 +403,7 @@ def _bounded_preview_option(key: str, default: int, minimum: int, maximum: int) 
 DEJITTER_PAD_TO_UNION = _load_builtin_editor_options_raw().get("dejitter_pad_to_union", False) is True
 DEJITTER_EXPORT_NEW_WORKSPACE = _load_builtin_editor_options_raw().get("dejitter_export_new_workspace", False) is True
 PREVIEW_AB_ENABLED = _load_builtin_editor_options_raw().get("preview_ab_enabled", False) is True
+PREVIEW_AB_LINKED = _load_builtin_editor_options_raw().get("preview_ab_linked", False) is True
 PREVIEW_AUTO_FOCUS_CENTER = _load_builtin_editor_options_raw().get("preview_auto_focus_center", False) is True
 
 # 成片两级预览共用最终源像素框；有界小图缓存不参与原尺寸导出。
