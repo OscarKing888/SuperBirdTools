@@ -5,7 +5,7 @@ from PyQt6.QtCore import QEvent, QObject, QSize, Qt, QTimer
 from PyQt6.QtGui import QIcon, QPixmap
 from PyQt6.QtWidgets import (
     QCheckBox, QHBoxLayout, QLabel, QListWidget, QListWidgetItem,
-    QSpinBox, QStyle, QToolButton, QVBoxLayout, QWidget,
+    QPushButton, QSpinBox, QStyle, QToolButton, QVBoxLayout, QWidget,
 )
 
 from . import editor_options
@@ -55,12 +55,16 @@ class SequenceTransport(QObject):
         self.fps.setToolTip('播放和长按方向键的预览速度')
         self.fps.valueChanged.connect(lambda value: self.timer.setInterval(round(1000 / value)))
         self.timer.setInterval(round(1000 / self.fps.value()))
+        self.auto_fps_button = QPushButton('自动')
+        self.auto_fps_button.setToolTip('根据当前照片列表的拍摄时间自动计算回放 FPS。')
+        self.auto_fps_button.clicked.connect(editor._on_dejitter_auto_fps_requested)
         self.loop = QCheckBox('循环')
         self.loop.setChecked(True)
         for widget in (self.play, self.previous, self.next, self.position):
             row.addWidget(widget)
         row.addStretch(1)
         row.addWidget(self.fps)
+        row.addWidget(self.auto_fps_button)
         row.addWidget(self.loop)
         layout.addLayout(row)
         self.strip = QListWidget()
@@ -166,6 +170,7 @@ class SequenceTransport(QObject):
                 self.editor.dejitter_tracking_status.setToolTip(result.error)
         ready = bool(self.paths) and not self.editor._sequence_exporting
         self.play.setEnabled(ready and len(self.paths) > 1)
+        self.auto_fps_button.setEnabled(ready and len(self.paths) > 1)
         self.previous.setEnabled(ready and index > 0)
         self.next.setEnabled(ready and index < len(self.paths) - 1)
         self.strip.setEnabled(ready)

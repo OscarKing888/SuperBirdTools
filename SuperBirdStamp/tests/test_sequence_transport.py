@@ -106,6 +106,28 @@ def test_play_timer_loop_pause_and_tab_change(window, monkeypatch):
     wait_until(lambda: window._preview_decode_worker is None)
 
 
+def test_auto_fps_uses_capture_time_result_with_playback_limit(window, monkeypatch, tmp_path):
+    transport = window.sequence_transport
+    transport.paths = [tmp_path / '第一张.jpg', tmp_path / '第二张.jpg']
+    transport.sync()
+    assert transport.auto_fps_button.text() == '自动'
+    assert window.gif_export_panel.auto_fps_button.text() == '自动'
+    assert window.video_export_panel.auto_fps_button.text() == '自动'
+    assert transport.auto_fps_button.isEnabled()
+
+    monkeypatch.setattr(window, '_calculate_auto_fps_from_photo_capture_times',
+                        lambda: (120, 120.2, 2))
+    transport.auto_fps_button.click()
+    assert transport.fps.value() == 30
+    assert transport.timer.interval() == round(1000 / 30)
+
+    monkeypatch.setattr(window, '_calculate_auto_fps_from_photo_capture_times',
+                        lambda: (12, 12.2, 2))
+    transport.auto_fps_button.click()
+    assert transport.fps.value() == 12
+    assert transport.timer.interval() == round(1000 / 12)
+
+
 def test_focus_loss_and_invalidation_stop_playback(window, monkeypatch):
     paths, _, _ = setup_tab(window, monkeypatch)
     populate(window, paths)

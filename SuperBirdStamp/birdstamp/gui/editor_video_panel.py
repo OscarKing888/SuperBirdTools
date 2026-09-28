@@ -110,7 +110,7 @@ class VideoExportPanel(QGroupBox):
             text = f"{float(value):.3f}".rstrip("0").rstrip(".")
             self.fps_combo.addItem(text, float(value))
         self.fps_combo.setCurrentText(f"{DEFAULT_VIDEO_FPS:.3f}".rstrip("0").rstrip("."))
-        self.auto_fps_button = QPushButton("Auto")
+        self.auto_fps_button = QPushButton("自动")
         self.auto_fps_button.setToolTip("根据当前照片列表的拍摄时间自动计算 FPS。")
         self.auto_fps_button.clicked.connect(self.autoFpsRequested.emit)
         fps_widget = QWidget()
