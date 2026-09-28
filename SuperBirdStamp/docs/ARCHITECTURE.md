@@ -31,7 +31,7 @@
 | [ABPreview](../birdstamp/gui/editor_ab_preview.py) | 独立 A/B 对照：预览工具栏「显示裁切效果」前的分屏图标开关带悬停提示；点击激活侧接收照片列表选择，原图/成片独立切换及可选视野联动；A 保持单 worker 所有权，B 保留原编辑上下文。 |
 | [SequenceTransport](../birdstamp/gui/editor_sequence_transport.py) | 成片播放面板、缩略图条、照片列表同步；普通编辑页首次按键用原生选择和快速小图，长按由精确定时器驱动，物理松键仅为最终照片提交一次清晰预览。小图缓存未命中时由后台解码。 |
 | [_BirdStampReferenceTrackingMixin](../birdstamp/gui/editor_reference_tracking.py) | 多参考区预处理、结果签名与失效、切图跟踪预览及工作线程所有权。 |
-| [_BirdStampWorkspaceMixin](../birdstamp/gui/editor_workspace.py) | 工作区序列化、增量恢复、自动保存及恢复期间的保存门控。 |
+| [_BirdStampWorkspaceMixin](../birdstamp/gui/editor_workspace.py) | 工作区序列化、增量恢复、自动保存、文件菜单最近工作区记录及恢复期间的保存门控。最近列表保存在用户目录的 `editor_export_state.json`，只记录成功加载或手动保存的工作区；自动保存不进入列表。 |
 
 窗口保存显式状态：`current_path` 指向源文件；`current_source_image` 可为受限尺寸的预览解码结果，完整尺寸另存于 `current_source_full_size`；原始元数据、模板上下文和 `PhotoInfo` 分别保存在当前照片状态中。`photo_render_overrides` 保存逐图设置，全局导出设置另行合并。不要用预览 JPEG 的路径或像素尺寸替代原图的元数据、裁切坐标或导出输入。
 

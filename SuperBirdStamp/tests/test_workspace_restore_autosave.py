@@ -102,3 +102,62 @@ def test_completed_restore_resumes_manual_and_automatic_saving(window, tmp_path)
 
     assert len(read_workspace_json(autosave_path)["photos"]) == 2
     assert len(read_workspace_json(workspace_path)["photos"]) == 2
+
+
+def test_recent_workspace_menu_tracks_saved_and_opened_files(window, tmp_path):
+    first = tmp_path / "甲" / "编辑.birdstamp-workspace.json"
+    second = tmp_path / "乙" / "编辑.birdstamp-workspace.json"
+    window._autosave_workspace_now()
+    assert not window.recent_workspaces_menu.isEnabled()
+
+    window._save_workspace_to_path(first)
+    window._save_workspace_to_path(second)
+    actions = window.recent_workspaces_menu.actions()
+    assert [action.toolTip() for action in actions] == [str(second), str(first)]
+    assert all("编辑.birdstamp-workspace.json" in action.text() for action in actions)
+    assert actions[0].text() != actions[1].text()
+
+    actions[1].trigger()
+    assert window._workspace_path == first
+    assert window._load_editor_export_state_value("recent_workspace_paths") == [str(first), str(second)]
+    second.unlink()
+    window._refresh_recent_workspace_menu()
+    assert [action.toolTip() for action in window.recent_workspaces_menu.actions()] == [str(first)]
+
+
+def test_recent_workspace_failed_or_cancelled_load_does_not_change_history(window, tmp_path, monkeypatch):
+    first = tmp_path / "first.birdstamp-workspace.json"
+    second = tmp_path / "second.birdstamp-workspace.json"
+    window._save_workspace_to_path(first)
+    window._save_workspace_to_path(second)
+    history = window._load_editor_export_state_value("recent_workspace_paths")
+
+    monkeypatch.setattr(window, "_confirm_replace_workspace_session", lambda: False)
+    window.recent_workspaces_menu.actions()[1].trigger()
+    assert window._workspace_path == second
+    assert window._load_editor_export_state_value("recent_workspace_paths") == history
+
+    monkeypatch.setattr(window, "_confirm_replace_workspace_session", lambda: True)
+    monkeypatch.setattr(window, "_show_error", lambda title, message: None)
+    first.write_text("{invalid", encoding="utf-8")
+    window.recent_workspaces_menu.actions()[1].trigger()
+    assert window._workspace_path == second
+    assert window._load_editor_export_state_value("recent_workspace_paths") == history
+
+
+def test_recent_workspace_history_is_bounded_and_deduplicated(tmp_path):
+    raw = [str(tmp_path / f"{index}.json") for index in range(12)]
+    paths = editor_workspace._recent_workspace_paths(raw, newest=tmp_path / "3.json")
+    assert len(paths) == 10
+    assert paths[0] == (tmp_path / "3.json").resolve()
+    assert paths.count((tmp_path / "3.json").resolve()) == 1
+
+
+def test_recent_workspace_menu_includes_preexisting_last_workspace(window, tmp_path):
+    previous = tmp_path / "previous.birdstamp-workspace.json"
+    write_workspace_json(previous, window._collect_workspace_payload(previous))
+    window._save_editor_export_state_value("last_workspace_path", str(previous))
+
+    window._refresh_recent_workspace_menu()
+
+    assert [action.toolTip() for action in window.recent_workspaces_menu.actions()] == [str(previous)]

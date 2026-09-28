@@ -2101,6 +2101,9 @@ class BirdStampEditorWindow(
         file_menu.addAction(self.action_add_directory)
         file_menu.addSeparator()
         file_menu.addAction(self.action_load_workspace)
+        self.recent_workspaces_menu = file_menu.addMenu("最近打开的工作区")
+        self.recent_workspaces_menu.aboutToShow.connect(self._refresh_recent_workspace_menu)
+        self._refresh_recent_workspace_menu()
         file_menu.addAction(self.action_save_workspace)
         file_menu.addAction(self.action_save_workspace_as)
 

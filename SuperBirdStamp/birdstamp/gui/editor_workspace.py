@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import time
 from collections import deque
 from contextlib import contextmanager
@@ -43,6 +44,8 @@ _WORKSPACE_RESTORE_PHOTO_BATCH_MAX = 48
 _WORKSPACE_RESTORE_PHOTO_BATCH_BUDGET_S = 0.010
 _workspace_log = get_logger("birdstamp.workspace")
 _LAST_WORKSPACE_PATH_KEY = "last_workspace_path"
+_RECENT_WORKSPACE_PATHS_KEY = "recent_workspace_paths"
+_RECENT_WORKSPACE_LIMIT = 10
 _PIPELINE_STAGE_ENABLED_VALUE_KEYS = (
     STAGE_TEMPLATE_CROP_ENABLED_KEY,
     STAGE_RESIZE_LIMIT_ENABLED_KEY,
@@ -69,6 +72,28 @@ def _restore_widget_signals(previous_states: Iterable[tuple[object, bool]]) -> N
             widget.blockSignals(old_state)
         except Exception:
             continue
+
+
+def _recent_workspace_paths(raw: object, *, newest: Path | None = None) -> list[Path]:
+    candidates = [newest] if newest is not None else []
+    if isinstance(raw, list):
+        candidates.extend(raw)
+    paths: list[Path] = []
+    seen: set[str] = set()
+    for candidate in candidates:
+        if not isinstance(candidate, (str, Path)) or not str(candidate).strip():
+            continue
+        try:
+            path = Path(candidate).expanduser().resolve(strict=False)
+        except (OSError, RuntimeError, ValueError):
+            continue
+        key = os.path.normcase(str(path))
+        if key not in seen:
+            paths.append(path)
+            seen.add(key)
+        if len(paths) >= _RECENT_WORKSPACE_LIMIT:
+            break
+    return paths
 
 
 class _BirdStampWorkspaceMixin:
@@ -255,12 +280,36 @@ class _BirdStampWorkspaceMixin:
         return max(candidates, key=_mtime)
 
     def _save_workspace_last_path(self, workspace_path: Path) -> None:
+        recent = self._load_recent_workspace_paths()
         try:
             target = workspace_path.expanduser().resolve(strict=False)
         except Exception:
             target = Path(workspace_path)
         self._save_editor_export_state_value(_LAST_WORKSPACE_PATH_KEY, str(target))
         self._save_workspace_last_dir(target.parent)
+        recent = _recent_workspace_paths(recent, newest=target)
+        self._save_editor_export_state_value(_RECENT_WORKSPACE_PATHS_KEY, [str(path) for path in recent])
+        self._refresh_recent_workspace_menu()
+
+    def _load_recent_workspace_paths(self) -> list[Path]:
+        raw = self._load_editor_export_state_value(_RECENT_WORKSPACE_PATHS_KEY, None)
+        if raw is None:
+            last_path = self._load_workspace_last_path()
+            return [last_path] if last_path is not None else []
+        return _recent_workspace_paths(raw)
+
+    def _refresh_recent_workspace_menu(self) -> None:
+        menu = getattr(self, "recent_workspaces_menu", None)
+        if menu is None:
+            return
+        menu.clear()
+        for path in self._load_recent_workspace_paths():
+            if not path.is_file():
+                continue
+            action = menu.addAction(f"{path.name} — {path.parent}")
+            action.setToolTip(str(path))
+            action.triggered.connect(lambda _checked=False, selected=path: self._open_workspace_path(selected))
+        menu.setEnabled(bool(menu.actions()))
 
     def _restore_last_workspace_on_startup(self) -> bool:
         workspace_path = self._load_workspace_last_path()
@@ -1032,7 +1081,11 @@ class _BirdStampWorkspaceMixin:
         if not file_path:
             return
 
-        workspace_path = self._normalize_workspace_target_path(file_path)
+        self._open_workspace_path(self._normalize_workspace_target_path(file_path), confirmed=True)
+
+    def _open_workspace_path(self, workspace_path: Path, *, confirmed: bool = False) -> None:
+        if not confirmed and not self._confirm_replace_workspace_session():
+            return
         try:
             payload = read_workspace_json(workspace_path)
         except WorkspaceFormatError as exc:

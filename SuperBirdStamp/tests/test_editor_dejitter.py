@@ -4,12 +4,14 @@ from pathlib import Path
 import numpy as np
 import pytest
 from PIL import Image
+from PyQt6.QtCore import Qt
+from PyQt6.QtGui import QImage
 from PyQt6.QtWidgets import QApplication
 
 from birdstamp import config
 from birdstamp.gui import editor
 from birdstamp.gui.edit_modes import EDIT_MODE_REFERENCE_REGION
-from birdstamp.gui.color_key_rows import _ColorSwatch
+from birdstamp.gui.color_key_rows import _ColorFrame
 
 _APP = QApplication.instance() or QApplication([])
 
@@ -40,10 +42,18 @@ def test_dejitter_status_uses_color_keys_before_descriptions(window):
     bounds = window.dejitter_intersection_status
     assert tracking.text() == '跟踪成功\n未匹配（预计位置）'
     assert bounds.text() == '整组完整范围（并集）：待分析\n共同无黑边范围（交集）：待分析'
-    swatches = tracking.findChildren(_ColorSwatch) + bounds.findChildren(_ColorSwatch)
-    assert [(swatch.color.name().upper(), swatch.dashed) for swatch in swatches] == [
+    frames = tracking.findChildren(_ColorFrame) + bounds.findChildren(_ColorFrame)
+    assert [(frame.color.name().upper(), frame.dashed) for frame in frames] == [
         ('#FFB703', False), ('#FF5252', True), ('#F5A623', False), ('#45D6E8', False),
     ]
+    for frame in frames:
+        image = QImage(frame.size(), QImage.Format.Format_ARGB32)
+        image.fill(Qt.GlobalColor.transparent)
+        frame.render(image)
+        background = image.pixelColor(9, 1)
+        assert image.pixelColor(9, 8) == background
+        assert any(image.pixelColor(x, y) != background
+                   for x in range(1, 19) for y in (2, 3, 14, 15))
     bounds.set_lines(('整组完整范围（并集）：6776 × 4935 像素',
                       '共同无黑边范围（交集）：5523 × 3280 像素'))
     assert '黄色' not in tracking.text() and '红色' not in tracking.text()
