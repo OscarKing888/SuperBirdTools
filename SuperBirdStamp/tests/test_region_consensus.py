@@ -97,6 +97,36 @@ def test_equal_independent_rotating_groups_remain_ambiguous():
     assert resolve_tracking_consensus(first+second,raw,(1200,800),(1200,800)).matched_count == 0
 
 
+def test_rotation_limit_diagnostic_reports_measured_angle_without_accepting_it():
+    from birdstamp.image_dejitter.matching_options import MatchingOptions
+    regions = ((.1,.1,.2,.2), (.7,.1,.8,.2), (.1,.7,.2,.8), (.7,.7,.8,.8))
+    raw = RegionTrackingResult(rotated_matches(regions, -2.18), scores=(.91,)*4)
+    result = resolve_tracking_consensus(regions, raw, (1200,800), (1200,800))
+    assert result.matched_count == 0
+    assert '4 个选区支持约 -2.18°' in result.error
+    assert '超过当前 2° 上限' in result.error
+    assert '调到 3°，位置容差保持 0.3%' in result.error
+    accepted = resolve_tracking_consensus(regions, raw, (1200,800), (1200,800), options=MatchingOptions(3,.3))
+    assert accepted.boxes == raw.boxes
+    # 两个独立且同等可靠的转动组不能给出虚假的“调大参数即可”建议。
+    second = tuple(shifted(r, .04) for r in regions)
+    conflict = RegionTrackingResult(raw.boxes + rotated_matches(second, 2.18, (-80,-40)), scores=(.91,)*8)
+    ambiguous = resolve_tracking_consensus(regions+second, conflict, (1200,800), (1200,800))
+    assert ambiguous.matched_count == 0
+    assert '检测到' not in ambiguous.error
+
+
+@pytest.mark.parametrize('angle', [-1.8, 1.8])
+def test_missing_region_prediction_follows_rotation_but_stays_unmatched(angle):
+    regions = ((.1,.1,.2,.2), (.7,.1,.8,.2), (.1,.7,.2,.8), (.7,.7,.8,.8))
+    boxes = rotated_matches(regions, angle)
+    raw = RegionTrackingResult((*boxes[:3], None), scores=(.96,.96,.96,0))
+    result = resolve_tracking_consensus(regions, raw, (1200,800), (1200,800))
+    assert result.matched_count == 3
+    assert result.boxes[3] is None
+    assert result.predicted_boxes[3] == pytest.approx(boxes[3])
+
+
 def test_diagnostics_use_output_crop_coordinates_and_keep_original_ids():
     result = RegionTrackingResult((None, shifted(REGIONS[1], .2), None, None, None), scores=(0,.95,0,0,0))
     result = resolve_tracking_consensus(REGIONS, result, (1000,600), (1000,600))

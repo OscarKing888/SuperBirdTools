@@ -164,7 +164,7 @@ class _BirdStampReferenceTrackingMixin:
         if source and not self._reference_regions_editable():
             result = self._tracking_result_for_current()
             if result is not None:
-                detail = result.error or ("红色虚线表示未匹配的预计位置" if result.matched_count < len(result.boxes)
+                detail = result.error or ("未匹配区域只显示预计位置" if result.matched_count < len(result.boxes)
                                           else "可在原图修正匹配位置" if self._dejitter_tab_active() else "只读预览")
                 message += f"\n当前图：{result.matched_count}/{len(result.boxes)} 个区域 · {detail}"
             else:
