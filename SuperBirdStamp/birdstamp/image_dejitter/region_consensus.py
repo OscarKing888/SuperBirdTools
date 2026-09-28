@@ -16,8 +16,8 @@ def region_offsets(regions, result, size, reference_size):
 def _rotation_consistent_groups(regions, offsets, reference_size, tolerance, min_span, max_degrees):
     """小角度转动会使真实匹配的位移不同；用至少三区的刚性几何证据核验。
 
-    这里只选择可靠区域，输出仍为平移裁切，不旋转/缩放原图。两点即可拟合
-    转动，因此必须有第三个实测匹配支持，且参考点不能集中在同一小块内。
+    这里只选择可靠区域；rigid_alignment 按输出模式拟合刚性变换或保留平移。
+    两点即可拟合转动，因此必须有第三个实测匹配支持，且参考点不能集中在同一小块内。
     """
     if len(offsets) < 3 or max_degrees <= 0:
         return set()

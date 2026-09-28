@@ -12,7 +12,8 @@ from PyQt6.QtGui import QImage
 from birdstamp.export_stage.sequence_preview import prepare_sequence_preview, render_sequence_preview_frame
 from birdstamp.export_stage.sequence_photo_error import SequencePhotoError, sequence_photo_errors
 from . import editor_options
-from birdstamp.image_dejitter.sequence_geometry import aligned_crop_plan, render_aligned_thumbnail
+from birdstamp.image_dejitter.sequence_geometry import render_aligned_thumbnail
+from birdstamp.image_dejitter.rigid_alignment import render_alignment
 from .sequence_preview_frame import SequencePreviewFrame
 
 
@@ -91,11 +92,13 @@ class EditorSequencePreviewWorker(QThread):
                         return
                     with sequence_photo_errors(job.path), sources.pop(key) as small:
                         width, height = sequence.source_sizes[key]
-                        box = sequence.pixel_boxes[key]
-                        with render_aligned_thumbnail(small, (width,height), box, edge) as aligned:
+                        alignment = sequence.alignments.get(key)
+                        rendered = (render_alignment(small,(width,height),alignment,sequence.canvas_box,max_edge=edge)
+                                    if alignment else render_aligned_thumbnail(small,(width,height),sequence.pixel_boxes[key],edge))
+                        with rendered as aligned:
                             frames[key] = SequencePreviewFrame(
                                 job.path, pil_qimage(aligned), (width,height), sequence.output_size,
-                                aligned_crop_plan((width,height), box), pil_qimage(small))
+                                sequence.frame_crop_plan(key), pil_qimage(small),alignment,sequence.canvas_box)
                     report_counts(index, len(sequence.jobs), '生成快速预览')
                 if not self.cancel_event.is_set():
                     if self.cache and not sequence.partial:
@@ -129,7 +132,8 @@ class EditorSequencePreviewWorker(QThread):
                 finally:
                     if rgb is not image:
                         rgb.close()
-            frame = SequencePreviewFrame(self.path, qimage, context.source_size, output_size, context.crop_plan)
+            frame = SequencePreviewFrame(self.path, qimage, context.source_size, output_size, context.crop_plan,
+                                         alignment=sequence.alignments.get(path_key(self.path)),canvas_box=sequence.canvas_box)
             if not self.cancel_event.is_set():
                 if self.cache:
                     self.cache.save_sharp(sequence, frame)

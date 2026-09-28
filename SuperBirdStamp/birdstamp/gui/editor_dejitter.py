@@ -131,6 +131,17 @@ class _BirdStampDejitterMixin:
         form.addWidget(hint)
         layout.addWidget(reference)
 
+        alignment_row = QHBoxLayout()
+        alignment_row.addWidget(QLabel('对齐方式'))
+        self.dejitter_alignment_combo = QComboBox()
+        self.dejitter_alignment_combo.addItem('平移＋旋转', 'rigid')
+        self.dejitter_alignment_combo.addItem('仅平移', 'translation')
+        self.dejitter_alignment_combo.setCurrentIndex(0 if editor_options.DEJITTER_ALIGNMENT_MODE == 'rigid' else 1)
+        self.dejitter_alignment_combo.setToolTip('对齐到参考图的角度和位置；旋转需要重采样。角度证据不足时退回平移并标记，原图不变。')
+        self.dejitter_alignment_combo.currentIndexChanged.connect(self._on_dejitter_matching_changed)
+        alignment_row.addWidget(self.dejitter_alignment_combo,1)
+        layout.addLayout(alignment_row)
+
         self.dejitter_matching_controls = DejitterMatchingControls(editor_options.DEJITTER_MATCHING_DEFAULTS)
         self.dejitter_matching_controls.changed.connect(self._on_dejitter_matching_changed)
         layout.addWidget(self.dejitter_matching_controls)
@@ -567,6 +578,10 @@ class _BirdStampDejitterMixin:
             self._sequence_message = (f'已生成前 {len(sequence.jobs)}/{len(sequence.all_jobs)} 张成片预览；'
                                       f'{kind} {sequence.output_size[0]} × {sequence.output_size[1]}。\n'
                                       f'后续分析失败：{sequence.failure}')
+        if sequence.alignments:
+            corrected = sum(a.status == 'rigid' for a in sequence.alignments.values())
+            fallback = sum(a.status == 'fallback' for a in sequence.alignments.values())
+            self._sequence_message += f'\n旋转估计成功 {corrected} 张，退回平移 {fallback} 张（未纠正旋转）。'
         self._reference_tracking_message = self._sequence_message
         self._set_status(self._sequence_message)
         self._update_dejitter_controls()
@@ -627,10 +642,19 @@ class _BirdStampDejitterMixin:
             )
             state = EditorPreviewOverlayState(focus_box=focus,
                                               bird_box=bird, crop_effect_box=(0, 0, 1, 1))
-            from .editor_tracking_overlay import tracking_overlays
-            state.reference_diagnostics = tracking_overlays(
-                self._dejitter_reference_regions, sequence.tracking.get(key),
-                source_normalized_crop(frame.source_size, sequence.pixel_boxes[key]))
+            from .editor_tracking_overlay import tracking_overlays, apply_frame_alignment
+            if frame.alignment and frame.alignment.rotated:
+                focus = editor_core.resolve_focus_box_after_processing(
+                    job.raw_metadata, source_width=width, source_height=height, crop_box=None,
+                    outer_pad=(0, 0, 0, 0), apply_ratio_crop=False,
+                    camera_type=editor_core.resolve_focus_camera_type_from_metadata(job.raw_metadata))
+                apply_frame_alignment(state, frame, focus,
+                    self._bird_box_cache.get(self._source_signature(self.current_path)),
+                    self._dejitter_reference_regions, sequence.tracking.get(key))
+            else:
+                state.reference_diagnostics = tracking_overlays(
+                    self._dejitter_reference_regions, sequence.tracking.get(key),
+                    source_normalized_crop(frame.source_size, sequence.pixel_boxes[key]))
             self.preview_label.set_original_size(*frame.source_size)
             self.preview_label.set_cropped_size(*frame.output_size)
             pixmap = QPixmap.fromImage(frame.image)
@@ -751,6 +775,10 @@ class _BirdStampDejitterMixin:
                 state.crop_effect_box = source_normalized_crop(size, box)
                 state.alignment_crop_box = state.crop_effect_box
                 options.show_crop_effect = self.show_crop_effect_check.isChecked()
+            elif size and not self.dejitter_pad_to_union_check.isChecked():
+                from .editor_tracking_overlay import apply_alignment_crop
+                if apply_alignment_crop(state, self._sequence_preview, key):
+                    options.show_crop_effect = self.show_crop_effect_check.isChecked()
         if not editable:
             state.reference_diagnostics = tracking_overlays(self._dejitter_reference_regions, tracked)
         options.show_reference_regions = bool(state.reference_regions or state.reference_diagnostics)

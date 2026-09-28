@@ -6,6 +6,7 @@ Mixed into BirdStampEditorWindow via multiple inheritance.
 """
 from __future__ import annotations
 from birdstamp.image_dejitter.matching_options import MATCHING_KEYS, normalize_matching_settings
+from birdstamp.image_dejitter.rigid_alignment import ALIGNMENT_MODE_KEY, normalize_alignment_mode
 
 import hashlib
 from pathlib import Path
@@ -980,6 +981,7 @@ class _BirdStampRendererMixin:
         source = getattr(self, "_dejitter_reference_source", None)
         return {
             "dejitter_reference_strength": int(slider.value()) if slider is not None else 100,
+            ALIGNMENT_MODE_KEY: (self.dejitter_alignment_combo.currentData() if hasattr(self,'dejitter_alignment_combo') else 'translation'),
             **(self.dejitter_matching_controls.settings() if hasattr(self, 'dejitter_matching_controls')
                else normalize_matching_settings()),
             "dejitter_pad_to_union": bool(getattr(self, "dejitter_pad_to_union_check", None)
@@ -1007,6 +1009,7 @@ class _BirdStampRendererMixin:
         normalized.pop("auto_crop_stabilization", None)
         normalized.pop("dejitter_reference_strength", None)
         normalized.pop("dejitter_pad_to_union", None)
+        normalized.pop(ALIGNMENT_MODE_KEY,None)
         for key in MATCHING_KEYS:
             normalized.pop(key, None)
         normalized.pop("dejitter_reference_crop_settings", None)
@@ -1076,6 +1079,7 @@ class _BirdStampRendererMixin:
             DEJITTER_REFERENCE_REGIONS_KEY, DEJITTER_REFERENCE_SOURCE_KEY,
             "dejitter_reference_strength", "dejitter_reference_crop_settings", "dejitter_pad_to_union",
             *MATCHING_KEYS,
+            ALIGNMENT_MODE_KEY,
         )}
 
     def _normalize_render_settings(self, raw: Any, fallback: dict[str, Any]) -> dict[str, Any]:
@@ -1144,6 +1148,7 @@ class _BirdStampRendererMixin:
                 DEJITTER_REFERENCE_SOURCE_KEY,
                 "dejitter_reference_strength", "dejitter_pad_to_union",
                 *MATCHING_KEYS,
+                ALIGNMENT_MODE_KEY,
             )
         ):
             settings.update(self._clone_dejitter_reference_settings(raw))
@@ -1272,6 +1277,11 @@ class _BirdStampRendererMixin:
             invalidate()
         if hasattr(self, 'dejitter_matching_controls'):
             self.dejitter_matching_controls.set_settings(settings)
+        if hasattr(self,'dejitter_alignment_combo'):
+            combo = self.dejitter_alignment_combo
+            blocked = combo.blockSignals(True)
+            combo.setCurrentIndex(combo.findData(normalize_alignment_mode(settings.get(ALIGNMENT_MODE_KEY))))
+            combo.blockSignals(blocked)
         regions = []
         raw_regions = settings.get(DEJITTER_REFERENCE_REGIONS_KEY)
         if isinstance(raw_regions, (list, tuple)):

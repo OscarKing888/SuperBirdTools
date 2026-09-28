@@ -12,6 +12,8 @@ from birdstamp.gui.editor_utils import path_key
 from birdstamp.image_dejitter import ReferenceRegionTracker
 from birdstamp.image_dejitter.region_consensus import select_translation
 from birdstamp.image_dejitter.matching_options import MATCHING_KEYS, MatchingOptions, normalize_matching_settings
+from birdstamp.image_dejitter.rigid_alignment import ALIGNMENT_MODE_KEY, normalize_alignment_mode, estimate_alignment
+from birdstamp.image_dejitter.alignment_bounds import intersect_convex, outward_bounds, largest_pixel_rectangle, has_complete_pixel
 from birdstamp.image_dejitter.region_tracking_result import image_file_signature
 from birdstamp.image_pipeline import ImageProcContext, ImageProcPipeline
 from birdstamp.image_pipeline.image_proc_stage.image_proc_sequence_align_stage import ImageProcSequenceAlignStage
@@ -22,8 +24,8 @@ from .video_export_cancelled_error import VideoExportCancelledError
 
 
 REFERENCE_KEYS = ('dejitter_reference_regions', 'dejitter_reference_source',
-                  'dejitter_reference_strength', 'dejitter_pad_to_union', *MATCHING_KEYS)
-SEQUENCE_ANALYSIS_VERSION = 3
+                  'dejitter_reference_strength', 'dejitter_pad_to_union', ALIGNMENT_MODE_KEY, *MATCHING_KEYS)
+SEQUENCE_ANALYSIS_VERSION = 4
 
 
 def sequence_files(seeds, template_paths=None) -> tuple[Path, ...]:
@@ -50,6 +52,7 @@ def sequence_input_key(seeds, template_paths=None) -> str:
     payload = []
     for seed in seeds:
         settings = {**seed.settings, **normalize_matching_settings(seed.settings)}
+        settings[ALIGNMENT_MODE_KEY] = normalize_alignment_mode(settings.get(ALIGNMENT_MODE_KEY))
         payload.append((path_key(seed.path), {key: settings.get(key) for key in REFERENCE_KEYS}))
     data = (SEQUENCE_ANALYSIS_VERSION, payload, file_signatures(sequence_files(seeds)))
     return hashlib.sha256(json.dumps(data, ensure_ascii=False, sort_keys=True, default=str).encode('utf-8')).hexdigest()
@@ -69,6 +72,15 @@ class SequencePreview:
     # 部分预览仍对完整输入检查签名；jobs 只含可预览的连续成功前缀。
     input_jobs: dict = field(default_factory=dict)
     failure: SequencePhotoError | None = None
+    alignments: dict = field(default_factory=dict)
+    canvas_box: tuple = ()
+
+    def frame_crop_plan(self, key):
+        from birdstamp.image_dejitter.sequence_geometry import aligned_crop_plan
+        if key in self.pixel_boxes:
+            return aligned_crop_plan(self.source_sizes[key],self.pixel_boxes[key])
+        # Rotated frames carry their real geometry in alignments/canvas_box.
+        return (0.,0.,1.,1.), (0,0,0,0)
 
     @property
     def partial(self) -> bool:
@@ -113,6 +125,47 @@ def common_alignment_crop(regions, tracking, source_sizes, reference_size, stren
             raise SequencePhotoError(key, '对齐后没有整组共同覆盖的画面，请开启补边保留完整画面，或调整照片范围及参考区。')
     boxes = {key: (left + dx, top + dy, right + dx, bottom + dy) for key, (dx, dy) in shifts.items()}
     return boxes, (right - left, bottom - top)
+
+
+def prepare_rigid_geometry(regions, tracking, sizes, reference_size, reference_key, settings, *, cancelled):
+    alignments = {}
+    footprints = []
+    intersection = None
+    union = settings.get('dejitter_pad_to_union',False) is True
+    options = MatchingOptions.from_settings(settings)
+    for key,result in tracking.items():
+        if cancelled():
+            raise VideoExportCancelledError('已取消去抖动分析。')
+        try:
+            alignment = estimate_alignment(regions,result,sizes[key],reference_size,mode='rigid',
+                strength=settings.get('dejitter_reference_strength',100),options=options,is_reference=key==reference_key)
+        except ValueError as exc:
+            raise SequencePhotoError(key,f'参考区失配：{result.error or exc}') from exc
+        alignments[key] = alignment
+        footprint = alignment.footprint(sizes[key],safe=not union)
+        if not footprint:
+            raise SequencePhotoError(key,'旋转后没有可用的完整画幅。')
+        footprints.append(footprint)
+        if not union:
+            intersection = footprint if intersection is None else intersect_convex(intersection,footprint)
+            try:
+                usable = has_complete_pixel(intersection,cancelled=cancelled)
+            except InterruptedError as exc:
+                raise VideoExportCancelledError('已取消去抖动分析。') from exc
+            if not usable:
+                raise SequencePhotoError(key,'对齐后没有整组共同覆盖的画面，请开启补边或调整照片范围。')
+    if union:
+        canvas = outward_bounds(footprints)
+    else:
+        try:
+            canvas = largest_pixel_rectangle(intersection,cancelled=cancelled)
+        except InterruptedError as exc:
+            raise VideoExportCancelledError('已取消去抖动分析。') from exc
+    if canvas is None:
+        raise SequencePhotoError(next(reversed(tracking)),'对齐后没有完整像素的共同画面，请开启补边。')
+    boxes = {key:box for key,alignment in alignments.items()
+             if (box:=alignment.source_pixel_box(canvas)) is not None}
+    return boxes,(canvas[2]-canvas[0],canvas[3]-canvas[1]),alignments,canvas
 
 
 def prepare_sequence_preview(seeds, template_paths=None, *, cancel_event, progress=lambda message: None,
@@ -164,7 +217,14 @@ def prepare_sequence_preview(seeds, template_paths=None, *, cancel_event, progre
             break
         accepted[job_key] = job
 
+    alignments,canvas_box = {},()
     def crop(selected):
+        nonlocal alignments,canvas_box
+        if normalize_alignment_mode(settings.get(ALIGNMENT_MODE_KEY)) == 'rigid':
+            boxes,size,alignments,canvas_box = prepare_rigid_geometry(
+                regions,{k:tracking[k] for k in selected},sizes,reference_size,path_key(reference),settings,
+                cancelled=cancel_event.is_set)
+            return boxes,size
         return common_alignment_crop(regions, {k: tracking[k] for k in selected}, sizes, reference_size,
                                      settings.get('dejitter_reference_strength', 100),
                                      pad_to_union=settings.get('dejitter_pad_to_union', False) is True,
@@ -194,7 +254,8 @@ def prepare_sequence_preview(seeds, template_paths=None, *, cancel_event, progre
     result = SequencePreview(key, accepted, signatures,
                              tracking=tracking, bird_boxes=dict(bird_boxes or {}),
                              pixel_boxes=boxes, source_sizes={k: sizes[k] for k in accepted},
-                             output_size=output_size, input_jobs=input_jobs if failure else {}, failure=failure)
+                             output_size=output_size, input_jobs=input_jobs if failure else {}, failure=failure,
+                             alignments=alignments,canvas_box=canvas_box)
     if not result.files_current():
         raise ValueError('照片或 XMP 在分析期间发生变化，请重新分析。')
     if cancel_event.is_set():
@@ -216,5 +277,7 @@ def render_sequence_preview_frame(sequence: SequencePreview, path: Path, *, vali
                                    source_paths=(source_paths if source_paths is not None else
                                                  tuple(job.path for job in sequence.jobs.values())),
                                    raw_metadata=job.raw_metadata,
-                                   precomputed={'sequence_crop_pixels': sequence.pixel_boxes[key]})
+                                   precomputed=({'sequence_alignment':sequence.alignments[key],
+                                                 'sequence_canvas_box':sequence.canvas_box} if sequence.alignments else
+                                                {'sequence_crop_pixels': sequence.pixel_boxes[key]}))
         return ImageProcPipeline((ImageProcSequenceAlignStage(),)).process(context)
