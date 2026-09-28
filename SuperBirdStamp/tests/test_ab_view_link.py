@@ -46,6 +46,18 @@ def assert_linked(first, second):
     assert first.viewport_state()[1] == pytest.approx(second.viewport_state()[1])
 
 
+def relative_view(first, second):
+    zoom_a, center_a = first.viewport_state()
+    zoom_b, center_b = second.viewport_state()
+    return zoom_b / zoom_a, (center_b[0] - center_a[0], center_b[1] - center_a[1])
+
+
+def assert_relative(first, second, expected):
+    zoom_ratio, center_delta = relative_view(first, second)
+    assert zoom_ratio == pytest.approx(expected[0])
+    assert center_delta == pytest.approx(expected[1])
+
+
 def test_enabling_link_preserves_both_views_until_next_interaction(window, monkeypatch):
     ab, a, b = setup(window, monkeypatch)
     ab.linked.click()
@@ -54,12 +66,31 @@ def test_enabling_link_preserves_both_views_until_next_interaction(window, monke
     pan(b)
     before_a, before_b = a.viewport_state(), b.viewport_state()
     assert before_a != before_b
+    relation = relative_view(a, b)
 
     ab.linked.click()
     assert a.viewport_state() == before_a
     assert b.viewport_state() == before_b
     wheel(a)
-    assert_linked(a, b)
+    assert_relative(a, b, relation)
+    pan(a)
+    assert_relative(a, b, relation)
+    wheel(b)
+    assert_relative(a, b, relation)
+    pan(b)
+    assert_relative(a, b, relation)
+    ab.a_panel.fit.click()
+    assert a.viewport_state()[0] == pytest.approx(1)
+    assert relative_view(a, b)[0] == pytest.approx(relation[0])
+    # 适应窗口后的中心可受两侧画布边界限制，倍率关系仍保留。
+
+    before_a, before_b = a.viewport_state(), b.viewport_state()
+    pixmap = QPixmap(1000, 500)
+    pixmap.fill(QColor('blue'))
+    a.set_source_pixmap(pixmap, reset_view=True)
+    assert a.viewport_state()[0] == pytest.approx(before_a[0])
+    assert a.viewport_state()[1] == pytest.approx(before_a[1])
+    assert b.viewport_state() == before_b
 
 
 def test_zoom_pan_fit_and_decoded_resolution_upgrade_are_linked_both_ways(window, monkeypatch):
