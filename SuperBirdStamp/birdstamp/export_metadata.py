@@ -32,7 +32,7 @@ def copy_export_metadata(source: Path, target: Path, image: Image.Image) -> None
     """复制完整 EXIF（含厂商私有数据），只校正成片方向、尺寸和缩略图。"""
     executable = get_exiftool_executable_path()
     if not executable:
-        raise RuntimeError('无法找到 ExifTool，不能完整保留原图 EXIF，已取消此图片导出。')
+        raise RuntimeError('无法使用 ExifTool（程序缺失或捆绑组件不完整），不能完整保留原图 EXIF，已取消此图片导出。')
     # 直接从原文件复制，不能用模板用的筛选后元数据字典重建 EXIF。
     # EXIF 块保留未知标签；all:all 兼容 TIFF/RAW 标签复制并保留其他可写元数据。
     _run(executable, ['-TagsFromFile', str(source), '-all:all', '-EXIF', '-ICC_Profile', '-IFD0:Orientation#=1', str(target)], allow_empty_source=True)
