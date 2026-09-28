@@ -2,13 +2,16 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from PyQt6.QtCore import pyqtSignal
+from PyQt6.QtCore import QRect, QSize, pyqtSignal
+from PyQt6.QtGui import QResizeEvent
 from PyQt6.QtWidgets import (
     QCheckBox,
     QFormLayout,
     QGroupBox,
     QHBoxLayout,
     QLabel,
+    QLayout,
+    QLayoutItem,
     QPushButton,
     QSpinBox,
     QVBoxLayout,
@@ -20,6 +23,75 @@ from birdstamp.gui import editor_options
 GIF_SCALE_OPTIONS = editor_options.GIF_SCALE_OPTIONS
 DEFAULT_GIF_FPS = editor_options.DEFAULT_GIF_FPS
 DEFAULT_GIF_LOOP = editor_options.DEFAULT_GIF_LOOP
+
+
+class _ScaleOptionsLayout(QLayout):
+    """Keep all configured scale choices visible as the export sidebar narrows."""
+
+    def __init__(self, parent: QWidget) -> None:
+        super().__init__(parent)
+        self._items: list[QLayoutItem] = []
+        self.setContentsMargins(0, 0, 0, 0)
+        self.setSpacing(10)
+
+    def addItem(self, item: QLayoutItem) -> None:
+        self._items.append(item)
+
+    def count(self) -> int:
+        return len(self._items)
+
+    def itemAt(self, index: int) -> QLayoutItem | None:
+        return self._items[index] if 0 <= index < len(self._items) else None
+
+    def takeAt(self, index: int) -> QLayoutItem | None:
+        return self._items.pop(index) if 0 <= index < len(self._items) else None
+
+    def hasHeightForWidth(self) -> bool:
+        return True
+
+    def heightForWidth(self, width: int) -> int:
+        return self._layout_items(QRect(0, 0, width, 0), apply=False)
+
+    def setGeometry(self, rect: QRect) -> None:
+        super().setGeometry(rect)
+        self._layout_items(rect, apply=True)
+
+    def sizeHint(self) -> QSize:
+        width = sum(item.sizeHint().width() for item in self._items)
+        width += max(0, len(self._items) - 1) * self.spacing()
+        return QSize(width, self.heightForWidth(width))
+
+    def minimumSize(self) -> QSize:
+        width = max((item.minimumSize().width() for item in self._items), default=0)
+        return QSize(width, self.heightForWidth(width))
+
+    def _layout_items(self, rect: QRect, *, apply: bool) -> int:
+        x = rect.x()
+        y = rect.y()
+        row_height = 0
+        for item in self._items:
+            size = item.sizeHint()
+            if x > rect.x() and x + size.width() > rect.right() + 1:
+                x = rect.x()
+                y += row_height + self.spacing()
+                row_height = 0
+            if apply:
+                item.setGeometry(QRect(x, y, size.width(), size.height()))
+            x += size.width() + self.spacing()
+            row_height = max(row_height, size.height())
+        return y - rect.y() + row_height
+
+
+class _ScaleOptionsWidget(QWidget):
+    """Tell QFormLayout when wrapping needs a taller field row."""
+
+    def resizeEvent(self, event: QResizeEvent) -> None:
+        super().resizeEvent(event)
+        layout = self.layout()
+        if layout is not None:
+            height = layout.heightForWidth(event.size().width())
+            if self.minimumHeight() != height:
+                self.setMinimumHeight(height)
 
 
 @dataclass(slots=True)
@@ -75,16 +147,13 @@ class GifExportPanel(QGroupBox):
         self.loop_spin.valueChanged.connect(self.optionsChanged.emit)
         form.addRow("循环次数", self.loop_spin)
 
-        scale_widget = QWidget()
-        scale_layout = QHBoxLayout(scale_widget)
-        scale_layout.setContentsMargins(0, 0, 0, 0)
-        scale_layout.setSpacing(10)
+        scale_widget = _ScaleOptionsWidget()
+        scale_layout = _ScaleOptionsLayout(scale_widget)
         for label, scale in GIF_SCALE_OPTIONS:
             check = QCheckBox(label)
             check.toggled.connect(self.optionsChanged.emit)
             scale_layout.addWidget(check)
             self._scale_checks.append((float(scale), check))
-        scale_layout.addStretch(1)
         form.addRow("缩小版本", scale_widget)
 
         self.keep_frames_check = QCheckBox("保留单帧图片")
