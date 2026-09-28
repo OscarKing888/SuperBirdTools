@@ -12,7 +12,7 @@ class SequenceBoundsOverview(QWidget):
         self.intersection_box = None
         self.setFixedHeight(100)
         self.setAccessibleName('整组并集和交集范围示意图')
-        self.setToolTip('橙色：包含整组全部画面的完整范围。\n青色：每张照片都有内容的最大无黑边矩形。\n示意图始终按完整范围显示，不受成片裁切影响。')
+        self.setToolTip('并集：包含整组全部画面的完整范围。\n交集：每张照片都有内容的最大无黑边矩形。\n示意图始终按完整范围显示，不受成片裁切影响。')
         self.hide()
 
     def set_bounds(self, union_box, intersection_box):

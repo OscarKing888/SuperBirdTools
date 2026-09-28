@@ -165,8 +165,7 @@ class SequenceTransport(QObject):
                 alignment = sequence.alignments.get(key)
                 if alignment:
                     detail += '\n' + alignment.description()
-                self.editor.dejitter_tracking_status.setText(self.editor._sequence_message + '\n' + detail +
-                    '\n黄色：跟踪成功；红色虚线：未匹配（预计位置）。')
+                self.editor.dejitter_tracking_status.setText(self.editor._sequence_message + '\n' + detail)
                 self.editor.dejitter_tracking_status.setToolTip(result.error)
         ready = bool(self.paths) and not self.editor._sequence_exporting
         self.play.setEnabled(ready and len(self.paths) > 1)
