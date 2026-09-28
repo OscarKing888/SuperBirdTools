@@ -61,6 +61,16 @@ class SuperViewerUserOptionsDialog(QDialog):
         grid.addWidget(QLabel(f"默认 {cpu_count}"), row, 2)
 
         row += 1
+        metadata_default = max(1, min(8, cpu_count // 4 or 1))
+        grid.addWidget(QLabel("元数据读取线程数"), row, 0)
+        self._spin_metadata_loader_workers = QSpinBox(self)
+        self._spin_metadata_loader_workers.setRange(1, max_workers)
+        self._spin_metadata_loader_workers.setValue(int(opts.get("metadata_loader_workers", metadata_default)))
+        self._spin_metadata_loader_workers.setToolTip("统一任务池为元数据读取预留的并发额度；更改后重启应用生效。")
+        grid.addWidget(self._spin_metadata_loader_workers, row, 1)
+        grid.addWidget(QLabel(f"默认 {metadata_default}"), row, 2)
+
+        row += 1
         grid.addWidget(QLabel("小缩略图生成线程数"), row, 0)
         self._spin_persistent_thumb_workers = QSpinBox(self)
         self._spin_persistent_thumb_workers.setRange(1, max_workers)
@@ -133,6 +143,7 @@ class SuperViewerUserOptionsDialog(QDialog):
     def selected_options(self) -> dict[str, int]:
         return {
             "thumbnail_loader_workers": int(self._spin_thumb_loader_workers.value()),
+            "metadata_loader_workers": int(self._spin_metadata_loader_workers.value()),
             "persistent_thumb_workers": int(self._spin_persistent_thumb_workers.value()),
             "persistent_thumb_max_size": int(self._combo_persistent_thumb_size.currentData()),
             "key_navigation_fps": int(self._combo_key_navigation_fps.currentData()),

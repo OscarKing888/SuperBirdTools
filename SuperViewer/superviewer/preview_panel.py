@@ -54,6 +54,28 @@ _EXPORT_PREVIEW_DRAIN_TIMEOUT_MS = 30_000
 _HEIF_PIL_OPENER_REGISTERED = False
 
 
+def _source_dimensions(path: str) -> tuple[int, int] | None:
+    """Read source dimensions without decoding pixels for A/B validation."""
+    try:
+        if Path(path).suffix.lower() in PHOTOSHOP_EXTENSIONS:
+            size = read_psd_composite_size(path)
+            if size and all(int(value) > 0 for value in size):
+                return int(size[0]), int(size[1])
+        reader = QImageReader(path)
+        size = reader.size()
+        if size.isValid() and size.width() > 0 and size.height() > 0:
+            return size.width(), size.height()
+    except Exception:
+        pass
+    try:
+        if Path(path).suffix.lower() in HEIF_EXTENSIONS:
+            _register_heif_pil_opener()
+        with Image.open(path) as image:
+            return tuple(map(int, image.size))
+    except Exception:
+        return None
+
+
 def _qimage_rgb888_format():
     fmt_container = getattr(QImage, "Format", QImage)
     fmt = getattr(fmt_container, "Format_RGB888", None)
@@ -369,6 +391,7 @@ class PreviewPanel(QWidget):
         self._current_path = None
         self._preview_request_token = 0
         self._full_preview_loaded = False
+        self._full_only_mode = False
         self._canvas_source_full_resolution = False
         self._fast_preview_only = False
         self._full_preview_loader: _FullPreviewLoader | None = None
@@ -411,6 +434,10 @@ class PreviewPanel(QWidget):
                 return
             if load_full:
                 self._fast_preview_only = False
+                if self._full_only_mode and not self._full_preview_loaded:
+                    self._canvas.set_source_pixmap(None, log_performance=False)
+                    self._canvas.setText(f"正在加载原图\n{Path(path).name}")
+                    self._set_preview_status_text(None, None)
             if load_full and not self._full_preview_loaded and not self._full_preview_timer.isActive():
                 loader = self._full_preview_loader
                 loader_is_current = bool(
@@ -420,8 +447,8 @@ class PreviewPanel(QWidget):
                     and self._is_current_path(getattr(loader, "_path", ""))
                 )
                 if not loader_is_current:
-                    if not self._try_set_direct_original_preview(norm_path):
-                        self._full_preview_timer.start(_FULL_PREVIEW_DELAY_MS)
+                    if self._full_only_mode or not self._try_set_direct_original_preview(norm_path):
+                        self._full_preview_timer.start(0 if self._full_only_mode else _FULL_PREVIEW_DELAY_MS)
             perf_log(
                 _log,
                 "[PERF][image_switch][preview_panel.set_image] path=%r same_path=1 full_loaded=%s total_ms=%.1f",
@@ -441,9 +468,9 @@ class PreviewPanel(QWidget):
         target_size = _quick_preview_target_size(self._canvas, quick_size)
         pix = None
         direct_original = False
-        if load_full:
+        if load_full and not self._full_only_mode:
             direct_original = self._try_set_direct_original_preview(norm_path)
-        if not direct_original:
+        if not direct_original and (not load_full or not self._full_only_mode):
             pix = _load_quick_preview_pixmap(path, target_size)
         load_ms = (_time.perf_counter() - load_t0) * 1000.0
         canvas_ms = 0.0
@@ -463,14 +490,15 @@ class PreviewPanel(QWidget):
             canvas_t0 = _time.perf_counter()
             self._canvas.set_source_pixmap(None, log_performance=load_full)
             loading_heif = bool(load_full and path and Path(path).suffix.lower() in HEIF_EXTENSIONS)
-            message = "正在加载预览" if loading_heif else "无法预览"
+            message = "正在加载原图" if self._full_only_mode and load_full else (
+                "正在加载预览" if loading_heif else "无法预览")
             self._canvas.setText(f"{message}\n{Path(path).name if path else ''}")
             canvas_ms = (_time.perf_counter() - canvas_t0) * 1000.0
             status_t0 = _time.perf_counter()
             self._set_preview_status_text(None, None)
             status_ms = (_time.perf_counter() - status_t0) * 1000.0
         if load_full and path and not direct_original:
-            self._full_preview_timer.start(_FULL_PREVIEW_DELAY_MS)
+            self._full_preview_timer.start(0 if self._full_only_mode else _FULL_PREVIEW_DELAY_MS)
         perf_log(
             _log,
             "[PERF][image_switch][preview_panel.set_image] path=%r token=%s direct_original=%s quick_ok=%s quick_size=%s target=%s load_ms=%.1f canvas_ms=%.1f status_ms=%.1f total_ms=%.1f",
@@ -664,6 +692,13 @@ class PreviewPanel(QWidget):
                 load_ms,
             )
             return
+        if self._full_only_mode and Path(path).suffix.lower() not in RAW_EXTENSIONS:
+            source_size = _source_dimensions(path)
+            if source_size is None or sorted(source_size) != sorted((qimg.width(), qimg.height())):
+                self._canvas.set_source_pixmap(None, log_performance=False)
+                self._canvas.setText(f"无法加载原尺寸预览\n{Path(path).name}")
+                self._set_preview_status_text(None, None)
+                return
         apply_t0 = _time.perf_counter()
         pix = QPixmap.fromImage(qimg)
         if pix.isNull():
@@ -733,6 +768,9 @@ class PreviewPanel(QWidget):
         self._keep_view_on_switch = bool(enabled)
         if hasattr(self._canvas, "set_keep_view_on_switch"):
             self._canvas.set_keep_view_on_switch(self._keep_view_on_switch)
+
+    def set_full_only_mode(self, enabled: bool) -> None:
+        self._full_only_mode = bool(enabled)
 
     @property
     def canvas(self) -> PreviewCanvas:

@@ -208,6 +208,7 @@ class PhotoTagCacheWorker(QThread):
 
 
 class SuperViewerTaggedFileListPanel(FileListPanel):
+    use_unified_worker_pool = True
     """FileListPanel extension that adds configured custom tags."""
 
     use_report_db = False
@@ -298,6 +299,7 @@ class SuperViewerTaggedFileListPanel(FileListPanel):
         super()._stop_all_loaders()
         self._stop_persistent_thumb_cache_worker()
         self._stop_directory_scan_worker()
+        self._request_worker_pool_shutdown()
 
     def shutdown(self, *, wait_timeout_ms: int | None = None) -> bool:
         """Finish shutdown within the supplied wait budget when possible."""
@@ -325,7 +327,7 @@ class SuperViewerTaggedFileListPanel(FileListPanel):
                 continue
             except Exception:
                 complete = False
-        if not complete or self.has_pending_directory_scans():
+        if not complete or self.has_pending_directory_scans() or self.has_pending_pool_work():
             return False
         # All QThreads are already stopped, so the base finalizer's waits are
         # normally immediate. A bounded GUI close must not wait indefinitely

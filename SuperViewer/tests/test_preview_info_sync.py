@@ -5,6 +5,7 @@ import pytest
 from PIL import Image
 
 from app_common import superviewer_user_options
+from app_common.file_browser import _permissions
 from SuperViewer.superviewer import paths_settings, preview_panel
 from SuperViewer.superviewer.qt_compat import QApplication, QImage
 from SuperViewer.superviewer.tagged_file_list import SuperViewerTaggedFileListPanel
@@ -23,6 +24,11 @@ def window(tmp_path, monkeypatch):
     monkeypatch.setattr(paths_settings, "_get_user_state_dir", lambda: str(settings / "state"))
     monkeypatch.setattr(main, "_get_app_dir", lambda: str(settings))
     monkeypatch.setattr(superviewer_user_options, "_get_app_dir", lambda: str(settings))
+    monkeypatch.setattr(superviewer_user_options, "_RUNTIME_OPTIONS",
+                        superviewer_user_options.normalize_user_options(None))
+    for name, value in vars(_permissions).copy().items():
+        if name.startswith("CURRENT_SUPERPICKY_"):
+            monkeypatch.setattr(_permissions, name, value)
     monkeypatch.setenv("LOCALAPPDATA", str(settings / "cache"))
     monkeypatch.setenv("APPDATA", str(settings / "appdata"))
     config = tmp_path / "tags.cfg"
@@ -96,3 +102,62 @@ def test_full_preview_signal_does_not_refresh_stale_or_stopped_info(window, tmp_
     window.preview_panel.full_preview_ready.emit(path)
     assert calls == []
     window._shutdown_requested = False
+
+
+def test_ab_window_routes_list_to_active_side_and_keeps_info_on_list_selection(window, tmp_path):
+    photos = [tmp_path / f"对照{i}.png" for i in range(3)]
+    for photo in photos:
+        Image.new("RGB", (40, 30)).save(photo)
+    paths = [str(photo) for photo in photos]
+    window.preview_compare.set_display_paths(paths)
+    window._on_file_selected_from_list(paths[1])
+    window.preview_compare.set_enabled(True)
+    assert window.preview_compare.path_for_side("A") == paths[0]
+    assert window.preview_compare.path_for_side("B") == paths[1]
+
+    window.preview_compare.set_active_side("A")
+    assert window.preview_panel is window.preview_compare.preview_for_side("A")
+    window._on_file_selected_from_list(paths[2])
+    assert window.preview_compare.path_for_side("A") == paths[2]
+    assert window.preview_compare.path_for_side("B") == paths[1]
+    assert window._current_exif_path == paths[2]
+
+    window.preview_compare.set_side_path("B", paths[0])
+    assert window._current_exif_path == paths[2]
+    window._on_file_fast_preview_requested(paths[1])
+    assert window.preview_compare.path_for_side("A") == paths[2]
+    window.preview_compare.set_enabled(False)
+    assert window.preview_panel is window.preview_compare.preview_for_side("A")
+
+
+def test_ab_retains_both_images_when_directory_auto_selects_first(window, tmp_path):
+    first = tmp_path / "first"
+    second = tmp_path / "second"
+    first.mkdir()
+    second.mkdir()
+    a = first / "甲.png"
+    b = first / "乙.png"
+    next_photo = second / "丙.png"
+    for photo in (a, b, next_photo):
+        Image.new("RGB", (30, 20)).save(photo)
+
+    window._file_list.load_directory(str(first))
+    deadline = time.monotonic() + 5
+    while len(window._file_list._filtered_files) < 2 and time.monotonic() < deadline:
+        _APP.processEvents()
+        time.sleep(.002)
+    assert len(window._file_list._filtered_files) == 2
+    window.preview_compare.set_enabled(True)
+    window.preview_compare.set_side_path("A", str(a))
+    window.preview_compare.set_side_path("B", str(b))
+
+    window._file_list.load_directory(str(second))
+    deadline = time.monotonic() + 5
+    while window._current_exif_path != str(next_photo) and time.monotonic() < deadline:
+        _APP.processEvents()
+        time.sleep(.002)
+    assert window._current_exif_path == str(next_photo)
+    assert window.preview_compare.path_for_side("A") == str(a)
+    assert window.preview_compare.path_for_side("B") == str(b)
+    assert window.preview_compare._selectors["A"].itemText(0).startswith("[筛选外]")
+    assert window.preview_compare._selectors["B"].itemText(0).startswith("[筛选外]")

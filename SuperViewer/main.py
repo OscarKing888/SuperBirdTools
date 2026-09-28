@@ -45,6 +45,7 @@ from app_common.send_to_app import (
     get_external_apps,
 )
 from app_common.send_to_app.settings_ui import show_external_apps_settings_dialog
+from app_common.exif_io.exiftool_runner import close_exiftool_process
 from app_common.superviewer_user_options import (
     USER_OPTIONS_FILENAME,
     PERSISTENT_THUMB_SIZE_LEVELS,
@@ -90,6 +91,7 @@ try:
         _resolve_focus_calc_image_size,
     )
     from .superviewer.preview_panel import PreviewPanel
+    from .superviewer.ab_preview import ABPreviewPanel
     from .superviewer.image_info_tabs import (
         ImageInfoTabPanel_ImageInfo,
         ImageInfoTabPanel_Tags,
@@ -162,6 +164,7 @@ except ImportError:
         _resolve_focus_calc_image_size,
     )
     from superviewer.preview_panel import PreviewPanel
+    from superviewer.ab_preview import ABPreviewPanel
     from superviewer.image_info_tabs import (
         ImageInfoTabPanel_ImageInfo,
         ImageInfoTabPanel_Tags,
@@ -787,15 +790,19 @@ class MainWindow(QMainWindow):
         )
         self.combo_preview_scale.activated.connect(self._on_preview_scale_preset_activated)
         overlay_row.addWidget(self.combo_preview_scale)
+        self.preview_compare = ABPreviewPanel(left_widget)
+        overlay_row.addWidget(self.preview_compare.toggle_button)
         overlay_row.addStretch(1)
         left_layout.addLayout(overlay_row)
-        self.preview_panel = PreviewPanel(central)
-        self.preview_panel.full_preview_ready.connect(self._on_full_preview_ready)
-        self.preview_panel.set_composition_grid_mode(self.combo_preview_grid.currentData())
-        self.preview_panel.set_composition_grid_line_width(self.combo_preview_grid_line_width.currentData())
-        self.preview_panel.display_scale_percent_changed.connect(self._sync_preview_scale_combo)
+        self.preview_panel = self.preview_compare.active_preview
+        self.preview_compare.active_preview_changed.connect(self._on_active_preview_changed)
+        self.preview_compare.full_preview_ready.connect(self._on_full_preview_ready)
+        self.preview_compare.display_scale_percent_changed.connect(self._sync_preview_scale_combo)
+        self.preview_compare.set_composition_grid_mode(self.combo_preview_grid.currentData())
+        self.preview_compare.set_composition_grid_line_width(self.combo_preview_grid_line_width.currentData())
         self._sync_preview_scale_combo(self.preview_panel.current_display_scale_percent())
-        left_layout.addWidget(self.preview_panel, stretch=1)
+        left_layout.addWidget(self.preview_compare, stretch=1)
+        self._file_list.display_files_changed.connect(self.preview_compare.set_display_paths)
         splitter.addWidget(left_widget)
 
         # ── 面板 4：可扩展元信息 Tab ──
@@ -808,7 +815,7 @@ class MainWindow(QMainWindow):
             self._rename_photo_from_info_panel,
             metadata_provider=lambda path: self._file_list.get_photo_metadata_for_path(path, allow_slow_read=False),
             comment_save_callback=self._save_photo_comment_from_info_panel,
-            preview_pixmap_provider=self.preview_panel.source_pixmap_for_path,
+            preview_pixmap_provider=self.preview_compare.source_pixmap_for_path,
             write_enabled_provider=self._file_writes_allowed,
             write_disabled_tooltip_provider=self._file_writes_disabled_message,
             tag_write_enabled_provider=self._sidecar_writes_allowed,
@@ -903,7 +910,9 @@ class MainWindow(QMainWindow):
         perf_log(_log, "[PERF][image_switch][main] START source=%r", path)
         self._sync_directory_browser_to_file_selection(path)
         preview_t0 = _time.perf_counter()
-        self.preview_panel.set_image(path)
+        if not (self.preview_compare.is_enabled()
+                and getattr(self._file_list, "_emitting_automatic_selection", False)):
+            self.preview_compare.set_current_list_path(path)
         preview_ms = (_time.perf_counter() - preview_t0) * 1000.0
         info_t0 = _time.perf_counter()
         self.on_image_loaded(path)
@@ -927,11 +936,13 @@ class MainWindow(QMainWindow):
 
     def _on_file_fast_preview_requested(self, path: str):
         """连续方向键长按时直接预览原始文件，不再切到 report 派生预览图。"""
+        if self.preview_compare.is_enabled():
+            return
         t0 = _time.perf_counter()
         probe_t0 = perf_counter()
         perf_log(_log, "[PERF][fast_preview][main] START source=%r", path)
         preview_t0 = _time.perf_counter()
-        self.preview_panel.set_image(path, load_full=False)
+        self.preview_compare.set_current_list_path(path, load_full=False)
         preview_ms = (_time.perf_counter() - preview_t0) * 1000.0
         perf_log(
             _log,
@@ -950,9 +961,11 @@ class MainWindow(QMainWindow):
 
     def _on_file_fast_preview_pixmap_requested(self, path: str, pixmap, quick_size: int) -> None:
         """直接复用缩略图视图已经解码的帧，避免写盘后再读取。"""
+        if self.preview_compare.is_enabled():
+            return
         if not isinstance(pixmap, QPixmap) or pixmap.isNull():
             return
-        self.preview_panel.set_quick_pixmap(path, pixmap, quick_size=quick_size)
+        self.preview_compare.set_quick_pixmap_for_list(path, pixmap, quick_size=quick_size)
 
     def _init_menu_bar(self):
         file_menu = self.menuBar().addMenu("文件")
@@ -1062,7 +1075,7 @@ class MainWindow(QMainWindow):
         apply_runtime_user_options(normalized)
         self._sync_perf_probe_action()
         self._file_list.apply_user_options()
-        self.preview_panel.set_keep_view_on_switch(
+        self.preview_compare.set_keep_view_on_switch(
             bool(normalized.get("keep_view_on_switch", 1))
         )
         QMessageBox.information(
@@ -1127,7 +1140,7 @@ class MainWindow(QMainWindow):
         if mode is None:
             mode = self.combo_preview_grid.currentData()
         normalized = normalize_preview_composition_grid_mode(mode)
-        self.preview_panel.set_composition_grid_mode(normalized)
+        self.preview_compare.set_composition_grid_mode(normalized)
         save_preview_grid_mode_to_settings(normalized)
 
     def _on_preview_grid_line_width_changed(self, index: int) -> None:
@@ -1135,7 +1148,7 @@ class MainWindow(QMainWindow):
         if width is None:
             width = self.combo_preview_grid_line_width.currentData()
         normalized = normalize_preview_composition_grid_line_width(width)
-        self.preview_panel.set_composition_grid_line_width(normalized)
+        self.preview_compare.set_composition_grid_line_width(normalized)
         save_preview_grid_line_width_to_settings(normalized)
 
     def _on_preview_scale_preset_activated(self, index: int) -> None:
@@ -1149,6 +1162,10 @@ class MainWindow(QMainWindow):
 
     def _sync_preview_scale_combo(self, scale_percent: object) -> None:
         sync_preview_scale_preset_combo(self.combo_preview_scale, scale_percent)
+
+    def _on_active_preview_changed(self, preview: PreviewPanel) -> None:
+        self.preview_panel = preview
+        self._sync_preview_scale_combo(preview.current_display_scale_percent())
 
     @staticmethod
     def _same_filesystem_key(path_a: str | os.PathLike, path_b: str | os.PathLike) -> bool:
@@ -1280,7 +1297,7 @@ class MainWindow(QMainWindow):
         self._current_exif_path = target_path
         self.file_label.setText(target_path)
         self.file_label.setToolTip(target_path)
-        self.preview_panel.set_image(target_path)
+        self.preview_compare.set_current_list_path(target_path)
 
         current_dir = self._file_list.get_current_dir() or str(Path(target_path).parent)
         self._file_list.set_pending_selection([target_path], current_path=target_path, apply_immediately=False)
@@ -1370,7 +1387,7 @@ class MainWindow(QMainWindow):
                 self._file_list.stop_key_navigation_playback(commit=False)
             except Exception:
                 pass
-            for component in (self.image_info_tabs, self.preview_panel, self._file_list):
+            for component in (self.image_info_tabs, self.preview_compare, self._file_list):
                 request_shutdown = getattr(component, "request_shutdown", None)
                 if not callable(request_shutdown):
                     continue
@@ -1387,7 +1404,7 @@ class MainWindow(QMainWindow):
         except Exception:
             pass
         try:
-            preview_done = bool(self.preview_panel.shutdown(wait_timeout_ms=25))
+            preview_done = bool(self.preview_compare.shutdown(wait_timeout_ms=25))
         except Exception:
             pass
         try:
@@ -1463,6 +1480,7 @@ def main():
     def stop_receiver():
         if getattr(window, "_single_instance_receiver", None):
             window._single_instance_receiver.stop()
+        close_exiftool_process()
 
     app.aboutToQuit.connect(stop_receiver)
     window.showMaximized()

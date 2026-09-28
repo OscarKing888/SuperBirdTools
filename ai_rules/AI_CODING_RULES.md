@@ -55,6 +55,8 @@ This document is the cross-tool coding baseline for the current single-Viewer `i
 - Make minimal, task-scoped diffs.
 - Do not touch unrelated files.
 - Inspect both root and `app_common` working trees and preserve unrelated modifications. Coordinate overlapping edits; ask for direction only when an actual conflict prevents safe progress, not merely because other changes exist.
+- Do each new round of feature work on a feature branch in its own worktree, validate it, commit task-owned changes, merge into `img_mgr`, and remove the temporary branch and worktree. Resolve conflicts by the intent of both features, not by taking one side wholesale. [AGENTS.md](../AGENTS.md) gives the checkout-specific procedure.
+- `app_common/` is a separate Git repository. Check whether the root tracks a gitlink before using submodule commands. Commit shared changes there first, then commit root integration changes; record a gitlink only when one is actually tracked. Stage explicit paths and do not push without authorization.
 - When implementing new features, always evaluate modularization / encapsulation first:
   - prefer reusable module-level functions or class-based (OOP) encapsulation for coherent responsibilities
   - avoid embedding core logic directly in GUI/event handlers or one-off scripts when it can be extracted
