@@ -9,6 +9,7 @@ from PyQt6.QtWidgets import QApplication
 from birdstamp import config
 from birdstamp.gui import editor
 from birdstamp.gui.edit_modes import EDIT_MODE_REFERENCE_REGION
+from birdstamp.gui.color_key_rows import _ColorSwatch
 
 _APP = QApplication.instance() or QApplication([])
 
@@ -32,6 +33,22 @@ def window(tmp_path, monkeypatch):
     instance.close()
     instance.deleteLater()
     _APP.processEvents()
+
+
+def test_dejitter_status_uses_color_keys_before_descriptions(window):
+    tracking = window.dejitter_tracking_key
+    bounds = window.dejitter_intersection_status
+    assert tracking.text() == '跟踪成功\n未匹配（预计位置）'
+    assert bounds.text() == '整组完整范围（并集）：待分析\n共同无黑边范围（交集）：待分析'
+    swatches = tracking.findChildren(_ColorSwatch) + bounds.findChildren(_ColorSwatch)
+    assert [(swatch.color.name().upper(), swatch.dashed) for swatch in swatches] == [
+        ('#FFB703', False), ('#FF5252', True), ('#F5A623', False), ('#45D6E8', False),
+    ]
+    bounds.set_lines(('整组完整范围（并集）：6776 × 4935 像素',
+                      '共同无黑边范围（交集）：5523 × 3280 像素'))
+    assert '黄色' not in tracking.text() and '红色' not in tracking.text()
+    assert '橙' not in bounds.text() and '青' not in bounds.text()
+    assert '6776 × 4935' in bounds.text() and '5523 × 3280' in bounds.text()
 
 
 def test_selection_with_padding_roundtrips_but_is_separate_from_template_export(window):
