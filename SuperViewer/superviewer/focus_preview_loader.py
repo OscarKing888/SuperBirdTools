@@ -9,7 +9,6 @@ from __future__ import annotations
 import json
 import os
 import re
-import subprocess
 import sys
 import tempfile
 from pathlib import Path
@@ -18,6 +17,7 @@ import piexif
 from PIL import Image, ImageOps
 
 from app_common.exif_io import extract_metadata_with_xmp_priority, get_exiftool_executable_path
+from app_common.exif_io.exiftool_runner import run_exiftool_once
 from app_common.focus_calc import (
     extract_focus_box,
     resolve_focus_camera_type_from_metadata,
@@ -230,7 +230,7 @@ def _run_exiftool_json_for_focus(path: str) -> dict | None:
             try:
                 with os.fdopen(fd, "w", encoding="utf-8") as f:
                     f.write(path_norm + "\n")
-                cp = subprocess.run(
+                cp = run_exiftool_once(
                     [*cmd_common, "-@", argfile_path],
                     check=False,
                     capture_output=True,
@@ -244,7 +244,7 @@ def _run_exiftool_json_for_focus(path: str) -> dict | None:
                 except OSError:
                     pass
         else:
-            cp = subprocess.run(
+            cp = run_exiftool_once(
                 [*cmd_common, path_norm],
                 check=False,
                 capture_output=True,
