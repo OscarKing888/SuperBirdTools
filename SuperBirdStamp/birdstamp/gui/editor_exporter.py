@@ -9,7 +9,7 @@
 """
 from __future__ import annotations
 
-from concurrent.futures import ThreadPoolExecutor, as_completed, wait as _wait_futures
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait as _wait_futures
 import queue
 from dataclasses import dataclass
 from pathlib import Path
@@ -22,6 +22,9 @@ from typing import Any, Callable
 from PIL import Image
 from PyQt6.QtCore import QEventLoop, QTimer
 from PyQt6.QtWidgets import QApplication, QFileDialog, QMessageBox
+from app_common.file_browser._work_action import WorkerAction
+from app_common.file_browser._work_pool import BrowserWorkPool
+from app_common.file_browser._work_policy import WorkKind
 
 from birdstamp.export_frame_cache import (
     SOURCE_FRAME_BUCKET_KIND,
@@ -65,6 +68,26 @@ class _ImageExportTask:
     # GIF 中间缓存帧只供随后编码读取：用快速 PNG 压缩（无损，像素相同），
     # 避免 optimize=True 在 1920 px 帧上耗时约 9 s。用户可见的 PNG 导出不受影响。
     fast_png: bool = False
+
+
+class _ImageExportAction(WorkerAction):
+    """渲染并写入一张图片；每个 action 独占自己的原图和输出文件。"""
+
+    def __init__(self, exporter, task, template_paths, bird_box_cache, bird_box_lock):
+        super().__init__()
+        self.exporter = exporter
+        self.task = task
+        self.template_paths = template_paths
+        self.bird_box_cache = bird_box_cache
+        self.bird_box_lock = bird_box_lock
+
+    def execute(self):
+        return self.exporter._render_and_save_image_task(
+            self.task,
+            template_paths=self.template_paths,
+            bird_box_cache=self.bird_box_cache,
+            bird_box_lock=self.bird_box_lock,
+        )
 
 
 class _BirdStampExporterMixin:
@@ -783,47 +806,35 @@ class _BirdStampExporterMixin:
 
         self._set_status(f"{label}开始: 0/{total}，线程数 {worker_count}")
         try:
-            if total == 1:
-                try:
-                    ok_paths.append(
-                        self._render_and_save_image_task(
-                            tasks[0],
-                            template_paths=template_paths,
-                            bird_box_cache=bird_box_cache,
-                            bird_box_lock=bird_box_lock,
+            pool = BrowserWorkPool(worker_count)
+            pool.set_thumbnail_mode(False)
+            try:
+                task_iterator = iter(tasks)
+                futures: dict[object, _ImageExportTask] = {}
+
+                def _submit_tasks() -> None:
+                    max_in_flight = max(1, worker_count * 2)
+                    while len(futures) < max_in_flight:
+                        try:
+                            task = next(task_iterator)
+                        except StopIteration:
+                            return
+                        future = pool.submit_action(
+                            _ImageExportAction(
+                                self, task, template_paths, bird_box_cache, bird_box_lock,
+                            ),
+                            kind=WorkKind.METADATA,
                         )
-                    )
-                    self._set_image_export_progress(1, total, label=label, worker_count=worker_count)
-                    self._set_status(f"{label}进行中: 1/{total}，线程数 {worker_count}")
-                except Exception as exc:
-                    failed.append(f"{tasks[0].job.path.name}: {exc}")
-                    self._set_image_export_progress(1, total, label=label, worker_count=worker_count)
-                    self._set_status(f"{label}进行中: 1/{total}，线程数 {worker_count}")
-            else:
-                with ThreadPoolExecutor(max_workers=worker_count, thread_name_prefix="birdstamp-image-export") as executor:
-                    task_iterator = iter(tasks)
-                    futures: dict[object, _ImageExportTask] = {}
+                        futures[future] = task
 
-                    def _submit_tasks() -> None:
-                        max_in_flight = max(1, worker_count * 2)
-                        while len(futures) < max_in_flight:
-                            try:
-                                task = next(task_iterator)
-                            except StopIteration:
-                                return
-                            future = executor.submit(
-                                self._render_and_save_image_task,
-                                task,
-                                template_paths=template_paths,
-                                bird_box_cache=bird_box_cache,
-                                bird_box_lock=bird_box_lock,
-                            )
-                            futures[future] = task
-
-                    _submit_tasks()
-                    completed = 0
-                    while futures:
-                        future = next(as_completed(tuple(futures)))
+                _submit_tasks()
+                completed = 0
+                while futures:
+                    done, _ = _wait_futures(tuple(futures), timeout=0.03, return_when=FIRST_COMPLETED)
+                    if not done:
+                        self._process_image_export_ui_events()
+                        continue
+                    for future in done:
                         task = futures.pop(future)
                         try:
                             ok_paths.append(future.result())
@@ -832,7 +843,9 @@ class _BirdStampExporterMixin:
                         completed += 1
                         self._set_image_export_progress(completed, total, label=label, worker_count=worker_count)
                         self._set_status(f"{label}进行中: {completed}/{total}，线程数 {worker_count}")
-                        _submit_tasks()
+                    _submit_tasks()
+            finally:
+                pool.shutdown()
         finally:
             self._close_render_job_sources(jobs)
             self._finish_image_export_progress(

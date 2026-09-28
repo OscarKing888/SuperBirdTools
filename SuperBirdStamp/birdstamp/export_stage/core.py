@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import as_completed
 import hashlib
 import json
 import os
@@ -19,6 +19,9 @@ import numpy as np
 from PIL import Image, ImageColor
 
 from app_common.log import get_logger
+from app_common.file_browser._work_action import WorkerAction
+from app_common.file_browser._work_pool import BrowserWorkPool
+from app_common.file_browser._work_policy import WorkKind
 from birdstamp.render.text_scale import normalize_text_scale
 from birdstamp import image_dejitter as _dejitter
 from birdstamp.config import get_app_dir, get_app_resource_dir, get_user_data_dir, resolve_bundled_path
@@ -1644,6 +1647,30 @@ def _normalize_and_cache_video_frame(
     return (index, label, frame_path, source_signature, frame_signature)
 
 
+class _SourceFrameRenderAction(WorkerAction):
+    """一张原图的解码、处理和源帧缓存写入。"""
+
+    def __init__(self, *, cancel_event, **kwargs):
+        super().__init__()
+        self.cancel_event = cancel_event
+        self.kwargs = kwargs
+
+    def execute(self):
+        return _render_and_cache_source_frame(cancel_event=self.cancel_event, **self.kwargs)
+
+
+class _VideoFrameNormalizeAction(WorkerAction):
+    """一张源帧的尺寸规格化和视频帧缓存写入。"""
+
+    def __init__(self, *, cancel_event, **kwargs):
+        super().__init__()
+        self.cancel_event = cancel_event
+        self.kwargs = kwargs
+
+    def execute(self):
+        return _normalize_and_cache_video_frame(cancel_event=self.cancel_event, **self.kwargs)
+
+
 def _prune_cache_frames(frames_dir: Path, manifest: dict[str, Any], *, total: int) -> None:
     frames = manifest.get("frames") if isinstance(manifest, dict) else None
     if isinstance(frames, dict):
@@ -1846,7 +1873,8 @@ def _ensure_source_frame_cache(
         )
         return (source_bucket_key, source_plan, source_frame_paths)
 
-    executor = ThreadPoolExecutor(max_workers=render_workers, thread_name_prefix="birdstamp-video-source-render")
+    pool = BrowserWorkPool(render_workers)
+    pool.set_thumbnail_mode(False)
     futures: dict[Any, tuple[int, VideoFrameJob, str, str]] = {}
     pending_iterator = iter(pending_jobs)
 
@@ -1858,16 +1886,18 @@ def _ensure_source_frame_cache(
             except StopIteration:
                 return
             _raise_if_cancel_requested(cancel_event, message="视频导出已中断，正在停止剩余源帧渲染。")
-            future = executor.submit(
-                _render_and_cache_source_frame,
-                job=job,
-                index=index,
-                source_plan=source_plan,
-                template_paths=template_paths,
-                frame_signature=frame_signature,
-                bird_box_cache=bird_box_cache,
-                bird_box_lock=bird_box_lock,
-                cancel_event=cancel_event,
+            future = pool.submit_action(
+                _SourceFrameRenderAction(
+                    job=job,
+                    index=index,
+                    source_plan=source_plan,
+                    template_paths=template_paths,
+                    frame_signature=frame_signature,
+                    bird_box_cache=bird_box_cache,
+                    bird_box_lock=bird_box_lock,
+                    cancel_event=cancel_event,
+                ),
+                kind=WorkKind.METADATA,
             )
             futures[future] = (index, job, source_signature, frame_signature)
 
@@ -1911,7 +1941,7 @@ def _ensure_source_frame_cache(
             _raise_if_cancel_requested(cancel_event, message="视频导出已中断，正在停止剩余源帧渲染。")
             _submit_source_jobs()
     finally:
-        executor.shutdown(wait=True, cancel_futures=True)
+        pool.shutdown()
         # 取消或失败时也要把已完成帧写进 manifest，保留续做时的复用。
         manifest_writer.flush()
 
@@ -2040,7 +2070,8 @@ def _ensure_video_frame_cache(
                 message=f"已准备视频帧 {completed}/{total}: {frame_name}",
             )
         else:
-            executor = ThreadPoolExecutor(max_workers=render_workers, thread_name_prefix="birdstamp-video-frame-cache")
+            pool = BrowserWorkPool(render_workers)
+            pool.set_thumbnail_mode(False)
             futures: dict[Any, tuple[int, Path, str, str]] = {}
             pending_iterator = iter(pending_frames)
 
@@ -2055,15 +2086,17 @@ def _ensure_video_frame_cache(
                         cancel_event,
                         message="视频导出已中断，正在停止剩余视频帧准备。",
                     )
-                    future = executor.submit(
-                        _normalize_and_cache_video_frame,
-                        index=index,
-                        source_frame_path=source_frame_path,
-                        label=frame_name,
-                        video_plan=video_plan,
-                        target_size=target_size,
-                        background_color=options.background_color,
-                        cancel_event=cancel_event,
+                    future = pool.submit_action(
+                        _VideoFrameNormalizeAction(
+                            index=index,
+                            source_frame_path=source_frame_path,
+                            label=frame_name,
+                            video_plan=video_plan,
+                            target_size=target_size,
+                            background_color=options.background_color,
+                            cancel_event=cancel_event,
+                        ),
+                        kind=WorkKind.METADATA,
                     )
                     futures[future] = (index, source_frame_path, source_signature, frame_name)
 
@@ -2112,7 +2145,7 @@ def _ensure_video_frame_cache(
                     _raise_if_cancel_requested(cancel_event, message="视频导出已中断，正在停止剩余视频帧准备。")
                     _submit_video_frames()
             finally:
-                executor.shutdown(wait=True, cancel_futures=True)
+                pool.shutdown()
                 video_manifest_writer.flush()
 
     write_frame_manifest(
