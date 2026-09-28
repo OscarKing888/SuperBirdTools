@@ -94,7 +94,7 @@
 - [sequence_export.py](../birdstamp/export_stage/sequence_export.py)：PNG/JPG 整组输出，使用 `PngExportStage` 终端描述；新目录隔离，异常/取消回滚。
 - [editor_dejitter.py](../birdstamp/gui/editor_dejitter.py)：原生 Tab、选区列表、独立流程、同一预览画布与焦点/鸟体/参考线映射。
 - [editor_sequence_preview_worker.py](../birdstamp/gui/editor_sequence_preview_worker.py)：分析、按需预览和整组导出的 Qt 工作线程与取消。
-- [editor_sequence_transport.py](../birdstamp/gui/editor_sequence_transport.py)：播放面板、缩略图条、方向键物理/重复事件和精确定时器；切换 Tab、失去焦点、失效或关闭时停止，松键仅提交当前帧一次。普通导出页仍保持原生照片列表导航。
+- [editor_sequence_transport.py](../birdstamp/gui/editor_sequence_transport.py)：播放面板、缩略图条、方向键物理/重复事件和精确定时器；切换 Tab、失去焦点、失效或关闭时停止，松键仅提交当前帧一次。普通编辑页首次按键就显示有界小图，长按按选定帧率切换，松键再升级最终照片。
 - 分析解码时同时保留有界原图小预览，按最终变换及画布生成快速成片；切图先显示小图，停留 120ms 后再由单一后台 worker 生成清晰帧。连续播放/长按只使用整组小图缓存，不逐帧启动模板渲染、原图解码或鸟体识别。参考区、焦点、鸟体框和原图上的成片保留范围均按四个顶点映射，原图、成片及 A/B 共用坐标。构图网格限制在保留范围内，辅助层不写入独立成片。
 - `editor_options.json` 配置成片清晰预览长边（默认 1600）与缓存预算（64 MiB），快速预览长边上限（768）与整组原图/成片缓存预算（64 MiB），播放默认帧率（8），`dejitter_pad_to_union` 补边默认关闭，`dejitter_alignment_mode` 默认 `rigid`。整组越大，快速预览分辨率自适应降低以限制内存；不会缩放或改变导出计划。导出始终重新读取原图，使用已确认的同一组变换和画布。
 

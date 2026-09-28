@@ -53,12 +53,14 @@ class EditorPreviewDecodeWorker(QThread):
         path: Path,
         *,
         max_long_edge: int,
+        quick_only: bool = False,
         parent=None,
     ) -> None:
         super().__init__(parent)
         self._token = int(token)
         self._path = Path(path).resolve(strict=False)
         self._max_long_edge = max(1, int(max_long_edge))
+        self._quick_only = bool(quick_only)
 
     def run(self) -> None:
         image: Image.Image | None = None
@@ -68,7 +70,9 @@ class EditorPreviewDecodeWorker(QThread):
                 return
             with perf.span("preview.cached_thumbnail", path=str(self._path)):
                 try:
-                    image = cached_preview_image(self._path, self._max_long_edge)
+                    image = cached_preview_image(
+                        self._path, min(512, self._max_long_edge) if self._quick_only else self._max_long_edge,
+                    )
                 except Exception:
                     image = None  # 缓存损坏或不可读仍继续解码源图。
             full_size = None
@@ -87,7 +91,21 @@ class EditorPreviewDecodeWorker(QThread):
                 else:
                     image.close()
                 image = None
+                if self._quick_only and full_size is not None:
+                    return
             if self.isInterruptionRequested():
+                return
+            if self._quick_only:
+                with perf.span("preview.quick_decode", path=str(self._path)):
+                    image = decode_image_for_preview(
+                        self._path, max_long_edge=min(512, self._max_long_edge), decoder="auto",
+                    )
+                if self.isInterruptionRequested():
+                    return
+                properties = image.info.get("birdstamp_source_properties") or {}
+                full_size = properties.get("size") or full_size or image.size
+                self.quick_decoded.emit(self._token, str(self._path), image, full_size)
+                image = None
                 return
             with perf.span("preview.decode", path=str(self._path)):
                 image = decode_image_for_preview(

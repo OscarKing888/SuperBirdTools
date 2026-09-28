@@ -8,7 +8,8 @@ import time
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PIL import Image
-from PyQt6.QtCore import QTimer
+from PyQt6.QtCore import QEvent, Qt, QTimer
+from PyQt6.QtGui import QKeyEvent
 from PyQt6.QtWidgets import QApplication
 import pytest
 
@@ -426,6 +427,67 @@ def test_worker_reuses_dimensions_from_decode(monkeypatch, tmp_path):
     assert results[0][2].size == (120, 80)
     assert results[0][3] == (360, 240)
     results[0][2].close()
+
+
+def test_key_preview_worker_decodes_bounded_quick_image_only(monkeypatch, tmp_path):
+    path = tmp_path / "uncached.png"
+    Image.new("RGB", (900, 600), "red").save(path)
+    monkeypatch.setattr(editor_preview_decode_worker, "cached_preview_image", lambda *a: None)
+    worker = editor_preview_decode_worker.EditorPreviewDecodeWorker(
+        1, path, max_long_edge=1600, quick_only=True,
+    )
+    quick, full = [], []
+    worker.quick_decoded.connect(lambda *args: quick.append(args))
+    worker.decoded.connect(lambda *args: full.append(args))
+    worker.run()
+    assert len(quick) == 1 and not full
+    assert max(quick[0][2].size) <= 512
+    assert quick[0][3] == (900, 600)
+    quick[0][2].close()
+
+
+def test_ordinary_held_keys_use_quick_preview_until_release(monkeypatch, tmp_path):
+    paths = [tmp_path / f"frame-{index}.png" for index in range(4)]
+    for index, path in enumerate(paths):
+        Image.new("RGB", (120, 80), (index * 70, 20, 30)).save(path)
+    window = _make_window()
+    try:
+        for path in paths:
+            _add_photo(window, path)
+            signature = window._preview_image_cache_signature(path)
+            window._store_preview_image_cache(signature, Image.new("RGB", (120, 80)))
+            window._preview_source_size_cache[signature] = (120, 80)
+        tree = window.photo_list._tree_widget
+        window.photo_list.blockSignals(True)
+        tree.setCurrentItem(tree.topLevelItem(0))
+        window.photo_list.blockSignals(False)
+        monkeypatch.setattr(window, "_start_preview_decode_worker",
+                            lambda *a, **kw: pytest.fail("cached key frame started a decoder"))
+
+        def send(kind, repeat=False):
+            event = QKeyEvent(kind, Qt.Key.Key_Down, Qt.KeyboardModifier.NoModifier, "", repeat)
+            _APP.sendEvent(tree, event)
+
+        send(QEvent.Type.KeyPress)
+        assert tree.currentItem() is tree.topLevelItem(1)
+        assert window.current_path == paths[1] and window._preview_is_quick
+        send(QEvent.Type.KeyPress, True)
+        transport = window.sequence_transport
+        assert transport.mode == "ordinary_keys"
+        assert window.current_path == paths[2] and window._preview_is_quick
+        assert window.preview_label.canvas._source_pixmap is not None
+        send(QEvent.Type.KeyRelease, True)
+        assert transport.active and window._preview_is_quick
+        send(QEvent.Type.KeyPress, True)
+        assert window.current_path == paths[2]
+        transport.timer.stop()
+        transport._tick()
+        assert window.current_path == paths[3] and window._preview_is_quick
+        send(QEvent.Type.KeyRelease)
+        assert not transport.active
+        assert window.current_path == paths[3] and not window._preview_is_quick
+    finally:
+        _cleanup_window(_APP, window)
 
 
 def test_stale_quick_and_full_results_never_replace_current_image(tmp_path):

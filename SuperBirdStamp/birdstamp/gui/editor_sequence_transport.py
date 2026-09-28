@@ -238,6 +238,7 @@ class SequenceTransport(QObject):
 
     def stop(self, *, commit=True):
         was_active = self.active
+        ordinary_keys = self.mode == 'ordinary_keys'
         self.timer.stop()
         self.mode, self.key = None, None
         self._update_play_button()
@@ -245,10 +246,19 @@ class SequenceTransport(QObject):
             item = self.editor.photo_list.currentItem()
             if item is not None:
                 self.editor._on_photo_selected(item, None)
-            else:
+            elif not ordinary_keys:
                 self.editor._refresh_preview_label(preserve_view=True)
 
     def _tick(self):
+        if self.mode == 'ordinary_keys':
+            tree = self.editor.photo_list._tree_widget
+            current = tree.indexOfTopLevelItem(tree.currentItem())
+            target = current + self.direction
+            if 0 <= target < tree.topLevelItemCount():
+                tree.setCurrentItem(tree.topLevelItem(target))
+            else:
+                self.timer.stop()
+            return
         index = self.index() + self.direction
         if not 0 <= index < len(self.paths):
             if self.mode == 'play' and self.loop.isChecked() and self.paths:
@@ -267,6 +277,46 @@ class SequenceTransport(QObject):
             if self.active:
                 self.stop()
             return False
+        if (not self.editor._dejitter_tab_active()
+                and kind in (QEvent.Type.KeyPress, QEvent.Type.KeyRelease)):
+            tree = self.editor.photo_list._tree_widget
+            if watched is not tree:
+                try:
+                    if watched is not tree.viewport():
+                        return False
+                except RuntimeError:
+                    return False
+            directions = {Qt.Key.Key_Up: -1, Qt.Key.Key_Down: 1}
+            key = event.key()
+            if key not in directions:
+                return False
+            if kind == QEvent.Type.KeyRelease:
+                if event.isAutoRepeat():
+                    return self.mode == 'ordinary_keys'
+                if self.mode == 'ordinary_keys' and self.key == key:
+                    self.stop()
+                    return True
+                return False
+            if event.modifiers() != Qt.KeyboardModifier.NoModifier:
+                if self.mode == 'ordinary_keys':
+                    self.stop(commit=False)
+                return False
+            if not event.isAutoRepeat():
+                if self.mode == 'ordinary_keys':
+                    self.stop(commit=False)
+                self.mode = 'ordinary_keys'
+                self.key = key
+                self.direction = directions[key]
+                return False
+            if self.mode != 'ordinary_keys' or self.key != key:
+                self.stop(commit=False)
+                self.mode = 'ordinary_keys'
+                self.key = key
+                self.direction = directions[key]
+            if not self.timer.isActive():
+                self._tick()
+                self.timer.start()
+            return True
         if not self.editor._dejitter_tab_active() or not self.paths or self.editor._sequence_exporting:
             return False
         if kind not in (QEvent.Type.KeyPress, QEvent.Type.KeyRelease):
