@@ -12,6 +12,7 @@ from birdstamp.export_stage.sequence_preview import sequence_input_key
 from birdstamp.export_stage.sequence_intersection import normalized_intersection_box
 from birdstamp.image_dejitter.region_tracking_result import image_file_signature
 from birdstamp.image_dejitter.manual_region_matches import MANUAL_MATCHES_KEY
+from birdstamp.image_dejitter.auto_regions import suggest_reference_regions
 from . import editor_core, editor_options
 from .edit_modes import EDIT_MODE_NONE, EDIT_MODE_REFERENCE_REGION
 from .editor_preview_canvas import EditorPreviewOverlayState
@@ -134,9 +135,13 @@ class _BirdStampDejitterMixin:
         self.dejitter_edit_reference_btn.clicked.connect(self._on_edit_reference_photo)
         self.dejitter_draw_btn = QPushButton('框选 / 追加选区')
         self.dejitter_draw_btn.clicked.connect(self._on_dejitter_draw)
+        self.dejitter_auto_regions_btn = QPushButton('自动添加选区')
+        self.dejitter_auto_regions_btn.setToolTip('在当前参考图中添加最多 4 个分散的纹理区域；已有选区保留，可继续手动调整。')
+        self.dejitter_auto_regions_btn.clicked.connect(self._on_dejitter_auto_regions)
         buttons.addWidget(self.dejitter_edit_reference_btn)
         buttons.addWidget(self.dejitter_draw_btn)
         form.addLayout(buttons)
+        form.addWidget(self.dejitter_auto_regions_btn)
         self.dejitter_region_list = QListWidget()
         self.dejitter_region_list.setMaximumHeight(110)
         self.dejitter_region_list.setSelectionMode(QListWidget.SelectionMode.ExtendedSelection)
@@ -389,6 +394,30 @@ class _BirdStampDejitterMixin:
             self._set_edit_mode_button_checked(EDIT_MODE_REFERENCE_REGION)
             self._refresh_preview_label(preserve_view=True)
 
+    def _on_dejitter_auto_regions(self):
+        if self._sequence_shutdown or self._sequence_worker is not None:
+            return
+        self._set_dejitter_view('edit')
+        if not self._reference_regions_editable():
+            self._on_edit_reference_photo()
+            self._set_status('请在参考图加载完成后再次点击“自动添加选区”。')
+            return
+        image = self.current_source_image
+        if image is None or self.current_path is None:
+            self._set_status('请先选择参考照片并等待原图预览加载完成。')
+            return
+        added = suggest_reference_regions(image, self._dejitter_reference_regions)
+        if not added:
+            self._set_status('当前参考图没有找到新的合适纹理区域；可手动框选。')
+            return
+        self._set_edit_mode_button_checked(EDIT_MODE_REFERENCE_REGION)
+        self._commit_source_reference_regions(
+            self.current_path, (*self._dejitter_reference_regions, *added))
+        self._sequence_message = f'已自动添加 {len(added)} 个选区；请检查位置后重新分析。'
+        self._update_dejitter_controls()
+        self._refresh_preview_label(preserve_view=True)
+        self._set_status(self._sequence_message)
+
     def _invalidate_sequence_preview(self, *, shutdown=False):
         self._sequence_export_open_workspace = False
         self._sequence_export_workspace_result = None
@@ -432,6 +461,9 @@ class _BirdStampDejitterMixin:
         self.dejitter_reference_status.setText(f'{Path(source).name} · {len(regions)} 个选区' if source and regions else '尚未选择参考区')
         self.dejitter_reference_strength_slider.setEnabled(bool(regions))
         self.dejitter_edit_reference_btn.setEnabled(bool(self._dejitter_reference_source))
+        self.dejitter_auto_regions_btn.setEnabled(
+            not self._sequence_shutdown and self._sequence_worker is None
+            and self.current_path is not None)
         detail = ('保留对齐后全部图像范围，缺失区域补黑；可在导出后进行二次裁切。'
                   if self.dejitter_pad_to_union_check.isChecked() else
                   '取对齐后整组画面交集；编辑构图中可查看最终保留范围。')

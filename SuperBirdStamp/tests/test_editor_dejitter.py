@@ -53,6 +53,21 @@ def test_selection_with_padding_roundtrips_but_is_separate_from_template_export(
     assert not any(key.startswith('dejitter_') for key in window._photo_override_settings_from_snapshot(settings))
 
 
+def test_auto_add_regions_keeps_existing_reference_and_invalidates_analysis(window):
+    rng = np.random.default_rng(83)
+    window.current_source_image.close()
+    window.current_source_image = Image.fromarray(rng.integers(15, 240, (300, 450, 3), dtype=np.uint8))
+    window.export_tabs.setCurrentWidget(window.dejitter_page)
+    original = (.03, .03, .28, .28)
+    window._commit_source_reference_regions(window.current_path, (original,))
+    window.dejitter_auto_regions_btn.click()
+    assert window._dejitter_reference_regions[0] == original
+    assert 1 < len(window._dejitter_reference_regions) <= 5
+    assert window._dejitter_reference_source == str(window.current_path)
+    assert window.dejitter_region_list.count() == len(window._dejitter_reference_regions)
+    assert window._sequence_preview is None
+
+
 def test_disabling_preserves_regions_and_workspace_snapshot(window):
     window._on_canvas_reference_region_changed(((.2, .3, .7, .8),))
     regions = window._dejitter_reference_regions

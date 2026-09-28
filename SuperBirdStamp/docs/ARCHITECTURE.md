@@ -116,7 +116,7 @@ flowchart LR
 
 普通图片导出的每张解码、阶段处理和写入由 [editor_exporter.py](../birdstamp/gui/editor_exporter.py) 的 `_ImageExportAction` 提交到 `BrowserWorkPool`，单张导出也在后台执行。视频导出的源帧渲染和目标尺寸规格化分别由 [core.py](../birdstamp/export_stage/core.py) 的 `_SourceFrameRenderAction`、`_VideoFrameNormalizeAction` 执行；协调线程按原有内存预算限制在途数，并在完成后更新缓存清单和进度。GIF 中间图片复用普通图片 action。显式参考区去抖动的旧兼容预计算仍按帧顺序汇总结果。
 
-独立去抖动流程位于“导出 → 去抖动”标签页，右侧使用“编辑构图 / 成片预览”按钮组。编辑视图显示原图，不应用模板裁切与补边；多参考区使用各自原图的归一化坐标，A/B 两侧原图均可编辑；框内拖动，八手柄缩放，Shift 保持当前比例、Alt 围绕中心对称缩放（可组合）。参考图空白处 Shift 追加、右键删除及页内列表多选删除保留；目标图只修正对应编号的匹配位置，右键恢复自动匹配，不能重设参考图或增删编号。成片视图只展示诊断。路径/模式切换会取消未提交手势，拖动几何由 [reference_region_geometry.py](../birdstamp/gui/reference_region_geometry.py) 统一约束。
+独立去抖动流程位于“导出 → 去抖动”标签页，右侧使用“编辑构图 / 成片预览”按钮组。编辑视图显示原图，不应用模板裁切与补边；多参考区使用各自原图的归一化坐标，A/B 两侧原图均可编辑；框内拖动，八手柄缩放，Shift 保持当前比例、Alt 围绕中心对称缩放（可组合）。参考图可用 [auto_regions.py](../birdstamp/image_dejitter/auto_regions.py) 从有界预览中建议分散的纹理选区，每次最多追加 4 个并保留手工选区；建议需人工检查运动一致性。参考图空白处 Shift 追加、右键删除及页内列表多选删除保留；目标图只修正对应编号的匹配位置，右键恢复自动匹配，不能重设参考图或增删编号。成片视图只展示诊断。路径/模式切换会取消未提交手势，拖动几何由 [reference_region_geometry.py](../birdstamp/gui/reference_region_geometry.py) 统一约束。
 
 [matching_options.py](../birdstamp/image_dejitter/matching_options.py) 的 `normalize_matching_settings` / `MatchingOptions.from_settings` 统一自动与自定义模式、有限数值校验和边界；跟踪、引导搜索、共识与最终公共裁切消费同一组有效参数。[DejitterMatchingControls](../birdstamp/gui/editor_matching_controls.py) 负责“自动（推荐）／高级自定义”、角度/短边百分比输入及恢复默认，初值由 `editor_options.json` 经资源解析器加载。参数随全局工作区状态保存，从逐图 override 排除，修改后取消旧分析并使跟踪/成片缓存失效；旧信号仍受 worker 身份及 epoch 检查。阶段参数描述由 `ImageProcSequenceAlignStage.parameter_options` 提供。回归见 [test_matching_options.py](../tests/test_matching_options.py)。
 
