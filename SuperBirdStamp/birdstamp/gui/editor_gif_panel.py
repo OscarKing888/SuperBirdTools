@@ -135,7 +135,7 @@ class GifExportPanel(QGroupBox):
         self.fps_spin.setSingleStep(1)
         self.fps_spin.setValue(max(1, int(round(float(DEFAULT_GIF_FPS)))))
         self.fps_spin.valueChanged.connect(lambda _value: self.optionsChanged.emit())
-        self.auto_fps_button = QPushButton("Auto")
+        self.auto_fps_button = QPushButton("自动")
         self.auto_fps_button.setToolTip("根据当前照片列表的拍摄时间自动计算 FPS。")
         self.auto_fps_button.clicked.connect(self.autoFpsRequested.emit)
         fps_widget = QWidget()

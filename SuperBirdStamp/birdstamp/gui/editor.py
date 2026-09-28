@@ -2667,6 +2667,18 @@ class BirdStampEditorWindow(
             f"已根据 {timestamp_count} 张照片的拍摄时间计算视频 FPS：{fps_value}（原始 {fps:.2f}）。"
         )
 
+    def _on_dejitter_auto_fps_requested(self) -> None:
+        result = self._calculate_auto_fps_from_photo_capture_times()
+        if result is None:
+            return
+        fps_value, fps, timestamp_count = result
+        playback = self.sequence_transport.fps
+        playback_fps = max(playback.minimum(), min(playback.maximum(), fps_value))
+        playback.setValue(playback_fps)
+        self._set_status(
+            f"已根据 {timestamp_count} 张照片的拍摄时间计算成片回放 FPS：{playback_fps}（原始 {fps:.2f}）。"
+        )
+
     def _confirm_video_output_overwrite(self, output_path: Path) -> bool:
         if not output_path.exists():
             return True
