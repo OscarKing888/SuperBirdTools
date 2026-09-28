@@ -22,6 +22,17 @@ from .editor_utils import path_key
 from birdstamp.image_dejitter.sequence_geometry import source_normalized_crop
 
 
+def _add_progress_completion_label(layout, progress_bar, accessible_name):
+    label = QLabel('完成✅')
+    label.setAccessibleName(accessible_name)
+    label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+    label.setStyleSheet('color: #218838; font-weight: 600;')
+    label.setMinimumHeight(progress_bar.sizeHint().height())
+    label.hide()
+    layout.addWidget(label)
+    return label
+
+
 class _BirdStampDejitterMixin:
     """去抖动页/共享画布协调；计算与作业结果由无窗口核心持有。"""
 
@@ -150,6 +161,8 @@ class _BirdStampDejitterMixin:
         self.dejitter_analysis_progress.setAccessibleName('去抖动分析进度')
         self.dejitter_analysis_progress.hide()
         layout.addWidget(self.dejitter_analysis_progress)
+        self.dejitter_analysis_complete = _add_progress_completion_label(
+            layout, self.dejitter_analysis_progress, '去抖动分析完成')
         self.dejitter_effective_status = QLabel()
         self.dejitter_effective_status.setWordWrap(True)
         layout.addWidget(self.dejitter_effective_status)
@@ -178,6 +191,8 @@ class _BirdStampDejitterMixin:
         self.dejitter_export_progress.setAccessibleName('去抖动导出进度')
         self.dejitter_export_progress.hide()
         layout.addWidget(self.dejitter_export_progress)
+        self.dejitter_export_complete = _add_progress_completion_label(
+            layout, self.dejitter_export_progress, '去抖动导出完成')
         note = QLabel('默认保留对齐后整组共同区域；交集太小时可开启补边，导出完整画面后再裁切。独立输出原图对齐结果，不叠加模板或文字；参考线、焦点和鸟体框仅用于预览。')
         note.setWordWrap(True)
         layout.addWidget(note)
@@ -324,6 +339,9 @@ class _BirdStampDejitterMixin:
         elif hasattr(self, 'dejitter_analysis_progress'):
             self.dejitter_analysis_progress.hide()
             self.dejitter_export_progress.hide()
+        if hasattr(self, 'dejitter_analysis_complete'):
+            self.dejitter_analysis_complete.hide()
+            self.dejitter_export_complete.hide()
         self._sequence_restore_timer.stop()
         self._sequence_restore_state = None
         if not shutdown:
@@ -463,6 +481,8 @@ class _BirdStampDejitterMixin:
     def _begin_sequence_progress(self, kind):
         self._sequence_progress_kind = kind
         bar = self.dejitter_export_progress if kind == 'export' else self.dejitter_analysis_progress
+        completed = self.dejitter_export_complete if kind == 'export' else self.dejitter_analysis_complete
+        completed.hide()
         bar.setRange(0, 0)
         bar.setValue(0)
         bar.setFormat('正在准备…')
@@ -487,12 +507,19 @@ class _BirdStampDejitterMixin:
         if kind is None:
             return
         bar = self.dejitter_export_progress if kind == 'export' else self.dejitter_analysis_progress
+        completed = self.dejitter_export_complete if kind == 'export' else self.dejitter_analysis_complete
         if complete:
             total = max(1, len(self._sequence_preview.jobs))
             bar.setRange(0, total)
             bar.setValue(total)
             bar.setFormat(f'{label} %v/%m · %p%')
+            # 两个控件互斥显示，完成文字占用原进度条的位置。
+            bar.hide()
+            completed.setToolTip(bar.text())
+            completed.show()
         else:
+            completed.hide()
+            bar.show()
             # 取消/失败要停止忙碌动画，不能显示一个永远在转或冒充完成的进度。
             if bar.maximum() == 0:
                 bar.setRange(0, 1)

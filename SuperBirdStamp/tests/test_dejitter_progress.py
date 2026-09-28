@@ -22,9 +22,11 @@ def test_analysis_and_export_show_live_counts_then_completion(window, monkeypatc
     monkeypatch.setattr(sequence_analysis.SequenceAnalysisAction, 'execute', execute)
     window.dejitter_preprocess_btn.click()
     bar = window.dejitter_analysis_progress
+    completed = window.dejitter_analysis_complete
     try:
         wait_until(lambda: bar.maximum() == 2 and bar.value() == 1)
         assert not bar.isHidden()
+        assert completed.isHidden()
         assert '对齐照片' in bar.format()
         assert window._sequence_worker is not None
     finally:
@@ -32,6 +34,11 @@ def test_analysis_and_export_show_live_counts_then_completion(window, monkeypatc
         wait_until(lambda: window._sequence_worker is None)
     assert bar.value() == bar.maximum() == 2
     assert '分析完成' in bar.format()
+    assert bar.isHidden() and not completed.isHidden()
+    assert completed.text() == '完成✅'
+    assert '2/2' in completed.toolTip()
+    color = completed.palette().color(completed.foregroundRole())
+    assert color.green() > max(color.red(), color.blue())
     assert window._sequence_preview is not None
 
     release.clear()
@@ -49,6 +56,8 @@ def test_analysis_and_export_show_live_counts_then_completion(window, monkeypatc
     try:
         wait_until(lambda: export_bar.maximum() == 2 and export_bar.value() == 1)
         assert not export_bar.isHidden()
+        assert window.dejitter_export_complete.isHidden()
+        assert not completed.isHidden()
         assert '导出图片' in export_bar.format()
         assert '分析完成' in bar.format()
     finally:
@@ -56,6 +65,9 @@ def test_analysis_and_export_show_live_counts_then_completion(window, monkeypatc
         wait_until(lambda: window._sequence_worker is None)
     assert export_bar.value() == export_bar.maximum() == 2
     assert '导出完成' in export_bar.format()
+    assert export_bar.isHidden() and not window.dejitter_export_complete.isHidden()
+    assert window.dejitter_export_complete.text() == '完成✅'
+    assert '2/2' in window.dejitter_export_complete.toolTip()
     assert len(list(tmp_path.glob('去抖动_*/*.png'))) == 2
 
 
@@ -63,8 +75,13 @@ def test_analysis_and_export_show_live_counts_then_completion(window, monkeypatc
 @pytest.mark.parametrize('cancel', [False, True])
 def test_cancel_and_failure_stop_progress_and_reject_late_signals(window, monkeypatch, tmp_path, route, cancel):
     setup_tab(window, monkeypatch)
+    analyze(window)
+    monkeypatch.setattr(editor_dejitter.QFileDialog, 'getExistingDirectory', lambda *args: str(tmp_path))
     if route == 'export':
-        analyze(window)
+        window.dejitter_export_btn.click()
+        wait_until(lambda: window._sequence_worker is None)
+    completed = window.dejitter_export_complete if route == 'export' else window.dejitter_analysis_complete
+    assert not completed.isHidden()
     release = threading.Event()
     worker_class = EditorSequenceExportWorker if route == 'export' else EditorSequencePreviewWorker
 
@@ -77,13 +94,13 @@ def test_cancel_and_failure_stop_progress_and_reject_late_signals(window, monkey
 
     name = 'EditorSequenceExportWorker' if route == 'export' else 'EditorSequencePreviewWorker'
     monkeypatch.setattr(editor_dejitter, name, DelayedWorker)
-    monkeypatch.setattr(editor_dejitter.QFileDialog, 'getExistingDirectory', lambda *args: str(tmp_path))
     button = window.dejitter_export_btn if route == 'export' else window.dejitter_preprocess_btn
     bar = window.dejitter_export_progress if route == 'export' else window.dejitter_analysis_progress
     button.click()
     worker = window._sequence_worker
     try:
         wait_until(lambda: bar.value() == 1 and bar.maximum() == 2)
+        assert completed.isHidden() and not bar.isHidden()
         if cancel:
             window.dejitter_preprocess_btn.click()
             assert '已取消' in bar.format()
@@ -94,6 +111,7 @@ def test_cancel_and_failure_stop_progress_and_reject_late_signals(window, monkey
     assert bar.maximum() > 0  # 不留下永远运行的忙碌动画。
     assert ('已取消' if cancel else '失败') in bar.format()
     assert '迟到' not in bar.format()
+    assert completed.isHidden() and not bar.isHidden()
     assert window._sequence_progress_kind is None
 
 
@@ -101,11 +119,15 @@ def test_sharp_upgrade_does_not_reset_completed_analysis_progress(window, monkey
     setup_tab(window, monkeypatch)
     analyze(window)
     bar = window.dejitter_analysis_progress
+    completed = window.dejitter_analysis_complete
+    assert bar.isHidden() and not completed.isHidden()
     before = (bar.minimum(), bar.maximum(), bar.value(), bar.format())
     window._sequence_frames.clear()
     window._sequence_frame_bytes = 0
     window._launch_sequence_worker()
     wait_until(lambda: window._sequence_worker is None)
     assert (bar.minimum(), bar.maximum(), bar.value(), bar.format()) == before
+    assert bar.isHidden() and not completed.isHidden()
     window.dejitter_reference_strength_slider.setValue(50)
     assert bar.isHidden()
+    assert completed.isHidden()
