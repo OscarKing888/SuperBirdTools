@@ -65,6 +65,37 @@ def test_image_exports_use_parallel_worker_actions(tmp_path, monkeypatch):
     assert all(path.is_file() for path in targets)
 
 
+def test_gif_frames_use_full_core_worker_budget(tmp_path, monkeypatch):
+    jobs = _jobs(tmp_path, count=12)
+    exporter = _Exporter()
+    barrier = threading.Barrier(12)
+    worker_threads = set()
+    budget_calls = []
+
+    def resolve_workers(requested, pending, *, max_frame_pixels):
+        budget_calls.append((requested, pending, max_frame_pixels))
+        return 12
+
+    def render(task, **_kwargs):
+        worker_threads.add(threading.get_ident())
+        barrier.wait(timeout=10)
+        return task.target_path
+
+    monkeypatch.setattr(editor_exporter, "resolve_sequence_export_workers", resolve_workers)
+    monkeypatch.setattr(editor_exporter, "resolve_video_render_workers", lambda *_args, **_kwargs: 4)
+    monkeypatch.setattr(exporter, "_render_and_save_image_task", render)
+    targets = [tmp_path / f"frame_{index}.png" for index in range(12)]
+
+    ok_paths, failed = exporter._export_render_jobs_to_images(
+        jobs, targets, label="GIF 帧导出", fast_png=True,
+    )
+
+    assert failed == []
+    assert set(ok_paths) == set(targets)
+    assert budget_calls == [(0, 12, 0)]
+    assert len(worker_threads) == 12
+
+
 def test_single_image_export_runs_off_gui_thread(tmp_path):
     exporter = _Exporter()
     worker_threads = []

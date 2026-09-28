@@ -56,6 +56,7 @@ from birdstamp.export_stage import (
     resolve_video_render_workers,
     source_frame_signature_for_job,
 )
+from birdstamp.export_stage.sequence_export_workers import resolve_sequence_export_workers
 
 OUTPUT_FORMAT_OPTIONS = editor_options.OUTPUT_FORMAT_OPTIONS
 _IMAGE_EXPORT_PROGRESS_HIDE_DELAY_MS = 600
@@ -795,7 +796,10 @@ class _BirdStampExporterMixin:
         bird_box_cache: dict[str, tuple[float, float, float, float] | None] = {}
         bird_box_lock = threading.Lock()
         total = len(tasks)
-        worker_count = resolve_video_render_workers(
+        # GIF 帧是逐张独立的图片任务，沿用整组图片的 CPU/内存预算，
+        # 不受视频渲染的 8 线程上限及未知尺寸时的 4 线程回退限制。
+        resolve_workers = resolve_sequence_export_workers if fast_png else resolve_video_render_workers
+        worker_count = resolve_workers(
             0,
             total,
             max_frame_pixels=estimate_video_job_max_pixels(jobs),

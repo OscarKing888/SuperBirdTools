@@ -160,7 +160,7 @@ flowchart LR
 
 独立去抖动另外使用 `copy_export_sidecar`，通过共享严格同目录/同名查找器定位 `.xmp`（扩展名不区分大小写），原样复制到导出图的新同名 `.xmp`；缺少时不生成空文件，失败/取消随本次目录一起回滚。分析签名记录实际 sidecar 路径，之后增加、删除或修改 `.XMP` 同样使结果失效。GIF/视频成品不作为逐张原始 EXIF 容器，其保留的 PNG 帧各自携带元数据。回归见 [test_export_metadata.py](../tests/test_export_metadata.py)。
 
-`_build_batch_image_targets` 在启动并行写入前分配所有文件名：使用 NFC 规范化加 `casefold` 判断本批同名目标，依次追加 `_2`、`_3`。这避免不同目录的 `a.jpg`、`A.jpg` 或 Unicode 等价名称写到同一目标；它解决本批目标互撞，不提供跨进程文件锁。并行度复用导出核心的 CPU/图像像素内存预算。
+`_build_batch_image_targets` 在启动并行写入前分配所有文件名：使用 NFC 规范化加 `casefold` 判断本批同名目标，依次追加 `_2`、`_3`。这避免不同目录的 `a.jpg`、`A.jpg` 或 Unicode 等价名称写到同一目标；它解决本批目标互撞，不提供跨进程文件锁。普通图片并行度沿用视频导出的 CPU/图像像素内存预算；GIF 中间 PNG 帧使用整组图片导出的可用逻辑核心及内存预算，实际线程数仍受待导出帧数限制。
 
 ### 两级帧缓存和视频生命周期
 
