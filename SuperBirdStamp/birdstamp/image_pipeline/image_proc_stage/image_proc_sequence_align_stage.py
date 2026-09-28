@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 from birdstamp.image_dejitter.sequence_geometry import aligned_crop_plan
+from birdstamp.image_dejitter.matching_options import ROTATION_RANGE, TOLERANCE_RANGE
 from ..image_proc_context import ImageProcContext
 from ..image_proc_option_spec import ImageProcOptionSpec
+from ..image_proc_option_choice import ImageProcOptionChoice
 from .image_proc_stage import ImageProcStage
 
 
@@ -17,7 +19,18 @@ class ImageProcSequenceAlignStage(ImageProcStage):
         return (ImageProcOptionSpec(key='dejitter_reference_strength', label='补偿强度',
                                     value_type='int', default=100),
                 ImageProcOptionSpec(key='dejitter_pad_to_union', label='补边保留完整画面',
-                                    value_type='bool', default=False))
+                                    value_type='bool', default=False),
+                ImageProcOptionSpec(key='dejitter_match_mode', label='匹配设置', value_type='choice', default='auto',
+                                    choices=(ImageProcOptionChoice('自动（推荐）', 'auto'),
+                                             ImageProcOptionChoice('高级自定义', 'custom'))),
+                ImageProcOptionSpec(key='dejitter_match_rotation_deg', label='允许的轻微旋转（度）',
+                                    value_type='float', default=2.0, minimum=ROTATION_RANGE[0],
+                                    maximum=ROTATION_RANGE[1], step=.1,
+                                    description='仅高级自定义生效；用于匹配核验，不旋转输出图片。'),
+                ImageProcOptionSpec(key='dejitter_match_tolerance_pct', label='位置容差（短边百分比）',
+                                    value_type='float', default=.3, minimum=TOLERANCE_RANGE[0],
+                                    maximum=TOLERANCE_RANGE[1], step=.05,
+                                    description='仅高级自定义生效；至少 1 像素，调大可能增加错配。'))
 
     def process(self, context: ImageProcContext) -> ImageProcContext:
         left, top, right, bottom = context.precomputed['sequence_crop_pixels']

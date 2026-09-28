@@ -6,6 +6,7 @@ from functools import lru_cache
 from typing import Any
 
 from birdstamp.config import resolve_bundled_path
+from birdstamp.image_dejitter.matching_options import normalize_matching_settings
 from birdstamp.render.text_effects import normalize_text_effects
 from birdstamp.render.text_scale import TEXT_SCALE_DEFAULT, TEXT_SCALE_MIN, TEXT_SCALE_MAX
 
@@ -400,6 +401,7 @@ def _bounded_preview_option(key: str, default: int, minimum: int, maximum: int) 
         return default
 
 
+DEJITTER_MATCHING_DEFAULTS = normalize_matching_settings(_load_builtin_editor_options_raw())
 DEJITTER_PAD_TO_UNION = _load_builtin_editor_options_raw().get("dejitter_pad_to_union", False) is True
 PREVIEW_AB_ENABLED = _load_builtin_editor_options_raw().get("preview_ab_enabled", False) is True
 PREVIEW_AUTO_FOCUS_CENTER = _load_builtin_editor_options_raw().get("preview_auto_focus_center", False) is True

@@ -8,6 +8,7 @@ from PyQt6.QtCore import QThread, pyqtSignal
 from app_common.log import get_logger
 from birdstamp.decoders.image_decoder import decode_image
 from birdstamp.image_dejitter.reference_region_tracker import ReferenceRegionTracker
+from birdstamp.image_dejitter.matching_options import MatchingOptions
 from birdstamp.image_dejitter.region_tracking_result import RegionTrackingResult, image_file_signature
 from .editor_utils import path_key
 
@@ -21,12 +22,14 @@ class EditorReferenceTrackingWorker(QThread):
     progressChanged = pyqtSignal(int, int, int)
     failed = pyqtSignal(int, str)
 
-    def __init__(self, *, token: int, reference: Path, regions: tuple, paths: tuple[Path, ...], parent=None):
+    def __init__(self, *, token: int, reference: Path, regions: tuple, paths: tuple[Path, ...],
+                 options=MatchingOptions(), parent=None):
         super().__init__(parent)
         self.token = token
         self.reference = reference
         self.regions = regions
         self.paths = paths
+        self.options = options
         self.reference_signature = image_file_signature(reference)
 
     def run(self) -> None:
@@ -36,7 +39,7 @@ class EditorReferenceTrackingWorker(QThread):
             if self.reference_signature is None:
                 raise ValueError(f"无法读取参考照片：{self.reference}")
             with decode_image(self.reference, decoder="auto") as image:
-                tracker = ReferenceRegionTracker(image, self.regions)
+                tracker = ReferenceRegionTracker(image, self.regions, options=self.options)
             if image_file_signature(self.reference) != self.reference_signature:
                 raise ValueError("参考照片已变化，请重新预处理。")
             results = {}

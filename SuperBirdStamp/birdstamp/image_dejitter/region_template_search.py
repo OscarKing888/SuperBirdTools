@@ -196,7 +196,7 @@ class RegionTemplateSearch:
         denominator = float(np.linalg.norm(a)*np.linalg.norm(b))
         return float(np.sum(a*b)/denominator) if denominator > 1e-8 else 0.0
 
-    def locate_near(self, image, index, expected, *, cancelled=lambda: False):
+    def locate_near(self, image, index, expected, *, cancelled=lambda: False, tolerance=None):
         """其它可靠选区只限定搜索窗，仍须在当前图找到完整纹理证据。"""
         template = self.templates[index]
         if template is None or cancelled():
@@ -204,7 +204,7 @@ class RegionTemplateSearch:
         fw, fh = template.fine_size
         fx, fy = template.fine_origin
         th, tw = template.fine.shape
-        tolerance = max(1, min(image.size)*.003)
+        tolerance = max(1, min(image.size)*.003) if tolerance is None else tolerance
         rx, ry = max(2, int(np.ceil(tolerance*fw/image.width))), max(2, int(np.ceil(tolerance*fh/image.height)))
         x, y = fx+expected[0]*fw, fy+expected[1]*fh
         if x < 0 or y < 0 or x+tw > fw or y+th > fh:

@@ -137,6 +137,9 @@
     "settings_text": "f/8  1/2000s  ISO800  600mm"
   },
   "dejitter_disk_cache_mb": 512,
+  "dejitter_match_mode": "auto",
+  "dejitter_match_rotation_deg": 2.0,
+  "dejitter_match_tolerance_pct": 0.3,
   "text_effects": {
     "stroke_enabled": false,
     "stroke_color": "#000000",

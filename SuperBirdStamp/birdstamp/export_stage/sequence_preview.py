@@ -11,6 +11,7 @@ from app_common.exif_io.exiftool_runner import exiftool_worker_session, exiftool
 from birdstamp.gui.editor_utils import path_key
 from birdstamp.image_dejitter import ReferenceRegionTracker
 from birdstamp.image_dejitter.region_consensus import select_translation
+from birdstamp.image_dejitter.matching_options import MATCHING_KEYS, MatchingOptions, normalize_matching_settings
 from birdstamp.image_dejitter.region_tracking_result import image_file_signature
 from birdstamp.image_pipeline import ImageProcContext, ImageProcPipeline
 from birdstamp.image_pipeline.image_proc_stage.image_proc_sequence_align_stage import ImageProcSequenceAlignStage
@@ -21,8 +22,8 @@ from .video_export_cancelled_error import VideoExportCancelledError
 
 
 REFERENCE_KEYS = ('dejitter_reference_regions', 'dejitter_reference_source',
-                  'dejitter_reference_strength', 'dejitter_pad_to_union')
-SEQUENCE_ANALYSIS_VERSION = 2
+                  'dejitter_reference_strength', 'dejitter_pad_to_union', *MATCHING_KEYS)
+SEQUENCE_ANALYSIS_VERSION = 3
 
 
 def sequence_files(seeds, template_paths=None) -> tuple[Path, ...]:
@@ -46,7 +47,10 @@ def file_signatures(paths):
 def sequence_input_key(seeds, template_paths=None) -> str:
     # 独立流程只依赖原图、参考选区、强度和补边选项；模板/手动裁切/输出叠加不参与。
     seeds = tuple(seeds)
-    payload = [(path_key(seed.path), {key: seed.settings.get(key) for key in REFERENCE_KEYS}) for seed in seeds]
+    payload = []
+    for seed in seeds:
+        settings = {**seed.settings, **normalize_matching_settings(seed.settings)}
+        payload.append((path_key(seed.path), {key: settings.get(key) for key in REFERENCE_KEYS}))
     data = (SEQUENCE_ANALYSIS_VERSION, payload, file_signatures(sequence_files(seeds)))
     return hashlib.sha256(json.dumps(data, ensure_ascii=False, sort_keys=True, default=str).encode('utf-8')).hexdigest()
 
@@ -78,7 +82,8 @@ class SequencePreview:
         return file_signatures(sequence_files(self.all_jobs.values())) == self.signatures
 
 
-def common_alignment_crop(regions, tracking, source_sizes, reference_size, strength=100, *, pad_to_union=False):
+def common_alignment_crop(regions, tracking, source_sizes, reference_size, strength=100, *, pad_to_union=False,
+                          options=MatchingOptions()):
     """选区并集提供平移证据；最终对全部画面求交集，补边时改求并集。"""
     shifts = {}
     bounds = None
@@ -92,7 +97,7 @@ def common_alignment_crop(regions, tracking, source_sizes, reference_size, stren
                    for region, box in zip(regions, result.boxes) if box is not None]
         if not offsets:
             raise SequencePhotoError(key, f'参考区失配，{result.error or "没有可靠匹配"}。请在参考图调整或追加选区后重新分析，无需逐张框选。')
-        translation = select_translation(regions, result, (width, height), reference_size)
+        translation = select_translation(regions, result, (width, height), reference_size, options=options)
         if translation is None:
             raise SequencePhotoError(key, '多个参考区运动不一致且没有可区分的可靠匹配，请调整参考选区。')
         dx, dy, _ = translation
@@ -137,7 +142,7 @@ def prepare_sequence_preview(seeds, template_paths=None, *, cancel_event, progre
     with sequence_photo_errors(reference), decode_image(reference, decoder='auto') as image:
         if cancel_event.is_set():
             raise VideoExportCancelledError('已取消去抖动分析。')
-        tracker = ReferenceRegionTracker(image, regions)
+        tracker = ReferenceRegionTracker(image, regions, options=MatchingOptions.from_settings(settings))
         reference_size = image.size
         if preview_source is not None:
             preview_source(reference, image)
@@ -162,7 +167,8 @@ def prepare_sequence_preview(seeds, template_paths=None, *, cancel_event, progre
     def crop(selected):
         return common_alignment_crop(regions, {k: tracking[k] for k in selected}, sizes, reference_size,
                                      settings.get('dejitter_reference_strength', 100),
-                                     pad_to_union=settings.get('dejitter_pad_to_union', False) is True)
+                                     pad_to_union=settings.get('dejitter_pad_to_union', False) is True,
+                                     options=tracker.options)
 
     if failure is not None and not accepted:
         raise failure

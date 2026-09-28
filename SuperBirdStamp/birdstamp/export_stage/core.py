@@ -1,4 +1,5 @@
 from __future__ import annotations
+from birdstamp.image_dejitter.matching_options import normalize_matching_settings
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import hashlib
@@ -748,6 +749,7 @@ def _clone_render_settings(settings: dict[str, Any]) -> dict[str, Any]:
         "custom_center_x": float(custom_center_x) if custom_center_x is not None else None,
         "custom_center_y": float(custom_center_y) if custom_center_y is not None else None,
         "dejitter_pad_to_union": _parse_bool_value(settings.get("dejitter_pad_to_union"), False),
+        **normalize_matching_settings(settings),
         "dejitter_reference_strength": _parse_percent_setting(settings.get("dejitter_reference_strength"), 100),
         "dejitter_reference_crop_settings": dict(settings["dejitter_reference_crop_settings"])
         if isinstance(settings.get("dejitter_reference_crop_settings"), dict) else {},

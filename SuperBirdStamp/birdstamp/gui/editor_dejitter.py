@@ -15,6 +15,7 @@ from .edit_modes import EDIT_MODE_NONE, EDIT_MODE_REFERENCE_REGION
 from .editor_preview_canvas import EditorPreviewOverlayState
 from .editor_sequence_preview_worker import EditorSequencePreviewWorker, EditorSequenceExportWorker
 from .sequence_preview_cache import SequencePreviewCache
+from .editor_matching_controls import DejitterMatchingControls
 from birdstamp.export_stage.render_job_seed import RenderJobSeed
 from .editor_utils import pil_to_qpixmap
 from .editor_utils import path_key
@@ -130,6 +131,10 @@ class _BirdStampDejitterMixin:
         form.addWidget(hint)
         layout.addWidget(reference)
 
+        self.dejitter_matching_controls = DejitterMatchingControls(editor_options.DEJITTER_MATCHING_DEFAULTS)
+        self.dejitter_matching_controls.changed.connect(self._on_dejitter_matching_changed)
+        layout.addWidget(self.dejitter_matching_controls)
+
         self.dejitter_pad_to_union_check = QCheckBox('补边保留完整画面（供二次裁切）')
         self.dejitter_pad_to_union_check.setChecked(editor_options.DEJITTER_PAD_TO_UNION)
         self.dejitter_pad_to_union_check.setToolTip('关闭：裁掉所有空白，取整组交集。开启：保留整组画面并集，统一画幅，缺失区域补黑。')
@@ -170,6 +175,13 @@ class _BirdStampDejitterMixin:
         self.dejitter_reference_check.toggled.connect(self._on_dejitter_options_changed)
         self.dejitter_reference_strength_slider.valueChanged.connect(self._on_dejitter_options_changed)
         return page
+
+    def _on_dejitter_matching_changed(self):
+        self._invalidate_reference_tracking('匹配参数已变化，请重新分析。')
+        self._sequence_message = '匹配参数已变化，请重新分析。'
+        self._update_dejitter_controls()
+        self._on_output_settings_changed()
+        self._schedule_workspace_autosave()
 
     def _build_dejitter_view_bar(self):
         bar = QWidget()

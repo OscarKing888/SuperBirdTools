@@ -2,6 +2,7 @@
 from dataclasses import replace
 from math import atan2, hypot, radians
 from statistics import median
+from .matching_options import MatchingOptions
 
 
 def region_offsets(regions, result, size, reference_size):
@@ -12,13 +13,13 @@ def region_offsets(regions, result, size, reference_size):
             for i, (region, box) in enumerate(zip(regions, result.boxes)) if box is not None}
 
 
-def _rotation_consistent_groups(regions, offsets, reference_size, tolerance, min_span):
+def _rotation_consistent_groups(regions, offsets, reference_size, tolerance, min_span, max_degrees):
     """小角度转动会使真实匹配的位移不同；用至少三区的刚性几何证据核验。
 
     这里只选择可靠区域，输出仍为平移裁切，不旋转/缩放原图。两点即可拟合
     转动，因此必须有第三个实测匹配支持，且参考点不能集中在同一小块内。
     """
-    if len(offsets) < 3:
+    if len(offsets) < 3 or max_degrees <= 0:
         return set()
     rw, rh = reference_size
     source = {i: complex((regions[i][0]+regions[i][2])*rw/2,
@@ -35,7 +36,7 @@ def _rotation_consistent_groups(regions, offsets, reference_size, tolerance, min
             if abs(rotation) < 1e-8:
                 continue
             rotation /= abs(rotation)
-            if abs(atan2(rotation.imag, rotation.real)) > radians(2):
+            if abs(atan2(rotation.imag, rotation.real)) > radians(max_degrees):
                 continue
             translation = (target[i]+target[j]-rotation*(source[i]+source[j]))/2
             group = tuple(k for k in indices
@@ -49,22 +50,22 @@ def _rotation_consistent_groups(regions, offsets, reference_size, tolerance, min
             if abs(covariance) < 1e-8:
                 continue
             rotation = covariance/abs(covariance)
-            if abs(atan2(rotation.imag, rotation.real)) > radians(2):
+            if abs(atan2(rotation.imag, rotation.real)) > radians(max_degrees):
                 continue
             if all(abs(target[k]-mapped-rotation*(source[k]-center)) <= tolerance for k in group):
                 groups.add(group)
     return groups
 
 
-def select_translation(regions, result, size, reference_size):
+def select_translation(regions, result, size, reference_size, *, options=MatchingOptions()):
     offsets = region_offsets(regions, result, size, reference_size)
     if not offsets:
         return None
-    tolerance = max(1, min(size) * .003)
+    tolerance = options.pixel_tolerance(size)
     groups = {tuple(i for i, q in offsets.items() if hypot(q[0]-p[0], q[1]-p[1]) <= tolerance)
               for p in offsets.values()}
     groups.update(_rotation_consistent_groups(regions, offsets, reference_size, tolerance,
-                                              min(size)*.1))
+                                              min(size)*.1, options.rotation_degrees))
     quality = lambda group: sum(result.scores[i] if i < len(result.scores) else 0 for i in group) / len(group)
     ranked = sorted(groups, key=lambda group: (-len(group), -quality(group), group))
     winner = ranked[0]
@@ -77,13 +78,19 @@ def select_translation(regions, result, size, reference_size):
     return dx, dy, winner
 
 
-def resolve_tracking_consensus(regions, result, size, reference_size):
-    translation = select_translation(regions, result, size, reference_size)
+def resolve_tracking_consensus(regions, result, size, reference_size, *, options=MatchingOptions()):
+    translation = select_translation(regions, result, size, reference_size, options=options)
     if translation is None:
         reasons = tuple((result.reasons[i] if i < len(result.reasons) else '') or
-                        ('匹配方向冲突，未确定位置' if box else '未匹配') for i, box in enumerate(result.boxes))
+                        ('纹理匹配通过，但几何偏差或冲突未消除，未确定位置' if box else '未匹配')
+                        for i, box in enumerate(result.boxes))
+        hint = ''
+        if any(box is not None for box in result.boxes):
+            hint = (f'。当前允许旋转 {options.rotation_degrees:g}°，位置容差 {options.tolerance_percent:g}%'
+                    f'（约 {options.pixel_tolerance(size):.1f} 像素）。请确认选区属于同一运动；'
+                    '若仅有轻微几何差异，可在“高级自定义”调整；重复纹理应重新框选。')
         return replace(result, boxes=tuple(None for _ in regions), reasons=reasons,
-                       predicted_boxes=tuple(regions), error='；'.join(f'选区 {i+1}：{s}' for i, s in enumerate(reasons)))
+                       predicted_boxes=tuple(regions), error='；'.join(f'选区 {i+1}：{s}' for i, s in enumerate(reasons))+hint)
     dx, dy, accepted = translation
     width, height = size
     rw, rh = reference_size

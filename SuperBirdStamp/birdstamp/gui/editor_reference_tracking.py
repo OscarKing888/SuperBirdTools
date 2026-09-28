@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from birdstamp.image_dejitter.region_tracking_result import image_file_signature
+from birdstamp.image_dejitter.matching_options import MatchingOptions
 from .editor_reference_tracking_worker import EditorReferenceTrackingWorker
 from .editor_utils import path_key
 
@@ -22,7 +23,9 @@ class _BirdStampReferenceTrackingMixin:
     def _reference_tracking_input(self):
         source = getattr(self, "_dejitter_reference_source", None)
         regions = tuple(getattr(self, "_dejitter_reference_regions", ()))
-        return (path_key(Path(source)), regions) if source and regions else None
+        controls = getattr(self, 'dejitter_matching_controls', None)
+        options = MatchingOptions.from_settings(controls.settings() if controls else None)
+        return (path_key(Path(source)), regions, options) if source and regions else None
 
     def _reference_regions_editable(self) -> bool:
         source = getattr(self, "_dejitter_reference_source", None)
@@ -97,7 +100,7 @@ class _BirdStampReferenceTrackingMixin:
         self._invalidate_reference_tracking("正在预处理跟踪…")
         worker = EditorReferenceTrackingWorker(
             token=self._reference_tracking_token, reference=Path(self._dejitter_reference_source),
-            regions=definition[1], paths=paths, parent=self,
+            regions=definition[1], paths=paths, options=definition[2], parent=self,
         )
         self._reference_tracking_worker = worker
         worker.resultsReady.connect(self._on_reference_tracking_results)
@@ -113,7 +116,7 @@ class _BirdStampReferenceTrackingMixin:
         return (worker is not None and worker is self._reference_tracking_worker
                 and not self._reference_tracking_shutdown and token == self._reference_tracking_token
                 and not worker.isInterruptionRequested()
-                and self._reference_tracking_input() == (path_key(worker.reference), worker.regions))
+                and self._reference_tracking_input() == (path_key(worker.reference), worker.regions, worker.options))
 
     def _on_reference_tracking_results(self, token: int, results: object) -> None:
         if not self._accept_reference_tracking_signal(token):
