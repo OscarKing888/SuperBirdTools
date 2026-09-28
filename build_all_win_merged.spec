@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import sys
+import subprocess
 from pathlib import Path
 
 from PyInstaller.building.api import MERGE
@@ -17,6 +18,14 @@ SUPERVIEWER_ROOT = REPO_ROOT / "SuperViewer"
 SUPERBIRDSTAMP_ROOT = REPO_ROOT / "SuperBirdStamp"
 APP_COMMON_ROOT = REPO_ROOT / "app_common"
 MERGED_WORKPATH = Path(CONF["workpath"]).resolve()
+
+exiftool = APP_COMMON_ROOT / "exif_io" / "exiftools_win" / "exiftool.exe"
+try:
+    probe = subprocess.run([str(exiftool), "-ver"], capture_output=True, text=True, timeout=10)
+except (OSError, subprocess.TimeoutExpired) as exc:
+    raise RuntimeError(f"Bundled ExifTool cannot start: {exiftool}") from exc
+if probe.returncode != 0 or not probe.stdout.strip():
+    raise RuntimeError(f"Bundled ExifTool cannot start: {exiftool}\n{probe.stderr}")
 
 for candidate in (REPO_ROOT, SUPERVIEWER_ROOT, SUPERBIRDSTAMP_ROOT):
     candidate_str = str(candidate)

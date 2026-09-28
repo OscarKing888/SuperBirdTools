@@ -17,6 +17,13 @@ _LOG = logging.getLogger(__name__)
 def _run(executable: str, args: list[str], *, allow_empty_source: bool = False) -> None:
     result = run_exiftool(executable, ['-charset', 'filename=UTF8', '-overwrite_original', *args], timeout=60)
     lines = [line.strip() for line in result.stderr.splitlines() if line.strip()]
+    # The bundled Windows Perl may emit a startup locale warning when LANG is
+    # inherited from a Unix-like shell. It is unrelated to ExifTool's result.
+    if lines and lines[0] == 'perl: warning: Setting locale failed.':
+        for index, line in enumerate(lines):
+            if line.startswith('perl: warning: Falling back to the standard locale'):
+                lines = lines[index + 1:]
+                break
     # 共享 runner 把此 ExifTool 警告视为错误；无元数据原图是合法输入。
     if (allow_empty_source and lines
             and all(line.startswith('Warning: No writable tags set from ') for line in lines)
