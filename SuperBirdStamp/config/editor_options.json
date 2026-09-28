@@ -1,5 +1,7 @@
 {
   "dejitter_pad_to_union": false,
+  "dejitter_show_intersection": true,
+  "dejitter_export_intersection": false,
   "preview_ab_enabled": false,
   "preview_auto_focus_center": false,
   "dejitter_reference_strength": 100,

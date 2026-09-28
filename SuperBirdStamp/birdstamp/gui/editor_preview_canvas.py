@@ -56,6 +56,7 @@ class EditorPreviewOverlayState(PreviewOverlayState):
     focus_polygon: tuple = ()
     bird_polygon: tuple = ()
     crop_polygon: tuple = ()
+    intersection_box: "NormalizedBox | None" = None
 
 
 @dataclass(slots=True)
@@ -104,6 +105,7 @@ class EditorPreviewCanvas(FocusCenteredPreviewCanvas):
         self._reference_regions: tuple["NormalizedBox", ...] = ()
         self._reference_diagnostics: tuple = ()
         self._alignment_crop_box = None
+        self._intersection_box = None
         self._focus_polygon = self._bird_polygon = self._crop_polygon = ()
         self._show_reference_regions: bool = False
         self._reference_region_labels: tuple[str, ...] = ()
@@ -280,6 +282,9 @@ class EditorPreviewCanvas(FocusCenteredPreviewCanvas):
             if getattr(self,'_'+name) != value:
                 setattr(self,'_'+name,value)
                 changed = True
+        if self._intersection_box != state.intersection_box:
+            self._intersection_box = state.intersection_box
+            changed = True
         return changed
 
     def _apply_overlay_options_data(self, options: "PreviewOverlayOptions") -> bool:
@@ -303,6 +308,7 @@ class EditorPreviewCanvas(FocusCenteredPreviewCanvas):
         self._reference_regions = ()
         self._reference_diagnostics = ()
         self._alignment_crop_box = None
+        self._intersection_box = None
         self._focus_polygon = self._bird_polygon = self._crop_polygon = ()
         self._bird_box = None
         self._crop_effect_box = None
@@ -330,6 +336,11 @@ class EditorPreviewCanvas(FocusCenteredPreviewCanvas):
             self._paint_alignment_crop(painter, draw_rect, content_rect)
         if self._show_crop_effect and self._crop_polygon:
             self._paint_polygon(painter,draw_rect,content_rect,self._crop_polygon,'#45D6E8',dashed=True,label='成片保留范围')
+        if self._intersection_box is not None:
+            left, top, right, bottom = self._intersection_box
+            self._paint_polygon(painter, draw_rect, content_rect,
+                                ((left, top), (right, top), (right, bottom), (left, bottom)),
+                                '#45D6E8', dashed=True, label='最大交集范围')
         self._edit_modes.paint(painter, draw_rect, content_rect)
 
     @staticmethod

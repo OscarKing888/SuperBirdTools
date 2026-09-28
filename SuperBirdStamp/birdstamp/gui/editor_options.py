@@ -404,6 +404,8 @@ def _bounded_preview_option(key: str, default: int, minimum: int, maximum: int) 
 DEJITTER_MATCHING_DEFAULTS = normalize_matching_settings(_load_builtin_editor_options_raw())
 DEJITTER_ALIGNMENT_MODE = _load_builtin_editor_options_raw().get('dejitter_alignment_mode', 'rigid')
 DEJITTER_PAD_TO_UNION = _load_builtin_editor_options_raw().get("dejitter_pad_to_union", False) is True
+DEJITTER_SHOW_INTERSECTION = _load_builtin_editor_options_raw().get('dejitter_show_intersection', True) is True
+DEJITTER_EXPORT_INTERSECTION = _load_builtin_editor_options_raw().get('dejitter_export_intersection', False) is True
 PREVIEW_AB_ENABLED = _load_builtin_editor_options_raw().get("preview_ab_enabled", False) is True
 PREVIEW_AUTO_FOCUS_CENTER = _load_builtin_editor_options_raw().get("preview_auto_focus_center", False) is True
 

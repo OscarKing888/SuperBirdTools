@@ -159,10 +159,11 @@ class EditorSequenceExportWorker(QThread):
     progress_counts = pyqtSignal(int, int, int, str)
     failed = pyqtSignal(int, str)
 
-    def __init__(self, *, token, sequence, destination, output_format, parent=None):
+    def __init__(self, *, token, sequence, destination, output_format, intersection_only=False, parent=None):
         super().__init__(parent)
         self.token, self.sequence = token, sequence
         self.destination, self.output_format = destination, output_format
+        self.intersection_only = intersection_only
         self.cancel_event = threading.Event()
 
     def cancel(self):
@@ -174,6 +175,7 @@ class EditorSequenceExportWorker(QThread):
         try:
             folder = export_aligned_sequence(
                 self.sequence, self.destination, output_format=self.output_format,
+                intersection_only=self.intersection_only,
                 cancel_event=self.cancel_event,
                 progress=lambda text: self.progress.emit(self.token, text),
                 progress_counts=lambda current, total, stage: self.progress_counts.emit(

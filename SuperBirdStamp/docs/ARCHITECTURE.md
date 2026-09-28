@@ -199,6 +199,8 @@ flowchart LR
 
 磁盘缓存位于用户配置目录 `cache/sequence_preview`；默认总预算 512 MiB（`editor_options.json` 的 `dejitter_disk_cache_mb`），最多保留 8 组，优先淘汰旧清晰帧和旧组，保留当前组的有界快速预览。临时桶在完整写入后发布，取消/磁盘故障不丢弃内存分析。缓存属于本机派生数据，移动照片或只复制 workspace 到其他机器需要重新分析。回归见 [test_sequence_preview_cache.py](../tests/test_sequence_preview_cache.py)。
 
+[sequence_intersection.py](../birdstamp/export_stage/sequence_intersection.py) 从分析后的变换／整数像素框计算 `SequencePreview.intersection_box`（成片画布内的最大完整像素矩形，无共同区域为 `None`），旋转沿用安全插值边缘、凸交集及最大矩形规则。该范围由后台分析保存，缓存版本 3 增加此字段；版本 2 在缓存 worker 中只根据已有几何补算，不重读照片。`normalized_intersection_box` 统一主预览及 A/B 的独立青色范围框，不更改裁切遮罩或构图网格；`intersection_export_sequence` 派生导出画布，保持预览结果与源变换不变，`export_aligned_sequence(..., intersection_only=True)` 仍经原管线一次原生采样。无共同区域时只禁用交集导出，补边输出保持可用。两个开关保存在工作区 `editor_state.sequence_preview.show_intersection / export_intersection`，默认值从 `editor_options.json` 加载，不进入分析签名，切换无需取消或重算分析。回归见 [test_sequence_intersection.py](../tests/test_sequence_intersection.py)。
+
 [config.py](../birdstamp/config.py) 区分只读资源与可写状态：`resolve_bundled_path` 定位内置资源；`get_user_data_dir` 在开发模式返回应用目录，打包后返回平台用户目录；`get_config_path` 返回其 `Config/config.yaml`。模板经 [template_directory](../birdstamp/gui/editor_template.py) 进入同级 `templates`，运行状态和 `editor_autosave.birdstamp-workspace.json` 也位于配置目录。默认编辑选项来自 [editor_options.json](../config/editor_options.json)。自动保存、导出状态和用户路径不应打包为发行默认值。
 
 ## 7. 按功能定位入口与回归

@@ -21,7 +21,7 @@ from . import editor_options
 from .editor_utils import path_key
 from .sequence_preview_frame import SequencePreviewFrame
 
-CACHE_VERSION = 2
+CACHE_VERSION = 3
 _log = get_logger('birdstamp.sequence_cache')
 
 
@@ -69,7 +69,8 @@ class SequencePreviewCache:
                                     tracking=asdict(sequence.tracking[key])))
             document = dict(version=CACHE_VERSION, input_key=sequence.input_key,
                             output_size=sequence.output_size, signatures=sequence.signatures, frames=records,
-                            bird_boxes=list(sequence.bird_boxes.items()),canvas_box=sequence.canvas_box)
+                            bird_boxes=list(sequence.bird_boxes.items()),canvas_box=sequence.canvas_box,
+                            intersection_box=sequence.intersection_box)
             (staging / 'manifest.json').write_text(json.dumps(document, ensure_ascii=False, default=str), encoding='utf-8')
             if cancelled() or not sequence.files_current():
                 return
@@ -106,7 +107,7 @@ class SequencePreviewCache:
             if manifest.stat().st_size > 64*1024*1024:
                 raise ValueError('成片缓存清单过大')
             raw = json.loads(manifest.read_text(encoding='utf-8'))
-            if raw['version'] != CACHE_VERSION or raw['input_key'] != key:
+            if raw['version'] not in (2, CACHE_VERSION) or raw['input_key'] != key:
                 return None
             records = raw['frames']
             if [path_key(seed.path) for seed in seeds] != [path_key(Path(r['path'])) for r in records]:
@@ -165,6 +166,18 @@ class SequencePreviewCache:
                                                         sequence.frame_crop_plan(frame_key), source,alignment,sequence.canvas_box)
             if not sequence.files_current() or sequence_input_key(sequence.jobs.values()) != key:
                 return None
+            if raw['version'] == 2:
+                # Geometry-only upgrade in the owned worker; no photo decode/matching.
+                from birdstamp.export_stage.sequence_intersection import compute_intersection_box
+                sequence.intersection_box = compute_intersection_box(sequence, cancelled=cancelled)
+            else:
+                box = raw['intersection_box']
+                if box is not None:
+                    if (len(box) != 4 or any(type(v) is not int for v in box) or
+                            not (0 <= box[0] < box[2] <= sequence.output_size[0] and
+                                 0 <= box[1] < box[3] <= sequence.output_size[1])):
+                        raise ValueError('成片缓存最大交集范围无效')
+                    sequence.intersection_box = tuple(box)
             os.utime(folder, None)
             return sequence, frames
         except (OSError, ValueError, KeyError, TypeError, AttributeError, IndexError) as exc:
