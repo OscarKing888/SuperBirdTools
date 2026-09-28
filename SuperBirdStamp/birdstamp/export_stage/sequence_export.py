@@ -21,6 +21,12 @@ from .video_export_cancelled_error import VideoExportCancelledError
 _LOG = get_logger('sequence_export')
 
 
+def sequence_export_targets(source_paths, folder, output_format):
+    """按原列表编号生成输出清单，导出与后续工作区导入共用同一份命名规则。"""
+    return tuple(Path(folder) / f'{index:04d}_{path.stem}.{output_format}'
+                 for index, path in enumerate(source_paths, 1))
+
+
 class SequenceExportAction(WorkerAction):
     """使用已分析的像素框完成一张原分辨率导出，不重复跟踪或读取模板。"""
 
@@ -85,9 +91,9 @@ def export_aligned_sequence(sequence, destination, *, output_format='png', cance
         pool.set_thumbnail_mode(False)
         # 编号先于提交分配，与完成顺序无关，同 stem/大小写/Unicode 也不会互相覆盖。
         actions = iter(tuple(SequenceExportAction(
-            sequence, path, folder / f'{index:04d}_{path.stem}.{output_format}',
+            sequence, path, target,
             output_format, source_paths, cancelled=cancelled,
-        ) for index, path in enumerate(source_paths, 1)))
+        ) for path, target in zip(source_paths, sequence_export_targets(source_paths, folder, output_format))))
         pending = set()
         completed = 0
         render_seconds = write_seconds = 0.0

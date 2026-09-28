@@ -28,6 +28,8 @@ class _BirdStampDejitterMixin:
     def _init_dejitter_preview(self):
         self._sequence_worker = None
         self._sequence_exporting = False
+        self._sequence_export_open_workspace = False
+        self._sequence_export_workspace_result = None
         self._sequence_progress_kind = None
         self._sequence_epoch = 0
         self._sequence_shutdown = False
@@ -56,9 +58,13 @@ class _BirdStampDejitterMixin:
 
     def _collect_sequence_workspace_state(self):
         return dict(input_key=self._sequence_cache_key,
-                    active=self._dejitter_tab_active(), view=self._dejitter_view)
+                    active=self._dejitter_tab_active(), view=self._dejitter_view,
+                    open_export_workspace=self.dejitter_export_workspace_check.isChecked())
 
     def _restore_sequence_workspace_state(self, state):
+        self.dejitter_export_workspace_check.setChecked(
+            state.get('open_export_workspace', editor_options.DEJITTER_EXPORT_NEW_WORKSPACE) is True
+            if isinstance(state, dict) else editor_options.DEJITTER_EXPORT_NEW_WORKSPACE)
         if not isinstance(state, dict) or not state.get('input_key') or self._sequence_shutdown:
             return
         self._sequence_restore_state = dict(state)
@@ -161,6 +167,13 @@ class _BirdStampDejitterMixin:
         output.addWidget(self.dejitter_output_format)
         output.addWidget(self.dejitter_export_btn, 1)
         layout.addLayout(output)
+        self.dejitter_export_workspace_check = QCheckBox('导出后保存当前工作区，新建工作区加载成片')
+        self.dejitter_export_workspace_check.setChecked(editor_options.DEJITTER_EXPORT_NEW_WORKSPACE)
+        self.dejitter_export_workspace_check.setToolTip(
+            '导出成功后保存当前工作区，再建立成片工作区并加载本次导出的图片。\n'
+            '未命名的原工作区和新成片工作区自动保存到本次导出目录；保存失败时保留当前列表。')
+        self.dejitter_export_workspace_check.toggled.connect(self._schedule_workspace_autosave)
+        layout.addWidget(self.dejitter_export_workspace_check)
         self.dejitter_export_progress = QProgressBar()
         self.dejitter_export_progress.setAccessibleName('去抖动导出进度')
         self.dejitter_export_progress.hide()
@@ -304,6 +317,8 @@ class _BirdStampDejitterMixin:
             self._refresh_preview_label(preserve_view=True)
 
     def _invalidate_sequence_preview(self, *, shutdown=False):
+        self._sequence_export_open_workspace = False
+        self._sequence_export_workspace_result = None
         if self._sequence_progress_kind is not None:
             self._finish_sequence_progress('已取消')
         elif hasattr(self, 'dejitter_analysis_progress'):
@@ -335,6 +350,7 @@ class _BirdStampDejitterMixin:
     def _update_dejitter_controls(self):
         if not hasattr(self, 'dejitter_effective_status'):
             return
+        self.dejitter_export_workspace_check.setEnabled(not self._sequence_exporting and not self._sequence_shutdown)
         regions = getattr(self, '_dejitter_reference_regions', ())
         source = self._dejitter_reference_source
         self.dejitter_reference_status.setText(f'{Path(source).name} · {len(regions)} 个选区' if source and regions else '尚未选择参考区')
@@ -487,6 +503,7 @@ class _BirdStampDejitterMixin:
 
     def _on_sequence_failed(self, token, message):
         if self._accept_sequence_signal(token):
+            self._sequence_export_workspace_result = None
             worker = self._sequence_worker
             analysis_failed = (self._sequence_progress_kind == 'analysis'
                                and not getattr(worker, 'restore_only', False))
@@ -569,9 +586,19 @@ class _BirdStampDejitterMixin:
         if worker is None or worker is not self._sequence_worker:
             return
         self._finish_sequence_progress('已取消' if worker.isInterruptionRequested() else '任务已结束')
+        workspace_result = (self._sequence_export_workspace_result
+                            if worker.token == self._sequence_epoch and not worker.isInterruptionRequested()
+                            and not self._sequence_shutdown else None)
+        self._sequence_export_workspace_result = None
+        self._sequence_export_open_workspace = False
         self._sequence_worker = None
         self._sequence_exporting = False
         worker.deleteLater()
+        if workspace_result is not None:
+            self._sequence_pending_path = None
+            self._update_dejitter_controls()
+            self._open_dejitter_export_workspace(*workspace_result)
+            return
         if self._sequence_restore_state is not None:
             self._try_restore_sequence_cache()
             return
@@ -678,7 +705,7 @@ class _BirdStampDejitterMixin:
         self._on_output_settings_changed()
 
     def _on_dejitter_export_all(self):
-        if self._sequence_worker is not None:
+        if self._sequence_worker is not None or self._workspace_restore_in_progress():
             return
         sequence = self._valid_sequence_for_export()
         if sequence is None:
@@ -694,6 +721,8 @@ class _BirdStampDejitterMixin:
                                             output_format=self.dejitter_output_format.currentData(), parent=self)
         self._sequence_worker = worker
         self._sequence_exporting = True
+        self._sequence_export_open_workspace = self.dejitter_export_workspace_check.isChecked()
+        self._sequence_export_workspace_result = None
         self._begin_sequence_progress('export')
         worker.progress.connect(self._on_sequence_progress)
         worker.progress_counts.connect(self._on_sequence_progress_counts)
@@ -705,6 +734,8 @@ class _BirdStampDejitterMixin:
 
     def _on_sequence_exported(self, token, folder):
         if self._accept_sequence_signal(token):
+            if self._sequence_export_open_workspace:
+                self._sequence_export_workspace_result = (Path(folder), self._sequence_worker.exported_paths)
             self._finish_sequence_progress('导出完成', complete=True)
             self._sequence_message = f'整组导出完成：{folder}'
             self._set_status(self._sequence_message)

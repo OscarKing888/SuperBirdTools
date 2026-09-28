@@ -160,13 +160,14 @@ class EditorSequenceExportWorker(QThread):
         self.token, self.sequence = token, sequence
         self.destination, self.output_format = destination, output_format
         self.cancel_event = threading.Event()
+        self.exported_paths = ()
 
     def cancel(self):
         self.cancel_event.set()
         self.requestInterruption()
 
     def run(self):
-        from birdstamp.export_stage.sequence_export import export_aligned_sequence
+        from birdstamp.export_stage.sequence_export import export_aligned_sequence, sequence_export_targets
         try:
             folder = export_aligned_sequence(
                 self.sequence, self.destination, output_format=self.output_format,
@@ -175,6 +176,8 @@ class EditorSequenceExportWorker(QThread):
                 progress_counts=lambda current, total, stage: self.progress_counts.emit(
                     self.token, current, total, stage),
             )
+            self.exported_paths = sequence_export_targets(
+                (job.path for job in self.sequence.jobs.values()), folder, self.output_format)
             self.completed.emit(self.token, str(folder))
         except Exception as exc:
             if not self.cancel_event.is_set():

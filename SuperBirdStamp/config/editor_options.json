@@ -1,5 +1,6 @@
 {
   "dejitter_pad_to_union": false,
+  "dejitter_export_new_workspace": false,
   "preview_ab_enabled": false,
   "preview_auto_focus_center": false,
   "dejitter_reference_strength": 100,

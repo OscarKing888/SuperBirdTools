@@ -72,6 +72,42 @@ def _restore_widget_signals(previous_states: Iterable[tuple[object, bool]]) -> N
 
 
 class _BirdStampWorkspaceMixin:
+    def _open_dejitter_export_workspace(self, folder, paths):
+        """先持久保存两个完整工作区，再复用增量恢复流程切换照片列表。"""
+        from .dejitter_export_workspace import unused_workspace_path, exported_workspace_payload
+        folder, paths = Path(folder), tuple(paths)
+        if self._workspace_restore_in_progress() or self._workspace_autosave_shutdown:
+            return
+        if self._video_export_worker is not None and self._video_export_worker.isRunning():
+            self._show_error('暂未切换工作区', f'请先结束视频导出。去抖动图片已保存在：{folder}')
+            return
+        original = self._workspace_path
+        try:
+            if not isinstance(original, Path):
+                original = unused_workspace_path(folder, '去抖动前工作区')
+            if not paths or any(not path.is_file() for path in paths):
+                raise ValueError('本次导出的图片清单为空或文件已被移走。')
+            original_payload = self._collect_workspace_payload(original)
+            write_workspace_json(original, original_payload)
+            self._workspace_path = original
+            self._save_workspace_last_path(original)
+            target = unused_workspace_path(folder, '去抖动成片')
+            # 重新采集以 target 为基准的相对路径，避免模板/导出目录引用错位。
+            payload = exported_workspace_payload(self._collect_workspace_payload(target), paths, target,
+                                                 sequence_column=PHOTO_COL_SEQ)
+            write_workspace_json(target, payload)
+        except Exception as exc:
+            _workspace_log.warning('dejitter export workspace save failed folder=%s original=%s: %s',
+                                   folder, original, exc)
+            self._show_error('图片已导出，工作区未切换',
+                             f'{exc}\n当前照片列表已保留。\n导出目录：{folder}\n原工作区路径：{original}')
+            return
+        # 此时导出线程已经真正退出；旧异步读图/识别由恢复流程取消并拒绝迟到结果。
+        self.export_tabs.setCurrentIndex(0)
+        self.ab_preview.mode.setCurrentIndex(0)
+        self._restore_workspace_payload(payload, target,
+                                        status_label=f'成片工作区已建立（原工作区：{original}）')
+
     def _init_workspace_autosave(self) -> None:
         self._workspace_autosave_suspend_depth = 0
         self._workspace_autosave_shutdown = False
