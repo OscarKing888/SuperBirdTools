@@ -27,7 +27,7 @@ def test_scale_options_wrap_to_fit_sidebar_and_configured_count(monkeypatch) -> 
         assert [check.text() for check in checks] == [label for label, _scale in options]
         field = checks[0].parentWidget()
 
-        for width in (220, 420, 220):
+        for width in (220, 520, 220):
             panel.resize(width, 300)
             panel.show()
             _APP.processEvents()
@@ -41,5 +41,24 @@ def test_scale_options_wrap_to_fit_sidebar_and_configured_count(monkeypatch) -> 
 
         checks[-1].setChecked(True)
         assert panel.current_request().scale_factors == [options[-1][1]]
+    finally:
+        panel.close()
+
+
+def test_scale_label_keeps_room_for_native_checkbox_paint() -> None:
+    panel = editor_gif_panel.GifExportPanel()
+    panel.setStyleSheet("QWidget { font-size: 13px; }")
+    try:
+        panel.resize(270, 300)
+        panel.show()
+        _APP.processEvents()
+        _APP.processEvents()
+
+        checks = [check for _scale, check in panel._scale_checks]
+        field = checks[0].parentWidget()
+        assert checks[2].y() > checks[0].y()
+        for check in checks:
+            assert check.width() >= check.sizeHint().width() + 12
+            assert field.rect().contains(check.geometry())
     finally:
         panel.close()

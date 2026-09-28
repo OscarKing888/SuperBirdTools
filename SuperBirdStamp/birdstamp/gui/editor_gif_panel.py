@@ -28,6 +28,8 @@ DEFAULT_GIF_LOOP = editor_options.DEFAULT_GIF_LOOP
 class _ScaleOptionsLayout(QLayout):
     """Keep all configured scale choices visible as the export sidebar narrows."""
 
+    _TEXT_CLEARANCE = 16
+
     def __init__(self, parent: QWidget) -> None:
         super().__init__(parent)
         self._items: list[QLayoutItem] = []
@@ -57,20 +59,25 @@ class _ScaleOptionsLayout(QLayout):
         self._layout_items(rect, apply=True)
 
     def sizeHint(self) -> QSize:
-        width = sum(item.sizeHint().width() for item in self._items)
+        width = sum(self._item_size(item).width() for item in self._items)
         width += max(0, len(self._items) - 1) * self.spacing()
         return QSize(width, self.heightForWidth(width))
 
     def minimumSize(self) -> QSize:
-        width = max((item.minimumSize().width() for item in self._items), default=0)
+        width = max((self._item_size(item).width() for item in self._items), default=0)
         return QSize(width, self.heightForWidth(width))
+
+    def _item_size(self, item: QLayoutItem) -> QSize:
+        size = item.sizeHint()
+        # Native checkbox styles can paint the final glyph beyond Qt's size hint.
+        return QSize(size.width() + self._TEXT_CLEARANCE, size.height())
 
     def _layout_items(self, rect: QRect, *, apply: bool) -> int:
         x = rect.x()
         y = rect.y()
         row_height = 0
         for item in self._items:
-            size = item.sizeHint()
+            size = self._item_size(item)
             if x > rect.x() and x + size.width() > rect.right() + 1:
                 x = rect.x()
                 y += row_height + self.spacing()
