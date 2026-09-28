@@ -38,6 +38,7 @@ def test_matching_rows_on_empty_loading_single_and_compare_views(window):
     ab = window.ab_preview
     assert ab.a_panel.isHidden()
     assert not ab.b_panel.toolbar.isHidden()
+    assert ab.b_panel.name_label.isHidden()
     assert ab.b_panel.filename.parentWidget() is ab.b_panel.toolbar
     assert ab.b_panel.name_label.parentWidget() is ab.b_panel.toolbar
     assert 'transparent' in ab.b_panel.viewport_frame.styleSheet()
@@ -45,6 +46,8 @@ def test_matching_rows_on_empty_loading_single_and_compare_views(window):
     assert window.preview_scale_combo.parentWidget() is ab.b_panel.toolbar
     ab.enabled.setChecked(True)
     assert_aligned(window)
+    assert not ab.a_panel.name_label.isHidden()
+    assert not ab.b_panel.name_label.isHidden()
     assert '#2196f3' in ab.b_panel.viewport_frame.styleSheet()
     assert 'transparent' in ab.a_panel.viewport_frame.styleSheet()
     assert ab.b_panel.name_label.text() == 'B · 当前'
@@ -64,9 +67,11 @@ def test_matching_rows_on_empty_loading_single_and_compare_views(window):
     ab.enabled.setChecked(False)
     assert ab.a_panel.isHidden()
     assert not ab.b_panel.toolbar.isHidden()
+    assert ab.b_panel.name_label.isHidden()
     assert 'transparent' in ab.b_panel.viewport_frame.styleSheet()
     ab.enabled.setChecked(True)
     assert_aligned(window)
+    assert not ab.b_panel.name_label.isHidden()
 
 
 def test_modes_transport_resize_and_font_changes_keep_canvas_edges_aligned(window, monkeypatch):

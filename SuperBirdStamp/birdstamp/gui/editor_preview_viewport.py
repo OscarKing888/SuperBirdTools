@@ -104,6 +104,7 @@ class PreviewViewportPanel(QWidget):
 
     def set_active(self, active, *, compare_mode=True):
         highlighted = active and compare_mode
+        self.name_label.setVisible(compare_mode)
         self.name_label.setText(f'{self.name} · 当前' if highlighted else self.name)
         self.name_label.setStyleSheet('color: #2196f3; font-weight: 600;' if highlighted else '')
         color = '#2196f3' if highlighted else 'transparent'
