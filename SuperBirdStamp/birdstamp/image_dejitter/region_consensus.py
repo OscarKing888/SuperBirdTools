@@ -1,6 +1,6 @@
 """从可靠参考区中选择一致的平移，不把离群区域计入补偿。"""
 from dataclasses import replace
-from math import hypot
+from math import atan2, hypot, radians
 from statistics import median
 
 
@@ -12,6 +12,50 @@ def region_offsets(regions, result, size, reference_size):
             for i, (region, box) in enumerate(zip(regions, result.boxes)) if box is not None}
 
 
+def _rotation_consistent_groups(regions, offsets, reference_size, tolerance, min_span):
+    """小角度转动会使真实匹配的位移不同；用至少三区的刚性几何证据核验。
+
+    这里只选择可靠区域，输出仍为平移裁切，不旋转/缩放原图。两点即可拟合
+    转动，因此必须有第三个实测匹配支持，且参考点不能集中在同一小块内。
+    """
+    if len(offsets) < 3:
+        return set()
+    rw, rh = reference_size
+    source = {i: complex((regions[i][0]+regions[i][2])*rw/2,
+                         (regions[i][1]+regions[i][3])*rh/2) for i in offsets}
+    target = {i: source[i] + complex(*offsets[i]) for i in offsets}
+    groups = set()
+    indices = list(offsets)
+    for position, i in enumerate(indices):
+        for j in indices[position+1:]:
+            baseline = source[j] - source[i]
+            if abs(baseline) < min_span:
+                continue
+            rotation = (target[j] - target[i]) / baseline
+            if abs(rotation) < 1e-8:
+                continue
+            rotation /= abs(rotation)
+            if abs(atan2(rotation.imag, rotation.real)) > radians(2):
+                continue
+            translation = (target[i]+target[j]-rotation*(source[i]+source[j]))/2
+            group = tuple(k for k in indices
+                          if abs(target[k]-rotation*source[k]-translation) <= tolerance)
+            if len(group) < 3 or i not in group or j not in group:
+                continue
+            # 全组最小二乘刚性拟合，再检查所有成员，避免仅凭一对端点放行。
+            center = sum(source[k] for k in group)/len(group)
+            mapped = sum(target[k] for k in group)/len(group)
+            covariance = sum((source[k]-center).conjugate()*(target[k]-mapped) for k in group)
+            if abs(covariance) < 1e-8:
+                continue
+            rotation = covariance/abs(covariance)
+            if abs(atan2(rotation.imag, rotation.real)) > radians(2):
+                continue
+            if all(abs(target[k]-mapped-rotation*(source[k]-center)) <= tolerance for k in group):
+                groups.add(group)
+    return groups
+
+
 def select_translation(regions, result, size, reference_size):
     offsets = region_offsets(regions, result, size, reference_size)
     if not offsets:
@@ -19,6 +63,8 @@ def select_translation(regions, result, size, reference_size):
     tolerance = max(1, min(size) * .003)
     groups = {tuple(i for i, q in offsets.items() if hypot(q[0]-p[0], q[1]-p[1]) <= tolerance)
               for p in offsets.values()}
+    groups.update(_rotation_consistent_groups(regions, offsets, reference_size, tolerance,
+                                              min(size)*.1))
     quality = lambda group: sum(result.scores[i] if i < len(result.scores) else 0 for i in group) / len(group)
     ranked = sorted(groups, key=lambda group: (-len(group), -quality(group), group))
     winner = ranked[0]

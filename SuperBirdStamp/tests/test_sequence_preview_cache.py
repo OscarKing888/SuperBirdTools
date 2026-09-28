@@ -48,7 +48,7 @@ def test_cache_reloads_geometry_tracking_quick_and_sharp_without_recompute(seque
         assert restored[0][1][key].source_image == original.source_image
 
 
-@pytest.mark.parametrize('change', ['source', 'xmp', 'strength', 'regions', 'order', 'union', 'corrupt'])
+@pytest.mark.parametrize('change', ['source', 'xmp', 'strength', 'regions', 'order', 'union', 'corrupt', 'algorithm'])
 def test_stale_or_corrupt_cache_is_not_restored(sequence, tmp_path, monkeypatch, change):
     seeds, result = sequence
     cache = SequencePreviewCache(tmp_path / 'cache')
@@ -61,6 +61,9 @@ def test_stale_or_corrupt_cache_is_not_restored(sequence, tmp_path, monkeypatch,
         seeds = list(reversed(seeds))
     elif change == 'corrupt':
         (cache.root / result.input_key / 'quick-0.png').write_bytes(b'broken')
+    elif change == 'algorithm':
+        from birdstamp.export_stage import sequence_preview
+        monkeypatch.setattr(sequence_preview, 'SEQUENCE_ANALYSIS_VERSION', sequence_preview.SEQUENCE_ANALYSIS_VERSION+1)
     else:
         key, value = {'strength': ('dejitter_reference_strength', 30),
                       'regions': ('dejitter_reference_regions', [(0,0,.5,.5)]),

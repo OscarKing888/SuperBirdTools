@@ -123,7 +123,7 @@ class RegionTemplateSearch:
             return None, f'细化匹配不可靠（{refined:.2f}）'
         return ((left+x+ox-fx)/fw, (top+y+oy-fy)/fh), ''
 
-    def recover_occlusion(self, image, index, expected, *, cancelled=lambda: False):
+    def recover_occlusion(self, image, index, expected, *, span=(0.0, 0.0), cancelled=lambda: False):
         """仅在前后两帧均可靠时，核验预测附近的多个参考子块；不直接输出插值。"""
         template = self.templates[index]
         if template is None:
@@ -133,8 +133,10 @@ class RegionTemplateSearch:
         th, tw = template.fine.shape
         if min(th, tw) < 16:
             return None
-        radius_x = max(8, round(tw / 4))
-        radius_y = max(8, round(th / 2))
+        # 邻帧可能加速移动，真实位置不一定接近两帧中点。搜索窗覆盖两端
+        # 实测位置及原有余量，仍须通过当前图的子块相关和唯一性核验。
+        radius_x = max(8, round(tw / 4)) + int(np.ceil(abs(span[0])*fw))
+        radius_y = max(8, round(th / 2)) + int(np.ceil(abs(span[1])*fh))
         predicted_x, predicted_y = fx + expected[0]*fw, fy + expected[1]*fh
         left, top = max(0, round(predicted_x)-radius_x), max(0, round(predicted_y)-radius_y)
         right, bottom = min(fw, round(predicted_x)+tw+radius_x), min(fh, round(predicted_y)+th+radius_y)

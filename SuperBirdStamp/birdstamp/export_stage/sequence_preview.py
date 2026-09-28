@@ -22,6 +22,7 @@ from .video_export_cancelled_error import VideoExportCancelledError
 
 REFERENCE_KEYS = ('dejitter_reference_regions', 'dejitter_reference_source',
                   'dejitter_reference_strength', 'dejitter_pad_to_union')
+SEQUENCE_ANALYSIS_VERSION = 2
 
 
 def sequence_files(seeds, template_paths=None) -> tuple[Path, ...]:
@@ -46,7 +47,7 @@ def sequence_input_key(seeds, template_paths=None) -> str:
     # 独立流程只依赖原图、参考选区、强度和补边选项；模板/手动裁切/输出叠加不参与。
     seeds = tuple(seeds)
     payload = [(path_key(seed.path), {key: seed.settings.get(key) for key in REFERENCE_KEYS}) for seed in seeds]
-    data = (payload, file_signatures(sequence_files(seeds)))
+    data = (SEQUENCE_ANALYSIS_VERSION, payload, file_signatures(sequence_files(seeds)))
     return hashlib.sha256(json.dumps(data, ensure_ascii=False, sort_keys=True, default=str).encode('utf-8')).hexdigest()
 
 

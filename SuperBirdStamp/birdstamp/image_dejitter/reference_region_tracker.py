@@ -92,7 +92,8 @@ class ReferenceRegionTracker:
             if before is None or after is None:
                 continue
             expected = ((before[0]+after[0])/2-region[0], (before[1]+after[1])/2-region[1])
-            displacement = self.search.recover_occlusion(image, index, expected, cancelled=cancelled)
+            span = (abs(after[0]-before[0])/2, abs(after[1]-before[1])/2)
+            displacement = self.search.recover_occlusion(image, index, expected, span=span, cancelled=cancelled)
             if displacement is not None:
                 dx, dy = displacement
                 boxes[index] = tuple(float(value) for value in (region[0]+dx, region[1]+dy, region[2]+dx, region[3]+dy))
