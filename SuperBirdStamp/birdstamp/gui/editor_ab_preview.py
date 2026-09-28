@@ -60,7 +60,6 @@ class ABPreview(QObject):
         self.mode.setToolTip('A 独立选择原图或已分析的去抖动成片。')
         self.b_panel = PreviewViewportPanel('B', editor.preview_label,
                                             center=editor.auto_focus_center_check, scale=editor.preview_scale_combo)
-        self.b_header = self.b_panel.header
         self.b_mode = self.b_panel.mode
         self.b_mode.setToolTip('选择 B 的原图或已分析的去抖动成片。')
         self.b_mode.activated.connect(self._choose_b_mode)
@@ -75,7 +74,6 @@ class ABPreview(QObject):
         self.splitter.setSizes([500, 500])
         layout.addWidget(self.splitter, 1)
         self.a_panel.setVisible(self.enabled.isChecked())
-        self.b_header.setVisible(self.enabled.isChecked())
         self.enabled.toggled.connect(self._toggle)
         self.mode.currentIndexChanged.connect(lambda: self.sync(force=True))
         self.a_panel.activated.connect(lambda: self.activate('a'))
@@ -83,9 +81,13 @@ class ABPreview(QObject):
         from .editor_ab_view_link import ABViewLink
         self.view_link = ABViewLink(self)
         self.linked.setChecked(editor_options.PREVIEW_AB_LINKED)
-        self.a_panel.set_active(False)
-        self.b_panel.set_active(True)
+        self._update_active_panels()
         self._sync_controls()
+
+    def _update_active_panels(self):
+        compare_mode = self.enabled.isChecked()
+        self.a_panel.set_active(self.active_side == 'a', compare_mode=compare_mode)
+        self.b_panel.set_active(self.active_side == 'b', compare_mode=compare_mode)
 
     def _schedule_alignment(self):
         if not self.stopping and not self.geometry_timer.isActive():
@@ -116,7 +118,7 @@ class ABPreview(QObject):
 
     def _toggle(self, enabled):
         self.a_panel.setVisible(enabled)
-        self.b_header.setVisible(enabled)
+        self._update_active_panels()
         self._schedule_alignment()
         self._sync_controls()
         if enabled:
@@ -138,8 +140,7 @@ class ABPreview(QObject):
             return
         self.editor.sequence_transport.stop(commit=False)
         self.active_side = side
-        self.a_panel.set_active(side == 'a')
-        self.b_panel.set_active(side == 'b')
+        self._update_active_panels()
         if sync_selection:
             item = self.editor._find_photo_item_by_path(self.selected_path()) if self.selected_path() else None
             if item is not None:

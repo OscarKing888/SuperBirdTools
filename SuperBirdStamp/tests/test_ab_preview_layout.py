@@ -20,8 +20,8 @@ def assert_aligned(window):
     def aligned():
         if ab.geometry_timer.isActive():
             return False
-        for a, b in ((ab.a_panel.header, ab.b_panel.header),
-                     (ab.a_panel.toolbar, ab.b_panel.toolbar),
+        for a, b in ((ab.a_panel.toolbar, ab.b_panel.toolbar),
+                     (ab.a_panel.viewport_frame, ab.b_panel.viewport_frame),
                      (ab.preview.canvas, window.preview_label.canvas),
                      (ab.preview._status_label, window.preview_label._status_label)):
             left, right = geometry(a, window), geometry(b, window)
@@ -36,11 +36,24 @@ def assert_aligned(window):
 def test_matching_rows_on_empty_loading_single_and_compare_views(window):
     window.show()
     ab = window.ab_preview
-    assert ab.a_panel.isHidden() and ab.b_header.isHidden()
+    assert ab.a_panel.isHidden()
     assert not ab.b_panel.toolbar.isHidden()
+    assert ab.b_panel.filename.parentWidget() is ab.b_panel.toolbar
+    assert ab.b_panel.name_label.parentWidget() is ab.b_panel.toolbar
+    assert 'transparent' in ab.b_panel.viewport_frame.styleSheet()
     assert window.auto_focus_center_check.parentWidget() is ab.b_panel.toolbar
     assert window.preview_scale_combo.parentWidget() is ab.b_panel.toolbar
     ab.enabled.setChecked(True)
+    assert_aligned(window)
+    assert '#2196f3' in ab.b_panel.viewport_frame.styleSheet()
+    assert 'transparent' in ab.a_panel.viewport_frame.styleSheet()
+    assert ab.b_panel.name_label.text() == 'B · 当前'
+    assert ab.a_panel.filename.parentWidget() is ab.a_panel.toolbar
+    assert ab.a_panel.name_label.parentWidget() is ab.a_panel.toolbar
+    ab.activate('a')
+    assert '#2196f3' in ab.a_panel.viewport_frame.styleSheet()
+    assert 'transparent' in ab.b_panel.viewport_frame.styleSheet()
+    assert ab.a_panel.name_label.text() == 'A · 当前'
     assert_aligned(window)
     assert not ab.a_panel.fit.isEnabled()
     assert not ab.a_panel.scale.isEnabled()
@@ -49,8 +62,9 @@ def test_matching_rows_on_empty_loading_single_and_compare_views(window):
     assert not ab.a_panel.toolbar.isHidden()
     assert not ab.b_panel.toolbar.isHidden()
     ab.enabled.setChecked(False)
-    assert ab.a_panel.isHidden() and ab.b_header.isHidden()
+    assert ab.a_panel.isHidden()
     assert not ab.b_panel.toolbar.isHidden()
+    assert 'transparent' in ab.b_panel.viewport_frame.styleSheet()
     ab.enabled.setChecked(True)
     assert_aligned(window)
 

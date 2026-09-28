@@ -123,7 +123,7 @@ def test_input_widgets_and_a_canvas_do_not_navigate_b(window, monkeypatch):
     ab.enabled.setChecked(True)
     wait_until(lambda: ab.worker is None and not ab.pending)
     # A 激活后快捷键导航 A，不能经窗口冒泡触发 B 切图。
-    QTest.mouseClick(ab.a_panel.header, Qt.MouseButton.LeftButton)
+    QTest.mouseClick(ab.a_panel.toolbar, Qt.MouseButton.LeftButton)
     QTest.keyClick(ab.preview.canvas, Qt.Key.Key_Down)
     assert ab.path == paths[1] and window.current_path == paths[0]
     wait_until(lambda: ab.worker is None and not ab.pending)

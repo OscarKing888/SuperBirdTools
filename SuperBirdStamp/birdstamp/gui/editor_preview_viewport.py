@@ -1,6 +1,6 @@
-"""A/B 共用视口：照片标题、模式/视野工具栏、画布和状态栏。"""
-from PyQt6.QtCore import QEvent, pyqtSignal
-from PyQt6.QtWidgets import QButtonGroup, QComboBox, QHBoxLayout, QLabel, QPushButton, QSizePolicy, QToolButton, QVBoxLayout, QWidget
+"""A/B 共用视口：照片信息及操作工具栏、画布和状态栏。"""
+from PyQt6.QtCore import QEvent, Qt, pyqtSignal
+from PyQt6.QtWidgets import QButtonGroup, QComboBox, QFrame, QHBoxLayout, QLabel, QPushButton, QSizePolicy, QToolButton, QVBoxLayout, QWidget
 
 from app_common.preview_canvas import configure_preview_scale_preset_combo, sync_preview_scale_preset_combo
 from . import editor_options
@@ -47,15 +47,13 @@ class PreviewViewportPanel(QWidget):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(6)
-        self.header, head = self._row()
+        self.toolbar, tools = self._row()
         self.name_label = QLabel(name)
-        head.addWidget(self.name_label)
+        tools.addWidget(self.name_label)
         self.filename = QLabel('未选择')
         self.filename.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
-        head.addWidget(self.filename, 1)
-        layout.addWidget(self.header)
-
-        self.toolbar, tools = self._row()
+        self.filename.setMinimumWidth(0)
+        tools.addWidget(self.filename, 1)
         self.mode = PreviewModeButtons()
         tools.addWidget(self.mode)
         self.center = center if center is not None else QToolButton()
@@ -79,14 +77,20 @@ class PreviewViewportPanel(QWidget):
             preview.display_scale_percent_changed.connect(self._sync_scale)
             self._sync_scale(preview.current_display_scale_percent())
         tools.addWidget(self.scale)
-        tools.addStretch(1)
         layout.addWidget(self.toolbar)
-        layout.addWidget(preview, 1)
+        self.viewport_frame = QFrame()
+        self.viewport_frame.setObjectName('ABViewportFrame')
+        frame_layout = QVBoxLayout(self.viewport_frame)
+        frame_layout.setContentsMargins(2, 2, 2, 2)
+        frame_layout.setSpacing(0)
+        frame_layout.addWidget(preview)
+        layout.addWidget(self.viewport_frame, 1)
+        self._filename = '未选择'
+        self.set_active(False)
 
         # 长状态文本不能撑开其中一个视口；保持单行等高，完整内容仍可悬停查看。
         preview._status_label.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
         preview._status_label.installEventFilter(self)
-        self.header.installEventFilter(self)
         self.toolbar.installEventFilter(self)
         preview.display_scale_percent_changed.connect(self._update_available)
         self._update_available()
@@ -94,14 +98,23 @@ class PreviewViewportPanel(QWidget):
             widget.installEventFilter(self)
 
     def set_path(self, path):
-        self.filename.setText(path.name if path else '未选择')
+        self._filename = path.name if path else '未选择'
+        self._elide_filename()
         self.filename.setToolTip(str(path) if path else '')
 
-    def set_active(self, active):
-        self.name_label.setText(f'{self.name} · 当前' if active else self.name)
-        self.name_label.setStyleSheet('color: #2196f3; font-weight: 600;' if active else '')
-        self.header.setToolTip('当前视图响应照片列表选择' if active else '点击激活此视图，再从照片列表选图')
+    def set_active(self, active, *, compare_mode=True):
+        highlighted = active and compare_mode
+        self.name_label.setText(f'{self.name} · 当前' if highlighted else self.name)
+        self.name_label.setStyleSheet('color: #2196f3; font-weight: 600;' if highlighted else '')
+        color = '#2196f3' if highlighted else 'transparent'
+        self.viewport_frame.setStyleSheet(f'QFrame#ABViewportFrame {{ border: 2px solid {color}; }}')
+        self.toolbar.setToolTip('当前视图响应照片列表选择' if highlighted else '点击激活此视图，再从照片列表选图')
         self.metrics_changed.emit()
+
+    def _elide_filename(self):
+        width = self.filename.contentsRect().width()
+        self.filename.setText(self.filename.fontMetrics().elidedText(
+            self._filename, Qt.TextElideMode.ElideMiddle, max(0, width)))
 
     @staticmethod
     def _row():
@@ -130,6 +143,8 @@ class PreviewViewportPanel(QWidget):
     def eventFilter(self, watched, event):
         if event.type() in (QEvent.Type.MouseButtonPress, QEvent.Type.FocusIn):
             self.activated.emit()
+        if watched is self.filename and event.type() in (QEvent.Type.Resize, QEvent.Type.FontChange):
+            self._elide_filename()
         if watched is self.preview._status_label and event.type() == QEvent.Type.ToolTip:
             watched.setToolTip(watched.text())
         if event.type() in (QEvent.Type.LayoutRequest, QEvent.Type.FontChange, QEvent.Type.StyleChange):
@@ -145,7 +160,7 @@ def align_viewport_rows(first, second):
         for widget in widgets:
             if widget.minimumWidth() != width or widget.maximumWidth() != width:
                 widget.setFixedWidth(width)
-    for key in ('header', 'toolbar'):
+    for key in ('toolbar',):
         widgets = (getattr(first, key), getattr(second, key))
         height = max(widget.layout().sizeHint().height() for widget in widgets)
         for widget in widgets:

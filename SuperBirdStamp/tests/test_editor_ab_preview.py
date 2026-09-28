@@ -31,19 +31,19 @@ def test_photo_list_refreshes_only_clicked_active_view(window, monkeypatch):
     assert ab.path == paths[0]
     assert ab.image is not None
     assert not hasattr(ab, 'pin') and not hasattr(ab.a_panel, 'photos') and not hasattr(ab.b_panel, 'photos')
-    QTest.mouseClick(ab.a_panel.header, Qt.MouseButton.LeftButton)
+    QTest.mouseClick(ab.a_panel.toolbar, Qt.MouseButton.LeftButton)
     assert ab.active_side == 'a'
     window.photo_list.setCurrentItem(window._find_photo_item_by_path(paths[1]))
     finish(ab)
     assert ab.path == paths[1]
     assert window.current_path == paths[0]
-    QTest.mouseClick(ab.b_panel.header, Qt.MouseButton.LeftButton)
+    QTest.mouseClick(ab.b_panel.toolbar, Qt.MouseButton.LeftButton)
     assert ab.active_side == 'b'
     window.photo_list.setCurrentItem(window._find_photo_item_by_path(paths[1]))
     wait_until(lambda: window._preview_decode_worker is None)
     assert window.current_path == paths[1]
     assert ab.path == paths[1]
-    QTest.mouseClick(ab.a_panel.header, Qt.MouseButton.LeftButton)
+    QTest.mouseClick(ab.a_panel.toolbar, Qt.MouseButton.LeftButton)
     window.photo_list.setCurrentItem(window._find_photo_item_by_path(paths[0]))
     finish(ab)
     window.export_tabs.setCurrentWidget(window.dejitter_page)
