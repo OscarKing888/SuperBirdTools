@@ -913,6 +913,9 @@ class _BirdStampDejitterMixin:
             self._validate_sequence_preview()
         source = self.current_source_image
         quick = self._sequence_quick_frames.get(path_key(self.current_path)) if self.current_path and (source is None or self._sequence_fast_preview_active()) else None
+        source_entry = (self.sequence_transport.source_preview(self.current_path)
+                        if self.current_path and source is None and quick is None
+                        and hasattr(self, 'sequence_transport') else None)
         raw_metadata = self.current_raw_metadata
         if self._sequence_preview is not None and self.current_path is not None:
             job = self._sequence_preview.jobs.get(path_key(self.current_path))
@@ -953,8 +956,9 @@ class _BirdStampDejitterMixin:
                 self._dejitter_reference_regions, self._tracking_diagnostics_for_path(self.current_path) if can_edit else tracked)
         options.show_reference_regions = bool(state.reference_regions or state.reference_diagnostics)
         self.preview_label.apply_overlay_options(options)
-        if source is not None or quick is not None:
-            width, height = quick.source_size if quick else self._crop_display_source_size() or source.size
+        if source is not None or quick is not None or source_entry is not None:
+            width, height = (quick.source_size if quick else source_entry[1] if source_entry is not None
+                             else self._crop_display_source_size() or source.size)
             state.focus_box = editor_core.resolve_focus_box_after_processing(
                 raw_metadata, source_width=width, source_height=height, crop_box=None,
                 outer_pad=(0, 0, 0, 0), apply_ratio_crop=False,
@@ -967,7 +971,16 @@ class _BirdStampDejitterMixin:
         if source is not self._dejitter_edit_source:
             self._dejitter_edit_source = source
             self._dejitter_edit_pixmap = pil_to_qpixmap(source) if source is not None else None
-        pixmap = QPixmap.fromImage(quick.source_image) if quick else self._dejitter_edit_pixmap
+        if quick is not None:
+            pixmap = QPixmap.fromImage(quick.source_image)
+        elif source_entry is not None:
+            source_image, _ = source_entry
+            try:
+                pixmap = pil_to_qpixmap(source_image)
+            finally:
+                source_image.close()
+        else:
+            pixmap = self._dejitter_edit_pixmap
         self.preview_label.set_source_pixmap(pixmap,
                                              reset_view=reset_view, preserve_view=preserve_view,
                                              preserve_scale=preserve_view)

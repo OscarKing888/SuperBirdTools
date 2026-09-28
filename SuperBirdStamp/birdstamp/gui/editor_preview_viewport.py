@@ -1,6 +1,6 @@
 """A/B 共用视口：照片信息及操作工具栏、画布和状态栏。"""
 from PyQt6.QtCore import QEvent, Qt, pyqtSignal
-from PyQt6.QtWidgets import QButtonGroup, QComboBox, QFrame, QHBoxLayout, QLabel, QPushButton, QSizePolicy, QToolButton, QVBoxLayout, QWidget
+from PyQt6.QtWidgets import QButtonGroup, QComboBox, QFrame, QHBoxLayout, QLabel, QPushButton, QSizePolicy, QStyle, QToolButton, QVBoxLayout, QWidget
 
 from app_common.preview_canvas import configure_preview_scale_preset_combo, sync_preview_scale_preset_combo
 from . import editor_options
@@ -54,6 +54,11 @@ class PreviewViewportPanel(QWidget):
         self.filename.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
         self.filename.setMinimumWidth(0)
         tools.addWidget(self.filename, 1)
+        self.play = QToolButton()
+        self.play.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_MediaPlay))
+        self.play.setToolTip(f'播放 {name} 侧照片序列')
+        self.play.setAccessibleName(f'播放 {name} 侧照片序列')
+        tools.addWidget(self.play)
         self.mode = PreviewModeButtons()
         tools.addWidget(self.mode)
         self.center = center if center is not None else QToolButton()

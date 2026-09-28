@@ -29,7 +29,7 @@
 | [_BirdStampExporterMixin](../birdstamp/gui/editor_exporter.py) | 图片/GIF 导出的目标分配、作业调度、进度与错误展示。 |
 | [_BirdStampDejitterMixin](../birdstamp/gui/editor_dejitter.py) | 导出组的去抖动标签页、原生编辑/成片 Tab、整组分析签名与快/清晰两级有界成片缓存、共享画布辅助层映射。 |
 | [ABPreview](../birdstamp/gui/editor_ab_preview.py) | 独立 A/B 对照：预览工具栏「显示裁切效果」前的分屏图标开关带悬停提示；点击激活侧接收照片列表选择，原图/成片独立切换及可选视野联动；A 保持单 worker 所有权，B 保留原编辑上下文。 |
-| [SequenceTransport](../birdstamp/gui/editor_sequence_transport.py) | 成片播放面板、缩略图条、照片列表同步；普通编辑页首次按键用原生选择和快速小图，长按由精确定时器驱动，物理松键仅为最终照片提交一次清晰预览。小图缓存未命中时由后台解码。 |
+| [SequenceTransport](../birdstamp/gui/editor_sequence_transport.py) | 原图/成片共用播放条、帧率、循环和缩略图条；A/B 每侧按钮激活本侧，播放只切换该侧。原图未分析时由 [SourceQuickLoader](../birdstamp/gui/editor_source_quick_loader.py) 后台准备有界小图，停播后升级清晰帧。普通编辑页方向键首次按下用小图，长按由精确定时器驱动，物理松键提交最终清晰预览。 |
 | [_BirdStampReferenceTrackingMixin](../birdstamp/gui/editor_reference_tracking.py) | 多参考区预处理、结果签名与失效、切图跟踪预览及工作线程所有权。 |
 | [_BirdStampWorkspaceMixin](../birdstamp/gui/editor_workspace.py) | 工作区序列化、增量恢复、自动保存、文件菜单最近工作区记录及恢复期间的保存门控。最近列表保存在用户目录的 `editor_export_state.json`，只记录成功加载或手动保存的工作区；自动保存不进入列表。 |
 

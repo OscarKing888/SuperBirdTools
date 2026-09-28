@@ -866,6 +866,8 @@ class _BirdStampRendererMixin:
     ) -> None:
         if hasattr(self, "ab_preview"):
             self.ab_preview.sync()
+        if hasattr(self, "sequence_transport") and not self.sequence_transport.selecting:
+            self.sequence_transport.sync()
         if self._show_dejitter_edit_preview(reset_view=reset_view, preserve_view=preserve_view) or self._show_sequence_preview_result(reset_view=reset_view, preserve_view=preserve_view):
             return
         display_pixmap: QPixmap | None = self.preview_pixmap

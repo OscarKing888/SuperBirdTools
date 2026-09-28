@@ -75,7 +75,7 @@ class ABPreview(QObject):
         layout.addWidget(self.splitter, 1)
         self.a_panel.setVisible(self.enabled.isChecked())
         self.enabled.toggled.connect(self._toggle)
-        self.mode.currentIndexChanged.connect(lambda: self.sync(force=True))
+        self.mode.currentIndexChanged.connect(self._on_a_mode_changed)
         self.a_panel.activated.connect(lambda: self.activate('a'))
         self.b_panel.activated.connect(lambda: self.activate('b'))
         from .editor_ab_view_link import ABViewLink
@@ -116,6 +116,11 @@ class ABPreview(QObject):
         self.activate('b')
         self.editor._set_dejitter_view('result' if index == 1 else 'edit')
 
+    def _on_a_mode_changed(self, _index):
+        self.editor.sequence_transport.stop(commit=False)
+        self.sync(force=True)
+        self.editor.sequence_transport.sync()
+
     def _toggle(self, enabled):
         self.a_panel.setVisible(enabled)
         self._update_active_panels()
@@ -131,9 +136,19 @@ class ABPreview(QObject):
             self.activate('b')
         self.editor._restore_selected_preview_source()
         self.editor._refresh_preview_label(preserve_view=True)
+        self.editor.sequence_transport.sync()
 
     def selected_path(self):
         return self.path if self.enabled.isChecked() and self.active_side == 'a' else self.editor.current_path
+
+    def bind_transport(self, transport):
+        self.a_panel.play.clicked.connect(lambda: self._play_side('a'))
+        self.b_panel.play.clicked.connect(lambda: self._play_side('b'))
+        transport.sync()
+
+    def _play_side(self, side):
+        self.activate(side)
+        self.editor.sequence_transport.toggle()
 
     def activate(self, side, *, sync_selection=True):
         if self.stopping or (side == 'a' and not self.enabled.isChecked()) or side == self.active_side:
@@ -228,6 +243,14 @@ class ABPreview(QObject):
             self.image = frame.image if result else frame.source_image
             self.size = frame.source_size
             self.frame = frame if result else None
+        elif not result and hasattr(editor, 'sequence_transport'):
+            source_entry = editor.sequence_transport.source_preview(self.path)
+            if source_entry is not None:
+                source_image, self.size = source_entry
+                try:
+                    self.image = pil_qimage(source_image)
+                finally:
+                    source_image.close()
         if result and (sequence is None or key not in sequence.jobs):
             self.preview.set_source_mode('成片待分析 · 可切回原图对照')
             return

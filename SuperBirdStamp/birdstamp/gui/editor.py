@@ -2048,6 +2048,7 @@ class BirdStampEditorWindow(
         )
         from .editor_sequence_transport import SequenceTransport
         self.sequence_transport = SequenceTransport(self)
+        self.ab_preview.bind_transport(self.sequence_transport)
         right_layout.addWidget(self.sequence_transport.panel)
 
         return right_panel
@@ -2679,7 +2680,7 @@ class BirdStampEditorWindow(
         playback_fps = max(playback.minimum(), min(playback.maximum(), fps_value))
         playback.setValue(playback_fps)
         self._set_status(
-            f"已根据 {timestamp_count} 张照片的拍摄时间计算成片回放 FPS：{playback_fps}（原始 {fps:.2f}）。"
+            f"已根据 {timestamp_count} 张照片的拍摄时间计算序列回放 FPS：{playback_fps}（原始 {fps:.2f}）。"
         )
 
     def _confirm_video_output_overwrite(self, output_path: Path) -> bool:
@@ -2734,6 +2735,7 @@ class BirdStampEditorWindow(
             event.ignore()
             return
         ab_stopped = self.ab_preview.shutdown()
+        source_preview_stopped = self.sequence_transport.shutdown()
         self._invalidate_reference_tracking("正在停止参考区预处理…", shutdown=True)
         self._invalidate_sequence_preview(shutdown=True)
         self._cancel_async_bird_detect(shutdown=True)
@@ -2759,7 +2761,7 @@ class BirdStampEditorWindow(
         ) or (
             metadata_worker is not None
             and metadata_worker.isRunning()
-        ) or pending_metadata_running or not self._exiftool_shutdown_done.is_set() or not ab_stopped or not discovery_stopped or self._reference_tracking_worker is not None or self._sequence_worker is not None:
+        ) or pending_metadata_running or not self._exiftool_shutdown_done.is_set() or not ab_stopped or not source_preview_stopped or not discovery_stopped or self._reference_tracking_worker is not None or self._sequence_worker is not None:
             self._set_status("正在安全结束后台任务...")
             event.ignore()
             QTimer.singleShot(100, self.close)
@@ -4924,7 +4926,7 @@ class BirdStampEditorWindow(
         if self._select_sequence_preview(path):
             return
         transport = getattr(self, "sequence_transport", None)
-        quick_only = bool(transport is not None and transport.mode == "ordinary_keys")
+        quick_only = bool(transport is not None and transport.mode in ("ordinary_keys", "source_play"))
         if not path.exists():
             self._show_error("文件不存在", str(path))
             return
@@ -4933,10 +4935,11 @@ class BirdStampEditorWindow(
         token = self._preview_decode_token
         self._cancel_async_bird_detect()
         self._begin_photo_selection(path, current, preserve_preview_view=quick_only)
-        cached = self._cached_preview_image(path)
+        source_entry = transport.source_preview(path) if quick_only and transport is not None else None
+        cached = source_entry[0] if source_entry is not None else self._cached_preview_image(path)
         if cached is not None:
             signature = self._preview_image_cache_signature(path)
-            full_size = self._preview_source_size_cache.get(signature, cached.size)
+            full_size = source_entry[1] if source_entry is not None else self._preview_source_size_cache.get(signature, cached.size)
             if quick_only:
                 cached.thumbnail((512, 512), Image.Resampling.BILINEAR)
             worker = getattr(self, "_preview_decode_worker", None)
@@ -5061,11 +5064,11 @@ class BirdStampEditorWindow(
                 path,
                 cached,
                 self._preview_source_size_cache.get(signature, cached.size),
-                quick=bool(transport is not None and transport.mode == "ordinary_keys"),
+                quick=bool(transport is not None and transport.mode in ("ordinary_keys", "source_play")),
             )
             return
         transport = getattr(self, "sequence_transport", None)
-        if transport is not None and transport.mode == "ordinary_keys":
+        if transport is not None and transport.mode in ("ordinary_keys", "source_play"):
             self._start_preview_decode_worker(token, path, quick_only=True)
         else:
             self._start_preview_decode_worker(token, path)

@@ -50,8 +50,117 @@ def test_native_tabs_and_filmstrip_real_selection(window, monkeypatch):
     transport.previous.click()
     assert window.current_path == paths[0]
     window.dejitter_view_tabs.setCurrentIndex(0)
-    assert transport.panel.isHidden()
+    assert not transport.panel.isHidden()
+    assert transport.strip.count() == len(paths)
+    assert transport.strip.item(0).text() == '1'
     wait_until(lambda: window._preview_decode_worker is None)
+
+
+def test_original_playback_controls_work_on_both_ab_sides_without_analysis(window, monkeypatch):
+    paths, _, _ = setup_tab(window, monkeypatch)
+    populate(window, paths)
+    window.export_tabs.setCurrentIndex(0)
+    assert window._sequence_preview is None
+    transport = window.sequence_transport
+    window.photo_list.setCurrentItem(window._find_photo_item_by_path(paths[1]))
+    assert not transport.panel.isHidden()
+    assert transport.strip.count() == len(paths)
+    assert transport.play.isEnabled() and window.ab_preview.b_panel.play.isEnabled()
+    window.photo_list.setCurrentItem(window._find_photo_item_by_path(paths[0]))
+
+    ab = window.ab_preview
+    ab.enabled.setChecked(True)
+    wait_until(lambda: ab.worker is None and not ab.pending)
+    ab.a_panel.play.click()
+    assert ab.active_side == 'a' and transport.mode == 'source_play'
+    transport.timer.stop()
+    transport._tick()
+    assert ab.path == paths[1] and window.current_path == paths[0]
+    wait_until(lambda: ab.image is not None and ab.path == paths[1])
+    assert ab.preview.canvas._source_pixmap is not None
+    source_entry = transport.source_preview(paths[1])
+    assert source_entry is not None and max(source_entry[0].size) <= 512
+    source_entry[0].close()
+    transport.stop()
+    wait_until(lambda: ab.worker is None and not ab.pending)
+    assert ab.image is not None and ab.path == paths[1]
+
+    ab.select_a(paths[0])
+    ab.b_panel.play.click()
+    assert ab.active_side == 'b' and transport.mode == 'source_play'
+    transport.timer.stop()
+    transport._tick()
+    assert window.current_path == paths[1] and ab.path == paths[0]
+    wait_until(lambda: window.current_source_image is not None and window._preview_is_quick)
+    assert window.preview_label.canvas._source_pixmap is not None
+    transport.stop()
+    wait_until(lambda: window._preview_decode_worker is None)
+
+
+def test_single_original_view_playback_stays_quick_until_pause(window, monkeypatch):
+    paths, _, _ = setup_tab(window, monkeypatch)
+    populate(window, paths)
+    window.export_tabs.setCurrentIndex(0)
+    transport = window.sequence_transport
+    transport.sync()
+    window.ab_preview.b_panel.play.click()
+    assert transport.mode == 'source_play'
+    transport.timer.stop()
+    transport._tick()
+    assert window.current_path == paths[1]
+    wait_until(lambda: window.current_source_image is not None and window._preview_is_quick)
+    transport.stop()
+    wait_until(lambda: window.current_source_image is not None and not window._preview_is_quick
+               and window._preview_decode_worker is None)
+
+
+def test_ab_play_buttons_follow_each_sides_original_or_result_mode(window, monkeypatch):
+    paths, _, _ = setup_tab(window, monkeypatch)
+    populate(window, paths)
+    analyze(window)
+    window._set_dejitter_view('edit')
+    ab = window.ab_preview
+    ab.enabled.setChecked(True)
+    wait_until(lambda: ab.worker is None and not ab.pending)
+    ab.mode.setCurrentIndex(1)
+    wait_until(lambda: ab.worker is None and not ab.pending)
+    assert ab.a_panel.play.isEnabled() and ab.b_panel.play.isEnabled()
+
+    ab.a_panel.play.click()
+    transport = window.sequence_transport
+    assert transport.mode == 'play' and ab.active_side == 'a'
+    transport.timer.stop()
+    transport._tick()
+    assert ab.path == paths[1] and window.current_path == paths[0]
+    transport.stop()
+
+    ab.select_a(paths[0])
+    ab.b_panel.play.click()
+    assert transport.mode == 'source_play' and ab.active_side == 'b'
+    transport.timer.stop()
+    transport._tick()
+    assert window.current_path == paths[1] and ab.path == paths[0]
+    transport.stop()
+    wait_until(lambda: window._preview_decode_worker is None and ab.worker is None)
+
+
+def test_unanalysed_dejitter_original_held_key_uses_source_frames(window, monkeypatch):
+    paths, _, _ = setup_tab(window, monkeypatch)
+    populate(window, paths)
+    assert window._sequence_preview is None
+    key(window, QEvent.Type.KeyPress, Qt.Key.Key_Down, True)
+    transport = window.sequence_transport
+    assert transport.mode == 'source_keys' and window.current_path == paths[1]
+    def quick_ready():
+        entry = transport.source_preview(paths[1])
+        if entry is None:
+            return False
+        entry[0].close()
+        return window.preview_label.canvas._source_pixmap is not None
+    wait_until(quick_ready)
+    key(window, QEvent.Type.KeyRelease, Qt.Key.Key_Down)
+    assert not transport.active
+    wait_until(lambda: window.current_source_image is not None and window._preview_decode_worker is None)
 
 
 def test_held_keys_use_quick_frames_until_physical_release(window, monkeypatch):
@@ -102,13 +211,13 @@ def test_play_timer_loop_pause_and_tab_change(window, monkeypatch):
     assert not transport.timer.isActive()
     transport.play.click()
     window.dejitter_view_tabs.setCurrentIndex(0)
-    assert not transport.active and transport.panel.isHidden()
+    assert not transport.active and not transport.panel.isHidden()
     wait_until(lambda: window._preview_decode_worker is None)
 
 
 def test_auto_fps_uses_capture_time_result_with_playback_limit(window, monkeypatch, tmp_path):
     transport = window.sequence_transport
-    transport.paths = [tmp_path / '第一张.jpg', tmp_path / '第二张.jpg']
+    populate(window, [tmp_path / '第一张.jpg', tmp_path / '第二张.jpg'])
     transport.sync()
     assert transport.auto_fps_button.text() == '自动'
     assert window.gif_export_panel.auto_fps_button.text() == '自动'

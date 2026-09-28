@@ -1,4 +1,5 @@
-"""成片播放与方向键节拍；只调度缓存画面，不在 GUI 线程读取照片。"""
+"""原图与成片播放；只调度缓存画面，不在 GUI 线程解码照片。"""
+from collections import OrderedDict
 from pathlib import Path
 
 from PyQt6.QtCore import QEvent, QObject, QSize, Qt, QTimer
@@ -10,6 +11,11 @@ from PyQt6.QtWidgets import (
 
 from . import editor_options
 from .editor_utils import path_key
+from .editor_source_quick_loader import SourceQuickLoader
+from .editor_sequence_preview_worker import pil_qimage
+
+
+_SOURCE_QUICK_CACHE_BYTES = 64 * 1024 * 1024
 
 
 class SequenceTransport(QObject):
@@ -21,6 +27,14 @@ class SequenceTransport(QObject):
         self.direction = 1
         self.key = None
         self.selecting = False
+        self._strip_kind = None
+        self._strip_paths = ()
+        self._source_strip_items = {}
+        self._source_cache = OrderedDict()
+        self._source_loader = None
+        self._source_shutdown = False
+        self._result_frames = {}
+        self._play_visual_state = None
         self.timer = QTimer(self)
         self.timer.setTimerType(Qt.TimerType.PreciseTimer)
         self.timer.timeout.connect(self._tick)
@@ -103,6 +117,14 @@ class SequenceTransport(QObject):
     def set_frames(self, sequence, frames):
         self.stop(commit=False)
         self.paths = [job.path for job in sequence.jobs.values()] if sequence else []
+        self._result_frames = dict(frames)
+        self._strip_kind = None
+        self.sync()
+
+    def _rebuild_result_strip(self, sequence):
+        self._strip_kind = 'result'
+        self._strip_paths = tuple(self.paths)
+        self._source_strip_items = {}
         self.strip.blockSignals(True)
         self.strip.clear()
         has_fallback = sequence and any(a.status == 'fallback' for a in sequence.alignments.values())
@@ -118,7 +140,7 @@ class SequenceTransport(QObject):
             alignment = sequence.alignments.get(key)
             if alignment and alignment.status == 'fallback':
                 item.setText(f'{index + 1} · 未纠正旋转')
-            frame = frames.get(key)
+            frame = self._result_frames.get(key)
             if frame:
                 item.setIcon(QIcon(QPixmap.fromImage(frame.image).scaled(
                     frame.image.size().boundedTo(self.strip.iconSize()), Qt.AspectRatioMode.KeepAspectRatio,
@@ -128,28 +150,148 @@ class SequenceTransport(QObject):
             if alignment:
                 item.setToolTip(item.toolTip() + '\n' + alignment.description())
         self.strip.blockSignals(False)
-        self.sync()
+
+    def _active_paths(self):
+        return self.paths if self.result_mode() else self.editor._list_photo_paths()
+
+    def _source_entry(self, path):
+        signature = self.editor._source_signature(Path(path))
+        entry = self._source_cache.get(signature)
+        if entry is None:
+            return None
+        self._source_cache.move_to_end(signature)
+        image, full_size = entry
+        return image.copy(), full_size
+
+    def source_preview(self, path):
+        return self._source_entry(path) if path is not None else None
+
+    def _request_source_frames(self):
+        if self._source_shutdown:
+            return
+        paths = self.editor._list_photo_paths()
+        if not paths:
+            return
+        index = self.index()
+        if index < 0:
+            index = 0
+        near = [paths[(index + offset) % len(paths)] for offset in range(min(8, len(paths)))]
+        entries = [(self.editor._source_signature(path), path) for path in near]
+        entries = [(signature, path) for signature, path in entries if signature not in self._source_cache]
+        if not entries:
+            return
+        if self._source_loader is None:
+            loader = SourceQuickLoader(self)
+            loader.ready.connect(self._on_source_ready)
+            self._source_loader = loader
+            loader.enqueue(entries)
+            loader.start()
+        else:
+            self._source_loader.enqueue(entries)
+
+    def _source_icon(self, image):
+        pixmap = QPixmap.fromImage(pil_qimage(image))
+        return QIcon(pixmap.scaled(self.strip.iconSize(), Qt.AspectRatioMode.KeepAspectRatio,
+                                   Qt.TransformationMode.SmoothTransformation))
+
+    def _on_source_ready(self, signature, path_text, image, full_size):
+        if self._source_shutdown or signature != self.editor._source_signature(Path(path_text)):
+            image.close()
+            return
+        old = self._source_cache.pop(signature, None)
+        if old is not None:
+            old[0].close()
+        self._source_cache[signature] = (image, tuple(full_size))
+        total = sum(frame.width * frame.height * 4 for frame, _ in self._source_cache.values())
+        while len(self._source_cache) > 1 and total > _SOURCE_QUICK_CACHE_BYTES:
+            old_signature, (evicted, _) = self._source_cache.popitem(last=False)
+            total -= evicted.width * evicted.height * 4
+            evicted.close()
+            old_item = self._source_strip_items.get(old_signature)
+            if old_item is not None and path_key(old_item[1]) not in self.editor._sequence_quick_frames:
+                old_item[0].setIcon(QIcon())
+        if self._strip_kind == 'source':
+            item = self._source_strip_items.get(signature)
+            if item is not None:
+                item[0].setIcon(self._source_icon(image))
+        selected = self.editor.ab_preview.selected_path()
+        if (self.mode in ('source_play', 'source_keys') and selected is not None
+                and path_key(selected) == path_key(Path(path_text))):
+            ab = self.editor.ab_preview
+            if ab.enabled.isChecked() and ab.active_side == 'a':
+                ab.sync(force=True)
+            elif self.editor._dejitter_tab_active() or ab.enabled.isChecked():
+                self.editor._refresh_preview_label(preserve_view=True)
+            elif self.editor.current_source_image is None:
+                self.editor._on_quick_preview_ready(
+                    self.editor._preview_decode_token, path_text, image.copy(), tuple(full_size))
+
+    def _rebuild_source_strip(self, paths):
+        self._strip_kind = 'source'
+        self._strip_paths = tuple(paths)
+        self._source_strip_items = {}
+        self.strip.blockSignals(True)
+        self.strip.clear()
+        self.strip.setGridSize(QSize(104, 84))
+        for index, path in enumerate(paths):
+            item = QListWidgetItem(str(index + 1))
+            item.setToolTip(path.name)
+            signature = self.editor._source_signature(path)
+            self._source_strip_items[signature] = (item, path)
+            frame = self.editor._sequence_quick_frames.get(path_key(path))
+            if frame is not None:
+                item.setIcon(QIcon(QPixmap.fromImage(frame.source_image).scaled(
+                    self.strip.iconSize(), Qt.AspectRatioMode.KeepAspectRatio,
+                    Qt.TransformationMode.SmoothTransformation)))
+            else:
+                entry = self._source_entry(path)
+                if entry is not None:
+                    image, _ = entry
+                    item.setIcon(self._source_icon(image))
+                    image.close()
+            self.strip.addItem(item)
+        self.strip.blockSignals(False)
+
+    def shutdown(self):
+        self._source_shutdown = True
+        self.stop(commit=False)
+        if self._source_loader is not None:
+            self._source_loader.stop()
+            if self._source_loader.isRunning():
+                return False
+        for image, _ in self._source_cache.values():
+            image.close()
+        self._source_cache.clear()
+        return True
 
     def index(self):
         current = self.editor.ab_preview.selected_path()
-        return next((i for i, path in enumerate(self.paths) if path == current), -1)
+        return next((i for i, path in enumerate(self._active_paths()) if path == current), -1)
 
     def sync(self):
+        if self._source_shutdown:
+            return
         self.editor.preview_label.canvas.setFocusPolicy(
             Qt.FocusPolicy.StrongFocus if self.editor._dejitter_tab_active() else self._ordinary_canvas_focus_policy)
+        source_mode = not self.result_mode()
+        paths = self._active_paths()
+        if source_mode and (self._strip_kind != 'source' or self._strip_paths != tuple(paths)):
+            self._rebuild_source_strip(paths)
+        elif not source_mode and (self._strip_kind != 'result' or self._strip_paths != tuple(paths)):
+            self._rebuild_result_strip(self.editor._sequence_preview)
         index = self.index()
         self.strip.blockSignals(True)
         self.strip.setCurrentRow(index)
         if index >= 0:
             self.strip.scrollToItem(self.strip.item(index))
         self.strip.blockSignals(False)
-        self.position.setText(f'{index + 1} / {len(self.paths)}')
+        self.position.setText(f'{index + 1} / {len(paths)}')
         sequence = self.editor._sequence_preview
-        if sequence is not None and 0 <= index < len(self.paths):
-            result = sequence.tracking.get(path_key(self.paths[index]))
+        if not source_mode and sequence is not None and 0 <= index < len(paths):
+            result = sequence.tracking.get(path_key(paths[index]))
             if result:
                 detail = f'当前第 {index + 1} 张：{result.matched_count}/{len(result.boxes)} 个选区匹配'
-                key = path_key(self.paths[index])
+                key = path_key(paths[index])
                 width, height = sequence.source_sizes[key]
                 output_width, output_height = sequence.output_size
                 padded = sequence.jobs[key].settings.get('dejitter_pad_to_union', False) is True
@@ -167,13 +309,20 @@ class SequenceTransport(QObject):
                     detail += '\n' + alignment.description()
                 self.editor.dejitter_tracking_status.setText(self.editor._sequence_message + '\n' + detail)
                 self.editor.dejitter_tracking_status.setToolTip(result.error)
-        ready = bool(self.paths) and not self.editor._sequence_exporting
-        self.play.setEnabled(ready and len(self.paths) > 1)
-        self.auto_fps_button.setEnabled(ready and len(self.paths) > 1)
+        ready = bool(paths) and not self.editor._sequence_exporting
+        self.play.setEnabled(ready and len(paths) > 1)
+        self.auto_fps_button.setEnabled(ready and len(paths) > 1)
         self.previous.setEnabled(ready and index > 0)
-        self.next.setEnabled(ready and index < len(self.paths) - 1)
+        self.next.setEnabled(ready and index < len(paths) - 1)
         self.strip.setEnabled(ready)
-        self.panel.setVisible(self.result_mode())
+        self.panel.setVisible(ready)
+        ab = self.editor.ab_preview
+        source_ready = len(self.editor._list_photo_paths()) > 1 and not self.editor._sequence_exporting
+        result_ready = len(self.paths) > 1 and not self.editor._sequence_exporting
+        ab.a_panel.play.setEnabled(ab.enabled.isChecked() and
+                                   (result_ready if ab.mode.currentIndex() == 1 else source_ready))
+        ab.b_panel.play.setEnabled(result_ready if self.editor._sequence_result_mode() else source_ready)
+        self._update_play_button()
 
     def result_mode(self):
         ab = self.editor.ab_preview
@@ -181,14 +330,18 @@ class SequenceTransport(QObject):
                 else self.editor._sequence_result_mode())
 
     def _select(self, index):
-        if not 0 <= index < len(self.paths):
+        paths = self._active_paths()
+        if not 0 <= index < len(paths):
             return
         self.selecting = True
         try:
-            path = self.paths[index]
+            path = paths[index]
             item = self.editor._find_photo_item_by_path(path)
             if item is not None:
-                self.editor.photo_list.setCurrentItem(item)
+                if item is self.editor.photo_list.currentItem():
+                    self.editor.ab_preview.route_photo_selection(path)
+                else:
+                    self.editor.photo_list.setCurrentItem(item)
                 self.editor.photo_list._tree_widget.scrollToItem(item)
             else:
                 if not self.editor.ab_preview.route_photo_selection(path):
@@ -205,20 +358,32 @@ class SequenceTransport(QObject):
 
     def step(self, direction):
         self.stop(commit=False)
-        self._select(max(0, min(len(self.paths) - 1, self.index() + direction)))
+        paths = self._active_paths()
+        self._select(max(0, min(len(paths) - 1, self.index() + direction)))
 
     def toggle(self):
         if self.active:
             self.stop()
             return
-        if len(self.paths) < 2 or not self.editor._validate_sequence_preview():
+        paths = self._active_paths()
+        if len(paths) < 2 or (self.result_mode() and not self.editor._validate_sequence_preview()):
             return
-        if self.index() == len(self.paths) - 1:
+        if self.index() == len(paths) - 1:
             self._select(0)
-        self.start('play', 1)
+        self.start('play' if self.result_mode() else 'source_play', 1)
 
     def start(self, mode, direction):
         self.mode, self.direction = mode, direction
+        if mode in ('source_play', 'source_keys'):
+            ab = self.editor.ab_preview
+            if ab.enabled.isChecked() and ab.active_side == 'a':
+                ab._cancel()
+            else:
+                self.editor._cancel_preview_decode()
+            self._request_source_frames()
+            self._update_play_button()
+            self.timer.start()
+            return
         self.editor._sequence_upgrade_timer.stop()
         worker = self.editor._sequence_worker
         # 分析/导出有自己的生命周期；这里只取消上一张的清晰预览任务。
@@ -229,12 +394,24 @@ class SequenceTransport(QObject):
         self.timer.start()
 
     def _update_play_button(self):
-        playing = self.mode == 'play'
+        playing = self.mode in ('play', 'source_play')
+        ab = self.editor.ab_preview
+        state = (playing, ab.active_side)
+        if state == self._play_visual_state:
+            return
+        self._play_visual_state = state
         label = '暂停' if playing else '播放序列'
         icon = QStyle.StandardPixmap.SP_MediaPause if playing else QStyle.StandardPixmap.SP_MediaPlay
         self.play.setIcon(self.play.style().standardIcon(icon))
         self.play.setToolTip(label)
         self.play.setAccessibleName(label)
+        for side, panel in (('a', ab.a_panel), ('b', ab.b_panel)):
+            side_playing = playing and ab.active_side == side
+            side_label = f'暂停 {side.upper()} 侧播放' if side_playing else f'播放 {side.upper()} 侧照片序列'
+            side_icon = QStyle.StandardPixmap.SP_MediaPause if side_playing else QStyle.StandardPixmap.SP_MediaPlay
+            panel.play.setIcon(panel.play.style().standardIcon(side_icon))
+            panel.play.setToolTip(side_label)
+            panel.play.setAccessibleName(side_label)
 
     def stop(self, *, commit=True):
         was_active = self.active
@@ -248,6 +425,9 @@ class SequenceTransport(QObject):
                 self.editor._on_photo_selected(item, None)
             elif not ordinary_keys:
                 self.editor._refresh_preview_label(preserve_view=True)
+            ab = self.editor.ab_preview
+            if ab.enabled.isChecked() and ab.active_side == 'a':
+                ab.sync(force=True)
 
     def _tick(self):
         if self.mode == 'ordinary_keys':
@@ -259,19 +439,24 @@ class SequenceTransport(QObject):
             else:
                 self.timer.stop()
             return
+        paths = self._active_paths()
         index = self.index() + self.direction
-        if not 0 <= index < len(self.paths):
-            if self.mode == 'play' and self.loop.isChecked() and self.paths:
-                index %= len(self.paths)
+        if not 0 <= index < len(paths):
+            if self.mode in ('play', 'source_play') and self.loop.isChecked() and paths:
+                index %= len(paths)
             else:
-                if self.mode == 'keys':
+                if self.mode in ('keys', 'source_keys'):
                     self.timer.stop()  # 到边界仍等物理松键，自动重复事件不能反复提交。
                 else:
                     self.stop()
                 return
         self._select(index)
+        if self.mode in ('source_play', 'source_keys'):
+            self._request_source_frames()
 
     def eventFilter(self, watched, event):
+        if self._source_shutdown:
+            return False
         kind = event.type()
         if kind in (QEvent.Type.WindowDeactivate, QEvent.Type.FocusOut, QEvent.Type.Hide):
             if self.active:
@@ -317,7 +502,7 @@ class SequenceTransport(QObject):
                 self._tick()
                 self.timer.start()
             return True
-        if not self.editor._dejitter_tab_active() or not self.paths or self.editor._sequence_exporting:
+        if not self.editor._dejitter_tab_active() or not self._active_paths() or self.editor._sequence_exporting:
             return False
         if kind not in (QEvent.Type.KeyPress, QEvent.Type.KeyRelease):
             return False
@@ -338,8 +523,9 @@ class SequenceTransport(QObject):
         if event.modifiers() != Qt.KeyboardModifier.NoModifier:
             return False
         if event.isAutoRepeat():
-            if self.mode != 'keys' or self.key != key:
-                self.start('keys', directions[key])
+            key_mode = 'keys' if self.result_mode() else 'source_keys'
+            if self.mode != key_mode or self.key != key:
+                self.start(key_mode, directions[key])
                 self.key = key
                 self._tick()
             return True
