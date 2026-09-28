@@ -41,6 +41,17 @@ def test_manual_position_cannot_be_outvoted_by_automatic_matches():
     assert select_translation(regions,conflicting,(100,100),(100,100)) is None
 
 
+def test_manual_anchor_keeps_rotated_automatic_evidence():
+    from test_region_consensus import rotated_matches
+
+    regions = ((.1,.1,.2,.2), (.7,.1,.8,.2), (.1,.7,.2,.8), (.7,.7,.8,.8))
+    boxes = rotated_matches(regions, 1.2)
+    tracked = RegionTrackingResult(boxes, scores=(.97,) * len(boxes))
+    corrected = apply_manual_boxes(tracked, (boxes[0], None, None, None))
+    translation = select_translation(regions, corrected, (1200,800), (1200,800))
+    assert translation is not None and translation[2] == (0,1,2,3)
+
+
 @pytest.mark.parametrize('change', ['source', 'reference', 'regions', 'bad_box'])
 def test_serialized_records_validate_files_and_reference_definition(sequence, change):
     seeds, result = sequence

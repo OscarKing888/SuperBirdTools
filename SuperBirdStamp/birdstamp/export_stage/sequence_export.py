@@ -16,6 +16,7 @@ from birdstamp.export_metadata import save_export_image, copy_export_sidecar
 from .sequence_export_workers import resolve_sequence_export_workers
 from .png_export_stage import PngExportStage
 from .sequence_preview import render_sequence_preview_frame
+from .sequence_intersection import intersection_export_sequence
 from .video_export_cancelled_error import VideoExportCancelledError
 
 _LOG = get_logger('sequence_export')
@@ -60,7 +61,7 @@ class SequenceExportAction(WorkerAction):
 
 
 def export_aligned_sequence(sequence, destination, *, output_format='png', cancel_event,
-                            progress=lambda message: None, render_workers=0,
+                            progress=lambda message: None, render_workers=0, intersection_only=False,
                             progress_counts=lambda current, total, stage: None):
     """有界并行导出；线程池退出后才回滚，避免迟到写入重新创建输出目录。"""
     if output_format not in {'png', 'jpg'}:
@@ -71,6 +72,8 @@ def export_aligned_sequence(sequence, destination, *, output_format='png', cance
         raise ValueError('当前仅有失败前的部分成片预览，请完成整组分析后再导出全部。')
     if not sequence.files_current():
         raise ValueError('照片已变化，请重新分析。')
+    if intersection_only:
+        sequence = intersection_export_sequence(sequence)
     source_paths = tuple(job.path for job in sequence.jobs.values())
     total = len(source_paths)
     if not total:

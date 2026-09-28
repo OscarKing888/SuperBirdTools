@@ -48,7 +48,8 @@ def test_cache_reloads_geometry_tracking_quick_and_sharp_without_recompute(seque
         assert restored[0][1][key].source_image == original.source_image
 
 
-@pytest.mark.parametrize('change', ['source', 'xmp', 'strength', 'regions', 'order', 'union', 'corrupt'])
+@pytest.mark.parametrize('change', ['source', 'xmp', 'strength', 'regions', 'order', 'union', 'corrupt', 'algorithm',
+                                    'match_mode', 'match_rotation', 'match_tolerance'])
 def test_stale_or_corrupt_cache_is_not_restored(sequence, tmp_path, monkeypatch, change):
     seeds, result = sequence
     cache = SequencePreviewCache(tmp_path / 'cache')
@@ -61,10 +62,16 @@ def test_stale_or_corrupt_cache_is_not_restored(sequence, tmp_path, monkeypatch,
         seeds = list(reversed(seeds))
     elif change == 'corrupt':
         (cache.root / result.input_key / 'quick-0.png').write_bytes(b'broken')
+    elif change == 'algorithm':
+        from birdstamp.export_stage import sequence_preview
+        monkeypatch.setattr(sequence_preview, 'SEQUENCE_ANALYSIS_VERSION', sequence_preview.SEQUENCE_ANALYSIS_VERSION+1)
     else:
         key, value = {'strength': ('dejitter_reference_strength', 30),
                       'regions': ('dejitter_reference_regions', [(0,0,.5,.5)]),
-                      'union': ('dejitter_pad_to_union', True)}[change]
+                      'union': ('dejitter_pad_to_union', True),
+                      'match_mode': ('dejitter_match_mode', 'custom'),
+                      'match_rotation': ('dejitter_match_rotation_deg', 3.0),
+                      'match_tolerance': ('dejitter_match_tolerance_pct', .5)}[change]
         seeds = [replace(seed, settings={**seed.settings, key: value}) for seed in seeds]
     monkeypatch.setattr(workers, 'prepare_sequence_preview', fail_recompute)
     results, quick, errors = run_worker(seeds, cache, restore_only=True)

@@ -9,6 +9,7 @@ from PyQt6.QtWidgets import QTabBar, QCheckBox, QComboBox, QFileDialog, QListWid
 from PyQt6.QtCore import Qt, QTimer
 
 from birdstamp.export_stage.sequence_preview import sequence_input_key
+from birdstamp.export_stage.sequence_intersection import normalized_intersection_box
 from birdstamp.image_dejitter.region_tracking_result import image_file_signature
 from birdstamp.image_dejitter.manual_region_matches import MANUAL_MATCHES_KEY
 from . import editor_core, editor_options
@@ -16,6 +17,7 @@ from .edit_modes import EDIT_MODE_NONE, EDIT_MODE_REFERENCE_REGION
 from .editor_preview_canvas import EditorPreviewOverlayState
 from .editor_sequence_preview_worker import EditorSequencePreviewWorker, EditorSequenceExportWorker
 from .sequence_preview_cache import SequencePreviewCache
+from .editor_matching_controls import DejitterMatchingControls
 from birdstamp.export_stage.render_job_seed import RenderJobSeed
 from .editor_utils import pil_to_qpixmap
 from .editor_utils import path_key
@@ -70,13 +72,22 @@ class _BirdStampDejitterMixin:
     def _collect_sequence_workspace_state(self):
         return dict(input_key=self._sequence_cache_key,
                     active=self._dejitter_tab_active(), view=self._dejitter_view,
+                    show_intersection=self.dejitter_show_intersection_check.isChecked(),
+                    export_intersection=self.dejitter_export_intersection_check.isChecked(),
                     open_export_workspace=self.dejitter_export_workspace_check.isChecked())
 
     def _restore_sequence_workspace_state(self, state):
-        self.dejitter_export_workspace_check.setChecked(
-            state.get('open_export_workspace', editor_options.DEJITTER_EXPORT_NEW_WORKSPACE) is True
-            if isinstance(state, dict) else editor_options.DEJITTER_EXPORT_NEW_WORKSPACE)
-        if not isinstance(state, dict) or not state.get('input_key') or self._sequence_shutdown:
+        if self._sequence_shutdown:
+            return
+        options = state if isinstance(state, dict) else {}
+        for checkbox, key, default in (
+                (self.dejitter_show_intersection_check, 'show_intersection', editor_options.DEJITTER_SHOW_INTERSECTION),
+                (self.dejitter_export_intersection_check, 'export_intersection', editor_options.DEJITTER_EXPORT_INTERSECTION),
+                (self.dejitter_export_workspace_check, 'open_export_workspace', editor_options.DEJITTER_EXPORT_NEW_WORKSPACE)):
+            blocked = checkbox.blockSignals(True)
+            checkbox.setChecked(options.get(key, default) is True)
+            checkbox.blockSignals(blocked)
+        if not isinstance(state, dict) or not state.get('input_key'):
             return
         self._sequence_restore_state = dict(state)
         # 异步读盘期间自动保存也保留引用，防止下次启动丢失已有分析。
@@ -149,11 +160,31 @@ class _BirdStampDejitterMixin:
         form.addWidget(hint)
         layout.addWidget(reference)
 
+        alignment_row = QHBoxLayout()
+        alignment_row.addWidget(QLabel('对齐方式'))
+        self.dejitter_alignment_combo = QComboBox()
+        self.dejitter_alignment_combo.addItem('平移＋旋转', 'rigid')
+        self.dejitter_alignment_combo.addItem('仅平移', 'translation')
+        self.dejitter_alignment_combo.setCurrentIndex(0 if editor_options.DEJITTER_ALIGNMENT_MODE == 'rigid' else 1)
+        self.dejitter_alignment_combo.setToolTip('对齐到参考图的角度和位置；旋转需要重采样。角度证据不足时退回平移并标记，原图不变。')
+        self.dejitter_alignment_combo.currentIndexChanged.connect(self._on_dejitter_matching_changed)
+        alignment_row.addWidget(self.dejitter_alignment_combo,1)
+        layout.addLayout(alignment_row)
+
+        self.dejitter_matching_controls = DejitterMatchingControls(editor_options.DEJITTER_MATCHING_DEFAULTS)
+        self.dejitter_matching_controls.changed.connect(self._on_dejitter_matching_changed)
+        layout.addWidget(self.dejitter_matching_controls)
+
         self.dejitter_pad_to_union_check = QCheckBox('补边保留完整画面（供二次裁切）')
         self.dejitter_pad_to_union_check.setChecked(editor_options.DEJITTER_PAD_TO_UNION)
         self.dejitter_pad_to_union_check.setToolTip('关闭：裁掉所有空白，取整组交集。开启：保留整组画面并集，统一画幅，缺失区域补黑。')
         self.dejitter_pad_to_union_check.toggled.connect(self._on_dejitter_options_changed)
         layout.addWidget(self.dejitter_pad_to_union_check)
+        self.dejitter_show_intersection_check = QCheckBox('成片预览显示最大交集范围框')
+        self.dejitter_show_intersection_check.setChecked(editor_options.DEJITTER_SHOW_INTERSECTION)
+        self.dejitter_show_intersection_check.setToolTip('显示整组共同有效画面的最大矩形；仅作辅助叠加，不写入成片。')
+        self.dejitter_show_intersection_check.toggled.connect(self._on_dejitter_intersection_options_changed)
+        layout.addWidget(self.dejitter_show_intersection_check)
         self.dejitter_preprocess_btn = QPushButton('分析并预览成片')
         self.dejitter_preprocess_btn.clicked.connect(self._on_reference_preprocess_clicked)
         layout.addWidget(self.dejitter_preprocess_btn)
@@ -169,6 +200,14 @@ class _BirdStampDejitterMixin:
         self.dejitter_tracking_status = QLabel()
         self.dejitter_tracking_status.setWordWrap(True)
         layout.addWidget(self.dejitter_tracking_status)
+        self.dejitter_intersection_status = QLabel('最大交集范围：待分析')
+        self.dejitter_intersection_status.setWordWrap(True)
+        layout.addWidget(self.dejitter_intersection_status)
+        self.dejitter_export_intersection_check = QCheckBox('仅导出最大交集范围')
+        self.dejitter_export_intersection_check.setChecked(editor_options.DEJITTER_EXPORT_INTERSECTION)
+        self.dejitter_export_intersection_check.setToolTip('导出范围与预览交集框一致；不改变当前补边预览，不需要重新匹配。')
+        self.dejitter_export_intersection_check.toggled.connect(self._on_dejitter_intersection_options_changed)
+        layout.addWidget(self.dejitter_export_intersection_check)
         output = QHBoxLayout()
         self.dejitter_output_format = QComboBox()
         formats = [(suffix, label) for suffix, label in editor_options.OUTPUT_FORMAT_OPTIONS
@@ -200,6 +239,18 @@ class _BirdStampDejitterMixin:
         self.dejitter_reference_check.toggled.connect(self._on_dejitter_options_changed)
         self.dejitter_reference_strength_slider.valueChanged.connect(self._on_dejitter_options_changed)
         return page
+
+    def _on_dejitter_matching_changed(self):
+        self._invalidate_reference_tracking('匹配参数已变化，请重新分析。')
+        self._sequence_message = '匹配参数已变化，请重新分析。'
+        self._update_dejitter_controls()
+        self._on_output_settings_changed()
+        self._schedule_workspace_autosave()
+
+    def _on_dejitter_intersection_options_changed(self):
+        self._update_dejitter_controls()
+        self._refresh_preview_label(preserve_view=True)
+        self._schedule_workspace_autosave()
 
     def _build_dejitter_view_bar(self):
         bar = QWidget()
@@ -407,8 +458,20 @@ class _BirdStampDejitterMixin:
                                                and (worker is not None or (self.current_path is not None and bool(regions))))
         sequence = self._sequence_preview
         partial = sequence is not None and sequence.partial
-        self.dejitter_export_btn.setEnabled(worker is None and sequence is not None and not partial and not self._sequence_shutdown)
-        self.dejitter_export_btn.setToolTip('当前仅保留失败前的成片预览，请完成整组分析后导出全部。' if partial else '')
+        box = sequence.intersection_box if sequence is not None else None
+        missing_intersection = sequence is not None and box is None
+        if box is not None:
+            label = '当前成功前缀最大交集' if partial else '最大交集范围'
+            detail = f'{label}：{box[2]-box[0]} × {box[3]-box[1]} 像素'
+        else:
+            detail = '整组没有共同有效区域，无法仅导出最大交集范围。' if sequence else '最大交集范围：待分析'
+        self.dejitter_intersection_status.setText(detail)
+        export_blocked = missing_intersection and self.dejitter_export_intersection_check.isChecked()
+        self.dejitter_export_intersection_check.setEnabled(not self._sequence_exporting)
+        self.dejitter_export_btn.setEnabled(worker is None and sequence is not None and not partial
+                                            and not export_blocked and not self._sequence_shutdown)
+        self.dejitter_export_btn.setToolTip('当前仅保留失败前的成片预览，请完成整组分析后导出全部。' if partial
+                                            else detail if export_blocked else '')
         self.dejitter_tracking_status.setText(self._sequence_message)
         if hasattr(self, 'sequence_transport'):
             self.sequence_transport.sync()
@@ -610,6 +673,10 @@ class _BirdStampDejitterMixin:
             self._sequence_message = (f'已生成前 {len(sequence.jobs)}/{len(sequence.all_jobs)} 张成片预览；'
                                       f'{kind} {sequence.output_size[0]} × {sequence.output_size[1]}。\n'
                                       f'后续分析失败：{sequence.failure}')
+        if sequence.alignments:
+            corrected = sum(a.status == 'rigid' for a in sequence.alignments.values())
+            fallback = sum(a.status == 'fallback' for a in sequence.alignments.values())
+            self._sequence_message += f'\n旋转估计成功 {corrected} 张，退回平移 {fallback} 张（未纠正旋转）。'
         self._reference_tracking_message = self._sequence_message
         self._set_status(self._sequence_message)
         self._update_dejitter_controls()
@@ -680,11 +747,22 @@ class _BirdStampDejitterMixin:
             )
             state = EditorPreviewOverlayState(focus_box=focus,
                                               bird_box=bird, crop_effect_box=(0, 0, 1, 1))
-            from .editor_tracking_overlay import tracking_overlays
-            state.reference_diagnostics = tracking_overlays(
-                self._dejitter_reference_regions, sequence.tracking.get(key),
-                source_normalized_crop(frame.source_size, sequence.pixel_boxes[key]))
+            from .editor_tracking_overlay import tracking_overlays, apply_frame_alignment
+            if frame.alignment and frame.alignment.rotated:
+                focus = editor_core.resolve_focus_box_after_processing(
+                    job.raw_metadata, source_width=width, source_height=height, crop_box=None,
+                    outer_pad=(0, 0, 0, 0), apply_ratio_crop=False,
+                    camera_type=editor_core.resolve_focus_camera_type_from_metadata(job.raw_metadata))
+                apply_frame_alignment(state, frame, focus,
+                    self._bird_box_cache.get(self._source_signature(self.current_path)),
+                    self._dejitter_reference_regions, sequence.tracking.get(key))
+            else:
+                state.reference_diagnostics = tracking_overlays(
+                    self._dejitter_reference_regions, sequence.tracking.get(key),
+                    source_normalized_crop(frame.source_size, sequence.pixel_boxes[key]))
             self.preview_label.set_original_size(*frame.source_size)
+            if self.dejitter_show_intersection_check.isChecked():
+                state.intersection_box = normalized_intersection_box(sequence)
             self.preview_label.set_cropped_size(*frame.output_size)
             pixmap = QPixmap.fromImage(frame.image)
         else:
@@ -752,6 +830,7 @@ class _BirdStampDejitterMixin:
             return
         worker = EditorSequenceExportWorker(token=self._sequence_epoch, sequence=sequence,
                                             destination=destination,
+                                            intersection_only=self.dejitter_export_intersection_check.isChecked(),
                                             output_format=self.dejitter_output_format.currentData(), parent=self)
         self._sequence_worker = worker
         self._sequence_exporting = True
@@ -815,6 +894,10 @@ class _BirdStampDejitterMixin:
                 state.crop_effect_box = source_normalized_crop(size, box)
                 state.alignment_crop_box = state.crop_effect_box
                 options.show_crop_effect = self.show_crop_effect_check.isChecked()
+            elif size and not self.dejitter_pad_to_union_check.isChecked():
+                from .editor_tracking_overlay import apply_alignment_crop
+                if apply_alignment_crop(state, self._sequence_preview, key):
+                    options.show_crop_effect = self.show_crop_effect_check.isChecked()
         if not editable:
             state.reference_diagnostics = tracking_overlays(
                 self._dejitter_reference_regions, self._tracking_diagnostics_for_path(self.current_path) if can_edit else tracked)

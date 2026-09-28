@@ -114,3 +114,41 @@ def test_logical_discovery_completion_keeps_thread_owned_until_finished(discover
     window.closeEvent(event)
     assert not event.isAccepted()
     assert window._pending_photo_input_discovery_workers == [worker]
+
+
+def test_close_cancels_exiftool_before_waiting_for_workers(discovery_window, monkeypatch):
+    window, worker = discovery_window
+    closing = threading.Event()
+    allow_close = threading.Event()
+    close_calls = []
+
+    def slow_exiftool_close():
+        close_calls.append(1)
+        closing.set()
+        allow_close.wait(2)
+
+    monkeypatch.setattr(editor, "close_exiftool_process", slow_exiftool_close)
+    try:
+        event = QCloseEvent()
+        started = time.monotonic()
+        window.closeEvent(event)
+        assert time.monotonic() - started < 0.5
+        assert not event.isAccepted()
+        assert closing.wait(1)
+
+        worker.finish_discovery.set()
+        worker.finish_thread.set()
+        assert QThread.wait(worker, 2000)
+        _APP.processEvents()
+        event = QCloseEvent()
+        window.closeEvent(event)
+        assert not event.isAccepted()
+
+        allow_close.set()
+        window._exiftool_shutdown_thread.join(1)
+        event = QCloseEvent()
+        window.closeEvent(event)
+        assert event.isAccepted()
+        assert close_calls == [1]
+    finally:
+        allow_close.set()

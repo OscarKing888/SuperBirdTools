@@ -8,7 +8,7 @@
 | --- | --- |
 | [entry.py](../entry.py) | `main` 补齐仓库导入路径，开发环境优先重启到仓库 `.venv`，再进入应用入口。 |
 | [main.py](../main.py) | `main` 配置启动日志、处理文件参数和已有实例转发，延迟导入 GUI。 |
-| [gui/editor.py](../birdstamp/gui/editor.py) | `launch_gui` 创建应用、窗口、FileOpen 处理和单实例接收器；窗口显示后安排启动恢复与文件导入。`aboutToQuit` 停止接收器并关闭 ExifTool 常驻进程。 |
+| [gui/editor.py](../birdstamp/gui/editor.py) | `launch_gui` 创建应用、窗口、FileOpen 处理和单实例接收器；窗口显示后安排启动恢复与文件导入。`closeEvent` 先取消元数据读取、在后台关闭 ExifTool，并等实际线程结束；`aboutToQuit` 停止接收器并再次执行幂等清理。 |
 | [cli.py](../birdstamp/cli.py) / [__main__.py](../birdstamp/__main__.py) | Typer 命令 `render`、`inspect`、`inspect-auto-proxy`、`init-config`、`gui`。适合批处理、字段路由诊断和无窗口验证。 |
 | [gui/editor_core.py](../birdstamp/gui/editor_core.py) / [decoders/image_decoder.py](../birdstamp/decoders/image_decoder.py) | 裁切、缩放等图像计算与原图/预览解码。部分可复用计算目前仍位于 `gui` 包内，不能仅凭目录名判断是否依赖窗口。 |
 | [image_pipeline](../birdstamp/image_pipeline/__init__.py) / [export_stage](../birdstamp/export_stage/__init__.py) | 处理阶段、单帧任务、批量预计算、帧缓存及视频编码。 |
@@ -61,7 +61,7 @@ A/B 的布局与显隐约定见 [A/B 预览工具栏布局](ux/AB_PREVIEW_LAYOUT
 
 普通格式解码在旋转/转色前缩小像素，并携带原尺寸和文件属性，避免再次打开 TIFF 读取尺寸。TIFF 原尺寸读取兼容 Pillow 已应用 Orientation 的情形，不能重复交换宽高。性能探针 `select.activate`、`select.render_preview`、`preview.cached_thumbnail`、`preview.source_size`、`preview.decode` 区分点击耗时和后台读取耗时。
 
-`BirdStampEditorWindow.closeEvent` 在视频导出仍运行时拒绝关闭并提示先停止；其他工作采用协作停止。只要预览、检测、元数据或发现线程仍在运行，窗口忽略本次关闭并通过定时器重试，不阻塞 GUI 等待发现线程。全部结束后才关闭工作区自动保存并接受关闭。修改这条路径时，应测试“业务完成信号已发出但线程尚未返回”的窗口期。
+`BirdStampEditorWindow.closeEvent` 在视频导出仍运行时拒绝关闭并提示先停止；其他工作采用协作停止。元数据加载器通过独立 ExifTool 会话和取消回调中断批量读取，关闭请求会在后台终止 ExifTool 子进程。只要预览、检测、元数据（包括待结束的旧加载器）、发现线程或 ExifTool 清理仍在运行，窗口忽略本次关闭并通过定时器重试，不阻塞 GUI 等待。全部结束后才关闭工作区自动保存并接受关闭。修改这条路径时，应测试“业务完成信号已发出但线程尚未返回”的窗口期。
 
 ## 3. 元数据与模板 provider
 
@@ -118,7 +118,13 @@ flowchart LR
 
 独立去抖动流程位于“导出 → 去抖动”标签页，右侧使用“编辑构图 / 成片预览”按钮组。编辑视图显示原图，不应用模板裁切与补边；多参考区使用各自原图的归一化坐标，A/B 两侧原图均可编辑；框内拖动，八手柄缩放，Shift 保持当前比例、Alt 围绕中心对称缩放（可组合）。参考图空白处 Shift 追加、右键删除及页内列表多选删除保留；目标图只修正对应编号的匹配位置，右键恢复自动匹配，不能重设参考图或增删编号。成片视图只展示诊断。路径/模式切换会取消未提交手势，拖动几何由 [reference_region_geometry.py](../birdstamp/gui/reference_region_geometry.py) 统一约束。
 
-[sequence_preview.py](../birdstamp/export_stage/sequence_preview.py) 通过 `ReferenceRegionTracker` 逐图匹配，由 [region_consensus.py](../birdstamp/image_dejitter/region_consensus.py) 选择可靠一致组，剔除离群和越界，不要求严格多数，一个可靠区即可对齐；小位移相位相关失败时，由 [RegionTemplateSearch](../birdstamp/image_dejitter/region_template_search.py) 执行有界整图相关搜索与局部细化；孤立遮挡帧仅在前后可靠结果限定的窗口内做参考子块证据核验，不使用插值代填，在原生像素坐标中求全部对齐画幅的最大公共矩形。默认取交集；`dejitter_pad_to_union` 开启时取整组画幅并集并补黑，原图不缩放。交集模式原图预览显示最终保留边界与面积比例；[sequence_geometry.py](../birdstamp/image_dejitter/sequence_geometry.py) 统一补边坐标、辅助层映射与有界快速预览。`SequencePreview` 保存输入签名、原始尺寸和各帧像素框；无法找到可靠组或默认模式无共同画面会明确失败，但保留逐区诊断供原图/A/B 检查。[editor_tracking_overlay.py](../birdstamp/gui/editor_tracking_overlay.py) 将成功黄框、失败红色预测框映射到原图或成片裁切坐标，画面外保留编号提示；该辅助层不写入独立导出。[ImageProcSequenceAlignStage](../birdstamp/image_pipeline/image_proc_stage/image_proc_sequence_align_stage.py) 在独立 `ImageProcPipeline` 中执行同一组裁切，`ImageProcContext` 提供辅助层所需几何。普通模板、尺寸限制及叠加不参与这条管线；“不裁切”不会禁用独立分析。
+[matching_options.py](../birdstamp/image_dejitter/matching_options.py) 的 `normalize_matching_settings` / `MatchingOptions.from_settings` 统一自动与自定义模式、有限数值校验和边界；跟踪、引导搜索、共识与最终公共裁切消费同一组有效参数。[DejitterMatchingControls](../birdstamp/gui/editor_matching_controls.py) 负责“自动（推荐）／高级自定义”、角度/短边百分比输入及恢复默认，初值由 `editor_options.json` 经资源解析器加载。参数随全局工作区状态保存，从逐图 override 排除，修改后取消旧分析并使跟踪/成片缓存失效；旧信号仍受 worker 身份及 epoch 检查。阶段参数描述由 `ImageProcSequenceAlignStage.parameter_options` 提供。回归见 [test_matching_options.py](../tests/test_matching_options.py)。
+
+[region_consensus._rotation_consistent_groups](../birdstamp/image_dejitter/region_consensus.py) 用至少三个分散实测区域核验轻微相机转动，默认不超过 2°、逐点容差为短边的 0.3%；高级模式可调整，证据数量及唯一性门槛保持不变。[rigid_alignment.estimate_alignment / FrameAlignment](../birdstamp/image_dejitter/rigid_alignment.py) 对获胜组进行无缩放的刚性最小二乘拟合，保存原图到参考图的变换、逆变换、实测／应用角度、支持选区和降级原因；强度围绕匹配组中心插值。至少三区才能估计旋转，证据不足退回整数平移，参考帧恒等。新工作区默认 `dejitter_alignment_mode=rigid`，旧工作区缺字段为 `translation`。邻帧遮挡恢复只提供搜索窗口，不能代填坐标或角度。分析算法版本和模式进入 `sequence_input_key`，升级后不复用旧磁盘结果。回归见 [test_rigid_alignment.py](../tests/test_rigid_alignment.py)、[test_rotation_ui.py](../tests/test_rotation_ui.py)、[test_region_consensus.py](../tests/test_region_consensus.py)。
+
+`SequencePreview.alignments / canvas_box` 是旋转模式的统一几何；只有不旋转的帧保留 `pixel_boxes`，不得由轴对齐源框反推旋转。[alignment_bounds.py](../birdstamp/image_dejitter/alignment_bounds.py) 对补边求四边形并集外接矩形并向外取整；对无补边求凸交集，扫描完整像素行区间，再用直方图最大矩形算法选取画布，同面积优先靠上、靠左。旋转采样边缘留 2 像素余量；逐帧检查是否尚有完整像素，保留首次失败归属及成功前缀。`render_alignment` 在原始分辨率以一次双三次采样合并旋转、平移与裁切，平移仍整数复制。快速／清晰帧和独立导出共用该几何。BirdStamp 本地画布扩展四边形焦点、鸟体、参考区及原图保留范围，构图网格裁剪在有效保留多边形内；不修改共享画布的网格模式及导出契约。缓存版本 2 保存变换和状态并验证刚性、角度、模式、画布一致性，缩略图及状态明确标记退回平移。
+
+[sequence_preview.py](../birdstamp/export_stage/sequence_preview.py) 通过 `ReferenceRegionTracker` 逐图匹配，由 [region_consensus.py](../birdstamp/image_dejitter/region_consensus.py) 选择可靠一致组，剔除离群和越界，不要求严格多数，一个可靠区即可平移对齐；小位移相位相关失败时，由 [RegionTemplateSearch](../birdstamp/image_dejitter/region_template_search.py) 执行有界整图相关搜索与局部细化。默认求整组交集最大矩形，`dejitter_pad_to_union` 开启时取并集外接矩形并补黑。交集模式原图预览显示最终保留边界与面积比例；[sequence_geometry.py](../birdstamp/image_dejitter/sequence_geometry.py) 保留仅平移时的补边和整数裁切。`SequencePreview` 保存输入签名、原始尺寸、逐帧变换和共同画布；无法找到可靠组或无共同画面会明确失败，但保留逐区诊断供原图/A/B 检查。[editor_tracking_overlay.py](../birdstamp/gui/editor_tracking_overlay.py) 将成功黄框、失败红色预测框映射到原图或成片坐标，画面外保留编号提示；该辅助层不写入独立导出。[ImageProcSequenceAlignStage](../birdstamp/image_pipeline/image_proc_stage/image_proc_sequence_align_stage.py) 在独立 `ImageProcPipeline` 中执行同一组对齐变换与裁切，`ImageProcContext.precomputed` 携带对应几何。普通模板、尺寸限制及叠加不参与这条管线；“不裁切”不会禁用独立分析。
 
 [manual_region_matches.py](../birdstamp/image_dejitter/manual_region_matches.py) 管理逐照片手动匹配记录，绑定参考选区定义和两张原图的文件签名；由工作区保存，进入逐图设置和分析缓存键。修改参考选区清空修正，原图变化使其失效。人工位置优先确定平移，自动结果只能补充一致证据；人工位置互相冲突仍保留失败诊断。所有编号均已指定时直接使用手动位置，部分指定时补充自动跟踪；邻帧核验不得覆盖人工位置。非 GUI 调用可在 `RenderJobSeed.settings['dejitter_manual_matches']` 传入 `manual_match_record()` 生成的记录，单图 CLI 不增加独立序列参数。回归见 [test_ab_region_edit.py](../tests/test_ab_region_edit.py)、[test_manual_region_matches.py](../tests/test_manual_region_matches.py)、[test_reference_region_handles.py](../tests/test_reference_region_handles.py)。
 
@@ -200,6 +206,8 @@ flowchart LR
 去抖动导出可选择保存原工作区并自动建立成片工作区。选项默认值来自 `editor_options.json` 的 `dejitter_export_new_workspace`，随 `editor_state.sequence_preview.open_export_workspace` 保存；启动导出时固定本次选项，成功清单来自核心 `sequence_export_targets`，不扫描输出目录。有效完成信号只记录清单，真实 `QThread.finished` 后才调用 [_BirdStampWorkspaceMixin._open_dejitter_export_workspace](../birdstamp/gui/editor_workspace.py)。它先原子保存原工作区和成片工作区，再复用现有增量恢复、选图和自动保存门控；原工作区保存失败或新文件创建失败均保留当前列表。未命名原工作区与新工作区存放在本次输出目录，同名自动加编号。[dejitter_export_workspace.py](../birdstamp/gui/dejitter_export_workspace.py) 独立构建成片工作区，保留模板/输出偏好，清空源照片的几何、参考区、手动匹配和缓存引用；按输出序号加载完整画幅并切回普通单图编辑。取消、过期及关闭时清除待切换状态。本功能处理当前窗口工作区，因此未新增 CLI 开关，核心图片导出 API 不变。真实 PNG/JPG 输出、工作区读回、延迟线程结束和保存失败回归见 [test_dejitter_export_workspace.py](../tests/test_dejitter_export_workspace.py)。
 
 磁盘缓存位于用户配置目录 `cache/sequence_preview`；默认总预算 512 MiB（`editor_options.json` 的 `dejitter_disk_cache_mb`），最多保留 8 组，优先淘汰旧清晰帧和旧组，保留当前组的有界快速预览。临时桶在完整写入后发布，取消/磁盘故障不丢弃内存分析。缓存属于本机派生数据，移动照片或只复制 workspace 到其他机器需要重新分析。回归见 [test_sequence_preview_cache.py](../tests/test_sequence_preview_cache.py)。
+
+[sequence_intersection.py](../birdstamp/export_stage/sequence_intersection.py) 从分析后的变换／整数像素框计算 `SequencePreview.intersection_box`（成片画布内的最大完整像素矩形，无共同区域为 `None`），旋转沿用安全插值边缘、凸交集及最大矩形规则。该范围由后台分析保存，缓存版本 3 增加此字段；版本 2 在缓存 worker 中只根据已有几何补算，不重读照片。`normalized_intersection_box` 统一主预览及 A/B 的独立青色范围框，不更改裁切遮罩或构图网格；`intersection_export_sequence` 派生导出画布，保持预览结果与源变换不变，`export_aligned_sequence(..., intersection_only=True)` 仍经原管线一次原生采样。无共同区域时只禁用交集导出，补边输出保持可用。两个开关保存在工作区 `editor_state.sequence_preview.show_intersection / export_intersection`，默认值从 `editor_options.json` 加载，不进入分析签名，切换无需取消或重算分析。回归见 [test_sequence_intersection.py](../tests/test_sequence_intersection.py)。
 
 [config.py](../birdstamp/config.py) 区分只读资源与可写状态：`resolve_bundled_path` 定位内置资源；`get_user_data_dir` 在开发模式返回应用目录，打包后返回平台用户目录；`get_config_path` 返回其 `Config/config.yaml`。模板经 [template_directory](../birdstamp/gui/editor_template.py) 进入同级 `templates`，运行状态和 `editor_autosave.birdstamp-workspace.json` 也位于配置目录。默认编辑选项来自 [editor_options.json](../config/editor_options.json)。自动保存、导出状态和用户路径不应打包为发行默认值。
 

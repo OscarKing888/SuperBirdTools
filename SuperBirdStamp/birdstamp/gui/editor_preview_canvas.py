@@ -16,7 +16,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from PyQt6.QtCore import QPointF, QRectF, Qt, pyqtSignal
-from PyQt6.QtGui import QColor, QPainterPath, QPen, QPixmap
+from PyQt6.QtGui import QColor, QPainterPath, QPen, QPixmap, QPolygonF
 from PyQt6.QtWidgets import QWidget
 
 from app_common.preview_canvas import FocusCenteredPreviewCanvas, PreviewOverlayOptions, PreviewOverlayState
@@ -53,6 +53,10 @@ class EditorPreviewOverlayState(PreviewOverlayState):
     reference_regions: tuple["NormalizedBox", ...] = ()
     reference_diagnostics: tuple = ()
     alignment_crop_box: "NormalizedBox | None" = None
+    focus_polygon: tuple = ()
+    bird_polygon: tuple = ()
+    crop_polygon: tuple = ()
+    intersection_box: "NormalizedBox | None" = None
 
 
 @dataclass(slots=True)
@@ -104,6 +108,8 @@ class EditorPreviewCanvas(FocusCenteredPreviewCanvas):
         self._reference_regions: tuple["NormalizedBox", ...] = ()
         self._reference_diagnostics: tuple = ()
         self._alignment_crop_box = None
+        self._intersection_box = None
+        self._focus_polygon = self._bird_polygon = self._crop_polygon = ()
         self._show_reference_regions: bool = False
         self._reference_region_labels: tuple[str, ...] = ()
         self.reference_region_creation_enabled = True
@@ -324,6 +330,14 @@ class EditorPreviewCanvas(FocusCenteredPreviewCanvas):
         if self._alignment_crop_box != state.alignment_crop_box:
             self._alignment_crop_box = state.alignment_crop_box
             changed = True
+        for name in ('focus_polygon','bird_polygon','crop_polygon'):
+            value = getattr(state,name)
+            if getattr(self,'_'+name) != value:
+                setattr(self,'_'+name,value)
+                changed = True
+        if self._intersection_box != state.intersection_box:
+            self._intersection_box = state.intersection_box
+            changed = True
         return changed
 
     def _apply_overlay_options_data(self, options: "PreviewOverlayOptions") -> bool:
@@ -348,6 +362,8 @@ class EditorPreviewCanvas(FocusCenteredPreviewCanvas):
         self._reference_regions = ()
         self._reference_diagnostics = ()
         self._alignment_crop_box = None
+        self._intersection_box = None
+        self._focus_polygon = self._bird_polygon = self._crop_polygon = ()
         self._bird_box = None
         self._crop_effect_box = None
         self._dragging_handle = None
@@ -357,6 +373,8 @@ class EditorPreviewCanvas(FocusCenteredPreviewCanvas):
         self._has_pan = False
 
     def _paint_overlays(self, painter, draw_rect, content_rect) -> None:  # type: ignore[override]
+        if self._show_bird_box and self._bird_polygon:
+            self._paint_polygon(painter,draw_rect,content_rect,self._bird_polygon,'#4299E1')
         if self._show_bird_box and self._bird_box:
             self._paint_bird_overlay(painter, draw_rect, content_rect)
         if self._show_crop_effect and self._crop_effect_box:
@@ -370,7 +388,36 @@ class EditorPreviewCanvas(FocusCenteredPreviewCanvas):
                 self._paint_reference_regions(painter, draw_rect, content_rect)
         if self._show_crop_effect and self._alignment_crop_box:
             self._paint_alignment_crop(painter, draw_rect, content_rect)
+        if self._show_crop_effect and self._crop_polygon:
+            self._paint_polygon(painter,draw_rect,content_rect,self._crop_polygon,'#45D6E8',dashed=True,label='成片保留范围')
+        if self._intersection_box is not None:
+            left, top, right, bottom = self._intersection_box
+            self._paint_polygon(painter, draw_rect, content_rect,
+                                ((left, top), (right, top), (right, bottom), (left, bottom)),
+                                '#45D6E8', dashed=True, label='最大交集范围')
         self._edit_modes.paint(painter, draw_rect, content_rect)
+
+    @staticmethod
+    def _widget_polygon(draw_rect, points):
+        return QPolygonF([QPointF(draw_rect.left()+x*draw_rect.width(),draw_rect.top()+y*draw_rect.height()) for x,y in points])
+
+    def _paint_polygon(self,painter,draw_rect,content_rect,points,color,*,dashed=False,label=''):
+        polygon = self._widget_polygon(draw_rect,points)
+        painter.save()
+        painter.setClipRect(draw_rect.intersected(QRectF(content_rect)))
+        painter.setPen(QPen(QColor(color),2,Qt.PenStyle.DashLine if dashed else Qt.PenStyle.SolidLine))
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        painter.drawPolygon(polygon)
+        if label:
+            p = polygon.boundingRect().topLeft()
+            painter.drawText(p+QPointF(5,painter.fontMetrics().ascent()+3),label)
+        painter.restore()
+
+    def _paint_focus_box(self,painter,draw_rect,content):
+        if self._focus_polygon:
+            self._paint_polygon(painter,draw_rect,content,self._focus_polygon,'#FF5252')
+        else:
+            super()._paint_focus_box(painter,draw_rect,content)
 
     def _paint_alignment_crop(self, painter, draw_rect, content_rect):
         l,t,r,b = self._alignment_crop_box
@@ -510,6 +557,19 @@ class EditorPreviewCanvas(FocusCenteredPreviewCanvas):
             if not matched:
                 pen.setStyle(Qt.PenStyle.DashLine)
             painter.setPen(pen)
+            if box and isinstance(box[0],(tuple,list)):
+                polygon = self._widget_polygon(draw_rect,box)
+                rect = polygon.boundingRect().intersected(visible)
+                painter.setBrush(Qt.BrushStyle.NoBrush)
+                if rect.width() >= 1 and rect.height() >= 1:
+                    painter.drawPolygon(polygon)
+                    point = QPointF(rect.left()+5,rect.top()+painter.fontMetrics().ascent()+3)
+                else:
+                    label += ' · 画面外'
+                    point = QPointF(visible.left()+8,visible.top()+20+outside*22)
+                    outside += 1
+                painter.drawText(point,label)
+                continue
             rect = QRectF(draw_rect.left()+box[0]*draw_rect.width(),
                           draw_rect.top()+box[1]*draw_rect.height(),
                           (box[2]-box[0])*draw_rect.width(),
@@ -870,8 +930,22 @@ class EditorPreviewCanvas(FocusCenteredPreviewCanvas):
         shade_path = QPainterPath()
         shade_path.addRect(visible_rect)
         keep_path = QPainterPath()
-        keep_path.addRect(crop_rect)
+        if self._crop_polygon:
+            keep_path.addPolygon(self._widget_polygon(draw_rect, self._crop_polygon))
+            keep_path.closeSubpath()
+        else:
+            keep_path.addRect(crop_rect)
         painter.fillPath(shade_path.subtracted(keep_path), QColor(0, 0, 0, self._crop_effect_alpha))
+
+    def _paint_composition_grid(self, painter, draw_rect, content_rect):
+        painter.save()
+        if self._crop_polygon:
+            clip = QPainterPath()
+            clip.addPolygon(self._widget_polygon(draw_rect, self._crop_polygon))
+            clip.closeSubpath()
+            painter.setClipPath(clip, Qt.ClipOperation.IntersectClip)
+        super()._paint_composition_grid(painter, draw_rect, content_rect)
+        painter.restore()
 
 
 # ---------------------------------------------------------------------------

@@ -3,7 +3,7 @@ import threading
 
 import numpy as np
 import pytest
-from PIL import Image
+from PIL import Image, ImageFilter
 
 from birdstamp.image_dejitter.reference_region_tracker import ReferenceRegionTracker
 from birdstamp.image_dejitter.region_template_search import normalized_correlation
@@ -54,6 +54,23 @@ def test_repeated_candidates_and_unrelated_texture_remain_rejected():
             assert tracker.track(unrelated).matched_count == 0
 
 
+def test_rotated_brightness_changed_image_keeps_high_quality_matches():
+    regions = ((.1,.1,.18,.22), (.7,.1,.78,.22), (.1,.7,.18,.82), (.7,.7,.78,.82))
+    rng = np.random.default_rng(912)
+    values = rng.integers(20,220,(800,1200),dtype=np.uint8)
+    with Image.fromarray(values) as noise, noise.filter(ImageFilter.GaussianBlur(2)) as ref:
+        with ref.rotate(1.2,resample=Image.Resampling.BICUBIC,translate=(50,30)) as rotated:
+            with rotated.point(lambda v: v*.7+25) as target:
+                result = ReferenceRegionTracker(ref,regions).track(target)
+    assert result.matched_count == 4, result.error
+    rotation = np.exp(-1j*np.deg2rad(1.2))
+    for region, box in zip(regions,result.boxes):
+        original = complex((region[0]+region[2])*600,(region[1]+region[3])*400)
+        expected = complex(600,400)+rotation*(original-complex(600,400))+complex(50,30)
+        actual = complex((box[0]+box[2])*600,(box[1]+box[3])*400)
+        assert abs(actual-expected) < 3
+
+
 def test_flat_reference_and_cancelled_search_are_rejected():
     with Image.new('RGB', (600, 400), 'gray') as flat:
         tracker = ReferenceRegionTracker(flat, (REGION,))
@@ -102,3 +119,22 @@ def test_isolated_occlusion_recovers_from_visible_reference_content_not_interpol
     sequence = prepare_sequence_preview([RenderJobSeed(p, settings, {}, True) for p in paths],
                                         cancel_event=threading.Event())
     assert all(result.matched_count == 1 for result in sequence.tracking.values())
+
+
+def test_accelerating_motion_recovery_searches_between_neighbors_with_texture_evidence():
+    with source() as ref, shifted(ref,100,25) as before, shifted(ref,340,25) as after:
+        tracker = ReferenceRegionTracker(ref,(REGION,))
+        previous, following = tracker.track(before), tracker.track(after)
+        with shifted(ref,310,25) as target:
+            target.paste('white',(370,145,490,205))
+            failed = tracker.track(target)
+            assert failed.matched_count == 0
+            recovered = tracker.recover(target,failed,previous,following)
+            assert recovered.matched_count == 1
+            np.testing.assert_allclose(np.subtract(recovered.boxes[0],REGION),(310/600,25/400)*2,atol=.002)
+        with Image.new('RGB',ref.size,'white') as absent:
+            assert tracker.recover(absent,failed,previous,following).matched_count == 0
+        with ref.crop((60,120,180,240)) as patch, Image.new('RGB',ref.size,'white') as repeated:
+            repeated.paste(patch,(160,145))
+            repeated.paste(patch,(370,145))
+            assert tracker.recover(repeated,failed,previous,following).matched_count == 0

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import os
+import subprocess
+import threading
 from pathlib import Path
 
 from PIL import Image
@@ -117,6 +119,47 @@ def test_background_metadata_falls_back_to_pillow_and_xmp(tmp_path: Path, monkey
     values = _template_values(path, raw, snapshot=True)
     assert values["camera_model"] == "ILCE-1M2"
     assert values["capture_text"] == "2026-09-25 22:11"
+
+
+def test_metadata_loader_stop_interrupts_exiftool_without_pillow_fallback(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    path = tmp_path / "slow.jpg"
+    path.write_bytes(b"test")
+    entered = threading.Event()
+    pillow_called = threading.Event()
+    requests = []
+    monkeypatch.setattr(reader, "get_exiftool_executable_path", lambda: "exiftool")
+    def unexpected_pillow(_path):
+        pillow_called.set()
+        return {}
+    monkeypatch.setattr(
+        reader, "extract_pillow_metadata",
+        unexpected_pillow,
+    )
+
+    def blocked_exiftool(_executable, _args, **_kwargs):
+        from app_common.exif_io import exiftool_runner
+
+        request = exiftool_runner._worker_local.request
+        requests.append(request)
+        entered.set()
+        while not request[0].is_set():
+            threading.Event().wait(0.01)
+        return subprocess.CompletedProcess([], 1, "", "cancelled")
+
+    monkeypatch.setattr(reader, "run_exiftool", blocked_exiftool)
+    loader = EditorPhotoListMetadataLoader([path])
+    loader.start()
+    try:
+        assert entered.wait(1)
+        loader.stop()
+        assert loader.wait(1000)
+        assert requests and requests[0][0].is_set()
+        assert not pillow_called.is_set()
+    finally:
+        loader.stop()
+        loader.wait(1000)
 
 
 def test_export_metadata_is_not_overwritten_by_browser_cache(tmp_path: Path) -> None:

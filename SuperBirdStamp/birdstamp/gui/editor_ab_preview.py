@@ -348,21 +348,36 @@ class ABPreview(QObject):
         reference = editor._is_reference_photo(self.path)
         canvas.reference_region_creation_enabled = reference
         canvas.set_edit_mode(EDIT_MODE_REFERENCE_REGION if can_edit else EDIT_MODE_NONE)
-        source_crop = source_normalized_crop(self.size, sequence.pixel_boxes[key]) if self.frame and sequence else None
-        state.reference_diagnostics = tracking_overlays(
-            regions, editor._tracking_diagnostics_for_path(self.path) if can_edit else tracking, source_crop)
+        diagnostics = editor._tracking_diagnostics_for_path(self.path) if can_edit else tracking
         if can_edit:
             state.reference_regions = editor._editable_regions_for_path(self.path)
+        if self.frame and self.frame.alignment and self.frame.alignment.rotated:
+            from .editor_tracking_overlay import apply_frame_alignment
+            focus = editor_core.resolve_focus_box_after_processing(
+                metadata, source_width=width, source_height=height, crop_box=None,
+                outer_pad=(0, 0, 0, 0), apply_ratio_crop=False,
+                camera_type=editor_core.resolve_focus_camera_type_from_metadata(metadata))
+            apply_frame_alignment(state, self.frame, focus, bird, regions, diagnostics)
+        else:
+            source_crop = source_normalized_crop(self.size, sequence.pixel_boxes[key]) if self.frame and sequence else None
+            state.reference_diagnostics = tracking_overlays(regions, diagnostics, source_crop)
         if not crop and reference:
             state.reference_regions = regions
             state.reference_diagnostics = ()
         options = editor._build_preview_overlay_options()
         options.show_reference_regions = True
         options.show_crop_effect = False
+        if self.frame and sequence and editor.dejitter_show_intersection_check.isChecked():
+            from birdstamp.export_stage.sequence_intersection import normalized_intersection_box
+            state.intersection_box = normalized_intersection_box(sequence)
         if not self.frame and sequence and key in sequence.pixel_boxes and not editor.dejitter_pad_to_union_check.isChecked():
             state.crop_effect_box = source_normalized_crop(self.size, sequence.pixel_boxes[key])
             state.alignment_crop_box = state.crop_effect_box
             options.show_crop_effect = editor.show_crop_effect_check.isChecked()
+        elif not self.frame and sequence and not editor.dejitter_pad_to_union_check.isChecked():
+            from .editor_tracking_overlay import apply_alignment_crop
+            if apply_alignment_crop(state, sequence, key):
+                options.show_crop_effect = editor.show_crop_effect_check.isChecked()
         self.preview.apply_overlay_options(options)
         self.preview.apply_overlay_state(state)
         self.preview.set_original_size(width, height)

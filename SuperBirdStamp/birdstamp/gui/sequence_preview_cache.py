@@ -16,12 +16,12 @@ from birdstamp.config import get_config_path
 from birdstamp.export_stage.sequence_preview import SequencePreview, sequence_input_key
 from birdstamp.export_stage.video_frame_job import VideoFrameJob
 from birdstamp.image_dejitter.region_tracking_result import RegionTrackingResult
-from birdstamp.image_dejitter.sequence_geometry import aligned_crop_plan
+from birdstamp.image_dejitter.rigid_alignment import FrameAlignment, ALIGNMENT_MODE_KEY, normalize_alignment_mode
 from . import editor_options
 from .editor_utils import path_key
 from .sequence_preview_frame import SequencePreviewFrame
 
-CACHE_VERSION = 1
+CACHE_VERSION = 3
 _log = get_logger('birdstamp.sequence_cache')
 
 
@@ -64,11 +64,13 @@ class SequencePreviewCache:
                 self._save_image(frame.image, staging / f'quick-{index}.png')
                 self._save_image(frame.source_image, staging / f'source-{index}.png')
                 records.append(dict(path=str(job.path), settings=job.settings, raw_metadata=job.raw_metadata,
-                                    source_size=sequence.source_sizes[key], pixel_box=sequence.pixel_boxes[key],
+                                    source_size=sequence.source_sizes[key], pixel_box=sequence.pixel_boxes.get(key),
+                                    alignment=asdict(sequence.alignments[key]) if key in sequence.alignments else None,
                                     tracking=asdict(sequence.tracking[key])))
             document = dict(version=CACHE_VERSION, input_key=sequence.input_key,
                             output_size=sequence.output_size, signatures=sequence.signatures, frames=records,
-                            bird_boxes=list(sequence.bird_boxes.items()))
+                            bird_boxes=list(sequence.bird_boxes.items()),canvas_box=sequence.canvas_box,
+                            intersection_box=sequence.intersection_box)
             (staging / 'manifest.json').write_text(json.dumps(document, ensure_ascii=False, default=str), encoding='utf-8')
             if cancelled() or not sequence.files_current():
                 return
@@ -105,13 +107,21 @@ class SequencePreviewCache:
             if manifest.stat().st_size > 64*1024*1024:
                 raise ValueError('成片缓存清单过大')
             raw = json.loads(manifest.read_text(encoding='utf-8'))
-            if raw['version'] != CACHE_VERSION or raw['input_key'] != key:
+            if raw['version'] not in (2, CACHE_VERSION) or raw['input_key'] != key:
                 return None
             records = raw['frames']
             if [path_key(seed.path) for seed in seeds] != [path_key(Path(r['path'])) for r in records]:
                 return None
             signatures = tuple((path, tuple(sig) if sig is not None else None) for path, sig in raw['signatures'])
             sequence = SequencePreview(key, {}, signatures, output_size=tuple(raw['output_size']))
+            sequence.canvas_box = tuple(raw.get('canvas_box') or ())
+            rigid = normalize_alignment_mode(seeds[0].settings.get(ALIGNMENT_MODE_KEY)) == 'rigid'
+            if bool(sequence.canvas_box) != rigid:
+                raise ValueError('成片缓存缺少对应的对齐几何')
+            if sequence.canvas_box and (len(sequence.canvas_box) != 4 or
+                    any(type(v) is not int for v in sequence.canvas_box) or
+                    (sequence.canvas_box[2]-sequence.canvas_box[0],sequence.canvas_box[3]-sequence.canvas_box[1]) != sequence.output_size):
+                raise ValueError('成片缓存画布无效')
             sequence.bird_boxes = {tuple(signature): tuple(box) for signature, box in raw.get('bird_boxes', [])}
             frames = {}
             budget = editor_options.DEJITTER_QUICK_CACHE_BYTES
@@ -120,9 +130,22 @@ class SequencePreviewCache:
                     return None
                 path = Path(record['path'])
                 frame_key = path_key(path)
-                size, box = tuple(record['source_size']), tuple(record['pixel_box'])
-                if (len(size) != 2 or min(size) <= 0 or len(box) != 4 or
-                        (box[2]-box[0], box[3]-box[1]) != sequence.output_size or min(sequence.output_size) <= 0):
+                size = tuple(record['source_size'])
+                box = tuple(record['pixel_box']) if record['pixel_box'] is not None else None
+                raw_alignment = record.get('alignment')
+                if (raw_alignment is not None) != rigid:
+                    raise ValueError('成片缓存对齐方式不一致')
+                alignment = None
+                if raw_alignment is not None:
+                    alignment = FrameAlignment(**{**raw_alignment,
+                        'source_to_reference':tuple(raw_alignment['source_to_reference']),
+                        'region_indices':tuple(raw_alignment['region_indices'])})
+                    if not sequence.canvas_box or alignment.source_pixel_box(sequence.canvas_box) != box:
+                        raise ValueError('成片缓存变换与画布不一致')
+                    sequence.alignments[frame_key] = alignment
+                if (len(size) != 2 or min(size) <= 0 or min(sequence.output_size) <= 0 or
+                        (box is None and alignment is None) or (box is not None and
+                        (len(box) != 4 or (box[2]-box[0], box[3]-box[1]) != sequence.output_size))):
                     raise ValueError('成片缓存几何无效')
                 tracking = record['tracking']
                 result = RegionTrackingResult(
@@ -135,12 +158,26 @@ class SequencePreviewCache:
                 source = self._read_image(folder / f'source-{index}.png', budget)
                 budget -= source.sizeInBytes()
                 sequence.jobs[frame_key] = VideoFrameJob(path, record['settings'], record['raw_metadata'], {})
-                sequence.source_sizes[frame_key], sequence.pixel_boxes[frame_key] = size, box
+                sequence.source_sizes[frame_key] = size
+                if box is not None:
+                    sequence.pixel_boxes[frame_key] = box
                 sequence.tracking[frame_key] = result
                 frames[frame_key] = SequencePreviewFrame(path, image, size, sequence.output_size,
-                                                        aligned_crop_plan(size, box), source)
+                                                        sequence.frame_crop_plan(frame_key), source,alignment,sequence.canvas_box)
             if not sequence.files_current() or sequence_input_key(sequence.jobs.values()) != key:
                 return None
+            if raw['version'] == 2:
+                # Geometry-only upgrade in the owned worker; no photo decode/matching.
+                from birdstamp.export_stage.sequence_intersection import compute_intersection_box
+                sequence.intersection_box = compute_intersection_box(sequence, cancelled=cancelled)
+            else:
+                box = raw['intersection_box']
+                if box is not None:
+                    if (len(box) != 4 or any(type(v) is not int for v in box) or
+                            not (0 <= box[0] < box[2] <= sequence.output_size[0] and
+                                 0 <= box[1] < box[3] <= sequence.output_size[1])):
+                        raise ValueError('成片缓存最大交集范围无效')
+                    sequence.intersection_box = tuple(box)
             os.utime(folder, None)
             return sequence, frames
         except (OSError, ValueError, KeyError, TypeError, AttributeError, IndexError) as exc:
@@ -175,7 +212,7 @@ class SequencePreviewCache:
             key = path_key(path)
             size = sequence.source_sizes[key]
             return SequencePreviewFrame(path, image, size, sequence.output_size,
-                                        aligned_crop_plan(size, sequence.pixel_boxes[key]))
+                                        sequence.frame_crop_plan(key),alignment=sequence.alignments.get(key),canvas_box=sequence.canvas_box)
         except (OSError, ValueError, KeyError):
             return None
 

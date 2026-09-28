@@ -1,6 +1,8 @@
 {
   "dejitter_pad_to_union": false,
   "dejitter_export_new_workspace": false,
+  "dejitter_show_intersection": true,
+  "dejitter_export_intersection": false,
   "preview_ab_enabled": false,
   "preview_ab_linked": false,
   "preview_auto_focus_center": false,
@@ -139,6 +141,10 @@
     "settings_text": "f/8  1/2000s  ISO800  600mm"
   },
   "dejitter_disk_cache_mb": 512,
+  "dejitter_match_mode": "auto",
+  "dejitter_alignment_mode": "rigid",
+  "dejitter_match_rotation_deg": 2.0,
+  "dejitter_match_tolerance_pct": 0.3,
   "text_effects": {
     "stroke_enabled": false,
     "stroke_color": "#000000",

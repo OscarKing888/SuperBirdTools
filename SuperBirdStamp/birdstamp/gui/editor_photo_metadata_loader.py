@@ -7,6 +7,7 @@ from typing import Any
 from PyQt6.QtCore import QThread, pyqtSignal
 
 from app_common.exif_io import extract_many_with_xmp_priority
+from app_common.exif_io.exiftool_runner import exiftool_read_request, exiftool_worker_session
 from app_common.log import get_logger
 
 _log = get_logger("editor.photo_metadata_loader")
@@ -36,19 +37,20 @@ class EditorPhotoListMetadataLoader(QThread):
         chunk_size = max(1, _PHOTO_LIST_METADATA_CHUNK_SIZE)
         _log.info("[EditorPhotoListMetadataLoader.run] START paths=%s chunk=%s", total, chunk_size)
         try:
-            for index in range(0, total, chunk_size):
-                if self._should_stop():
-                    _log.info("[EditorPhotoListMetadataLoader.run] interrupted before chunk")
-                    return
-                chunk = self._paths[index : index + chunk_size]
-                batch = self._read_chunk(chunk)
-                if self._should_stop():
-                    _log.info("[EditorPhotoListMetadataLoader.run] interrupted after chunk")
-                    return
-                if batch:
-                    self.metadata_batch_ready.emit(batch)
-                processed += len(chunk)
-                self.progress_updated.emit(min(processed, total), total)
+            with exiftool_worker_session():
+                for index in range(0, total, chunk_size):
+                    if self._should_stop():
+                        _log.info("[EditorPhotoListMetadataLoader.run] interrupted before chunk")
+                        return
+                    chunk = self._paths[index : index + chunk_size]
+                    batch = self._read_chunk(chunk)
+                    if self._should_stop():
+                        _log.info("[EditorPhotoListMetadataLoader.run] interrupted after chunk")
+                        return
+                    if batch:
+                        self.metadata_batch_ready.emit(batch)
+                    processed += len(chunk)
+                    self.progress_updated.emit(min(processed, total), total)
         except Exception as exc:
             _log.warning("[EditorPhotoListMetadataLoader.run] failed: %s", exc)
         _log.info("[EditorPhotoListMetadataLoader.run] END")
@@ -59,7 +61,10 @@ class EditorPhotoListMetadataLoader(QThread):
         try:
             # 限定标签的浏览器缓存可能只有尺寸/report 字段，且不会总是合并 sidecar。
             # 模板消费只读快照，必须在后台一次读全，并让 XMP 覆盖同语义字段。
-            raw_batch = extract_many_with_xmp_priority([Path(path) for path in chunk])
+            with exiftool_worker_session(), exiftool_read_request(self._should_stop, timeout=20):
+                raw_batch = extract_many_with_xmp_priority(
+                    [Path(path) for path in chunk], cancelled=self._should_stop,
+                )
         except Exception as exc:
             _log.warning("[EditorPhotoListMetadataLoader._read_chunk] batch read failed: %s", exc)
             raw_batch = {}

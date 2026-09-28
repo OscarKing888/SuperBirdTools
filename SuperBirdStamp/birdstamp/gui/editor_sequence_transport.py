@@ -101,6 +101,8 @@ class SequenceTransport(QObject):
         self.paths = [job.path for job in sequence.jobs.values()] if sequence else []
         self.strip.blockSignals(True)
         self.strip.clear()
+        has_fallback = sequence and any(a.status == 'fallback' for a in sequence.alignments.values())
+        self.strip.setGridSize(QSize(156 if has_fallback else 104, 84))
         reference = self.editor._dejitter_reference_source
         for index, path in enumerate(self.paths):
             key = path_key(path)
@@ -109,6 +111,9 @@ class SequenceTransport(QObject):
             partial = result.matched_count < len(result.boxes)
             label = f'{index + 1}' + (' · 参考' if reference_frame else '') + (' · 待检查' if partial else '')
             item = QListWidgetItem(label)
+            alignment = sequence.alignments.get(key)
+            if alignment and alignment.status == 'fallback':
+                item.setText(f'{index + 1} · 未纠正旋转')
             frame = frames.get(key)
             if frame:
                 item.setIcon(QIcon(QPixmap.fromImage(frame.image).scaled(
@@ -116,6 +121,8 @@ class SequenceTransport(QObject):
                     Qt.TransformationMode.SmoothTransformation)))
             item.setToolTip(path.name + ('：部分选区失配，请检查对齐结果' if partial else ''))
             self.strip.addItem(item)
+            if alignment:
+                item.setToolTip(item.toolTip() + '\n' + alignment.description())
         self.strip.blockSignals(False)
         self.sync()
 
@@ -151,6 +158,9 @@ class SequenceTransport(QObject):
                         detail += '，共同范围较小，可开启补边后再裁切'
                 if result.matched_count < len(result.boxes):
                     detail += '，请检查成片'
+                alignment = sequence.alignments.get(key)
+                if alignment:
+                    detail += '\n' + alignment.description()
                 self.editor.dejitter_tracking_status.setText(self.editor._sequence_message + '\n' + detail +
                     '\n黄色：跟踪成功；红色虚线：未匹配（预计位置）。')
                 self.editor.dejitter_tracking_status.setToolTip(result.error)
