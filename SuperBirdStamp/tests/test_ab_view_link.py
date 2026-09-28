@@ -46,6 +46,22 @@ def assert_linked(first, second):
     assert first.viewport_state()[1] == pytest.approx(second.viewport_state()[1])
 
 
+def test_enabling_link_preserves_both_views_until_next_interaction(window, monkeypatch):
+    ab, a, b = setup(window, monkeypatch)
+    ab.linked.click()
+    a.set_display_scale_percent(a._fit_scale() * 250)
+    b.set_display_scale_percent(b._fit_scale() * 400)
+    pan(b)
+    before_a, before_b = a.viewport_state(), b.viewport_state()
+    assert before_a != before_b
+
+    ab.linked.click()
+    assert a.viewport_state() == before_a
+    assert b.viewport_state() == before_b
+    wheel(a)
+    assert_linked(a, b)
+
+
 def test_zoom_pan_fit_and_decoded_resolution_upgrade_are_linked_both_ways(window, monkeypatch):
     ab, a, b = setup(window, monkeypatch)
     regions = window._dejitter_reference_regions

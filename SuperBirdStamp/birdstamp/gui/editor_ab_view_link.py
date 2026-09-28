@@ -25,10 +25,7 @@ class ABViewLink(QObject):
             # 焦点锁定会禁止平移；联动与独立焦点锁定互斥，避免另一侧悄悄跳回焦点。
             self.ab.center.setChecked(False)
             self.ab.editor.auto_focus_center_check.setChecked(False)
-            canvas = self.canvases[0 if self.ab.active_side == 'a' else 1]
-            if canvas.viewport_state() is None:
-                canvas = next((item for item in self.canvases if item.viewport_state() is not None), canvas)
-            self.move_from(canvas)
+            # 开启联动本身不是视野操作；等待下一次缩放/平移再以操作侧为源同步。
 
     def focus_changed(self, checked):
         if checked and self.enabled():

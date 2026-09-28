@@ -47,7 +47,7 @@ class ABPreview(QObject):
         self.linked = QToolButton()
         self.linked.setText('同步缩放/移动')
         self.linked.setCheckable(True)
-        self.linked.setToolTip('联动两侧的缩放和图像相对位置。\n'
+        self.linked.setToolTip('开启时保留两侧当前视野；之后联动缩放和图像相对位置。\n'
                                '启用联动会关闭自动焦点居中；重新开启焦点居中则退出联动。')
         self.splitter = QSplitter(Qt.Orientation.Horizontal)
         self.splitter.setChildrenCollapsible(False)
