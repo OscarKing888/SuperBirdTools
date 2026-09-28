@@ -65,14 +65,16 @@ class ReferenceRegionTracker:
         result = resolve_tracking_consensus(self.regions, raw, image.size, self.reference_size, options=self.options)
         translation = select_translation(self.regions, result, image.size, self.reference_size, options=self.options)
         if translation is not None:
-            dx, dy, _ = translation
-            expected = (dx/image.width, dy/image.height)
             boxes = list(result.boxes)
             for index, region in enumerate(self.regions):
                 if cancelled():
                     raise InterruptedError('参考区预处理已取消')
                 if boxes[index] is not None:
                     continue
+                # 转动时各处位移不同；使用该区中心的刚性预测，不能套用整组中位平移。
+                predicted = result.predicted_boxes[index]
+                expected = ((predicted[0]+predicted[2]-region[0]-region[2])/2,
+                            (predicted[1]+predicted[3]-region[1]-region[3])/2)
                 found = self.search.locate_near(image, index, expected, cancelled=cancelled,
                                               tolerance=self.options.pixel_tolerance(image.size))
                 if found is not None:

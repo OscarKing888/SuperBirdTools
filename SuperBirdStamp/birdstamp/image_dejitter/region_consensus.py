@@ -1,8 +1,9 @@
 """从可靠参考区中选择一致的平移，不把离群区域计入补偿。"""
 from dataclasses import replace
-from math import atan2, hypot, radians
+from math import atan2, ceil, hypot, radians
 from statistics import median
-from .matching_options import MatchingOptions
+from .matching_options import MatchingOptions, ROTATION_RANGE
+from .region_motion import fit_region_motion
 
 
 def region_offsets(regions, result, size, reference_size):
@@ -84,6 +85,25 @@ def select_translation(regions, result, size, reference_size, *, options=Matchin
     return dx, dy, winner
 
 
+def _rotation_limit_hint(regions, result, size, reference_size, options):
+    """仅用未放宽纹理及位置容差的额外几何核验解释超限，不放行结果。"""
+    if options.rotation_degrees >= ROTATION_RANGE[1]:
+        return ''
+    diagnostic_options = replace(options, rotation_degrees=ROTATION_RANGE[1])
+    selected = select_translation(regions, result, size, reference_size, options=diagnostic_options)
+    if selected is None:
+        return ''
+    offsets = region_offsets(regions, result, size, reference_size)
+    motion = fit_region_motion(regions, {i: offsets[i] for i in selected[2]}, reference_size, size,
+                               options=diagnostic_options)
+    if motion is None or abs(motion.angle_degrees) <= options.rotation_degrees:
+        return ''
+    suggested = min(ROTATION_RANGE[1], ceil(abs(motion.angle_degrees)))
+    return (f'。检测到 {len(selected[2])} 个选区支持约 {motion.angle_degrees:+.2f}° 旋转，'
+            f'超过当前 {options.rotation_degrees:g}° 上限。可在“高级自定义”将允许旋转调到 '
+            f'{suggested:g}°，位置容差保持 {options.tolerance_percent:g}%，再重新分析')
+
+
 def resolve_tracking_consensus(regions, result, size, reference_size, *, options=MatchingOptions()):
     translation = select_translation(regions, result, size, reference_size, options=options)
     if translation is None:
@@ -93,7 +113,8 @@ def resolve_tracking_consensus(regions, result, size, reference_size, *, options
                         for i, box in enumerate(result.boxes))
         hint = ''
         if any(box is not None for box in result.boxes):
-            hint = (f'。当前允许旋转 {options.rotation_degrees:g}°，位置容差 {options.tolerance_percent:g}%'
+            hint = _rotation_limit_hint(regions, result, size, reference_size, options)
+            hint = hint or (f'。当前允许旋转 {options.rotation_degrees:g}°，位置容差 {options.tolerance_percent:g}%'
                     f'（约 {options.pixel_tolerance(size):.1f} 像素）。请确认选区属于同一运动；'
                     '若仅有轻微几何差异，可在“高级自定义”调整；重复纹理应重新框选。')
         return replace(result, boxes=tuple(None for _ in regions), reasons=reasons,
@@ -101,10 +122,17 @@ def resolve_tracking_consensus(regions, result, size, reference_size, *, options
     dx, dy, accepted = translation
     width, height = size
     rw, rh = reference_size
+    offsets = region_offsets(regions, result, size, reference_size)
+    motion = fit_region_motion(regions, {i: offsets[i] for i in accepted}, reference_size, size,
+                               options=options)
     boxes, predictions, reasons = [], [], []
     for i, region in enumerate(regions):
-        predicted = ((region[0]*rw+dx)/width, (region[1]*rh+dy)/height,
-                     (region[2]*rw+dx)/width, (region[3]*rh+dy)/height)
+        rx, ry = dx, dy
+        if motion is not None:
+            delta = motion.displacement(complex((region[0]+region[2])*rw/2, (region[1]+region[3])*rh/2))
+            rx, ry = delta.real, delta.imag
+        predicted = ((region[0]*rw+rx)/width, (region[1]*rh+ry)/height,
+                     (region[2]*rw+rx)/width, (region[3]*rh+ry)/height)
         box = result.boxes[i] if i in accepted else None
         reason = ''
         if box is None:

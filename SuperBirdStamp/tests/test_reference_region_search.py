@@ -79,6 +79,34 @@ def test_flat_reference_and_cancelled_search_are_rejected():
             tracker.search.locate(flat, tracker.search.search_image(flat), 0, cancelled=lambda: True)
 
 
+def test_rotating_consensus_recovers_ambiguous_region_using_its_own_displacement():
+    from birdstamp.image_dejitter.rigid_alignment import estimate_alignment
+    regions = ((.1,.1,.18,.22), (.7,.1,.78,.22), (.1,.7,.18,.82), (.7,.7,.78,.82))
+    values = np.random.default_rng(912).integers(20,220,(800,1200),dtype=np.uint8)
+    with Image.fromarray(values) as noise, noise.filter(ImageFilter.GaussianBlur(2)) as ref:
+        with ref.rotate(1.8, resample=Image.Resampling.BICUBIC, translate=(100,25)) as target:
+            rotation = np.exp(-1j*np.deg2rad(1.8))
+            point = complex(888,608)
+            mapped = complex(600,400)+rotation*(point-complex(600,400))+complex(100,25)
+            left, top = round(mapped.real-48), round(mapped.imag-48)
+            with target.crop((left-5,top-5,left+101,top+101)) as duplicate:
+                target.paste(duplicate, (500,280))
+            tracker = ReferenceRegionTracker(ref, regions)
+            found, reason = tracker.search.locate(target, tracker.search.search_image(target), 3)
+            assert found is None and '多个相似位置' in reason
+            result = tracker.track(target)
+            assert result.matched_count == 4, result.error
+            box = result.boxes[3]
+            actual = complex((box[0]+box[2])*600, (box[1]+box[3])*400)
+            assert abs(actual-mapped) < 2
+            alignment = estimate_alignment(regions, result, target.size, ref.size, mode='rigid')
+            assert alignment.measured_degrees == pytest.approx(-1.8, abs=.05)
+            # 同样的几何预测面对缺失纹理必须继续失败。
+            target.paste('white', (left-8,top-8,left+104,top+104))
+            absent = tracker.track(target)
+            assert absent.boxes[3] is None
+
+
 def test_normalized_correlation_matches_direct_formula():
     rng = np.random.default_rng(61)
     values = rng.normal(100, 20, (20, 30))
