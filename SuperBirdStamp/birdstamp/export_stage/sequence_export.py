@@ -13,7 +13,7 @@ from app_common.file_browser._work_policy import WorkKind
 from app_common.log import get_logger
 from birdstamp.export_metadata import save_export_image, copy_export_sidecar
 
-from .core import resolve_video_render_workers
+from .sequence_export_workers import resolve_sequence_export_workers
 from .png_export_stage import PngExportStage
 from .sequence_preview import render_sequence_preview_frame
 from .video_export_cancelled_error import VideoExportCancelledError
@@ -72,7 +72,7 @@ def export_aligned_sequence(sequence, destination, *, output_format='png', cance
     # 补边输出可能大于任何原图，内存预算必须同时考虑输出画幅。
     max_pixels = max(width * height for width, height in
                      (*sequence.source_sizes.values(), sequence.output_size))
-    workers = resolve_video_render_workers(render_workers, total, max_frame_pixels=max_pixels)
+    workers = resolve_sequence_export_workers(render_workers, total, max_frame_pixels=max_pixels)
     stopped = threading.Event()
     cancelled = lambda: stopped.is_set() or cancel_event.is_set()
     pool = None

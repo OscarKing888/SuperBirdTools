@@ -214,3 +214,46 @@ def test_pre_cancelled_export_creates_no_pool_or_output(tmp_path, monkeypatch):
     with pytest.raises(VideoExportCancelledError):
         sequence_export.export_aligned_sequence(sequence, tmp_path, cancel_event=cancel)
     assert set(tmp_path.iterdir()) == before
+
+
+def test_default_export_really_runs_more_than_eight_actions_and_reuses_pixels(tmp_path, monkeypatch):
+    from birdstamp.export_stage import sequence_export_workers as policy
+    sequence = prepared_sequence(tmp_path, count=12)
+    monkeypatch.setattr(policy.os, 'process_cpu_count', lambda: 12, raising=False)
+    monkeypatch.setattr(policy, '_available_memory_bytes', lambda: 32 * 1024**3)
+    barrier = threading.Barrier(12)
+    lock = threading.Lock()
+    active = peak = 0
+    thread_ids = set()
+    original_execute = sequence_export.SequenceExportAction.execute
+    before_sessions = set(exiftool_runner._read_sessions)
+
+    def execute(action):
+        nonlocal active, peak
+        with lock:
+            active += 1
+            peak = max(peak, active)
+            thread_ids.add(threading.get_ident())
+        try:
+            # 必须全部并发进入，固定 4/8 线程或队列额度错误都会在这里失败。
+            barrier.wait(timeout=10)
+            return original_execute(action)
+        finally:
+            with lock:
+                active -= 1
+
+    monkeypatch.setattr(sequence_export.SequenceExportAction, 'execute', execute)
+    progress, counts = [], []
+    folder = sequence_export.export_aligned_sequence(
+        sequence, tmp_path, cancel_event=threading.Event(), progress=progress.append,
+        progress_counts=lambda current, total, stage: counts.append((current, total, stage)))
+    assert peak == 12 and active == 0 and len(thread_ids) == 12
+    assert all('最多 12 张并行' in message for message in progress)
+    assert [current for current, total, _ in counts if total == 12] == list(range(13))
+    assert exiftool_runner._read_sessions == before_sessions
+    for index, job in enumerate(sequence.jobs.values(), 1):
+        target = folder / f'{index:04d}_{job.path.stem}.png'
+        with Image.open(target) as exported, Image.open(job.path) as source:
+            with source.crop((4, 2, 92, 62)) as expected:
+                assert exported.tobytes() == expected.tobytes()
+        assert target.with_suffix('.xmp').read_bytes() == job.path.with_suffix('.XMP').read_bytes()
