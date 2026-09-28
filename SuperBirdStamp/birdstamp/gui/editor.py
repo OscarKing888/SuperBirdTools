@@ -698,6 +698,8 @@ class BirdStampEditorWindow(
         self._photo_list_metadata_pending_keys: set[str] = set()
         self._photo_list_metadata_loader: EditorPhotoListMetadataLoader | None = None
         self._pending_photo_list_metadata_loaders: list[EditorPhotoListMetadataLoader] = []
+        self._exiftool_shutdown_thread: threading.Thread | None = None
+        self._exiftool_shutdown_done = threading.Event()
         self._photo_list_metadata_restart_pending = False
         self._photo_list_metadata_loading = False
         self._photo_list_header_fast_mode = False
@@ -2687,6 +2689,23 @@ class BirdStampEditorWindow(
             self._apply_system_adaptive_style()
         super().changeEvent(event)
 
+    def _begin_exiftool_shutdown(self) -> None:
+        if self._exiftool_shutdown_thread is not None:
+            return
+
+        def close_shared_process() -> None:
+            try:
+                close_exiftool_process()
+            finally:
+                self._exiftool_shutdown_done.set()
+
+        self._exiftool_shutdown_thread = threading.Thread(
+            target=close_shared_process,
+            name="BirdStampExifToolShutdown",
+            daemon=True,
+        )
+        self._exiftool_shutdown_thread.start()
+
     def closeEvent(self, event) -> None:  # type: ignore[override]
         active_worker = self._video_export_worker
         if active_worker is not None and active_worker.isRunning():
@@ -2699,11 +2718,17 @@ class BirdStampEditorWindow(
         self._cancel_async_bird_detect(shutdown=True)
         self._cancel_preview_decode(shutdown=True)
         self._stop_photo_list_metadata_loader(wait=False, reset_progress=True)
+        # Cancel blocked metadata reads before waiting for their QThreads.
+        # Process teardown stays off the GUI thread even if ExifTool is wedged.
+        self._begin_exiftool_shutdown()
         discovery_stopped = self._stop_photo_input_discovery_workers(wait=False)
         self._stop_received_photo_import(reset_progress=True)
         bird_worker = getattr(self, "_bird_detect_worker", None)
         preview_worker = getattr(self, "_preview_decode_worker", None)
         metadata_worker = self._photo_list_metadata_loader
+        pending_metadata_running = any(
+            worker.isRunning() for worker in self._pending_photo_list_metadata_loaders
+        )
         if (
             bird_worker is not None
             and bird_worker.isRunning()
@@ -2713,7 +2738,7 @@ class BirdStampEditorWindow(
         ) or (
             metadata_worker is not None
             and metadata_worker.isRunning()
-        ) or not ab_stopped or not discovery_stopped or self._reference_tracking_worker is not None or self._sequence_worker is not None:
+        ) or pending_metadata_running or not self._exiftool_shutdown_done.is_set() or not ab_stopped or not discovery_stopped or self._reference_tracking_worker is not None or self._sequence_worker is not None:
             self._set_status("正在安全结束后台任务...")
             event.ignore()
             QTimer.singleShot(100, self.close)
