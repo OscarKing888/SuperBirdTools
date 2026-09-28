@@ -57,6 +57,7 @@ class EditorPreviewOverlayState(PreviewOverlayState):
     bird_polygon: tuple = ()
     crop_polygon: tuple = ()
     intersection_box: "NormalizedBox | None" = None
+    union_box: "NormalizedBox | None" = None
 
 
 @dataclass(slots=True)
@@ -109,6 +110,7 @@ class EditorPreviewCanvas(FocusCenteredPreviewCanvas):
         self._reference_diagnostics: tuple = ()
         self._alignment_crop_box = None
         self._intersection_box = None
+        self._union_box = None
         self._focus_polygon = self._bird_polygon = self._crop_polygon = ()
         self._show_reference_regions: bool = False
         self._reference_region_labels: tuple[str, ...] = ()
@@ -338,6 +340,9 @@ class EditorPreviewCanvas(FocusCenteredPreviewCanvas):
         if self._intersection_box != state.intersection_box:
             self._intersection_box = state.intersection_box
             changed = True
+        if self._union_box != state.union_box:
+            self._union_box = state.union_box
+            changed = True
         return changed
 
     def _apply_overlay_options_data(self, options: "PreviewOverlayOptions") -> bool:
@@ -363,6 +368,7 @@ class EditorPreviewCanvas(FocusCenteredPreviewCanvas):
         self._reference_diagnostics = ()
         self._alignment_crop_box = None
         self._intersection_box = None
+        self._union_box = None
         self._focus_polygon = self._bird_polygon = self._crop_polygon = ()
         self._bird_box = None
         self._crop_effect_box = None
@@ -390,18 +396,23 @@ class EditorPreviewCanvas(FocusCenteredPreviewCanvas):
             self._paint_alignment_crop(painter, draw_rect, content_rect)
         if self._show_crop_effect and self._crop_polygon:
             self._paint_polygon(painter,draw_rect,content_rect,self._crop_polygon,'#45D6E8',dashed=True,label='成片保留范围')
+        if self._union_box is not None:
+            left, top, right, bottom = self._union_box
+            self._paint_polygon(painter, draw_rect, content_rect,
+                                ((left, top), (right, top), (right, bottom), (left, bottom)),
+                                '#F5A623', label='整组完整范围（并集）')
         if self._intersection_box is not None:
             left, top, right, bottom = self._intersection_box
             self._paint_polygon(painter, draw_rect, content_rect,
                                 ((left, top), (right, top), (right, bottom), (left, bottom)),
-                                '#45D6E8', dashed=True, label='最大交集范围')
+                                '#45D6E8', dashed=True, label='共同无黑边范围（交集）', label_at_bottom=True)
         self._edit_modes.paint(painter, draw_rect, content_rect)
 
     @staticmethod
     def _widget_polygon(draw_rect, points):
         return QPolygonF([QPointF(draw_rect.left()+x*draw_rect.width(),draw_rect.top()+y*draw_rect.height()) for x,y in points])
 
-    def _paint_polygon(self,painter,draw_rect,content_rect,points,color,*,dashed=False,label=''):
+    def _paint_polygon(self,painter,draw_rect,content_rect,points,color,*,dashed=False,label='',label_at_bottom=False):
         polygon = self._widget_polygon(draw_rect,points)
         painter.save()
         painter.setClipRect(draw_rect.intersected(QRectF(content_rect)))
@@ -409,8 +420,9 @@ class EditorPreviewCanvas(FocusCenteredPreviewCanvas):
         painter.setBrush(Qt.BrushStyle.NoBrush)
         painter.drawPolygon(polygon)
         if label:
-            p = polygon.boundingRect().topLeft()
-            painter.drawText(p+QPointF(5,painter.fontMetrics().ascent()+3),label)
+            bounds = polygon.boundingRect()
+            p = bounds.bottomLeft()+QPointF(5,-5) if label_at_bottom else bounds.topLeft()+QPointF(5,painter.fontMetrics().ascent()+3)
+            painter.drawText(p,label)
         painter.restore()
 
     def _paint_focus_box(self,painter,draw_rect,content):

@@ -16,6 +16,7 @@ from test_rigid_alignment import rotated_seeds
 from test_sequence_preview_cache import run_worker, fail_recompute
 from birdstamp.export_stage.sequence_intersection import (
     compute_intersection_box, normalized_intersection_box, intersection_export_sequence,
+    compute_union_box, normalized_union_box,
 )
 from birdstamp.export_stage.sequence_preview import prepare_sequence_preview, render_sequence_preview_frame
 from birdstamp.export_stage.sequence_export import export_aligned_sequence
@@ -34,6 +35,10 @@ def test_padded_intersection_export_matches_unpadded_analysis(sequence,tmp_path,
     expected = prepare_sequence_preview(
         [replace(s,settings={**s.settings,'dejitter_pad_to_union':False}) for s in seeds],cancel_event=Event())
     assert padded.intersection_box == (5,3,200,160)
+    assert padded.union_box == (0,0,205,163)
+    assert expected.union_box == (-5,-3,200,160)
+    assert compute_union_box(intersection_export_sequence(padded)) == expected.union_box
+    assert intersection_export_sequence(padded).union_box == expected.union_box
     assert normalized_intersection_box(padded) == (5/205,3/163,200/205,160/163)
     original_boxes = dict(padded.pixel_boxes)
     folder = export_aligned_sequence(padded,tmp_path,cancel_event=Event(),intersection_only=True)
@@ -55,6 +60,8 @@ def test_rotated_intersection_reuses_transform_and_single_native_render(rotated_
     assert cropped.output_size == unpadded.output_size
     assert cropped.canvas_box == unpadded.canvas_box
     assert cropped.alignments is padded.alignments
+    assert padded.union_box == (0,0,*padded.output_size)
+    assert cropped.union_box == compute_union_box(cropped) == unpadded.union_box
     assert padded.output_size != cropped.output_size
     folder=export_aligned_sequence(padded,tmp_path,cancel_event=Event(),intersection_only=True)
     for seed,path in zip(seeds,sorted(folder.glob('*.png'))):
@@ -70,6 +77,7 @@ def test_no_common_rectangle_rejects_only_intersection_export_before_creating_fi
     padded=replace(original,jobs=jobs,output_size=(410,160),
                    pixel_boxes={keys[0]:(0,0,410,160),keys[1]:(-210,0,200,160)},intersection_box=None)
     assert compute_intersection_box(padded) is None
+    assert compute_union_box(padded) == (0,0,410,160)
     destination=tmp_path/'out'
     destination.mkdir()
     with pytest.raises(ValueError,match='没有共同有效区域'):
@@ -80,7 +88,7 @@ def test_no_common_rectangle_rejects_only_intersection_export_before_creating_fi
         compute_intersection_box(padded,cancelled=lambda:True)
 
 
-@pytest.mark.parametrize('version', [2,3])
+@pytest.mark.parametrize('version', [2,3,4])
 def test_cache_roundtrip_and_old_cache_geometry_upgrade(rotated_seeds,tmp_path,monkeypatch,version):
     seeds=[replace(s,settings={**s.settings,'dejitter_pad_to_union':True}) for s in rotated_seeds]
     cache=SequencePreviewCache(tmp_path/'cache')
@@ -92,15 +100,23 @@ def test_cache_roundtrip_and_old_cache_geometry_upgrade(rotated_seeds,tmp_path,m
     raw['version']=version
     if version==2:
         del raw['intersection_box']
+    if version<4:
+        del raw['union_box']
     manifest.write_text(json.dumps(raw),encoding='utf-8')
     monkeypatch.setattr(workers,'prepare_sequence_preview',fail_recompute)
     monkeypatch.setattr(workers,'render_sequence_preview_frame',fail_recompute)
     restored,_,errors=run_worker(seeds,cache,restore_only=True)
     assert restored and not errors
     assert restored[0][0].intersection_box == sequence.intersection_box
+    assert restored[0][0].union_box == sequence.union_box
     assert restored[0][1].image == first[0][1].image
     raw['version']=3
     raw['intersection_box']=[-1,0,20,30]
+    manifest.write_text(json.dumps(raw),encoding='utf-8')
+    assert cache.load(seeds) is None
+    raw['version']=4
+    raw['intersection_box']=sequence.intersection_box
+    raw['union_box']=[0,0,1,1]
     manifest.write_text(json.dumps(raw),encoding='utf-8')
     assert cache.load(seeds) is None
 
@@ -115,16 +131,24 @@ def test_options_refresh_ab_without_invalidating_analysis_and_persist_without_ca
     key=window._sequence_cache_key
     expected=normalized_intersection_box(sequence)
     assert window.preview_label.canvas._intersection_box == expected
+    assert window.preview_label.canvas._union_box == normalized_union_box(sequence)
+    assert window.dejitter_bounds_overview.union_box == sequence.union_box
+    assert window.dejitter_bounds_overview.intersection_box == sequence.intersection_box
+    assert '205 × 163' in window.dejitter_intersection_status.text()
+    assert '195 × 157' in window.dejitter_intersection_status.text()
     ab=window.ab_preview
     ab.enabled.setChecked(True)
     finish(ab)
     ab.mode.setCurrentIndex(1)
     finish(ab)
     assert ab.preview.canvas._intersection_box == expected
+    assert ab.preview.canvas._union_box == normalized_union_box(sequence)
     window.dejitter_show_intersection_check.setChecked(False)
     window.dejitter_export_intersection_check.setChecked(True)
     assert window.preview_label.canvas._intersection_box is None
     assert ab.preview.canvas._intersection_box is None
+    assert window.preview_label.canvas._union_box is None
+    assert ab.preview.canvas._union_box is None
     assert window._sequence_preview is sequence and window._sequence_epoch == epoch
     assert window._sequence_cache_key == key and window.dejitter_export_btn.isEnabled()
     state=window._collect_sequence_workspace_state()

@@ -80,6 +80,7 @@ class SequencePreview:
     canvas_box: tuple = ()
     # Relative to the displayed output canvas, including padded previews.
     intersection_box: tuple | None = None
+    union_box: tuple | None = None
 
     def frame_crop_plan(self, key):
         from birdstamp.image_dejitter.sequence_geometry import aligned_crop_plan
@@ -262,10 +263,11 @@ def prepare_sequence_preview(seeds, template_paths=None, *, cancel_event, progre
                              pixel_boxes=boxes, source_sizes={k: sizes[k] for k in accepted},
                              output_size=output_size, input_jobs=input_jobs if failure else {}, failure=failure,
                              alignments=alignments,canvas_box=canvas_box)
-    from .sequence_intersection import compute_intersection_box
+    from .sequence_intersection import compute_intersection_box, compute_union_box
     result.intersection_box = (compute_intersection_box(result, cancelled=cancel_event.is_set)
                                if settings.get('dejitter_pad_to_union', False) is True
                                else (0, 0, *output_size))
+    result.union_box = compute_union_box(result, cancelled=cancel_event.is_set)
     if not result.files_current():
         raise ValueError('照片或 XMP 在分析期间发生变化，请重新分析。')
     if cancel_event.is_set():
