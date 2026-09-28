@@ -415,6 +415,7 @@ PREVIEW_AUTO_FOCUS_CENTER = _load_builtin_editor_options_raw().get("preview_auto
 DEJITTER_QUICK_MAX_EDGE = _bounded_preview_option("dejitter_quick_max_edge", 768, 128, 1024)
 DEJITTER_QUICK_CACHE_BYTES = _bounded_preview_option("dejitter_quick_cache_mb", 64, 8, 256) * 1024 * 1024
 DEJITTER_PLAYBACK_FPS = _bounded_preview_option("dejitter_playback_fps", 8, 1, 30)
+DEJITTER_AUTO_REGION_COUNT = _bounded_preview_option("dejitter_auto_region_count", 9, 1, 36)
 DEJITTER_PREVIEW_MAX_EDGE = _bounded_preview_option("dejitter_preview_max_edge", 1600, 256, 4096)
 DEJITTER_DISK_CACHE_BYTES = _bounded_preview_option("dejitter_disk_cache_mb", 512, 128, 4096) * 1024 * 1024
 DEJITTER_PREVIEW_CACHE_BYTES = _bounded_preview_option("dejitter_preview_cache_mb", 64, 8, 256) * 1024 * 1024

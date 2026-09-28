@@ -44,7 +44,7 @@ def test_dejitter_status_uses_color_keys_before_descriptions(window):
     assert bounds.text() == '整组完整范围（并集）：待分析\n共同无黑边范围（交集）：待分析'
     frames = tracking.findChildren(_ColorFrame) + bounds.findChildren(_ColorFrame)
     assert [(frame.color.name().upper(), frame.dashed) for frame in frames] == [
-        ('#FFB703', False), ('#FF5252', True), ('#F5A623', False), ('#45D6E8', False),
+        ('#FFB703', False), ('#FF5252', True), ('#23F531', False), ('#45D6E8', False),
     ]
     for frame in frames:
         image = QImage(frame.size(), QImage.Format.Format_ARGB32)
@@ -89,9 +89,61 @@ def test_auto_add_regions_keeps_existing_reference_and_invalidates_analysis(wind
     window._commit_source_reference_regions(window.current_path, (original,))
     window.dejitter_auto_regions_btn.click()
     assert window._dejitter_reference_regions[0] == original
-    assert 1 < len(window._dejitter_reference_regions) <= 5
+    assert len(window._dejitter_reference_regions) == 9
     assert window._dejitter_reference_source == str(window.current_path)
     assert window.dejitter_region_list.count() == len(window._dejitter_reference_regions)
+    assert window._sequence_preview is None
+    assert '目标 9 个，已有 1 个，新增 8 个，共 9 个' in window._sequence_message
+    epoch = window._sequence_epoch
+    window.dejitter_auto_regions_btn.click()
+    assert len(window._dejitter_reference_regions) == 9
+    assert window._sequence_epoch == epoch
+
+
+def test_auto_region_count_workspace_defaults_and_preferences_do_not_invalidate(window):
+    from birdstamp.gui import editor_options
+    assert window.dejitter_auto_region_count.value() == editor_options.DEJITTER_AUTO_REGION_COUNT == 9
+    epoch = window._sequence_epoch
+    window.dejitter_auto_region_count.setValue(16)
+    state = window._collect_sequence_workspace_state()
+    assert state['auto_region_count'] == 16
+    window.dejitter_auto_region_count.setValue(3)
+    window._restore_sequence_workspace_state(state)
+    assert window.dejitter_auto_region_count.value() == 16
+    window._restore_sequence_workspace_state({})
+    assert window.dejitter_auto_region_count.value() == 9
+    for value, expected in [(None,9), ('bad',9), (0,1), (100,36)]:
+        window._restore_sequence_workspace_state({'auto_region_count':value})
+        assert window.dejitter_auto_region_count.value() == expected
+    assert window._sequence_epoch == epoch
+
+
+def test_no_auto_candidates_keep_analysis_and_manual_matches(window, monkeypatch):
+    window.export_tabs.setCurrentWidget(window.dejitter_page)
+    original = ((.1,.1,.2,.2),)
+    window._commit_source_reference_regions(window.current_path, original)
+    window._sequence_cache_key = 'saved-analysis'
+    window._dejitter_manual_matches['sample'] = {'preserve':True}
+    epoch = window._sequence_epoch
+    messages = []
+    monkeypatch.setattr(window, '_set_status', messages.append)
+    window.dejitter_auto_regions_btn.click()  # 固定黑色预览没有角点。
+    assert window._dejitter_reference_regions == original
+    assert window._sequence_cache_key == 'saved-analysis'
+    assert window._sequence_epoch == epoch
+    assert window._dejitter_manual_matches == {'sample':{'preserve':True}}
+    assert '新增 0 个，共 1 个' in messages[-1] and '尚差 8 个' in messages[-1]
+
+
+def test_auto_region_target_survives_workspace_file_without_analysis(window, tmp_path):
+    from birdstamp.workspace import read_workspace_json, write_workspace_json
+    path = tmp_path / '自动选区.birdstamp-workspace.json'
+    window.dejitter_auto_region_count.setValue(25)
+    write_workspace_json(path, window._collect_workspace_payload(path))
+    window.dejitter_auto_region_count.setValue(2)
+    window._restore_workspace_payload(read_workspace_json(path), path)
+    assert not window._workspace_restore_in_progress()
+    assert window.dejitter_auto_region_count.value() == 25
     assert window._sequence_preview is None
 
 

@@ -5,7 +5,7 @@ from pathlib import Path
 from time import monotonic
 
 from PyQt6.QtGui import QPixmap
-from PyQt6.QtWidgets import QTabBar, QCheckBox, QComboBox, QFileDialog, QListWidget, QGroupBox, QHBoxLayout, QLabel, QProgressBar, QPushButton, QSlider, QVBoxLayout, QWidget
+from PyQt6.QtWidgets import QTabBar, QCheckBox, QComboBox, QFileDialog, QListWidget, QGroupBox, QHBoxLayout, QLabel, QProgressBar, QPushButton, QSlider, QSpinBox, QVBoxLayout, QWidget
 from PyQt6.QtCore import Qt, QTimer
 
 from birdstamp.export_stage.sequence_preview import sequence_input_key
@@ -77,12 +77,20 @@ class _BirdStampDejitterMixin:
                     active=self._dejitter_tab_active(), view=self._dejitter_view,
                     show_intersection=self.dejitter_show_intersection_check.isChecked(),
                     export_intersection=self.dejitter_export_intersection_check.isChecked(),
+                    auto_region_count=self.dejitter_auto_region_count.value(),
                     open_export_workspace=self.dejitter_export_workspace_check.isChecked())
 
     def _restore_sequence_workspace_state(self, state):
         if self._sequence_shutdown:
             return
         options = state if isinstance(state, dict) else {}
+        try:
+            count = int(options.get('auto_region_count', editor_options.DEJITTER_AUTO_REGION_COUNT))
+        except (TypeError, ValueError, OverflowError):
+            count = editor_options.DEJITTER_AUTO_REGION_COUNT
+        blocked = self.dejitter_auto_region_count.blockSignals(True)
+        self.dejitter_auto_region_count.setValue(count)
+        self.dejitter_auto_region_count.blockSignals(blocked)
         for checkbox, key, default in (
                 (self.dejitter_show_intersection_check, 'show_intersection', editor_options.DEJITTER_SHOW_INTERSECTION),
                 (self.dejitter_export_intersection_check, 'export_intersection', editor_options.DEJITTER_EXPORT_INTERSECTION),
@@ -138,12 +146,26 @@ class _BirdStampDejitterMixin:
         self.dejitter_draw_btn = QPushButton('框选 / 追加选区')
         self.dejitter_draw_btn.clicked.connect(self._on_dejitter_draw)
         self.dejitter_auto_regions_btn = QPushButton('自动添加选区')
-        self.dejitter_auto_regions_btn.setToolTip('在当前参考图中添加最多 4 个分散的纹理区域；已有选区保留，可继续手动调整。')
+        self.dejitter_auto_regions_btn.setToolTip('保留已有选区，分格优先补足到右侧目标数量；空白格从其他有纹理的位置补选。\n质量不足时允许少于目标；建议选区仍可手动调整或删除。')
         self.dejitter_auto_regions_btn.clicked.connect(self._on_dejitter_auto_regions)
         buttons.addWidget(self.dejitter_edit_reference_btn)
         buttons.addWidget(self.dejitter_draw_btn)
         form.addLayout(buttons)
-        form.addWidget(self.dejitter_auto_regions_btn)
+        auto_row = QHBoxLayout()
+        auto_row.addWidget(self.dejitter_auto_regions_btn, 1)
+        self.dejitter_auto_region_count = QSpinBox()
+        self.dejitter_auto_region_count.setRange(1, 36)
+        self.dejitter_auto_region_count.setValue(editor_options.DEJITTER_AUTO_REGION_COUNT)
+        self.dejitter_auto_region_count.setSuffix(' 个')
+        self.dejitter_auto_region_count.setKeyboardTracking(False)
+        self.dejitter_auto_region_count.setAccessibleName('自动选区目标总数')
+        self.dejitter_auto_region_count.setToolTip('包含已有选区的目标总数；默认 9 按 3×3 分格。\n只改变数量不会修改当前选区；点击按钮后补足，已达到目标时不新增。')
+        count_label = QLabel('目标数量')
+        count_label.setBuddy(self.dejitter_auto_region_count)
+        auto_row.addWidget(count_label)
+        auto_row.addWidget(self.dejitter_auto_region_count)
+        form.addLayout(auto_row)
+        self.dejitter_auto_region_count.valueChanged.connect(self._schedule_workspace_autosave)
         self.dejitter_region_list = QListWidget()
         self.dejitter_region_list.setMaximumHeight(110)
         self.dejitter_region_list.setSelectionMode(QListWidget.SelectionMode.ExtendedSelection)
@@ -408,6 +430,11 @@ class _BirdStampDejitterMixin:
     def _on_dejitter_auto_regions(self):
         if self._sequence_shutdown or self._sequence_worker is not None:
             return
+        target = self.dejitter_auto_region_count.value()
+        before = len(self._dejitter_reference_regions)
+        if before >= target:
+            self._set_status(f'目标 {target} 个，已有 {before} 个，新增 0 个，共 {before} 个；已达到目标，保留现有选区。')
+            return
         self._set_dejitter_view('edit')
         if not self._reference_regions_editable():
             self._on_edit_reference_photo()
@@ -417,14 +444,18 @@ class _BirdStampDejitterMixin:
         if image is None or self.current_path is None:
             self._set_status('请先选择参考照片并等待原图预览加载完成。')
             return
-        added = suggest_reference_regions(image, self._dejitter_reference_regions)
+        added = suggest_reference_regions(image, self._dejitter_reference_regions, target_count=target)
+        total = before + len(added)
+        message = f'目标 {target} 个，已有 {before} 个，新增 {len(added)} 个，共 {total} 个。'
+        if total < target:
+            message += f'缺少合格纹理或可用空间，尚差 {target-total} 个；可手动框选。'
         if not added:
-            self._set_status('当前参考图没有找到新的合适纹理区域；可手动框选。')
+            self._set_status(message)
             return
         self._set_edit_mode_button_checked(EDIT_MODE_REFERENCE_REGION)
         self._commit_source_reference_regions(
             self.current_path, (*self._dejitter_reference_regions, *added))
-        self._sequence_message = f'已自动添加 {len(added)} 个选区；请检查位置后重新分析。'
+        self._sequence_message = message + '请检查位置后重新分析。'
         self._update_dejitter_controls()
         self._refresh_preview_label(preserve_view=True)
         self._set_status(self._sequence_message)
