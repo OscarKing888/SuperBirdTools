@@ -21,7 +21,7 @@ from . import editor_options
 from .editor_utils import path_key
 from .sequence_preview_frame import SequencePreviewFrame
 
-CACHE_VERSION = 3
+CACHE_VERSION = 4
 _log = get_logger('birdstamp.sequence_cache')
 
 
@@ -70,7 +70,7 @@ class SequencePreviewCache:
             document = dict(version=CACHE_VERSION, input_key=sequence.input_key,
                             output_size=sequence.output_size, signatures=sequence.signatures, frames=records,
                             bird_boxes=list(sequence.bird_boxes.items()),canvas_box=sequence.canvas_box,
-                            intersection_box=sequence.intersection_box)
+                            intersection_box=sequence.intersection_box, union_box=sequence.union_box)
             (staging / 'manifest.json').write_text(json.dumps(document, ensure_ascii=False, default=str), encoding='utf-8')
             if cancelled() or not sequence.files_current():
                 return
@@ -107,7 +107,7 @@ class SequencePreviewCache:
             if manifest.stat().st_size > 64*1024*1024:
                 raise ValueError('成片缓存清单过大')
             raw = json.loads(manifest.read_text(encoding='utf-8'))
-            if raw['version'] not in (2, CACHE_VERSION) or raw['input_key'] != key:
+            if raw['version'] not in (2, 3, CACHE_VERSION) or raw['input_key'] != key:
                 return None
             records = raw['frames']
             if [path_key(seed.path) for seed in seeds] != [path_key(Path(r['path'])) for r in records]:
@@ -178,6 +178,11 @@ class SequencePreviewCache:
                                  0 <= box[1] < box[3] <= sequence.output_size[1])):
                         raise ValueError('成片缓存最大交集范围无效')
                     sequence.intersection_box = tuple(box)
+            # 完整范围只需四角几何；旧缓存可直接补算，新缓存同时核验坐标。
+            from birdstamp.export_stage.sequence_intersection import compute_union_box
+            sequence.union_box = compute_union_box(sequence, cancelled=cancelled)
+            if raw['version'] == CACHE_VERSION and raw.get('union_box') != list(sequence.union_box):
+                raise ValueError('成片缓存完整范围与对齐几何不一致')
             os.utime(folder, None)
             return sequence, frames
         except (OSError, ValueError, KeyError, TypeError, AttributeError, IndexError) as exc:

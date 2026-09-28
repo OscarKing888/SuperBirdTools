@@ -9,7 +9,7 @@ from PyQt6.QtWidgets import QTabBar, QCheckBox, QComboBox, QFileDialog, QListWid
 from PyQt6.QtCore import Qt, QTimer
 
 from birdstamp.export_stage.sequence_preview import sequence_input_key
-from birdstamp.export_stage.sequence_intersection import normalized_intersection_box
+from birdstamp.export_stage.sequence_intersection import normalized_intersection_box, normalized_union_box
 from birdstamp.image_dejitter.region_tracking_result import image_file_signature
 from birdstamp.image_dejitter.manual_region_matches import MANUAL_MATCHES_KEY
 from birdstamp.image_dejitter.auto_regions import suggest_reference_regions
@@ -19,6 +19,7 @@ from .editor_preview_canvas import EditorPreviewOverlayState
 from .editor_sequence_preview_worker import EditorSequencePreviewWorker, EditorSequenceExportWorker
 from .sequence_preview_cache import SequencePreviewCache
 from .editor_matching_controls import DejitterMatchingControls
+from .sequence_bounds_overview import SequenceBoundsOverview
 from birdstamp.export_stage.render_job_seed import RenderJobSeed
 from .editor_utils import pil_to_qpixmap
 from .editor_utils import path_key
@@ -185,9 +186,9 @@ class _BirdStampDejitterMixin:
         self.dejitter_pad_to_union_check.setToolTip('关闭：裁掉所有空白，取整组交集。开启：保留整组画面并集，统一画幅，缺失区域补黑。')
         self.dejitter_pad_to_union_check.toggled.connect(self._on_dejitter_options_changed)
         layout.addWidget(self.dejitter_pad_to_union_check)
-        self.dejitter_show_intersection_check = QCheckBox('成片预览显示最大交集范围框')
+        self.dejitter_show_intersection_check = QCheckBox('成片预览显示交集／并集范围框')
         self.dejitter_show_intersection_check.setChecked(editor_options.DEJITTER_SHOW_INTERSECTION)
-        self.dejitter_show_intersection_check.setToolTip('显示整组共同有效画面的最大矩形；仅作辅助叠加，不写入成片。')
+        self.dejitter_show_intersection_check.setToolTip('青色交集框：所有照片共同覆盖的最大无黑边矩形。橙色并集框：整组完整范围。\n开启补边可在成片中完整查看两框；下方示意图始终显示两个范围。')
         self.dejitter_show_intersection_check.toggled.connect(self._on_dejitter_intersection_options_changed)
         layout.addWidget(self.dejitter_show_intersection_check)
         self.dejitter_preprocess_btn = QPushButton('分析并预览成片')
@@ -205,10 +206,12 @@ class _BirdStampDejitterMixin:
         self.dejitter_tracking_status = QLabel()
         self.dejitter_tracking_status.setWordWrap(True)
         layout.addWidget(self.dejitter_tracking_status)
-        self.dejitter_intersection_status = QLabel('最大交集范围：待分析')
+        self.dejitter_intersection_status = QLabel('整组完整范围（并集）：待分析\n共同无黑边范围（交集）：待分析')
         self.dejitter_intersection_status.setWordWrap(True)
         layout.addWidget(self.dejitter_intersection_status)
-        self.dejitter_export_intersection_check = QCheckBox('仅导出最大交集范围')
+        self.dejitter_bounds_overview = SequenceBoundsOverview()
+        layout.addWidget(self.dejitter_bounds_overview)
+        self.dejitter_export_intersection_check = QCheckBox('仅导出共同无黑边范围（交集）')
         self.dejitter_export_intersection_check.setChecked(editor_options.DEJITTER_EXPORT_INTERSECTION)
         self.dejitter_export_intersection_check.setToolTip('导出范围与预览交集框一致；不改变当前补边预览，不需要重新匹配。')
         self.dejitter_export_intersection_check.toggled.connect(self._on_dejitter_intersection_options_changed)
@@ -491,13 +494,18 @@ class _BirdStampDejitterMixin:
         sequence = self._sequence_preview
         partial = sequence is not None and sequence.partial
         box = sequence.intersection_box if sequence is not None else None
+        union = sequence.union_box if sequence is not None else None
         missing_intersection = sequence is not None and box is None
+        prefix = '当前成功前缀 · ' if partial else ''
+        union_detail = (f'{union[2]-union[0]} × {union[3]-union[1]} 像素' if union else '待分析')
         if box is not None:
-            label = '当前成功前缀最大交集' if partial else '最大交集范围'
-            detail = f'{label}：{box[2]-box[0]} × {box[3]-box[1]} 像素'
+            detail = f'{box[2]-box[0]} × {box[3]-box[1]} 像素'
         else:
-            detail = '整组没有共同有效区域，无法仅导出最大交集范围。' if sequence else '最大交集范围：待分析'
-        self.dejitter_intersection_status.setText(detail)
+            detail = '没有共同有效区域，无法导出交集' if sequence else '待分析'
+        self.dejitter_intersection_status.setText(
+            f'{prefix}整组完整范围（并集，橙）：{union_detail}\n'
+            f'{prefix}共同无黑边范围（交集，青）：{detail}')
+        self.dejitter_bounds_overview.set_bounds(union, box)
         export_blocked = missing_intersection and self.dejitter_export_intersection_check.isChecked()
         self.dejitter_export_intersection_check.setEnabled(not self._sequence_exporting)
         self.dejitter_export_btn.setEnabled(worker is None and sequence is not None and not partial
@@ -795,6 +803,7 @@ class _BirdStampDejitterMixin:
             self.preview_label.set_original_size(*frame.source_size)
             if self.dejitter_show_intersection_check.isChecked():
                 state.intersection_box = normalized_intersection_box(sequence)
+                state.union_box = normalized_union_box(sequence)
             self.preview_label.set_cropped_size(*frame.output_size)
             pixmap = QPixmap.fromImage(frame.image)
         else:

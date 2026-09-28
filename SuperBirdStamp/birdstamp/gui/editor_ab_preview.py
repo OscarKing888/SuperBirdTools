@@ -368,8 +368,9 @@ class ABPreview(QObject):
         options.show_reference_regions = True
         options.show_crop_effect = False
         if self.frame and sequence and editor.dejitter_show_intersection_check.isChecked():
-            from birdstamp.export_stage.sequence_intersection import normalized_intersection_box
+            from birdstamp.export_stage.sequence_intersection import normalized_intersection_box, normalized_union_box
             state.intersection_box = normalized_intersection_box(sequence)
+            state.union_box = normalized_union_box(sequence)
         if not self.frame and sequence and key in sequence.pixel_boxes and not editor.dejitter_pad_to_union_check.isChecked():
             state.crop_effect_box = source_normalized_crop(self.size, sequence.pixel_boxes[key])
             state.alignment_crop_box = state.crop_effect_box
