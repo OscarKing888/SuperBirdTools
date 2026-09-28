@@ -139,7 +139,7 @@ def test_failed_analysis_retains_per_region_diagnostics(window, monkeypatch):
     from birdstamp.export_stage import sequence_preview
     def fail_crop(*args, **kwargs):
         raise ValueError('测试无共同画面')
-    monkeypatch.setattr(sequence_preview, 'common_alignment_crop', fail_crop)
+    monkeypatch.setattr(sequence_preview, 'prepare_rigid_geometry', fail_crop)
     window.dejitter_preprocess_btn.click()
     wait_until(lambda: window._sequence_worker is None)
     assert window._sequence_preview is None

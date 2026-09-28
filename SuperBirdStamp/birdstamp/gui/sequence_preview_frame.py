@@ -10,3 +10,5 @@ class SequencePreviewFrame:
     output_size: tuple
     crop_plan: tuple
     source_image: QImage | None = None
+    alignment: object | None = None
+    canvas_box: tuple = ()

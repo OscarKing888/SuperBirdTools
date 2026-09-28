@@ -330,8 +330,16 @@ class ABPreview(QObject):
         if tracking and (tracking.signature != image_file_signature(self.path) or
                          image_file_signature(Path(editor._dejitter_reference_source)) != editor._reference_tracking_signature):
             tracking = None
-        source_crop = source_normalized_crop(self.size, sequence.pixel_boxes[key]) if self.frame and sequence else None
-        state.reference_diagnostics = tracking_overlays(regions, tracking, source_crop)
+        if self.frame and self.frame.alignment and self.frame.alignment.rotated:
+            from .editor_tracking_overlay import apply_frame_alignment
+            focus = editor_core.resolve_focus_box_after_processing(
+                metadata, source_width=width, source_height=height, crop_box=None,
+                outer_pad=(0, 0, 0, 0), apply_ratio_crop=False,
+                camera_type=editor_core.resolve_focus_camera_type_from_metadata(metadata))
+            apply_frame_alignment(state, self.frame, focus, bird, regions, tracking)
+        else:
+            source_crop = source_normalized_crop(self.size, sequence.pixel_boxes[key]) if self.frame and sequence else None
+            state.reference_diagnostics = tracking_overlays(regions, tracking, source_crop)
         if not crop and editor._dejitter_reference_source and path_key(Path(editor._dejitter_reference_source)) == key:
             state.reference_regions = regions
             state.reference_diagnostics = ()
@@ -342,6 +350,10 @@ class ABPreview(QObject):
             state.crop_effect_box = source_normalized_crop(self.size, sequence.pixel_boxes[key])
             state.alignment_crop_box = state.crop_effect_box
             options.show_crop_effect = editor.show_crop_effect_check.isChecked()
+        elif not self.frame and sequence and not editor.dejitter_pad_to_union_check.isChecked():
+            from .editor_tracking_overlay import apply_alignment_crop
+            if apply_alignment_crop(state, sequence, key):
+                options.show_crop_effect = editor.show_crop_effect_check.isChecked()
         self.preview.apply_overlay_options(options)
         self.preview.apply_overlay_state(state)
         self.preview.set_original_size(width, height)
