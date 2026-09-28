@@ -213,7 +213,7 @@ class _BirdStampDejitterMixin:
         ))
         layout.addWidget(self.dejitter_tracking_key)
         self.dejitter_intersection_status = ColorKeyRows((
-            ('#F5A623', False, '整组完整范围（并集）：待分析'),
+            ("#23F531", False, '整组完整范围（并集）：待分析'),
             ('#45D6E8', False, '共同无黑边范围（交集）：待分析'),
         ))
         layout.addWidget(self.dejitter_intersection_status)
