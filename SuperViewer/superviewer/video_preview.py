@@ -18,6 +18,13 @@ from .qt_compat import (
     _NoEditTriggers,
 )
 
+try:
+    from PyQt6.QtCore import QEvent
+except ImportError:
+    from PyQt5.QtCore import QEvent
+
+_EVENTS = getattr(QEvent, "Type", QEvent)
+
 _log = get_logger('superviewer.video')
 
 
@@ -116,6 +123,8 @@ class _VideoProbe(QThread):
 
 class VideoPlayerView(QWidget):
     """Paused poster until explicit play. Qt owns A/V decoding and synchronization."""
+    activated = pyqtSignal()
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self.path = ''
@@ -213,6 +222,7 @@ class VideoPlayerView(QWidget):
             self._invoke = QMetaObject.invokeMethod
             self._arg = Q_ARG
             self.video = QVideoWidget(self)
+            self.video.installEventFilter(self)
             self.stack.addWidget(self.video)
             self.player = QMediaPlayer(self)
             self.audio = QAudioOutput(self)
@@ -230,6 +240,13 @@ class VideoPlayerView(QWidget):
         except (ImportError, RuntimeError) as exc:
             self.message.setText(f'无法启动播放器：{exc}')
             return False
+
+    def eventFilter(self, watched, event):
+        if watched is getattr(self, "video", None) and event.type() in (
+            _EVENTS.MouseButtonPress, _EVENTS.FocusIn,
+        ):
+            self.activated.emit()
+        return super().eventFilter(watched, event)
 
     def toggle_play(self):
         if not self.path or not self._ensure_player():

@@ -133,6 +133,7 @@ try:
     from .superviewer.super_viewer_user_options_dialog import SuperViewerUserOptionsDialog
     from .superviewer.tagged_file_list import SuperViewerTaggedFileListPanel
     from .superviewer.preview_key_router import PreviewKeyRouter
+    from .superviewer.viewer_ab_preview import ViewerABPreview
     from .superviewer.tag_history_actions import TagHistoryActions
     from .superviewer.metadata_edit_sync import sync_saved_xmp_edit
     from .superviewer.ui_theme import get_ui_theme_manager, install_app_theme, panel_theme_colors
@@ -215,6 +216,7 @@ except ImportError:
     from superviewer.super_viewer_user_options_dialog import SuperViewerUserOptionsDialog
     from superviewer.tagged_file_list import SuperViewerTaggedFileListPanel
     from superviewer.preview_key_router import PreviewKeyRouter
+    from superviewer.viewer_ab_preview import ViewerABPreview
     from superviewer.tag_history_actions import TagHistoryActions
     from superviewer.metadata_edit_sync import sync_saved_xmp_edit
     from superviewer.ui_theme import get_ui_theme_manager, install_app_theme, panel_theme_colors
@@ -308,6 +310,8 @@ class MainWindow(QMainWindow):
         self._shutdown_finalized = False
         self._shutdown_started_at: float | None = None
         self._shutdown_pending_state: tuple[bool, bool, bool, bool, bool] | None = None
+        self._ab_pre_sizes: list[int] | None = None
+        self._focus_display_panel = None
         self._exiftool_shutdown_thread: threading.Thread | None = None
         self._exiftool_shutdown_done = threading.Event()
         info = _load_superviewer_about_info()
@@ -447,7 +451,22 @@ class MainWindow(QMainWindow):
         self.preview_panel.set_composition_grid_line_width(self.combo_preview_grid_line_width.currentData())
         self.preview_panel.display_scale_percent_changed.connect(self._sync_preview_scale_combo)
         self._sync_preview_scale_combo(self.preview_panel.current_display_scale_percent())
-        left_layout.addWidget(self.preview_panel, stretch=1)
+        self.preview_a = PreviewPanel(central)
+        self._preview_key_router_a = PreviewKeyRouter(self.preview_a._canvas, self._file_list, self)
+        self.preview_a.set_quick_preview_provider(self._file_list.cached_quick_preview_for_path)
+        self.preview_a.set_show_focus_enabled(self.check_show_focus.isChecked())
+        self.preview_a.set_composition_grid_mode(self.combo_preview_grid.currentData())
+        self.preview_a.set_composition_grid_line_width(self.combo_preview_grid_line_width.currentData())
+        self.preview_a.set_keep_view_on_switch(bool(get_keep_view_on_switch()))
+        self.preview_a.full_preview_ready.connect(lambda path: self._on_full_preview_ready(path, panel=self.preview_a))
+        self.ab_preview = ViewerABPreview(
+            self, self.preview_panel, self.preview_a,
+            b_center=self.check_auto_focus_center, b_scale=self.combo_preview_scale,
+        )
+        self.ab_preview.a_panel.center.toggled.connect(lambda _checked: self._refresh_preview_focus_options())
+        overlay_row.insertWidget(0, self.ab_preview.enabled)
+        overlay_row.insertWidget(1, self.ab_preview.linked)
+        left_layout.addWidget(self.ab_preview.splitter, stretch=1)
         splitter.addWidget(left_widget)
 
         # ── 面板 4：可扩展元信息 Tab ──
@@ -460,7 +479,7 @@ class MainWindow(QMainWindow):
             self._rename_photo_from_info_panel,
             metadata_provider=self._file_list.cached_photo_metadata_for_path,
             comment_save_callback=self._save_photo_comment_from_info_panel,
-            preview_pixmap_provider=self.preview_panel.source_pixmap_for_path,
+            preview_pixmap_provider=lambda path: self._active_preview_panel().source_pixmap_for_path(path),
             write_enabled_provider=self._file_writes_allowed,
             write_disabled_tooltip_provider=self._file_writes_disabled_message,
             tag_write_enabled_provider=self._sidecar_writes_allowed,
@@ -492,8 +511,12 @@ class MainWindow(QMainWindow):
         self.media_info_stack.setMinimumWidth(300)
         self.media_info_stack.addWidget(self.image_info_tabs)
         self.media_info_stack.addWidget(self.video_info_panel)
-        self.preview_panel.video_info_ready.connect(self.video_info_panel.update_info)
-        self._file_list.video_playback_stop_requested.connect(self.preview_panel.stop_video_playback)
+        self.preview_panel.video_info_ready.connect(
+            lambda path, info, error: self._on_video_info_ready("b", path, info, error))
+        self.preview_a.video_info_ready.connect(
+            lambda path, info, error: self._on_video_info_ready("a", path, info, error))
+        self._file_list.video_playback_stop_requested.connect(
+            lambda: self._active_preview_panel().stop_video_playback())
         splitter.addWidget(self.media_info_stack)
         splitter.set_handle_toggle_target(3, 3)
 
@@ -531,7 +554,11 @@ class MainWindow(QMainWindow):
 
     def _on_directory_selected(self, path: str):
         """目录树选中目录后，保存路径到设置与 .last_folder.txt，并刷新文件列表。"""
+        self.preview_a.clear_image()
         self.preview_panel.clear_image()
+        self.ab_preview.set_side_path("a", "")
+        self.ab_preview.set_side_path("b", "")
+        self.ab_preview.video_info = {"a": None, "b": None}
         self.video_info_panel.set_path('')
         self.media_info_stack.setCurrentWidget(self.image_info_tabs)
         self.image_info_tabs.on_photo_selected('')
@@ -563,9 +590,66 @@ class MainWindow(QMainWindow):
         if not isinstance(splitter, TriangleToggleSplitter):
             return
         try:
-            save_main_splitter_state_to_settings(splitter.export_panel_state())
+            state = splitter.export_panel_state()
+            if self.ab_preview.enabled.isChecked() and self._ab_pre_sizes:
+                state["sizes"] = list(self._ab_pre_sizes)
+            save_main_splitter_state_to_settings(state)
         except Exception:
             pass
+
+    def _active_preview_panel(self):
+        ab = getattr(self, "ab_preview", None)
+        return ab.active_panel() if ab is not None else self.preview_panel
+
+    def _on_ab_toggled(self, enabled: bool) -> None:
+        self._file_list.stop_key_navigation_playback(commit=False)
+        if enabled:
+            self._ab_pre_sizes = list(self._main_splitter.sizes())
+            self._file_list.setMinimumWidth(260)
+            sizes = list(self._main_splitter.sizes())
+            if len(sizes) == 4:
+                released = max(0, sizes[1] - 260)
+                sizes[1] = 260
+                sizes[2] += released
+                self._main_splitter.setSizes(sizes)
+            path = self._current_exif_path or self.preview_panel.current_path() or ""
+            display_path = self._file_list.get_selected_display_path() or path
+            self.ab_preview.set_side_path("b", path, display_path=display_path)
+            self.ab_preview.set_side_path("a", path, display_path=display_path)
+            if path:
+                self.preview_a.set_image(path, quick_size=self._file_list.preview_quick_size())
+                self.preview_a.set_focus_box(self.preview_panel.canvas._focus_box)
+        else:
+            self.preview_a.clear_image()
+            self.ab_preview.set_side_path("a", "")
+            self.ab_preview.video_info["a"] = None
+            self._file_list.setMinimumWidth(520)
+            restore_sizes = self._ab_pre_sizes
+            if restore_sizes:
+                self._main_splitter.setSizes(restore_sizes)
+                # Qt may relayout the newly hidden A pane after this toggle slot.
+                QTimer.singleShot(0, lambda sizes=restore_sizes: self._restore_ab_splitter_sizes(sizes))
+            self._ab_pre_sizes = None
+            self._on_ab_activated("b")
+
+    def _restore_ab_splitter_sizes(self, sizes: list[int]) -> None:
+        if not self._shutdown_requested and not self.ab_preview.enabled.isChecked():
+            self._main_splitter.setSizes(sizes)
+
+    def _on_ab_activated(self, side: str) -> None:
+        path = self.ab_preview.active_path()
+        display_path = self.ab_preview.display_paths[side]
+        if display_path:
+            self._file_list.select_display_path_silently(display_path)
+        self.on_image_loaded(path)
+
+    def _on_video_info_ready(self, side: str, path: str, info, error: str) -> None:
+        panel = self.preview_a if side == "a" else self.preview_panel
+        if not path or os.path.normcase(os.path.normpath(path)) != os.path.normcase(os.path.normpath(panel.current_path() or "")):
+            return
+        self.ab_preview.video_info[side] = (path, info, error)
+        if self._active_preview_panel() is panel and self._current_exif_path == path:
+            self.video_info_panel.update_info(path, info, error)
 
     def _sync_directory_browser_to_file_selection(self, path: str) -> None:
         display_path = self._file_list.get_selected_display_path()
@@ -596,7 +680,12 @@ class MainWindow(QMainWindow):
         preview_t0 = _time.perf_counter()
         quick_size_fn = getattr(self._file_list, "preview_quick_size", None)
         quick_size = quick_size_fn() if callable(quick_size_fn) else None
-        self.preview_panel.set_image(path, quick_size=quick_size)
+        panel = self._active_preview_panel()
+        panel.set_image(path, quick_size=quick_size)
+        side = "a" if panel is self.preview_a else "b"
+        self.ab_preview.video_info[side] = None
+        self.ab_preview.set_side_path(
+            side, path, display_path=self._file_list.get_selected_display_path() or path)
         preview_ms = (_time.perf_counter() - preview_t0) * 1000.0
         info_t0 = _time.perf_counter()
         self.on_image_loaded(path)
@@ -622,15 +711,17 @@ class MainWindow(QMainWindow):
         """连续方向键长按时显示已解析的当前档位缓存。"""
         quick_size_fn = getattr(self._file_list, "preview_quick_size", None)
         quick_size = quick_size_fn() if callable(quick_size_fn) else None
-        self.preview_panel.set_image(path, load_full=False, quick_size=quick_size)
-        self._update_preview_focus_box(path, allow_async_load=False)
+        panel = getattr(self, "_active_preview_panel", lambda: self.preview_panel)()
+        panel.set_image(path, load_full=False, quick_size=quick_size)
+        self._update_preview_focus_box(path, allow_async_load=False, panel=panel)
 
     def _on_file_fast_preview_pixmap_requested(self, path: str, pixmap, quick_size: int) -> None:
         """直接复用缩略图视图已解码的当前档位帧，避免 JPEG 落盘再读。"""
         if not isinstance(pixmap, QPixmap) or pixmap.isNull():
             return
-        self.preview_panel.set_quick_pixmap(path, pixmap, quick_size=quick_size)
-        self._update_preview_focus_box(path, allow_async_load=False)
+        panel = getattr(self, "_active_preview_panel", lambda: self.preview_panel)()
+        panel.set_quick_pixmap(path, pixmap, quick_size=quick_size)
+        self._update_preview_focus_box(path, allow_async_load=False, panel=panel)
 
     def _init_menu_bar(self):
         file_menu = self.menuBar().addMenu("文件")
@@ -695,9 +786,8 @@ class MainWindow(QMainWindow):
         apply_runtime_user_options(normalized)
         self._sync_perf_probe_action()
         self._file_list.apply_user_options()
-        self.preview_panel.set_keep_view_on_switch(
-            bool(normalized.get("keep_view_on_switch", 1))
-        )
+        for panel in (self.preview_panel, self.preview_a):
+            panel.set_keep_view_on_switch(bool(normalized.get("keep_view_on_switch", 1)))
         QMessageBox.information(
             self,
             "已保存",
@@ -759,7 +849,8 @@ class MainWindow(QMainWindow):
         if mode is None:
             mode = self.combo_preview_grid.currentData()
         normalized = normalize_preview_composition_grid_mode(mode)
-        self.preview_panel.set_composition_grid_mode(normalized)
+        for panel in (self.preview_panel, self.preview_a):
+            panel.set_composition_grid_mode(normalized)
         save_preview_grid_mode_to_settings(normalized)
 
     def _on_preview_grid_line_width_changed(self, index: int) -> None:
@@ -767,7 +858,8 @@ class MainWindow(QMainWindow):
         if width is None:
             width = self.combo_preview_grid_line_width.currentData()
         normalized = normalize_preview_composition_grid_line_width(width)
-        self.preview_panel.set_composition_grid_line_width(normalized)
+        for panel in (self.preview_panel, self.preview_a):
+            panel.set_composition_grid_line_width(normalized)
         save_preview_grid_line_width_to_settings(normalized)
 
     def _on_preview_scale_preset_activated(self, index: int) -> None:
@@ -776,8 +868,9 @@ class MainWindow(QMainWindow):
             parsed = float(percent)
         except Exception:
             return
-        self.preview_panel.set_display_scale_percent(parsed, preserve_view=True)
-        self._sync_preview_scale_combo(self.preview_panel.current_display_scale_percent())
+        panel = self.preview_panel
+        panel.set_display_scale_percent(parsed, preserve_view=True)
+        self._sync_preview_scale_combo(panel.current_display_scale_percent())
 
     def _sync_preview_scale_combo(self, scale_percent: object) -> None:
         sync_preview_scale_preset_combo(self.combo_preview_scale, scale_percent)
@@ -995,7 +1088,10 @@ class MainWindow(QMainWindow):
         self._current_exif_path = target_path
         self.file_label.setText(target_path)
         self.file_label.setToolTip(target_path)
-        self.preview_panel.set_image(target_path)
+        getattr(self, "_active_preview_panel", lambda: self.preview_panel)().set_image(target_path)
+        ab = getattr(self, "ab_preview", None)
+        if ab is not None:
+            ab.set_side_path(ab.active_side, target_path, display_path=target_path)
 
         current_dir = self._file_list.get_current_dir() or str(Path(target_path).parent)
         self._file_list.set_pending_selection([target_path], current_path=target_path, apply_immediately=False)
@@ -1044,12 +1140,20 @@ class MainWindow(QMainWindow):
             video = is_video(path)
             self.media_info_stack.setCurrentWidget(self.video_info_panel if video else self.image_info_tabs)
             self.video_info_panel.set_path(path if video else '')
-            for control in (self.check_show_focus, self.check_auto_focus_center, self.combo_preview_grid,
-                            self.combo_preview_grid_line_width, self.combo_preview_scale):
-                control.setEnabled(not video)
+            other_path = self.preview_a.current_path() if self._active_preview_panel() is self.preview_panel else self.preview_panel.current_path()
+            overlay_available = not video or (self.ab_preview.enabled.isChecked() and bool(other_path) and not is_video(other_path))
+            for control in (self.check_show_focus, self.combo_preview_grid, self.combo_preview_grid_line_width):
+                control.setEnabled(overlay_available)
+            self.ab_preview.a_panel._update_available()
+            self.ab_preview.b_panel._update_available()
+            if video:
+                side = "a" if self._active_preview_panel() is self.preview_a else "b"
+                cached = self.ab_preview.video_info[side]
+                if cached is not None and os.path.normcase(os.path.normpath(cached[0])) == os.path.normcase(os.path.normpath(path)):
+                    self.video_info_panel.update_info(*cached)
         self.image_info_tabs.on_photo_selected('' if is_video(path) else path)
         tabs_ms = (_time.perf_counter() - tabs_t0) * 1000.0
-        self._update_preview_focus_box(path)
+        self._update_preview_focus_box(path, panel=self._active_preview_panel())
         perf_log(
             _log,
             "[PERF][image_switch][info] END path=%r label_ms=%.1f tabs_ms=%.1f total_ms=%.1f",
@@ -1102,23 +1206,29 @@ class MainWindow(QMainWindow):
             if panel_path and os.path.normcase(os.path.normpath(panel_path)) == current:
                 self.image_info_panel.refresh_metadata_fields()
 
-    def _on_full_preview_ready(self, path: str) -> None:
+    def _on_full_preview_ready(self, path: str, *, panel=None) -> None:
+        panel = panel or self.preview_panel
         if (
             self._shutdown_requested
             or not self._current_exif_path
             or self._file_list._key_navigation_playback_active
+            or panel is not self._active_preview_panel()
         ):
             return
         if os.path.normcase(os.path.normpath(path)) != os.path.normcase(os.path.normpath(self._current_exif_path)):
             return
-        self._update_preview_focus_box(path)
+        if panel is self.preview_panel:
+            self._update_preview_focus_box(path)
+        else:
+            self._update_preview_focus_box(path, panel=panel)
         if self.image_info_tabs.currentWidget() is self.image_info_panel:
             self.image_info_panel.refresh_metadata_fields()
 
     def _on_preview_overlay_toggled(self, _checked: bool) -> None:
         """「显示对焦点」开关：同步 canvas 并按需加载/清除当前图的对焦点框。"""
         enabled = self.check_show_focus.isChecked()
-        self.preview_panel.set_show_focus_enabled(enabled)
+        for panel in (self.preview_panel, self.preview_a):
+            panel.set_show_focus_enabled(enabled)
         self._refresh_preview_focus_options()
 
     def _on_auto_focus_center_toggled(self, enabled: bool) -> None:
@@ -1129,9 +1239,10 @@ class MainWindow(QMainWindow):
     def _refresh_preview_focus_options(self) -> None:
         # 播放期间的选项变化也只能读内存，不能恢复 EXIF/完整预览任务。
         playing = self._file_list._key_navigation_playback_active
-        path = self.preview_panel.current_path() if playing else self._current_exif_path
+        panel = self._active_preview_panel()
+        path = panel.current_path() if playing else self._current_exif_path
         if path:
-            self._update_preview_focus_box(path, allow_async_load=not playing)
+            self._update_preview_focus_box(path, allow_async_load=not playing, panel=panel)
 
     def _find_source_file_by_stem(self, path: str) -> str | None:
         """Resolve a RAW/HEIF sibling from the directory-listing index."""
@@ -1178,12 +1289,15 @@ class MainWindow(QMainWindow):
                 return (True, focus_box)
         return (False, None)
 
-    def _update_preview_focus_box(self, path: str, *, allow_async_load: bool = True) -> None:
+    def _update_preview_focus_box(self, path: str, *, allow_async_load: bool = True, panel=None) -> None:
         """根据当前预览图尺寸与元数据，异步加载并更新 PreviewCanvas 的对焦点框。
 
         `allow_async_load=False` 时只使用当前源图的内存缓存，不解析来源或启动线程。
         """
-        auto_center_control = getattr(self, "check_auto_focus_center", None)
+        panel = panel if panel is not None else self.preview_panel
+        ab = getattr(self, "ab_preview", None)
+        auto_center_control = (ab.a_panel.center if ab is not None and panel is ab.a_preview
+                               else getattr(self, "check_auto_focus_center", None))
         auto_center = bool(auto_center_control and auto_center_control.isChecked())
         if not allow_async_load or is_video(path):
             self._stop_focus_loader()
@@ -1193,37 +1307,38 @@ class MainWindow(QMainWindow):
                 source_path = self._file_list.get_selected_display_path() or path
                 if not is_video(source_path):
                     _checked, focus_box = self._get_cached_focus_box_for_preview(source_path)
-            self.preview_panel.set_focus_box(focus_box)
+            panel.set_focus_box(focus_box)
             return
         if not self.check_show_focus.isChecked() and not auto_center:
             self._stop_focus_loader()
-            self.preview_panel.set_focus_box(None)
+            panel.set_focus_box(None)
             return
         if not path or not os.path.isfile(path):
             self._stop_focus_loader()
-            self.preview_panel.set_focus_box(None)
+            panel.set_focus_box(None)
             return
         focus_source_path = self._resolve_focus_metadata_source_path(path)
         cached_checked, cached_focus_box = self._get_cached_focus_box_for_preview(path, focus_source_path)
         if cached_checked:
             self._stop_focus_loader()
-            self.preview_panel.set_focus_box(cached_focus_box)
+            panel.set_focus_box(cached_focus_box)
             return
-        size = self.preview_panel.get_preview_image_size()
+        size = panel.get_preview_image_size()
         if not size:
             self._stop_focus_loader()
-            self.preview_panel.set_focus_box(None)
+            panel.set_focus_box(None)
             return
-        preview_path = self.preview_panel.current_path() or path
+        preview_path = panel.current_path() or path
         if (not preview_path or not os.path.isfile(preview_path)) and (
             not focus_source_path or not os.path.isfile(focus_source_path)
         ):
             self._stop_focus_loader()
-            self.preview_panel.set_focus_box(None)
+            panel.set_focus_box(None)
             return
         self._focus_request_sequence += 1
         request_id = self._focus_request_sequence
         self._focus_display_request_id = request_id
+        self._focus_display_panel = panel
         _log.info(
             "[_update_preview_focus_box] async request_id=%s preview=%r focus_source=%r size=%sx%s",
             request_id,
@@ -1240,7 +1355,7 @@ class MainWindow(QMainWindow):
             int(size[1]),
         )
         self._queue_focus_loader_request(request)
-        self.preview_panel.set_focus_box(None)
+        panel.set_focus_box(None)
 
     def _queue_focus_loader_request(
         self,
@@ -1324,7 +1439,10 @@ class MainWindow(QMainWindow):
             used_path,
             focus_box,
         )
-        self.preview_panel.set_focus_box(focus_box)
+        panel = getattr(self, "_focus_display_panel", None) or self.preview_panel
+        active = getattr(self, "_active_preview_panel", lambda: self.preview_panel)()
+        if panel is active:
+            panel.set_focus_box(focus_box)
 
     def _on_focus_loader_finished(self, loader: FocusBoxLoader) -> None:
         self._finalize_focus_loader(loader, start_pending=True)
@@ -1393,6 +1511,7 @@ class MainWindow(QMainWindow):
                 pass
             try:
                 self.preview_panel.request_shutdown()
+                self.preview_a.request_shutdown()
             except Exception:
                 pass
             try:
@@ -1418,6 +1537,7 @@ class MainWindow(QMainWindow):
             pass
         try:
             preview_done = bool(self.preview_panel.shutdown(wait_timeout_ms=25))
+            preview_done = bool(self.preview_a.shutdown(wait_timeout_ms=25)) and preview_done
         except Exception:
             pass
         exiftool_done = self._exiftool_shutdown_done.is_set()
