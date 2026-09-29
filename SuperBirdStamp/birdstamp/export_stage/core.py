@@ -3,6 +3,7 @@ from birdstamp.image_dejitter.matching_options import normalize_matching_setting
 from birdstamp.image_dejitter.rigid_alignment import ALIGNMENT_MODE_KEY, normalize_alignment_mode
 
 from concurrent.futures import as_completed
+from contextlib import nullcontext
 import hashlib
 import json
 import os
@@ -65,6 +66,10 @@ from .video_export_cancelled_error import VideoExportCancelledError
 from .video_export_options import VIDEO_CODEC_RAWVIDEO, VideoExportOptions, is_uncompressed_video_container
 from .video_export_progress import VideoExportProgress, VideoExportProgressCallback
 from .video_frame_job import VideoFrameJob
+from .video_render_workers import (
+    UNKNOWN_FRAME_PIXELS, VideoStageStats, estimate_normalize_pixels,
+    resolve_video_frame_budget, track_video_stage,
+)
 
 _log = get_logger("export_stage")
 
@@ -1415,12 +1420,51 @@ def estimate_video_job_max_pixels(jobs: list[VideoFrameJob]) -> int:
     return max_pixels
 
 
+def estimate_source_render_pixels(jobs: list[VideoFrameJob], *, check_cancel=lambda: None) -> int:
+    """Include known padding and probe only headers when metadata lacks dimensions."""
+    maximum = 0
+    for job in jobs:
+        check_cancel()
+        metadata = job.raw_metadata or {}
+        width = _metadata_dimension_value(metadata, "ImageWidth", "File:ImageWidth", "ExifImageWidth",
+                                         "EXIF:ExifImageWidth", "EXIF:ImageWidth", "RawImageWidth")
+        height = _metadata_dimension_value(metadata, "ImageHeight", "File:ImageHeight", "ExifImageHeight",
+                                          "EXIF:ExifImageHeight", "EXIF:ImageHeight", "RawImageHeight")
+        if job.source_image is not None:
+            width, height = job.source_image.size
+        elif not (width and height):
+            try:
+                with Image.open(job.path) as image:
+                    width, height = image.size
+            except (OSError, ValueError):
+                pass
+        if not (width and height):
+            maximum = max(maximum, UNKNOWN_FRAME_PIXELS)
+            continue
+        maximum = max(maximum, width * height)
+        if _is_ratio_no_crop(_parse_ratio_value(job.settings.get("ratio"))):
+            continue
+        plan = _normalize_precomputed_crop_plan(job.crop_plan)
+        if plan is None and editor_core.should_use_crop_box_override(job.settings):
+            box = editor_core.normalize_extended_unit_box(job.settings.get("crop_box"))
+            if box is not None:
+                plan = editor_core._crop_plan_from_override(width, height, box)
+        if plan is not None:
+            top, bottom, left, right = plan[1]
+            maximum = max(maximum, (width + left + right) * (height + top + bottom))
+    return maximum
+
+
 def resolve_video_render_workers(
     render_workers: int,
     pending_jobs: int,
     *,
     max_frame_pixels: int = 0,
 ) -> int:
+    """Compatibility policy for image export and sequence analysis.
+
+    Video frame preparation uses resolve_video_frame_budget independently.
+    """
     if pending_jobs <= 0:
         return 1
     requested = max(0, int(render_workers))
@@ -1495,16 +1539,19 @@ def _save_normalized_temp_frame(
     *,
     background_color: str,
     source_path: Path,
+    stats: VideoStageStats | None = None,
 ) -> None:
     from birdstamp.export_metadata import save_export_image
-    normalized = normalize_frame_size(
-        image,
-        target_size,
-        background_color=background_color,
-    )
+    with stats.measure("processing") if stats else nullcontext():
+        normalized = normalize_frame_size(
+            image,
+            target_size,
+            background_color=background_color,
+        )
     try:
         # 临时中间帧优先追求速度，不做 optimize 压缩。
-        save_export_image(normalized, frame_path, source_path=source_path, format="PNG", compress_level=1)
+        with stats.measure("writing") if stats else nullcontext():
+            save_export_image(normalized, frame_path, source_path=source_path, format="PNG", compress_level=1)
     finally:
         try:
             normalized.close()
@@ -1600,19 +1647,24 @@ def _render_and_cache_source_frame(
     bird_box_cache: dict[str, tuple[float, float, float, float] | None],
     bird_box_lock: threading.Lock | None,
     cancel_event: threading.Event | None,
+    stats: VideoStageStats | None = None,
 ) -> tuple[int, str, Path, str, str]:
     _raise_if_cancel_requested(cancel_event, message="视频导出已中断，正在保留已完成源帧。")
-    rendered = _export_stage_callable("render_video_frame")(
-        job,
-        template_paths=template_paths,
-        bird_box_cache=bird_box_cache,
-        bird_box_lock=bird_box_lock,
-    )
+    with stats.measure("processing") if stats else nullcontext():
+        rendered = _export_stage_callable("render_video_frame")(
+            job,
+            template_paths=template_paths,
+            bird_box_cache=bird_box_cache,
+            bird_box_lock=bird_box_lock,
+        )
     frame_path = _cache_frame_output_path(source_plan, index, suffix="png")
     source_signature = _source_signature(job.path)
     try:
         _raise_if_cancel_requested(cancel_event, message="视频导出已中断，正在保留已完成源帧。")
-        _save_rendered_source_frame(rendered, frame_path, source_path=job.path)
+        with stats.measure("writing") if stats else nullcontext():
+            _save_rendered_source_frame(rendered, frame_path, source_path=job.path)
+        if stats:
+            stats.frame_completed()
     finally:
         try:
             rendered.close()
@@ -1630,6 +1682,7 @@ def _normalize_and_cache_video_frame(
     target_size: tuple[int, int],
     background_color: str,
     cancel_event: threading.Event | None,
+    stats: VideoStageStats | None = None,
 ) -> tuple[int, str, Path, str, str]:
     _raise_if_cancel_requested(cancel_event, message="视频导出已中断，正在保留已完成视频帧。")
     frame_path = _cache_frame_output_path(video_plan, index, suffix="png")
@@ -1647,7 +1700,10 @@ def _normalize_and_cache_video_frame(
             target_size,
             background_color=background_color,
             source_path=source_frame_path,
+            stats=stats,
         )
+    if stats:
+        stats.frame_completed()
     return (index, label, frame_path, source_signature, frame_signature)
 
 
@@ -1705,6 +1761,7 @@ def _prune_cache_frames(frames_dir: Path, manifest: dict[str, Any], *, total: in
                 _log.debug("prune stale cache frame failed: %s", frame_path, exc_info=True)
 
 
+@track_video_stage("source")
 def _ensure_source_frame_cache(
     jobs: list[VideoFrameJob],
     *,
@@ -1717,6 +1774,7 @@ def _ensure_source_frame_cache(
     bird_box_lock: threading.Lock,
     dirty_path_keys: set[str],
     on_cache_created: Callable[[FrameCachePlan], None] | None = None,
+    stats: VideoStageStats,
 ) -> tuple[str, Any, list[Path]]:
     total = len(jobs)
     # 缓存桶只由全局导出设置决定，与裁切计划无关；先建立它以便复用已保存的预计算结果。
@@ -1823,16 +1881,23 @@ def _ensure_source_frame_cache(
             message=f"复用已缓存源帧 {reused_count}/{total} 帧。",
         )
 
+    stats.reused = reused_count
     if not pending_jobs:
         write_frame_manifest(source_plan, manifest, metadata=_source_frame_cache_metadata(total=total))
         return (source_bucket_key, source_plan, source_frame_paths)
 
-    max_frame_pixels = estimate_video_job_max_pixels([job for _, job, _, _ in pending_jobs])
-    render_workers, worker_warning = _resolve_video_render_worker_status(
+    max_frame_pixels = estimate_source_render_pixels(
+        [job for _, job, _, _ in pending_jobs],
+        check_cancel=lambda: _raise_if_cancel_requested(cancel_event),
+    )
+    budget = resolve_video_frame_budget(
         options.render_workers,
         len(pending_jobs),
         max_frame_pixels=max_frame_pixels,
+        stage="source",
     )
+    render_workers, worker_warning = budget.workers, budget.warning
+    stats.workers = render_workers
     _emit_progress(
         progress_callback,
         phase="render",
@@ -1855,6 +1920,7 @@ def _ensure_source_frame_cache(
             bird_box_cache=bird_box_cache,
             bird_box_lock=bird_box_lock,
             cancel_event=cancel_event,
+            stats=stats,
         )
         source_frame_paths[rendered_index - 1] = frame_path
         update_frame_manifest_record(
@@ -1883,7 +1949,7 @@ def _ensure_source_frame_cache(
     pending_iterator = iter(pending_jobs)
 
     def _submit_source_jobs() -> None:
-        max_in_flight = max(1, render_workers * 2)
+        max_in_flight = max(1, render_workers)
         while len(futures) < max_in_flight:
             try:
                 index, job, source_signature, frame_signature = next(pending_iterator)
@@ -1900,6 +1966,7 @@ def _ensure_source_frame_cache(
                     bird_box_cache=bird_box_cache,
                     bird_box_lock=bird_box_lock,
                     cancel_event=cancel_event,
+                    stats=stats,
                 ),
                 kind=WorkKind.METADATA,
             )
@@ -1953,6 +2020,7 @@ def _ensure_source_frame_cache(
     return (source_bucket_key, source_plan, source_frame_paths)
 
 
+@track_video_stage("normalize")
 def _ensure_video_frame_cache(
     source_frame_paths: list[Path],
     jobs: list[VideoFrameJob],
@@ -1963,6 +2031,7 @@ def _ensure_video_frame_cache(
     progress_callback: VideoExportProgressCallback | None,
     cancel_event: threading.Event | None,
     on_cache_created: Callable[[FrameCachePlan], None] | None = None,
+    stats: VideoStageStats,
 ) -> tuple[Any, tuple[int, int], Path]:
     total = len(jobs)
     target_size = _resolve_target_size_from_source_frame(source_frame_paths[0], options)
@@ -2017,13 +2086,20 @@ def _ensure_video_frame_cache(
             message=f"复用已缓存视频帧 {reused_count}/{total} 帧。",
         )
 
+    stats.reused = reused_count
     if pending_frames:
-        max_frame_pixels = int(target_size[0]) * int(target_size[1])
-        render_workers, worker_warning = _resolve_video_render_worker_status(
+        max_frame_pixels = estimate_normalize_pixels(
+            (path for _, path, _, _ in pending_frames), target_size,
+            check_cancel=lambda: _raise_if_cancel_requested(cancel_event),
+        )
+        budget = resolve_video_frame_budget(
             options.render_workers,
             len(pending_frames),
             max_frame_pixels=max_frame_pixels,
+            stage="normalize",
         )
+        render_workers, worker_warning = budget.workers, budget.warning
+        stats.workers = render_workers
         _emit_progress(
             progress_callback,
             phase="render",
@@ -2045,6 +2121,7 @@ def _ensure_video_frame_cache(
                 target_size=target_size,
                 background_color=options.background_color,
                 cancel_event=cancel_event,
+                stats=stats,
             )
             update_frame_manifest_record(
                 video_plan,
@@ -2080,7 +2157,7 @@ def _ensure_video_frame_cache(
             pending_iterator = iter(pending_frames)
 
             def _submit_video_frames() -> None:
-                max_in_flight = max(1, render_workers * 2)
+                max_in_flight = max(1, render_workers)
                 while len(futures) < max_in_flight:
                     try:
                         index, source_frame_path, source_signature, frame_name = next(pending_iterator)
@@ -2099,6 +2176,7 @@ def _ensure_video_frame_cache(
                             target_size=target_size,
                             background_color=options.background_color,
                             cancel_event=cancel_event,
+                            stats=stats,
                         ),
                         kind=WorkKind.METADATA,
                     )
