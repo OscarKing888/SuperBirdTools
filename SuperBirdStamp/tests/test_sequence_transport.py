@@ -1,7 +1,7 @@
 """原生 Tab、序列播放和快/清晰两阶段的真实 Qt 事件回归。"""
 import pytest
 from PyQt6.QtCore import QEvent, Qt
-from PyQt6.QtGui import QKeyEvent, QImage
+from PyQt6.QtGui import QColor, QKeyEvent, QImage, QPalette
 from PyQt6.QtWidgets import QLabel
 
 from test_editor_dejitter import window, _APP
@@ -27,6 +27,38 @@ def populate(window, paths):
 def key(window, kind, code, repeat=False):
     event = QKeyEvent(kind, code, Qt.KeyboardModifier.NoModifier, '', repeat)
     _APP.sendEvent(window.photo_list._tree_widget, event)
+
+
+def test_media_controls_follow_dark_and_light_palette(window):
+    transport = window.sequence_transport
+    buttons = (transport.play, transport.previous, transport.next,
+               window.ab_preview.a_panel.play, window.ab_preview.b_panel.play)
+    original = QPalette(window.palette())
+    try:
+        for background, foreground in (('#202020', '#eeeeee'), ('#f0f0f0', '#202020')):
+            palette = QPalette(original)
+            palette.setColor(QPalette.ColorRole.Window, QColor(background))
+            palette.setColor(QPalette.ColorRole.ButtonText, QColor(foreground))
+            window.setStyleSheet('')
+            window.setPalette(palette)
+            window._apply_system_adaptive_style()
+            for button in buttons:
+                image = button.icon().pixmap(button.iconSize()).toImage()
+                pixels = (image.pixelColor(x, y) for y in range(image.height())
+                          for x in range(image.width()))
+                color = max(pixels, key=lambda pixel: pixel.alpha())
+                assert color.name() == foreground
+            transport.mode = 'play'
+            transport._update_play_button()
+            image = transport.play.icon().pixmap(transport.play.iconSize()).toImage()
+            color = max((image.pixelColor(x, y) for y in range(image.height())
+                         for x in range(image.width())), key=lambda pixel: pixel.alpha())
+            assert color.name() == foreground
+            transport.stop(commit=False)
+    finally:
+        window.setStyleSheet('')
+        window.setPalette(original)
+        window._apply_system_adaptive_style()
 
 
 def test_native_tabs_and_filmstrip_real_selection(window, monkeypatch):

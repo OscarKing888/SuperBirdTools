@@ -2276,6 +2276,9 @@ class BirdStampEditorWindow(
         ab_preview = getattr(self, "ab_preview", None)
         if ab_preview is not None:
             ab_preview.enabled.setIcon(_make_preview_tool_icon("compare", color=text_color))
+        transport = getattr(self, "sequence_transport", None)
+        if transport is not None:
+            transport.refresh_media_icons(button_text)
 
     def _set_status(self, message: str) -> None:
         self.statusBar().showMessage(message)

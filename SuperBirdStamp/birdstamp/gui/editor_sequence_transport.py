@@ -3,7 +3,7 @@ from collections import OrderedDict
 from pathlib import Path
 
 from PyQt6.QtCore import QEvent, QObject, QSize, Qt, QTimer
-from PyQt6.QtGui import QIcon, QPixmap
+from PyQt6.QtGui import QColor, QIcon, QPalette, QPixmap
 from PyQt6.QtWidgets import (
     QCheckBox, QHBoxLayout, QLabel, QListWidget, QListWidgetItem,
     QPushButton, QSpinBox, QStyle, QToolButton, QVBoxLayout, QWidget,
@@ -13,6 +13,7 @@ from . import editor_options
 from .editor_utils import path_key
 from .editor_source_quick_loader import SourceQuickLoader
 from .editor_sequence_preview_worker import pil_qimage
+from .editor_media_icons import media_icon
 
 
 _SOURCE_QUICK_CACHE_BYTES = 64 * 1024 * 1024
@@ -58,15 +59,13 @@ class SequenceTransport(QObject):
         self.previous.clicked.connect(lambda: self.step(-1))
         self.next = QToolButton()
         self.next.clicked.connect(lambda: self.step(1))
-        for button, label, icon in (
-                (self.previous, '上一张', QStyle.StandardPixmap.SP_MediaSkipBackward),
-                (self.next, '下一张', QStyle.StandardPixmap.SP_MediaSkipForward)):
+        for button, label in ((self.previous, '上一张'), (self.next, '下一张')):
             button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
-            button.setIcon(button.style().standardIcon(icon))
             button.setIconSize(self.play.iconSize())
             button.setMinimumSize(self.play.minimumSize())
             button.setToolTip(label)
             button.setAccessibleName(label)
+        self.refresh_media_icons()
         self.position = QLabel('0 / 0')
         self.preparation = QLabel('')
         self.fps = QSpinBox()
@@ -491,23 +490,31 @@ class SequenceTransport(QObject):
         self._update_play_button()
         self.timer.start()
 
-    def _update_play_button(self):
+    def refresh_media_icons(self, color: QColor | None = None):
+        color = color or self.editor.palette().color(QPalette.ColorRole.ButtonText)
+        self._media_icon_color = QColor(color)
+        self.previous.setIcon(media_icon(self.previous, QStyle.StandardPixmap.SP_MediaSkipBackward, color))
+        self.next.setIcon(media_icon(self.next, QStyle.StandardPixmap.SP_MediaSkipForward, color))
+        self._update_play_button(force=True, color=color)
+
+    def _update_play_button(self, *, force=False, color: QColor | None = None):
         playing = self.mode in ('play', 'source_play')
         ab = self.editor.ab_preview
         state = (playing, self._pending_source_play, ab.active_side)
-        if state == self._play_visual_state:
+        if state == self._play_visual_state and not force:
             return
         self._play_visual_state = state
+        color = color or getattr(self, '_media_icon_color', None) or self.editor.palette().color(QPalette.ColorRole.ButtonText)
         label = '取消预览准备' if self._pending_source_play else '暂停' if playing else '播放序列'
         icon = QStyle.StandardPixmap.SP_MediaPause if playing else QStyle.StandardPixmap.SP_MediaPlay
-        self.play.setIcon(self.play.style().standardIcon(icon))
+        self.play.setIcon(media_icon(self.play, icon, color))
         self.play.setToolTip(label)
         self.play.setAccessibleName(label)
         for side, panel in (('a', ab.a_panel), ('b', ab.b_panel)):
             side_playing = playing and ab.active_side == side
             side_label = f'暂停 {side.upper()} 侧播放' if side_playing else f'播放 {side.upper()} 侧照片序列'
             side_icon = QStyle.StandardPixmap.SP_MediaPause if side_playing else QStyle.StandardPixmap.SP_MediaPlay
-            panel.play.setIcon(panel.play.style().standardIcon(side_icon))
+            panel.play.setIcon(media_icon(panel.play, side_icon, color))
             panel.play.setToolTip(side_label)
             panel.play.setAccessibleName(side_label)
 
