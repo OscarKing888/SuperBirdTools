@@ -196,6 +196,8 @@ flowchart LR
 
 当前 Pillow GIF 编码会在内存中保留一个变体的全部采样帧，尚非流式编码。编码器可能合并相同帧，播放器也可能施加自身最小时长；上述进度表达导出的时间计划，不能用来假设文件必然包含同等数量的独立帧记录或所有播放器具有相同播放策略。
 
+“缩小版本”首位的“微信表情”默认开启，默认值读取 `editor_options.json.default_gif_wechat_sticker`；选择随导出偏好和工作区的 `gif_wechat_sticker` 保存，旧工作区使用配置默认值。核心 `GifExportOptions.wechat_sticker` 为可选附加输出，不改变主 GIF 和比例版本；生成 `__wechat.gif`，初始长边最多 480 像素、不放大小图。`_save_wechat_gif_variant` 开启调色板优化，实际编码并检查文件大小；超出 5,000,000 字节时按面积估算下一轮尺寸、等比缩小重试，保留相同帧顺序和时间计划。只有通过大小检查的临时文件才原子替换目标，失败清理临时目录并保留原有微信版本；即使缩到 1×1 仍超限则明确报错，要求减少照片。体积限制采用十进制 5 MB，以同时满足 5 MiB 的上限。回归见 [test_gif_wechat.py](../tests/test_gif_wechat.py) 与 [test_gif_export_panel.py](../tests/test_gif_export_panel.py)。CLI 可用 `python -m birdstamp gif frame1.png frame2.png -o clip.gif --wechat` 对已渲染帧使用同一编码算法（按传入顺序，CLI 默认不附加微信版本）。
+
 ## 6. 工作区、自动保存与配置
 
 [workspace.py](../birdstamp/workspace.py) 是不依赖窗口的 JSON 存取层。`serialize_workspace_path` 保存相对/绝对路径信息，`resolve_workspace_path` 优先使用可用的相对路径，再回退绝对路径。`read_workspace_json` 校验格式；`write_workspace_json` 在同目录写临时文件、flush/fsync 后原子替换，失败清理临时文件。

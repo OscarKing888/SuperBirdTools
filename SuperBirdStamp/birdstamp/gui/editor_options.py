@@ -361,6 +361,7 @@ def load_editor_options() -> dict[str, Any]:
         "gif_scale_options": gif_scale_options,
         "default_gif_fps": default_gif_fps,
         "default_gif_loop": default_gif_loop,
+        "default_gif_wechat_sticker": raw.get("default_gif_wechat_sticker", True) is not False,
         "video_container_options": video_container_options,
         "video_codec_options": video_codec_options,
         "video_preset_options": video_preset_options,
@@ -427,6 +428,7 @@ OUTPUT_FORMAT_OPTIONS: list[tuple[str, str]] = _EDITOR_OPTIONS["output_format_op
 GIF_SCALE_OPTIONS: list[tuple[str, float]] = _EDITOR_OPTIONS["gif_scale_options"]
 DEFAULT_GIF_FPS: float = _EDITOR_OPTIONS["default_gif_fps"]
 DEFAULT_GIF_LOOP: int = _EDITOR_OPTIONS["default_gif_loop"]
+DEFAULT_GIF_WECHAT_STICKER: bool = _EDITOR_OPTIONS["default_gif_wechat_sticker"]
 VIDEO_CONTAINER_OPTIONS: list[tuple[str, str]] = _EDITOR_OPTIONS["video_container_options"]
 VIDEO_CODEC_OPTIONS: list[tuple[str, str]] = _EDITOR_OPTIONS["video_codec_options"]
 VIDEO_PRESET_OPTIONS: list[tuple[str, str]] = _EDITOR_OPTIONS["video_preset_options"]

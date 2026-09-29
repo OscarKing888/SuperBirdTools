@@ -122,7 +122,7 @@ def test_gui_completion_status_reports_temporal_sampling(tmp_path, monkeypatch):
 
     class Harness(_BirdStampExporterMixin):
         gif_export_panel = SimpleNamespace(current_request=lambda: SimpleNamespace(
-            fps=120, loop=0, scale_factors=[], keep_frame_images=False,
+            fps=120, loop=0, scale_factors=[], keep_frame_images=False, wechat_sticker=True,
         ))
 
         def __init__(self):
@@ -159,3 +159,5 @@ def test_gui_completion_status_reports_temporal_sampling(tmp_path, monkeypatch):
     assert harness.messages[-1].startswith("GIF 导出完成")
     assert "GIF 实际 100.000 FPS" in harness.messages[-1]
     assert "按时间采样" in harness.messages[-1]
+    assert (tmp_path / "finished__wechat.gif").is_file()
+    assert "finished__wechat.gif" in harness.messages[-1]

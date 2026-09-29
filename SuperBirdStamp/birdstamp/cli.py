@@ -31,6 +31,25 @@ app = typer.Typer(add_completion=False, no_args_is_help=True, help="极速鸟框
 LOGGER = logging.getLogger("birdstamp")
 
 
+@app.command("gif")
+def gif_command(
+    frames: list[Path] = typer.Argument(..., exists=True, dir_okay=False, help="按播放顺序排列的已渲染图片。"),
+    output: Path = typer.Option(..., "--output", "-o", help="GIF 输出路径。"),
+    fps: float = typer.Option(24.0, help="每秒帧数。"),
+    loop: int = typer.Option(0, help="循环次数，0 表示无限循环。"),
+    wechat: bool = typer.Option(False, "--wechat/--no-wechat", help="额外生成不超过 5 MB 的微信表情版本。"),
+) -> None:
+    """将已渲染图片合成为 GIF，可额外导出微信表情。"""
+    from birdstamp.gif_export import GifExportOptions, export_gif
+
+    try:
+        outputs = export_gif(frames, GifExportOptions(output, fps=fps, loop=loop, wechat_sticker=wechat))
+    except (ValueError, OSError) as exc:
+        raise typer.BadParameter(str(exc)) from exc
+    for path in outputs:
+        typer.echo(str(path))
+
+
 @dataclass(slots=True)
 class _Result:
     source: Path

@@ -107,6 +107,7 @@ class GifExportRequest:
     loop: int
     keep_frame_images: bool
     scale_factors: list[float]
+    wechat_sticker: bool = True
 
 
 class GifExportPanel(QGroupBox):
@@ -156,6 +157,11 @@ class GifExportPanel(QGroupBox):
 
         scale_widget = _ScaleOptionsWidget()
         scale_layout = _ScaleOptionsLayout(scale_widget)
+        self.wechat_sticker_check = QCheckBox("微信表情")
+        self.wechat_sticker_check.setChecked(editor_options.DEFAULT_GIF_WECHAT_STICKER)
+        self.wechat_sticker_check.setToolTip("额外生成微信表情 GIF：长边不超过 480 像素，自动缩小至不超过 5 MB，保持播放时长。")
+        self.wechat_sticker_check.toggled.connect(self.optionsChanged.emit)
+        scale_layout.addWidget(self.wechat_sticker_check)
         for label, scale in GIF_SCALE_OPTIONS:
             check = QCheckBox(label)
             check.toggled.connect(self.optionsChanged.emit)
@@ -192,6 +198,7 @@ class GifExportPanel(QGroupBox):
             loop=max(0, int(self.loop_spin.value())),
             keep_frame_images=bool(self.keep_frames_check.isChecked()),
             scale_factors=scales,
+            wechat_sticker=self.wechat_sticker_check.isChecked(),
         )
 
     def set_state(
@@ -201,13 +208,17 @@ class GifExportPanel(QGroupBox):
         loop: int | None = None,
         keep_frame_images: bool | None = None,
         scale_factors: list[float] | tuple[float, ...] | None = None,
+        wechat_sticker: bool | None = None,
     ) -> None:
+        wechat_was_blocked = self.wechat_sticker_check.blockSignals(True)
         self.fps_spin.blockSignals(True)
         self.loop_spin.blockSignals(True)
         self.keep_frames_check.blockSignals(True)
         for _scale, check in self._scale_checks:
             check.blockSignals(True)
         try:
+            if wechat_sticker is not None:
+                self.wechat_sticker_check.setChecked(bool(wechat_sticker))
             if fps is not None:
                 self.fps_spin.setValue(max(1, min(240, int(round(float(fps))))))
             if loop is not None:
@@ -219,6 +230,7 @@ class GifExportPanel(QGroupBox):
                 for scale, check in self._scale_checks:
                     check.setChecked(round(float(scale), 6) in selected)
         finally:
+            self.wechat_sticker_check.blockSignals(wechat_was_blocked)
             for _scale, check in reversed(self._scale_checks):
                 check.blockSignals(False)
             self.keep_frames_check.blockSignals(False)

@@ -27,7 +27,8 @@ def test_scale_options_wrap_to_fit_sidebar_and_configured_count(monkeypatch) -> 
         assert [check.text() for check in checks] == [label for label, _scale in options]
         field = checks[0].parentWidget()
 
-        for width in (220, 520, 220):
+        checks = [panel.wechat_sticker_check, *checks]
+        for width in (220, 720, 220):
             panel.resize(width, 300)
             panel.show()
             _APP.processEvents()
@@ -41,6 +42,74 @@ def test_scale_options_wrap_to_fit_sidebar_and_configured_count(monkeypatch) -> 
 
         checks[-1].setChecked(True)
         assert panel.current_request().scale_factors == [options[-1][1]]
+    finally:
+        panel.close()
+
+
+def test_wechat_default_order_and_state_restore(monkeypatch, tmp_path) -> None:
+    from birdstamp import config
+    from birdstamp.gui.editor_workspace import _BirdStampWorkspaceMixin
+
+    monkeypatch.setattr(config, "get_user_data_dir", lambda: tmp_path)
+    panel = editor_gif_panel.GifExportPanel()
+    signals = []
+    panel.optionsChanged.connect(lambda: signals.append(True))
+    try:
+        assert panel.current_request().wechat_sticker is True
+        assert panel.wechat_sticker_check.text() == "微信表情"
+        assert panel.wechat_sticker_check.parentWidget().layout().itemAt(0).widget() is panel.wechat_sticker_check
+        panel.set_state(wechat_sticker=False)
+        assert panel.current_request().wechat_sticker is False
+        assert not signals
+        panel.wechat_sticker_check.setChecked(True)
+        assert signals == [True]
+
+        class Harness(_BirdStampWorkspaceMixin):
+            gif_export_panel = panel
+            _image_export_last_output_dir = None
+            _batch_export_last_output_dir = None
+
+            def _selected_output_suffix(self):
+                return "gif"
+
+            def _selected_export_stage_id(self):
+                return "export_gif"
+
+            def _current_pipeline_stage_order(self):
+                return []
+
+            def _current_pipeline_stage_enabled_map(self):
+                return {}
+
+            def _save_image_export_preferences(self):
+                pass
+
+            def _refresh_image_export_action_states(self):
+                pass
+
+        harness = Harness()
+        workspace = tmp_path / "session.json"
+        panel.set_state(wechat_sticker=False)
+        state = harness._collect_workspace_image_export_state(workspace)
+        panel.set_state(wechat_sticker=True)
+        harness._apply_workspace_image_export_state(state, workspace)
+        assert panel.current_request().wechat_sticker is False
+        del state["gif_wechat_sticker"]
+        harness._apply_workspace_image_export_state(state, workspace)
+        assert panel.current_request().wechat_sticker is True
+    finally:
+        panel.close()
+
+
+def test_wechat_default_comes_from_editor_options(monkeypatch) -> None:
+    options = editor_gif_panel.editor_options
+    monkeypatch.setattr(options, "_load_builtin_editor_options_raw", lambda: {"default_gif_wechat_sticker": False})
+    loaded = options.load_editor_options()
+    assert loaded["default_gif_wechat_sticker"] is False
+    monkeypatch.setattr(options, "DEFAULT_GIF_WECHAT_STICKER", loaded["default_gif_wechat_sticker"])
+    panel = editor_gif_panel.GifExportPanel()
+    try:
+        assert panel.current_request().wechat_sticker is False
     finally:
         panel.close()
 

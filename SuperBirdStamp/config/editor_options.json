@@ -45,6 +45,7 @@
   ],
   "default_gif_fps": 24,
   "default_gif_loop": 0,
+  "default_gif_wechat_sticker": true,
   "video_container_options": [
     {"suffix": "mp4", "label": "MP4"},
     {"suffix": "mov", "label": "MOV"},

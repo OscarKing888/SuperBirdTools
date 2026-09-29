@@ -609,6 +609,7 @@ class _BirdStampExporterMixin:
                 fps=gif_request.fps,
                 loop=gif_request.loop,
                 scale_factors=gif_request.scale_factors,
+                wechat_sticker=gif_request.wechat_sticker,
             )
         except Exception:
             self._reset_image_export_progress(expected_token=prepare_token)
@@ -647,9 +648,10 @@ class _BirdStampExporterMixin:
         fps: float,
         loop: int,
         scale_factors: list[float],
+        wechat_sticker: bool = False,
     ) -> list[Path]:
         variant_paths = build_gif_variant_output_paths(output_path.with_suffix(".gif"), scale_factors)
-        total_outputs = 1 + len(variant_paths)
+        total_outputs = 1 + len(variant_paths) + int(wechat_sticker)
         timing = build_gif_frame_timing(len(frame_paths), fps)
         progress_token = self._begin_image_export_progress(total=timing.encoded_frame_count, label="GIF 合成", phase_text="编码中")
         try:
@@ -658,6 +660,7 @@ class _BirdStampExporterMixin:
                 fps=fps,
                 loop=loop,
                 scale_factors=tuple(scale_factors),
+                wechat_sticker=wechat_sticker,
                 background_color=self._gif_background_color_for_export(),
             )
             written_paths = self._run_gif_export_off_gui_thread(frame_paths, options, total_outputs)

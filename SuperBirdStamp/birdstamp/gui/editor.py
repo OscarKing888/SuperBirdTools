@@ -2421,6 +2421,7 @@ class BirdStampEditorWindow(
             loop=gif_loop_value,
             keep_frame_images=keep_frame_images_value,
             scale_factors=scale_factors,
+            wechat_sticker=self._load_editor_export_state_value("gif_wechat_sticker", None),
         )
         self._refresh_image_export_action_states()
 
@@ -2437,6 +2438,7 @@ class BirdStampEditorWindow(
         self._save_editor_export_state_value("gif_loop", gif_request.loop)
         self._save_editor_export_state_value("gif_keep_frame_images", gif_request.keep_frame_images)
         self._save_editor_export_state_value("gif_scale_factors", list(gif_request.scale_factors))
+        self._save_editor_export_state_value("gif_wechat_sticker", gif_request.wechat_sticker)
     def _on_image_export_format_changed(self, *_args: Any) -> None:
         self._refresh_image_export_action_states()
         self._save_image_export_preferences()

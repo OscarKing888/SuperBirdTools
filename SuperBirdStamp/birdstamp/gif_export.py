@@ -3,12 +3,16 @@ from __future__ import annotations
 from dataclasses import dataclass
 from fractions import Fraction
 import math
+import os
 from pathlib import Path
+import tempfile
 from typing import Callable, Iterable, Sequence
 
 from PIL import Image, ImageColor
 
 DEFAULT_GIF_BACKGROUND_COLOR = "#000000"
+WECHAT_GIF_MAX_BYTES = 5_000_000
+WECHAT_GIF_MAX_LONG_EDGE = 480
 
 
 @dataclass(slots=True)
@@ -18,6 +22,7 @@ class GifExportOptions:
     loop: int = 0
     scale_factors: tuple[float, ...] = ()
     background_color: str = DEFAULT_GIF_BACKGROUND_COLOR
+    wechat_sticker: bool = False
 
     def normalized_output_path(self) -> Path:
         output_path = self.output_path.resolve(strict=False)
@@ -107,6 +112,7 @@ def validate_gif_export_options(options: GifExportOptions) -> GifExportOptions:
         loop=loop,
         scale_factors=tuple(scales),
         background_color=background_color,
+        wechat_sticker=bool(options.wechat_sticker),
     )
 
 
@@ -213,12 +219,14 @@ def export_gif(
     target_size = resolve_gif_target_size(sampled_frame_paths)
 
     output_specs = [(1.0, output_path)]
+    if validated.wechat_sticker:
+        output_specs.append((None, output_path.with_name(f"{output_path.stem}__wechat.gif")))
     output_specs.extend(build_gif_variant_output_paths(output_path, validated.scale_factors))
 
     total_outputs = len(output_specs)
     written_paths: list[Path] = []
     for index, (scale, variant_output_path) in enumerate(output_specs, start=1):
-        variant_target_size = _scaled_target_size(target_size, scale)
+        variant_target_size = _scaled_target_size(target_size, scale if scale is not None else 1.0)
         _emit_progress(
             progress_callback,
             phase="encode",
@@ -229,7 +237,8 @@ def export_gif(
             output_index=index,
             total_outputs=total_outputs,
         )
-        _save_gif_variant(
+        save_variant = _save_wechat_gif_variant if scale is None else _save_gif_variant
+        save_variant(
             sampled_frame_paths,
             variant_output_path,
             durations_ms=timing.durations_ms,
@@ -253,13 +262,51 @@ def export_gif(
             phase="done",
             current=timing.encoded_frame_count,
             total=timing.encoded_frame_count,
-            message=f"已生成 GIF {index}/{total_outputs}: {variant_output_path.name} | {timing.summary()}",
+            message=f"已生成 GIF {index}/{total_outputs}: {variant_output_path.name}"
+            f" ({variant_output_path.stat().st_size / 1_000_000:.2f} MB) | {timing.summary()}",
             timing=timing,
             output_index=index,
             total_outputs=total_outputs,
         )
 
     return written_paths
+
+
+def _save_wechat_gif_variant(
+    frame_paths: Sequence[Path],
+    output_path: Path,
+    *,
+    durations_ms: Sequence[int],
+    loop: int,
+    target_size: tuple[int, int],
+    background_color: str,
+    frame_prepared_callback: Callable[[int], None] | None = None,
+) -> None:
+    """Encode and measure each candidate; publish only a size-checked GIF.
+
+    Keep the entire timeline and aspect ratio. Area-based estimates accelerate
+    convergence but never substitute for measuring the encoded file. Even an
+    unusually long clip whose frame overhead exceeds the budget fails safely.
+    """
+    size = _scaled_target_size(target_size, min(1.0, WECHAT_GIF_MAX_LONG_EDGE / max(target_size)))
+    with tempfile.TemporaryDirectory(prefix=".birdstamp-wechat-", dir=output_path.parent) as temporary:
+        candidate = Path(temporary) / "candidate.gif"
+        while True:
+            _save_gif_variant(
+                frame_paths, candidate, durations_ms=durations_ms, loop=loop,
+                target_size=size, background_color=background_color,
+                frame_prepared_callback=frame_prepared_callback, optimize=True,
+            )
+            byte_count = candidate.stat().st_size
+            if byte_count <= WECHAT_GIF_MAX_BYTES:
+                os.replace(candidate, output_path)
+                return
+            if size == (1, 1):
+                raise ValueError("微信表情 GIF 无法在保留全部帧和时长的情况下压缩到 5 MB，请减少照片数量。")
+            ratio = max(0.5, min(0.85, math.sqrt(WECHAT_GIF_MAX_BYTES / byte_count) * 0.95))
+            # Scale from the original canvas to avoid accumulating aspect-ratio rounding.
+            long_edge = max(1, int(max(size) * ratio))
+            size = _scaled_target_size(target_size, long_edge / max(target_size))
 
 
 def _save_gif_variant(
@@ -271,6 +318,7 @@ def _save_gif_variant(
     target_size: tuple[int, int],
     background_color: str,
     frame_prepared_callback: Callable[[int], None] | None = None,
+    optimize: bool = False,
 ) -> None:
     frames: list[Image.Image] = []
     try:
@@ -297,7 +345,7 @@ def _save_gif_variant(
             append_images=append_frames,
             duration=list(durations_ms),
             loop=max(0, int(loop)),
-            optimize=False,
+            optimize=optimize,
             disposal=2,
         )
     finally:
@@ -365,6 +413,8 @@ def _emit_progress(
 
 __all__ = [
     "DEFAULT_GIF_BACKGROUND_COLOR",
+    "WECHAT_GIF_MAX_BYTES",
+    "WECHAT_GIF_MAX_LONG_EDGE",
     "GifExportOptions",
     "GifExportProgress",
     "GifExportProgressCallback",

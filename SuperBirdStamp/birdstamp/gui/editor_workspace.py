@@ -419,6 +419,7 @@ class _BirdStampWorkspaceMixin:
             "gif_loop": gif_request.loop,
             "gif_keep_frame_images": gif_request.keep_frame_images,
             "gif_scale_factors": list(gif_request.scale_factors),
+            "gif_wechat_sticker": gif_request.wechat_sticker,
             "last_image_output_dir": serialize_workspace_path(
                 self._image_export_last_output_dir,
                 workspace_path=workspace_path,
@@ -466,6 +467,7 @@ class _BirdStampWorkspaceMixin:
                 loop=state.get("gif_loop"),
                 keep_frame_images=state.get("gif_keep_frame_images"),
                 scale_factors=state.get("gif_scale_factors"),
+                wechat_sticker=state.get("gif_wechat_sticker", editor_options.DEFAULT_GIF_WECHAT_STICKER),
             )
         finally:
             _restore_widget_signals(widgets_state)
