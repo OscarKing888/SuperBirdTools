@@ -4,6 +4,7 @@ import io
 import os
 import subprocess
 import tempfile
+from contextlib import nullcontext
 from pathlib import Path
 
 from PIL import Image, ImageOps
@@ -13,6 +14,14 @@ from birdstamp.subprocess_utils import decode_subprocess_output
 
 _HEIF_REGISTERED = False
 _DEFAULT_PREVIEW_MAX_LONG_EDGE = 2048
+_RAW_EMBEDDED_MIN_LONG_EDGE = 1600
+
+
+def _rawpy_source(path: Path):
+    # Windows LibRaw 的窄字符路径入口可能打不开中文文件名。
+    if os.name == "nt" and any(ord(char) > 127 for char in str(path)):
+        return path.open("rb")
+    return nullcontext(str(path))
 
 
 def _pillow_oriented_size(image: Image.Image) -> tuple[int, int]:
@@ -104,7 +113,7 @@ def _decode_raw_rawpy(path: Path) -> Image.Image:
     except ImportError as exc:
         raise RuntimeError("rawpy is not installed") from exc
 
-    with rawpy.imread(str(path)) as raw:
+    with _rawpy_source(path) as source, rawpy.imread(source) as raw:
         rgb = raw.postprocess(
             use_camera_wb=True,
             no_auto_bright=False,
@@ -114,27 +123,7 @@ def _decode_raw_rawpy(path: Path) -> Image.Image:
     return image if image.mode == "RGB" else image.convert("RGB")
 
 
-def _decode_raw_rawpy_for_preview(path: Path, max_long_edge: int) -> Image.Image:
-    try:
-        import rawpy
-    except ImportError as exc:
-        raise RuntimeError("rawpy is not installed") from exc
-
-    with rawpy.imread(str(path)) as raw:
-        rgb = raw.postprocess(
-            use_camera_wb=True,
-            no_auto_bright=False,
-            output_bps=8,
-            half_size=True,
-        )
-    image = Image.fromarray(rgb).convert("RGB")
-    resized = _resize_fit_image(image, max_long_edge)
-    if resized is not image:
-        image.close()
-    return resized
-
-
-def _decode_embedded_raw_preview(path: Path, max_long_edge: int) -> Image.Image | None:
+def _eligible_raw_preview_bytes(path: Path) -> bytes | None:
     try:
         from app_common.thumb_stream import get_raw_preview_jpeg
     except Exception:
@@ -147,7 +136,20 @@ def _decode_embedded_raw_preview(path: Path, max_long_edge: int) -> Image.Image 
         return None
     try:
         with Image.open(io.BytesIO(preview_bytes)) as source:
-            # 目标尺寸按未缩小的原始方向尺寸计算，保证与旧的“全尺寸解码后 fit”结果尺寸一致。
+            if max(_pillow_oriented_size(source)) < _RAW_EMBEDDED_MIN_LONG_EDGE:
+                return None
+            source.load()
+    except Exception:
+        return None
+    return preview_bytes
+
+
+def _decode_embedded_raw_preview(path: Path, max_long_edge: int) -> Image.Image | None:
+    preview_bytes = _eligible_raw_preview_bytes(path)
+    if preview_bytes is None:
+        return None
+    try:
+        with Image.open(io.BytesIO(preview_bytes)) as source:
             oriented_w, oriented_h = _pillow_oriented_size(source)
             target = _draft_target_size(oriented_w, oriented_h, max_long_edge) if max_long_edge > 0 else (oriented_w, oriented_h)
             width, height = source.size
@@ -160,11 +162,26 @@ def _decode_embedded_raw_preview(path: Path, max_long_edge: int) -> Image.Image 
                     pass
             ImageOps.exif_transpose(source, in_place=True)
             rgb = source.convert("RGB")
+        properties = {"size": (oriented_w, oriented_h)}
         if rgb.size == target:
+            rgb.info["birdstamp_source_properties"] = properties
             return rgb
         resized = rgb.resize(target, Image.Resampling.LANCZOS)
         rgb.close()
+        resized.info["birdstamp_source_properties"] = properties
         return resized
+    except Exception:
+        return None
+
+
+def _decode_embedded_raw_full(path: Path) -> Image.Image | None:
+    preview_bytes = _eligible_raw_preview_bytes(path)
+    if preview_bytes is None:
+        return None
+    try:
+        with Image.open(io.BytesIO(preview_bytes)) as source:
+            ImageOps.exif_transpose(source, in_place=True)
+            return source.convert("RGB")
     except Exception:
         return None
 
@@ -292,6 +309,10 @@ def read_decoded_image_size(path: Path) -> tuple[int, int]:
         with Image.open(path) as image:
             return _pillow_oriented_size(image)
     if ext in RAW_EXTENSIONS:
+        preview_bytes = _eligible_raw_preview_bytes(path)
+        if preview_bytes is not None:
+            with Image.open(io.BytesIO(preview_bytes)) as image:
+                return _pillow_oriented_size(image)
         exif_size = _read_raw_exif_size(path)
         if exif_size is not None:
             return exif_size
@@ -301,7 +322,7 @@ def read_decoded_image_size(path: Path) -> tuple[int, int]:
             rawpy = None
         if rawpy is not None:
             try:
-                with rawpy.imread(str(path)) as raw:
+                with _rawpy_source(path) as source, rawpy.imread(source) as raw:
                     sizes = raw.sizes
                     width = max(1, int(getattr(sizes, "width", 0) or getattr(sizes, "iwidth", 0)))
                     height = max(1, int(getattr(sizes, "height", 0) or getattr(sizes, "iheight", 0)))
@@ -326,6 +347,10 @@ def decode_image(path: Path, decoder: str = "auto") -> Image.Image:
             raise RuntimeError("pillow-heif is required to decode HEIF/HEIC/HIF")
         return _decode_standard(path)
     if ext in RAW_EXTENSIONS:
+        if decoder.lower() == "auto":
+            embedded = _decode_embedded_raw_full(path)
+            if embedded is not None:
+                return embedded
         return _decode_raw(path, decoder=decoder)
     raise RuntimeError(f"unsupported image format: {path.suffix}")
 
@@ -335,8 +360,9 @@ def decode_image_for_preview(
     *,
     max_long_edge: int = _DEFAULT_PREVIEW_MAX_LONG_EDGE,
     decoder: str = "auto",
+    show_raw: bool = False,
 ) -> Image.Image:
-    """Preview-only decode: draft/downscale large raster images; export still uses decode_image()."""
+    """Decode a bounded preview using the same RAW source as export unless explicitly showing RAW."""
     limit = max(1, int(max_long_edge))
     ext = path.suffix.lower()
     if ext in PIL_EXTENSIONS:
@@ -346,15 +372,15 @@ def decode_image_for_preview(
             raise RuntimeError("pillow-heif is required to decode HEIF/HEIC/HIF")
         return _decode_standard_for_preview(path, limit)
     if ext in RAW_EXTENSIONS:
-        embedded = _decode_embedded_raw_preview(path, limit)
-        if embedded is not None:
-            return embedded
-        try:
-            return _decode_raw_rawpy_for_preview(path, limit)
-        except Exception as exc:
-            raise RuntimeError(
-                "RAW preview decode failed: no usable embedded preview and "
-                "half-size rawpy decode is unavailable; full RAW demosaic is "
-                f"reserved for export ({path.name}): {exc}"
-            ) from exc
+        if not show_raw:
+            embedded = _decode_embedded_raw_preview(path, limit)
+            if embedded is not None:
+                return embedded
+        raw_image = _decode_raw(path, decoder=decoder)
+        raw_size = raw_image.size
+        resized = _resize_fit_image(raw_image, limit)
+        if resized is not raw_image:
+            raw_image.close()
+        resized.info["birdstamp_source_properties"] = {"size": raw_size}
+        return resized
     raise RuntimeError(f"unsupported image format: {path.suffix}")

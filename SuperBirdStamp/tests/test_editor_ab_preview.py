@@ -127,6 +127,58 @@ def test_late_decode_is_closed_without_replacing_a(window, monkeypatch):
         pass
 
 
+def test_raw_toggle_is_independent_per_viewport_and_keeps_export_source(window, monkeypatch, tmp_path):
+    import io
+    from birdstamp.decoders import image_decoder
+    from test_sequence_transport import populate
+
+    raw = tmp_path / '鸟.arw'
+    raw.write_bytes(b'RAW placeholder')
+    jpeg = tmp_path / '普通.jpg'
+    Image.new('RGB', (100, 80), 'green').save(jpeg)
+    stream = io.BytesIO()
+    Image.new('RGB', (1600, 800), 'blue').save(stream, format='JPEG')
+    monkeypatch.setattr('app_common.thumb_stream.get_raw_preview_jpeg', lambda _path: stream.getvalue())
+    monkeypatch.setattr(image_decoder, '_decode_raw',
+                        lambda *_args, **_kwargs: Image.new('RGB', (2400, 1200), 'red'))
+    monkeypatch.setattr(window, '_metadata_snapshot_for_selection', lambda _path: {})
+    monkeypatch.setattr(window, '_schedule_async_bird_detect', lambda *_args: None)
+    populate(window, [raw, jpeg])
+    window.show()
+    ab = window.ab_preview
+    ab.enabled.setChecked(True)
+    ab.select_a(raw)
+    window._on_photo_selected(window._find_photo_item_by_path(raw), None, target_view='b')
+    wait_until(lambda: window._preview_decode_worker is None and window.current_source_image is not None)
+    finish(ab)
+    assert ab.a_panel.show_raw.isVisible() and ab.b_panel.show_raw.isVisible()
+    assert window.current_source_image.getpixel((0, 0))[2] > 200
+
+    ab.b_panel.show_raw.click()
+    wait_until(lambda: window._preview_decode_worker is None and window.current_source_image is not None)
+    assert window.current_source_image.getpixel((0, 0)) == (255, 0, 0)
+    assert not ab.a_panel.show_raw.isChecked()
+
+    ab.a_panel.show_raw.click()
+    finish(ab)
+    assert ab.image.pixelColor(0, 0).red() == 255
+    ab.select_a(jpeg)
+    finish(ab)
+    assert not ab.a_panel.show_raw.isVisible()
+    ab.select_a(raw)
+    finish(ab)
+    assert ab.a_panel.show_raw.isChecked() and ab.a_panel.show_raw.isVisible()
+    ab.mode.setCurrentIndex(1)
+    assert not ab.a_panel.show_raw.isVisible()
+    ab.mode.setCurrentIndex(0)
+    finish(ab)
+    assert ab.a_panel.show_raw.isVisible()
+
+    with image_decoder.decode_image(raw) as exported:
+        assert exported.size == (1600, 800)
+        assert exported.getpixel((0, 0))[2] > 200
+
+
 def test_a_keeps_owned_worker_until_finished_and_close_waits(window, monkeypatch):
     paths, _ = install_sequence(window, monkeypatch)
     ab = window.ab_preview

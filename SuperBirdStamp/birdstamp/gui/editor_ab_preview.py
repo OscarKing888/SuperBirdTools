@@ -6,6 +6,7 @@ from PyQt6.QtGui import QPixmap
 from PyQt6.QtWidgets import QSplitter, QToolButton
 
 from app_common.preview_canvas import PreviewWithStatusBar
+from birdstamp.constants import RAW_EXTENSIONS
 from .editor_preview_canvas import EditorPreviewCanvas, EditorPreviewOverlayState
 from .editor_preview_decode_worker import EditorPreviewDecodeWorker
 from .editor_sequence_preview_worker import EditorSequencePreviewWorker, pil_qimage
@@ -58,11 +59,13 @@ class ABPreview(QObject):
         self.a_panel = PreviewViewportPanel('A', self.preview)
         self.mode, self.center = self.a_panel.mode, self.a_panel.center
         self.mode.setToolTip('A 独立选择原图或已分析的去抖动成片。')
+        self.a_panel.show_raw.toggled.connect(self._on_a_raw_toggled)
         self.b_panel = PreviewViewportPanel('B', editor.preview_label,
                                             center=editor.auto_focus_center_check, scale=editor.preview_scale_combo)
         self.b_mode = self.b_panel.mode
         self.b_mode.setToolTip('选择 B 的原图或已分析的去抖动成片。')
         self.b_mode.activated.connect(self._choose_b_mode)
+        self.b_panel.show_raw.toggled.connect(self._on_b_raw_toggled)
         self.splitter.addWidget(self.a_panel)
         self.splitter.addWidget(self.b_panel)
         self.geometry_timer = QTimer(self)
@@ -120,6 +123,19 @@ class ABPreview(QObject):
         self.editor.sequence_transport.stop(commit=False)
         self.sync(force=True)
         self.editor.sequence_transport.sync()
+
+    def _on_a_raw_toggled(self, _checked):
+        if self.enabled.isChecked() and self.path is not None and self.mode.currentIndex() == 0:
+            self.sync(force=True)
+
+    def _on_b_raw_toggled(self, _checked):
+        editor = self.editor
+        if (editor.current_path is not None and not editor._sequence_result_mode()
+                and editor.current_path.suffix.lower() in RAW_EXTENSIONS):
+            self.activate('b')
+            item = editor._find_photo_item_by_path(editor.current_path)
+            if item is not None:
+                editor._on_photo_selected(item, None, target_view='b')
 
     def _toggle(self, enabled):
         self.a_panel.setVisible(enabled)
@@ -210,6 +226,7 @@ class ABPreview(QObject):
         if self.stopping:
             return
         self._sync_controls()
+        self.b_panel.set_path(self.editor.current_path)
         if not self.enabled.isChecked():
             return
         editor = self.editor
@@ -223,8 +240,11 @@ class ABPreview(QObject):
         self._sync_controls()
         sequence = editor._sequence_preview
         result = self.mode.currentIndex() == 1
+        show_raw = bool(self.path and self.path.suffix.lower() in RAW_EXTENSIONS
+                        and self.a_panel.show_raw.isChecked() and not result
+                        and not editor._sequence_fast_preview_active())
         request = (self.path, result, id(sequence) if result else None,
-                   image_file_signature(self.path) if self.path else None)
+                   image_file_signature(self.path) if self.path else None, show_raw)
         if not force and request == self.request:
             self._display()
             return
@@ -239,11 +259,11 @@ class ABPreview(QObject):
             return
         key = path_key(self.path)
         frame = editor._sequence_quick_frames.get(key)
-        if frame is not None:
+        if frame is not None and not show_raw:
             self.image = frame.image if result else frame.source_image
             self.size = frame.source_size
             self.frame = frame if result else None
-        elif not result and hasattr(editor, 'sequence_transport'):
+        elif not result and not show_raw and hasattr(editor, 'sequence_transport'):
             source_entry = editor.sequence_transport.source_preview(self.path)
             if source_entry is not None:
                 source_image, self.size = source_entry
@@ -287,6 +307,7 @@ class ABPreview(QObject):
         else:
             worker = EditorPreviewDecodeWorker(self.token, path,
                                                max_long_edge=self.editor._preview_decode_max_long_edge(),
+                                               show_raw=self.request[4],
                                                pool=self.editor._preview_action_pool, parent=self)
             worker.quick_decoded.connect(self._decoded)
             worker.decoded.connect(self._decoded)
@@ -383,7 +404,7 @@ class ABPreview(QObject):
                 camera_type=editor_core.resolve_focus_camera_type_from_metadata(metadata))
             apply_frame_alignment(state, self.frame, focus, bird, regions, diagnostics)
         else:
-            source_crop = source_normalized_crop(self.size, sequence.pixel_boxes[key]) if self.frame and sequence else None
+            source_crop = source_normalized_crop(sequence.source_sizes[key], sequence.pixel_boxes[key]) if self.frame and sequence else None
             state.reference_diagnostics = tracking_overlays(regions, diagnostics, source_crop)
         if not crop and reference:
             state.reference_regions = regions
@@ -396,7 +417,7 @@ class ABPreview(QObject):
             state.intersection_box = normalized_intersection_box(sequence)
             state.union_box = normalized_union_box(sequence)
         if not self.frame and sequence and key in sequence.pixel_boxes and not editor.dejitter_pad_to_union_check.isChecked():
-            state.crop_effect_box = source_normalized_crop(self.size, sequence.pixel_boxes[key])
+            state.crop_effect_box = source_normalized_crop(sequence.source_sizes[key], sequence.pixel_boxes[key])
             state.alignment_crop_box = state.crop_effect_box
             options.show_crop_effect = editor.show_crop_effect_check.isChecked()
         elif not self.frame and sequence and not editor.dejitter_pad_to_union_check.isChecked():

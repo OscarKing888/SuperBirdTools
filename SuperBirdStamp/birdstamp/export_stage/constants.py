@@ -13,7 +13,7 @@ _PLATFORM_TOOL_SUBDIR = {
     "win32": "windows",
 }
 _BIRD_DETECT_WARNING_EMITTED = False
-_VIDEO_RENDER_CACHE_VERSION = 2
+_VIDEO_RENDER_CACHE_VERSION = 3
 _VIDEO_RENDER_CACHE_ROOT_NAME = "birdstamp_export_cache"
 
 _build_metadata_context = editor_utils.build_metadata_context

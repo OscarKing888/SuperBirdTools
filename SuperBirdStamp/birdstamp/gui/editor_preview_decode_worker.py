@@ -45,26 +45,28 @@ def cached_preview_image(path: Path, max_long_edge: int) -> Image.Image | None:
 class EditorPreviewAction(WorkerAction):
     """读取单张预览；Qt 协调线程与 A/B 视图共用同一动作。"""
 
-    def __init__(self, path, max_long_edge, quick_only, emit_quick, emit_full, *, cancelled):
+    def __init__(self, path, max_long_edge, quick_only, emit_quick, emit_full, *, cancelled, show_raw=False):
         super().__init__(cancelled=cancelled)
         self.path = Path(path)
         self.max_long_edge = max_long_edge
         self.quick_only = quick_only
         self.emit_quick = emit_quick
         self.emit_full = emit_full
+        self.show_raw = bool(show_raw)
 
     def execute(self):
         image: Image.Image | None = None
         try:
             if self.is_cancelled():
                 return
-            with perf.span("preview.cached_thumbnail", path=str(self.path)):
-                try:
-                    image = cached_preview_image(
-                        self.path, min(512, self.max_long_edge) if self.quick_only else self.max_long_edge,
-                    )
-                except Exception:
-                    image = None
+            if not self.show_raw:
+                with perf.span("preview.cached_thumbnail", path=str(self.path)):
+                    try:
+                        image = cached_preview_image(
+                            self.path, min(512, self.max_long_edge) if self.quick_only else self.max_long_edge,
+                        )
+                    except Exception:
+                        image = None
             full_size = None
             if image is not None:
                 try:
@@ -87,7 +89,8 @@ class EditorPreviewAction(WorkerAction):
                 return
             edge = min(512, self.max_long_edge) if self.quick_only else self.max_long_edge
             with perf.span("preview.quick_decode" if self.quick_only else "preview.decode", path=str(self.path)):
-                image = decode_image_for_preview(self.path, max_long_edge=edge, decoder="auto")
+                kwargs = {"show_raw": True} if self.show_raw else {}
+                image = decode_image_for_preview(self.path, max_long_edge=edge, decoder="auto", **kwargs)
             if self.is_cancelled():
                 return
             properties = image.info.get("birdstamp_source_properties") or {}
@@ -123,6 +126,7 @@ class EditorPreviewDecodeWorker(QThread):
         *,
         max_long_edge: int,
         quick_only: bool = False,
+        show_raw: bool = False,
         pool=None,
         parent=None,
     ) -> None:
@@ -131,6 +135,7 @@ class EditorPreviewDecodeWorker(QThread):
         self._path = Path(path).resolve(strict=False)
         self._max_long_edge = max(1, int(max_long_edge))
         self._quick_only = bool(quick_only)
+        self._show_raw = bool(show_raw)
         self._pool = pool
 
     def run(self) -> None:
@@ -139,7 +144,7 @@ class EditorPreviewDecodeWorker(QThread):
                 self._path, self._max_long_edge, self._quick_only,
                 lambda image, size: self.quick_decoded.emit(self._token, str(self._path), image, size),
                 lambda image, size: self.decoded.emit(self._token, str(self._path), image, size),
-                cancelled=self.isInterruptionRequested,
+                cancelled=self.isInterruptionRequested, show_raw=self._show_raw,
             )
             if self._pool is None:
                 action.execute()

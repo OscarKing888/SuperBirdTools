@@ -94,7 +94,7 @@ from app_common.send_to_app import (
 
 import birdstamp
 from birdstamp.config import get_app_resource_dir, get_config_path, resolve_bundled_path
-from birdstamp.constants import SEND_TO_APP_ID, SUPPORTED_EXTENSIONS
+from birdstamp.constants import RAW_EXTENSIONS, SEND_TO_APP_ID, SUPPORTED_EXTENSIONS
 from birdstamp import perf as birdstamp_perf
 from app_common.exif_io import (
     extract_many,
@@ -4964,9 +4964,13 @@ class BirdStampEditorWindow(
         self._preview_decode_token += 1
         token = self._preview_decode_token
         self._cancel_async_bird_detect()
-        self._begin_photo_selection(path, current, preserve_preview_view=quick_only)
+        show_raw = bool(path.suffix.lower() in RAW_EXTENSIONS and self._b_show_raw_for_path(path)
+                        and not quick_only)
+        self._begin_photo_selection(path, current,
+                                    preserve_preview_view=quick_only or path == self.current_path)
         source_entry = transport.source_preview(path) if quick_only and transport is not None else None
-        cached = source_entry[0] if source_entry is not None else self._cached_preview_image(path)
+        cached = (source_entry[0] if source_entry is not None else
+                  None if show_raw else self._cached_preview_image(path))
         if cached is not None:
             signature = self._preview_image_cache_signature(path)
             full_size = source_entry[1] if source_entry is not None else self._preview_source_size_cache.get(signature, cached.size)
@@ -4998,6 +5002,7 @@ class BirdStampEditorWindow(
             path,
             max_long_edge=self._preview_decode_max_long_edge(),
             quick_only=quick_only,
+            show_raw=not quick_only and self._b_show_raw_for_path(path),
             pool=self._preview_action_pool,
             parent=self,
         )

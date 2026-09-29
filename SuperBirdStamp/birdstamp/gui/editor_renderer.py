@@ -20,6 +20,7 @@ from app_common.preview_canvas import (
     normalize_preview_composition_grid_mode,
 )
 from birdstamp.decoders.image_decoder import decode_image, decode_image_for_preview, read_decoded_image_size
+from birdstamp.constants import RAW_EXTENSIONS
 from birdstamp.render.text_scale import normalize_text_scale
 from birdstamp import perf as birdstamp_perf
 from birdstamp.crop_resolution import CropPixelContext
@@ -377,7 +378,13 @@ class _BirdStampRendererMixin:
         return image.copy()
 
     def _preview_image_cache_signature(self, path: Path) -> str:
-        return f"{self._source_signature(path)}:preview{_PREVIEW_DECODE_MAX_LONG_EDGE}"
+        mode = 'raw' if self._b_show_raw_for_path(path) else 'embedded'
+        return f"{self._source_signature(path)}:preview{_PREVIEW_DECODE_MAX_LONG_EDGE}:{mode}"
+
+    def _b_show_raw_for_path(self, path: Path) -> bool:
+        ab = getattr(self, 'ab_preview', None)
+        return bool(path.suffix.lower() in RAW_EXTENSIONS and ab is not None
+                    and ab.b_panel.show_raw.isChecked() and not self._sequence_result_mode())
 
     def _preview_decode_max_long_edge(self) -> int:
         return _PREVIEW_DECODE_MAX_LONG_EDGE

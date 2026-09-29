@@ -23,6 +23,7 @@ from .editor_preview_decode_worker import cached_preview_image
 _log = logging.getLogger(__name__)
 _CACHE_EDGE = 512
 _CACHE_SOFT_LIMIT = 512 * 1024 * 1024
+_CACHE_VERSION = 2  # RAW 源尺寸改为实际内嵌 JPEG 的尺寸。
 
 
 class SourceQuickAction(WorkerAction):
@@ -32,7 +33,8 @@ class SourceQuickAction(WorkerAction):
         super().__init__(cancelled=cancelled)
         self.signature = signature
         self.path = Path(path)
-        self.cache_path = Path(cache_dir) / (hashlib.sha256(signature.encode('utf-8')).hexdigest() + '.bin')
+        cache_key = f'{_CACHE_VERSION}:{signature}'
+        self.cache_path = Path(cache_dir) / (hashlib.sha256(cache_key.encode('utf-8')).hexdigest() + '.bin')
 
     def _read_cache(self):
         try:

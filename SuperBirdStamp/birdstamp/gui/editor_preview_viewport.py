@@ -4,6 +4,7 @@ from PyQt6.QtGui import QPalette
 from PyQt6.QtWidgets import QButtonGroup, QComboBox, QFrame, QHBoxLayout, QLabel, QPushButton, QSizePolicy, QStyle, QToolButton, QVBoxLayout, QWidget
 
 from app_common.preview_canvas import configure_preview_scale_preset_combo, sync_preview_scale_preset_combo
+from birdstamp.constants import RAW_EXTENSIONS
 from . import editor_options
 from .editor_media_icons import media_icon
 
@@ -66,6 +67,13 @@ class PreviewViewportPanel(QWidget):
         tools.addWidget(self.play)
         self.mode = PreviewModeButtons()
         tools.addWidget(self.mode)
+        self.show_raw = QToolButton()
+        self.show_raw.setText('显示 RAW')
+        self.show_raw.setCheckable(True)
+        self.show_raw.setToolTip('仅切换本视口原图的像素来源；导出仍优先使用 RAW 内嵌预览图。')
+        self.show_raw.setAccessibleName(f'显示 {name} 侧完整 RAW')
+        tools.addWidget(self.show_raw)
+        self.mode.currentIndexChanged.connect(lambda _index: self._update_raw_toggle_visibility())
         self.center = center if center is not None else QToolButton()
         if center is None:
             self.center.setText('自动焦点居中')
@@ -96,6 +104,8 @@ class PreviewViewportPanel(QWidget):
         frame_layout.addWidget(preview)
         layout.addWidget(self.viewport_frame, 1)
         self._filename = '未选择'
+        self._path = None
+        self._update_raw_toggle_visibility()
         self.set_active(False)
 
         # 长状态文本不能撑开其中一个视口；保持单行等高，完整内容仍可悬停查看。
@@ -108,9 +118,16 @@ class PreviewViewportPanel(QWidget):
             widget.installEventFilter(self)
 
     def set_path(self, path):
+        self._path = path
         self._filename = path.name if path else '未选择'
         self._elide_filename()
         self.filename.setToolTip(str(path) if path else '')
+        self._update_raw_toggle_visibility()
+
+    def _update_raw_toggle_visibility(self):
+        path = self._path
+        self.show_raw.setVisible(bool(path and path.suffix.lower() in RAW_EXTENSIONS
+                                      and self.mode.currentIndex() == 0))
 
     def set_active(self, active, *, compare_mode=True):
         highlighted = active and compare_mode

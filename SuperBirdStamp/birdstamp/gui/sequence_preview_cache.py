@@ -21,7 +21,7 @@ from . import editor_options
 from .editor_utils import path_key
 from .sequence_preview_frame import SequencePreviewFrame
 
-CACHE_VERSION = 4
+CACHE_VERSION = 5
 _log = get_logger('birdstamp.sequence_cache')
 
 
