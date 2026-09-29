@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import time
+from copy import deepcopy
 from collections import deque
 from contextlib import contextmanager
 from pathlib import Path
@@ -13,6 +14,7 @@ from PyQt6.QtWidgets import QFileDialog, QMessageBox
 from app_common.log import get_logger
 from birdstamp import perf as birdstamp_perf
 from birdstamp.config import get_config_path
+from . import editor_options
 from birdstamp.constants import SUPPORTED_EXTENSIONS
 from birdstamp.gui.edit_modes import (
     EDIT_MODE_CROP_ADJUST,
@@ -376,13 +378,19 @@ class _BirdStampWorkspaceMixin:
     def _has_workspace_session_content(self) -> bool:
         return bool(self.photo_list.topLevelItemCount() or self._report_db_entries)
 
-    def _confirm_replace_workspace_session(self) -> bool:
+    def _confirm_replace_workspace_session(self, *, creating: bool = False) -> bool:
         if not self._has_workspace_session_content():
             return True
+        title = "新建工作区" if creating else "加载工作区"
+        message = (
+            "新建工作区会清空当前照片、report.db 和编辑设置，是否继续？"
+            if creating else
+            "加载工作区会清空当前照片列表、report.db 列表和当前编辑设置，是否继续？"
+        )
         answer = QMessageBox.question(
             self,
-            "加载工作区",
-            "加载工作区会清空当前照片列表、report.db 列表和当前编辑设置，是否继续？",
+            title,
+            message,
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             QMessageBox.StandardButton.No,
         )
@@ -1033,6 +1041,26 @@ class _BirdStampWorkspaceMixin:
                     timer.start()
 
         return
+
+    def new_workspace(self) -> None:
+        if self._video_export_worker is not None and self._video_export_worker.isRunning():
+            self._show_error("视频导出进行中", "请先中断当前视频导出，再新建工作区。")
+            return
+        if not self._confirm_replace_workspace_session(creating=True):
+            return
+        defaults = deepcopy(self._new_workspace_defaults)
+        self._pending_startup_workspace_restore = False
+        self._restore_workspace_payload(
+            defaults, self._workspace_autosave_path(),
+            status_label="已新建工作区", mark_as_current_workspace=False,
+        )
+        self.ab_preview.enabled.setChecked(editor_options.PREVIEW_AB_ENABLED)
+        self.ab_preview.mode.setCurrentIndex(0)
+        self.ab_preview.linked.setChecked(editor_options.PREVIEW_AB_LINKED)
+        self.export_tabs.setCurrentIndex(0)
+        self._set_dejitter_view('edit')
+        self._workspace_path = None
+        self._schedule_workspace_autosave()
 
     def save_workspace(self) -> None:
         workspace_path = getattr(self, "_workspace_path", None)

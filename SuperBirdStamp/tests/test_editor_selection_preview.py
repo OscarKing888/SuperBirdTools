@@ -561,3 +561,64 @@ def test_shutdown_releases_preview_deferred_by_crop_drag(tmp_path):
     finally:
         window._crop_drag_active = False
         _cleanup_window(_APP, window)
+
+
+def test_hot_receive_imports_while_result_preview_is_open(tmp_path):
+    path = tmp_path / "received.png"
+    Image.new("RGB", (16, 12), "green").save(path)
+    app = _app()
+    window = _make_window()
+    completed = []
+    try:
+        window.export_tabs.setCurrentWidget(window.dejitter_page)
+        window.dejitter_view_tabs.setCurrentIndex(1)
+        window.ab_preview.enabled.setChecked(True)
+        window.ab_preview.activate('a')
+        window.ab_preview.mode.setCurrentIndex(1)
+        window.add_received_file_paths([path], on_complete=lambda: completed.append(True))
+        assert _wait_until(app, lambda: bool(completed), timeout=5)
+        assert window.photo_list.topLevelItemCount() == 1
+        assert window.current_path == path.resolve(strict=False)
+        assert window._dejitter_view == 'edit'
+        assert window.dejitter_view_tabs.currentIndex() == 0
+        assert window.ab_preview.active_side == 'b'
+        assert window.ab_preview.mode.currentIndex() == 0
+        assert window.ab_preview.b_mode.currentIndex() == 0
+    finally:
+        _cleanup_window(app, window)
+
+
+def test_new_workspace_clears_session_and_restores_editor_defaults(tmp_path, monkeypatch):
+    path = tmp_path / "previous.png"
+    Image.new("RGB", (16, 12), "blue").save(path)
+    app = _app()
+    window = _make_window()
+    try:
+        defaults = window._new_workspace_defaults["editor_state"]
+        _add_photo(window, path)
+        window.draw_banner_check.setChecked(not defaults["global_export_settings"]["draw_banner"])
+        window.text_scale_slider.setValue(150)
+        window.dejitter_auto_region_count.setValue(5)
+        window.dejitter_export_workspace_check.setChecked(True)
+        window.ab_preview.enabled.setChecked(True)
+        window.export_tabs.setCurrentWidget(window.dejitter_page)
+        window.dejitter_view_tabs.setCurrentIndex(1)
+        window._workspace_path = tmp_path / "previous.birdstamp-workspace.json"
+        monkeypatch.setattr(window, "_confirm_replace_workspace_session", lambda **kwargs: True)
+
+        window.action_new_workspace.trigger()
+
+        assert window.photo_list.topLevelItemCount() == 0
+        assert window._workspace_path is None
+        assert window._dejitter_view == "edit"
+        assert window.export_tabs.currentWidget() is not window.dejitter_page
+        assert not window.ab_preview.enabled.isChecked()
+        assert window.draw_banner_check.isChecked() == defaults["global_export_settings"]["draw_banner"]
+        assert window.text_scale_slider.value() == round(defaults["current_render_settings"]["text_scale"] * 100)
+        assert window.dejitter_auto_region_count.value() == defaults["sequence_preview"]["auto_region_count"]
+        assert window.dejitter_export_workspace_check.isChecked() == defaults["sequence_preview"]["open_export_workspace"]
+        state = window._collect_workspace_payload(window._workspace_autosave_path())["editor_state"]
+        for key in ("global_export_settings", "image_export", "video_export", "sequence_preview"):
+            assert state[key] == defaults[key]
+    finally:
+        _cleanup_window(app, window)

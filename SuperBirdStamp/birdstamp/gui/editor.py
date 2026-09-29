@@ -768,6 +768,7 @@ class BirdStampEditorWindow(
         self._reload_template_combo(preferred="default")
         self._set_status("就绪。请添加照片并选择模板。")
         self._show_instant_placeholder_preview()
+        self._new_workspace_defaults = self._collect_workspace_payload(self._workspace_autosave_path())
 
         # 冷启动或「发送到本应用」传入的文件列表：加入照片列表
         files_to_add: list[Path] = []
@@ -2066,6 +2067,11 @@ class BirdStampEditorWindow(
         self.action_add_directory.triggered.connect(self._pick_directory)
         self.addAction(self.action_add_directory)
 
+        self.action_new_workspace = QAction("新建工作区", self)
+        self.action_new_workspace.setShortcut(QKeySequence.StandardKey.New)
+        self.action_new_workspace.triggered.connect(self.new_workspace)
+        self.addAction(self.action_new_workspace)
+
         self.action_load_workspace = QAction("加载工作区...", self)
         self.action_load_workspace.setShortcut(QKeySequence("Ctrl+Shift+O"))
         self.action_load_workspace.triggered.connect(self.load_workspace)
@@ -2104,6 +2110,7 @@ class BirdStampEditorWindow(
         file_menu.addAction(self.action_add_files)
         file_menu.addAction(self.action_add_directory)
         file_menu.addSeparator()
+        file_menu.addAction(self.action_new_workspace)
         file_menu.addAction(self.action_load_workspace)
         self.recent_workspaces_menu = file_menu.addMenu("最近打开的工作区")
         self.recent_workspaces_menu.aboutToShow.connect(self._refresh_recent_workspace_menu)
@@ -4737,6 +4744,12 @@ class BirdStampEditorWindow(
     ) -> None:
         """处理外部 received 文件：先补充 report.db，再按时间片分批导入。"""
         pending_paths = list(paths)
+        if pending_paths:
+            self.ab_preview.activate("b", sync_selection=False)
+            if self.ab_preview.mode.currentIndex() != 0:
+                self.ab_preview.mode.setCurrentIndex(0)
+            if self._dejitter_view == "result":
+                self._set_dejitter_view("edit")
         pre_added_report_db_count = self._auto_add_report_db_paths_for_received_files(pending_paths)
         self._enqueue_received_photo_paths(
             pending_paths,

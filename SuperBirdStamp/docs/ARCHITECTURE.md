@@ -18,6 +18,8 @@
 
 应用身份由根 [app_metadata.json](../../app_metadata.json) 经 [load_app_identity](../../app_identity.py) 读取，包入口导出 `APP_INFO` / `__version__`，窗口标题和 Qt 应用名使用同一对象。应用自己的 [about.cfg](../about.cfg) 仅管理 About 内容与图片，共享 [config.py](../../app_common/about_dialog/config.py) 处理覆盖和路径，[AboutDialog](../../app_common/about_dialog/dialog.py) 负责屏幕边界、自适应换行和滚动。只读启动检查 [about_diagnostics.py](../../about_diagnostics.py) 通过 `entry.py --check-about` 调用应用实际配置入口，不构造主窗口或恢复工作区。
 
+Hot-received photos switch the B preview from result view to source/edit view before the import queue starts, including when the photo list is empty. The IPC receiver reports transfer completion before the import callback, so a late transfer event cannot replace the final import status. File > New Workspace (Ctrl+N) reuses the empty workspace restore path and the editor defaults captured before startup workspace restoration; it clears photos, report databases, sequence results and workspace settings, then returns to source/edit view. The previous named workspace is not overwritten by this action.
+
 ## 2. 编辑器状态与线程归属
 
 主窗口 [BirdStampEditorWindow](../birdstamp/gui/editor.py) 组合六个 mixin：
