@@ -51,13 +51,13 @@ Hot-received photos switch the B preview from result view to source/edit view be
 
 列表点击由 `_begin_photo_selection` 立即切换编辑目标，只应用一次逐图设置；不重写列表行、不重新排序。后台像素升级沿用最新设置和元数据，裁切拖动中延后替换像素，避免坐标系突变。已解码预览使用 128 MiB / 32 项上限的 LRU（像素按 4 字节计量），淘汰时同步移除原尺寸缓存；原图导出缓存保持独立。
 
-裁剪框像素标注与 Shift 分辨率吸附由 [crop_resolution.py](../birdstamp/crop_resolution.py) 的 `CropPixelContext`、`resolution_targets` 和 `choose_snap_target` 计算。主编辑器与模板预览向画布传入原图尺寸、实际预览尺寸及预览补边；标注复用导出的裁剪计划/取整，表示包含补边、后续缩放和模板扩展之前的裁剪像素。候选框先在原图坐标中落到整数边界，再转换到预览归一化坐标；角点固定对角，边中点固定对边并垂直居中，锚点取整最多偏移半个原图像素。工作区仍保存现有 `crop_box`，无需迁移。
+裁剪框像素标注与分辨率吸附由 [crop_resolution.py](../birdstamp/crop_resolution.py) 的 `CropPixelContext`、`resolution_targets` 和 `choose_snap_target` 计算。主编辑器与模板预览向画布传入原图尺寸、实际预览尺寸及预览补边；标注复用导出的裁剪计划/取整，表示包含补边、后续缩放和模板扩展之前的裁剪像素。候选框先在原图坐标中落到整数边界，再转换到预览归一化坐标；角点固定对角，边中点固定对边并垂直居中，锚点取整最多偏移半个原图像素。工作区仍保存现有 `crop_box`，无需迁移。
 
-`editor_options.json.crop_resolution_snap` 配置短边档位（默认 480p/480、720p/720、1080p/1080、1440p/1440、4K/2160）和进入/脱离距离（10/16 个逻辑像素）。长边按当前比例取整；自由模式取本次拖动起始比例。Shift 只预览最近一档，接近时吸附，整框平移不吸附；候选必须符合原有最小尺寸及可见重叠限制，允许补边。松开 Shift 隐藏参考线并保持当前框，下一次移动恢复普通调整；鼠标释放、失焦、切图和退出模式清理临时状态，保留一次最终提交。
+`editor_options.json.crop_resolution_snap` 配置短边档位（默认 480p/480、720p/720、1080p/1080、1440p/1440、4K/2160）和进入/脱离距离（10/16 个逻辑像素）。长边按当前比例取整；自由模式取本次拖动起始比例。拖动裁剪手柄时立即预览最近一档，接近时吸附，整框平移不吸附；候选必须符合原有最小尺寸及可见重叠限制，允许补边。松开鼠标、失焦、切图和退出模式时清理参考线等临时状态并保持当前框，保留一次最终提交。
 
-参考框、标签与吸附共用 `tiers` 配置中的 `label` / `short_edge`，不以 4K 为上限；例如 `{"label": "6K+", "short_edge": 3456}` 在 3:2 比例下生成 5184×3456 框。`load_crop_resolution_snap_options` 在画布创建和每次开始 Shift 手势时通过 `resolve_bundled_path("config", "editor_options.json")` 重新读取，绕过其他编辑选项的启动缓存；增删或重命名档位下次按住 Shift 即生效。一次拖动沿用同一快照，不在逐帧移动/绘制中读文件。文件缺失或 JSON 暂未保存完整时记录诊断并沿用上次有效配置。配置仍仅显示最近一个参考框。
+参考框、标签与吸附共用 `tiers` 配置中的 `label` / `short_edge`，不以 4K 为上限；例如 `{"label": "6K+", "short_edge": 3456}` 在 3:2 比例下生成 5184×3456 框。`load_crop_resolution_snap_options` 在画布创建和每次开始拖动裁剪手柄时通过 `resolve_bundled_path("config", "editor_options.json")` 重新读取，绕过其他编辑选项的启动缓存；增删或重命名档位下次拖动手柄即生效。一次拖动沿用同一快照，不在逐帧移动/绘制中读文件。文件缺失或 JSON 暂未保存完整时记录诊断并沿用上次有效配置。配置仍仅显示最近一个参考框。
 
-[crop_resolution_overlay.py](../birdstamp/gui/crop_resolution_overlay.py) 的 `CropResolutionOverlayMixin` 管理按键、滞回和标签；`EditorPreviewCanvas.paintEvent` 在正常绘制后添加界面提示，尺寸标签与青色虚线不进入叠加导出。无可靠原图尺寸时停用此提示和吸附，去抖动成片视图不复用普通裁剪上下文。核心几何不依赖 Qt，可由非 GUI 调用；本次没有新增 CLI 开关，因为键盘/指针吸附是编辑交互，CLI 沿用保存后的裁剪框。回归见 [test_crop_resolution.py](../tests/test_crop_resolution.py)，覆盖八个手柄、补边、真实导出、工作区往返、缩放/高 DPI、退出清理及导出隔离；[test_crop_coordinate_regressions.py](../tests/test_crop_coordinate_regressions.py) 同时验证主编辑器与模板预览的尺寸接线。
+[crop_resolution_overlay.py](../birdstamp/gui/crop_resolution_overlay.py) 的 `CropResolutionOverlayMixin` 管理拖动、滞回和标签；`EditorPreviewCanvas.paintEvent` 在正常绘制后添加界面提示，尺寸标签与青色虚线不进入叠加导出。无可靠原图尺寸时停用此提示和吸附，去抖动成片视图不复用普通裁剪上下文。核心几何不依赖 Qt，可由非 GUI 调用；本次没有新增 CLI 开关，因为指针吸附是编辑交互，CLI 沿用保存后的裁剪框。回归见 [test_crop_resolution.py](../tests/test_crop_resolution.py)，覆盖八个手柄、补边、真实导出、工作区往返、缩放/高 DPI、退出清理及导出隔离；[test_crop_coordinate_regressions.py](../tests/test_crop_coordinate_regressions.py) 同时验证主编辑器与模板预览的尺寸接线。
 
 `render_preview` 的鸟体中心及缺失焦点回退通过后台识别计算，结果到达后重算裁切与文字；中间缩略图不参与检测，手动裁切框不会被覆盖。导出仍使用完整裁切管线。预览模板通过 `template_context.preview_photo_info` 消费已合并 XMP 的元数据快照，字段缺失时等待后台元数据刷新，不在 GUI 抢占 ExifTool 或打开原图探测。字段解析按优先级命中即返回，同次预览复用 provider context；导出和模板管理器保留完整读取规则。
 

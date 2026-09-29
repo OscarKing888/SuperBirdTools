@@ -1,4 +1,4 @@
-"""UI-only crop size labels and the transient Shift guide interaction."""
+"""UI-only crop size labels and transient resize guides."""
 from PyQt6.QtCore import QRectF, Qt
 from PyQt6.QtGui import QColor, QPainter, QPen
 
@@ -9,7 +9,6 @@ from . import editor_options
 class CropResolutionOverlayMixin:
     def _init_crop_resolution(self):
         self._crop_pixel_context = None
-        self._crop_shift_down = False
         self._crop_resolution_guide = None
         self._crop_resolution_snapped = False
         self._crop_snap_options = editor_options.load_crop_resolution_snap_options(editor_options.CROP_RESOLUTION_SNAP)
@@ -26,7 +25,6 @@ class CropResolutionOverlayMixin:
         self._clear_crop_resolution()
 
     def _clear_crop_resolution(self):
-        self._crop_shift_down = False
         self._crop_resolution_guide = None
         self._crop_resolution_snapped = False
         self.update()
@@ -37,7 +35,6 @@ class CropResolutionOverlayMixin:
         self._dragging_handle = None
         self._drag_start_box = None
         self._drag_start_pos = None
-        self._last_pos = None
         self._clear_crop_resolution()
         if active:
             self._drag_probe.end()
@@ -49,15 +46,15 @@ class CropResolutionOverlayMixin:
         context = self._crop_pixel_context
         return context.ratio if context.ratio is not None else context.pixel_ratio(box)
 
-    def _update_crop_resolution_guide(self, box, draw_rect, *, dragging=False):
+    def _update_crop_resolution_guide(self, box, draw_rect):
         context = self._crop_pixel_context
-        if (not self._crop_shift_down or not self._crop_edit_mode or context is None
-                or self._dragging_handle == self._CROP_DRAG_CENTER):
+        if (not self._crop_edit_mode or context is None
+                or self._dragging_handle in (None, self._CROP_DRAG_CENTER)):
             self._crop_resolution_guide = None
             self._crop_resolution_snapped = False
             return box
-        start = self._drag_start_box if dragging else box
-        handle = self._dragging_handle if dragging else None
+        start = self._drag_start_box
+        handle = self._dragging_handle
         targets = resolution_targets(context, start, handle, self._resolution_ratio(start),
                                      self._crop_snap_options["tiers"])
         previous = self._crop_resolution_guide if self._crop_resolution_snapped else None
@@ -71,55 +68,18 @@ class CropResolutionOverlayMixin:
 
     def _crop_resize_box(self, draw_rect, pos):
         nx, ny = self._widget_to_norm(draw_rect, pos.x(), pos.y())
-        override = None
-        context = self._crop_pixel_context
-        if self._crop_shift_down and context is not None:
-            # _box_after_drag uses preview-pixel aspect, including unequal axis rounding.
-            sw, sh = context.source_size
-            pw, ph = context.preview_size
-            override = self._resolution_ratio(self._drag_start_box) * (pw / sw) / (ph / sh)
         box = self._box_after_drag(self._drag_start_box, self._dragging_handle, nx, ny,
-                                   draw_rect.width() / draw_rect.height(), ratio_override=override)
-        return self._update_crop_resolution_guide(box, draw_rect, dragging=True)
+                                   draw_rect.width() / draw_rect.height())
+        return self._update_crop_resolution_guide(box, draw_rect)
 
-    def _sync_crop_shift(self, pressed):
-        if pressed and not self._crop_shift_down:
-            self._crop_snap_options = editor_options.load_crop_resolution_snap_options(self._crop_snap_options)
-            self._crop_resolution_guide = None
+    def _begin_crop_resolution_drag(self, draw_rect):
+        self._crop_snap_options = editor_options.load_crop_resolution_snap_options(self._crop_snap_options)
+        self._crop_resolution_guide = None
+        self._crop_resolution_snapped = False
+        if self._crop_pixel_context is not None:
+            self._update_crop_resolution_guide(self._crop_effect_box, draw_rect)
             self._crop_resolution_snapped = False
-        self._crop_shift_down = pressed
-
-    def _set_crop_shift(self, pressed):
-        self._sync_crop_shift(pressed)
-        if not pressed:
-            self._crop_resolution_guide = None
-            self._crop_resolution_snapped = False
-        elif self._crop_edit_mode and self._crop_effect_box is not None:
-            rect = self._display_rect()
-            if rect is not None and rect.width() > 0 and rect.height() > 0:
-                if self._dragging_handle not in (None, self._CROP_DRAG_CENTER) and self._last_pos is not None:
-                    box = self._crop_resize_box(rect, self._last_pos)
-                    self._set_crop_effect_box_no_update(box)
-                    self.crop_box_changed.emit(box)
-                else:
-                    self._update_crop_resolution_guide(self._crop_effect_box, rect)
         self.update()
-
-    def keyPressEvent(self, event):
-        if event.key() == Qt.Key.Key_Shift and self._crop_edit_mode:
-            if not event.isAutoRepeat():
-                self._set_crop_shift(True)
-            event.accept()
-            return
-        super().keyPressEvent(event)
-
-    def keyReleaseEvent(self, event):
-        if event.key() == Qt.Key.Key_Shift and self._crop_edit_mode:
-            if not event.isAutoRepeat():
-                self._set_crop_shift(False)
-            event.accept()
-            return
-        super().keyReleaseEvent(event)
 
     def focusOutEvent(self, event):
         self._finish_crop_resolution_drag()
@@ -149,7 +109,7 @@ class CropResolutionOverlayMixin:
                     break
             guide = self._crop_resolution_guide
             self._draw_crop_resolution_label(painter, crop_rect, label, QColor("white"))
-            if self._crop_shift_down and guide:
+            if self._dragging_handle not in (None, self._CROP_DRAG_CENTER) and guide:
                 guide_rect = self._crop_resolution_rect(guide.box, draw_rect)
                 color = QColor("#7FFFF0" if self._crop_resolution_snapped else "#45D6E8")
                 painter.setPen(QPen(color, 2 if self._crop_resolution_snapped else 1, Qt.PenStyle.DashLine))

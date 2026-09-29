@@ -3,7 +3,7 @@ import json
 import pytest
 from PIL import Image
 from PyQt6.QtCore import QEvent, QPointF, Qt
-from PyQt6.QtGui import QFocusEvent, QKeyEvent, QMouseEvent, QPixmap
+from PyQt6.QtGui import QFocusEvent, QMouseEvent, QPixmap
 from PyQt6.QtWidgets import QApplication
 
 from birdstamp.crop_resolution import (
@@ -80,17 +80,14 @@ def _write_snap_config(path, tiers):
 
 
 @pytest.mark.parametrize("tier", [("5K", 2880), ("6K", 3160), ("6K+", 3456), ("8K", 4320)])
-@pytest.mark.parametrize("activation", ["keyboard", "mouse"])
-def test_configured_high_resolution_guides_are_drawn_and_snapped(canvas, snap_config_file, tier, activation):
+def test_configured_high_resolution_guides_are_drawn_and_snapped(canvas, snap_config_file, tier):
     # The canvas already exists: changes must bypass the startup options cache.
     _write_snap_config(snap_config_file, [tier])
     start = canvas._crop_effect_box
-    if activation == "keyboard":
-        _key(canvas, True)
-        assert canvas._crop_resolution_guide.label == tier[0]
-    _mouse(canvas, QEvent.Type.MouseButtonPress, _point(canvas, start, "se"), shift=True)
+    _mouse(canvas, QEvent.Type.MouseButtonPress, _point(canvas, start, "se"))
+    assert canvas._crop_resolution_guide.label == tier[0]
     target = resolution_targets(canvas._crop_pixel_context, start, "se", 1.5, (tier,))[0]
-    _mouse(canvas, QEvent.Type.MouseMove, _point(canvas, target.box, "se"), shift=True)
+    _mouse(canvas, QEvent.Type.MouseMove, _point(canvas, target.box, "se"))
     assert canvas._crop_snap_options["tiers"] == (tier,)
     assert canvas._crop_resolution_snapped
     assert canvas._crop_resolution_guide == target
@@ -115,26 +112,26 @@ def test_config_reload_between_gestures_keeps_drag_snapshot_and_last_good_file(c
     _write_snap_config(snap_config_file, [("first", 1080)])
     start = canvas._crop_effect_box
     _mouse(canvas, QEvent.Type.MouseButtonPress, _point(canvas, start, "se"))
-    _mouse(canvas, QEvent.Type.MouseMove, _point(canvas, start, "se"), shift=True)
+    _mouse(canvas, QEvent.Type.MouseMove, _point(canvas, start, "se"))
     assert len(reads) == 1
     assert canvas._crop_resolution_guide.label == "first"
     _write_snap_config(snap_config_file, [("更新档位", 2880)])
     for _ in range(3):
-        _mouse(canvas, QEvent.Type.MouseMove, _point(canvas, start, "se"), shift=True)
+        _mouse(canvas, QEvent.Type.MouseMove, _point(canvas, start, "se"))
     assert len(reads) == 1
     assert canvas._crop_resolution_guide.label == "first"
-    _key(canvas, False)
-    _key(canvas, True)
+    _mouse(canvas, QEvent.Type.MouseButtonRelease, _point(canvas, start, "se"))
+    _mouse(canvas, QEvent.Type.MouseButtonPress, _point(canvas, start, "se"))
     assert len(reads) == 2
     assert canvas._crop_resolution_guide.label == "更新档位"
     assert canvas._crop_resolution_guide.size == (4320, 2880)
     snap_config_file.write_text('{"crop_resolution_snap":', encoding="utf-8")
-    _key(canvas, False)
-    _key(canvas, True)
+    _mouse(canvas, QEvent.Type.MouseButtonRelease, _point(canvas, start, "se"))
+    _mouse(canvas, QEvent.Type.MouseButtonPress, _point(canvas, start, "se"))
     assert canvas._crop_resolution_guide.label == "更新档位"
     snap_config_file.unlink()
-    _key(canvas, False)
-    _key(canvas, True)
+    _mouse(canvas, QEvent.Type.MouseButtonRelease, _point(canvas, start, "se"))
+    _mouse(canvas, QEvent.Type.MouseButtonPress, _point(canvas, start, "se"))
     assert canvas._crop_resolution_guide.label == "更新档位"
 
 
@@ -181,60 +178,54 @@ def _mouse(canvas, kind, point, *, shift=False):
     _APP.sendEvent(canvas, event)
 
 
-def _key(canvas, pressed):
-    _APP.sendEvent(canvas, QKeyEvent(QEvent.Type.KeyPress if pressed else QEvent.Type.KeyRelease,
-                                   Qt.Key.Key_Shift, Qt.KeyboardModifier.ShiftModifier if pressed
-                                   else Qt.KeyboardModifier.NoModifier))
-
-
 def _point(canvas, box, handle):
     return canvas._norm_to_widget(canvas._display_rect(), *handle_point(box, handle))
 
 
 @pytest.mark.parametrize("handle", HANDLES)
-def test_drag_snaps_all_handles_and_commits_once(canvas, handle):
+@pytest.mark.parametrize("shift", [False, True])
+def test_drag_snaps_all_handles_and_commits_once(canvas, handle, shift):
     events = []
     canvas.crop_drag_finished.connect(lambda: events.append("finished"))
     canvas.crop_box_changed.connect(lambda box: events.append("drag" if canvas._dragging_handle else "commit"))
     target = resolution_targets(canvas._crop_pixel_context, canvas._crop_effect_box, handle, 1.5)[2]
-    _mouse(canvas, QEvent.Type.MouseButtonPress, _point(canvas, canvas._crop_effect_box, handle))
-    _mouse(canvas, QEvent.Type.MouseMove, _point(canvas, target.box, handle), shift=True)
+    _mouse(canvas, QEvent.Type.MouseButtonPress, _point(canvas, canvas._crop_effect_box, handle), shift=shift)
+    assert canvas._crop_resolution_guide is not None
+    _mouse(canvas, QEvent.Type.MouseMove, _point(canvas, target.box, handle), shift=shift)
     assert canvas._crop_resolution_snapped
     assert canvas._crop_pixel_context.crop_size(canvas._crop_effect_box) == (1620, 1080)
     assert canvas._crop_resolution_guide.label == "1080p"
-    _mouse(canvas, QEvent.Type.MouseButtonRelease, _point(canvas, target.box, handle), shift=True)
+    _mouse(canvas, QEvent.Type.MouseButtonRelease, _point(canvas, target.box, handle), shift=shift)
     assert events[-2:] == ["finished", "commit"]
     assert events.count("commit") == 1
     assert canvas._crop_resolution_guide is None
 
 
-def test_mid_drag_shift_release_idle_guide_and_free_ratio(canvas):
+def test_resize_shows_guide_and_free_ratio_resumes_after_leaving_snap(canvas):
     context = CropPixelContext((6000, 4000), (1200, 800), source_key="bird")
     canvas.set_crop_pixel_context(context)
     canvas.set_crop_ratio_constraint(None, True)
-    _key(canvas, True)
-    assert canvas._crop_resolution_guide is not None
-    assert not canvas._crop_resolution_snapped
-    _key(canvas, False)
+    assert canvas._crop_resolution_guide is None
     target = resolution_targets(context, canvas._crop_effect_box, "se", 1.5)[2]
     _mouse(canvas, QEvent.Type.MouseButtonPress, _point(canvas, canvas._crop_effect_box, "se"))
+    assert canvas._crop_resolution_guide is not None
     tx, ty = _point(canvas, target.box, "se")
     _mouse(canvas, QEvent.Type.MouseMove, (tx + 2, ty + 2))
-    _key(canvas, True)
     assert canvas._crop_resolution_snapped
     assert context.crop_size(canvas._crop_effect_box) == (1620, 1080)
-    _key(canvas, False)
-    assert canvas._crop_resolution_guide is None
-    assert context.crop_size(canvas._crop_effect_box) == (1620, 1080)
     _mouse(canvas, QEvent.Type.MouseMove, (tx + 30, ty + 2))
+    assert canvas._crop_resolution_guide is not None
+    assert not canvas._crop_resolution_snapped
     assert context.pixel_ratio(canvas._crop_effect_box) != pytest.approx(1.5)
+    _mouse(canvas, QEvent.Type.MouseButtonRelease, (tx + 30, ty + 2))
+    assert canvas._crop_resolution_guide is None
 
 
 def test_center_pan_does_not_snap(canvas):
     before = canvas._crop_pixel_context.crop_size(canvas._crop_effect_box)
     x, y = _point(canvas, canvas._crop_effect_box, "")
-    _mouse(canvas, QEvent.Type.MouseButtonPress, (x, y), shift=True)
-    _mouse(canvas, QEvent.Type.MouseMove, (x + 10, y + 5), shift=True)
+    _mouse(canvas, QEvent.Type.MouseButtonPress, (x, y))
+    _mouse(canvas, QEvent.Type.MouseMove, (x + 10, y + 5))
     assert canvas._crop_resolution_guide is None
     assert canvas._crop_pixel_context.crop_size(canvas._crop_effect_box) == before
 
@@ -245,10 +236,10 @@ def test_canvas_zoom_keeps_ten_pixel_snap_distance(canvas, zoom):
     target = resolution_targets(canvas._crop_pixel_context, canvas._crop_effect_box, "e", 1.5)[2]
     _mouse(canvas, QEvent.Type.MouseButtonPress, _point(canvas, canvas._crop_effect_box, "e"))
     x, y = _point(canvas, target.box, "e")
-    _mouse(canvas, QEvent.Type.MouseMove, (x + 9, y), shift=True)
+    _mouse(canvas, QEvent.Type.MouseMove, (x + 9, y))
     assert canvas._crop_resolution_snapped
     assert canvas._crop_pixel_context.crop_size(canvas._crop_effect_box) == target.size
-    _mouse(canvas, QEvent.Type.MouseMove, (x + 17, y), shift=True)
+    _mouse(canvas, QEvent.Type.MouseMove, (x + 17, y))
     assert not canvas._crop_resolution_snapped
 
 
@@ -286,7 +277,7 @@ def test_labels_remain_inside_viewport_and_report_exact_tier(canvas):
 
 @pytest.mark.parametrize("clear", ["focus", "mode", "source", "pixmap"])
 def test_transient_state_is_cleared(canvas, clear):
-    _mouse(canvas, QEvent.Type.MouseButtonPress, _point(canvas, canvas._crop_effect_box, "se"), shift=True)
+    _mouse(canvas, QEvent.Type.MouseButtonPress, _point(canvas, canvas._crop_effect_box, "se"))
     assert canvas._crop_resolution_guide is not None
     finished = []
     canvas.crop_drag_finished.connect(lambda: finished.append(True))
@@ -301,13 +292,13 @@ def test_transient_state_is_cleared(canvas, clear):
     assert finished == [True]
     assert canvas._crop_resolution_guide is None
     assert canvas._dragging_handle is None
-    assert not canvas._crop_shift_down
 
 
 def test_ui_labels_never_enter_overlay_export_and_grid_remains(canvas):
     canvas.set_composition_grid_mode("thirds")
     before = canvas.render_source_pixmap_with_overlays().toImage()
-    _key(canvas, True)
+    _mouse(canvas, QEvent.Type.MouseButtonPress, _point(canvas, canvas._crop_effect_box, "se"))
+    assert canvas._crop_resolution_guide is not None
     canvas.grab()  # Exercise the QWidget-only paint layer.
     after = canvas.render_source_pixmap_with_overlays().toImage()
     assert before == after

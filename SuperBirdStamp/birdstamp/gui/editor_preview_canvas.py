@@ -105,7 +105,6 @@ class EditorPreviewCanvas(CropResolutionOverlayMixin, FocusCenteredPreviewCanvas
         self._dragging_handle: str | None = None
         self._drag_start_box: "NormalizedBox | None" = None
         self._drag_start_pos: "QPointF | None" = None
-        self._last_pos: "QPointF | None" = None
         self._has_pan: bool = False
         self._reference_regions: tuple["NormalizedBox", ...] = ()
         self._reference_diagnostics: tuple = ()
@@ -189,7 +188,6 @@ class EditorPreviewCanvas(CropResolutionOverlayMixin, FocusCenteredPreviewCanvas
         self._dragging_handle = None
         self._drag_start_box = None
         self._drag_start_pos = None
-        self._last_pos = None
         self._has_pan = False
         self.update()
 
@@ -383,7 +381,6 @@ class EditorPreviewCanvas(CropResolutionOverlayMixin, FocusCenteredPreviewCanvas
         self._dragging_handle = None
         self._drag_start_box = None
         self._drag_start_pos = None
-        self._last_pos = None
         self._has_pan = False
 
     def _paint_overlays(self, painter, draw_rect, content_rect) -> None:  # type: ignore[override]
@@ -721,11 +718,9 @@ class EditorPreviewCanvas(CropResolutionOverlayMixin, FocusCenteredPreviewCanvas
         new_nx: float,
         new_ny: float,
         image_aspect: float,
-        *,
-        ratio_override: float | None = None,
     ) -> NormalizedBox:
         l, t, r, b = start_box[0], start_box[1], start_box[2], start_box[3]
-        if self._ratio_free and ratio_override is None:
+        if self._ratio_free:
             if handle in ("nw", "n", "ne"):
                 t = new_ny
             if handle in ("ne", "e", "se"):
@@ -736,7 +731,7 @@ class EditorPreviewCanvas(CropResolutionOverlayMixin, FocusCenteredPreviewCanvas
                 l = new_nx
             return self._clamp_box(l, t, r, b)
         # Target ratio R is for crop in pixels: (r-l)*W / ((b-t)*H) = R => (r-l)/(b-t) = R/image_aspect.
-        target_pixel_ratio = ratio_override or (self._crop_ratio if self._crop_ratio is not None and self._crop_ratio > 0 else image_aspect)
+        target_pixel_ratio = self._crop_ratio if self._crop_ratio is not None and self._crop_ratio > 0 else image_aspect
         ratio_norm = target_pixel_ratio / image_aspect if image_aspect > 0 else target_pixel_ratio
         # Corner handles: fix the opposite corner and constrain to ratio.
         if handle == "nw":
@@ -827,7 +822,6 @@ class EditorPreviewCanvas(CropResolutionOverlayMixin, FocusCenteredPreviewCanvas
         ):
             self.setFocus(Qt.FocusReason.MouseFocusReason)
             self._clear_crop_resolution()
-            self._sync_crop_shift(bool(event.modifiers() & Qt.KeyboardModifier.ShiftModifier))
             draw_rect = self._display_rect()
             if draw_rect is not None and draw_rect.width() > 0 and draw_rect.height() > 0:
                 pos = event.position()
@@ -835,17 +829,15 @@ class EditorPreviewCanvas(CropResolutionOverlayMixin, FocusCenteredPreviewCanvas
                 if hit is not None:
                     self._dragging_handle = hit
                     self._drag_start_box = self._crop_effect_box
-                    self._last_pos = QPointF(pos)
                     self.crop_drag_started.emit()
                     self._drag_probe.begin("crop_adjust")
-                    self._set_crop_shift(self._crop_shift_down)
+                    self._begin_crop_resolution_drag(draw_rect)
                     event.accept()
                     return
                 if self._is_inside_crop_box(draw_rect, self._crop_effect_box, pos.x(), pos.y()):
                     self._dragging_handle = self._CROP_DRAG_CENTER
                     self._drag_start_box = self._crop_effect_box
                     self._drag_start_pos = QPointF(pos)
-                    self._last_pos = QPointF(pos)
                     self._has_pan = True
                     self.crop_drag_started.emit()
                     self._drag_probe.begin("crop_adjust")
@@ -864,8 +856,6 @@ class EditorPreviewCanvas(CropResolutionOverlayMixin, FocusCenteredPreviewCanvas
             draw_rect = self._display_rect()
             if draw_rect is not None and draw_rect.width() > 0 and draw_rect.height() > 0:
                 pos = event.position()
-                self._last_pos = QPointF(pos)
-                self._sync_crop_shift(bool(event.modifiers() & Qt.KeyboardModifier.ShiftModifier))
                 if self._dragging_handle == self._CROP_DRAG_CENTER and self._drag_start_pos is not None:
                     dnx = (pos.x() - self._drag_start_pos.x()) / draw_rect.width()
                     dny = (pos.y() - self._drag_start_pos.y()) / draw_rect.height()
