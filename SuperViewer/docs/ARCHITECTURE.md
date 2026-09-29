@@ -76,6 +76,8 @@ RAW 焦点读取（[`raw_focus_metadata.py`](../../app_common/raw_focus_metadata
 
 快速缓存 provider 是 `SuperViewerTaggedFileListPanel.cached_quick_preview_for_path()`：优先使用当前档位已解码的 `QPixmap`，再用共享 `_resolve_existing_sized_preview_image_path(..., exact_size_only=True)` 读取已有缓存。它不生成缓存、不返回原图冒充缩略图。缓存根和文件命名由 `_browser_core.py` 按每个源文件解析，不能简单用当前选中目录推断。
 
+BirdStamp 的 [`editor_shared_thumb_cache.py`](../../SuperBirdStamp/birdstamp/gui/editor_shared_thumb_cache.py) 复用同一 `_browser_core.py` 作用域、精确档位校验和原子写入接口，读取并生成 `.superpicky/thumb_cache/256`，也能读取 Viewer 的本地 256 缓存。Viewer 因此可直接使用 BirdStamp 生成的共享 256 档；缺少 `.superpicky` 时 BirdStamp 询问创建，拒绝后在本窗口会话使用自己的本地缓存。
+
 完整解码 worker 只传 `QImage` 回 GUI，GUI 转为 `QPixmap`。`_preview_request_token` 与当前路径共同拒绝晚到结果；`_full_preview_loader` 加一个 `_pending_full_preview_request` 实现单任务运行、只保留最新替换请求。原生线程退出后也必须保留引用，直到它自己的 `QThread.finished` 槽完成交接。
 
 `full_preview_ready(path)` 通知主窗口：对仍选中的照片补充焦点请求，并调用信息页 `refresh_metadata_fields()` 补齐尺寸等字段。它不会重新加载整页、重置文件名或覆盖备注草稿。`source_pixmap_for_path()` 只暴露真正完整加载的图，避免把快速档位尺寸当作照片尺寸。

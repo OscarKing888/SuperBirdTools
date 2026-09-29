@@ -15,15 +15,16 @@ from PyQt6.QtCore import QThread, pyqtSignal
 
 from app_common.file_browser._work_action import WorkerAction
 from app_common.file_browser._work_policy import WorkKind
-from birdstamp.config import get_user_data_dir
+from birdstamp import config
 from birdstamp.decoders.image_decoder import decode_image_for_preview, read_decoded_image_size
 from .editor_preview_decode_worker import cached_preview_image
+from .editor_shared_thumb_cache import THUMB_EDGE, local_thumbnail_path, write_thumbnail
 
 
 _log = logging.getLogger(__name__)
-_CACHE_EDGE = 512
+_CACHE_EDGE = THUMB_EDGE
 _CACHE_SOFT_LIMIT = 512 * 1024 * 1024
-_CACHE_VERSION = 2  # RAW 源尺寸改为实际内嵌 JPEG 的尺寸。
+_CACHE_VERSION = 3  # 固定 Viewer 的 256 档；旧 512 缓存不可复用。
 
 
 class SourceQuickAction(WorkerAction):
@@ -67,6 +68,8 @@ class SourceQuickAction(WorkerAction):
             return None
         cached = self._read_cache()
         if cached is not None:
+            if not self.is_cancelled():
+                write_thumbnail(self.path, cached[0])
             return cached
         image = None
         try:
@@ -92,7 +95,11 @@ class SourceQuickAction(WorkerAction):
                 image.close()
                 image = converted
             full_size = (int(full_size[0]), int(full_size[1]))
-            self._write_cache(image, full_size)
+            write_thumbnail(self.path, image)
+            try:
+                self._write_cache(image, full_size)
+            except OSError as exc:
+                _log.warning('[SourceQuickAction] local cache write failed path=%s: %s', self.path, exc)
             if self.is_cancelled():
                 return None
             result, image = image, None
@@ -109,7 +116,7 @@ class SourceQuickLoader(QThread):
     def __init__(self, pool, parent=None):
         super().__init__(parent)
         self._pool = pool
-        self._cache_dir = get_user_data_dir() / 'config' / 'cache' / 'source_preview'
+        self._cache_dir = config.get_user_data_dir() / 'config' / 'cache' / 'source_preview'
         self._condition = Condition()
         self._pending = deque()
         self._queued = set()
@@ -157,17 +164,20 @@ class SourceQuickLoader(QThread):
 
     def _prune_cache(self, entries):
         """软上限只淘汰其他列表；当前列表的完整预取不被清理破坏。"""
-        protected = {hashlib.sha256(signature.encode('utf-8')).hexdigest() + '.bin'
-                     for signature, _ in entries}
+        protected = {self._cache_dir / (hashlib.sha256(
+            f'{_CACHE_VERSION}:{signature}'.encode('utf-8')).hexdigest() + '.bin')
+            for signature, _ in entries}
+        protected.update(local_thumbnail_path(path) for _, path in entries)
         try:
-            files = [(path, path.stat()) for path in self._cache_dir.glob('*.bin')]
+            files = [(path, path.stat()) for path in (
+                *self._cache_dir.glob('*.bin'), *(self._cache_dir / '256').glob('*.jpg'))]
         except OSError:
             return
         total = sum(stat.st_size for _, stat in files)
         for path, stat in sorted(files, key=lambda entry: entry[1].st_mtime_ns):
             if total <= _CACHE_SOFT_LIMIT:
                 break
-            if path.name in protected:
+            if path in protected:
                 continue
             try:
                 path.unlink()

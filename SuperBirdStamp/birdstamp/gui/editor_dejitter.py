@@ -379,6 +379,8 @@ class _BirdStampDejitterMixin:
         transport = self.sequence_transport
         if transport.active and not transport.selecting:
             transport.stop(commit=False)
+        if self._sequence_result_mode() and not transport.active and path_key(path) in self._sequence_quick_frames:
+            self._sequence_force_quick_key = path_key(path)
         self._cancel_preview_decode()
         self._cancel_async_bird_detect()
         self._preview_debounce_timer.stop()
@@ -412,6 +414,9 @@ class _BirdStampDejitterMixin:
         if self._sequence_shutdown or self._sequence_fast_preview_active() or not self._sequence_result_mode():
             return
         key = path_key(self.current_path) if self.current_path else ''
+        if getattr(self, '_sequence_force_quick_key', None) == key:
+            self._sequence_force_quick_key = None
+            self._show_sequence_preview_result(preserve_view=True)
         if not self._sequence_preview or key not in self._sequence_preview.jobs or key in self._sequence_frames:
             return
         if self._sequence_worker is None:
@@ -800,9 +805,10 @@ class _BirdStampDejitterMixin:
                 sequence = None
         key = path_key(self.current_path) if self.current_path else ''
         fast = self._sequence_fast_preview_active()
-        frame = (self._sequence_quick_frames.get(key) if fast else
+        force_quick = getattr(self, '_sequence_force_quick_key', None) == key
+        frame = (self._sequence_quick_frames.get(key) if fast or force_quick else
                  self._sequence_frames.get(key) or self._sequence_quick_frames.get(key)) if sequence else None
-        if sequence is not None and key in sequence.jobs and key not in self._sequence_frames and not fast:
+        if sequence is not None and key in sequence.jobs and (force_quick or key not in self._sequence_frames) and not fast:
             self._sequence_upgrade_timer.start()
         options = self._build_preview_overlay_options()
         options.show_reference_regions = True

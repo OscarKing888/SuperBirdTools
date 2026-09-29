@@ -138,6 +138,7 @@ def test_single_original_view_playback_stays_quick_until_pause(window, monkeypat
     window.ab_preview.b_panel.play.click()
     wait_until(lambda: transport.mode == 'source_play')
     transport.timer.stop()
+    wait_until(lambda: window._source_signature(paths[1]) in transport._source_cache)
     transport._tick()
     assert window.current_path == paths[1]
     wait_until(lambda: window.current_source_image is not None and window._preview_is_quick)

@@ -21,7 +21,7 @@ from . import editor_options
 from .editor_utils import path_key
 from .sequence_preview_frame import SequencePreviewFrame
 
-CACHE_VERSION = 5
+CACHE_VERSION = 6
 _log = get_logger('birdstamp.sequence_cache')
 
 
@@ -107,7 +107,7 @@ class SequencePreviewCache:
             if manifest.stat().st_size > 64*1024*1024:
                 raise ValueError('成片缓存清单过大')
             raw = json.loads(manifest.read_text(encoding='utf-8'))
-            if raw['version'] not in (2, 3, CACHE_VERSION) or raw['input_key'] != key:
+            if raw['version'] != CACHE_VERSION or raw['input_key'] != key:
                 return None
             records = raw['frames']
             if [path_key(seed.path) for seed in seeds] != [path_key(Path(r['path'])) for r in records]:
@@ -195,6 +195,8 @@ class SequencePreviewCache:
 
     def save_sharp(self, sequence, frame):
         if sequence.partial:
+            return
+        if frame.image.sizeInBytes() > editor_options.DEJITTER_PREVIEW_CACHE_BYTES:
             return
         try:
             path = self._sharp_path(sequence, frame.path)

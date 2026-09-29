@@ -4957,30 +4957,63 @@ class BirdStampEditorWindow(
             return
         transport = getattr(self, "sequence_transport", None)
         quick_only = bool(transport is not None and transport.mode in ("ordinary_keys", "source_play"))
+        if transport is not None and transport.mode == "ordinary_keys" and transport._ordinary_first_step:
+            transport._ordinary_first_step = False
+            quick_only = False
         if not path.exists():
             self._show_error("文件不存在", str(path))
             return
 
+        if not quick_only:
+            self.sequence_transport.shared_scope.ensure(path, self)
+
         self._preview_decode_token += 1
         token = self._preview_decode_token
         self._cancel_async_bird_detect()
+        previous_worker = getattr(self, "_preview_decode_worker", None)
+        if previous_worker is not None:
+            previous_worker.requestInterruption()
+            self._preview_decode_pending = None
         show_raw = bool(path.suffix.lower() in RAW_EXTENSIONS and self._b_show_raw_for_path(path)
                         and not quick_only)
         self._begin_photo_selection(path, current,
                                     preserve_preview_view=quick_only or path == self.current_path)
-        source_entry = transport.source_preview(path) if quick_only and transport is not None else None
-        cached = (source_entry[0] if source_entry is not None else
-                  None if show_raw else self._cached_preview_image(path))
+        source_entry = transport.source_preview(path) if transport is not None else None
+        cached = None if quick_only or show_raw else self._cached_preview_image(path)
+        if cached is None and not quick_only:
+            from .editor_preview_policy import load_full_synchronously
+            if load_full_synchronously(path):
+                try:
+                    image = self._decode_image_for_preview(path)
+                except Exception:
+                    image = None  # 解码失败仍由后台 worker 报告具体错误。
+                if image is not None:
+                    if source_entry is not None:
+                        source_entry[0].close()
+                    self._apply_decoded_photo_selection(path, image, image.size)
+                    return
+        showing_quick = cached is None and source_entry is not None
+        if showing_quick:
+            cached = source_entry[0]
+        elif source_entry is not None:
+            source_entry[0].close()
         if cached is not None:
             signature = self._preview_image_cache_signature(path)
-            full_size = source_entry[1] if source_entry is not None else self._preview_source_size_cache.get(signature, cached.size)
+            full_size = (source_entry[1] if showing_quick else
+                         self._preview_source_size_cache.get(signature, cached.size))
             if quick_only:
-                cached.thumbnail((512, 512), Image.Resampling.BILINEAR)
+                cached.thumbnail((256, 256), Image.Resampling.BILINEAR)
             worker = getattr(self, "_preview_decode_worker", None)
             if worker is not None and worker.isRunning():
                 worker.requestInterruption()
             self._preview_decode_pending = None
-            self._apply_decoded_photo_selection(path, cached, full_size, quick=quick_only)
+            self._apply_decoded_photo_selection(path, cached, full_size, quick=showing_quick)
+            if quick_only or not showing_quick:
+                return
+
+        if quick_only:
+            if transport is not None:
+                transport._request_source_frames()
             return
 
         worker = getattr(self, "_preview_decode_worker", None)
@@ -4988,10 +5021,7 @@ class BirdStampEditorWindow(
             worker.requestInterruption()
             self._preview_decode_pending = (token, path)
         else:
-            if quick_only:
-                self._start_preview_decode_worker(token, path, quick_only=True)
-            else:
-                self._start_preview_decode_worker(token, path)
+            self._start_preview_decode_worker(token, path)
         self._set_status(f"正在后台读取预览: {path.name}")
 
     def _start_preview_decode_worker(self, token: int, path: Path, *, quick_only: bool = False) -> None:
@@ -5055,7 +5085,9 @@ class BirdStampEditorWindow(
                 normalized_size = accepted.size
         else:
             normalized_size = accepted.size
-        self._preview_source_size_cache[self._preview_image_cache_signature(path)] = normalized_size
+        signature = self._preview_image_cache_signature(path)
+        if signature in self._preview_image_cache:
+            self._preview_source_size_cache[signature] = normalized_size
         self._apply_decoded_photo_selection(path, accepted, normalized_size)
 
     def _on_quick_preview_ready(self, token: int, path_text: str, image: object, full_size: object) -> None:
@@ -5092,21 +5124,19 @@ class BirdStampEditorWindow(
         token, path = pending
         if int(token) != self._preview_decode_token or not self._selected_item_matches_path(path):
             return
-        cached = self._cached_preview_image(path)
+        transport = getattr(self, "sequence_transport", None)
+        fast = bool(transport is not None and transport.mode in ("ordinary_keys", "source_play"))
+        cached = None if fast else self._cached_preview_image(path)
         if cached is not None:
             signature = self._preview_image_cache_signature(path)
-            transport = getattr(self, "sequence_transport", None)
             self._apply_decoded_photo_selection(
                 path,
                 cached,
                 self._preview_source_size_cache.get(signature, cached.size),
-                quick=bool(transport is not None and transport.mode in ("ordinary_keys", "source_play")),
+                quick=False,
             )
             return
-        transport = getattr(self, "sequence_transport", None)
-        if transport is not None and transport.mode in ("ordinary_keys", "source_play"):
-            self._start_preview_decode_worker(token, path, quick_only=True)
-        else:
+        if not fast:
             self._start_preview_decode_worker(token, path)
 
     def _cancel_preview_decode(self, *, shutdown: bool = False) -> bool:

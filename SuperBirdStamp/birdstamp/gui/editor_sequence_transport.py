@@ -11,7 +11,9 @@ from PyQt6.QtWidgets import (
 
 from . import editor_options
 from .editor_utils import path_key
+from .editor_photo_list import PHOTO_COL_ROW, PHOTO_LIST_PATH_ROLE
 from .editor_source_quick_loader import SourceQuickLoader
+from .editor_shared_thumb_cache import SharedThumbnailScope
 from .editor_sequence_preview_worker import pil_qimage
 from .editor_media_icons import media_icon
 
@@ -27,19 +29,19 @@ class SequenceTransport(QObject):
         self.mode = None
         self.direction = 1
         self.key = None
+        self._ordinary_first_step = False
         self.selecting = False
         self._strip_kind = None
         self._strip_paths = ()
         self._source_strip_items = {}
         self._source_cache = OrderedDict()
         self._source_loader = None
+        self.shared_scope = SharedThumbnailScope()
         self._source_shutdown = False
         self._source_entries = ()
         self._source_signatures = set()
         self._source_ready = set()
         self._source_failed = {}
-        self._pending_source_play = False
-        self._waiting_source_path = None
         self._result_frames = {}
         self._play_visual_state = None
         self.timer = QTimer(self)
@@ -182,8 +184,6 @@ class SequenceTransport(QObject):
             return
         if self.mode in ('source_play', 'source_keys'):
             self.stop(commit=False)
-        self._pending_source_play = False
-        self._waiting_source_path = None
         self._source_entries = entries
         self._source_signatures = {signature for signature, _ in entries}
         self._source_ready.clear()
@@ -209,15 +209,6 @@ class SequenceTransport(QObject):
         skipped = len(self._source_failed)
         self.preparation.setText(
             f'预览 {done}/{total}' + (f' · 跳过 {skipped}' if skipped else '') if total else '')
-        if self._pending_source_play and done == total:
-            self._pending_source_play = False
-            playable = sum(signature not in self._source_failed for signature, _ in self._source_entries)
-            if playable < 2:
-                self.editor._set_status(f'可播放照片不足两张；跳过 {skipped} 张读取失败的照片。')
-            else:
-                self.editor._set_status(f'预览准备完成；跳过 {skipped} 张读取失败的照片。')
-                self.start('source_play', 1)
-            self._update_play_button()
 
     def _source_entry(self, path):
         signature = self.editor._source_signature(Path(path))
@@ -287,16 +278,9 @@ class SequenceTransport(QObject):
                 ab.sync(force=True)
             elif self.editor._dejitter_tab_active() or ab.enabled.isChecked():
                 self.editor._refresh_preview_label(preserve_view=True)
-            elif self.editor.current_source_image is None:
+            elif self.editor.current_source_image is None or not getattr(self.editor, '_preview_is_quick', False):
                 self.editor._on_quick_preview_ready(
                     self.editor._preview_decode_token, path_text, image.copy(), tuple(full_size))
-        if (self.mode == 'source_play' and self._waiting_source_path is not None
-                and path_key(self._waiting_source_path) == path_key(Path(path_text))):
-            target = self._waiting_source_path
-            self._waiting_source_path = None
-            paths = self._active_paths()
-            if target in paths:
-                self._select(paths.index(target))
         self._update_source_preparation()
 
     def _on_source_failed(self, signature, path_text, message):
@@ -443,9 +427,6 @@ class SequenceTransport(QObject):
         self._select(max(0, min(len(paths) - 1, self.index() + direction)))
 
     def toggle(self):
-        if self._pending_source_play:
-            self.stop(commit=False)
-            return
         if self.active:
             self.stop()
             return
@@ -457,27 +438,34 @@ class SequenceTransport(QObject):
             self._select(0)
         if self.result_mode():
             self.start('play', 1)
-        elif len(self._source_ready) + len(self._source_failed) < len(self._source_signatures):
-            self._pending_source_play = True
-            self._request_source_frames()
-            self._update_play_button()
-        elif sum(signature not in self._source_failed for signature, _ in self._source_entries) < 2:
-            self.editor._set_status('可播放照片不足两张。')
         else:
+            seen_directories = set()
+            for path in paths:
+                if path.parent not in seen_directories:
+                    seen_directories.add(path.parent)
+                    self.shared_scope.ensure(path, self.editor)
             self.start('source_play', 1)
 
     def start(self, mode, direction):
         if mode in ('source_play', 'source_keys'):
             self._scan_source_list()
         self.mode, self.direction = mode, direction
+        ab = self.editor.ab_preview
         if mode in ('source_play', 'source_keys'):
-            ab = self.editor.ab_preview
             if ab.enabled.isChecked() and ab.active_side == 'a':
                 ab._cancel()
             else:
                 self.editor._cancel_preview_decode()
             self._request_source_frames()
             self._update_play_button()
+            if ab.enabled.isChecked() and ab.active_side == 'a':
+                ab.sync(force=True)
+            elif mode == 'source_play':
+                selected = ab.selected_path()
+                entry = self.source_preview(selected) if selected is not None else None
+                if entry is not None:
+                    self.editor._on_quick_preview_ready(
+                        self.editor._preview_decode_token, str(selected), *entry)
             self.sync()
             self.timer.start()
             return
@@ -488,6 +476,10 @@ class SequenceTransport(QObject):
             worker.cancel()
         self.editor._sequence_pending_path = None
         self._update_play_button()
+        if ab.enabled.isChecked() and ab.active_side == 'a':
+            ab.sync(force=True)
+        elif self.editor._sequence_result_mode():
+            self.editor._show_sequence_preview_result(preserve_view=True)
         self.timer.start()
 
     def refresh_media_icons(self, color: QColor | None = None):
@@ -500,12 +492,12 @@ class SequenceTransport(QObject):
     def _update_play_button(self, *, force=False, color: QColor | None = None):
         playing = self.mode in ('play', 'source_play')
         ab = self.editor.ab_preview
-        state = (playing, self._pending_source_play, ab.active_side)
+        state = (playing, ab.active_side)
         if state == self._play_visual_state and not force:
             return
         self._play_visual_state = state
         color = color or getattr(self, '_media_icon_color', None) or self.editor.palette().color(QPalette.ColorRole.ButtonText)
-        label = '取消预览准备' if self._pending_source_play else '暂停' if playing else '播放序列'
+        label = '暂停' if playing else '播放序列'
         icon = QStyle.StandardPixmap.SP_MediaPause if playing else QStyle.StandardPixmap.SP_MediaPlay
         self.play.setIcon(media_icon(self.play, icon, color))
         self.play.setToolTip(label)
@@ -522,9 +514,8 @@ class SequenceTransport(QObject):
         was_active = self.active
         ordinary_keys = self.mode == 'ordinary_keys'
         self.timer.stop()
-        self._pending_source_play = False
-        self._waiting_source_path = None
         self.mode, self.key = None, None
+        self._ordinary_first_step = False
         self._update_play_button()
         if was_active and commit and not self.editor._sequence_shutdown:
             item = self.editor.photo_list.currentItem()
@@ -542,7 +533,13 @@ class SequenceTransport(QObject):
             current = tree.indexOfTopLevelItem(tree.currentItem())
             target = current + self.direction
             if 0 <= target < tree.topLevelItemCount():
-                tree.setCurrentItem(tree.topLevelItem(target))
+                item = tree.topLevelItem(target)
+                raw = item.data(PHOTO_COL_ROW, PHOTO_LIST_PATH_ROLE)
+                path = Path(raw) if isinstance(raw, str) else None
+                if path is not None and self.editor._source_signature(path) in self._source_cache:
+                    tree.setCurrentItem(item)
+                else:
+                    self._request_source_frames()
             else:
                 self.timer.stop()
             return
@@ -564,10 +561,8 @@ class SequenceTransport(QObject):
                 return
             if (self.editor._source_signature(target) not in self._source_cache
                     and path_key(target) not in self.editor._sequence_quick_frames):
-                self._waiting_source_path = target
                 self._request_source_frames()
                 return
-            self._waiting_source_path = None
         self._select(index)
         if self.mode in ('source_play', 'source_keys'):
             self._request_source_frames()
@@ -610,6 +605,7 @@ class SequenceTransport(QObject):
                 self.mode = 'ordinary_keys'
                 self.key = key
                 self.direction = directions[key]
+                self._ordinary_first_step = True
                 return False
             if self.mode != 'ordinary_keys' or self.key != key:
                 self.stop(commit=False)

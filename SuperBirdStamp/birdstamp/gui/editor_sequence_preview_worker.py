@@ -43,7 +43,7 @@ class EditorSequencePreviewWorker(QThread):
         sources = {}
         sources_lock = threading.Lock()
         # 按组大小缩小快速预览，原图缩略图 + 对齐缩略图总量有明确上限。
-        edge = min(editor_options.DEJITTER_QUICK_MAX_EDGE,
+        edge = min(256, editor_options.DEJITTER_QUICK_MAX_EDGE,
                    max(1, int(math.sqrt(editor_options.DEJITTER_QUICK_CACHE_BYTES /
                                         (8 * max(1, len(self.seeds)))))))
 
@@ -124,7 +124,6 @@ class EditorSequencePreviewWorker(QThread):
             context = render_sequence_preview_frame(sequence, self.path)
             with sequence_photo_errors(self.path), context.image as image:
                 output_size = image.size
-                image.thumbnail((editor_options.DEJITTER_PREVIEW_MAX_EDGE,) * 2, Image.Resampling.LANCZOS)
                 rgb = image.convert('RGB')
                 try:
                     qimage = QImage(rgb.tobytes(), rgb.width, rgb.height, rgb.width * 3,

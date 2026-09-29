@@ -87,8 +87,7 @@ OUTPUT_FORMAT_OPTIONS               = editor_options.OUTPUT_FORMAT_OPTIONS
 _SOURCE_IMAGE_CACHE_MAX = 4
 _PREVIEW_IMAGE_CACHE_MAX_BYTES = 128 * 1024 * 1024
 _PREVIEW_IMAGE_CACHE_MAX_ITEMS = 32
-_PREVIEW_DECODE_MAX_LONG_EDGE = 2048
-_PREVIEW_PIXMAP_MAX_PIXELS = 1920 * 1080 * 2
+_PREVIEW_DECODE_MAX_LONG_EDGE = 0  # 0 表示清晰预览保持原生像素。
 
 
 class _BirdStampRendererMixin:
@@ -366,7 +365,9 @@ class _BirdStampRendererMixin:
             return cached.copy()
 
         with birdstamp_perf.span("decode_preview", path=str(path)):
-            image = decode_image_for_preview(path, max_long_edge=_PREVIEW_DECODE_MAX_LONG_EDGE, decoder="auto")
+            image = decode_image(path, decoder="auto")
+        if image.width * image.height * 4 > _PREVIEW_IMAGE_CACHE_MAX_BYTES:
+            return image
         self._store_preview_image_cache(signature, image)
         counts[signature] = int(counts.get(signature, 0)) + 1
         birdstamp_perf.plog(
@@ -414,6 +415,8 @@ class _BirdStampRendererMixin:
             return
         # Pillow 的 RGB 存储也可能按四字节对齐，预算按 RGBA 保守计量。
         image_bytes = image.width * image.height * 4
+        if image_bytes > _PREVIEW_IMAGE_CACHE_MAX_BYTES:
+            return  # 原生大图只由当前视口持有，避免 LRU 再复制一份。
         cache_bytes = sum(entry.width * entry.height * 4 for entry in cache.values())
         while cache and (
             len(cache) >= _PREVIEW_IMAGE_CACHE_MAX_ITEMS
@@ -430,6 +433,8 @@ class _BirdStampRendererMixin:
         cache[signature] = image
 
     def _accept_async_preview_image(self, path: Path, image: Image.Image) -> Image.Image:
+        if image.width * image.height * 4 > _PREVIEW_IMAGE_CACHE_MAX_BYTES:
+            return image
         signature = self._preview_image_cache_signature(path)
         self._store_preview_image_cache(signature, image)
         counts = getattr(self, "_perf_decode_counts", None)
@@ -451,14 +456,8 @@ class _BirdStampRendererMixin:
             return (self.current_source_image.width, self.current_source_image.height)
         return None
 
-    def _preview_pixmap_max_pixels(self) -> int:
-        label = getattr(self, "preview_label", None)
-        viewport_budget = 0
-        if label is not None:
-            viewport_budget = (max(1, int(label.width())) * 2) * (max(1, int(label.height())) * 2)
-        if viewport_budget <= 0:
-            return _PREVIEW_PIXMAP_MAX_PIXELS
-        return min(viewport_budget, _PREVIEW_PIXMAP_MAX_PIXELS)
+    def _preview_pixmap_max_pixels(self) -> int | None:
+        return None  # 缩放由视口完成；保留完整像素以支持放大检查。
 
     def _schedule_async_bird_detect(self, path: Path, source_image: Image.Image) -> None:
         if getattr(self, "_bird_detect_shutdown", False) or getattr(self, "_preview_is_quick", False):

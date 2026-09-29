@@ -257,13 +257,18 @@ class ABPreview(QObject):
         self.preview.set_source_mode('A · 正在读取…' if self.path else 'A · 未选择')
         if self.path is None:
             return
+        if not result and not editor._sequence_fast_preview_active():
+            editor.sequence_transport.shared_scope.ensure(self.path, editor)
         key = path_key(self.path)
         frame = editor._sequence_quick_frames.get(key)
-        if frame is not None and not show_raw:
-            self.image = frame.image if result else frame.source_image
+        if frame is not None:
+            small = frame.image if result else frame.source_image
+            self.image = (small.scaled(256, 256, Qt.AspectRatioMode.KeepAspectRatio,
+                                       Qt.TransformationMode.SmoothTransformation)
+                          if max(small.width(), small.height()) > 256 else small)
             self.size = frame.source_size
             self.frame = frame if result else None
-        elif not result and not show_raw and hasattr(editor, 'sequence_transport'):
+        elif not result and hasattr(editor, 'sequence_transport'):
             source_entry = editor.sequence_transport.source_preview(self.path)
             if source_entry is not None:
                 source_image, self.size = source_entry

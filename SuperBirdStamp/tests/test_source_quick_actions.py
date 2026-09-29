@@ -1,4 +1,4 @@
-"""原图播放的整组预取、磁盘缓存与缺帧保护。"""
+"""原图播放的异步预取、磁盘缓存与缺帧保护。"""
 from pathlib import Path
 import threading
 
@@ -18,7 +18,7 @@ def test_source_quick_action_reuses_disk_and_invalidates_signature(tmp_path, mon
     cache = tmp_path / 'cache'
     Image.new('RGB', (800, 600), 'red').save(path)
     first, size = SourceQuickAction('first', path, cache, cancelled=lambda: False).execute()
-    assert size == (800, 600) and max(first.size) == 512
+    assert size == (800, 600) and max(first.size) == 256
     first.close()
 
     original = loader_module.decode_image_for_preview
@@ -48,7 +48,7 @@ def test_corrupt_source_cache_is_rebuilt(tmp_path):
     again.close()
 
 
-def test_full_list_prepared_before_play_and_unreadable_photo_skipped(window, monkeypatch, tmp_path):
+def test_play_starts_before_full_list_prepared_and_unreadable_photo_skipped(window, monkeypatch, tmp_path):
     paths, _, _ = setup_tab(window, monkeypatch)
     for index in range(9):
         path = tmp_path / f'frame-{index}.png'
@@ -75,11 +75,12 @@ def test_full_list_prepared_before_play_and_unreadable_photo_skipped(window, mon
         transport._scan_source_list()
         wait_until(started.is_set)
         transport.toggle()
-        assert transport._pending_source_play and transport.mode is None
+        assert transport.mode == 'source_play'
+        transport.timer.stop()
+        assert len(transport._source_ready) < len(paths) - 1
     finally:
         release.set()
-    wait_until(lambda: transport.mode == 'source_play')
-    transport.timer.stop()
+    wait_until(lambda: len(transport._source_ready) + len(transport._source_failed) == len(paths))
     assert len(transport._source_ready) == len(paths) - 1
     assert len(transport._source_failed) == 1
     assert broken not in transport._active_paths()
@@ -104,12 +105,16 @@ def test_evicted_next_frame_waits_without_black_canvas(window, monkeypatch, tmp_
     assert len(transport._source_cache) == 1
     transport.start('source_play', 1)
     transport.timer.stop()
+    transport._source_loader.stop()
     before = window.preview_label.canvas._source_pixmap
     transport._tick()
     assert window.preview_label.canvas._source_pixmap is not None
     if window.current_path != paths[1]:
         assert window.preview_label.canvas._source_pixmap is before
-    wait_until(lambda: window.current_path == paths[1])
+        signature = window._source_signature(paths[1])
+        transport._on_source_ready(signature, str(paths[1]), Image.new('RGB', (200, 160)), (200, 160))
+        transport._tick()
+    assert window.current_path == paths[1]
     assert window.preview_label.canvas._source_pixmap is not None
 
 
@@ -133,9 +138,9 @@ def test_pending_play_cancel_and_list_change_discard_old_results(window, monkeyp
         transport._scan_source_list()
         wait_until(started.is_set)
         transport.toggle()
-        assert transport._pending_source_play
+        assert transport.mode == 'source_play'
         transport.toggle()
-        assert not transport._pending_source_play
+        assert transport.mode is None
         extra = tmp_path / '新增.png'
         Image.new('RGB', (40, 30), 'blue').save(extra)
         paths.append(extra)

@@ -217,7 +217,7 @@ def test_preview_decode_is_single_flight_and_keeps_gui_responsive(
     max_active = 0
     decode_calls: list[Path] = []
 
-    def slow_decode(path: Path, *, max_long_edge: int, decoder: str) -> Image.Image:
+    def slow_decode(path: Path, *, decoder: str) -> Image.Image:
         nonlocal active, max_active
         with state_lock:
             active += 1
@@ -234,7 +234,9 @@ def test_preview_decode_is_single_flight_and_keeps_gui_responsive(
             with state_lock:
                 active -= 1
 
-    monkeypatch.setattr(editor_preview_decode_worker, "decode_image_for_preview", slow_decode)
+    from birdstamp.gui import editor_preview_policy
+    monkeypatch.setattr(editor_preview_policy, "load_full_synchronously", lambda path: False)
+    monkeypatch.setattr(editor_preview_decode_worker, "decode_image", slow_decode)
     window = _make_window()
     timer = QTimer()
     heartbeats: list[int] = []
@@ -304,7 +306,9 @@ def test_quick_preview_upgrade_preserves_edits_and_metadata(monkeypatch, tmp_pat
         entered.set()
         assert release.wait(3)
         return Image.new("RGB", (600, 400), "blue")
-    monkeypatch.setattr(editor_preview_decode_worker, "decode_image_for_preview", decode)
+    from birdstamp.gui import editor_preview_policy
+    monkeypatch.setattr(editor_preview_policy, "load_full_synchronously", lambda path: False)
+    monkeypatch.setattr(editor_preview_decode_worker, "decode_image", decode)
     monkeypatch.setattr(editor_preview_decode_worker, "cached_preview_image", lambda *a: Image.new("RGB", (120, 80), "red"))
     window = _make_window()
     try:
@@ -323,7 +327,7 @@ def test_quick_preview_upgrade_preserves_edits_and_metadata(monkeypatch, tmp_pat
         window._crop_drag_active = True
         release.set()
         assert _wait_until(_APP, lambda: window._preview_decode_worker is None)
-        assert window.current_source_image.size == (120, 80)
+        assert max(window.current_source_image.size) <= 256
         window._crop_drag_active = False
         assert _wait_until(_APP, lambda: not window._preview_is_quick)
         assert window.current_source_image.size == (600, 400)
@@ -431,11 +435,11 @@ def test_preview_reuses_viewer_per_file_cache_and_rejects_stale(tmp_path, monkey
         (directory / ".superpicky").mkdir(parents=True)
         path = directory / "same.tif"
         Image.new("RGB", (600, 400), color).save(path)
-        cache_path = Path(_persistent_thumb_cache_path_for_file(str(path), str(directory), 512, selected_dir=str(directory)))
+        cache_path = Path(_persistent_thumb_cache_path_for_file(str(path), str(directory), 256, selected_dir=str(directory)))
         cache_path.parent.mkdir(parents=True, exist_ok=True)
-        Image.new("RGB", (512, 341), color).save(cache_path)
+        Image.new("RGB", (256, 171), color).save(cache_path)
         cached = editor_preview_decode_worker.cached_preview_image(path, 2048)
-        assert cached is not None and cached.size == (512, 341)
+        assert cached is not None and cached.size == (256, 171)
         assert cached.getpixel((0, 0))[0 if color == "red" else 2] > 240
         cached.close()
         stamp = path.stat().st_mtime
@@ -469,7 +473,7 @@ def test_key_preview_worker_decodes_bounded_quick_image_only(monkeypatch, tmp_pa
     worker.decoded.connect(lambda *args: full.append(args))
     worker.run()
     assert len(quick) == 1 and not full
-    assert max(quick[0][2].size) <= 512
+    assert max(quick[0][2].size) <= 256
     assert quick[0][3] == (900, 600)
     quick[0][2].close()
 
@@ -485,6 +489,8 @@ def test_ordinary_held_keys_use_quick_preview_until_release(monkeypatch, tmp_pat
             signature = window._preview_image_cache_signature(path)
             window._store_preview_image_cache(signature, Image.new("RGB", (120, 80)))
             window._preview_source_size_cache[signature] = (120, 80)
+            window.sequence_transport._source_cache[window._source_signature(path)] = (
+                Image.new("RGB", (120, 80)), (120, 80))
         tree = window.photo_list._tree_widget
         window.photo_list.blockSignals(True)
         tree.setCurrentItem(tree.topLevelItem(0))
@@ -498,7 +504,7 @@ def test_ordinary_held_keys_use_quick_preview_until_release(monkeypatch, tmp_pat
 
         send(QEvent.Type.KeyPress)
         assert tree.currentItem() is tree.topLevelItem(1)
-        assert window.current_path == paths[1] and window._preview_is_quick
+        assert window.current_path == paths[1] and not window._preview_is_quick
         send(QEvent.Type.KeyPress, True)
         transport = window.sequence_transport
         assert transport.mode == "ordinary_keys"
@@ -548,6 +554,8 @@ def test_decode_handoff_waits_for_real_thread_finished(monkeypatch, tmp_path):
     window = _make_window()
     worker = FinishingWorker()
     try:
+        from birdstamp.gui import editor_preview_policy
+        monkeypatch.setattr(editor_preview_policy, "load_full_synchronously", lambda path: False)
         _add_photo(window, path)
         window._preview_decode_worker = worker
         starts = []

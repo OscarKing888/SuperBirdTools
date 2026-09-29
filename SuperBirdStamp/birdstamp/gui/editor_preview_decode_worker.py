@@ -6,40 +6,16 @@ from PIL import Image
 from PyQt6.QtCore import QThread, pyqtSignal
 from app_common.file_browser._work_action import WorkerAction
 from app_common.file_browser._work_policy import WorkKind
+from app_common.image_formats import HEIF_EXTENSIONS, RAW_EXTENSIONS
 
-from birdstamp.decoders.image_decoder import decode_image_for_preview, read_decoded_image_size
+from birdstamp.decoders.image_decoder import decode_image, decode_image_for_preview, read_decoded_image_size
 from birdstamp import perf
+from .editor_shared_thumb_cache import THUMB_EDGE, read_thumbnail, write_thumbnail
 
 
 def cached_preview_image(path: Path, max_long_edge: int) -> Image.Image | None:
-    """复用 Viewer 的逐文件缓存作用域；缓存未命中时不解码原图或生成缩略图。"""
-    from app_common.file_browser._browser_core import (
-        _existing_persistent_thumb_cache_path_for_file,
-        _thumb_disk_cache_path,
-        _thumb_source_stamp,
-    )
-
-    source = str(path)
-    directory = str(path.parent)
-    sizes = tuple(size for size in (2048, 1024, 512, 256, 128) if size <= max_long_edge)
-    stamp = _thumb_source_stamp(source)
-    cache_path = _existing_persistent_thumb_cache_path_for_file(
-        source, directory, requested_size=max_long_edge, source_stamp=stamp,
-        candidate_sizes=sizes, selected_dir=directory,
-    )
-    candidates = [cache_path] if cache_path else []
-    candidates.extend(_thumb_disk_cache_path(source, stamp, size, directory) for size in sizes)
-    for candidate in candidates:
-        if not candidate:
-            continue
-        try:
-            with Image.open(candidate) as cached:
-                if max(cached.size) > max_long_edge:
-                    continue
-                return cached.convert("RGB")
-        except (OSError, ValueError):
-            continue
-    return None
+    """复用 Viewer 的精确 256 档；缓存未命中时不解码原图。"""
+    return read_thumbnail(path) if max_long_edge == 0 or max_long_edge >= THUMB_EDGE else None
 
 
 class EditorPreviewAction(WorkerAction):
@@ -59,14 +35,11 @@ class EditorPreviewAction(WorkerAction):
         try:
             if self.is_cancelled():
                 return
-            if not self.show_raw:
-                with perf.span("preview.cached_thumbnail", path=str(self.path)):
-                    try:
-                        image = cached_preview_image(
-                            self.path, min(512, self.max_long_edge) if self.quick_only else self.max_long_edge,
-                        )
-                    except Exception:
-                        image = None
+            with perf.span("preview.cached_thumbnail", path=str(self.path)):
+                try:
+                    image = cached_preview_image(self.path, self.max_long_edge or THUMB_EDGE)
+                except Exception:
+                    image = None
             full_size = None
             if image is not None:
                 try:
@@ -87,10 +60,32 @@ class EditorPreviewAction(WorkerAction):
                     return
             if self.is_cancelled():
                 return
-            edge = min(512, self.max_long_edge) if self.quick_only else self.max_long_edge
+            if (image is None and not self.quick_only and self.max_long_edge == 0
+                    and self.path.suffix.lower() not in HEIF_EXTENSIONS | RAW_EXTENSIONS):
+                quick = decode_image_for_preview(self.path, max_long_edge=THUMB_EDGE, decoder="auto")
+                try:
+                    properties = quick.info.get("birdstamp_source_properties") or {}
+                    quick_size = properties.get("size") or read_decoded_image_size(self.path)
+                    write_thumbnail(self.path, quick)
+                    if not self.is_cancelled():
+                        self.emit_quick(quick, quick_size)
+                        quick = None
+                finally:
+                    if quick is not None:
+                        quick.close()
+            if self.is_cancelled():
+                return
+            edge = (min(THUMB_EDGE, self.max_long_edge) if self.max_long_edge else THUMB_EDGE)
+            if not self.quick_only:
+                edge = self.max_long_edge
             with perf.span("preview.quick_decode" if self.quick_only else "preview.decode", path=str(self.path)):
-                kwargs = {"show_raw": True} if self.show_raw else {}
-                image = decode_image_for_preview(self.path, max_long_edge=edge, decoder="auto", **kwargs)
+                if edge == 0:
+                    image = (decode_image_for_preview(self.path, max_long_edge=2**31 - 1,
+                                                      decoder="auto", show_raw=True)
+                             if self.show_raw else decode_image(self.path, decoder="auto"))
+                else:
+                    kwargs = {"show_raw": True} if self.show_raw else {}
+                    image = decode_image_for_preview(self.path, max_long_edge=edge, decoder="auto", **kwargs)
             if self.is_cancelled():
                 return
             properties = image.info.get("birdstamp_source_properties") or {}
@@ -103,6 +98,8 @@ class EditorPreviewAction(WorkerAction):
             if self.is_cancelled():
                 return
             if self.quick_only:
+                if edge >= THUMB_EDGE:
+                    write_thumbnail(self.path, image)
                 self.emit_quick(image, full_size)
             else:
                 self.emit_full(image, full_size)
@@ -133,7 +130,7 @@ class EditorPreviewDecodeWorker(QThread):
         super().__init__(parent)
         self._token = int(token)
         self._path = Path(path).resolve(strict=False)
-        self._max_long_edge = max(1, int(max_long_edge))
+        self._max_long_edge = max(0, int(max_long_edge))
         self._quick_only = bool(quick_only)
         self._show_raw = bool(show_raw)
         self._pool = pool
