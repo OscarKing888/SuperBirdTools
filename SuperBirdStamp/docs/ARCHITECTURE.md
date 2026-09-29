@@ -114,7 +114,7 @@ flowchart LR
 
 [export_stage/core.py](../birdstamp/export_stage/core.py) 的 `render_video_frame_context` 构造上下文并运行阶段管线，返回实际图像及裁切几何；`render_video_frame` 包装它返回导出位图。旧“批量构图 / 构图平滑”的 UI、统一尺寸和中位中心算法已移除，旧字段不参与设置或缓存签名。`prepare_uniform_auto_crop_plans` 仅保留显式参考区策略的非 GUI 兼容入口；[resolve_dejitter_strategy](../birdstamp/image_dejitter/strategy_registry.py) 默认关闭，只有显式 `reference_region` 能启用旧入口。
 
-普通图片导出的每张解码、阶段处理和写入由 [editor_exporter.py](../birdstamp/gui/editor_exporter.py) 的 `_ImageExportAction` 提交到 `BrowserWorkPool`，单张导出也在后台执行。视频导出的源帧渲染和目标尺寸规格化分别由 [core.py](../birdstamp/export_stage/core.py) 的 `_SourceFrameRenderAction`、`_VideoFrameNormalizeAction` 执行；协调线程按原有内存预算限制在途数，并在完成后更新缓存清单和进度。GIF 中间图片复用普通图片 action。显式参考区去抖动的旧兼容预计算仍按帧顺序汇总结果。
+普通图片导出的每张解码、阶段处理和写入由 [editor_exporter.py](../birdstamp/gui/editor_exporter.py) 的 `_ImageExportAction` 提交到精确线程数的 `BrowserWorkPool`，单张导出也在后台执行。视频的 `_SourceFrameRenderAction` 与 `_VideoFrameNormalizeAction` 在同一个有界池中交错执行：第一张源帧确定自动视频尺寸后，已完成的源帧即可开始规格化，不等待整组渲染结束。自动并发按可用逻辑核心、待处理帧数和可用内存计算；显式线程数仍可覆盖。GIF 中间图片复用普通图片 action。显式参考区去抖动的旧兼容预计算仍按帧顺序汇总结果。
 
 独立去抖动流程位于“导出 → 去抖动”标签页，右侧使用“编辑构图 / 成片预览”按钮组。编辑视图显示原图，不应用模板裁切与补边；多参考区使用各自原图的归一化坐标，A/B 两侧原图均可编辑；框内拖动，八手柄缩放，Shift 保持当前比例、Alt 围绕中心对称缩放（可组合）。参考图可用 [auto_regions.py](../birdstamp/image_dejitter/auto_regions.py) 从长边不超过 768 的预览中按 Shi–Tomasi 角点强度建议选区，保留已有框并补足到按钮右侧的目标总数（1–36，默认 9）。等面积分格先保证未覆盖格各有一个，缺额再按质量和与已有/新增框的距离补选，每格候选上限 64；质量不足允许少选，建议需人工检查运动一致性。`suggest_reference_regions(..., target_count=9)` 只返回待追加框；数量默认值来自 `editor_options.json` 的 `dejitter_auto_region_count`，保存于工作区 `sequence_preview.auto_region_count`，数量偏好本身不进入分析签名或使旧结果失效。参考图空白处 Shift 追加、右键删除及页内列表多选删除保留；目标图只修正对应编号的匹配位置，右键恢复自动匹配，不能重设参考图或增删编号。成片视图只展示诊断。路径/模式切换会取消未提交手势，拖动几何由 [reference_region_geometry.py](../birdstamp/gui/reference_region_geometry.py) 统一约束。
 
@@ -132,7 +132,7 @@ flowchart LR
 
 [sequence_analysis.py](../birdstamp/export_stage/sequence_analysis.py) 的 `SequenceAnalysisAction` 将每张照片的解码、参考区跟踪及原图小预览生成送入共享 `BrowserWorkPool`；固定参考模板只读，原图由 action 独占，小图交接使用锁。协调线程限制在途数量，按 CPU/可用内存估算并发，额外为 FFT 临时数组保留预算；第一轮全部结束后按照片列表顺序汇总，再并行核验孤立遮挡，邻帧证据始终取第一轮快照，不级联修复。取消/失败由协调线程停止提交并等待池退出，之后 GUI worker 才释放缓存。`prepare_sequence_preview` 保留原有文字进度并增加结构化 `progress_counts(current, total, stage)` 与 `analysis_workers` 参数；进度回调在协调线程执行，`preview_source` 在池线程执行，调用方必须安全交接小图。回归见 [test_sequence_analysis.py](../tests/test_sequence_analysis.py)。
 
-[sequence_export.py](../birdstamp/export_stage/sequence_export.py) 的 `SequenceExportAction` 经同一渲染入口及 `PngExportStage` 完成独立 PNG/JPG 整组导出，直接消费分析后的像素框。`export_aligned_sequence` 在 Qt 协调线程内创建并关闭共享 `BrowserWorkPool`，关闭缩略图额度预留，把 action 送入单一队列；每线程独立复用 ExifTool 会话，避免串行元数据锁。[sequence_export_workers.py](../birdstamp/export_stage/sequence_export_workers.py) 的 `resolve_sequence_export_workers` 默认尽量使用进程可用的全部逻辑核心，不继承视频渲染的 8 线程 / 4 GiB 固定上限；以当前可用内存的 50% 为预算，按最大原图或补边画幅每像素 24 字节估算在途任务上限，并受照片数量限制。内存探测不可用时使用 2 GiB 备用预算，尺寸未知按 2400 万像素估算；API 显式 `render_workers` 保留覆盖语义。完成一张即补交下一张。整组文件签名只在导出前后核验，单帧仍核对源尺寸；预先编号保持列表顺序，PNG 使用低压缩级别的无损编码。输出写入新建子目录，取消/失败等待全部 action 和进程退出后撤销本次文件；日志记录 CPU、内存预算、并发上限、总耗时与解码/写入累计耗时。预算及 12 路真实 action 并发回归见 [test_sequence_export_workers.py](../tests/test_sequence_export_workers.py)、[test_sequence_export.py](../tests/test_sequence_export.py)。普通图片/GIF/视频导出不再注入去抖动页的计划，也不会自动启用参考区策略。旧显式参考区策略仍可供非 GUI 调用，统一尺寸/中位中心策略已删除。
+[sequence_export.py](../birdstamp/export_stage/sequence_export.py) 的 `SequenceExportAction` 经同一渲染入口及 `PngExportStage` 完成独立 PNG/JPG 整组导出，直接消费分析后的像素框。`export_aligned_sequence` 在 Qt 协调线程内创建并关闭共享 `BrowserWorkPool`，关闭缩略图额度预留，把 action 送入单一队列；每线程独立复用 ExifTool 会话，避免串行元数据锁。[sequence_export_workers.py](../birdstamp/export_stage/sequence_export_workers.py) 的 `resolve_sequence_export_workers` 是图片/GIF/视频导出共用的并发预算：默认尽量使用进程可用的全部逻辑核心，以当前可用内存的 50% 为预算，按最大原图或补边画幅每像素 24 字节估算在途任务上限，并受照片数量限制。内存探测不可用时使用 2 GiB 备用预算，尺寸未知按 2400 万像素估算；API 显式 `render_workers` 保留覆盖语义。去抖动分析因 FFT 临时数组使用独立的保守额度。完成一张即补交下一张。整组文件签名只在导出前后核验，单帧仍核对源尺寸；预先编号保持列表顺序，PNG 使用低压缩级别的无损编码。输出写入新建子目录，取消/失败等待全部 action 和进程退出后撤销本次文件；日志记录 CPU、内存预算、并发上限、总耗时与解码/写入累计耗时。预算及 12 路真实 action 并发回归见 [test_sequence_export_workers.py](../tests/test_sequence_export_workers.py)、[test_sequence_export.py](../tests/test_sequence_export.py)。普通图片/GIF/视频导出不再注入去抖动页的计划，也不会自动启用参考区策略。旧显式参考区策略仍可供非 GUI 调用，统一尺寸/中位中心策略已删除。
 
 去抖动页在分析、导出按钮下各有独立进度条。[EditorSequencePreviewWorker / EditorSequenceExportWorker](../birdstamp/gui/editor_sequence_preview_worker.py) 将结构化进度作为 Qt 信号交给 [_BirdStampDejitterMixin](../birdstamp/gui/editor_dejitter.py)：有总数的阶段显示实际完成数/总数及百分比，读取缓存/元数据、参考图准备及最终校验阶段显示忙碌状态；完整成片或有效导出结果到达才隐藏对应进度条，在原位置显示绿色“完成✅”，完成数量保留在提示文字中。新任务隐藏旧完成文字并恢复进度条，分析失效时清除两处完成提示；取消和失败保留各自进度状态，不显示完成。旧任务信号仍受 worker 身份、epoch 和 shutdown 检查保护；按需清晰帧升级不重置整组完成提示。回归见 [test_dejitter_progress.py](../tests/test_dejitter_progress.py)。
 
@@ -158,11 +158,11 @@ flowchart LR
 
 [editor_exporter.py](../birdstamp/gui/editor_exporter.py) 的 `export_current` / `export_all` 根据终端选择调度图片或 GIF；图片进入 `_export_render_jobs_to_images`。单图和批量导出由 GUI 编排，批量图像任务使用线程池并限制在途任务；GUI 在进度更新处处理事件，因此不能把整个图片/GIF 流程描述成独立的后台 QThread。GIF 编码由 `_run_gif_export_off_gui_thread` 放到单个后台线程执行（Pillow 编码期间释放 GIL），GUI 线程轮询完成并按序应用进度，所有控件更新仍在 GUI 线程；导出期间依旧排除用户输入。GIF 中间缓存帧以 `compress_level=1` 快速写 PNG（无损），用户直接导出的 PNG 仍用 `optimize=True`。
 
-所有 PNG/JPG 写入（普通单图/批量、CLI、独立去抖动、GIF 和视频保存的 PNG 帧）统一经过 [export_metadata.py](../birdstamp/export_metadata.py) 的 `save_export_image`，必须传入实际 `source_path`。ExifTool 从原文件复制 EXIF 块及可写元数据，包含 MakerNotes/未知 EXIF 标签；随后单独校正成片方向与尺寸并生成成片缩略图。不能用模板筛选后的元数据字典重建 EXIF。临时文件完成图片和 EXIF 后才替换目标，元数据失败不冒充成功、不覆盖已有完整目标，也禁止覆盖原图。使用共享 ExifTool runner（超时、Windows 隐藏窗口、应用关闭/atexit 清理）；中文内容通过文件复制保留，不拼入命令行。原图没有 EXIF 时可正常导出。源帧和视频帧缓存版本同步更新，避免复用旧的无 EXIF 缓存。
+所有新渲染的 PNG/JPG 写入（普通单图/批量、CLI、独立去抖动、GIF 和视频帧）统一经过 [export_metadata.py](../birdstamp/export_metadata.py) 的 `save_export_image`，必须传入实际 `source_path`；有效 PNG 成品或同尺寸源帧可原子复制完整字节和已有 EXIF。ExifTool 从原文件复制 EXIF 块及可写元数据，包含 MakerNotes/未知 EXIF 标签；随后单独校正成片方向与尺寸并生成成片缩略图。不能用模板筛选后的元数据字典重建 EXIF。临时文件完成图片和 EXIF 后才替换目标，元数据失败不冒充成功、不覆盖已有完整目标，也禁止覆盖原图。使用共享 ExifTool runner（超时、Windows 隐藏窗口、应用关闭/atexit 清理）；中文内容通过文件复制保留，不拼入命令行。原图没有 EXIF 时可正常导出。源帧缓存版本更新后不会复用旧的无 EXIF 缓存。
 
 独立去抖动另外使用 `copy_export_sidecar`，通过共享严格同目录/同名查找器定位 `.xmp`（扩展名不区分大小写），原样复制到导出图的新同名 `.xmp`；缺少时不生成空文件，失败/取消随本次目录一起回滚。分析签名记录实际 sidecar 路径，之后增加、删除或修改 `.XMP` 同样使结果失效。GIF/视频成品不作为逐张原始 EXIF 容器，其保留的 PNG 帧各自携带元数据。回归见 [test_export_metadata.py](../tests/test_export_metadata.py)。
 
-`_build_batch_image_targets` 在启动并行写入前分配所有文件名：使用 NFC 规范化加 `casefold` 判断本批同名目标，依次追加 `_2`、`_3`。这避免不同目录的 `a.jpg`、`A.jpg` 或 Unicode 等价名称写到同一目标；它解决本批目标互撞，不提供跨进程文件锁。普通图片并行度沿用视频导出的 CPU/图像像素内存预算；GIF 中间 PNG 帧使用整组图片导出的可用逻辑核心及内存预算，实际线程数仍受待导出帧数限制。
+`_build_batch_image_targets` 在启动并行写入前分配所有文件名：使用 NFC 规范化加 `casefold` 判断本批同名目标，依次追加 `_2`、`_3`。这避免不同目录的 `a.jpg`、`A.jpg` 或 Unicode 等价名称写到同一目标；它解决本批目标互撞，不提供跨进程文件锁。普通图片、视频和 GIF 中间帧共用可用逻辑核心及内存预算，实际线程数仍受待导出帧数限制。成功的普通 PNG/JPG 导出由 [exported_image_index.py](../birdstamp/exported_image_index.py) 记录到用户配置缓存目录，索引上限 50,000 个签名；视频/GIF 可跨输出目录按 PNG 优先、JPG 补帧的顺序复用，文件状态或处理输入变化时退回原图渲染。旧导出图和独立去抖动序列没有可验证的普通管线签名，不进入索引。
 
 ### 两级帧缓存和视频生命周期
 
@@ -173,7 +173,7 @@ flowchart LR
 | `rendered_source_frames` | 完成裁切、模板和焦点处理的 RGB 源帧。桶由全局导出设置与版本区分；逐帧记录源文件签名、渲染设置、元数据/模板上下文、照片信息和模板内容签名。 |
 | `video_frames` | 按视频目标尺寸和背景归一化后的 PNG 帧，宽高满足编码的偶数要求。桶关联源帧桶、目标尺寸和背景；只改 FPS 或编码器通常可复用已渲染帧。 |
 
-保留模式使用输出目录下的 `birdstamp_export_cache/<类型>/<桶>/frames` 与 manifest；临时模式在输出目录创建独立临时目录。`dirty_path_keys` 强制相关源图重渲染，manifest 验证命中条件。视频两级缓存用 `ThrottledFrameManifestWriter` 节流写 manifest（每 32 帧或 1 秒一次），并在 `finally` 中 flush，完成、取消与失败时已完成的帧都会记录。GIF 的 `_ensure_gif_frame_cache` 也使用渲染源帧缓存；视频由 `_ensure_source_frame_cache`、`_ensure_video_frame_cache` 分两步准备。
+保留模式使用输出目录下的 `birdstamp_export_cache/<类型>/<桶>/frames` 与 manifest；临时模式在输出目录创建独立临时目录。`dirty_path_keys` 强制相关源图重渲染，manifest 验证命中条件。终端导出类型不进入源帧签名。视频两级缓存用 `ThrottledFrameManifestWriter` 节流写 manifest（每 32 帧或 1 秒一次），并在 `finally` 中 flush；`_ensure_video_caches_pipelined` 在同一池内调度两级帧。源 PNG 已符合视频尺寸时原子复制完整文件，保持像素和 EXIF，免去第二次编码。
 
 [export_video](../birdstamp/export_stage/core.py) 在每个缓存目录创建后立即接管所有权，不能等准备函数成功返回后才记录目录。成功时先在工作目录编码，再用 `os.replace` 放到最终目标；普通异常清理未完成视频，并按 `preserve_temp_files` 决定是否保留帧缓存。即使异常发生在首帧或 manifest 准备期间，临时目录也有清理责任方。
 

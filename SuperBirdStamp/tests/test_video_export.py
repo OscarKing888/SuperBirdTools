@@ -13,7 +13,6 @@ from birdstamp.gui.editor_renderer import _BirdStampRendererMixin
 from birdstamp.gui.editor_core import draw_focus_box_overlay
 from birdstamp.export_stage import (
     _compute_auto_bird_crop_plan,
-    _recommended_auto_render_workers,
     _count_contiguous_rendered_frames,
     _partial_video_output_path,
     _run_ffmpeg_command,
@@ -226,19 +225,11 @@ def test_resolve_video_render_workers_honors_auto_and_manual_limits() -> None:
     assert resolve_video_render_workers(1, 5) == 1
 
 
-def test_recommended_auto_render_workers_prefers_physical_cpu_count() -> None:
-    assert _recommended_auto_render_workers(physical_cpu_count=12, logical_cpu_count=12) == 20
-
-
-def test_recommended_auto_render_workers_falls_back_to_logical_cpu_count() -> None:
-    assert _recommended_auto_render_workers(physical_cpu_count=None, logical_cpu_count=16) == 12
-
-
 def test_auto_render_workers_respect_available_memory(monkeypatch) -> None:
     import psutil
     import birdstamp.export_stage.core as export_core
 
-    monkeypatch.setattr(export_core, "_detect_physical_cpu_count", lambda: 32)
+    monkeypatch.setattr(export_core.os, "process_cpu_count", lambda: 64, raising=False)
     monkeypatch.setattr(export_core.os, "cpu_count", lambda: 64)
     monkeypatch.setattr(
         psutil,
@@ -252,15 +243,15 @@ def test_auto_render_workers_respect_available_memory(monkeypatch) -> None:
         "virtual_memory",
         lambda: SimpleNamespace(available=8 * 1024 * 1024 * 1024),
     )
-    assert resolve_video_render_workers(0, 100, max_frame_pixels=8_000_000) == 8
-    assert resolve_video_render_workers(0, 100) == 4
+    assert resolve_video_render_workers(0, 100, max_frame_pixels=8_000_000) == 22
+    assert resolve_video_render_workers(0, 100) == 7
 
 
-def test_auto_render_workers_are_capped_at_eight(monkeypatch) -> None:
+def test_auto_render_workers_use_all_available_cores(monkeypatch) -> None:
     import psutil
     import birdstamp.export_stage.core as export_core
 
-    monkeypatch.setattr(export_core, "_detect_physical_cpu_count", lambda: 64)
+    monkeypatch.setattr(export_core.os, "process_cpu_count", lambda: 64, raising=False)
     monkeypatch.setattr(export_core.os, "cpu_count", lambda: 128)
     monkeypatch.setattr(
         psutil,
@@ -268,14 +259,14 @@ def test_auto_render_workers_are_capped_at_eight(monkeypatch) -> None:
         lambda: SimpleNamespace(available=128 * 1024 * 1024 * 1024),
     )
 
-    assert resolve_video_render_workers(0, 100, max_frame_pixels=1_000_000) == 8
+    assert resolve_video_render_workers(0, 100, max_frame_pixels=1_000_000) == 64
 
 
 def test_explicit_render_workers_are_honored_with_warning(monkeypatch) -> None:
     import psutil
     import birdstamp.export_stage.core as export_core
 
-    monkeypatch.setattr(export_core, "_detect_physical_cpu_count", lambda: 4)
+    monkeypatch.setattr(export_core.os, "process_cpu_count", lambda: 8, raising=False)
     monkeypatch.setattr(export_core.os, "cpu_count", lambda: 8)
     monkeypatch.setattr(
         psutil,
@@ -458,7 +449,7 @@ def test_export_video_reuses_preserved_temp_frames() -> None:
 
             first_output = export_video(jobs, options)
             assert first_output == options.output_path.resolve()
-            assert render_calls == ["source_1.jpg", "source_2.jpg"]
+            assert sorted(render_calls) == ["source_1.jpg", "source_2.jpg"]
 
             render_calls.clear()
             second_output = export_video(jobs, options)
@@ -534,7 +525,7 @@ def test_export_video_uses_new_cache_dir_when_draw_focus_changes() -> None:
                 cache_key=first_cache_key,
             )
             export_video(jobs, options)
-            assert render_calls == ["source_1.jpg", "source_2.jpg"]
+            assert sorted(render_calls) == ["source_1.jpg", "source_2.jpg"]
 
             for job in jobs:
                 job.settings["draw_focus"] = True
@@ -548,7 +539,7 @@ def test_export_video_uses_new_cache_dir_when_draw_focus_changes() -> None:
             )
             export_video(jobs, options)
             assert first_work_dir != second_work_dir
-            assert render_calls == ["source_1.jpg", "source_2.jpg"]
+            assert sorted(render_calls) == ["source_1.jpg", "source_2.jpg"]
         finally:
             export_stage.find_ffmpeg_executable = original_find_ffmpeg
             export_stage._run_ffmpeg_command = original_run_ffmpeg
@@ -608,7 +599,7 @@ def test_export_video_rerenders_only_changed_photo_when_crop_box_changes() -> No
             export_stage.render_video_frame = fake_render_video_frame
 
             export_video(jobs, options)
-            assert render_calls == ["source_1.jpg", "source_2.jpg"]
+            assert sorted(render_calls) == ["source_1.jpg", "source_2.jpg"]
 
             jobs[1].settings["crop_box"] = [0.0, 0.0, 0.8, 1.0]
 

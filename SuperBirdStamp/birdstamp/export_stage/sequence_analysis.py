@@ -13,7 +13,8 @@ from birdstamp.gui.editor_utils import path_key
 from birdstamp.image_dejitter.region_tracking_result import RegionTrackingResult, image_file_signature
 from birdstamp.image_dejitter.manual_region_matches import MANUAL_MATCHES_KEY, valid_manual_boxes, apply_manual_boxes
 from birdstamp.image_dejitter.region_consensus import resolve_tracking_consensus
-from .core import estimate_video_job_max_pixels, resolve_video_render_workers
+from .core import estimate_video_job_max_pixels
+from .sequence_export_workers import resolve_sequence_export_workers
 from .sequence_photo_error import SequencePhotoError, sequence_photo_errors
 from .video_export_cancelled_error import VideoExportCancelledError
 
@@ -67,7 +68,14 @@ def analyze_sequence_frames(jobs, tracker, reference, *, cancel_event, preview_s
     # 分析另有 FFT 临时数组；尺寸缺失/小图也至少按 2400 万像素估算预算。
     max_pixels = max(24_000_000, estimate_video_job_max_pixels(jobs),
                      tracker.reference_size[0] * tracker.reference_size[1])
-    workers = resolve_video_render_workers(analysis_workers, len(jobs), max_frame_pixels=max_pixels)
+    # FFT tracking holds more scratch arrays than export rendering.  Keep its
+    # conservative budget independent of the full-core export policy.
+    workers = resolve_sequence_export_workers(
+        analysis_workers, len(jobs),
+        max_frame_pixels=max_pixels if analysis_workers else max_pixels * 3,
+    )
+    if not analysis_workers:
+        workers = min(8, workers)
     stopped = threading.Event()
 
     def cancelled():

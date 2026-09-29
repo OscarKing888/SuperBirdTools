@@ -16,7 +16,7 @@ FRAME_CACHE_ROOT_NAME = "birdstamp_export_cache"
 SOURCE_FRAME_BUCKET_KIND = "rendered_source_frames"
 VIDEO_FRAME_BUCKET_KIND = "video_frames"
 # 图片帧开始完整保留 EXIF，避免复用旧的无元数据缓存。
-SOURCE_FRAME_CACHE_VERSION = 8
+SOURCE_FRAME_CACHE_VERSION = 9
 VIDEO_FRAME_CACHE_VERSION = 2
 _DEFAULT_PIPELINE_STAGE_ORDER = (
     "template_crop",
@@ -408,6 +408,31 @@ def update_frame_manifest_record(
     }
 
 
+def source_origin_matches(manifest: dict[str, Any], index: int, candidate: Path | None) -> bool:
+    record = manifest.get("frames", {}).get(str(index), {})
+    if not isinstance(record, dict):
+        return False
+    if candidate is None:
+        return "exported_image" not in record
+    return record.get("exported_image") == {
+        "path": normalized_path_text(candidate),
+        "signature": path_signature(candidate),
+    }
+
+
+def set_source_origin(manifest: dict[str, Any], index: int, exported_image: Path | None) -> None:
+    record = manifest.get("frames", {}).get(str(index), {})
+    if not isinstance(record, dict):
+        return
+    if exported_image is None:
+        record.pop("exported_image", None)
+    else:
+        record["exported_image"] = {
+            "path": normalized_path_text(exported_image),
+            "signature": path_signature(exported_image),
+        }
+
+
 __all__ = [
     "FRAME_CACHE_MANIFEST_VERSION",
     "FRAME_CACHE_ROOT_NAME",
@@ -428,6 +453,8 @@ __all__ = [
     "path_signature",
     "normalize_signature_value",
     "reusable_frame_path",
+    "set_source_origin",
+    "source_origin_matches",
     "stable_json_dumps",
     "update_frame_manifest_record",
     "write_frame_manifest",

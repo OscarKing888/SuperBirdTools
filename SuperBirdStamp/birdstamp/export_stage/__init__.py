@@ -63,7 +63,6 @@ _count_contiguous_rendered_frames = _core._count_contiguous_rendered_frames
 _create_video_work_dir = _core._create_video_work_dir
 _crop_plan_center_in_source_pixels = _core._crop_plan_center_in_source_pixels
 _partial_video_output_path = _core._partial_video_output_path
-_recommended_auto_render_workers = _core._recommended_auto_render_workers
 _render_cache_key = _core._render_cache_key
 _run_ffmpeg_command = _core._run_ffmpeg_command
 

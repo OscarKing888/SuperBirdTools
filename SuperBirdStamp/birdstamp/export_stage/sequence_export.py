@@ -90,8 +90,7 @@ def export_aligned_sequence(sequence, destination, *, output_format='png', cance
     try:
         # 沿用共享 WorkerAction 线程及线程独有 ExifTool 会话；关闭浏览器缩略图
         # 额度预留，全部 action 使用同一队列。实际在途数仍受 workers 限制。
-        pool = BrowserWorkPool(workers)
-        pool.set_thumbnail_mode(False)
+        pool = BrowserWorkPool(workers, metadata_only=True)
         # 编号先于提交分配，与完成顺序无关，同 stem/大小写/Unicode 也不会互相覆盖。
         actions = iter(tuple(SequenceExportAction(
             sequence, path, target,

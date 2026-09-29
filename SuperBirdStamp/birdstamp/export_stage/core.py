@@ -3,6 +3,8 @@ from birdstamp.image_dejitter.matching_options import normalize_matching_setting
 from birdstamp.image_dejitter.rigid_alignment import ALIGNMENT_MODE_KEY, normalize_alignment_mode
 
 from concurrent.futures import as_completed
+from collections import deque
+from dataclasses import dataclass
 import hashlib
 import json
 import os
@@ -13,7 +15,6 @@ import tempfile
 import math
 import threading
 import time
-from functools import lru_cache
 from pathlib import Path
 from typing import Any, Callable, Mapping
 
@@ -42,6 +43,8 @@ from birdstamp.export_frame_cache import (
     load_frame_manifest,
     path_signature,
     reusable_frame_path,
+    set_source_origin,
+    source_origin_matches,
     ThrottledFrameManifestWriter,
     SOURCE_FRAME_CACHE_VERSION,
     hash_payload as _hash_payload,
@@ -49,6 +52,7 @@ from birdstamp.export_frame_cache import (
     update_frame_manifest_record,
     write_frame_manifest,
 )
+from birdstamp.exported_image_index import ExportedImageIndex, materialize_exported_image
 from birdstamp.gui import editor_core, editor_template, editor_utils, template_context as _template_context
 from birdstamp.image_pipeline import (
     ImageProcContext,
@@ -65,6 +69,7 @@ from .video_export_cancelled_error import VideoExportCancelledError
 from .video_export_options import VIDEO_CODEC_RAWVIDEO, VideoExportOptions, is_uncompressed_video_container
 from .video_export_progress import VideoExportProgress, VideoExportProgressCallback
 from .video_frame_job import VideoFrameJob
+from .sequence_export_workers import resolve_sequence_export_workers
 
 _log = get_logger("export_stage")
 
@@ -535,6 +540,9 @@ def source_frame_signature_for_job(
     template_signature_state: Mapping[str, Mapping[str, Any]] | None = None,
 ) -> str:
     render_settings = _clone_render_settings(job.settings)
+    # The terminal exporter never changes source pixels.  Omitting it lets an
+    # image, GIF and video share the same rendered-frame identity.
+    render_settings.pop(EXPORT_STAGE_ID_KEY, None)
     if dejitter_reference_active(render_settings):
         source = render_settings.get(DEJITTER_REFERENCE_SOURCE_KEY)
         if source:
@@ -1322,57 +1330,6 @@ def _ffmpeg_fps_text(fps: float) -> str:
     return text or "25"
 
 
-def _recommended_auto_render_workers(
-    *,
-    physical_cpu_count: int | None,
-    logical_cpu_count: int | None,
-) -> int:
-    """自动渲染线程数。
-
-    优先按物理核心估算为 `核心数 * 2 - 4`，给系统/前台交互预留余量；
-    如果拿不到物理核心数，则退回到逻辑核心数减 4。
-    """
-    if physical_cpu_count is not None:
-        try:
-            physical = max(1, int(physical_cpu_count))
-        except Exception:
-            physical = 1
-        return max(1, physical * 2 - 4)
-
-    try:
-        logical = max(1, int(logical_cpu_count or 1))
-    except Exception:
-        logical = 1
-    return max(1, logical - 4)
-
-
-@lru_cache(maxsize=1)
-def _detect_physical_cpu_count() -> int | None:
-    try:
-        import psutil  # optional dependency
-
-        detected = psutil.cpu_count(logical=False)
-        if detected is not None and int(detected) > 0:
-            return int(detected)
-    except Exception:
-        pass
-
-    if sys.platform == "darwin":
-        try:
-            output = subprocess.check_output(
-                ["sysctl", "-n", "hw.physicalcpu"],
-                stderr=subprocess.DEVNULL,
-                text=True,
-            ).strip()
-            detected = int(output)
-            if detected > 0:
-                return detected
-        except Exception:
-            return None
-
-    return None
-
-
 def _metadata_dimension_value(metadata: Mapping[str, Any], *keys: str) -> int:
     for key in keys:
         value = metadata.get(key)
@@ -1421,44 +1378,19 @@ def resolve_video_render_workers(
     *,
     max_frame_pixels: int = 0,
 ) -> int:
-    if pending_jobs <= 0:
-        return 1
-    requested = max(0, int(render_workers))
-    cpu_workers = min(
-        8,
-        _recommended_auto_render_workers(
-            physical_cpu_count=_detect_physical_cpu_count(),
-            logical_cpu_count=os.cpu_count(),
-        ),
+    recommended = resolve_sequence_export_workers(
+        0, pending_jobs, max_frame_pixels=max_frame_pixels,
     )
-    # Budget at most 20% of currently available RAM (hard-capped at 4 GiB).
-    # A render may hold source/crop/overlay/converted buffers, estimated as
-    # 24 bytes per source pixel. Unknown dimensions use a conservative cap.
-    memory_workers = 4
-    try:
-        import psutil  # optional dependency
-
-        available_bytes = max(0, int(psutil.virtual_memory().available))
-        render_budget = min(int(available_bytes * 0.20), 4 * 1024 * 1024 * 1024)
-        pixels = max(0, int(max_frame_pixels))
-        if pixels > 0:
-            memory_workers = max(1, render_budget // max(1, pixels * 24))
-    except Exception:
-        memory_workers = 4
-    recommended = max(1, min(cpu_workers, memory_workers, pending_jobs))
-    if requested > 0:
-        explicit_workers = max(1, min(requested, pending_jobs))
-        if requested > recommended:
-            _log.warning(
-                "explicit video render worker count %s exceeds recommended %s "
-                "(pending=%s, max_frame_pixels=%s); honoring explicit setting",
-                requested,
-                recommended,
-                pending_jobs,
-                max(0, int(max_frame_pixels)),
-            )
-        return explicit_workers
-    return recommended
+    requested = max(0, int(render_workers))
+    if requested > recommended:
+        _log.warning(
+            "explicit video render worker count %s exceeds recommended %s "
+            "(pending=%s, max_frame_pixels=%s); honoring explicit setting",
+            requested, recommended, pending_jobs, max(0, int(max_frame_pixels)),
+        )
+    return resolve_sequence_export_workers(
+        requested, pending_jobs, max_frame_pixels=max_frame_pixels,
+    )
 
 
 def _resolve_video_render_worker_status(
@@ -1600,16 +1532,21 @@ def _render_and_cache_source_frame(
     bird_box_cache: dict[str, tuple[float, float, float, float] | None],
     bird_box_lock: threading.Lock | None,
     cancel_event: threading.Event | None,
-) -> tuple[int, str, Path, str, str]:
+    exported_image: Path | None = None,
+) -> tuple[int, str, Path, str, str, Path | None]:
     _raise_if_cancel_requested(cancel_event, message="视频导出已中断，正在保留已完成源帧。")
+    frame_path = _cache_frame_output_path(source_plan, index, suffix="png")
+    source_signature = _source_signature(job.path)
+    if exported_image is not None and materialize_exported_image(
+        exported_image, frame_path, original=job.path,
+    ):
+        return (index, job.path.name, frame_path, source_signature, frame_signature, exported_image)
     rendered = _export_stage_callable("render_video_frame")(
         job,
         template_paths=template_paths,
         bird_box_cache=bird_box_cache,
         bird_box_lock=bird_box_lock,
     )
-    frame_path = _cache_frame_output_path(source_plan, index, suffix="png")
-    source_signature = _source_signature(job.path)
     try:
         _raise_if_cancel_requested(cancel_event, message="视频导出已中断，正在保留已完成源帧。")
         _save_rendered_source_frame(rendered, frame_path, source_path=job.path)
@@ -1618,7 +1555,7 @@ def _render_and_cache_source_frame(
             rendered.close()
         except Exception:
             pass
-    return (index, job.path.name, frame_path, source_signature, frame_signature)
+    return (index, job.path.name, frame_path, source_signature, frame_signature, None)
 
 
 def _normalize_and_cache_video_frame(
@@ -1641,14 +1578,31 @@ def _normalize_and_cache_video_frame(
     )
     with Image.open(source_frame_path) as source_image:
         _raise_if_cancel_requested(cancel_event, message="视频导出已中断，正在保留已完成视频帧。")
-        _save_normalized_temp_frame(
-            source_image,
-            frame_path,
-            target_size,
-            background_color=background_color,
-            source_path=source_frame_path,
-        )
+        if source_image.format == "PNG" and source_image.mode == "RGB" and source_image.size == target_size:
+            # The complete source PNG already has the rendered pixels and EXIF.
+            # A byte copy is much cheaper than decoding, encoding and copying
+            # metadata a second time; keep cache files independent.
+            _copy_complete_frame(source_frame_path, frame_path)
+        else:
+            _save_normalized_temp_frame(
+                source_image,
+                frame_path,
+                target_size,
+                background_color=background_color,
+                source_path=source_frame_path,
+            )
     return (index, label, frame_path, source_signature, frame_signature)
+
+
+def _copy_complete_frame(source: Path, target: Path) -> None:
+    target.parent.mkdir(parents=True, exist_ok=True)
+    descriptor, temp_name = tempfile.mkstemp(prefix=".birdstamp-frame-", suffix=target.suffix, dir=target.parent)
+    os.close(descriptor)
+    try:
+        shutil.copyfile(source, temp_name)
+        os.replace(temp_name, target)
+    finally:
+        Path(temp_name).unlink(missing_ok=True)
 
 
 class _SourceFrameRenderAction(WorkerAction):
@@ -1705,6 +1659,17 @@ def _prune_cache_frames(frames_dir: Path, manifest: dict[str, Any], *, total: in
                 _log.debug("prune stale cache frame failed: %s", frame_path, exc_info=True)
 
 
+@dataclass(slots=True)
+class _SourceCachePreparation:
+    bucket_key: str
+    plan: FrameCachePlan
+    manifest: dict[str, Any]
+    paths: list[Path]
+    pending: list[tuple[int, VideoFrameJob, str, str]]
+    reused_count: int
+    exported_images: dict[int, Path]
+
+
 def _ensure_source_frame_cache(
     jobs: list[VideoFrameJob],
     *,
@@ -1717,7 +1682,8 @@ def _ensure_source_frame_cache(
     bird_box_lock: threading.Lock,
     dirty_path_keys: set[str],
     on_cache_created: Callable[[FrameCachePlan], None] | None = None,
-) -> tuple[str, Any, list[Path]]:
+    prepare_only: bool = False,
+) -> tuple[str, Any, list[Path]] | _SourceCachePreparation:
     total = len(jobs)
     # 缓存桶只由全局导出设置决定，与裁切计划无关；先建立它以便复用已保存的预计算结果。
     source_bucket_key = _render_cache_key(jobs, options)
@@ -1789,6 +1755,9 @@ def _ensure_source_frame_cache(
     source_frame_paths = [_cache_frame_output_path(source_plan, index, suffix="png") for index in range(1, total + 1)]
     pending_jobs: list[tuple[int, VideoFrameJob, str, str]] = []
     reused_count = 0
+    exported_index = ExportedImageIndex()
+    exported_records = exported_index.load()
+    exported_images: dict[int, Path] = {}
     template_signature_state = build_template_signature_state(jobs, template_paths)
     for index, job in enumerate(jobs, start=1):
         source_signature = _source_signature(job.path)
@@ -1798,6 +1767,13 @@ def _ensure_source_frame_cache(
             template_signature_state=template_signature_state,
         )
         dirty_key = _path_key(job.path)
+        candidate = None
+        if dirty_key not in dirty_path_keys:
+            candidate = exported_index.find(
+                exported_records, source=job.path, frame_signature=frame_signature,
+            )
+            if candidate is not None:
+                exported_images[index] = candidate
         reusable_path = None
         if dirty_key not in dirty_path_keys:
             reusable_path = reusable_frame_path(
@@ -1808,6 +1784,8 @@ def _ensure_source_frame_cache(
                 source_signature=source_signature,
                 frame_signature=frame_signature,
             )
+            if reusable_path is not None and not source_origin_matches(manifest, index, candidate):
+                reusable_path = None
         if reusable_path is not None:
             source_frame_paths[index - 1] = reusable_path
             reused_count += 1
@@ -1821,6 +1799,12 @@ def _ensure_source_frame_cache(
             current=reused_count,
             total=total,
             message=f"复用已缓存源帧 {reused_count}/{total} 帧。",
+        )
+
+    if prepare_only:
+        return _SourceCachePreparation(
+            source_bucket_key, source_plan, manifest,
+            source_frame_paths, pending_jobs, reused_count, exported_images,
         )
 
     if not pending_jobs:
@@ -1844,41 +1828,7 @@ def _ensure_source_frame_cache(
         ),
     )
     completed = reused_count
-    if len(pending_jobs) == 1:
-        index, job, source_signature, frame_signature = pending_jobs[0]
-        rendered_index, frame_name, frame_path, _, _ = _render_and_cache_source_frame(
-            job=job,
-            index=index,
-            source_plan=source_plan,
-            template_paths=template_paths,
-            frame_signature=frame_signature,
-            bird_box_cache=bird_box_cache,
-            bird_box_lock=bird_box_lock,
-            cancel_event=cancel_event,
-        )
-        source_frame_paths[rendered_index - 1] = frame_path
-        update_frame_manifest_record(
-            source_plan,
-            manifest,
-            index=rendered_index,
-            source_path=job.path,
-            source_signature=source_signature,
-            frame_signature=frame_signature,
-            frame_path=frame_path,
-        )
-        completed += 1
-        write_frame_manifest(source_plan, manifest, metadata=_source_frame_cache_metadata(total=total))
-        _emit_progress(
-            progress_callback,
-            phase="render",
-            current=completed,
-            total=total,
-            message=f"已渲染源帧 {completed}/{total}: {frame_name}",
-        )
-        return (source_bucket_key, source_plan, source_frame_paths)
-
-    pool = BrowserWorkPool(render_workers)
-    pool.set_thumbnail_mode(False)
+    pool = BrowserWorkPool(render_workers, metadata_only=True)
     futures: dict[Any, tuple[int, VideoFrameJob, str, str]] = {}
     pending_iterator = iter(pending_jobs)
 
@@ -1900,6 +1850,7 @@ def _ensure_source_frame_cache(
                     bird_box_cache=bird_box_cache,
                     bird_box_lock=bird_box_lock,
                     cancel_event=cancel_event,
+                    exported_image=exported_images.get(index),
                 ),
                 kind=WorkKind.METADATA,
             )
@@ -1916,7 +1867,7 @@ def _ensure_source_frame_cache(
             future = next(as_completed(tuple(futures)))
             index, job, source_signature, frame_signature = futures.pop(future)
             try:
-                rendered_index, frame_name, frame_path, _, _ = future.result()
+                rendered_index, frame_name, frame_path, _, _, exported_used = future.result()
             except VideoExportCancelledError:
                 if cancel_event is not None:
                     cancel_event.set()
@@ -1933,6 +1884,7 @@ def _ensure_source_frame_cache(
                 frame_signature=frame_signature,
                 frame_path=frame_path,
             )
+            set_source_origin(manifest, rendered_index, exported_used)
             completed += 1
             manifest_writer.record_written()
             _emit_progress(
@@ -2074,8 +2026,7 @@ def _ensure_video_frame_cache(
                 message=f"已准备视频帧 {completed}/{total}: {frame_name}",
             )
         else:
-            pool = BrowserWorkPool(render_workers)
-            pool.set_thumbnail_mode(False)
+            pool = BrowserWorkPool(render_workers, metadata_only=True)
             futures: dict[Any, tuple[int, Path, str, str]] = {}
             pending_iterator = iter(pending_frames)
 
@@ -2163,6 +2114,218 @@ def _ensure_video_frame_cache(
         ),
     )
     return (video_plan, target_size, temp_output_path)
+
+
+def _ensure_video_caches_pipelined(
+    jobs: list[VideoFrameJob],
+    *,
+    output_path: Path,
+    options: VideoExportOptions,
+    template_paths: dict[str, Path] | None,
+    progress_callback: VideoExportProgressCallback | None,
+    cancel_event: threading.Event | None,
+    bird_box_cache: dict[str, tuple[float, float, float, float] | None],
+    bird_box_lock: threading.Lock,
+    dirty_path_keys: set[str],
+    on_source_created: Callable[[FrameCachePlan], None],
+    on_video_created: Callable[[FrameCachePlan], None],
+) -> tuple[FrameCachePlan, FrameCachePlan, Path]:
+    """Prepare both cache tiers in one bounded action pool.
+
+    Source work can start before the first frame establishes automatic video
+    dimensions.  As soon as that frame is ready, completed source frames are
+    normalized while later photos are still rendering.
+    """
+    prepared = _ensure_source_frame_cache(
+        jobs, output_path=output_path, options=options,
+        template_paths=template_paths, progress_callback=progress_callback,
+        cancel_event=cancel_event, bird_box_cache=bird_box_cache,
+        bird_box_lock=bird_box_lock, dirty_path_keys=dirty_path_keys,
+        on_cache_created=on_source_created, prepare_only=True,
+    )
+    assert isinstance(prepared, _SourceCachePreparation)
+    total = len(jobs)
+    pending_indices = {index for index, _job, _source_sig, _frame_sig in prepared.pending}
+    source_ready = {
+        index: prepared.paths[index - 1]
+        for index in range(1, total + 1) if index not in pending_indices
+    }
+    max_pixels = estimate_video_job_max_pixels(jobs)
+    if options.frame_size_mode != "auto":
+        max_pixels = max(max_pixels, options.frame_width * options.frame_height)
+    workers, worker_warning = _resolve_video_render_worker_status(
+        options.render_workers, total, max_frame_pixels=max_pixels,
+    )
+    _emit_progress(
+        progress_callback, phase="render", current=prepared.reused_count, total=total,
+        message=f"正在准备视频帧，线程数 {workers}{worker_warning}",
+    )
+
+    video_plan: FrameCachePlan | None = None
+    video_manifest: dict[str, Any] | None = None
+    video_writer: ThrottledFrameManifestWriter | None = None
+    target_size: tuple[int, int] | None = None
+    video_jobs: deque[tuple[int, Path, str, str]] = deque()
+    source_completed = prepared.reused_count
+    video_completed = 0
+
+    def video_metadata() -> dict[str, Any]:
+        assert target_size is not None
+        return _video_frame_cache_metadata(
+            total=total, target_size=target_size,
+            background_color=options.background_color,
+            source_bucket_key=prepared.bucket_key,
+        )
+
+    def queue_video(index: int, path: Path) -> None:
+        nonlocal video_completed
+        assert video_plan is not None and video_manifest is not None and target_size is not None
+        source_signature = path_signature(path)
+        frame_signature = _video_frame_signature_for_source(
+            path, target_size=target_size, background_color=options.background_color,
+        )
+        reusable = reusable_frame_path(
+            video_plan, video_manifest, index=index, source_path=path,
+            source_signature=source_signature, frame_signature=frame_signature,
+        )
+        if reusable is not None:
+            video_completed += 1
+        else:
+            video_jobs.append((index, path, source_signature, jobs[index - 1].path.name))
+
+    def initialize_video_plan() -> None:
+        nonlocal video_plan, video_manifest, video_writer, target_size
+        if video_plan is not None or 1 not in source_ready:
+            return
+        target_size = _resolve_target_size_from_source_frame(source_ready[1], options)
+        bucket_key = build_video_frame_bucket_key(
+            source_bucket_key=prepared.bucket_key,
+            target_size=target_size,
+            background_color=options.background_color,
+        )
+        video_plan = create_frame_cache_plan(
+            output_path, bucket_kind=VIDEO_FRAME_BUCKET_KIND,
+            bucket_key=bucket_key, persistent=options.preserve_temp_files,
+        )
+        on_video_created(video_plan)
+        video_manifest = load_frame_manifest(video_plan)
+        video_plan.frames_dir.mkdir(parents=True, exist_ok=True)
+        _prune_cache_frames(video_plan.frames_dir, video_manifest, total=total)
+        _cleanup_incomplete_output(video_plan.cache_dir / output_path.name)
+        video_writer = ThrottledFrameManifestWriter(
+            video_plan, video_manifest, metadata_factory=video_metadata,
+        )
+        for index, path in sorted(source_ready.items()):
+            queue_video(index, path)
+
+    initialize_video_plan()
+    pool = BrowserWorkPool(workers, metadata_only=True)
+    futures: dict[Any, tuple[str, int, VideoFrameJob | Path, str, str]] = {}
+    pending_sources = iter(prepared.pending)
+    sources_exhausted = False
+    source_writer = ThrottledFrameManifestWriter(
+        prepared.plan, prepared.manifest,
+        metadata_factory=lambda: _source_frame_cache_metadata(total=total),
+    )
+
+    def refill() -> None:
+        nonlocal sources_exhausted
+        while len(futures) < max(1, workers * 2):
+            _raise_if_cancel_requested(cancel_event, message="视频导出已中断，正在停止剩余帧任务。")
+            if video_jobs and video_plan is not None and target_size is not None:
+                index, path, source_sig, label = video_jobs.popleft()
+                future = pool.submit_action(
+                    _VideoFrameNormalizeAction(
+                        index=index, source_frame_path=path, label=label,
+                        video_plan=video_plan, target_size=target_size,
+                        background_color=options.background_color,
+                        cancel_event=cancel_event,
+                    ),
+                    kind=WorkKind.METADATA,
+                    priority=29,
+                )
+                futures[future] = ("video", index, path, source_sig, "")
+                continue
+            if sources_exhausted:
+                return
+            try:
+                index, job, source_sig, frame_sig = next(pending_sources)
+            except StopIteration:
+                sources_exhausted = True
+                return
+            future = pool.submit_action(
+                _SourceFrameRenderAction(
+                    job=job, index=index, source_plan=prepared.plan,
+                    template_paths=template_paths, frame_signature=frame_sig,
+                    bird_box_cache=bird_box_cache, bird_box_lock=bird_box_lock,
+                    cancel_event=cancel_event, exported_image=prepared.exported_images.get(index),
+                ),
+                kind=WorkKind.METADATA,
+            )
+            futures[future] = ("source", index, job, source_sig, frame_sig)
+
+    try:
+        refill()
+        while futures:
+            future = next(as_completed(tuple(futures)))
+            kind, index, input_value, source_sig, frame_sig = futures.pop(future)
+            try:
+                result = future.result()
+            except VideoExportCancelledError:
+                if cancel_event is not None:
+                    cancel_event.set()
+                for pending in futures:
+                    pending.cancel()
+                raise
+            if kind == "source":
+                job = input_value
+                assert isinstance(job, VideoFrameJob)
+                rendered_index, label, path, _actual_sig, _frame_sig, exported_used = result
+                prepared.paths[rendered_index - 1] = path
+                update_frame_manifest_record(
+                    prepared.plan, prepared.manifest, index=rendered_index,
+                    source_path=job.path, source_signature=source_sig,
+                    frame_signature=frame_sig, frame_path=path,
+                )
+                set_source_origin(prepared.manifest, rendered_index, exported_used)
+                source_writer.record_written()
+                source_completed += 1
+                source_ready[rendered_index] = path
+                if video_plan is None:
+                    initialize_video_plan()
+                else:
+                    queue_video(rendered_index, path)
+                _emit_progress(
+                    progress_callback, phase="render", current=source_completed, total=total,
+                    message=f"已渲染源帧 {source_completed}/{total}: {label}",
+                )
+            else:
+                path = input_value
+                assert isinstance(path, Path)
+                assert video_plan is not None and video_manifest is not None and video_writer is not None
+                rendered_index, label, frame_path, _actual_sig, frame_sig = result
+                update_frame_manifest_record(
+                    video_plan, video_manifest, index=rendered_index,
+                    source_path=path, source_signature=source_sig,
+                    frame_signature=frame_sig, frame_path=frame_path,
+                )
+                video_writer.record_written()
+                video_completed += 1
+                _emit_progress(
+                    progress_callback, phase="render", current=video_completed, total=total,
+                    message=f"已准备视频帧 {video_completed}/{total}: {label}",
+                )
+            refill()
+        assert video_plan is not None and video_manifest is not None
+        write_frame_manifest(prepared.plan, prepared.manifest,
+                             metadata=_source_frame_cache_metadata(total=total))
+        write_frame_manifest(video_plan, video_manifest, metadata=video_metadata())
+        return prepared.plan, video_plan, video_plan.cache_dir / output_path.name
+    finally:
+        pool.shutdown()
+        source_writer.flush()
+        if video_writer is not None:
+            video_writer.flush()
 
 
 def _render_and_save_video_frame(
@@ -2559,7 +2722,7 @@ def export_video(
 
     try:
         _raise_if_cancel_requested(cancel_event, message="视频导出已中断，尚未开始渲染。")
-        source_bucket_key, source_plan, source_frame_paths = _ensure_source_frame_cache(
+        source_plan, video_plan, temp_output_path = _ensure_video_caches_pipelined(
             jobs,
             output_path=output_path,
             options=validated,
@@ -2569,17 +2732,8 @@ def export_video(
             bird_box_cache=bird_box_cache,
             bird_box_lock=bird_box_lock,
             dirty_path_keys=dirty_keys,
-            on_cache_created=own_source_cache,
-        )
-        video_plan, _target_size, temp_output_path = _ensure_video_frame_cache(
-            source_frame_paths,
-            jobs,
-            output_path=output_path,
-            options=validated,
-            source_bucket_key=source_bucket_key,
-            progress_callback=progress_callback,
-            cancel_event=cancel_event,
-            on_cache_created=own_video_cache,
+            on_source_created=own_source_cache,
+            on_video_created=own_video_cache,
         )
         work_dir = video_plan.cache_dir
         frames_dir = video_plan.frames_dir
