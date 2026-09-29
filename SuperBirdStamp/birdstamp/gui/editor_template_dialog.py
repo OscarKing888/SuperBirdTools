@@ -770,7 +770,7 @@ class TemplateManagerDialog(QDialog):
         preview_toolbar.addWidget(self.show_crop_effect_check)
 
         self.crop_edit_mode_check = QCheckBox("调整裁剪框")
-        self.crop_edit_mode_check.setToolTip("拖动手柄调整裁剪范围并显示像素尺寸；按住 Shift，靠近虚线框时保持比例吸附至 480p–4K 档位。")
+        self.crop_edit_mode_check.setToolTip("拖动手柄调整裁剪范围并显示像素尺寸；按住 Shift，靠近虚线框时保持比例吸附至配置的分辨率档位。")
         self.crop_edit_mode_check.toggled.connect(self._on_preview_overlay_toggled)
         preview_toolbar.addWidget(self.crop_edit_mode_check)
 

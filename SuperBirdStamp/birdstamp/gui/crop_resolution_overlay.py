@@ -12,7 +12,7 @@ class CropResolutionOverlayMixin:
         self._crop_shift_down = False
         self._crop_resolution_guide = None
         self._crop_resolution_snapped = False
-        self._crop_snap_options = editor_options.CROP_RESOLUTION_SNAP
+        self._crop_snap_options = editor_options.load_crop_resolution_snap_options(editor_options.CROP_RESOLUTION_SNAP)
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
 
     def set_crop_pixel_context(self, context: CropPixelContext | None):
@@ -82,8 +82,15 @@ class CropResolutionOverlayMixin:
                                    draw_rect.width() / draw_rect.height(), ratio_override=override)
         return self._update_crop_resolution_guide(box, draw_rect, dragging=True)
 
-    def _set_crop_shift(self, pressed):
+    def _sync_crop_shift(self, pressed):
+        if pressed and not self._crop_shift_down:
+            self._crop_snap_options = editor_options.load_crop_resolution_snap_options(self._crop_snap_options)
+            self._crop_resolution_guide = None
+            self._crop_resolution_snapped = False
         self._crop_shift_down = pressed
+
+    def _set_crop_shift(self, pressed):
+        self._sync_crop_shift(pressed)
         if not pressed:
             self._crop_resolution_guide = None
             self._crop_resolution_snapped = False

@@ -1,3 +1,5 @@
+import json
+
 import pytest
 from PIL import Image
 from PyQt6.QtCore import QEvent, QPointF, Qt
@@ -60,6 +62,80 @@ def test_config_defaults_and_validation(monkeypatch):
     options = normalize_snap_options({"tiers": [None, {}, {"label": "bad", "short_edge": -1}],
                                       "enter_distance": float("nan"), "leave_distance": "x"})
     assert options == normalize_snap_options(None)
+
+
+@pytest.fixture
+def snap_config_file(tmp_path, monkeypatch):
+    from birdstamp.gui import editor_options
+    path = tmp_path / "editor_options.json"
+    monkeypatch.setattr(editor_options, "resolve_bundled_path", lambda *parts: path)
+    return path
+
+
+def _write_snap_config(path, tiers):
+    path.write_text(json.dumps({"crop_resolution_snap": {
+        "tiers": [{"label": label, "short_edge": edge} for label, edge in tiers],
+        "enter_distance": 10, "leave_distance": 16,
+    }}, ensure_ascii=False), encoding="utf-8")
+
+
+@pytest.mark.parametrize("tier", [("5K", 2880), ("6K", 3160), ("6K+", 3456), ("8K", 4320)])
+@pytest.mark.parametrize("activation", ["keyboard", "mouse"])
+def test_configured_high_resolution_guides_are_drawn_and_snapped(canvas, snap_config_file, tier, activation):
+    # The canvas already exists: changes must bypass the startup options cache.
+    _write_snap_config(snap_config_file, [tier])
+    start = canvas._crop_effect_box
+    if activation == "keyboard":
+        _key(canvas, True)
+        assert canvas._crop_resolution_guide.label == tier[0]
+    _mouse(canvas, QEvent.Type.MouseButtonPress, _point(canvas, start, "se"), shift=True)
+    target = resolution_targets(canvas._crop_pixel_context, start, "se", 1.5, (tier,))[0]
+    _mouse(canvas, QEvent.Type.MouseMove, _point(canvas, target.box, "se"), shift=True)
+    assert canvas._crop_snap_options["tiers"] == (tier,)
+    assert canvas._crop_resolution_snapped
+    assert canvas._crop_resolution_guide == target
+    assert canvas._crop_pixel_context.crop_size(canvas._crop_effect_box) == target.size
+    labels = []
+    canvas._draw_crop_resolution_label = lambda _p, _r, text, _c, **kw: labels.append(text)
+    canvas.grab()
+    w, h = target.size
+    assert f"{tier[0]} · {w} × {h} px" in labels
+
+
+def test_config_reload_between_gestures_keeps_drag_snapshot_and_last_good_file(canvas, snap_config_file, monkeypatch):
+    from birdstamp.gui import editor_options
+    reads = []
+    reader = editor_options._read_builtin_editor_options_raw
+
+    def counted_read():
+        reads.append(True)
+        return reader()
+
+    monkeypatch.setattr(editor_options, "_read_builtin_editor_options_raw", counted_read)
+    _write_snap_config(snap_config_file, [("first", 1080)])
+    start = canvas._crop_effect_box
+    _mouse(canvas, QEvent.Type.MouseButtonPress, _point(canvas, start, "se"))
+    _mouse(canvas, QEvent.Type.MouseMove, _point(canvas, start, "se"), shift=True)
+    assert len(reads) == 1
+    assert canvas._crop_resolution_guide.label == "first"
+    _write_snap_config(snap_config_file, [("更新档位", 2880)])
+    for _ in range(3):
+        _mouse(canvas, QEvent.Type.MouseMove, _point(canvas, start, "se"), shift=True)
+    assert len(reads) == 1
+    assert canvas._crop_resolution_guide.label == "first"
+    _key(canvas, False)
+    _key(canvas, True)
+    assert len(reads) == 2
+    assert canvas._crop_resolution_guide.label == "更新档位"
+    assert canvas._crop_resolution_guide.size == (4320, 2880)
+    snap_config_file.write_text('{"crop_resolution_snap":', encoding="utf-8")
+    _key(canvas, False)
+    _key(canvas, True)
+    assert canvas._crop_resolution_guide.label == "更新档位"
+    snap_config_file.unlink()
+    _key(canvas, False)
+    _key(canvas, True)
+    assert canvas._crop_resolution_guide.label == "更新档位"
 
 
 @pytest.mark.parametrize("scale", [0.1, 0.25, 1.0, 2.0])

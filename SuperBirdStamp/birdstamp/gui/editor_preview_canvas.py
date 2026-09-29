@@ -827,7 +827,7 @@ class EditorPreviewCanvas(CropResolutionOverlayMixin, FocusCenteredPreviewCanvas
         ):
             self.setFocus(Qt.FocusReason.MouseFocusReason)
             self._clear_crop_resolution()
-            self._crop_shift_down = bool(event.modifiers() & Qt.KeyboardModifier.ShiftModifier)
+            self._sync_crop_shift(bool(event.modifiers() & Qt.KeyboardModifier.ShiftModifier))
             draw_rect = self._display_rect()
             if draw_rect is not None and draw_rect.width() > 0 and draw_rect.height() > 0:
                 pos = event.position()
@@ -865,7 +865,7 @@ class EditorPreviewCanvas(CropResolutionOverlayMixin, FocusCenteredPreviewCanvas
             if draw_rect is not None and draw_rect.width() > 0 and draw_rect.height() > 0:
                 pos = event.position()
                 self._last_pos = QPointF(pos)
-                self._crop_shift_down = bool(event.modifiers() & Qt.KeyboardModifier.ShiftModifier)
+                self._sync_crop_shift(bool(event.modifiers() & Qt.KeyboardModifier.ShiftModifier))
                 if self._dragging_handle == self._CROP_DRAG_CENTER and self._drag_start_pos is not None:
                     dnx = (pos.x() - self._drag_start_pos.x()) / draw_rect.width()
                     dny = (pos.y() - self._drag_start_pos.y()) / draw_rect.height()

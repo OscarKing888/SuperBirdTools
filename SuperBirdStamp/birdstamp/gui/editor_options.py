@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from functools import lru_cache
 from typing import Any
 
@@ -48,12 +49,28 @@ _FALLBACK_SAMPLE_RAW_METADATA: dict[str, Any] = {}
 
 @lru_cache(maxsize=1)
 def _load_builtin_editor_options_raw() -> dict[str, Any]:
+    return _read_builtin_editor_options_raw()
+
+
+def _read_builtin_editor_options_raw() -> dict[str, Any]:
     options_file = resolve_bundled_path("config", "editor_options.json")
     text = options_file.read_text(encoding="utf-8")
     raw = json.loads(text)
     if not isinstance(raw, dict):
         raise ValueError(f"编辑器选项格式错误: {options_file}")
     return raw
+
+
+def load_crop_resolution_snap_options(previous: dict | None = None) -> dict:
+    """Read a fresh snapshot at gesture boundaries, never on each drag frame."""
+    from birdstamp.crop_resolution import normalize_snap_options
+
+    try:
+        raw = _read_builtin_editor_options_raw()
+    except (OSError, ValueError) as exc:
+        logging.getLogger(__name__).warning("Cannot reload crop_resolution_snap: %s", exc)
+        return previous if previous is not None else normalize_snap_options(None)
+    return normalize_snap_options(raw.get("crop_resolution_snap"))
 
 
 def _normalize_style_options(value: Any) -> tuple[str, ...]:
