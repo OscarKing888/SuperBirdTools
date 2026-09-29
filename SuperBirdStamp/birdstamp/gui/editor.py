@@ -2886,7 +2886,7 @@ class BirdStampEditorWindow(
                 EDIT_MODE_CROP_ADJUST,
                 "crop",
                 "调整裁剪框",
-                "调整裁剪框：拖动 9 宫格手柄调整裁剪范围，比例由「裁切比例」锁定。",
+                "调整裁剪框：拖动手柄调整范围并显示原图像素尺寸；按住 Shift，靠近虚线框时吸附至 480p–4K 档位，保持比例。",
             ),
         )
 

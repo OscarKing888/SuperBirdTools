@@ -770,7 +770,7 @@ class TemplateManagerDialog(QDialog):
         preview_toolbar.addWidget(self.show_crop_effect_check)
 
         self.crop_edit_mode_check = QCheckBox("调整裁剪框")
-        self.crop_edit_mode_check.setToolTip("在预览上拖动 9 宫格手柄调整裁剪范围；比例由「裁切比例」锁定（选「自由」时不锁定）")
+        self.crop_edit_mode_check.setToolTip("拖动手柄调整裁剪范围并显示像素尺寸；按住 Shift，靠近虚线框时保持比例吸附至 480p–4K 档位。")
         self.crop_edit_mode_check.toggled.connect(self._on_preview_overlay_toggled)
         preview_toolbar.addWidget(self.crop_edit_mode_check)
 
@@ -1859,8 +1859,20 @@ class TemplateManagerDialog(QDialog):
         )
 
     def _apply_preview_overlay_options(self) -> None:
+        from birdstamp.crop_resolution import CropPixelContext
+
         self.preview_label.apply_overlay_options(self._build_preview_overlay_options())
         canvas = self.preview_label.canvas
+        source = self._preview_source_image or self.placeholder
+        display_size = getattr(self, "_preview_display_size", None) or source.size
+        r = _parse_ratio_value(self.template_ratio_combo.currentData())
+        ratio = float(r) if isinstance(r, (int, float)) and not isinstance(r, bool) else None
+        if r is None:
+            ratio = source.width / source.height
+        canvas.set_crop_pixel_context(None if _is_ratio_no_crop(r) else CropPixelContext(
+            source.size, display_size, getattr(self, "_preview_outer_pad", (0, 0, 0, 0)),
+            ratio, str(self._preview_source_path),
+        ))
         if hasattr(canvas, "set_crop_edit_mode"):
             canvas.set_crop_edit_mode(
                 self.crop_edit_mode_check.isChecked()

@@ -31,6 +31,7 @@ from birdstamp.gui.edit_modes import (
 )
 from birdstamp.gui.editor_utils import DEFAULT_CROP_EFFECT_ALPHA as _DEFAULT_CROP_EFFECT_ALPHA
 from birdstamp.perf import DragProbe
+from .crop_resolution_overlay import CropResolutionOverlayMixin
 
 NormalizedBox = tuple[float, float, float, float]
 
@@ -70,7 +71,7 @@ class EditorPreviewOverlayOptions(PreviewOverlayOptions):
     show_reference_regions: bool = False
 
 
-class EditorPreviewCanvas(FocusCenteredPreviewCanvas):
+class EditorPreviewCanvas(CropResolutionOverlayMixin, FocusCenteredPreviewCanvas):
     """PreviewCanvas specialised for the BirdStamp photo editor.
 
     Adds bird-detection-box and crop-effect-shade overlays on top of the
@@ -120,6 +121,7 @@ class EditorPreviewCanvas(FocusCenteredPreviewCanvas):
         self._edit_modes.register(CropAdjustEditMode())
         self._drag_probe = DragProbe()
         self.setMouseTracking(True)
+        self._init_crop_resolution()
 
     def fit_to_window(self) -> None:
         """显式适应窗口只重置视野；启用焦点锁定时也可重置缩放，不重新渲染。"""
@@ -146,6 +148,7 @@ class EditorPreviewCanvas(FocusCenteredPreviewCanvas):
         self._emit_display_scale_percent_changed()
 
     def set_source_pixmap(self, pixmap, **kwargs):
+        self._finish_crop_resolution_drag(commit=False)
         super().set_source_pixmap(pixmap, **kwargs)
         self.viewport_content_changed.emit()
 
@@ -167,6 +170,7 @@ class EditorPreviewCanvas(FocusCenteredPreviewCanvas):
     def paintEvent(self, event) -> None:  # type: ignore[override]
         start = perf_counter()
         super().paintEvent(event)
+        self._paint_crop_resolution_ui()
         self._drag_probe.add_paint(elapsed_ms(start))
 
     # ------------------------------------------------------------------
@@ -176,7 +180,10 @@ class EditorPreviewCanvas(FocusCenteredPreviewCanvas):
     def set_crop_edit_mode(self, enabled: bool) -> None:
         if self._crop_edit_mode == enabled:
             return
+        self._finish_crop_resolution_drag(commit=False)
         self._crop_edit_mode = enabled
+        if enabled:
+            self.setFocus(Qt.FocusReason.OtherFocusReason)
         if enabled and self._crop_effect_box is None:
             self._crop_effect_box = (0.0, 0.0, 1.0, 1.0)
         self._dragging_handle = None
@@ -360,6 +367,7 @@ class EditorPreviewCanvas(FocusCenteredPreviewCanvas):
         return changed
 
     def _on_source_cleared(self) -> None:
+        self.set_crop_pixel_context(None)
         self._reference_edit_source = None
         mode = self._edit_modes.active_mode()
         if isinstance(mode, ReferenceRegionEditMode):
@@ -713,9 +721,11 @@ class EditorPreviewCanvas(FocusCenteredPreviewCanvas):
         new_nx: float,
         new_ny: float,
         image_aspect: float,
+        *,
+        ratio_override: float | None = None,
     ) -> NormalizedBox:
         l, t, r, b = start_box[0], start_box[1], start_box[2], start_box[3]
-        if self._ratio_free:
+        if self._ratio_free and ratio_override is None:
             if handle in ("nw", "n", "ne"):
                 t = new_ny
             if handle in ("ne", "e", "se"):
@@ -726,7 +736,7 @@ class EditorPreviewCanvas(FocusCenteredPreviewCanvas):
                 l = new_nx
             return self._clamp_box(l, t, r, b)
         # Target ratio R is for crop in pixels: (r-l)*W / ((b-t)*H) = R => (r-l)/(b-t) = R/image_aspect.
-        target_pixel_ratio = self._crop_ratio if self._crop_ratio is not None and self._crop_ratio > 0 else image_aspect
+        target_pixel_ratio = ratio_override or (self._crop_ratio if self._crop_ratio is not None and self._crop_ratio > 0 else image_aspect)
         ratio_norm = target_pixel_ratio / image_aspect if image_aspect > 0 else target_pixel_ratio
         # Corner handles: fix the opposite corner and constrain to ratio.
         if handle == "nw":
@@ -815,6 +825,9 @@ class EditorPreviewCanvas(FocusCenteredPreviewCanvas):
             and self._crop_edit_mode
             and self._crop_effect_box is not None
         ):
+            self.setFocus(Qt.FocusReason.MouseFocusReason)
+            self._clear_crop_resolution()
+            self._crop_shift_down = bool(event.modifiers() & Qt.KeyboardModifier.ShiftModifier)
             draw_rect = self._display_rect()
             if draw_rect is not None and draw_rect.width() > 0 and draw_rect.height() > 0:
                 pos = event.position()
@@ -825,6 +838,7 @@ class EditorPreviewCanvas(FocusCenteredPreviewCanvas):
                     self._last_pos = QPointF(pos)
                     self.crop_drag_started.emit()
                     self._drag_probe.begin("crop_adjust")
+                    self._set_crop_shift(self._crop_shift_down)
                     event.accept()
                     return
                 if self._is_inside_crop_box(draw_rect, self._crop_effect_box, pos.x(), pos.y()):
@@ -850,20 +864,16 @@ class EditorPreviewCanvas(FocusCenteredPreviewCanvas):
             draw_rect = self._display_rect()
             if draw_rect is not None and draw_rect.width() > 0 and draw_rect.height() > 0:
                 pos = event.position()
+                self._last_pos = QPointF(pos)
+                self._crop_shift_down = bool(event.modifiers() & Qt.KeyboardModifier.ShiftModifier)
                 if self._dragging_handle == self._CROP_DRAG_CENTER and self._drag_start_pos is not None:
                     dnx = (pos.x() - self._drag_start_pos.x()) / draw_rect.width()
                     dny = (pos.y() - self._drag_start_pos.y()) / draw_rect.height()
                     new_box = self._box_after_pan(self._drag_start_box, dnx, dny)
+                    self._crop_resolution_guide = None
+                    self._crop_resolution_snapped = False
                 else:
-                    nx, ny = self._widget_to_norm(draw_rect, pos.x(), pos.y())
-                    image_aspect = draw_rect.width() / float(draw_rect.height())
-                    new_box = self._box_after_drag(
-                        self._drag_start_box,
-                        self._dragging_handle,
-                        nx,
-                        ny,
-                        image_aspect,
-                    )
+                    new_box = self._crop_resize_box(draw_rect, pos)
                 self._set_crop_effect_box_no_update(new_box)
                 self.crop_box_changed.emit(new_box)
                 self.update()
@@ -880,14 +890,7 @@ class EditorPreviewCanvas(FocusCenteredPreviewCanvas):
             self._drag_probe.end()
             return
         if event.button() == Qt.MouseButton.LeftButton and self._dragging_handle is not None:
-            self.crop_drag_finished.emit()
-            if self._crop_effect_box is not None:
-                self.crop_box_changed.emit(self._crop_effect_box)
-            self._dragging_handle = None
-            self._drag_start_box = None
-            self._drag_start_pos = None
-            self._last_pos = None
-            self._drag_probe.end()
+            self._finish_crop_resolution_drag()
             event.accept()
             return
         super().mouseReleaseEvent(event)

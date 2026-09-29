@@ -22,6 +22,7 @@ from app_common.preview_canvas import (
 from birdstamp.decoders.image_decoder import decode_image, decode_image_for_preview, read_decoded_image_size
 from birdstamp.render.text_scale import normalize_text_scale
 from birdstamp import perf as birdstamp_perf
+from birdstamp.crop_resolution import CropPixelContext
 from birdstamp.gui import editor_core, editor_options, editor_template, editor_utils, template_context as _template_context
 from birdstamp.gui.edit_modes import EDIT_MODE_CROP_ADJUST, EDIT_MODE_NONE, EDIT_MODE_REFERENCE_REGION
 from birdstamp.gui.editor_preview_canvas import EditorPreviewOverlayOptions, EditorPreviewOverlayState
@@ -163,9 +164,25 @@ class _BirdStampRendererMixin:
         if hasattr(self, "ab_preview"):
             self.ab_preview.sync()
         if self._show_dejitter_edit_preview(preserve_view=True) or self._show_sequence_preview_result(preserve_view=True):
+            self.preview_label.canvas.set_crop_pixel_context(None)
             return
         self.preview_label.apply_overlay_options(self._build_preview_overlay_options())
         canvas = self.preview_label.canvas
+        if hasattr(canvas, "set_crop_pixel_context"):
+            source_size = getattr(self, "current_source_full_size", None)
+            image = self.current_source_image
+            selected_ratio = self._selected_ratio()
+            ratio = (float(selected_ratio) if isinstance(selected_ratio, (int, float))
+                     and not isinstance(selected_ratio, bool) else None)
+            if source_size and image is not None and not _is_ratio_no_crop(selected_ratio):
+                if selected_ratio is None:
+                    ratio = source_size[0] / source_size[1]
+                canvas.set_crop_pixel_context(CropPixelContext(
+                    tuple(source_size), image.size, self._current_preview_outer_pad(), ratio,
+                    str(self.current_path or ""),
+                ))
+            else:
+                canvas.set_crop_pixel_context(None)
         if hasattr(canvas, "set_crop_ratio_constraint"):
             r = self._selected_ratio()
             ratio_constraint = float(r) if isinstance(r, (int, float)) and not isinstance(r, bool) else None
@@ -869,6 +886,7 @@ class _BirdStampRendererMixin:
         if hasattr(self, "sequence_transport") and not self.sequence_transport.selecting:
             self.sequence_transport.sync()
         if self._show_dejitter_edit_preview(reset_view=reset_view, preserve_view=preserve_view) or self._show_sequence_preview_result(reset_view=reset_view, preserve_view=preserve_view):
+            self.preview_label.canvas.set_crop_pixel_context(None)
             return
         display_pixmap: QPixmap | None = self.preview_pixmap
         source_mode = "原图"

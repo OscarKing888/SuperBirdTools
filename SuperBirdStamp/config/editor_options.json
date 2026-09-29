@@ -1,4 +1,15 @@
 {
+  "crop_resolution_snap": {
+    "tiers": [
+      {"label": "480p", "short_edge": 480},
+      {"label": "720p", "short_edge": 720},
+      {"label": "1080p", "short_edge": 1080},
+      {"label": "1440p", "short_edge": 1440},
+      {"label": "4K", "short_edge": 2160}
+    ],
+    "enter_distance": 10,
+    "leave_distance": 16
+  },
   "dejitter_pad_to_union": false,
   "dejitter_export_new_workspace": false,
   "dejitter_show_intersection": true,

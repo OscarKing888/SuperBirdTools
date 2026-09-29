@@ -271,10 +271,17 @@ class CropCanvasTests(unittest.TestCase):
                 settings = dict(ratio=1.5, center_mode="custom", crop_box=[-0.2, 0.1, 0.8, 0.9],
                                 draw_banner=False, draw_text=False, max_long_edge=0)
                 window._render_settings_for_path = Mock(return_value=settings)
+                # Keep the UI ratio consistent with this test's synthetic render settings.
+                window._selected_ratio = Mock(side_effect=lambda: settings["ratio"])
                 window.render_preview()
                 self.assertEqual(window._preview_outer_pad, (0, 0, 60, 0))
                 self.assertEqual(window.last_rendered.size, (360, 200))
                 self.assertEqual(window._preview_crop_size, (1200, 640))
+                pixel_context = window.preview_label.canvas._crop_pixel_context
+                self.assertEqual(pixel_context.source_size, (1200, 800))
+                self.assertEqual(pixel_context.preview_size, (300, 200))
+                self.assertEqual(pixel_context.outer_pad, (0, 0, 60, 0))
+                self.assertEqual(pixel_context.crop_size(window.preview_overlay_state.crop_effect_box), (1200, 640))
                 self.assertEqual(window.last_rendered.getpixel((10, 100)), (255, 255, 255))
                 self.assertEqual(window.last_rendered.getpixel((100, 100)), (255, 0, 0))
                 grid_index = window.preview_grid_combo.findData("thirds")
@@ -324,6 +331,9 @@ class CropCanvasTests(unittest.TestCase):
             try:
                 dialog._on_template_selected(dialog.template_list.findItems("default", Qt.MatchFlag.MatchExactly)[0], None)
                 self.assertEqual(dialog._preview_crop_size, (200, 128))
+                pixel_context = dialog.preview_label.canvas._crop_pixel_context
+                self.assertEqual(pixel_context.source_size, (1000, 800))
+                self.assertEqual(pixel_context.crop_size(dialog.preview_overlay_state.crop_effect_box), (1000, 640))
                 grid_index = dialog.preview_grid_combo.findData("thirds")
                 self.assertGreaterEqual(grid_index, 0)
                 dialog.preview_grid_combo.setCurrentIndex(grid_index)

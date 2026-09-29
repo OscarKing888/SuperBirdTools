@@ -253,6 +253,7 @@ def _normalize_text_scale_slider(value: Any) -> dict[str, int]:
 
 
 def load_editor_options() -> dict[str, Any]:
+    from birdstamp.crop_resolution import normalize_snap_options
     try:
         raw = _load_builtin_editor_options_raw()
     except Exception:
@@ -352,6 +353,7 @@ def load_editor_options() -> dict[str, Any]:
         default_video_height = _FALLBACK_DEFAULT_VIDEO_HEIGHT
 
     return {
+        "crop_resolution_snap": normalize_snap_options(raw.get("crop_resolution_snap")),
         "dejitter_reference_strength": max(0, min(100, _dejitter_strength(raw.get("dejitter_reference_strength")))),
         "text_scale_slider": _normalize_text_scale_slider(raw.get("text_scale_slider")),
         "style_options": style_options,
@@ -426,6 +428,7 @@ RATIO_OPTIONS: list[tuple[str, float | None | str]] = _EDITOR_OPTIONS["ratio_opt
 MAX_LONG_EDGE_OPTIONS: list[int] = _EDITOR_OPTIONS["max_long_edge_options"]
 OUTPUT_FORMAT_OPTIONS: list[tuple[str, str]] = _EDITOR_OPTIONS["output_format_options"]
 GIF_SCALE_OPTIONS: list[tuple[str, float]] = _EDITOR_OPTIONS["gif_scale_options"]
+CROP_RESOLUTION_SNAP: dict = _EDITOR_OPTIONS["crop_resolution_snap"]
 DEFAULT_GIF_FPS: float = _EDITOR_OPTIONS["default_gif_fps"]
 DEFAULT_GIF_LOOP: int = _EDITOR_OPTIONS["default_gif_loop"]
 DEFAULT_GIF_WECHAT_STICKER: bool = _EDITOR_OPTIONS["default_gif_wechat_sticker"]
