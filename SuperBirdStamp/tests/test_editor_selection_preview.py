@@ -561,3 +561,20 @@ def test_shutdown_releases_preview_deferred_by_crop_drag(tmp_path):
     finally:
         window._crop_drag_active = False
         _cleanup_window(_APP, window)
+
+
+def test_hot_receive_imports_while_result_preview_is_open(tmp_path):
+    path = tmp_path / "received.png"
+    Image.new("RGB", (16, 12), "green").save(path)
+    app = _app()
+    window = _make_window()
+    completed = []
+    try:
+        window.export_tabs.setCurrentWidget(window.dejitter_page)
+        window.dejitter_view_tabs.setCurrentIndex(1)
+        window.add_received_file_paths([path], on_complete=lambda: completed.append(True))
+        assert _wait_until(app, lambda: bool(completed), timeout=5)
+        assert window.photo_list.topLevelItemCount() == 1
+        assert window.current_path == path.resolve(strict=False)
+    finally:
+        _cleanup_window(app, window)
