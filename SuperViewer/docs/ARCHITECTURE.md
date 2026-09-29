@@ -12,7 +12,7 @@
 | 目录与列表 | [`_directory_browser.py`](../../app_common/file_browser/_directory_browser.py)、[`_panel.py`](../../app_common/file_browser/_panel.py) | 目录选择、报告范围、实际路径解析、过滤、选择、导航、剪贴板与缓存 |
 | Viewer 列表扩展 | [`tagged_file_list.py`](../superviewer/tagged_file_list.py)：`SuperViewerTaggedFileListPanel` | 标签库、标签过滤/历史、异步标签缓存、Viewer 快切开关、只读缓存 provider |
 | 数据模型与后台任务 | [`_models.py`](../../app_common/file_browser/_models.py)、[`_workers.py`](../../app_common/file_browser/_workers.py)、[`_thumbnail.py`](../../app_common/file_browser/_thumbnail.py) | 列表/缩略图模型，扫描、元数据、路径查找和缩略图任务 |
-| 预览 | [`preview_panel.py`](../superviewer/preview_panel.py)：`PreviewPanel`；[`canvas.py`](../../app_common/preview_canvas/canvas.py)：`PreviewCanvas` | 前者决定加载策略和线程交接；后者负责缩放、平移、构图线、焦点叠加和输出 |
+| 预览 | [`preview_panel.py`](../superviewer/preview_panel.py)：`PreviewPanel`；[`viewer_ab_preview.py`](../superviewer/viewer_ab_preview.py)：`ViewerABPreview`；[`canvas.py`](../../app_common/preview_canvas/canvas.py)：`PreviewCanvas` | 面板决定加载策略和线程交接；A/B 控制激活侧、工具行及视野联动；画布负责缩放、平移、构图线、焦点叠加和输出 |
 | 焦点 | [`focus_box_loader.py`](../superviewer/focus_box_loader.py)、[`focus_preview_loader.py`](../superviewer/focus_preview_loader.py) | 来源选择、不同格式的元数据提取、方向变换、报告保底 |
 | 右侧信息页 | [`image_info_tab_widget.py`](../superviewer/image_info_tab_widget.py) 及各 `image_info_tab_*` | 活动页按需刷新；信息编辑、标签管理、异步 EXIF 表 |
 | 标签模型/命令 | [`photo_tags.py`](../superviewer/photo_tags.py)、[`photo_tag_commands.py`](../superviewer/photo_tag_commands.py) | 配置树、XMP subject 读写、逐照片逆操作 |
@@ -56,6 +56,12 @@ flowchart TD
 RAW 焦点读取（[`raw_focus_metadata.py`](../../app_common/raw_focus_metadata.py)）与文件拍摄信息快速读取（[`fast_reader.py`](../../app_common/exif_io/fast_reader.py)）共用 [`tiff_reader.read_tiff_exif_tags()`](../../app_common/exif_io/tiff_reader.py)。它保留 ExifRead 的标签/MakerNote 解码，只将 TIFF 无符号字节字段改为整块读取，避免大型 MakerNote 的逐字节 Python 循环拖住整个目录；每次调用独占文件句柄和解析器，不修改依赖的全局状态。不支持的容器或不兼容的 ExifRead 内部 API 回退原入口，过大或截断的字节块终止读取。回归见 [TIFF 读取测试](../../app_common/tests/test_tiff_reader.py)，覆盖标签等价、大小端、并发和损坏长度。
 
 ## 3. 预览与连续快切
+
+### A/B 对照
+
+预览区的「A/B 对照」默认关闭。开启时 A、B 从当前文件开始，B 默认激活；点击任一侧画布或工具行会激活该侧，文件列表的新选择及方向键快切只更新激活侧。列表高亮与右侧图片信息、EXIF、视频信息及编辑目标跟随激活侧，切换侧本身不重新解码另一侧。两侧仅显示原图或原视频，没有 BirdStamp 的原图／成片模式按钮。视频各侧独立播放、定位和发声；长按浏览只停止激活侧的播放。
+
+每侧都有文件名、自动焦点居中、适应窗口和缩放控件。公共构图线和对焦点显示作用于两侧；「同步缩放／移动」开启时以当前两侧视野为基准联动后续变化，并关闭两侧焦点居中。焦点与完整预览后台结果按请求代次、视口和源路径校验；关闭窗口等待两侧解码和视频探测完成。开启对照时文件列表最小宽度临时降为 260px 并自动收窄，主分隔条仍可拖动；关闭后恢复原 520px 下限及开启前宽度。
 
 ### 正常选择
 
