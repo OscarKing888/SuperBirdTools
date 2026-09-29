@@ -141,10 +141,13 @@ SuperBirdStamp\\build_win.bat
 
 ## GitHub Actions 自动构建
 
-`.github/workflows/build-release.yml` 提供两种入口：
+`.github/workflows/build-release.yml` 每次都同时构建 SuperViewer 与 SuperBirdStamp 的 Windows x86_64 和 macOS arm64 包，入口如下：
 
-- 在 GitHub Actions 页面手动运行时，输入 SemVer 版本号（例如 `0.2.0`），构建结果保留为 14 天的 Actions artifacts。
-- 推送 `v*` tag（例如 `v0.2.0`）时，自动构建 Windows x86_64 和 macOS arm64 合集，生成 `SHA256SUMS.txt`，并创建对应 GitHub Release。
+- push 到 `main` 或向 `main` 提交 Pull Request 时自动构建（只改 Markdown、`docs/`、`ai_rules/`、`.cursor/` 时跳过），版本号为 `<当前 __version__>-ci.<run 编号>`，结果保留为 14 天的 Actions artifacts。同一分支/PR 的新提交会取消旧的构建。
+- 在 GitHub Actions 页面手动运行时，可输入 SemVer 版本号（例如 `0.2.0`），留空则同上自动生成 CI 版本号；结果同样保留为 Actions artifacts。
+- 推送 `v*` tag（例如 `v0.2.0`）时，额外生成 `SHA256SUMS.txt` 并创建对应 GitHub Release。
+
+checkout 会拉取 Git LFS 对象（图标、图片等），若仍有 LFS 指针文件未被替换，构建会直接失败。
 
 ```bash
 git tag v0.2.0

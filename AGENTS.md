@@ -83,7 +83,7 @@ Follow [ai_rules/AI_CODING_RULES.md](ai_rules/AI_CODING_RULES.md) as the cross-t
 - GitHub release builds must continue to invoke `build_all.bat --clean`; local incremental caching must not weaken clean release builds.
 - Keep the two app Analysis/PYZ targets in separate merged-spec workpaths; sharing one `base_library.zip` makes each app invalidate the other's Analysis cache on every run.
 - In `build_all_win_merged.spec`, collect Torch/Ultralytics before starting Viewer/Qt analysis as defense in depth. `build_all.bat` must also prepend the build-only `build_tools/pyinstaller_bootstrap` path so every PyInstaller isolated worker preloads the system MSVC runtime before PyQt/Torch imports.
-- `.github/workflows/build-release.yml` is the release build source of truth: manual runs upload Actions artifacts, while valid `v*` tags also publish a GitHub Release.
+- `.github/workflows/build-release.yml` is the CI and release build source of truth: pushes to `main`, pull requests into `main` and manual runs upload Actions artifacts (unversioned runs use `<__version__>-ci.<run number>`), while valid `v*` tags also publish a GitHub Release. Build-job checkouts must keep `lfs: true` because app icons/images are Git LFS objects.
 - CI release builds use `build_tools/set_build_version.py` to synchronize the two app versions and BirdStamp's macOS bundle version without committing generated changes.
 - Release staging must omit `SuperBirdStamp/config/editor_autosave.birdstamp-workspace.json` and `SuperBirdStamp/config/editor_export_state.json`; these files may contain user-specific paths and are runtime state, not distributable defaults.
 - Existing Release assets are not overwritten automatically. Replace them only through an explicit manual maintenance step.

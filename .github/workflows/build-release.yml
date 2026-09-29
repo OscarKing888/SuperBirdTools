@@ -4,19 +4,36 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: "SemVer build version, for example 0.2.0 or 0.2.0-rc.1"
-        required: true
+        description: "SemVer build version, for example 0.2.0 or 0.2.0-rc.1 (empty = <current>-ci.<run>)"
+        required: false
+        default: ""
         type: string
   push:
+    branches:
+      - main
     tags:
       - "v*"
+    paths-ignore:
+      - "**/*.md"
+      - "**/docs/**"
+      - "ai_rules/**"
+      - ".cursor/**"
+  pull_request:
+    branches:
+      - main
+    paths-ignore:
+      - "**/*.md"
+      - "**/docs/**"
+      - "ai_rules/**"
+      - ".cursor/**"
 
 permissions:
   contents: read
 
 concurrency:
-  group: build-release-${{ github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'workflow_dispatch' }}
+  group: build-release-${{ github.event.pull_request.number || github.ref }}
+  # Tag builds publish Releases and must never be cancelled mid-flight.
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
 
 jobs:
   prepare:
@@ -35,6 +52,13 @@ jobs:
         env:
           RAW_VERSION: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || inputs.version }}
         run: |
+          if [[ -z "$RAW_VERSION" ]]; then
+            # Branch / PR / unversioned manual builds: <current package version>-ci.<run number>
+            base="$(sed -nE 's/^__version__[[:space:]]*=[[:space:]]*["'\'']([^"'\'']+)["'\''].*/\1/p' \
+              SuperViewer/superviewer/__init__.py)"
+            base="${base%%[-+]*}"
+            RAW_VERSION="${base}-ci.${GITHUB_RUN_NUMBER}"
+          fi
           version="$(python3 build_tools/set_build_version.py "$RAW_VERSION" --check-only)"
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "Building SuperBirdTools v$version"
@@ -52,6 +76,21 @@ jobs:
         uses: actions/checkout@v7
         with:
           submodules: recursive
+          # Icons/images are Git LFS objects; without them PyInstaller gets pointer files.
+          lfs: true
+
+      - name: Fetch submodule LFS objects and verify binaries
+        shell: bash
+        run: |
+          git submodule foreach --recursive 'git lfs pull'
+          pointers="$(git lfs ls-files --name-only | while read -r f; do
+            if head -c 64 "$f" | grep -q '^version https://git-lfs'; then echo "$f"; fi
+          done)"
+          if [[ -n "$pointers" ]]; then
+            echo "::error::Git LFS pointer files were not materialized:"
+            echo "$pointers"
+            exit 1
+          fi
 
       - name: Set up Python
         uses: actions/setup-python@v7
@@ -144,6 +183,21 @@ jobs:
         uses: actions/checkout@v7
         with:
           submodules: recursive
+          # Icons/images are Git LFS objects; without them PyInstaller gets pointer files.
+          lfs: true
+
+      - name: Fetch submodule LFS objects and verify binaries
+        shell: bash
+        run: |
+          git submodule foreach --recursive 'git lfs pull'
+          pointers="$(git lfs ls-files --name-only | while read -r f; do
+            if head -c 64 "$f" | grep -q '^version https://git-lfs'; then echo "$f"; fi
+          done)"
+          if [[ -n "$pointers" ]]; then
+            echo "::error::Git LFS pointer files were not materialized:"
+            echo "$pointers"
+            exit 1
+          fi
 
       - name: Set up Python
         uses: actions/setup-python@v7
