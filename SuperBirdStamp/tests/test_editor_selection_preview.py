@@ -109,6 +109,34 @@ def _select_photo(
     assert _wait_until(app, lambda: window.current_path == resolved and window.current_source_image is not None)
 
 
+def test_video_frame_size_updates_both_editor_preview_guides() -> None:
+    app = _app()
+    window = _make_window()
+    try:
+        panel = window.video_export_panel
+        main = window.preview_label.canvas
+        compare = window.ab_preview.preview.canvas
+        assert main._video_safe_frame_size == panel.current_safe_frame_size()
+        assert compare._video_safe_frame_size == panel.current_safe_frame_size()
+
+        for index in range(panel.frame_size_combo.count()):
+            if (panel.frame_size_combo.itemData(index) or {}).get("mode") == "auto":
+                panel.frame_size_combo.setCurrentIndex(index)
+                break
+        assert main._video_safe_frame_size is None
+        assert compare._video_safe_frame_size is None
+
+        for index in range(panel.frame_size_combo.count()):
+            data = panel.frame_size_combo.itemData(index) or {}
+            if data.get("mode") == "preset" and data.get("width") == 3840:
+                panel.frame_size_combo.setCurrentIndex(index)
+                break
+        assert main._video_safe_frame_size == (3840, 2160)
+        assert compare._video_safe_frame_size == (3840, 2160)
+    finally:
+        _cleanup_window(app, window)
+
+
 def test_photo_selection_does_not_block_on_metadata_read(monkeypatch, tmp_path: Path) -> None:
     app = _app()
     image_path = tmp_path / "first.jpg"

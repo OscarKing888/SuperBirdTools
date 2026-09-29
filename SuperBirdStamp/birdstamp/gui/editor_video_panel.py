@@ -5,7 +5,7 @@ from pathlib import Path
 import threading
 from typing import Any, Callable
 
-from PyQt6.QtCore import QThread, pyqtSignal
+from PyQt6.QtCore import QSignalBlocker, QThread, pyqtSignal
 from PyQt6.QtWidgets import (
     QButtonGroup,
     QCheckBox,
@@ -65,10 +65,12 @@ class VideoExportPanel(QGroupBox):
     exportRequested = pyqtSignal(object)
     cancelRequested = pyqtSignal()
     autoFpsRequested = pyqtSignal()
+    frameSizeChanged = pyqtSignal(object)  # (width, height), or None for automatic size
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__("视频导出", parent)
         self._busy = False
+        self._restoring_state = False
         self._build_ui()
 
     def _build_ui(self) -> None:
@@ -169,6 +171,8 @@ class VideoExportPanel(QGroupBox):
         self.frame_height_spin.setSingleStep(2)
         self.frame_height_spin.setValue(DEFAULT_VIDEO_HEIGHT)
         custom_size_layout.addWidget(self.frame_height_spin)
+        self.frame_width_spin.valueChanged.connect(self._emit_frame_size_changed)
+        self.frame_height_spin.valueChanged.connect(self._emit_frame_size_changed)
         custom_size_layout.addStretch(1)
         form.addRow("自定义尺寸", custom_size_widget)
 
@@ -326,8 +330,27 @@ class VideoExportPanel(QGroupBox):
         self.frame_height_spin.setEnabled((not self._busy) and is_custom)
 
         if mode == "preset" and width > 0 and height > 0:
-            self.frame_width_spin.setValue(width)
-            self.frame_height_spin.setValue(height)
+            with QSignalBlocker(self.frame_width_spin), QSignalBlocker(self.frame_height_spin):
+                self.frame_width_spin.setValue(width)
+                self.frame_height_spin.setValue(height)
+        self._emit_frame_size_changed()
+
+    def current_safe_frame_size(self) -> tuple[int, int] | None:
+        data = self.current_frame_size_data()
+        mode = str(data.get("mode") or "auto").strip().lower()
+        if mode == "preset":
+            size = self._resolved_preset_size(data)
+        elif mode == "custom":
+            size = (self.frame_width_spin.value(), self.frame_height_spin.value())
+        else:
+            return None
+        if size[0] <= 0 or size[1] <= 0:
+            return None
+        return (size[0] + size[0] % 2, size[1] + size[1] % 2)
+
+    def _emit_frame_size_changed(self, *_args) -> None:
+        if not self._restoring_state:
+            self.frameSizeChanged.emit(self.current_safe_frame_size())
 
     def current_frame_size_data(self) -> dict[str, int | str]:
         data = self.frame_size_combo.currentData()
@@ -431,6 +454,7 @@ class VideoExportPanel(QGroupBox):
             *self.orientation_buttons.values(),
             *self.preset_buttons.values(),
         ]
+        self._restoring_state = True
         previous_blocks: list[tuple[QWidget, bool]] = []
         for widget in widgets:
             previous_blocks.append((widget, bool(widget.blockSignals(True))))
@@ -508,7 +532,7 @@ class VideoExportPanel(QGroupBox):
         finally:
             for widget, old_block in reversed(previous_blocks):
                 widget.blockSignals(old_block)
-
+            self._restoring_state = False
         self._sync_frame_size_state()
         self._sync_codec_quality_state()
 

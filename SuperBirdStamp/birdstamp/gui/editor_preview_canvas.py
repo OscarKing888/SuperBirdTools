@@ -16,7 +16,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from PyQt6.QtCore import QPointF, QRectF, Qt, pyqtSignal
-from PyQt6.QtGui import QColor, QPainterPath, QPen, QPixmap, QPolygonF
+from PyQt6.QtGui import QColor, QPainter, QPainterPath, QPen, QPixmap, QPolygonF
 from PyQt6.QtWidgets import QWidget
 
 from app_common.preview_canvas import FocusCenteredPreviewCanvas, PreviewOverlayOptions, PreviewOverlayState
@@ -32,6 +32,7 @@ from birdstamp.gui.edit_modes import (
 from birdstamp.gui.editor_utils import DEFAULT_CROP_EFFECT_ALPHA as _DEFAULT_CROP_EFFECT_ALPHA
 from birdstamp.perf import DragProbe
 from .crop_resolution_overlay import CropResolutionOverlayMixin
+from .video_safe_frame import inscribed_safe_frame
 
 NormalizedBox = tuple[float, float, float, float]
 
@@ -106,6 +107,7 @@ class EditorPreviewCanvas(CropResolutionOverlayMixin, FocusCenteredPreviewCanvas
         self._drag_start_box: "NormalizedBox | None" = None
         self._drag_start_pos: "QPointF | None" = None
         self._has_pan: bool = False
+        self._video_safe_frame_size: tuple[int, int] | None = None
         self._reference_regions: tuple["NormalizedBox", ...] = ()
         self._reference_diagnostics: tuple = ()
         self._alignment_crop_box = None
@@ -170,7 +172,54 @@ class EditorPreviewCanvas(CropResolutionOverlayMixin, FocusCenteredPreviewCanvas
         start = perf_counter()
         super().paintEvent(event)
         self._paint_crop_resolution_ui()
+        self._paint_video_safe_frame_ui()
         self._drag_probe.add_paint(elapsed_ms(start))
+
+    def set_video_safe_frame_size(self, size: tuple[int, int] | None) -> None:
+        if size == self._video_safe_frame_size:
+            return
+        self._video_safe_frame_size = size
+        self.update()
+
+    def _video_safe_frame_rect(self, draw_rect: QRectF) -> QRectF | None:
+        if self._video_safe_frame_size is None:
+            return None
+        box = self._crop_effect_box
+        bounds = (
+            QRectF(draw_rect.left() + box[0] * draw_rect.width(),
+                   draw_rect.top() + box[1] * draw_rect.height(),
+                   (box[2] - box[0]) * draw_rect.width(),
+                   (box[3] - box[1]) * draw_rect.height())
+            if box is not None else draw_rect
+        )
+        coordinates = inscribed_safe_frame(
+            (bounds.x(), bounds.y(), bounds.width(), bounds.height()),
+            self._video_safe_frame_size,
+        )
+        return QRectF(*coordinates) if coordinates is not None else None
+
+    def _paint_video_safe_frame_ui(self) -> None:
+        if self._video_safe_frame_size is None:
+            return
+        draw_rect = self._display_rect()
+        if draw_rect is None:
+            return
+        rect = self._video_safe_frame_rect(draw_rect)
+        if rect is None or not rect.intersects(QRectF(self.contentsRect())):
+            return
+        painter = QPainter(self)
+        try:
+            painter.setClipRect(self.contentsRect())
+            color = QColor("#FFBE55")
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.setPen(QPen(color, 2, Qt.PenStyle.DashLine))
+            painter.drawRect(rect)
+            width, height = self._video_safe_frame_size
+            self._draw_crop_resolution_label(
+                painter, rect, f"视频安全框 · {width} × {height}", color, bottom=True,
+            )
+        finally:
+            painter.end()
 
     # ------------------------------------------------------------------
     # Public API – crop edit (9-grid)

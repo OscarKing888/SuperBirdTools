@@ -166,6 +166,8 @@ flowchart LR
 
 ## 5. 图片、GIF、视频导出与缓存
 
+视频导出面板的尺寸、方向和自定义宽高变化通过 `VideoExportPanel.frameSizeChanged` 同步到主预览和 A/B 预览。画布使用 [video_safe_frame.py](../birdstamp/gui/video_safe_frame.py) 将目标宽高比居中内接于当前裁剪范围（无裁剪框时使用原图范围），以橙色虚线显示安全框和目标尺寸；自动尺寸不显示。辅助线仅在 QWidget 绘制，不进入叠加导出或视频帧。实际视频帧仍由 `normalize_frame_size` 等比缩放并补边，安全框只帮助构图，不改变导出裁剪。
+
 ### 图片和批量作业
 
 [editor_exporter.py](../birdstamp/gui/editor_exporter.py) 的 `export_current` / `export_all` 根据终端选择调度图片或 GIF；图片进入 `_export_render_jobs_to_images`。单图和批量导出由 GUI 编排，批量图像任务使用线程池并限制在途任务；GUI 在进度更新处处理事件，因此不能把整个图片/GIF 流程描述成独立的后台 QThread。GIF 编码由 `_run_gif_export_off_gui_thread` 放到单个后台线程执行（Pillow 编码期间释放 GIL），GUI 线程轮询完成并按序应用进度，所有控件更新仍在 GUI 线程；导出期间依旧排除用户输入。GIF 中间缓存帧以 `compress_level=1` 快速写 PNG（无损），用户直接导出的 PNG 仍用 `optimize=True`。

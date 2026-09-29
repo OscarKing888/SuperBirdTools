@@ -1424,6 +1424,7 @@ class BirdStampEditorWindow(
         export_root.addWidget(image_export_group)
 
         self.video_export_panel = VideoExportPanel()
+        self.video_export_panel.frameSizeChanged.connect(self._sync_video_safe_frame)
         self.video_export_panel.exportRequested.connect(self._start_video_export)
         self.video_export_panel.cancelRequested.connect(self._cancel_video_export)
         self.video_export_panel.autoFpsRequested.connect(self._on_video_auto_fps_requested)
@@ -2044,6 +2045,7 @@ class BirdStampEditorWindow(
         self._sync_preview_scale_combo(self.preview_label.current_display_scale_percent())
         from .editor_ab_preview import ABPreview
         self.ab_preview = ABPreview(self, right_layout)
+        self._sync_video_safe_frame(self.video_export_panel.current_safe_frame_size())
         preview_toolbar.insertWidget(
             preview_toolbar.indexOf(self.show_crop_effect_check), self.ab_preview.enabled,
         )
@@ -2788,6 +2790,12 @@ class BirdStampEditorWindow(
     def _on_auto_focus_center_toggled(self, enabled: bool) -> None:
         self.preview_label.canvas.set_auto_focus_center(enabled)
         self._schedule_workspace_autosave()
+
+    def _sync_video_safe_frame(self, size: tuple[int, int] | None) -> None:
+        if hasattr(self, "preview_label"):
+            self.preview_label.canvas.set_video_safe_frame_size(size)
+        if hasattr(self, "ab_preview"):
+            self.ab_preview.preview.canvas.set_video_safe_frame_size(size)
 
     def _on_preview_toolbar_toggled(self, _checked: bool) -> None:
         if self.sender() is self.show_bird_box_check and self.show_bird_box_check.isChecked():
