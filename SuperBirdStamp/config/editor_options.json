@@ -7,6 +7,7 @@
   "preview_ab_linked": false,
   "preview_auto_focus_center": false,
   "dejitter_reference_strength": 100,
+  "dejitter_auto_region_count": 9,
   "dejitter_quick_max_edge": 768,
   "dejitter_quick_cache_mb": 64,
   "dejitter_playback_fps": 8,
