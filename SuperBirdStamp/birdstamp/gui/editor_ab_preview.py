@@ -286,7 +286,8 @@ class ABPreview(QObject):
             worker.failed.connect(self._failed)
         else:
             worker = EditorPreviewDecodeWorker(self.token, path,
-                                               max_long_edge=self.editor._preview_decode_max_long_edge(), parent=self)
+                                               max_long_edge=self.editor._preview_decode_max_long_edge(),
+                                               pool=self.editor._preview_action_pool, parent=self)
             worker.quick_decoded.connect(self._decoded)
             worker.decoded.connect(self._decoded)
             worker.failed.connect(lambda token, _path, message: self._failed(token, message))

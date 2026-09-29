@@ -33,6 +33,12 @@ class SequenceTransport(QObject):
         self._source_cache = OrderedDict()
         self._source_loader = None
         self._source_shutdown = False
+        self._source_entries = ()
+        self._source_signatures = set()
+        self._source_ready = set()
+        self._source_failed = {}
+        self._pending_source_play = False
+        self._waiting_source_path = None
         self._result_frames = {}
         self._play_visual_state = None
         self.timer = QTimer(self)
@@ -62,6 +68,7 @@ class SequenceTransport(QObject):
             button.setToolTip(label)
             button.setAccessibleName(label)
         self.position = QLabel('0 / 0')
+        self.preparation = QLabel('')
         self.fps = QSpinBox()
         self.fps.setRange(1, 30)
         self.fps.setValue(editor_options.DEJITTER_PLAYBACK_FPS)
@@ -74,7 +81,7 @@ class SequenceTransport(QObject):
         self.auto_fps_button.clicked.connect(editor._on_dejitter_auto_fps_requested)
         self.loop = QCheckBox('循环')
         self.loop.setChecked(True)
-        for widget in (self.play, self.previous, self.next, self.position):
+        for widget in (self.play, self.previous, self.next, self.position, self.preparation):
             row.addWidget(widget)
         row.addStretch(1)
         row.addWidget(self.fps)
@@ -109,6 +116,14 @@ class SequenceTransport(QObject):
         # 窗口只监听失活；避免子控件未处理的按键冒泡后误触发 B 图导航（尤其 A 图）。
         for surface in (editor, *self._navigation_surfaces, *self._result_surfaces):
             surface.installEventFilter(self)
+        self._source_scan_timer = QTimer(self)
+        self._source_scan_timer.setSingleShot(True)
+        self._source_scan_timer.timeout.connect(self._scan_source_list)
+        model = editor.photo_list._tree_widget.model()
+        for signal in (model.rowsInserted, model.rowsRemoved, model.modelReset,
+                       model.layoutChanged, model.dataChanged):
+            signal.connect(lambda *args: self._source_scan_timer.start(100))
+        self._source_scan_timer.start(0)
 
     @property
     def active(self):
@@ -152,7 +167,58 @@ class SequenceTransport(QObject):
         self.strip.blockSignals(False)
 
     def _active_paths(self):
-        return self.paths if self.result_mode() else self.editor._list_photo_paths()
+        if self.result_mode():
+            return self.paths
+        paths = self.editor._list_photo_paths()
+        if self.mode == 'source_play':
+            return [path for path in paths if self.editor._source_signature(path) not in self._source_failed]
+        return paths
+
+    def _scan_source_list(self):
+        if self._source_shutdown:
+            return
+        paths = self.editor._list_photo_paths()
+        entries = tuple((self.editor._source_signature(path), path) for path in paths)
+        if entries == self._source_entries:
+            return
+        if self.mode in ('source_play', 'source_keys'):
+            self.stop(commit=False)
+        self._pending_source_play = False
+        self._waiting_source_path = None
+        self._source_entries = entries
+        self._source_signatures = {signature for signature, _ in entries}
+        self._source_ready.clear()
+        self._source_failed.clear()
+        for signature in list(self._source_cache):
+            if signature not in self._source_signatures:
+                image, _ = self._source_cache.pop(signature)
+                image.close()
+        if self._source_loader is None and entries:
+            loader = SourceQuickLoader(self.editor._preview_action_pool, self)
+            loader.ready.connect(self._on_source_ready)
+            loader.failed.connect(self._on_source_failed)
+            self._source_loader = loader
+            loader.reset(entries)
+            loader.start()
+        elif self._source_loader is not None:
+            self._source_loader.reset(entries)
+        self._update_source_preparation()
+
+    def _update_source_preparation(self):
+        total = len(self._source_signatures)
+        done = len(self._source_ready) + len(self._source_failed)
+        skipped = len(self._source_failed)
+        self.preparation.setText(
+            f'预览 {done}/{total}' + (f' · 跳过 {skipped}' if skipped else '') if total else '')
+        if self._pending_source_play and done == total:
+            self._pending_source_play = False
+            playable = sum(signature not in self._source_failed for signature, _ in self._source_entries)
+            if playable < 2:
+                self.editor._set_status(f'可播放照片不足两张；跳过 {skipped} 张读取失败的照片。')
+            else:
+                self.editor._set_status(f'预览准备完成；跳过 {skipped} 张读取失败的照片。')
+                self.start('source_play', 1)
+            self._update_play_button()
 
     def _source_entry(self, path):
         signature = self.editor._source_signature(Path(path))
@@ -169,7 +235,7 @@ class SequenceTransport(QObject):
     def _request_source_frames(self):
         if self._source_shutdown:
             return
-        paths = self.editor._list_photo_paths()
+        paths = self._active_paths()
         if not paths:
             return
         index = self.index()
@@ -177,16 +243,11 @@ class SequenceTransport(QObject):
             index = 0
         near = [paths[(index + offset) % len(paths)] for offset in range(min(8, len(paths)))]
         entries = [(self.editor._source_signature(path), path) for path in near]
-        entries = [(signature, path) for signature, path in entries if signature not in self._source_cache]
+        entries = [(signature, path) for signature, path in entries
+                   if signature not in self._source_cache and signature not in self._source_failed]
         if not entries:
             return
-        if self._source_loader is None:
-            loader = SourceQuickLoader(self)
-            loader.ready.connect(self._on_source_ready)
-            self._source_loader = loader
-            loader.enqueue(entries)
-            loader.start()
-        else:
+        if self._source_loader is not None:
             self._source_loader.enqueue(entries)
 
     def _source_icon(self, image):
@@ -195,9 +256,14 @@ class SequenceTransport(QObject):
                                    Qt.TransformationMode.SmoothTransformation))
 
     def _on_source_ready(self, signature, path_text, image, full_size):
-        if self._source_shutdown or signature != self.editor._source_signature(Path(path_text)):
+        if self._source_loader is not None:
+            self._source_loader.release_ready()
+        if (self._source_shutdown or signature != self.editor._source_signature(Path(path_text))
+                or signature not in self._source_signatures):
             image.close()
             return
+        self._source_ready.add(signature)
+        self._source_failed.pop(signature, None)
         old = self._source_cache.pop(signature, None)
         if old is not None:
             old[0].close()
@@ -225,6 +291,21 @@ class SequenceTransport(QObject):
             elif self.editor.current_source_image is None:
                 self.editor._on_quick_preview_ready(
                     self.editor._preview_decode_token, path_text, image.copy(), tuple(full_size))
+        if (self.mode == 'source_play' and self._waiting_source_path is not None
+                and path_key(self._waiting_source_path) == path_key(Path(path_text))):
+            target = self._waiting_source_path
+            self._waiting_source_path = None
+            paths = self._active_paths()
+            if target in paths:
+                self._select(paths.index(target))
+        self._update_source_preparation()
+
+    def _on_source_failed(self, signature, path_text, message):
+        if (self._source_shutdown or signature != self.editor._source_signature(Path(path_text))
+                or signature not in self._source_signatures):
+            return
+        self._source_failed[signature] = message
+        self._update_source_preparation()
 
     def _rebuild_source_strip(self, paths):
         self._strip_kind = 'source'
@@ -254,6 +335,7 @@ class SequenceTransport(QObject):
 
     def shutdown(self):
         self._source_shutdown = True
+        self._source_scan_timer.stop()
         self.stop(commit=False)
         if self._source_loader is not None:
             self._source_loader.stop()
@@ -362,17 +444,32 @@ class SequenceTransport(QObject):
         self._select(max(0, min(len(paths) - 1, self.index() + direction)))
 
     def toggle(self):
+        if self._pending_source_play:
+            self.stop(commit=False)
+            return
         if self.active:
             self.stop()
             return
+        self._scan_source_list()
         paths = self._active_paths()
         if len(paths) < 2 or (self.result_mode() and not self.editor._validate_sequence_preview()):
             return
         if self.index() == len(paths) - 1:
             self._select(0)
-        self.start('play' if self.result_mode() else 'source_play', 1)
+        if self.result_mode():
+            self.start('play', 1)
+        elif len(self._source_ready) + len(self._source_failed) < len(self._source_signatures):
+            self._pending_source_play = True
+            self._request_source_frames()
+            self._update_play_button()
+        elif sum(signature not in self._source_failed for signature, _ in self._source_entries) < 2:
+            self.editor._set_status('可播放照片不足两张。')
+        else:
+            self.start('source_play', 1)
 
     def start(self, mode, direction):
+        if mode in ('source_play', 'source_keys'):
+            self._scan_source_list()
         self.mode, self.direction = mode, direction
         if mode in ('source_play', 'source_keys'):
             ab = self.editor.ab_preview
@@ -382,6 +479,7 @@ class SequenceTransport(QObject):
                 self.editor._cancel_preview_decode()
             self._request_source_frames()
             self._update_play_button()
+            self.sync()
             self.timer.start()
             return
         self.editor._sequence_upgrade_timer.stop()
@@ -396,11 +494,11 @@ class SequenceTransport(QObject):
     def _update_play_button(self):
         playing = self.mode in ('play', 'source_play')
         ab = self.editor.ab_preview
-        state = (playing, ab.active_side)
+        state = (playing, self._pending_source_play, ab.active_side)
         if state == self._play_visual_state:
             return
         self._play_visual_state = state
-        label = '暂停' if playing else '播放序列'
+        label = '取消预览准备' if self._pending_source_play else '暂停' if playing else '播放序列'
         icon = QStyle.StandardPixmap.SP_MediaPause if playing else QStyle.StandardPixmap.SP_MediaPlay
         self.play.setIcon(self.play.style().standardIcon(icon))
         self.play.setToolTip(label)
@@ -417,6 +515,8 @@ class SequenceTransport(QObject):
         was_active = self.active
         ordinary_keys = self.mode == 'ordinary_keys'
         self.timer.stop()
+        self._pending_source_play = False
+        self._waiting_source_path = None
         self.mode, self.key = None, None
         self._update_play_button()
         if was_active and commit and not self.editor._sequence_shutdown:
@@ -450,6 +550,17 @@ class SequenceTransport(QObject):
                 else:
                     self.stop()
                 return
+        if self.mode == 'source_play':
+            target = paths[index]
+            if self.editor._source_signature(target) not in self._source_signatures:
+                self._scan_source_list()
+                return
+            if (self.editor._source_signature(target) not in self._source_cache
+                    and path_key(target) not in self.editor._sequence_quick_frames):
+                self._waiting_source_path = target
+                self._request_source_frames()
+                return
+            self._waiting_source_path = None
         self._select(index)
         if self.mode in ('source_play', 'source_keys'):
             self._request_source_frames()

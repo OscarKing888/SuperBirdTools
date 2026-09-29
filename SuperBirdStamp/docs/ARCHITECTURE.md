@@ -29,7 +29,7 @@
 | [_BirdStampExporterMixin](../birdstamp/gui/editor_exporter.py) | 图片/GIF 导出的目标分配、作业调度、进度与错误展示。 |
 | [_BirdStampDejitterMixin](../birdstamp/gui/editor_dejitter.py) | 导出组的去抖动标签页、原生编辑/成片 Tab、整组分析签名与快/清晰两级有界成片缓存、共享画布辅助层映射。 |
 | [ABPreview](../birdstamp/gui/editor_ab_preview.py) | 独立 A/B 对照：预览工具栏「显示裁切效果」前的分屏图标开关带悬停提示；点击激活侧接收照片列表选择，原图/成片独立切换及可选视野联动；A 保持单 worker 所有权，B 保留原编辑上下文。 |
-| [SequenceTransport](../birdstamp/gui/editor_sequence_transport.py) | 原图/成片共用播放条、帧率、循环和缩略图条；A/B 每侧按钮激活本侧，播放只切换该侧。原图未分析时由 [SourceQuickLoader](../birdstamp/gui/editor_source_quick_loader.py) 后台准备有界小图，停播后升级清晰帧。普通编辑页方向键首次按下用小图，长按由精确定时器驱动，物理松键提交最终清晰预览。 |
+| [SequenceTransport](../birdstamp/gui/editor_sequence_transport.py) | 原图/成片共用播放条、帧率、循环和缩略图条；A/B 每侧按钮激活本侧，播放只切换该侧。照片列表变化后，[SourceQuickLoader](../birdstamp/gui/editor_source_quick_loader.py) 用共享 action 池准备全列表 512 长边小图，压缩结果写入用户配置目录 `config/cache/source_preview`；内存只保留播放附近的 64 MiB 帧。原图播放等待全列表完成，损坏图跳过并显示数量；意外缓存缺帧时停在当前画面等待补读。停播后升级清晰帧。普通编辑页方向键首次按下用小图，长按由精确定时器驱动，物理松键提交最终清晰预览。 |
 | [_BirdStampReferenceTrackingMixin](../birdstamp/gui/editor_reference_tracking.py) | 多参考区预处理、结果签名与失效、切图跟踪预览及工作线程所有权。 |
 | [_BirdStampWorkspaceMixin](../birdstamp/gui/editor_workspace.py) | 工作区序列化、增量恢复、自动保存、文件菜单最近工作区记录及恢复期间的保存门控。最近列表保存在用户目录的 `editor_export_state.json`，只记录成功加载或手动保存的工作区；自动保存不进入列表。 |
 
@@ -40,7 +40,7 @@
 | 后台工作 | 所有者、接收与结束条件 |
 | --- | --- |
 | [editor.py](../birdstamp/gui/editor.py) 的 `_PhotoInputDiscoveryWorker` | 窗口保存活动和待结束 worker 引用。`finished_discovery` 仅表示业务结果完成；直到真实 `QThread.finished` 才移除待结束引用。停止或等待超时均不能提前释放线程。已退出活动集合的旧结果不再导入列表。 |
-| [EditorPreviewDecodeWorker](../birdstamp/gui/editor_preview_decode_worker.py) | 单个活动 worker + 最新待处理请求，直到真实 `finished` 才交接。先复用 Viewer 的逐文件缩略图缓存（原尺寸已知才显示），再补 2048 长边预览；两种结果都校验 token/路径/关闭状态。 |
+| [EditorPreviewDecodeWorker](../birdstamp/gui/editor_preview_decode_worker.py) | 单个活动 Qt 协调线程 + 最新待处理请求，直到真实 `finished` 才交接；普通编辑和 A/B 原图预览均向编辑器的有界 `BrowserWorkPool` 提交 `EditorPreviewAction`。先复用 Viewer 的逐文件缩略图缓存（原尺寸已知才显示），再补 2048 长边预览；两种结果都校验 token/路径/关闭状态。`SourceQuickAction` 使用同一池准备播放小图。关闭时取消任务并等待池线程真实退出。 |
 | [EditorPhotoListMetadataLoader](../birdstamp/gui/editor_photo_metadata_loader.py) | 分块调用 `extract_many_with_xmp_priority` 读取完整 EXIF/XMP 快照，供列表、模板预览与导出复用；不能用限定标签的浏览器缓存代替完整读取。窗口增量应用列表和当前照片数据；停止使用协作中断。 |
 | [EditorSequencePreviewWorker](../birdstamp/gui/editor_sequence_preview_worker.py) | 使用共享 RenderJobSeed 在后台准备原图跟踪与公共裁切，按需通过独立去抖动管线生成成片；单个 Qt 协调线程拥有有界分析 action 池，切图合并为最新请求，取消后拒绝迟到结果且等待真实 finished。 |
 | [BirdDetectWorker](../birdstamp/gui/bird_detect_worker.py) | 接收独立图像副本，在后台识别并在结束时关闭副本；渲染 mixin 按源图签名接收结果。 |

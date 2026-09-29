@@ -265,7 +265,8 @@ def test_active_a_rapid_selection_and_close_reject_late_decoder(window, monkeypa
         ab.activate('a')
         assert ab.route_photo_selection(paths[1])
         assert ab.worker is old and old.isInterruptionRequested()
-        assert ab.image is None
+        # 全列表预取可能已为新照片准备好快速帧；旧 worker 仍须保持所有权到退出。
+        assert ab.path == paths[1]
         if closing:
             event = QCloseEvent()
             window.closeEvent(event)
@@ -276,7 +277,7 @@ def test_active_a_rapid_selection_and_close_reject_late_decoder(window, monkeypa
     with pytest.raises(ValueError):
         delivered[0].getpixel((0, 0))
     if closing:
-        assert ab.image is None and not ab.pending
+        assert not ab.pending
     else:
         assert ab.path == paths[1] and window.current_path == paths[0]
         assert ab.image.pixelColor(0, 0).getRgb()[:3] == target.getpixel((0, 0))

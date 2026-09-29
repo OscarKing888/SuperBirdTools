@@ -4,6 +4,8 @@ from pathlib import Path
 
 from PIL import Image
 from PyQt6.QtCore import QThread, pyqtSignal
+from app_common.file_browser._work_action import WorkerAction
+from app_common.file_browser._work_policy import WorkKind
 
 from birdstamp.decoders.image_decoder import decode_image_for_preview, read_decoded_image_size
 from birdstamp import perf
@@ -40,8 +42,75 @@ def cached_preview_image(path: Path, max_long_edge: int) -> Image.Image | None:
     return None
 
 
+class EditorPreviewAction(WorkerAction):
+    """读取单张预览；Qt 协调线程与 A/B 视图共用同一动作。"""
+
+    def __init__(self, path, max_long_edge, quick_only, emit_quick, emit_full, *, cancelled):
+        super().__init__(cancelled=cancelled)
+        self.path = Path(path)
+        self.max_long_edge = max_long_edge
+        self.quick_only = quick_only
+        self.emit_quick = emit_quick
+        self.emit_full = emit_full
+
+    def execute(self):
+        image: Image.Image | None = None
+        try:
+            if self.is_cancelled():
+                return
+            with perf.span("preview.cached_thumbnail", path=str(self.path)):
+                try:
+                    image = cached_preview_image(
+                        self.path, min(512, self.max_long_edge) if self.quick_only else self.max_long_edge,
+                    )
+                except Exception:
+                    image = None
+            full_size = None
+            if image is not None:
+                try:
+                    with perf.span("preview.source_size", path=str(self.path)):
+                        full_size = read_decoded_image_size(self.path)
+                except Exception:
+                    pass
+            if self.is_cancelled():
+                return
+            if image is not None:
+                if full_size is not None:
+                    self.emit_quick(image, full_size)
+                    image = None
+                else:
+                    image.close()
+                    image = None
+                if self.quick_only and full_size is not None:
+                    return
+            if self.is_cancelled():
+                return
+            edge = min(512, self.max_long_edge) if self.quick_only else self.max_long_edge
+            with perf.span("preview.quick_decode" if self.quick_only else "preview.decode", path=str(self.path)):
+                image = decode_image_for_preview(self.path, max_long_edge=edge, decoder="auto")
+            if self.is_cancelled():
+                return
+            properties = image.info.get("birdstamp_source_properties") or {}
+            full_size = properties.get("size") or full_size
+            if full_size is None:
+                try:
+                    full_size = read_decoded_image_size(self.path)
+                except Exception:
+                    full_size = image.size
+            if self.is_cancelled():
+                return
+            if self.quick_only:
+                self.emit_quick(image, full_size)
+            else:
+                self.emit_full(image, full_size)
+            image = None
+        finally:
+            if image is not None:
+                image.close()
+
+
 class EditorPreviewDecodeWorker(QThread):
-    """Decode one editor preview without blocking the Qt GUI thread."""
+    """Qt 信号协调器；实际解码由共享池中的 WorkerAction 执行。"""
 
     decoded = pyqtSignal(int, str, object, object)
     quick_decoded = pyqtSignal(int, str, object, object)
@@ -54,6 +123,7 @@ class EditorPreviewDecodeWorker(QThread):
         *,
         max_long_edge: int,
         quick_only: bool = False,
+        pool=None,
         parent=None,
     ) -> None:
         super().__init__(parent)
@@ -61,78 +131,23 @@ class EditorPreviewDecodeWorker(QThread):
         self._path = Path(path).resolve(strict=False)
         self._max_long_edge = max(1, int(max_long_edge))
         self._quick_only = bool(quick_only)
+        self._pool = pool
 
     def run(self) -> None:
-        image: Image.Image | None = None
-        handed_off = False
         try:
-            if self.isInterruptionRequested():
-                return
-            with perf.span("preview.cached_thumbnail", path=str(self._path)):
-                try:
-                    image = cached_preview_image(
-                        self._path, min(512, self._max_long_edge) if self._quick_only else self._max_long_edge,
-                    )
-                except Exception:
-                    image = None  # 缓存损坏或不可读仍继续解码源图。
-            full_size = None
-            if image is not None:
-                try:
-                    with perf.span("preview.source_size", path=str(self._path)):
-                        full_size = read_decoded_image_size(self._path)
-                except Exception:
-                    pass
-            if self.isInterruptionRequested():
-                return
-            # 只有原尺寸已知才显示可编辑预览，避免把缩略图像素当作裁切留边的单位。
-            if image is not None:
-                if full_size is not None:
-                    self.quick_decoded.emit(self._token, str(self._path), image, full_size)
-                else:
-                    image.close()
-                image = None
-                if self._quick_only and full_size is not None:
-                    return
-            if self.isInterruptionRequested():
-                return
-            if self._quick_only:
-                with perf.span("preview.quick_decode", path=str(self._path)):
-                    image = decode_image_for_preview(
-                        self._path, max_long_edge=min(512, self._max_long_edge), decoder="auto",
-                    )
-                if self.isInterruptionRequested():
-                    return
-                properties = image.info.get("birdstamp_source_properties") or {}
-                full_size = properties.get("size") or full_size or image.size
-                self.quick_decoded.emit(self._token, str(self._path), image, full_size)
-                image = None
-                return
-            with perf.span("preview.decode", path=str(self._path)):
-                image = decode_image_for_preview(
-                    self._path, max_long_edge=self._max_long_edge, decoder="auto",
-                )
-            if self.isInterruptionRequested():
-                return
-            properties = image.info.get("birdstamp_source_properties") or {}
-            full_size = properties.get("size") or full_size
-            if full_size is None:
-                try:
-                    full_size = read_decoded_image_size(self._path)
-                except Exception:
-                    full_size = image.size
-            if self.isInterruptionRequested():
-                return
-            self.decoded.emit(self._token, str(self._path), image, full_size or image.size)
-            handed_off = True
+            action = EditorPreviewAction(
+                self._path, self._max_long_edge, self._quick_only,
+                lambda image, size: self.quick_decoded.emit(self._token, str(self._path), image, size),
+                lambda image, size: self.decoded.emit(self._token, str(self._path), image, size),
+                cancelled=self.isInterruptionRequested,
+            )
+            if self._pool is None:
+                action.execute()
+            else:
+                self._pool.submit_action(action, kind=WorkKind.METADATA).result()
         except Exception as exc:
             if not self.isInterruptionRequested():
                 self.failed.emit(self._token, str(self._path), str(exc))
-        finally:
-            if image is not None and not handed_off:
-                try:
-                    image.close()
-                except Exception:
-                    pass
 
 
-__all__ = ["EditorPreviewDecodeWorker"]
+__all__ = ["EditorPreviewAction", "EditorPreviewDecodeWorker"]

@@ -104,7 +104,7 @@ def test_single_original_view_playback_stays_quick_until_pause(window, monkeypat
     transport = window.sequence_transport
     transport.sync()
     window.ab_preview.b_panel.play.click()
-    assert transport.mode == 'source_play'
+    wait_until(lambda: transport.mode == 'source_play')
     transport.timer.stop()
     transport._tick()
     assert window.current_path == paths[1]

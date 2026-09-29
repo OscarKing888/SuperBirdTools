@@ -74,6 +74,7 @@ from app_common.about_dialog import load_about_info, load_about_images, show_abo
 from app_common.app_info_bar import AppInfoBar
 from app_common.exif_io import PhotoMetaDataReportDB, close_exiftool_process
 from app_common.file_utils import is_apple_double_metadata_file
+from app_common.file_browser._work_pool import BrowserWorkPool
 from app_common.log import get_logger
 from app_common.perf_probe import elapsed_ms, perf_counter
 from app_common.superviewer_user_options import (
@@ -682,6 +683,8 @@ class BirdStampEditorWindow(
         self._preview_decode_pending: tuple[int, Path] | None = None
         self._preview_decode_token = 0
         self._preview_decode_shutdown = False
+        self._preview_action_pool = BrowserWorkPool(4, metadata_workers=2)
+        self._preview_action_pool.set_thumbnail_mode(False)
         self._init_reference_tracking()
         self._init_dejitter_preview()
         self.last_rendered: Image.Image | None = None
@@ -2740,6 +2743,7 @@ class BirdStampEditorWindow(
         self._invalidate_sequence_preview(shutdown=True)
         self._cancel_async_bird_detect(shutdown=True)
         self._cancel_preview_decode(shutdown=True)
+        self._preview_action_pool.request_shutdown()
         self._stop_photo_list_metadata_loader(wait=False, reset_progress=True)
         # Cancel blocked metadata reads before waiting for their QThreads.
         # Process teardown stays off the GUI thread even if ExifTool is wedged.
@@ -2761,7 +2765,7 @@ class BirdStampEditorWindow(
         ) or (
             metadata_worker is not None
             and metadata_worker.isRunning()
-        ) or pending_metadata_running or not self._exiftool_shutdown_done.is_set() or not ab_stopped or not source_preview_stopped or not discovery_stopped or self._reference_tracking_worker is not None or self._sequence_worker is not None:
+        ) or pending_metadata_running or not self._exiftool_shutdown_done.is_set() or not ab_stopped or not source_preview_stopped or not self._preview_action_pool.is_finished() or not discovery_stopped or self._reference_tracking_worker is not None or self._sequence_worker is not None:
             self._set_status("正在安全结束后台任务...")
             event.ignore()
             QTimer.singleShot(100, self.close)
@@ -4968,6 +4972,7 @@ class BirdStampEditorWindow(
             path,
             max_long_edge=self._preview_decode_max_long_edge(),
             quick_only=quick_only,
+            pool=self._preview_action_pool,
             parent=self,
         )
         worker.decoded.connect(self._on_preview_decode_ready)
