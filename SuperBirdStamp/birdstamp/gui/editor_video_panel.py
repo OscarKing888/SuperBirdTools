@@ -139,7 +139,17 @@ class VideoExportPanel(QGroupBox):
                 break
         self.frame_size_combo.setCurrentIndex(frame_size_index)
         self.frame_size_combo.currentIndexChanged.connect(self._sync_frame_size_state)
-        form.addRow("尺寸", self.frame_size_combo)
+        frame_size_widget = QWidget()
+        frame_size_layout = QHBoxLayout(frame_size_widget)
+        frame_size_layout.setContentsMargins(0, 0, 0, 0)
+        frame_size_layout.setSpacing(8)
+        frame_size_layout.addWidget(self.frame_size_combo, stretch=1)
+        self.show_safe_frame_check = QCheckBox("显示安全框")
+        self.show_safe_frame_check.setChecked(True)
+        self.show_safe_frame_check.setToolTip("仅在选择视频导出时，在预览中显示目标尺寸的构图安全框。")
+        self.show_safe_frame_check.toggled.connect(self._emit_frame_size_changed)
+        frame_size_layout.addWidget(self.show_safe_frame_check)
+        form.addRow("尺寸", frame_size_widget)
 
         (
             self.orientation_widget,
@@ -428,6 +438,7 @@ class VideoExportPanel(QGroupBox):
             "orientation": self.current_orientation(),
             "custom_width": int(self.frame_width_spin.value()),
             "custom_height": int(self.frame_height_spin.value()),
+            "show_safe_frame": bool(self.show_safe_frame_check.isChecked()),
             "preset": self._radio_group_value(self.preset_buttons, DEFAULT_VIDEO_PRESET),
             "crf": int(self.crf_spin.value()),
             "preserve_temp_files": bool(self.preserve_temp_files_check.isChecked()),
@@ -447,6 +458,7 @@ class VideoExportPanel(QGroupBox):
             self.frame_size_combo,
             self.frame_width_spin,
             self.frame_height_spin,
+            self.show_safe_frame_check,
             self.crf_spin,
             self.preserve_temp_files_check,
             *self.container_buttons.values(),
@@ -516,6 +528,10 @@ class VideoExportPanel(QGroupBox):
             if custom_height > 0:
                 self.frame_height_spin.setValue(custom_height)
 
+            show_safe_frame = state.get("show_safe_frame")
+            if show_safe_frame is not None:
+                self.show_safe_frame_check.setChecked(bool(show_safe_frame))
+
             preset = str(state.get("preset") or "").strip().lower()
             self._set_radio_group_value(self.preset_buttons, preset, fallback_to_first=False)
 
@@ -546,6 +562,7 @@ class VideoExportPanel(QGroupBox):
         self.orientation_widget.setEnabled(not busy and str(self.current_frame_size_data().get("mode") or "") == "preset")
         self.frame_width_spin.setEnabled(not busy and str(self.current_frame_size_data().get("mode") or "") == "custom")
         self.frame_height_spin.setEnabled(not busy and str(self.current_frame_size_data().get("mode") or "") == "custom")
+        self.show_safe_frame_check.setEnabled(not busy)
         self._sync_codec_quality_state()
         self.preserve_temp_files_check.setEnabled(not busy)
         self.export_button.setVisible(not busy)
