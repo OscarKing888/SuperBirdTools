@@ -621,7 +621,7 @@ class MainWindow(QMainWindow):
             self.ab_preview.set_side_path("a", path, display_path=display_path)
             if path:
                 self.preview_a.set_image(path, quick_size=self._file_list.preview_quick_size())
-                self.preview_a.set_focus_box(self.preview_panel.canvas._focus_box)
+                self.preview_a.set_focus_box(self.preview_panel._source_focus_box)
         else:
             self.preview_a.clear_image()
             self.ab_preview.set_side_path("a", "")
@@ -1198,6 +1198,16 @@ class MainWindow(QMainWindow):
             pass
 
     def _on_photo_metadata_cache_updated(self, paths: object) -> None:
+        if not self._shutdown_requested:
+            changed = _norm_paths_for_compare(paths)
+            # 焦点数据可能晚于快速位图到达。按各侧显示身份刷新，不读 EXIF，
+            # 不使用播放中可能已前进到下一张的列表选择身份。
+            for preview in (self.preview_panel, self.preview_a):
+                source = getattr(preview, "_focus_cache_path", "")
+                if source and os.path.normcase(os.path.normpath(source)) in changed:
+                    checked, focus_box = self._get_cached_focus_box_for_preview(source)
+                    if checked:
+                        preview.set_focus_box(focus_box)
         if (
             self._shutdown_requested
             or not self._current_exif_path
@@ -1308,9 +1318,11 @@ class MainWindow(QMainWindow):
         if not allow_async_load or is_video(path):
             self._stop_focus_loader()
             focus_box = None
-            if auto_center and not is_video(path):
+            show_focus = getattr(self, "check_show_focus", None)
+            if (auto_center or bool(show_focus and show_focus.isChecked())) and not is_video(path):
                 # 磁盘缓存帧的 path 是散列 JPEG；选择身份来自列表，不扫描源文件。
                 source_path = self._file_list.get_selected_display_path() or path
+                panel._focus_cache_path = source_path
                 if not is_video(source_path):
                     _checked, focus_box = self._get_cached_focus_box_for_preview(source_path)
             panel.set_focus_box(focus_box)
@@ -1323,6 +1335,7 @@ class MainWindow(QMainWindow):
             self._stop_focus_loader()
             panel.set_focus_box(None)
             return
+        panel._focus_cache_path = path
         focus_source_path = self._resolve_focus_metadata_source_path(path)
         cached_checked, cached_focus_box = self._get_cached_focus_box_for_preview(path, focus_source_path)
         if cached_checked:

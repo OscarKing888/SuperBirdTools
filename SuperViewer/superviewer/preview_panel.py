@@ -6,6 +6,7 @@ from __future__ import annotations
 import time as _time
 import io as _io
 import os
+import json
 import sys
 from contextlib import nullcontext
 from pathlib import Path
@@ -13,6 +14,7 @@ from typing import Callable
 
 from PIL import Image, ImageOps
 
+from app_common.raw_preview_geometry import RAW_FOCUS_CROP_KEY, rawpy_camera_crop_box, map_camera_focus_box
 from app_common import thumb_stream
 from app_common.image_formats import HEIF_EXTENSIONS, PHOTOSHOP_EXTENSIONS, RAW_EXTENSIONS
 from app_common.log import get_logger
@@ -406,8 +408,12 @@ def _load_sensor_raw_qimage(path: str) -> QImage | None:
                   else nullcontext(path))
         with source as raw_source, rawpy.imread(raw_source) as raw:
             pixels = raw.postprocess(use_camera_wb=True, no_auto_bright=False, output_bps=8)
+            crop = rawpy_camera_crop_box(getattr(raw, "sizes", None))
         # LibRaw 已处理传感器方向，不能再次应用源文件的 Orientation。
-        return _qimage_from_pil_image(Image.fromarray(pixels))
+        image = _qimage_from_pil_image(Image.fromarray(pixels))
+        if image is not None and crop is not None:
+            image.setText(RAW_FOCUS_CROP_KEY, json.dumps(crop))
+        return image
     except Exception:
         _log.exception("[preview.raw] full RAW decode failed path=%r", path)
         return None
@@ -522,7 +528,10 @@ class PreviewPanel(QWidget):
         self.setMinimumSize(320, 240)
         self.setAcceptDrops(False)
         self._current_path = None
+        self._focus_cache_path = ""
         self._show_raw = False
+        self._source_focus_box = None
+        self._raw_focus_crop_box = None
         self._last_quick_size = None
         self._preview_request_token = 0
         self._full_preview_loaded = False
@@ -568,8 +577,10 @@ class PreviewPanel(QWidget):
         if path and Path(path).suffix.lower() in RAW_EXTENSIONS:
             load_full = not self._fast_preview_only
             # 模式属于请求身份；强制绕过同路径复用，并让迟到结果失效。
+            focus_box = self._source_focus_box
             self._current_path = None
             self.set_image(path, load_full=load_full, quick_size=self._last_quick_size)
+            self.set_focus_box(focus_box)
         self.source_changed.emit()
 
     def set_image(self, path: str, *, load_full: bool = True, quick_size: int | None = None):
@@ -603,10 +614,12 @@ class PreviewPanel(QWidget):
         self._preview_request_token += 1
         token = self._preview_request_token
         self._current_path = norm_path
+        self._focus_cache_path = norm_path
         self.source_changed.emit()
         self._full_preview_loaded = False
         self._fast_preview_only = not bool(load_full)
         self._cancel_pending_full_preview()
+        self._raw_focus_crop_box = None
         self.set_focus_box(None)
         load_t0 = _time.perf_counter()
         target_size = _quick_preview_target_size(self._canvas, quick_size)
@@ -702,10 +715,12 @@ class PreviewPanel(QWidget):
         started_at = _time.perf_counter()
         self._preview_request_token += 1
         self._current_path = os.path.normpath(path) if path else path
+        self._focus_cache_path = self._current_path
         self.source_changed.emit()
         self._full_preview_loaded = False
         self._fast_preview_only = True
         self._cancel_pending_full_preview()
+        self._raw_focus_crop_box = None
         self.set_focus_box(None)
 
         target_size = _quick_preview_target_size(self._canvas, quick_size)
@@ -757,10 +772,13 @@ class PreviewPanel(QWidget):
     def clear_image(self):
         self._preview_request_token += 1
         self._current_path = None
+        self._focus_cache_path = ""
         self.source_changed.emit()
         self._full_preview_loaded = False
         self._fast_preview_only = False
         self._cancel_pending_full_preview()
+        self._raw_focus_crop_box = None
+        self.set_focus_box(None)
         self._canvas.set_source_pixmap(None)
         self._set_preview_status_text(None, None)
 
@@ -883,6 +901,11 @@ class PreviewPanel(QWidget):
         pix = QPixmap.fromImage(qimg)
         if pix.isNull():
             return
+        try:
+            self._raw_focus_crop_box = json.loads(qimg.text(RAW_FOCUS_CROP_KEY) or "null")
+        except (ValueError, TypeError):
+            self._raw_focus_crop_box = None
+        self.set_focus_box(self._source_focus_box)
         self._set_canvas_pixmap(pix)
         self._set_preview_status_text(pix.width(), pix.height())
         self._full_preview_loaded = True
@@ -936,11 +959,15 @@ class PreviewPanel(QWidget):
             if image is None or image.isNull():
                 return None
             original = self._canvas._source_pixmap
+            original_focus = self._canvas._focus_box
             try:
+                export_crop = json.loads(image.text(RAW_FOCUS_CROP_KEY) or "null")
+                self._canvas._focus_box = map_camera_focus_box(self._source_focus_box, export_crop)
                 self._canvas._source_pixmap = QPixmap.fromImage(image)
                 return self._canvas.render_source_pixmap_with_overlays()
             finally:
                 self._canvas._source_pixmap = original
+                self._canvas._focus_box = original_focus
         self._ensure_full_preview_loaded_sync()
         return self._canvas.render_source_pixmap_with_overlays()
 
@@ -957,7 +984,9 @@ class PreviewPanel(QWidget):
 
     def set_focus_box(self, focus_box) -> None:
         """更新对焦点框（归一化坐标），传 None 表示清除。"""
-        self._canvas.apply_overlay_state(PreviewOverlayState(focus_box=focus_box))
+        self._source_focus_box = focus_box
+        self._canvas.apply_overlay_state(PreviewOverlayState(
+            focus_box=map_camera_focus_box(focus_box, self._raw_focus_crop_box)))
 
     def set_auto_focus_center(self, enabled: bool) -> None:
         """自动以焦点（缺失时为图像中心）为缩放和切图基准。"""

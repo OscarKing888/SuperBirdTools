@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from PIL import Image, ImageColor, ImageDraw, ImageOps
+from app_common.raw_preview_geometry import map_camera_focus_box
 from app_common.focus_calc import (
     CameraFocusType,
     extract_focus_box as _extract_focus_box_by_camera_type,
@@ -435,9 +436,12 @@ def extract_focus_box_for_display(
     width: int,
     height: int,
     camera_type: CameraFocusType | str | None = None,
+    *, camera_crop_box=None,
 ) -> tuple[float, float, float, float] | None:
     """Resolve a preview-ready focus box using metadata size + Orientation mapping."""
-    return _extract_focus_box_for_display_by_camera_type(raw, width, height, camera_type=camera_type)
+    return map_camera_focus_box(
+        _extract_focus_box_for_display_by_camera_type(raw, width, height, camera_type=camera_type),
+        camera_crop_box)
 
 
 def transform_focus_box_after_crop(
@@ -646,6 +650,7 @@ def resolve_focus_box_after_processing(
     outer_pad: tuple[int, int, int, int] = (0, 0, 0, 0),
     apply_ratio_crop: bool = True,
     camera_type: CameraFocusType | str | None = None,
+    camera_crop_box=None,
 ) -> tuple[float, float, float, float] | None:
     if source_width <= 0 or source_height <= 0:
         return None
@@ -654,6 +659,7 @@ def resolve_focus_box_after_processing(
         source_width,
         source_height,
         camera_type=camera_type,
+        camera_crop_box=camera_crop_box,
     )
     if focus_box is None:
         return None

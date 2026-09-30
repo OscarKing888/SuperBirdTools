@@ -4139,6 +4139,11 @@ class BirdStampEditorWindow(
                 current_metadata_refresh[1],
                 refresh_preview=True,
             )
+        ab = getattr(self, "ab_preview", None)
+        if ab is not None and ab.enabled.isChecked() and ab.path is not None:
+            if _path_key(ab.path) in {_path_key(Path(path)) for path in batch}:
+                # A 的焦点可晚于快速图到达；只重绘已显示像素，不启动解码。
+                ab._display()
         self._maybe_apply_pending_workspace_photo_selection()
 
     def _on_photo_list_metadata_batch_ready(self, batch: dict[str, dict[str, Any]]) -> None:
@@ -5258,8 +5263,12 @@ class BirdStampEditorWindow(
             self.current_photo_info,
             self.current_raw_metadata,
         )
-        if refresh_preview and self.current_source_image is not None:
-            self.render_preview()
+        if refresh_preview:
+            if self.current_source_image is not None:
+                self.render_preview()
+            else:
+                # 播放/长按可能直接显示序列小图，并没有 current_source_image。
+                self._refresh_preview_label(preserve_view=True)
 
     def _cached_metadata_context(
         self,

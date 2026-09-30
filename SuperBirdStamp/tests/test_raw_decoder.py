@@ -137,3 +137,28 @@ def test_read_decoded_raw_size_never_uses_pillow_fallback(monkeypatch) -> None:
         image_decoder.read_decoded_image_size(Path("sample.cr3"))
 
     assert pillow_called is False
+
+
+def test_rawpy_preview_carries_camera_crop_after_resizing(monkeypatch):
+    import numpy as np
+    from app_common.raw_preview_geometry import RAW_FOCUS_CROP_KEY
+
+    class Raw:
+        sizes = SimpleNamespace(width=1000, height=800, left_margin=20, top_margin=10,
+                                crop_left_margin=120, crop_top_margin=90,
+                                crop_width=600, crop_height=400, flip=5)
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            pass
+
+        def postprocess(self, **kwargs):
+            return np.zeros((1000, 800, 3), dtype=np.uint8)
+
+    monkeypatch.setitem(sys.modules, 'rawpy', SimpleNamespace(imread=lambda path: Raw()))
+    with image_decoder.decode_image_for_preview(Path('bird.ARW'), max_long_edge=256, show_raw=True) as image:
+        assert image.size == (204, 256)
+        assert image.info['birdstamp_source_properties']['size'] == (800, 1000)
+        assert image.info[RAW_FOCUS_CROP_KEY] == pytest.approx((.1, .3, .6, .9))
