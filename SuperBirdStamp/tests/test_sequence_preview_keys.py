@@ -40,6 +40,118 @@ def send(widget, kind, code, repeat=False, modifiers=Qt.KeyboardModifier.NoModif
     _APP.sendEvent(widget, QKeyEvent(kind, code, modifiers, '', repeat))
 
 
+@pytest.mark.parametrize('view', ['ordinary', 'source', 'result'])
+@pytest.mark.parametrize('name', ['photo_list', 'strip'])
+@pytest.mark.parametrize('different_crops', [False, True])
+def test_left_boundary_then_right_resumes_selection(window, monkeypatch, view, name, different_crops):
+    paths, _, _ = setup_tab(window, monkeypatch)
+    populate(window, paths)
+    crops = [(0, .1, 1, .9), (.2, .2, .8, .8)]
+    if different_crops:
+        for path, ratio, box in zip(paths, (16 / 9, 1), crops):
+            window.photo_render_overrides[path_key(path)] = {
+                'ratio': ratio, 'center_mode': 'custom', 'crop_box': box,
+            }
+    if view == 'result':
+        analyze(window)
+    elif view == 'ordinary':
+        window.export_tabs.setCurrentIndex(0)
+    transport = window.sequence_transport
+    transport._select(1)
+    window.show()
+    window.activateWindow()
+    _APP.processEvents()
+    target = window.photo_list._tree_widget if name == 'photo_list' else transport.strip
+    target.setFocus()
+    for code, row in [(Qt.Key.Key_Left, 0), (Qt.Key.Key_Left, 0),
+                      (Qt.Key.Key_Right, 1), (Qt.Key.Key_Right, 1),
+                      (Qt.Key.Key_Left, 0), (Qt.Key.Key_Right, 1)]:
+        QTest.keyClick(target, code)
+        _APP.processEvents()
+        assert window.current_path == paths[row]
+        assert transport.strip.currentRow() == row
+        assert window.photo_list.currentItem() is window._find_photo_item_by_path(paths[row])
+        assert _APP.focusWidget() is target
+        if different_crops:
+            assert window.photo_render_overrides[path_key(paths[row])]['crop_box'] == crops[row]
+    wait_until(lambda: window._sequence_worker is None and window._preview_decode_worker is None)
+
+
+@pytest.mark.parametrize('name', ['photo_list', 'strip'])
+@pytest.mark.parametrize('direction', [-1, 1])
+def test_ordinary_held_arrow_reverses_after_boundary(window, monkeypatch, name, direction):
+    paths, _, _ = setup_tab(window, monkeypatch)
+    extra = paths[0].with_name('third.png')
+    extra.write_bytes(paths[1].read_bytes())
+    paths.append(extra)
+    populate(window, paths)
+    window.export_tabs.setCurrentIndex(0)
+    transport = window.sequence_transport
+    transport._scan_source_list()
+    wait_until(lambda: len(transport._source_ready) == len(paths))
+    transport._select(2 if direction < 0 else 0)
+    window.show()
+    window.activateWindow()
+    _APP.processEvents()
+    target = window.photo_list._tree_widget if name == 'photo_list' else transport.strip
+    target.setFocus()
+    code = Qt.Key.Key_Left if direction < 0 else Qt.Key.Key_Right
+    reverse = Qt.Key.Key_Right if direction < 0 else Qt.Key.Key_Left
+    transport.start('source_play', direction)
+    assert transport.timer.isActive()
+    send(target, QEvent.Type.KeyPress, code)
+    assert window.current_path == paths[1]
+    assert not transport.timer.isActive()
+    commits = []
+    original = window._on_photo_selected
+    monkeypatch.setattr(window, '_on_photo_selected', lambda *a: (commits.append(window.current_path), original(*a))[-1])
+    send(target, QEvent.Type.KeyPress, code, True)
+    transport.timer.stop()
+    end = 0 if direction < 0 else 2
+    assert window.current_path == paths[end]
+    assert transport.mode == 'ordinary_keys'
+    before = len(commits)
+    transport._tick()
+    send(target, QEvent.Type.KeyRelease, code, True)
+    assert len(commits) == before and transport.active
+    send(target, QEvent.Type.KeyRelease, code)
+    assert len(commits) == before + 1 and not transport.active
+    QTest.keyClick(target, reverse)
+    assert window.current_path == paths[1]
+    assert transport.strip.currentRow() == 1
+    assert window.photo_list.currentItem() is window._find_photo_item_by_path(paths[1])
+    wait_until(lambda: window._preview_decode_worker is None)
+
+
+@pytest.mark.parametrize('name', ['photo_list', 'strip'])
+def test_video_export_long_list_returns_to_first_and_can_advance(window, monkeypatch, name):
+    paths, _, _ = setup_tab(window, monkeypatch)
+    for index in range(2, 121):
+        path = paths[0].with_name(f'frame-{index:03}.png')
+        path.write_bytes(paths[0].read_bytes())
+        paths.append(path)
+    populate(window, paths)
+    window.export_tabs.setCurrentIndex(0)
+    window.export_stage_buttons['export_video'].setChecked(True)
+    transport = window.sequence_transport
+    transport._select(120)
+    window.show()
+    window.activateWindow()
+    _APP.processEvents()
+    target = window.photo_list._tree_widget if name == 'photo_list' else transport.strip
+    target.setFocus()
+    for row in range(119, -1, -1):
+        QTest.keyClick(target, Qt.Key.Key_Left)
+        assert window.current_path == paths[row]
+    QTest.keyClick(target, Qt.Key.Key_Left)
+    QTest.keyClick(target, Qt.Key.Key_Right)
+    assert window.current_path == paths[1]
+    assert transport.position.text() == '2 / 121'
+    assert transport.strip.currentRow() == 1
+    assert window.photo_list.currentItem() is window._find_photo_item_by_path(paths[1])
+    wait_until(lambda: window._preview_decode_worker is None)
+
+
 @pytest.mark.parametrize('name', ['canvas', 'panel', 'play', 'previous', 'next', 'strip', 'tabs', 'loop'])
 @pytest.mark.parametrize('code,direction', [(Qt.Key.Key_Left, -1), (Qt.Key.Key_Up, -1),
                                            (Qt.Key.Key_Right, 1), (Qt.Key.Key_Down, 1)])

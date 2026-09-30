@@ -37,7 +37,7 @@ Hot-received photos switch the B preview from result view to source/edit view be
 
 窗口保存显式状态：`current_path` 指向源文件；`current_source_image` 可为受限尺寸的预览解码结果，完整尺寸另存于 `current_source_full_size`；原始元数据、模板上下文和 `PhotoInfo` 分别保存在当前照片状态中。`photo_render_overrides` 保存逐图设置，全局导出设置另行合并。不要用预览 JPEG 的路径或像素尺寸替代原图的元数据、裁切坐标或导出输入。
 
-[PhotoListWidget](../birdstamp/gui/editor_photo_list.py) 是共享 `FileListPanel` 的编辑器适配层，内部保留 `QTreeWidget` 和既有列表 API。它沿用原生方向键选择，未开启 SuperViewer 的应用定时器连续播放行为。导入发现结果通过队列和定时器分批加入 UI，避免一次插入大量行。
+[PhotoListWidget](../birdstamp/gui/editor_photo_list.py) 是共享 `FileListPanel` 的编辑器适配层，内部保留 `QTreeWidget` 和既有列表 API。它未开启 SuperViewer 的应用定时器连续播放行为。普通编辑页由 `SequenceTransport.eventFilter` 接管照片列表左右键及播放列表方向键，按当前照片顺序切换；照片列表首次上下键仍沿用原生选择。长按复用 BirdStamp 的缓存预览节拍，首尾边界松键后可立即反向切换，回归见 [test_sequence_preview_keys.py](../tests/test_sequence_preview_keys.py)。导入发现结果通过队列和定时器分批加入 UI，避免一次插入大量行。
 
 | 后台工作 | 所有者、接收与结束条件 |
 | --- | --- |

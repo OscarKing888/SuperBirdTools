@@ -537,7 +537,7 @@ class SequenceTransport(QObject):
                 raw = item.data(PHOTO_COL_ROW, PHOTO_LIST_PATH_ROLE)
                 path = Path(raw) if isinstance(raw, str) else None
                 if path is not None and self.editor._source_signature(path) in self._source_cache:
-                    tree.setCurrentItem(item)
+                    self._select(target)
                 else:
                     self._request_source_frames()
             else:
@@ -578,13 +578,15 @@ class SequenceTransport(QObject):
         if (not self.editor._dejitter_tab_active()
                 and kind in (QEvent.Type.KeyPress, QEvent.Type.KeyRelease)):
             tree = self.editor.photo_list._tree_widget
-            if watched is not tree:
-                try:
-                    if watched is not tree.viewport():
-                        return False
-                except RuntimeError:
-                    return False
-            directions = {Qt.Key.Key_Up: -1, Qt.Key.Key_Down: 1}
+            try:
+                tree_surface = watched is tree or watched is tree.viewport()
+                strip_surface = watched is self.strip or watched is self.strip.viewport()
+            except RuntimeError:
+                return False
+            if not tree_surface and not strip_surface:
+                return False
+            directions = {Qt.Key.Key_Left: -1, Qt.Key.Key_Up: -1,
+                          Qt.Key.Key_Right: 1, Qt.Key.Key_Down: 1}
             key = event.key()
             if key not in directions:
                 return False
@@ -600,18 +602,24 @@ class SequenceTransport(QObject):
                     self.stop(commit=False)
                 return False
             if not event.isAutoRepeat():
-                if self.mode == 'ordinary_keys':
-                    self.stop(commit=False)
+                self.stop(commit=False)
                 self.mode = 'ordinary_keys'
                 self.key = key
                 self.direction = directions[key]
                 self._ordinary_first_step = True
-                return False
+                # 树列表上下键保留原生选择；左右键及播放列表统一按照片顺序切图。
+                # 避免依赖树节点展开或图标列表的空间布局来决定前后照片。
+                if tree_surface and key in (Qt.Key.Key_Up, Qt.Key.Key_Down):
+                    return False
+                paths = self._active_paths()
+                self._select(max(0, min(len(paths) - 1, self.index() + self.direction)))
+                return True
             if self.mode != 'ordinary_keys' or self.key != key:
                 self.stop(commit=False)
                 self.mode = 'ordinary_keys'
                 self.key = key
                 self.direction = directions[key]
+            self._ordinary_first_step = False
             if not self.timer.isActive():
                 self._tick()
                 self.timer.start()
