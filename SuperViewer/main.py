@@ -493,6 +493,7 @@ class MainWindow(QMainWindow):
             self._file_list.clear_photo_tags_for_paths,
             self._sidecar_writes_allowed,
             self.image_info_tabs,
+            edit_tags_callback=self._file_list.tag_library.edit,
         )
         self.exif_info_panel = ImageInfoTabPanel_EXIF(
             self._load_metadata_rows_for_current_path,
@@ -504,6 +505,8 @@ class MainWindow(QMainWindow):
         self.image_info_tabs.add_info_panel(self.tags_info_panel)
         self.image_info_tabs.add_info_panel(self.exif_info_panel)
         self._file_list.photo_tags_cache_updated.connect(self._on_photo_tags_cache_updated)
+        self._file_list.tag_library_changed.connect(self.tags_info_panel.refresh_current_photo)
+        self._file_list.tag_library_changed.connect(self.image_info_panel.refresh_photo_tags)
         self._file_list.photo_metadata_cache_updated.connect(self._on_photo_metadata_cache_updated)
         self.image_info_tabs.on_photo_selected("")
         self.video_info_panel = VideoInfoPanel(self)
@@ -939,6 +942,9 @@ class MainWindow(QMainWindow):
                         tag_key = ""
                 if not tag_key:
                     raise RuntimeError("无法确定可写入 XMP sidecar 的标签名。")
+                from app_common.exif_io.photo_meta import _is_xmp_subject_key
+                if _is_xmp_subject_key(tag_key) and not self._file_list.tag_edits_allowed():
+                    raise RuntimeError("标签操作尚未完成；请等待，或在“编辑标签”中重试恢复。")
                 if not PhotoMetaDataXMP().write(path, {tag_key: new_val}):
                     raise RuntimeError("无法写入 XMP sidecar。请确认 exiftool 可用或该字段支持直接 sidecar 写入。")
                 sync_saved_xmp_edit(self._file_list, path, tag_key)
@@ -1019,7 +1025,7 @@ class MainWindow(QMainWindow):
         return True
 
     def _sidecar_writes_allowed(self) -> bool:
-        return True
+        return self._file_list.tag_edits_allowed()
 
     def _file_writes_disabled_message(self, action: str = "写入操作", path: str | None = None) -> str:
         return ""

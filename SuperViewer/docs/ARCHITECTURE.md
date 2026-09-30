@@ -136,6 +136,14 @@ Viewer 在列表子类中启用 `enable_key_navigation_playback`、`enable_in_me
 
 `PhotoTagConfig.load_tree()` / `load_tree_and_tags()` 解析缩进式 `tags.cfg`，返回 `TagTreeNode` 树及去重后的叶子词表。空行和 `#` 注释被忽略，平面配置仍可用；分组只有导航作用，只有叶子会成为 XMP Subject。标签库配置优先从照片库 `.superpicky/tags.cfg` 解析，回退到应用配置。
 
+标签管理页的“编辑标签…”由 [`tag_library_dialog.py`](../superviewer/tag_library_dialog.py) 提供树形草稿编辑；[`TagLibraryDraft`](../superviewer/tag_library_model.py) 按节点身份记录增删、改名和移动，支持同名叶子统一改名，保留配置注释和换行风格。空分组不能保存，以免旧格式读回时被解释成照片标签。`PhotoTagConfig.read_bytes()` / `save_bytes()` 对配置做严格快照检查和原子提交。
+
+[`prepare_tag_edit()` / `apply_tag_edit()`](../superviewer/tag_library_transaction.py) 是不依赖 Qt 的事务接口：扫描当前目录及全部子目录的实际照片，跳过缓存和目录链接，同一 XMP 只写一次；分组/排序/新增词表不写照片，删除仅在最后一个同名叶子消失时移除 Subject。当前生效配置可能由父目录或应用共享，界面明确显示配置位置和照片同步范围。事务先严格检查配置及涉及的标签成员关系，在配置旁创建 `.tag-edit-recovery-*` 恢复目录，保存照片后才提交配置；失败或取消恢复原文件，恢复失败保留副本和清单并阻止后续标签编辑，可通过“重试恢复”继续。恢复记录不是照片元数据侧车。
+
+[`TagLibraryController` / `TagLibraryCommand`](../superviewer/tag_library_controller.py) 将配置和照片同步作为一个整体接入现有 `CommandHistory`；模态进度窗口持有 worker 直到真实 `finished`，取消和退出等待回滚。撤销/重做只针对原文件集合和涉及的标签成员，保留无关关键词/元数据，外部冲突会停止操作。内部配置刷新保留历史；普通外部配置变更继续执行既有失效规则。刷新按 GUI 时间片更新缓存，以版本号、待重读路径和 worker 身份拒绝旧结果，随后刷新筛选及信息面板。服务函数可供批处理调用；本轮不增加独立 CLI，保存前的目录范围与影响数量确认保留在 GUI。
+
+回归入口：`test_tag_library_model.py`、`test_tag_library_transaction.py` 和 `test_tag_library_ui_history.py`，涵盖中文往返、草稿取消、递归同步、恢复、整体历史及后台响应。
+
 [`tag_menu.py`](../superviewer/tag_menu.py) 的 `add_filterable_tag_actions()` 接收叶子白名单和可选完整树。搜索组名会保留该组后代；搜索叶子逐层收缩。持续勾选菜单用 `checked_provider` 在每次回调后重读真实状态，同步同名叶子和清除动作，写失败也回退勾选；关闭菜单后不会遗留无主的焦点计时任务。图片信息页的“添加标签”菜单过滤已选叶子，标签管理页使用同一扁平词表。
 
 文本过滤由 `filter_text_tokens_match()` 实现空格分词 AND：每个词可分别命中文件名、备注或任意照片标签。`_path_matches_active_filters()` 先保留共享评级/pick/focus 等条件，再叠加文本与标签条件；`_refresh_filter_scope()` 保留递归范围和异步标签补全。

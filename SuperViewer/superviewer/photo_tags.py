@@ -8,6 +8,7 @@ SuperViewer vocabulary; unrelated XMP keywords are preserved.
 from __future__ import annotations
 
 import os
+import tempfile
 import threading
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -206,11 +207,43 @@ def find_superpicky_tag_config_path(
     return None
 
 
+def atomic_write_bytes(path: Path, data: bytes) -> None:
+    """Keep the previous complete file when staging or replacement fails."""
+    fd, name = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=path.parent)
+    try:
+        with os.fdopen(fd, "wb") as stream:
+            stream.write(data)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(name, path)
+    finally:
+        Path(name).unlink(missing_ok=True)
+
+
 class PhotoTagConfig:
     """Loads the available tag vocabulary from tags.cfg."""
 
     def __init__(self, path: str | os.PathLike[str] | None) -> None:
         self.path = Path(path) if path else None
+
+    def read_bytes(self) -> bytes | None:
+        """Strict snapshot for editors; missing and empty files are distinct."""
+        if self.path is None:
+            raise ValueError("没有可用的标签配置路径。")
+        try:
+            return self.path.read_bytes()
+        except FileNotFoundError:
+            return None
+
+    def save_bytes(self, data: bytes | None, *, expected: bytes | None) -> None:
+        """Compare then atomically replace the active UTF-8 configuration."""
+        if self.read_bytes() != expected:
+            raise ValueError("标签配置已被其他程序修改，请重新加载。")
+        if data is None:
+            self.path.unlink(missing_ok=True)
+            return
+        data.decode("utf-8-sig")
+        atomic_write_bytes(self.path, data)
 
     def _read_text(self) -> str | None:
         if self.path is None or not self.path.is_file():

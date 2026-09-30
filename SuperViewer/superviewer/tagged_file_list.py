@@ -226,6 +226,7 @@ class SuperViewerTaggedFileListPanel(FileListPanel):
     photo_tags_cache_updated = pyqtSignal(object)
     photo_metadata_cache_updated = pyqtSignal(object)
     command_history_changed = pyqtSignal()
+    tag_library_changed = pyqtSignal()
     use_report_db = True
     include_videos = True
     use_unified_worker_pool = True
@@ -299,6 +300,8 @@ class SuperViewerTaggedFileListPanel(FileListPanel):
         self._command_history = CommandHistory(max_commands=100)
         super().__init__(parent)
         self._command_history.add_observer(self.command_history_changed.emit)
+        from .tag_library_controller import TagLibraryController
+        self.tag_library = TagLibraryController(self)
         self._load_tag_config_if_changed(force=True)
         self._install_tag_filter_bar()
         if self._filter_edit is not None:
@@ -342,6 +345,7 @@ class SuperViewerTaggedFileListPanel(FileListPanel):
         if self._tag_shutdown_requested:
             return
         self._tag_shutdown_requested = True
+        self.tag_library.request_shutdown()
         self._request_background_shutdown()
         try:
             self.stop_key_navigation_playback(commit=False)
@@ -434,6 +438,9 @@ class SuperViewerTaggedFileListPanel(FileListPanel):
         preserve_meta_cache: bool = False,
         reuse_cached_listing: bool = False,
     ) -> None:
+        if self.tag_library.busy or self.tag_library.refreshing:
+            return
+        self.tag_library.dirty_paths.clear()
         tag_config_scope_changed = self._set_tag_config_directory(path)
         self._load_tag_config_if_changed(force=tag_config_scope_changed)
         if force_reload or os.path.normcase(os.path.normpath(path)) != os.path.normcase(self.get_current_dir() or ""):
@@ -483,6 +490,11 @@ class SuperViewerTaggedFileListPanel(FileListPanel):
     def _on_metadata_batch_ready(self, meta_dict: dict) -> None:
         if not self._is_current_metadata_sender():
             return
+        library = getattr(self, "tag_library", None)
+        if library is not None:
+            meta_dict = {path: ({key: value for key, value in meta.items() if key != "tags"}
+                               if library.busy or library.refreshing or os.path.normpath(path) in library.dirty_paths
+                               else meta) for path, meta in meta_dict.items()}
         meta_dict = self._merge_metadata_batch_with_photo_tag_cache(meta_dict)
         super()._on_metadata_batch_ready(meta_dict)
         changed = self._seed_photo_tag_cache_from_meta(meta_dict.keys())
@@ -856,7 +868,10 @@ class SuperViewerTaggedFileListPanel(FileListPanel):
         clear_action.triggered.connect(lambda checked=False: self._clear_tag_filters())
         _exec_menu(menu, button.mapToGlobal(button.rect().bottomLeft()))
 
-    def _load_tag_config_if_changed(self, *, force: bool = False) -> bool:
+    def _load_tag_config_if_changed(self, *, force: bool = False, preserve_history: bool = False) -> bool:
+        library = getattr(self, "tag_library", None)
+        if library is not None and library.busy and not preserve_history:
+            return False
         signature = _config_signature(self._tag_config.path)
         if not force and signature == self._tag_config_signature:
             return False
@@ -865,7 +880,7 @@ class SuperViewerTaggedFileListPanel(FileListPanel):
         if new_tree == self._available_tag_tree and new_tags == self._available_tags and not force:
             return False
         if new_tags != self._available_tags:
-            if set(new_tags) != set(self._available_tags):
+            if set(new_tags) != set(self._available_tags) and not preserve_history:
                 self._command_history.clear()
             self._stop_photo_tag_cache_loader()
             self._photo_tag_cache = {}
@@ -877,6 +892,8 @@ class SuperViewerTaggedFileListPanel(FileListPanel):
             self._photo_tag_loader_covers_all_files = False
         self._available_tags = new_tags
         self._available_tag_tree = new_tree
+        if library is not None:
+            library.check_recovery()
         self._active_tag_filters.intersection_update(new_tags)
         self._rebuild_tag_filter_bar()
         return True
@@ -935,6 +952,9 @@ class SuperViewerTaggedFileListPanel(FileListPanel):
             return []
         changed: list[str] = []
         for path in _norm_paths(paths):
+            library = getattr(self, "tag_library", None)
+            if library is not None and path in library.dirty_paths:
+                continue
             if not self._meta_cache_has_photo_tags(path):
                 continue
             tags = self._photo_tags_from_meta_cache(path).intersection(allowed)
@@ -956,6 +976,9 @@ class SuperViewerTaggedFileListPanel(FileListPanel):
         reason: str,
         allow_without_filters: bool = False,
     ) -> None:
+        library = getattr(self, "tag_library", None)
+        if library is not None and (library.busy or library.refreshing):
+            return
         if self._tag_shutdown_requested or not self._available_tags:
             return
         if not allow_without_filters and not self._photo_tag_lookup_needed_for_filters():
@@ -1023,6 +1046,10 @@ class SuperViewerTaggedFileListPanel(FileListPanel):
             if snapshot.get(os.path.normcase(norm_path), 0) != self._photo_tag_generation(norm_path):
                 continue
             self._photo_tag_cache[norm_path] = set(tags or set())
+            library = getattr(self, "tag_library", None)
+            if library is not None and norm_path in library.dirty_paths:
+                library.dirty_paths.discard(norm_path)
+                self._bump_photo_tag_generations([norm_path])
             accepted.append(norm_path)
         if not accepted:
             return
@@ -1312,11 +1339,11 @@ class SuperViewerTaggedFileListPanel(FileListPanel):
 
     @property
     def can_undo(self) -> bool:
-        return self._command_history.can_undo
+        return self._command_history.can_undo and self.tag_library.available
 
     @property
     def can_redo(self) -> bool:
-        return self._command_history.can_redo
+        return self._command_history.can_redo and self.tag_library.available
 
     def clear_tag_history(self) -> None:
         """Discard path-bound tag history after an explicit file rename."""
@@ -1345,6 +1372,10 @@ class SuperViewerTaggedFileListPanel(FileListPanel):
             self._show_tag_write_error("重做标签", exc)
 
     def _show_tag_write_error(self, action: str, exc: Exception) -> None:
+        from .tag_library_transaction import TagLibraryFailure
+        if isinstance(exc, TagLibraryFailure):
+            QMessageBox.warning(self, action + "未完成", str(exc))
+            return
         _log.warning("[tag.write] action=%s failed: %s", action, exc)
         QMessageBox.warning(
             self,
@@ -1354,6 +1385,8 @@ class SuperViewerTaggedFileListPanel(FileListPanel):
         )
 
     def _set_tag_for_paths(self, paths: list[str], tag: str, enabled: bool) -> None:
+        if not self.tag_edits_allowed():
+            return
         if self._tag_shutdown_requested or not self._sidecar_writes_allowed("保存标签", warn=True):
             return
         self._load_tag_config_if_changed()
@@ -1364,6 +1397,8 @@ class SuperViewerTaggedFileListPanel(FileListPanel):
             self._show_tag_write_error("保存标签", exc)
 
     def _clear_tags_for_paths(self, paths: list[str]) -> None:
+        if not self.tag_edits_allowed():
+            return
         if self._tag_shutdown_requested or not self._sidecar_writes_allowed("清除标签", warn=True):
             return
         self._load_tag_config_if_changed()
@@ -1374,6 +1409,8 @@ class SuperViewerTaggedFileListPanel(FileListPanel):
             self._show_tag_write_error("清除标签", exc)
 
     def _apply_photo_tag_states(self, states: TagStates) -> TagWriteResult:
+        if not self.tag_edits_allowed():
+            return TagWriteResult(failed_paths={path: "请等待标签操作完成，或先重试恢复。" for path in states})
         if self._tag_shutdown_requested or not self._sidecar_writes_allowed("保存标签"):
             return TagWriteResult(failed_paths={path: "当前无法写入标签。" for path in states})
         started_at = perf_counter()
@@ -1405,3 +1442,7 @@ class SuperViewerTaggedFileListPanel(FileListPanel):
             len(states), len(result.inverse_states), len(result.failed_paths), elapsed_ms(started_at),
         )
         return result
+
+    def tag_edits_allowed(self) -> bool:
+        """Operational transaction guard, independent of filesystem permissions."""
+        return self.tag_library.available and not self._tag_shutdown_requested

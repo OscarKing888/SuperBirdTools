@@ -52,12 +52,15 @@ class ImageInfoTabPanel_Tags(ImageInfoTabPanel):
         clear_tags_callback: Callable[[list[str]], None],
         write_enabled_provider: Callable[[], bool] | None = None,
         parent=None,
+        *,
+        edit_tags_callback: Callable[[], None] | None = None,
     ) -> None:
         self._available_tags_provider = available_tags_provider
         self._tags_for_path_provider = tags_for_path_provider
         self._set_tag_callback = set_tag_callback
         self._clear_tags_callback = clear_tags_callback
         self._write_enabled_provider = write_enabled_provider
+        self._edit_tags_callback = edit_tags_callback
         self._tag_checks: dict[str, QCheckBox] = {}
         self._available_tags: list[str] = []
         self._updating = False
@@ -89,6 +92,11 @@ class ImageInfoTabPanel_Tags(ImageInfoTabPanel):
         self.btn_clear.clicked.connect(self._clear_current_photo_tags)
         top_row.addWidget(self.btn_clear)
         layout.addLayout(top_row)
+
+        self.btn_edit = QPushButton("编辑标签…")
+        self.btn_edit.setEnabled(self._edit_tags_callback is not None)
+        self.btn_edit.clicked.connect(self._edit_tag_library)
+        layout.addWidget(self.btn_edit)
 
         self.empty_label = QLabel("")
         self.empty_label.setWordWrap(True)
@@ -188,6 +196,11 @@ class ImageInfoTabPanel_Tags(ImageInfoTabPanel):
         except Exception as exc:
             QMessageBox.warning(self, "TAG", f"读取标签配置失败：\n{exc}")
             return []
+
+    def _edit_tag_library(self) -> None:
+        if self._edit_tags_callback is not None:
+            self._edit_tags_callback()
+            self.refresh_current_photo()
 
     def _load_current_tags(self, path: str) -> set[str]:
         try:
