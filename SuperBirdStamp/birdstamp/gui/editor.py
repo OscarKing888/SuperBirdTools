@@ -70,6 +70,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+from app_common.toggle_button import ToggleToolButton
 from app_common.about_dialog import load_about_info, load_about_images, show_about_dialog
 from app_common.app_info_bar import AppInfoBar
 from app_common.exif_io import PhotoMetaDataReportDB, close_exiftool_process
@@ -1947,7 +1948,7 @@ class BirdStampEditorWindow(
         mode_separator.setFrameShadow(QFrame.Shadow.Sunken)
         preview_toolbar.addWidget(mode_separator)
 
-        self.show_crop_effect_check = QCheckBox("显示裁切效果")
+        self.show_crop_effect_check = ToggleToolButton("显示裁切效果")
         self.show_crop_effect_check.setChecked(True)
         self.show_crop_effect_check.toggled.connect(self._on_preview_toolbar_toggled)
         preview_toolbar.addWidget(self.show_crop_effect_check)
@@ -1968,12 +1969,12 @@ class BirdStampEditorWindow(
         self.crop_effect_alpha_value_label.setMinimumWidth(28)
         preview_toolbar.addWidget(self.crop_effect_alpha_value_label)
 
-        self.show_focus_box_check = QCheckBox("显示对焦点")
+        self.show_focus_box_check = ToggleToolButton("显示对焦点")
         self.show_focus_box_check.setChecked(True)
         self.show_focus_box_check.toggled.connect(self._on_preview_toolbar_toggled)
         preview_toolbar.addWidget(self.show_focus_box_check)
 
-        self.auto_focus_center_check = QToolButton()
+        self.auto_focus_center_check = ToggleToolButton()
         self.auto_focus_center_check.setText("自动焦点居中")
         self.auto_focus_center_check.setCheckable(True)
         self.auto_focus_center_check.setChecked(editor_options.PREVIEW_AUTO_FOCUS_CENTER)
@@ -1983,7 +1984,7 @@ class BirdStampEditorWindow(
         )
         self.auto_focus_center_check.toggled.connect(self._on_auto_focus_center_toggled)
 
-        self.show_bird_box_check = QCheckBox("显示鸟体框")
+        self.show_bird_box_check = ToggleToolButton("显示鸟体框")
         self.show_bird_box_check.setChecked(True)
         self.show_bird_box_check.toggled.connect(self._on_preview_toolbar_toggled)
         preview_toolbar.addWidget(self.show_bird_box_check)
@@ -2912,7 +2913,7 @@ class BirdStampEditorWindow(
 
         self._edit_mode_buttons: dict[str, QToolButton] = {}
         for mode_id, icon_kind, text, tip in specs:
-            btn = QToolButton()
+            btn = ToggleToolButton()
             btn.setCheckable(True)
             btn.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
             btn.setIcon(_make_preview_tool_icon(icon_kind, color=icon_color))

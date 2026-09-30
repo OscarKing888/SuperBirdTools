@@ -8,6 +8,7 @@ from PyQt6.QtGui import QPixmap
 from PyQt6.QtWidgets import QTabBar, QCheckBox, QComboBox, QFileDialog, QListWidget, QGroupBox, QHBoxLayout, QLabel, QProgressBar, QPushButton, QSlider, QSpinBox, QVBoxLayout, QWidget
 from PyQt6.QtCore import Qt, QTimer
 
+from app_common.toggle_button import ToggleToolButton
 from birdstamp.export_stage.sequence_preview import sequence_input_key
 from birdstamp.export_stage.sequence_intersection import normalized_intersection_box, normalized_union_box
 from birdstamp.image_dejitter.region_tracking_result import image_file_signature
@@ -209,7 +210,7 @@ class _BirdStampDejitterMixin:
         self.dejitter_pad_to_union_check.setToolTip('关闭：裁掉所有空白，取整组交集。开启：保留整组画面并集，统一画幅，缺失区域补黑。')
         self.dejitter_pad_to_union_check.toggled.connect(self._on_dejitter_options_changed)
         layout.addWidget(self.dejitter_pad_to_union_check)
-        self.dejitter_show_intersection_check = QCheckBox('成片预览显示交集／并集范围框')
+        self.dejitter_show_intersection_check = ToggleToolButton('成片预览显示交集／并集范围框')
         self.dejitter_show_intersection_check.setChecked(editor_options.DEJITTER_SHOW_INTERSECTION)
         self.dejitter_show_intersection_check.setToolTip('交集框：所有照片共同覆盖的最大无黑边矩形。并集框：整组完整范围。\n开启补边可在成片中完整查看两框；下方示意图始终显示两个范围。')
         self.dejitter_show_intersection_check.toggled.connect(self._on_dejitter_intersection_options_changed)

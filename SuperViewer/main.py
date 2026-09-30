@@ -31,6 +31,7 @@ def _ensure_default_log_file_env() -> None:
 
 _ensure_default_log_file_env()
 
+from app_common.toggle_button import ToggleToolButton
 from app_common import show_about_dialog, load_about_images, load_about_info
 from app_common.log import get_logger
 from app_common.perf_probe import elapsed_ms, perf_counter, perf_log
@@ -141,7 +142,6 @@ try:
     from .superviewer.qt_compat import (
         QAction,
         QApplication,
-        QCheckBox,
         QColor,
         QComboBox,
         QDialog,
@@ -224,7 +224,6 @@ except ImportError:
     from superviewer.qt_compat import (
         QAction,
         QApplication,
-        QCheckBox,
         QColor,
         QComboBox,
         QDialog,
@@ -380,12 +379,12 @@ class MainWindow(QMainWindow):
         overlay_row = QHBoxLayout()
         overlay_row.setContentsMargins(0, 0, 0, 0)
         overlay_row.setSpacing(8)
-        self.check_show_focus = QCheckBox("显示对焦点")
+        self.check_show_focus = ToggleToolButton("显示对焦点")
         self.check_show_focus.setChecked(True)
         self.check_show_focus.setToolTip("在预览图上叠加显示相机对焦点（来自原始 RAW/HEIF 元数据）。")
         self.check_show_focus.toggled.connect(self._on_preview_overlay_toggled)
         overlay_row.addWidget(self.check_show_focus)
-        self.check_auto_focus_center = QCheckBox("自动焦点居中")
+        self.check_auto_focus_center = ToggleToolButton("自动焦点居中")
         self.check_auto_focus_center.setChecked(load_auto_focus_center_from_settings())
         self.check_auto_focus_center.setToolTip(
             "切图及缩放时将焦点保持在预览中央；无焦点时以图像中心为准。"

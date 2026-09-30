@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 from datetime import datetime
 
+from app_common.toggle_button import ToggleToolButton
 from app_common.video import format_duration, is_video, probe_video, video_thumbnail_rgb
 from app_common.audio_waveform import audio_waveform
 from app_common.log import get_logger
@@ -172,7 +173,7 @@ class VideoPlayerView(QWidget):
         self.speed.setToolTip('播放速度')
         self.speed.currentIndexChanged.connect(self._set_speed)
         controls.addWidget(self.speed)
-        self.mute = QPushButton('静音')
+        self.mute = ToggleToolButton('静音')
         self.mute.setCheckable(True)
         self.mute.toggled.connect(self._set_audio)
         controls.addWidget(self.mute)

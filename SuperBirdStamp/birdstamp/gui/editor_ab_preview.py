@@ -3,8 +3,9 @@ from pathlib import Path
 
 from PyQt6.QtCore import QObject, Qt, QTimer
 from PyQt6.QtGui import QPixmap
-from PyQt6.QtWidgets import QSplitter, QToolButton
+from PyQt6.QtWidgets import QSplitter
 
+from app_common.toggle_button import ToggleToolButton
 from app_common.preview_canvas import PreviewWithStatusBar
 from birdstamp.constants import RAW_EXTENSIONS
 from .editor_preview_canvas import EditorPreviewCanvas, EditorPreviewOverlayState
@@ -38,14 +39,14 @@ class ABPreview(QObject):
         self.upgrade.setSingleShot(True)
         self.upgrade.setInterval(120)
         self.upgrade.timeout.connect(self._start)
-        self.enabled = QToolButton()
+        self.enabled = ToggleToolButton()
         self.enabled.setCheckable(True)
         self.enabled.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
         self.enabled.setAccessibleName('A/B 对照')
         self.enabled.setChecked(editor_options.PREVIEW_AB_ENABLED)
         self.enabled.setToolTip('A/B 对照：开启或关闭左右对照预览。\n'
                                 '点击任一视图激活，再从照片列表选图；另一侧保持当前照片。')
-        self.linked = QToolButton()
+        self.linked = ToggleToolButton()
         self.linked.setText('同步缩放/移动')
         self.linked.setCheckable(True)
         self.linked.setToolTip('开启时锁定两侧当前的缩放比例和相对位置；之后同步缩放和平移变化。\n'

@@ -3,6 +3,7 @@ from PyQt6.QtCore import QEvent, Qt, pyqtSignal
 from PyQt6.QtGui import QPalette
 from PyQt6.QtWidgets import QButtonGroup, QComboBox, QFrame, QHBoxLayout, QLabel, QPushButton, QSizePolicy, QStyle, QToolButton, QVBoxLayout, QWidget
 
+from app_common.toggle_button import ToggleToolButton
 from app_common.preview_canvas import configure_preview_scale_preset_combo, sync_preview_scale_preset_combo
 from birdstamp.constants import RAW_EXTENSIONS
 from . import editor_options
@@ -20,7 +21,7 @@ class PreviewModeButtons(QWidget):
         row.setSpacing(0)
         self.group = QButtonGroup(self)
         for index, text in enumerate(('原图', '去抖动成片')):
-            button = QToolButton()
+            button = ToggleToolButton()
             button.setText(text)
             button.setCheckable(True)
             button.setChecked(index == 0)
@@ -67,14 +68,14 @@ class PreviewViewportPanel(QWidget):
         tools.addWidget(self.play)
         self.mode = PreviewModeButtons()
         tools.addWidget(self.mode)
-        self.show_raw = QToolButton()
+        self.show_raw = ToggleToolButton()
         self.show_raw.setText('显示 RAW')
         self.show_raw.setCheckable(True)
         self.show_raw.setToolTip('仅切换本视口原图的像素来源；导出仍优先使用 RAW 内嵌预览图。')
         self.show_raw.setAccessibleName(f'显示 {name} 侧完整 RAW')
         tools.addWidget(self.show_raw)
         self.mode.currentIndexChanged.connect(lambda _index: self._update_raw_toggle_visibility())
-        self.center = center if center is not None else QToolButton()
+        self.center = center if center is not None else ToggleToolButton()
         if center is None:
             self.center.setText('自动焦点居中')
             self.center.setCheckable(True)

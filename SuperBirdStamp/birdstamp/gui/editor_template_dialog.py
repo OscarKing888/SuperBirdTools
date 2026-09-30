@@ -44,6 +44,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+from app_common.toggle_button import ToggleToolButton
 from app_common.preview_canvas import (
     PREVIEW_COMPOSITION_GRID_LINE_WIDTHS,
     PREVIEW_COMPOSITION_GRID_MODES,
@@ -764,12 +765,12 @@ class TemplateManagerDialog(QDialog):
         preview_toolbar.setContentsMargins(0, 0, 0, 0)
         preview_toolbar.setSpacing(8)
 
-        self.show_crop_effect_check = QCheckBox("显示裁切效果")
+        self.show_crop_effect_check = ToggleToolButton("显示裁切效果")
         self.show_crop_effect_check.setChecked(True)
         self.show_crop_effect_check.toggled.connect(self._on_preview_overlay_toggled)
         preview_toolbar.addWidget(self.show_crop_effect_check)
 
-        self.crop_edit_mode_check = QCheckBox("调整裁剪框")
+        self.crop_edit_mode_check = ToggleToolButton("调整裁剪框")
         self.crop_edit_mode_check.setToolTip("拖动手柄即可显示分辨率参考线，靠近虚线框时吸附至配置的档位。")
         self.crop_edit_mode_check.toggled.connect(self._on_preview_overlay_toggled)
         preview_toolbar.addWidget(self.crop_edit_mode_check)
@@ -790,12 +791,12 @@ class TemplateManagerDialog(QDialog):
         self.crop_effect_alpha_value_label.setMinimumWidth(28)
         preview_toolbar.addWidget(self.crop_effect_alpha_value_label)
 
-        self.show_focus_box_check = QCheckBox("显示对焦点")
+        self.show_focus_box_check = ToggleToolButton("显示对焦点")
         self.show_focus_box_check.setChecked(True)
         self.show_focus_box_check.toggled.connect(self._on_preview_overlay_toggled)
         preview_toolbar.addWidget(self.show_focus_box_check)
 
-        self.show_bird_box_check = QCheckBox("显示鸟体框")
+        self.show_bird_box_check = ToggleToolButton("显示鸟体框")
         self.show_bird_box_check.setChecked(True)
         self.show_bird_box_check.toggled.connect(self._on_preview_overlay_toggled)
         preview_toolbar.addWidget(self.show_bird_box_check)

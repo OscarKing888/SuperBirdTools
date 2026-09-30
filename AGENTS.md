@@ -194,6 +194,14 @@ Follow [ai_rules/AI_CODING_RULES.md](ai_rules/AI_CODING_RULES.md) as the cross-t
 ## New Feature: GUI Options
 - Keep new GUI options feature reading from `SuperBirdStamp/config/editor_options.json` via `birdstamp.config.resolve_bundled_path("config", "editor_options.json")`.
 
+## Unified Toggle Buttons
+
+- 两款应用的新增/修改 Toggle 按钮统一使用 `app_common.toggle_button.ToggleToolButton`，不要重复编写局部 checked 样式或依赖系统默认的浅灰选中效果。
+- 预览布尔选项（RAW、A/B、同步视野、焦点显示/居中、鸟体框、裁切效果、安全框等）使用 Toggle 按钮，不使用 QCheckBox；表单中的其它复选框不受此限制。
+- 选中状态必须保持高对比蓝色背景、白色文字/单色图标及高亮边框；未选中状态跟随主题，悬停、按住、键盘焦点、禁用和选中后禁用均须可辨。互斥工具（选择、参考区、裁切、原图/成片）复用同一组件，由 QButtonGroup 保持互斥。
+- 保留 `isChecked` / `setChecked` / `toggled`、静默恢复、工具提示、可访问名称和现有默认值；不要靠修改文案或业务信号模拟选中样式。瞬时操作不应改成开关。图标通过 `setIcon` 传入单色 QIcon，共享组件负责按状态着色和高 DPI 绘制。
+- 修改共享样式后检查深浅主题的文字/图标开关，并运行 `app_common/tests/test_toggle_button.py` 及涉及的两款应用预览回归。样式更新不触发图像解码、元数据读取或视口重建。
+
 ## SuperBirdStamp Image Processing Pipeline
 
 - `SuperBirdStamp/birdstamp/image_pipeline/` is the interface source of truth for the image processing pipeline. New processing steps must be modeled as `ImageProcStage` implementations that receive and return an `ImageProcContext`.

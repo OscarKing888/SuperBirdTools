@@ -5,13 +5,14 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
+from app_common.toggle_button import ToggleToolButton
 from app_common.preview_canvas import configure_preview_scale_preset_combo, sync_preview_scale_preset_combo
 from app_common.video import is_video
 from app_common.image_formats import RAW_EXTENSIONS
 
 from .qt_compat import (
-    QCheckBox, QComboBox, QFrame, QHBoxLayout, QLabel, QPushButton,
-    QSizePolicy, QSplitter, QToolButton, QVBoxLayout, QWidget, Qt,
+    QComboBox, QFrame, QHBoxLayout, QLabel, QPushButton,
+    QSizePolicy, QSplitter, QVBoxLayout, QWidget, Qt,
     _Horizontal,
 )
 
@@ -46,7 +47,7 @@ class ViewerViewportPanel(QWidget):
         self.filename.setMinimumWidth(0)
         self.filename.setSizePolicy(_POLICY.Ignored, _POLICY.Preferred)
         row.addWidget(self.filename, 1)
-        self.raw_toggle = QToolButton(self.toolbar)
+        self.raw_toggle = ToggleToolButton(parent=self.toolbar)
         self.raw_toggle.setText("显示 RAW")
         self.raw_toggle.setCheckable(True)
         self.raw_toggle.setChecked(preview.show_raw())
@@ -55,7 +56,7 @@ class ViewerViewportPanel(QWidget):
         self.raw_toggle.toggled.connect(preview.set_show_raw)
         row.addWidget(self.raw_toggle)
         preview.source_changed.connect(self._update_available)
-        self.center = center if center is not None else QCheckBox("自动焦点居中")
+        self.center = center if center is not None else ToggleToolButton("自动焦点居中")
         if center is None:
             self.center.toggled.connect(preview.set_auto_focus_center)
         row.addWidget(self.center)
@@ -217,11 +218,11 @@ class ViewerABPreview(QObject):
         self.active_side = "b"
         self.display_paths = {"a": "", "b": ""}
         self.video_info = {"a": None, "b": None}
-        self.enabled = QToolButton()
+        self.enabled = ToggleToolButton()
         self.enabled.setText("A/B 对照")
         self.enabled.setCheckable(True)
         self.enabled.setToolTip("左右对照；点击一侧后，文件列表选择只更新该侧。")
-        self.linked = QToolButton()
+        self.linked = ToggleToolButton()
         self.linked.setText("同步缩放/移动")
         self.linked.setCheckable(True)
         self.linked.setToolTip("保留当前相对视野；之后同步缩放和平移变化。")
