@@ -7,6 +7,7 @@ from pathlib import Path
 
 from app_common.preview_canvas import configure_preview_scale_preset_combo, sync_preview_scale_preset_combo
 from app_common.video import is_video
+from app_common.image_formats import RAW_EXTENSIONS
 
 from .qt_compat import (
     QCheckBox, QComboBox, QFrame, QHBoxLayout, QLabel, QPushButton,
@@ -45,6 +46,15 @@ class ViewerViewportPanel(QWidget):
         self.filename.setMinimumWidth(0)
         self.filename.setSizePolicy(_POLICY.Ignored, _POLICY.Preferred)
         row.addWidget(self.filename, 1)
+        self.raw_toggle = QToolButton(self.toolbar)
+        self.raw_toggle.setText("显示 RAW")
+        self.raw_toggle.setCheckable(True)
+        self.raw_toggle.setChecked(preview.show_raw())
+        self.raw_toggle.setAccessibleName(f"{name} 显示 RAW")
+        self.raw_toggle.setToolTip("开启：完整 RAW 解码；关闭：优先内嵌预览。仅影响本侧视口。")
+        self.raw_toggle.toggled.connect(preview.set_show_raw)
+        row.addWidget(self.raw_toggle)
+        preview.source_changed.connect(self._update_available)
         self.center = center if center is not None else QCheckBox("自动焦点居中")
         if center is None:
             self.center.toggled.connect(preview.set_auto_focus_center)
@@ -109,6 +119,8 @@ class ViewerViewportPanel(QWidget):
         sync_preview_scale_preset_combo(self.scale, value)
 
     def _update_available(self, *_args):
+        self.raw_toggle.setVisible(Path(self.preview.current_path() or "").suffix.lower() in RAW_EXTENSIONS)
+        self.raw_toggle.setChecked(self.preview.show_raw())
         available = (self.preview.current_display_scale_percent() is not None
                      and not is_video(self.preview.current_path() or ""))
         self.fit.setEnabled(available)

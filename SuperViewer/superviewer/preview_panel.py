@@ -6,6 +6,8 @@ from __future__ import annotations
 import time as _time
 import io as _io
 import os
+import sys
+from contextlib import nullcontext
 from pathlib import Path
 from typing import Callable
 
@@ -26,10 +28,7 @@ from app_common.preview_canvas import (
 )
 from app_common.superviewer_user_options import get_keep_view_on_switch
 
-from .focus_preview_loader import (
-    _get_orientation_from_file,
-    _load_preview_pixmap_for_canvas,
-)
+from .focus_preview_loader import _load_preview_pixmap_for_canvas
 from .qt_compat import (
     _KeepAspectRatio,
     _SmoothTransformation,
@@ -317,23 +316,6 @@ def _qsize_pixel_count(size) -> int:
         return 0
 
 
-def _apply_orientation_to_pil_image(img: Image.Image, orientation: int) -> Image.Image:
-    try:
-        orientation = int(orientation or 1)
-    except Exception:
-        orientation = 1
-    method = {
-        2: Image.Transpose.FLIP_LEFT_RIGHT,
-        3: Image.Transpose.ROTATE_180,
-        4: Image.Transpose.FLIP_TOP_BOTTOM,
-        5: Image.Transpose.TRANSPOSE,
-        6: Image.Transpose.ROTATE_270,
-        7: Image.Transpose.TRANSVERSE,
-        8: Image.Transpose.ROTATE_90,
-    }.get(orientation)
-    return img.transpose(method) if method is not None else img
-
-
 def _exif_transpose_in_place(img: Image.Image) -> None:
     """按 EXIF 方向就地旋转；方向为 1 时不复制整幅像素（exif_transpose 默认总会 copy）。"""
     try:
@@ -386,11 +368,17 @@ def _qimage_from_pil_image(img: Image.Image) -> QImage | None:
 def _load_raw_embedded_preview_qimage(path: str) -> QImage | None:
     if not path or not os.path.isfile(path) or Path(path).suffix.lower() not in RAW_EXTENSIONS:
         return None
-    preview_data = thumb_stream.get_raw_preview_jpeg(path)
+    try:
+        preview_data = thumb_stream.get_raw_preview_jpeg(path)
+    except Exception:
+        preview_data = None
     if preview_data:
         try:
             with Image.open(_io.BytesIO(preview_data)) as img:
-                img = _apply_orientation_to_pil_image(img, _get_orientation_from_file(path))
+                if max(img.size) < thumb_stream.RAW_INPROCESS_PREVIEW_MIN_LONG_EDGE:
+                    return None
+                # 与 BirdStamp 一致：使用内嵌 JPEG 自身的 EXIF 方向。
+                _exif_transpose_in_place(img)
                 embedded_qimg = _qimage_from_pil_image(img)
                 if embedded_qimg is not None and not embedded_qimg.isNull():
                     return embedded_qimg
@@ -402,10 +390,27 @@ def _load_raw_embedded_preview_qimage(path: str) -> QImage | None:
 def _load_full_preview_qimage_raw(path: str) -> QImage | None:
     if not path or not os.path.isfile(path) or Path(path).suffix.lower() not in RAW_EXTENSIONS:
         return None
-    # Ordinary RAW switching must never fall back to a full sensor demosaic.
-    # Camera-provided embedded previews are the only full-preview source here;
-    # explicit export workflows may still choose a separate RAW decode path.
-    return _load_raw_embedded_preview_qimage(path)
+    embedded = _load_raw_embedded_preview_qimage(path)
+    if embedded is not None and not embedded.isNull():
+        return embedded
+    return _load_sensor_raw_qimage(path)
+
+
+def _load_sensor_raw_qimage(path: str) -> QImage | None:
+    """完整 RAW 解码仅由后台预览 worker（或显式导出）调用。"""
+    try:
+        import rawpy
+
+        # LibRaw 的 Windows 窄字符路径不支持中文；二进制流交给 rawpy。
+        source = (open(path, "rb") if sys.platform.startswith("win") and not path.isascii()
+                  else nullcontext(path))
+        with source as raw_source, rawpy.imread(raw_source) as raw:
+            pixels = raw.postprocess(use_camera_wb=True, no_auto_bright=False, output_bps=8)
+        # LibRaw 已处理传感器方向，不能再次应用源文件的 Orientation。
+        return _qimage_from_pil_image(Image.fromarray(pixels))
+    except Exception:
+        _log.exception("[preview.raw] full RAW decode failed path=%r", path)
+        return None
 
 
 def _load_full_preview_qimage_pil(path: str) -> QImage | None:
@@ -433,8 +438,7 @@ def _load_full_preview_qimage(path: str) -> QImage | None:
     expected_pixels = 0
 
     if ext in RAW_EXTENSIONS:
-        # Do not let Qt/Pillow silently turn a missing embedded preview into a
-        # full RAW decode.  The normal preview policy is embedded-preview only.
+        # 与 BirdStamp 共用内嵌预览选择规则，不让 Qt/Pillow 另选低清缩略图。
         return _load_full_preview_qimage_raw(path)
 
     if ext in HEIF_EXTENSIONS:
@@ -478,16 +482,20 @@ def _load_full_preview_qimage(path: str) -> QImage | None:
 class _FullPreviewLoader(QThread):
     loaded = pyqtSignal(int, str, object, float)
 
-    def __init__(self, token: int, path: str, parent=None) -> None:
+    def __init__(self, token: int, path: str, parent=None, *, show_raw: bool = False) -> None:
         super().__init__(parent)
         self._token = int(token)
+        self._show_raw = bool(show_raw)
         self._path = os.path.normpath(path) if path else ""
 
     def run(self) -> None:
         started = _time.perf_counter()
         qimg = None
         if not self.isInterruptionRequested():
-            qimg = _load_full_preview_qimage(self._path)
+            if self._show_raw and Path(self._path).suffix.lower() in RAW_EXTENSIONS:
+                qimg = _load_sensor_raw_qimage(self._path)
+            else:
+                qimg = _load_full_preview_qimage(self._path)
         if self.isInterruptionRequested():
             # Dropping the decoded QImage in this worker avoids queueing a
             # potentially hundreds-of-megabytes stale object to the GUI loop.
@@ -507,12 +515,15 @@ class PreviewPanel(QWidget):
 
     display_scale_percent_changed = pyqtSignal(object)
     full_preview_ready = pyqtSignal(str)
+    source_changed = pyqtSignal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setMinimumSize(320, 240)
         self.setAcceptDrops(False)
         self._current_path = None
+        self._show_raw = False
+        self._last_quick_size = None
         self._preview_request_token = 0
         self._full_preview_loaded = False
         self._fast_preview_only = False
@@ -545,7 +556,26 @@ class PreviewPanel(QWidget):
         self._preview_status_label.setStyleSheet("color: #aaa; font-size: 12px;")
         layout.addWidget(self._preview_status_label)
 
+    def show_raw(self) -> bool:
+        return self._show_raw
+
+    def set_show_raw(self, enabled: bool) -> None:
+        enabled = bool(enabled)
+        if self._shutdown_requested or enabled == self._show_raw:
+            return
+        self._show_raw = enabled
+        path = self._current_path
+        if path and Path(path).suffix.lower() in RAW_EXTENSIONS:
+            load_full = not self._fast_preview_only
+            # 模式属于请求身份；强制绕过同路径复用，并让迟到结果失效。
+            self._current_path = None
+            self.set_image(path, load_full=load_full, quick_size=self._last_quick_size)
+        self.source_changed.emit()
+
     def set_image(self, path: str, *, load_full: bool = True, quick_size: int | None = None):
+        if self._shutdown_requested:
+            return
+        self._last_quick_size = quick_size
         t0 = _time.perf_counter()
         norm_path = os.path.normpath(path) if path else path
         if _can_reuse_current_preview(
@@ -573,6 +603,7 @@ class PreviewPanel(QWidget):
         self._preview_request_token += 1
         token = self._preview_request_token
         self._current_path = norm_path
+        self.source_changed.emit()
         self._full_preview_loaded = False
         self._fast_preview_only = not bool(load_full)
         self._cancel_pending_full_preview()
@@ -665,9 +696,13 @@ class PreviewPanel(QWidget):
 
     def set_quick_pixmap(self, path: str, pixmap: QPixmap, *, quick_size: int | None = None) -> None:
         """Display an already-decoded selected-tier frame without disk round-tripping."""
+        if self._shutdown_requested:
+            return
+        self._last_quick_size = quick_size
         started_at = _time.perf_counter()
         self._preview_request_token += 1
         self._current_path = os.path.normpath(path) if path else path
+        self.source_changed.emit()
         self._full_preview_loaded = False
         self._fast_preview_only = True
         self._cancel_pending_full_preview()
@@ -722,6 +757,7 @@ class PreviewPanel(QWidget):
     def clear_image(self):
         self._preview_request_token += 1
         self._current_path = None
+        self.source_changed.emit()
         self._full_preview_loaded = False
         self._fast_preview_only = False
         self._cancel_pending_full_preview()
@@ -792,11 +828,17 @@ class PreviewPanel(QWidget):
             return
         if not path or not self._is_current_path(path) or not os.path.isfile(path):
             return
-        loader = _FullPreviewLoader(token, path, self)
+        loader = _FullPreviewLoader(token, path, self, show_raw=self._show_raw)
         loader.loaded.connect(self._on_full_preview_loaded)
-        loader.finished.connect(lambda l=loader: self._cleanup_full_preview_loader(l))
+        loader.finished.connect(self._on_full_preview_loader_finished)
         self._full_preview_loader = loader
         loader.start()
+
+    def _on_full_preview_loader_finished(self) -> None:
+        # 使用 QObject 接收槽，避免关闭时 lambda 捕获 worker 形成循环引用。
+        loader = self.sender()
+        if isinstance(loader, _FullPreviewLoader):
+            self._cleanup_full_preview_loader(loader)
 
     def _cleanup_full_preview_loader(self, loader: _FullPreviewLoader) -> None:
         is_current = self._full_preview_loader is loader
@@ -825,6 +867,8 @@ class PreviewPanel(QWidget):
         if not self._is_current_path(path):
             return
         if qimg is None or qimg.isNull():
+            if self._show_raw and Path(path).suffix.lower() in RAW_EXTENSIONS:
+                self._preview_status_label.setText("RAW 解码失败，可关闭‘显示 RAW’重试内嵌预览")
             if not self._has_canvas_pixmap():
                 self._canvas.setText(f"无法预览\n{Path(path).name}")
             perf_log(
@@ -885,6 +929,18 @@ class PreviewPanel(QWidget):
         return self._canvas.set_display_scale_percent(scale_percent, preserve_view=preserve_view)
 
     def render_source_pixmap_with_overlays(self) -> QPixmap | None:
+        path = self._current_path or ""
+        if Path(path).suffix.lower() in RAW_EXTENSIONS and (self._show_raw or not self._full_preview_loaded):
+            # RAW 开关只控制视口。叠加导出固定使用默认来源且不改变当前请求/画布。
+            image = _load_full_preview_qimage_raw(path)
+            if image is None or image.isNull():
+                return None
+            original = self._canvas._source_pixmap
+            try:
+                self._canvas._source_pixmap = QPixmap.fromImage(image)
+                return self._canvas.render_source_pixmap_with_overlays()
+            finally:
+                self._canvas._source_pixmap = original
         self._ensure_full_preview_loaded_sync()
         return self._canvas.render_source_pixmap_with_overlays()
 
@@ -894,8 +950,10 @@ class PreviewPanel(QWidget):
         fmt: str | None = None,
         quality: int = -1,
     ) -> bool:
-        self._ensure_full_preview_loaded_sync()
-        return self._canvas.save_source_pixmap_with_overlays(path, fmt=fmt, quality=quality)
+        rendered = self.render_source_pixmap_with_overlays()
+        if rendered is None or rendered.isNull():
+            return False
+        return rendered.save(path, quality=quality) if fmt is None else rendered.save(path, fmt, quality)
 
     def set_focus_box(self, focus_box) -> None:
         """更新对焦点框（归一化坐标），传 None 表示清除。"""

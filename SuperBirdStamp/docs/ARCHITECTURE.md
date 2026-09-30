@@ -154,7 +154,7 @@ flowchart LR
 
 [editor_dejitter.py](../birdstamp/gui/editor_dejitter.py) 管理页内状态和快/清晰两级有界位图缓存；分析时复用正在解码的源图生成整组小预览，再按同一源像素框裁出快速成片。默认小图长边不超过 768，组越大分辨率越低，原图/成片总预算 64 MiB；清晰成片另有 64 MiB LRU。停留 120ms 后请求清晰帧，播放/长按只读小图，不启动逐帧原图解码或识别。原图/XMP/参考区/强度/照片列表变化使结果失效，普通模板参数变化不影响独立结果。焦点、鸟体框和参考线沿用同一画布的辅助开关，按实际裁切坐标映射但不写入独立导出。[EditorSequencePreviewWorker / EditorSequenceExportWorker](../birdstamp/gui/editor_sequence_preview_worker.py) 共用单活动任务所有权，真实 `finished` 之前不销毁或替换线程。播放/两级预览回归见 [test_sequence_transport.py](../tests/test_sequence_transport.py)，管线回归见 [test_dejitter_tab.py](../tests/test_dejitter_tab.py)，操作与边界见 [参考区去抖动](DEJITTER.md)，设计记录见 [UX 文档](ux/STABILIZATION_UX.md)。
 
-RAW 源图的去抖动分析、成片预览和导出统一优先读取长边至少 1600 像素的内嵌 JPEG；缺失、损坏或过小时回退完整 RAW 解码。普通图片、GIF、视频渲染帧使用相同来源规则，源尺寸随实际像素来源确定。每侧视口的“显示 RAW”只改变原图的交互预览，不改变分析、成片和导出。
+RAW 源图的去抖动分析、成片预览和导出统一优先读取长边至少 1600 像素的内嵌 JPEG；缺失、损坏或过小时回退完整 RAW 解码。普通图片、GIF、视频渲染帧使用相同来源规则，源尺寸随实际像素来源确定。每侧视口的“显示 RAW”只改变原图的交互预览，不改变分析、成片和导出。 SuperViewer 的单视口及 A/B 工具栏也遵循同一来源阈值和会话开关规则，见 [Viewer 显示 RAW](../../SuperViewer/docs/ARCHITECTURE.md#显示-raw)。
 
 预览由 [editor_renderer.py](../birdstamp/gui/editor_renderer.py) 的 `render_preview`、`_render_preview_pipeline_image` 适配相同的阶段顺序和设置，但保留裁切外画布以供编辑，不直接把最终裁切位图作为交互画布。模板要与裁切区域对齐，焦点框也要经过相同坐标变换。[editor_preview_canvas.py](../birdstamp/gui/editor_preview_canvas.py) 承接交互显示和网格叠加。
 

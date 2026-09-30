@@ -72,7 +72,7 @@ RAW 焦点读取（[`raw_focus_metadata.py`](../../app_common/raw_focus_metadata
 | 非 RAW，像素数不超过同步阈值 | `_should_load_full_preview_sync()` 判定后同步完整解码。JPEG 等默认阈值 40 MP（`SuperViewer_SYNC_FULL_PREVIEW_MAX_MP`）；HEIF 使用独立阈值，默认 4 MP（`SuperViewer_SYNC_FULL_PREVIEW_HEIF_MAX_MP`，设为 40 恢复旧行为），因为 HEVC 单位像素解码成本远高于 JPEG |
 | 大图 | 先尝试当前档位缓存或有尺寸限制的快速预览，再通过 `_full_preview_timer` 和 `_FullPreviewLoader` 替换完整图 |
 | 超过 HEIF 阈值的 HIF / HEIF / HEIC 缓存未命中 | 显示“正在加载预览”，由完整预览 worker 解码；不能为了生成临时小图在 GUI 线程完整解码 HEVC。失败后显示“无法预览” |
-| RAW | 两段式：GUI 线程只显示当前档位缓存，未命中时显示“正在加载预览”，不提取、不解码 RAW；随后 `_FullPreviewLoader` 经 `_load_raw_embedded_preview_qimage()` 取高分辨率内嵌 JPEG 替换。不做 RAW 解马赛克。内嵌 JPEG 由 `thumb_stream.get_raw_preview_jpeg()` 提取：先用进程内 LibRaw（长边 ≥1600 直接采用），否则按 ExifTool `JpgFromRaw → PreviewImage → ThumbnailImage` 补查并取较大者；极小 EXIF 缩略图只作最后兜底 |
+| RAW | 两段式：GUI 线程只显示当前档位缓存，未命中时显示“正在加载预览”，不提取、不解码 RAW；随后 `_FullPreviewLoader` 经 `_load_full_preview_qimage_raw()` 加载原生尺寸清晰图。默认使用可解码且长边至少 1600 的内嵌 JPEG，并按 JPEG 自身 EXIF 方向显示；缺失、损坏或过小时回退 `_load_sensor_raw_qimage()` 完整解码。提取仍复用 `thumb_stream.get_raw_preview_jpeg()`：先用进程内 LibRaw（长边 ≥1600 直接采用），否则按 ExifTool `JpgFromRaw → PreviewImage → ThumbnailImage` 补查并取较大者 |
 
 快速缓存 provider 是 `SuperViewerTaggedFileListPanel.cached_quick_preview_for_path()`：优先使用当前档位已解码的 `QPixmap`，再用共享 `_resolve_existing_sized_preview_image_path(..., exact_size_only=True)` 读取已有缓存。它不生成缓存、不返回原图冒充缩略图。缓存根和文件命名由 `_browser_core.py` 按每个源文件解析，不能简单用当前选中目录推断。
 
@@ -81,6 +81,14 @@ BirdStamp 的 [`editor_shared_thumb_cache.py`](../../SuperBirdStamp/birdstamp/gu
 完整解码 worker 只传 `QImage` 回 GUI，GUI 转为 `QPixmap`。`_preview_request_token` 与当前路径共同拒绝晚到结果；`_full_preview_loader` 加一个 `_pending_full_preview_request` 实现单任务运行、只保留最新替换请求。原生线程退出后也必须保留引用，直到它自己的 `QThread.finished` 槽完成交接。
 
 `full_preview_ready(path)` 通知主窗口：对仍选中的照片补充焦点请求，并调用信息页 `refresh_metadata_fields()` 补齐尺寸等字段。它不会重新加载整页、重置文件名或覆盖备注草稿。`source_pixmap_for_path()` 只暴露真正完整加载的图，避免把快速档位尺寸当作照片尺寸。
+
+### 显示 RAW
+
+`ViewerViewportPanel.raw_toggle` 在单视口和 A/B 两侧工具栏分别提供“显示 RAW”，仅当前源文件本身为 RAW 时可见。`PreviewPanel.set_show_raw()` 默认关闭；每侧在当前窗口会话独立记忆，切换照片、隐藏 A 侧或暂时查看 JPEG/视频不会重置，不写入用户配置。开启后 `_FullPreviewLoader` 直接通过 rawpy 完整解码（相机白平衡、8-bit 输出、LibRaw 方向），原生尺寸显示；Windows 非 ASCII 路径使用二进制流并在完成后关闭。
+
+模式变化使 `_preview_request_token` 递增，绕过同路径复用并取消旧任务；worker 在启动时固定本次模式，旧 token 的结果不能替换当前图像。长按期间开关只改变目标模式，仍显示精确档位小图，松键后才升级最终选中帧。两侧各自保持单 worker 和一个最新待处理请求；不建立完整 RAW 缓存，也不把完整 RAW 写入共享缩略图。解码失败保留快速图并提示关闭开关重试。构图叠加导出仍按默认内嵌优先规则取图，开关不改变导出来源或当前视口。
+
+这是视口会话选项，不新增 CLI 参数。回归见 [`test_raw_preview_toggle.py`](../tests/test_raw_preview_toggle.py)：1600 阈值、损坏回退、方向、中文路径、A/B 独立状态、迟到任务、快切结束升级及叠加导出。
 
 ### 按住方向键
 

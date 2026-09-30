@@ -196,7 +196,7 @@ def test_full_preview_loader_is_single_flight_and_coalesces_latest(
         panel.close()
 
 
-def test_ordinary_raw_full_preview_never_uses_rawpy_demosaic(
+def test_eligible_raw_preview_does_not_use_rawpy_demosaic(
     monkeypatch,
     tmp_path: Path,
 ) -> None:
@@ -211,9 +211,10 @@ def test_ordinary_raw_full_preview_never_uses_rawpy_demosaic(
             raise AssertionError("ordinary preview must not demosaic RAW")
 
     monkeypatch.setitem(sys.modules, "rawpy", _RawpyProbe)
-    monkeypatch.setattr(preview_panel, "_load_raw_embedded_preview_qimage", lambda path: None)
+    embedded = QImage(1600, 1000, preview_panel._qimage_rgb888_format())
+    monkeypatch.setattr(preview_panel, "_load_raw_embedded_preview_qimage", lambda path: embedded)
 
-    assert preview_panel._load_full_preview_qimage(str(raw_path)) is None
+    assert preview_panel._load_full_preview_qimage(str(raw_path)) is embedded
     assert calls["imread"] == 0
 
 
