@@ -373,3 +373,35 @@ def test_quick_to_full_upgrade_keeps_view_scale_and_position(window, monkeypatch
     assert full.height() == pytest.approx(before.height(), rel=.01)
     assert full.center().x() == pytest.approx(before.center().x(), abs=1)
     assert full.center().y() == pytest.approx(before.center().y(), abs=1)
+
+
+@pytest.mark.parametrize('side', ['a', 'b'])
+@pytest.mark.parametrize('mode', ['keys', 'play', 'source_keys', 'source_play'])
+def test_focus_is_painted_on_quick_source_and_result_frames(window, monkeypatch, side, mode):
+    paths, _, _ = setup_tab(window, monkeypatch)
+    populate(window, paths)
+    analyze(window)
+    ab = window.ab_preview
+    ab.enabled.setChecked(True)
+    wait_until(lambda: ab.worker is None and not ab.pending)
+    if side == 'a':
+        ab.mode.setCurrentIndex(0 if mode.startswith('source') else 1)
+        wait_until(lambda: ab.worker is None and not ab.pending)
+    else:
+        window._set_dejitter_view('edit' if mode.startswith('source') else 'result')
+    ab.activate(side)
+    window.show_focus_box_check.setChecked(True)
+    ab.a_panel.center.setChecked(False)
+    ab.b_panel.center.setChecked(False)
+    transport = window.sequence_transport
+    transport.start(mode, 1)
+    transport.timer.stop()  # 手动推进一个节拍，让检查不受机器速度影响。
+    transport._tick()
+    canvas = ab.preview.canvas if side == 'a' else window.preview_label.canvas
+    assert canvas._focus_box is not None
+    with_focus = canvas.render_source_pixmap_with_overlays().toImage()
+    window.show_focus_box_check.setChecked(False)
+    without_focus = canvas.render_source_pixmap_with_overlays().toImage()
+    assert with_focus != without_focus
+    assert window._sequence_worker is None
+    transport.stop(commit=False)

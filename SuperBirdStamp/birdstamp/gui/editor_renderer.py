@@ -15,6 +15,7 @@ from typing import Any, Iterable
 from PIL import Image
 from PyQt6.QtGui import QPixmap
 
+from app_common.raw_preview_geometry import RAW_FOCUS_CROP_KEY
 from app_common.preview_canvas import (
     normalize_preview_composition_grid_line_width,
     normalize_preview_composition_grid_mode,
@@ -1674,6 +1675,7 @@ class _BirdStampRendererMixin:
                     self.current_source_image.width,
                     self.current_source_image.height,
                     camera_type=focus_camera_type,
+                    camera_crop_box=self.current_source_image.info.get(RAW_FOCUS_CROP_KEY),
                 ),
                 crop_box=None,
                 source_width=self.current_source_image.width,

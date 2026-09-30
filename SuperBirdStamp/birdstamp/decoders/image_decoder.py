@@ -7,6 +7,7 @@ import tempfile
 from contextlib import nullcontext
 from pathlib import Path
 
+from app_common.raw_preview_geometry import RAW_FOCUS_CROP_KEY, rawpy_camera_crop_box
 from PIL import Image, ImageOps
 
 from birdstamp.constants import HEIF_EXTENSIONS, PIL_EXTENSIONS, RAW_EXTENSIONS
@@ -119,7 +120,10 @@ def _decode_raw_rawpy(path: Path) -> Image.Image:
             no_auto_bright=False,
             output_bps=8,
         )
+        crop = rawpy_camera_crop_box(getattr(raw, "sizes", None))
     image = Image.fromarray(rgb)
+    if crop is not None:
+        image.info[RAW_FOCUS_CROP_KEY] = crop
     return image if image.mode == "RGB" else image.convert("RGB")
 
 

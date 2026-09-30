@@ -107,7 +107,10 @@ Viewer 在列表子类中启用 `enable_key_navigation_playback`、`enable_in_me
 
 ## 4. 焦点来源与显示
 
-入口为 `MainWindow._update_preview_focus_box()`。快切传入 `allow_async_load=False`，停止旧焦点任务；开启自动居中时，仅按列表当前源图身份查询 `get_cached_focus_box_state_for_path()` 的内存缓存（磁盘缩略图路径可能是散列 JPEG），不解析来源、不扫描目录、不读文件元数据。普通预览在“显示对焦点”或“自动焦点居中”任一开启时查询缓存，必要时创建 `FocusBoxLoader`。
+RAW 完整解码可能保留内嵌 JPEG 裁掉的传感器边缘。共享 [`raw_preview_geometry.py`](../../app_common/raw_preview_geometry.py) 的 `rawpy_camera_crop_box()` 将 LibRaw 默认裁切范围减去可见区原点，再按 `flip` 映射到显示坐标；`map_camera_focus_box()` 将相机归一化焦点框放入该区域。几何随完整 RAW `QImage` 的 `raw_camera_crop_box` 传回；`PreviewPanel` 分别保留相机焦点框和当前像素几何。切换小图／RAW、A/B 初始化、迟到任务及叠加导出均按实际像素来源使用对应坐标，不裁掉 RAW 画面。缺少有效裁切信息时保留原映射，不猜测偏移。验证见 [`test_preview_focus_streaming.py`](../tests/test_preview_focus_streaming.py)。
+
+
+入口为 `MainWindow._update_preview_focus_box()`。快切传入 `allow_async_load=False`，停止旧焦点任务；开启“显示对焦点”或“自动焦点居中”任一选项时，仅按列表当前源图身份查询 `get_cached_focus_box_state_for_path()` 的内存缓存（磁盘缩略图路径可能是散列 JPEG），不解析来源、不扫描目录、不读文件元数据。普通预览在“显示对焦点”或“自动焦点居中”任一开启时查询缓存，必要时创建 `FocusBoxLoader`。 `_focus_cache_path` 保存各侧实际显示帧的源身份，后台元数据到达时仅重绘匹配侧的焦点；即使播放已选中但跳过下一张缺帧照片，也不把该照片的框画到旧画面上。无缓存时清空旧框，继续等待已有后台元数据任务，不在快速帧中启动焦点提取。
 
 预览工具栏的“自动焦点居中”默认关闭，状态通过 [`paths_settings.py`](../superviewer/paths_settings.py) 的 `preview_auto_focus_center` 保存。开启后，[`preview_panel.py`](../superviewer/preview_panel.py) 复用共享的 [FocusCenteredPreviewCanvas](../../app_common/preview_canvas/focus_centered.py)，将归一化焦点框中心锁定到预览中央，无焦点/未缓存时使用图像中心；靠边焦点允许留白。切图、缩略图升级、RAW/HEIF 加载占位保持相对于适应窗口的放大程度，滚轮及缩放菜单也以焦点为基准；关闭后恢复自由拖动。焦点框是否可见不影响居中。该功能只改变交互视口，继续复用共享构图/导出，不改变导出裁剪，也不需要 CLI 参数。回归见 [焦点居中测试](../tests/test_preview_focus_center.py)。
 

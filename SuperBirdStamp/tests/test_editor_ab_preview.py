@@ -129,6 +129,8 @@ def test_late_decode_is_closed_without_replacing_a(window, monkeypatch):
 
 def test_raw_toggle_is_independent_per_viewport_and_keeps_export_source(window, monkeypatch, tmp_path):
     import io
+    from app_common.raw_preview_geometry import RAW_FOCUS_CROP_KEY
+    from birdstamp.gui.editor_core import extract_focus_box_for_display
     from birdstamp.decoders import image_decoder
     from test_sequence_transport import populate
 
@@ -139,9 +141,17 @@ def test_raw_toggle_is_independent_per_viewport_and_keeps_export_source(window, 
     stream = io.BytesIO()
     Image.new('RGB', (1600, 800), 'blue').save(stream, format='JPEG')
     monkeypatch.setattr('app_common.thumb_stream.get_raw_preview_jpeg', lambda _path: stream.getvalue())
-    monkeypatch.setattr(image_decoder, '_decode_raw',
-                        lambda *_args, **_kwargs: Image.new('RGB', (2400, 1200), 'red'))
-    monkeypatch.setattr(window, '_metadata_snapshot_for_selection', lambda _path: {})
+    def raw_pixels(*args, **kwargs):
+        image = Image.new('RGB', (2400, 1200), 'red')
+        image.info[RAW_FOCUS_CROP_KEY] = (.1, .1, .9, .9)
+        return image
+    monkeypatch.setattr(image_decoder, '_decode_raw', raw_pixels)
+    metadata = {'Make': 'SONY', 'ExifImageWidth': 1600, 'ExifImageHeight': 800,
+                'SubjectArea': [400, 200, 160, 80]}
+    original_focus = extract_focus_box_for_display(metadata, 1600, 800)
+    raw_focus = tuple(.1 + value * .8 for value in original_focus)
+    monkeypatch.setattr(window, '_metadata_snapshot_for_selection', lambda _path: dict(metadata))
+    window.raw_metadata_cache[path_key(raw)] = dict(metadata)
     monkeypatch.setattr(window, '_schedule_async_bird_detect', lambda *_args: None)
     populate(window, [raw, jpeg])
     window.show()
@@ -158,10 +168,13 @@ def test_raw_toggle_is_independent_per_viewport_and_keeps_export_source(window, 
     wait_until(lambda: window._preview_decode_worker is None and window.current_source_image is not None)
     assert window.current_source_image.getpixel((0, 0)) == (255, 0, 0)
     assert not ab.a_panel.show_raw.isChecked()
+    assert window.preview_label.canvas._focus_box == pytest.approx(raw_focus)
+    assert ab.preview.canvas._focus_box == pytest.approx(original_focus)
 
     ab.a_panel.show_raw.click()
     finish(ab)
     assert ab.image.pixelColor(0, 0).red() == 255
+    assert ab.preview.canvas._focus_box == pytest.approx(raw_focus)
     ab.select_a(jpeg)
     finish(ab)
     assert not ab.a_panel.show_raw.isVisible()

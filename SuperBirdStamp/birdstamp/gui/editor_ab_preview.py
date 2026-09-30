@@ -6,6 +6,7 @@ from PyQt6.QtGui import QPixmap
 from PyQt6.QtWidgets import QSplitter
 
 from app_common.toggle_button import ToggleToolButton
+from app_common.raw_preview_geometry import RAW_FOCUS_CROP_KEY
 from app_common.preview_canvas import PreviewWithStatusBar
 from birdstamp.constants import RAW_EXTENSIONS
 from .editor_preview_canvas import EditorPreviewCanvas, EditorPreviewOverlayState
@@ -35,6 +36,7 @@ class ABPreview(QObject):
         self.frame = None
         self.image = None
         self.size = None
+        self.camera_crop_box = None
         self.upgrade = QTimer(self)
         self.upgrade.setSingleShot(True)
         self.upgrade.setInterval(120)
@@ -252,6 +254,7 @@ class ABPreview(QObject):
         self._cancel()
         self.request = request
         self.image = self.frame = self.size = None
+        self.camera_crop_box = None
         self.preview.set_source_pixmap(None)
         self.preview.set_original_size(None, None)
         self.preview.set_cropped_size(None, None)
@@ -331,6 +334,7 @@ class ABPreview(QObject):
         try:
             if not self._accept(token) or path_key(Path(path)) != path_key(self.path):
                 return
+            self.camera_crop_box = image.info.get(RAW_FOCUS_CROP_KEY)
             with image.convert('RGB') as rgb:
                 self.image = pil_qimage(rgb)
             self.size = tuple(size)
@@ -345,6 +349,7 @@ class ABPreview(QObject):
         if not sequence.files_current():
             self.editor._invalidate_sequence_preview()
             return
+        self.camera_crop_box = None
         self.frame, self.image, self.size = frame, frame.image, frame.source_size
         self._display()
 
@@ -388,7 +393,8 @@ class ABPreview(QObject):
         state.focus_box = editor_core.resolve_focus_box_after_processing(
             metadata, source_width=width, source_height=height, crop_box=crop,
             outer_pad=pad, apply_ratio_crop=crop is not None,
-            camera_type=editor_core.resolve_focus_camera_type_from_metadata(metadata))
+            camera_type=editor_core.resolve_focus_camera_type_from_metadata(metadata),
+            camera_crop_box=self.camera_crop_box)
         bird = editor._bird_box_cache.get(editor._source_signature(self.path))
         state.bird_box = editor_core.transform_source_box_after_crop_padding(
             bird, crop_box=crop, source_width=width, source_height=height, pt=pad[0], pb=pad[1], pl=pad[2], pr=pad[3]) if crop else bird

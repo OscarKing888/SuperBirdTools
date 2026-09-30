@@ -4,6 +4,7 @@ from collections import OrderedDict
 from pathlib import Path
 from time import monotonic
 
+from app_common.raw_preview_geometry import RAW_FOCUS_CROP_KEY
 from PyQt6.QtGui import QPixmap
 from PyQt6.QtWidgets import QTabBar, QCheckBox, QComboBox, QFileDialog, QListWidget, QGroupBox, QHBoxLayout, QLabel, QProgressBar, QPushButton, QSlider, QSpinBox, QVBoxLayout, QWidget
 from PyQt6.QtCore import Qt, QTimer
@@ -1000,7 +1001,9 @@ class _BirdStampDejitterMixin:
             state.focus_box = editor_core.resolve_focus_box_after_processing(
                 raw_metadata, source_width=width, source_height=height, crop_box=None,
                 outer_pad=(0, 0, 0, 0), apply_ratio_crop=False,
-                camera_type=editor_core.resolve_focus_camera_type_from_metadata(raw_metadata))
+                camera_type=editor_core.resolve_focus_camera_type_from_metadata(raw_metadata),
+                camera_crop_box=(source.info.get(RAW_FOCUS_CROP_KEY)
+                                 if source is not None and quick is None and source_entry is None else None))
             state.bird_box = self._bird_box_cache.get(self._source_signature(self.current_path)) if self.current_path else None
             self.preview_label.set_original_size(width, height)
         self.preview_label.set_cropped_size(None, None)
