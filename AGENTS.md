@@ -112,6 +112,7 @@ Follow [ai_rules/AI_CODING_RULES.md](ai_rules/AI_CODING_RULES.md) as the cross-t
 
 - This is a protected behavior. Do not replace it with "always show thumbnail", "always sync load full image", or "always async full image" simplifications.
 - Preserve `PreviewPanel.set_image(path, *, load_full=True, quick_size=None)` and keep `FileListPanel.preview_quick_size()` as the bridge from the selected thumbnail-size level to preview loading.
+- Initialization and directory changes must fit each viewport’s first valid image to the window, including its asynchronous full-resolution upgrade. Loading placeholders do not consume this reset. Manual zoom/pan while waiting takes precedence; later selections in the same directory retain the existing view policy.
 - Normal single-image selection:
   - Non-RAW images at or below the synchronous threshold should synchronously show the full preview image. The threshold is `SuperViewer_SYNC_FULL_PREVIEW_MAX_MP` (default 40 MP) for JPEG and other non-HEIF formats, and the separate `SuperViewer_SYNC_FULL_PREVIEW_HEIF_MAX_MP` (default 4 MP) for HEIF/HIF/HEIC, because HEVC decoding costs far more per pixel (measured ~18 ms/MP on M2 Max). Setting the HEIF value to 40 restores the old shared threshold.
   - Non-RAW images above their threshold should first show the selected thumbnail-size preview (`128/256/512/1024/2048`) and then asynchronously replace it with the full preview.

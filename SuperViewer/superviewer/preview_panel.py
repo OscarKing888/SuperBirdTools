@@ -533,6 +533,8 @@ class PreviewPanel(QWidget):
         self._source_focus_box = None
         self._raw_focus_crop_box = None
         self._last_quick_size = None
+        self._fit_next_image = True
+        self._first_image_fit_token = None
         self._preview_request_token = 0
         self._full_preview_loaded = False
         self._fast_preview_only = False
@@ -556,6 +558,7 @@ class PreviewPanel(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(4)
         self._canvas = ViewerPreviewCanvas(self, placeholder_text="未选择图片")
+        self._canvas.viewport_interacted.connect(self._cancel_first_image_fit)
         if hasattr(self._canvas, "set_keep_view_on_switch"):
             self._canvas.set_keep_view_on_switch(self._keep_view_on_switch)
         if hasattr(self._canvas, "display_scale_percent_changed"):
@@ -656,6 +659,7 @@ class PreviewPanel(QWidget):
             if direct_full:
                 self._full_preview_loaded = True
                 self._fast_preview_only = False
+                self._first_image_fit_token = None
         else:
             canvas_t0 = _time.perf_counter()
             if load_full:
@@ -771,6 +775,8 @@ class PreviewPanel(QWidget):
 
     def clear_image(self):
         self._preview_request_token += 1
+        self._fit_next_image = True
+        self._first_image_fit_token = None
         self._current_path = None
         self._focus_cache_path = ""
         self.source_changed.emit()
@@ -782,8 +788,20 @@ class PreviewPanel(QWidget):
         self._canvas.set_source_pixmap(None)
         self._set_preview_status_text(None, None)
 
+    def _cancel_first_image_fit(self) -> None:
+        # 首张小图出现后，用户的缩放/平移优先于后台清晰图到达时的自动适应。
+        self._first_image_fit_token = None
+
     def _set_canvas_pixmap(self, pix: QPixmap, *, log_performance: bool = True) -> None:
-        if self._canvas._auto_focus_center:
+        fit_first = (self._fit_next_image
+                     or self._first_image_fit_token == self._preview_request_token)
+        if fit_first:
+            self._canvas.set_source_pixmap(pix, reset_view=True, log_performance=log_performance)
+            # 焦点居中会保护旧 zoom；显式适应确保切目录后不会沿用上一目录倍率。
+            self._canvas.fit_to_window()
+            self._fit_next_image = False
+            self._first_image_fit_token = self._preview_request_token
+        elif self._canvas._auto_focus_center:
             # 保持相对于适应窗口的放大程度，缩略图换成完整图时不跳变。
             self._canvas.set_source_pixmap(pix, log_performance=log_performance)
         elif self._keep_view_on_switch:
@@ -910,6 +928,7 @@ class PreviewPanel(QWidget):
         self._set_preview_status_text(pix.width(), pix.height())
         self._full_preview_loaded = True
         self._fast_preview_only = False
+        self._first_image_fit_token = None
         self.full_preview_ready.emit(path)
         perf_log(
             _log,
