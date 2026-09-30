@@ -5,6 +5,7 @@ and the render_preview entry point.
 Mixed into BirdStampEditorWindow via multiple inheritance.
 """
 from __future__ import annotations
+from birdstamp.image_dejitter.recognition import SubjectSettings, SUBJECT_KEYS
 from birdstamp.image_dejitter.matching_options import MATCHING_KEYS, normalize_matching_settings
 from birdstamp.image_dejitter.rigid_alignment import ALIGNMENT_MODE_KEY, normalize_alignment_mode
 
@@ -1007,6 +1008,8 @@ class _BirdStampRendererMixin:
         slider = getattr(self, "dejitter_reference_strength_slider", None)
         source = getattr(self, "_dejitter_reference_source", None)
         return {
+            **(self.dejitter_subject_controls.settings() if hasattr(self, "dejitter_subject_controls")
+               else SubjectSettings().as_settings()),
             "dejitter_reference_strength": int(slider.value()) if slider is not None else 100,
             ALIGNMENT_MODE_KEY: (self.dejitter_alignment_combo.currentData() if hasattr(self,'dejitter_alignment_combo') else 'translation'),
             **(self.dejitter_matching_controls.settings() if hasattr(self, 'dejitter_matching_controls')
@@ -1035,6 +1038,8 @@ class _BirdStampRendererMixin:
         normalized.pop("uniform_auto_crop", None)
         normalized.pop("auto_crop_stabilization", None)
         normalized.pop("dejitter_reference_strength", None)
+        for key in SUBJECT_KEYS:
+            normalized.pop(key, None)
         normalized.pop("dejitter_pad_to_union", None)
         normalized.pop(ALIGNMENT_MODE_KEY,None)
         for key in MATCHING_KEYS:
@@ -1105,7 +1110,7 @@ class _BirdStampRendererMixin:
             DEJITTER_STRATEGY_KEY, DEJITTER_REFERENCE_ENABLED_KEY,
             DEJITTER_REFERENCE_REGIONS_KEY, DEJITTER_REFERENCE_SOURCE_KEY,
             "dejitter_reference_strength", "dejitter_reference_crop_settings", "dejitter_pad_to_union",
-            *MATCHING_KEYS,
+            *MATCHING_KEYS, *SUBJECT_KEYS,
             ALIGNMENT_MODE_KEY,
         )}
 
@@ -1174,7 +1179,7 @@ class _BirdStampRendererMixin:
                 DEJITTER_REFERENCE_REGIONS_KEY,
                 DEJITTER_REFERENCE_SOURCE_KEY,
                 "dejitter_reference_strength", "dejitter_pad_to_union",
-                *MATCHING_KEYS,
+                *MATCHING_KEYS, *SUBJECT_KEYS,
                 ALIGNMENT_MODE_KEY,
             )
         ):
@@ -1303,6 +1308,8 @@ class _BirdStampRendererMixin:
         invalidate = getattr(self, "_invalidate_reference_tracking", None)
         if callable(invalidate):
             invalidate()
+        if hasattr(self, 'dejitter_subject_controls'):
+            self.dejitter_subject_controls.set_settings(settings)
         if hasattr(self, 'dejitter_matching_controls'):
             self.dejitter_matching_controls.set_settings(settings)
         if hasattr(self,'dejitter_alignment_combo'):
@@ -1310,6 +1317,8 @@ class _BirdStampRendererMixin:
             blocked = combo.blockSignals(True)
             combo.setCurrentIndex(combo.findData(normalize_alignment_mode(settings.get(ALIGNMENT_MODE_KEY))))
             combo.blockSignals(blocked)
+        if hasattr(self, "dejitter_subject_controls"):
+            self._sync_dejitter_method_controls()
         regions = []
         raw_regions = settings.get(DEJITTER_REFERENCE_REGIONS_KEY)
         if isinstance(raw_regions, (list, tuple)):

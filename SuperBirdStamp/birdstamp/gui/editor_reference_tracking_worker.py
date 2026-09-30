@@ -23,13 +23,14 @@ class EditorReferenceTrackingWorker(QThread):
     failed = pyqtSignal(int, str)
 
     def __init__(self, *, token: int, reference: Path, regions: tuple, paths: tuple[Path, ...],
-                 options=MatchingOptions(), parent=None):
+                 options=MatchingOptions(), method="reference_region", parent=None):
         super().__init__(parent)
         self.token = token
         self.reference = reference
         self.regions = regions
         self.paths = paths
         self.options = options
+        self.method = method
         self.reference_signature = image_file_signature(reference)
 
     def run(self) -> None:
@@ -39,7 +40,8 @@ class EditorReferenceTrackingWorker(QThread):
             if self.reference_signature is None:
                 raise ValueError(f"无法读取参考照片：{self.reference}")
             with decode_image(self.reference, decoder="auto") as image:
-                tracker = ReferenceRegionTracker(image, self.regions, options=self.options)
+                from birdstamp.image_dejitter.recognition import recognition_strategy, METHOD_KEY
+                tracker = recognition_strategy({METHOD_KEY:self.method}).create_tracker(image, self.regions, options=self.options)
             if image_file_signature(self.reference) != self.reference_signature:
                 raise ValueError("参考照片已变化，请重新预处理。")
             results = {}

@@ -16,6 +16,8 @@ from birdstamp.config import get_config_path
 from birdstamp.export_stage.sequence_preview import SequencePreview, sequence_input_key
 from birdstamp.export_stage.video_frame_job import VideoFrameJob
 from birdstamp.image_dejitter.region_tracking_result import RegionTrackingResult
+from birdstamp.image_dejitter.recognition import SubjectSettings
+from birdstamp.image_dejitter.subject_local_tracker import LocalObservation
 from birdstamp.image_dejitter.rigid_alignment import FrameAlignment, ALIGNMENT_MODE_KEY, normalize_alignment_mode
 from . import editor_options
 from .editor_utils import path_key
@@ -66,6 +68,7 @@ class SequencePreviewCache:
                 records.append(dict(path=str(job.path), settings=job.settings, raw_metadata=job.raw_metadata,
                                     source_size=sequence.source_sizes[key], pixel_box=sequence.pixel_boxes.get(key),
                                     alignment=asdict(sequence.alignments[key]) if key in sequence.alignments else None,
+                                    subject_plan=asdict(sequence.subject_plans[key]) if key in sequence.subject_plans else None,
                                     tracking=asdict(sequence.tracking[key])))
             document = dict(version=CACHE_VERSION, input_key=sequence.input_key,
                             output_size=sequence.output_size, signatures=sequence.signatures, frames=records,
@@ -115,7 +118,8 @@ class SequencePreviewCache:
             signatures = tuple((path, tuple(sig) if sig is not None else None) for path, sig in raw['signatures'])
             sequence = SequencePreview(key, {}, signatures, output_size=tuple(raw['output_size']))
             sequence.canvas_box = tuple(raw.get('canvas_box') or ())
-            rigid = normalize_alignment_mode(seeds[0].settings.get(ALIGNMENT_MODE_KEY)) == 'rigid'
+            rigid = (normalize_alignment_mode(seeds[0].settings.get(ALIGNMENT_MODE_KEY)) == 'rigid'
+                     and SubjectSettings.from_settings(seeds[0].settings).method != 'subject_local')
             if bool(sequence.canvas_box) != rigid:
                 raise ValueError('成片缓存缺少对应的对齐几何')
             if sequence.canvas_box and (len(sequence.canvas_box) != 4 or
@@ -152,7 +156,8 @@ class SequencePreviewCache:
                     tuple(tuple(b) if b is not None else None for b in tracking['boxes']),
                     tuple(tracking['signature']) if tracking['signature'] else None,
                     tracking['error'], tuple(tracking['scores']), tuple(tracking['reasons']),
-                    tuple(tuple(b) for b in tracking['predicted_boxes']), tuple(tracking.get('manual_indices', ())))
+                    tuple(tuple(b) for b in tracking['predicted_boxes']), tuple(tracking.get('manual_indices', ())),
+                    observation=LocalObservation(**tracking['observation']) if tracking.get('observation') else None)
                 image = self._read_image(folder / f'quick-{index}.png', budget)
                 budget -= image.sizeInBytes()
                 source = self._read_image(folder / f'source-{index}.png', budget)
@@ -162,6 +167,9 @@ class SequencePreviewCache:
                 if box is not None:
                     sequence.pixel_boxes[frame_key] = box
                 sequence.tracking[frame_key] = result
+                if record.get("subject_plan"):
+                    from birdstamp.export_stage.subject_sequence import SubjectFramePlan
+                    sequence.subject_plans[frame_key] = SubjectFramePlan(**record["subject_plan"])
                 frames[frame_key] = SequencePreviewFrame(path, image, size, sequence.output_size,
                                                         sequence.frame_crop_plan(frame_key), source,alignment,sequence.canvas_box)
             if not sequence.files_current() or sequence_input_key(sequence.jobs.values()) != key:

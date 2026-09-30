@@ -54,6 +54,7 @@ class EditorPreviewOverlayState(PreviewOverlayState):
     crop_effect_box: "NormalizedBox | None" = None
     reference_regions: tuple["NormalizedBox", ...] = ()
     reference_diagnostics: tuple = ()
+    subject_points: tuple = ()
     alignment_crop_box: "NormalizedBox | None" = None
     focus_polygon: tuple = ()
     bird_polygon: tuple = ()
@@ -110,6 +111,7 @@ class EditorPreviewCanvas(CropResolutionOverlayMixin, FocusCenteredPreviewCanvas
         self._video_safe_frame_size: tuple[int, int] | None = None
         self._reference_regions: tuple["NormalizedBox", ...] = ()
         self._reference_diagnostics: tuple = ()
+        self._subject_points: tuple = ()
         self._alignment_crop_box = None
         self._intersection_box = None
         self._union_box = None
@@ -383,6 +385,9 @@ class EditorPreviewCanvas(CropResolutionOverlayMixin, FocusCenteredPreviewCanvas
         if self._reference_diagnostics != state.reference_diagnostics:
             self._reference_diagnostics = state.reference_diagnostics
             changed = True
+        if self._subject_points != state.subject_points:
+            self._subject_points = state.subject_points
+            changed = True
         if self._alignment_crop_box != state.alignment_crop_box:
             self._alignment_crop_box = state.alignment_crop_box
             changed = True
@@ -421,6 +426,7 @@ class EditorPreviewCanvas(CropResolutionOverlayMixin, FocusCenteredPreviewCanvas
             mode.cancel(self)
         self._reference_regions = ()
         self._reference_diagnostics = ()
+        self._subject_points = ()
         self._alignment_crop_box = None
         self._intersection_box = None
         self._union_box = None
@@ -441,6 +447,8 @@ class EditorPreviewCanvas(CropResolutionOverlayMixin, FocusCenteredPreviewCanvas
             self._paint_crop_shade(painter, draw_rect, content_rect)
         if self._crop_edit_mode and self._crop_effect_box:
             self._paint_crop_handles(painter, draw_rect, content_rect)
+        if self._subject_points:
+            self._paint_subject_points(painter, draw_rect, content_rect)
         if self._show_reference_regions:
             if self._reference_diagnostics:
                 self._paint_tracking_diagnostics(painter, draw_rect, content_rect)
@@ -606,6 +614,17 @@ class EditorPreviewCanvas(CropResolutionOverlayMixin, FocusCenteredPreviewCanvas
             painter.drawRect(rect)
             label = self._reference_region_labels[index] if index < len(self._reference_region_labels) else str(index + 1)
             painter.drawText(QPointF(rect.left() + 7, rect.top() + painter.fontMetrics().ascent() + 5), label)
+
+    def _paint_subject_points(self, painter, draw_rect, content_rect):
+        painter.save()
+        painter.setClipRect(draw_rect.intersected(QRectF(content_rect)))
+        for x,y,qx,qy,accepted in self._subject_points:
+            p = QPointF(*self._norm_to_widget(draw_rect,x,y))
+            q = QPointF(*self._norm_to_widget(draw_rect,qx,qy))
+            painter.setPen(QPen(QColor('#23F531' if accepted else '#FF5252'),1))
+            painter.drawLine(p,q)
+            painter.drawEllipse(q,2.5,2.5)
+        painter.restore()
 
     def _paint_tracking_diagnostics(self, painter, draw_rect, content_rect):
         visible = draw_rect.intersected(QRectF(content_rect))

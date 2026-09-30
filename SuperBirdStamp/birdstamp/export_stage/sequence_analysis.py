@@ -36,14 +36,18 @@ class SequenceAnalysisAction(WorkerAction):
             if self.recovery is None:
                 result = (RegionTrackingResult((None,) * len(self.manual_boxes))
                           if self.manual_boxes and all(box is not None for box in self.manual_boxes)
-                          else self.tracker.track(image, cancelled=self.is_cancelled))
+                          else (self.tracker.track_cached(self.path, image, cancelled=self.is_cancelled)
+                                if hasattr(self.tracker, "track_cached") else self.tracker.track(image, cancelled=self.is_cancelled)))
                 if self.preview_source is not None and not self.is_cancelled():
                     self.preview_source(self.path, image)
             else:
                 result = self.tracker.recover(image, *self.recovery, cancelled=self.is_cancelled)
             if any(box is not None for box in self.manual_boxes):
-                result = resolve_tracking_consensus(self.tracker.regions, apply_manual_boxes(result, self.manual_boxes),
-                                                    image.size, self.tracker.reference_size)
+                if hasattr(self.tracker, "resolve_manual"):
+                    result = self.tracker.resolve_manual(result, self.manual_boxes, image.size)
+                else:
+                    result = resolve_tracking_consensus(self.tracker.regions, apply_manual_boxes(result, self.manual_boxes),
+                                                        image.size, self.tracker.reference_size)
             if self.is_cancelled():
                 raise VideoExportCancelledError('已取消去抖动分析。')
             return (path_key(self.path), replace(result, signature=image_file_signature(self.path)), image.size)
@@ -136,7 +140,8 @@ def analyze_sequence_frames(jobs, tracker, reference, *, cancel_event, preview_s
         sizes = {key: sizes[key] for key in keys if key in sizes}
         first_pass = dict(tracking)
         recovery_actions = []
-        for index in range(1, min(failure_index, len(jobs) - 1)):
+        for index in (range(1, min(failure_index, len(jobs) - 1))
+                      if getattr(tracker, 'supports_recovery', True) else ()):
             check()
             if any(key not in first_pass for key in keys[index - 1:index + 2]):
                 continue

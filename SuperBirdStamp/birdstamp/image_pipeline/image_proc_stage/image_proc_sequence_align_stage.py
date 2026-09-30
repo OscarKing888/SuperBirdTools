@@ -17,7 +17,13 @@ class ImageProcSequenceAlignStage(ImageProcStage):
     description = '默认取对齐画面交集；可补边保留完整范围，供二次裁切。'
 
     def parameter_options(self):
-        return (ImageProcOptionSpec(key='dejitter_alignment_mode',label='对齐方式',value_type='choice',default='rigid',
+        from birdstamp.image_dejitter.recognition import METHOD_CHOICES
+        return (ImageProcOptionSpec(key='dejitter_recognition_method',label='识别方法',value_type='choice',default='reference_region',
+                                    choices=tuple(ImageProcOptionChoice(label,value) for label,value in METHOD_CHOICES)),
+                ImageProcOptionSpec(key='dejitter_subject_mode',label='主体稳定模式',value_type='choice',default='lock',
+                                    choices=(ImageProcOptionChoice('局部锁定','lock'),ImageProcOptionChoice('自然跟随','follow'))),
+                ImageProcOptionSpec(key='dejitter_subject_window',label='跟随平滑窗口',value_type='int',default=5,minimum=3,maximum=31,step=2),
+                ImageProcOptionSpec(key='dejitter_alignment_mode',label='对齐方式',value_type='choice',default='rigid',
                                     choices=(ImageProcOptionChoice('平移＋旋转','rigid'),ImageProcOptionChoice('仅平移','translation'))),
                 ImageProcOptionSpec(key='dejitter_reference_strength', label='补偿强度',
                                     value_type='int', default=100),

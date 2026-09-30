@@ -2,6 +2,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from .subject_local_tracker import LocalObservation
 
 from .normalized_box import NormalizedBox
 
@@ -25,6 +29,8 @@ class RegionTrackingResult:
     reasons: tuple[str, ...] = ()
     predicted_boxes: tuple[NormalizedBox, ...] = ()
     manual_indices: tuple[int, ...] = ()
+
+    observation: LocalObservation | None = None
 
     @property
     def matched_count(self) -> int:

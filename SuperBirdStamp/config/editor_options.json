@@ -155,6 +155,11 @@
   "dejitter_disk_cache_mb": 512,
   "dejitter_match_mode": "auto",
   "dejitter_alignment_mode": "rigid",
+  "dejitter_recognition_method": "reference_region",
+  "dejitter_subject_mode": "lock",
+  "dejitter_subject_window": 5,
+  "dejitter_subject_version": 1,
+  "dejitter_subject_debug": false,
   "dejitter_match_rotation_deg": 2.0,
   "dejitter_match_tolerance_pct": 0.3,
   "text_effects": {

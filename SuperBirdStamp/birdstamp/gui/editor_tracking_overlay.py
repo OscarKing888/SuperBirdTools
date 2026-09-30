@@ -46,3 +46,16 @@ def apply_alignment_crop(state, sequence, key):
     state.crop_effect_box = polygon_bounds(state.crop_polygon)
     state.alignment_crop_box = None
     return True
+
+
+def subject_debug_points(result, crop=None):
+    """源像素到实际预览裁切；视口缩放不参与观测，失配点不能显示为拟合成功。"""
+    observation = result.observation if result else None
+    if observation is None or not observation.source_size:
+        return ()
+    w,h = observation.source_size
+    l,t,r,b = crop or (0,0,1,1)
+    accepted = observation.status == 'tracked'
+    return tuple(((p[2]/w-l)/(r-l),(p[3]/h-t)/(b-t),
+                  (p[4]/w-l)/(r-l),(p[5]/h-t)/(b-t),bool(p[6] and accepted))
+                 for p in observation.points)

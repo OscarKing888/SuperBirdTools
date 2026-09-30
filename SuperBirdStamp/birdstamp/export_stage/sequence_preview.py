@@ -10,6 +10,7 @@ from app_common.exif_io import find_same_stem_xmp_sidecar
 from app_common.exif_io.exiftool_runner import exiftool_worker_session, exiftool_read_request
 from birdstamp.gui.editor_utils import path_key
 from birdstamp.image_dejitter import ReferenceRegionTracker
+from birdstamp.image_dejitter.recognition import SubjectSettings, SUBJECT_KEYS, recognition_strategy
 from birdstamp.image_dejitter.region_consensus import select_translation
 from birdstamp.image_dejitter.matching_options import MATCHING_KEYS, MatchingOptions, normalize_matching_settings
 from birdstamp.image_dejitter.rigid_alignment import ALIGNMENT_MODE_KEY, normalize_alignment_mode, estimate_alignment
@@ -25,8 +26,8 @@ from .video_export_cancelled_error import VideoExportCancelledError
 
 
 REFERENCE_KEYS = ('dejitter_reference_regions', 'dejitter_reference_source',
-                  'dejitter_reference_strength', 'dejitter_pad_to_union', ALIGNMENT_MODE_KEY, *MATCHING_KEYS)
-SEQUENCE_ANALYSIS_VERSION = 6
+                  'dejitter_reference_strength', 'dejitter_pad_to_union', ALIGNMENT_MODE_KEY, *MATCHING_KEYS, *SUBJECT_KEYS)
+SEQUENCE_ANALYSIS_VERSION = 7
 
 
 def sequence_files(seeds, template_paths=None) -> tuple[Path, ...]:
@@ -52,7 +53,8 @@ def sequence_input_key(seeds, template_paths=None) -> str:
     seeds = tuple(seeds)
     payload = []
     for seed in seeds:
-        settings = {**seed.settings, **normalize_matching_settings(seed.settings)}
+        settings = {**seed.settings, **normalize_matching_settings(seed.settings),
+                    **SubjectSettings.from_settings(seed.settings).as_settings()}
         settings[ALIGNMENT_MODE_KEY] = normalize_alignment_mode(settings.get(ALIGNMENT_MODE_KEY))
         relevant = {key: settings.get(key) for key in REFERENCE_KEYS}
         if settings.get(MANUAL_MATCHES_KEY):
@@ -81,6 +83,7 @@ class SequencePreview:
     # Relative to the displayed output canvas, including padded previews.
     intersection_box: tuple | None = None
     union_box: tuple | None = None
+    subject_plans: dict = field(default_factory=dict)
 
     def frame_crop_plan(self, key):
         from birdstamp.image_dejitter.sequence_geometry import aligned_crop_plan
@@ -202,12 +205,16 @@ def prepare_sequence_preview(seeds, template_paths=None, *, cancel_event, progre
     with sequence_photo_errors(reference), decode_image(reference, decoder='auto') as image:
         if cancel_event.is_set():
             raise VideoExportCancelledError('已取消去抖动分析。')
-        tracker = ReferenceRegionTracker(image, regions, options=MatchingOptions.from_settings(settings))
+        tracker = (recognition_strategy(settings).create_tracker(image, regions, options=MatchingOptions.from_settings(settings))
+                   if SubjectSettings.from_settings(settings).method == "subject_local"
+                   else ReferenceRegionTracker(image, regions, options=MatchingOptions.from_settings(settings)))
         reference_size = image.size
         if preview_source is not None:
             preview_source(reference, image)
     photo_errors = {}
-    tracking, sizes = analyze_sequence_frames(
+    from .subject_sequence import analyze_subject_sequence
+    analyzer = analyze_subject_sequence if SubjectSettings.from_settings(settings).method == "subject_local" else analyze_sequence_frames
+    tracking, sizes = analyzer(
         jobs, tracker, reference, cancel_event=cancel_event, preview_source=preview_source,
         progress=progress, progress_counts=progress_counts, analysis_workers=analysis_workers,
         photo_errors=photo_errors if allow_partial else None)
@@ -225,8 +232,15 @@ def prepare_sequence_preview(seeds, template_paths=None, *, cancel_event, progre
         accepted[job_key] = job
 
     alignments,canvas_box = {},()
+    subject_plans = {}
     def crop(selected):
-        nonlocal alignments,canvas_box
+        nonlocal alignments,canvas_box,subject_plans
+        if SubjectSettings.from_settings(settings).method == 'subject_local':
+            from .subject_sequence import prepare_subject_geometry
+            boxes, size, subject_plans = prepare_subject_geometry(
+                regions, {k:tracking[k] for k in selected}, sizes, reference_size, settings,
+                jobs=selected, cancelled=cancel_event.is_set)
+            return boxes, size
         if normalize_alignment_mode(settings.get(ALIGNMENT_MODE_KEY)) == 'rigid':
             boxes,size,alignments,canvas_box = prepare_rigid_geometry(
                 regions,{k:tracking[k] for k in selected},sizes,reference_size,path_key(reference),settings,
@@ -262,7 +276,7 @@ def prepare_sequence_preview(seeds, template_paths=None, *, cancel_event, progre
                              tracking=tracking, bird_boxes=dict(bird_boxes or {}),
                              pixel_boxes=boxes, source_sizes={k: sizes[k] for k in accepted},
                              output_size=output_size, input_jobs=input_jobs if failure else {}, failure=failure,
-                             alignments=alignments,canvas_box=canvas_box)
+                             alignments=alignments,canvas_box=canvas_box,subject_plans=subject_plans)
     from .sequence_intersection import compute_intersection_box, compute_union_box
     result.intersection_box = (compute_intersection_box(result, cancelled=cancel_event.is_set)
                                if settings.get('dejitter_pad_to_union', False) is True

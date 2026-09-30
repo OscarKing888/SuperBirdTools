@@ -210,6 +210,12 @@ RAW 源图的去抖动分析、成片预览和导出统一优先读取长边至�
 
 “缩小版本”首位的“微信表情”默认开启，默认值读取 `editor_options.json.default_gif_wechat_sticker`；选择随导出偏好和工作区的 `gif_wechat_sticker` 保存，旧工作区使用配置默认值。核心 `GifExportOptions.wechat_sticker` 为可选附加输出，不改变主 GIF 和比例版本；生成 `__wechat.gif`，初始长边最多 480 像素、不放大小图。`_save_wechat_gif_variant` 开启调色板优化，实际编码并检查文件大小；超出 5,000,000 字节时按面积估算下一轮尺寸、等比缩小重试，保留相同帧顺序和时间计划。只有通过大小检查的临时文件才原子替换目标，失败清理临时目录并保留原有微信版本；即使缩到 1×1 仍超限则明确报错，要求减少照片。体积限制采用十进制 5 MB，以同时满足 5 MiB 的上限。回归见 [test_gif_wechat.py](../tests/test_gif_wechat.py) 与 [test_gif_export_panel.py](../tests/test_gif_export_panel.py)。CLI 可用 `python -m birdstamp gif frame1.png frame2.png -o clip.gif --wechat` 对已渲染帧使用同一编码算法（按传入顺序，CLI 默认不附加微信版本）。
 
+### 局部主体去抖动
+
+独立序列管线通过 [recognition.py](../birdstamp/image_dejitter/recognition.py) 选择基本参考区匹配或高级局部主体识别。高级方法由 [SubjectLocalTracker](../birdstamp/image_dejitter/subject_local_tracker.py) 生成只含平移的源坐标观测，[subject_sequence.py](../birdstamp/export_stage/subject_sequence.py) 按人工关键帧分段并生成锁定/自然跟随计划，再复用 `ImageProcSequenceAlignStage` 的共同裁切输出。完整人工匹配成为后续片段关键帧；修改关键帧使旧链失效。算法不在 Qt handler 中运行，不创建另一套 YOLO。
+
+[SubjectControls](../birdstamp/gui/editor_subject_controls.py) 在去抖动页提供方法/模式/窗口，使用全局设置和现有工作区恢复；真实点 DEBUG 复用 A/B 的源裁切映射，不进入导出。观测有独立 32 MiB 会话缓存，强度/模式变更可复用；整段计划、对应点及预览仍归现有磁盘缓存和 worker 所有。CLI `stabilize` 调用同一分析/导出核心。使用、坐标/失败语义和验证见 [局部主体稳定](SUBJECT_STABILIZATION.md)。
+
 ## 6. 工作区、自动保存与配置
 
 [workspace.py](../birdstamp/workspace.py) 是不依赖窗口的 JSON 存取层。`serialize_workspace_path` 保存相对/绝对路径信息，`resolve_workspace_path` 优先使用可用的相对路径，再回退绝对路径。`read_workspace_json` 校验格式；`write_workspace_json` 在同目录写临时文件、flush/fsync 后原子替换，失败清理临时文件。

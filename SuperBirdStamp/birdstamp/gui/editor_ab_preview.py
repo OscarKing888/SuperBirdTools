@@ -418,6 +418,11 @@ class ABPreview(QObject):
         else:
             source_crop = source_normalized_crop(sequence.source_sizes[key], sequence.pixel_boxes[key]) if self.frame and sequence else None
             state.reference_diagnostics = tracking_overlays(regions, diagnostics, source_crop)
+        if editor.dejitter_debug_check.isChecked():
+            from .editor_tracking_overlay import subject_debug_points
+            state.subject_points = subject_debug_points(diagnostics,
+                source_normalized_crop(sequence.source_sizes[key],sequence.pixel_boxes[key])
+                if self.frame and sequence and key in sequence.pixel_boxes else None)
         if not crop and reference:
             state.reference_regions = regions
             state.reference_diagnostics = ()

@@ -423,6 +423,8 @@ def _bounded_preview_option(key: str, default: int, minimum: int, maximum: int) 
 
 DEJITTER_MATCHING_DEFAULTS = normalize_matching_settings(_load_builtin_editor_options_raw())
 DEJITTER_ALIGNMENT_MODE = _load_builtin_editor_options_raw().get('dejitter_alignment_mode', 'rigid')
+DEJITTER_SUBJECT_DEFAULTS = _load_builtin_editor_options_raw()
+DEJITTER_SUBJECT_DEBUG = DEJITTER_SUBJECT_DEFAULTS.get("dejitter_subject_debug", False) is True
 DEJITTER_PAD_TO_UNION = _load_builtin_editor_options_raw().get("dejitter_pad_to_union", False) is True
 DEJITTER_EXPORT_NEW_WORKSPACE = _load_builtin_editor_options_raw().get("dejitter_export_new_workspace", False) is True
 DEJITTER_SHOW_INTERSECTION = _load_builtin_editor_options_raw().get('dejitter_show_intersection', True) is True

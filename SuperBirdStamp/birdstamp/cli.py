@@ -31,6 +31,29 @@ app = typer.Typer(add_completion=False, no_args_is_help=True, help="极速鸟框
 LOGGER = logging.getLogger("birdstamp")
 
 
+@app.command("stabilize")
+def stabilize_command(
+    frames: list[Path] = typer.Argument(..., exists=True, dir_okay=False, help="按顺序排列的源照片。"),
+    reference: Path = typer.Option(..., "--reference", exists=True, dir_okay=False),
+    regions: Path = typer.Option(..., "--regions", exists=True, dir_okay=False, help="归一化矩形 ROI / 关键帧 JSON。"),
+    output: Path = typer.Option(..., "--output", "-o", help="结果父目录；每次建立独立子目录。"),
+    method: str = typer.Option("subject_local", help="reference_region 或 subject_local。"),
+    mode: str = typer.Option("lock", help="lock 局部锁定；follow 自然跟随。"),
+    strength: int = typer.Option(100, min=0, max=100),
+    window: int = typer.Option(5, min=3, max=31),
+    pad: bool = typer.Option(False, "--pad/--no-pad"),
+    debug: bool = typer.Option(False, "--debug", help="附加真实对应点 tracks.npz。"),
+) -> None:
+    """按基本或高级识别策略去抖动，导出 PNG 和数值诊断。"""
+    from birdstamp.subject_stabilization_cli import stabilize_files
+    try:
+        folder = stabilize_files(frames,reference,regions,output,method=method,mode=mode,
+                                 strength=strength,window=window,pad=pad,debug=debug,progress=typer.echo)
+    except (ValueError,OSError) as exc:
+        raise typer.BadParameter(str(exc)) from exc
+    typer.echo(str(folder))
+
+
 @app.command("gif")
 def gif_command(
     frames: list[Path] = typer.Argument(..., exists=True, dir_okay=False, help="按播放顺序排列的已渲染图片。"),

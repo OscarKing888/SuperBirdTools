@@ -8,6 +8,7 @@ from birdstamp.image_dejitter.manual_region_matches import (
     editable_match_boxes, normalize_match_box, without_manual_boxes,
 )
 from birdstamp.image_dejitter.matching_options import MatchingOptions
+from birdstamp.image_dejitter.recognition import SubjectSettings
 from .editor_reference_tracking_worker import EditorReferenceTrackingWorker
 from .editor_utils import path_key
 
@@ -31,7 +32,9 @@ class _BirdStampReferenceTrackingMixin:
         regions = tuple(getattr(self, "_dejitter_reference_regions", ()))
         controls = getattr(self, 'dejitter_matching_controls', None)
         options = MatchingOptions.from_settings(controls.settings() if controls else None)
-        return (path_key(Path(source)), regions, options) if source and regions else None
+        return (path_key(Path(source)), regions, options,
+                SubjectSettings.from_settings(self.dejitter_subject_controls.settings()).method
+                if hasattr(self,"dejitter_subject_controls") else "reference_region") if source and regions else None
 
     def _reference_regions_editable(self) -> bool:
         return self._is_reference_photo(getattr(self, 'current_path', None))
@@ -67,6 +70,11 @@ class _BirdStampReferenceTrackingMixin:
             result = self._reference_tracking_results.get(path_key(current))
             if result is not None and result.signature != image_file_signature(current):
                 result = None
+        # 高级方法的后续观测依赖人工关键帧；更改/撤销后不能继续显示旧链为成功。
+        if (result is not None and definition[3] == 'subject_local'
+                and self._reference_tracking_manual_matches != self._dejitter_manual_matches):
+            result = RegionTrackingResult((None,) * len(definition[1]), signature=result.signature,
+                error='关键帧已变化，请重新分析', predicted_boxes=editable_match_boxes(definition[1],result))
         record = self._manual_record_for_path(current)
         if result is not None and record and record == self._reference_tracking_manual_matches.get(path_key(current)):
             return result  # 保留本次分析的冲突/失败诊断，不能把手动位置重新标成成功。
@@ -190,7 +198,7 @@ class _BirdStampReferenceTrackingMixin:
         self._invalidate_reference_tracking("正在预处理跟踪…")
         worker = EditorReferenceTrackingWorker(
             token=self._reference_tracking_token, reference=Path(self._dejitter_reference_source),
-            regions=definition[1], paths=paths, options=definition[2], parent=self,
+            regions=definition[1], paths=paths, options=definition[2], method=definition[3], parent=self,
         )
         self._reference_tracking_worker = worker
         worker.resultsReady.connect(self._on_reference_tracking_results)
@@ -206,7 +214,7 @@ class _BirdStampReferenceTrackingMixin:
         return (worker is not None and worker is self._reference_tracking_worker
                 and not self._reference_tracking_shutdown and token == self._reference_tracking_token
                 and not worker.isInterruptionRequested()
-                and self._reference_tracking_input() == (path_key(worker.reference), worker.regions, worker.options))
+                and self._reference_tracking_input() == (path_key(worker.reference), worker.regions, worker.options, worker.method))
 
     def _on_reference_tracking_results(self, token: int, results: object) -> None:
         if not self._accept_reference_tracking_signal(token):
