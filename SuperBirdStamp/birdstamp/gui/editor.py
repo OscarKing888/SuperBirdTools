@@ -168,6 +168,7 @@ from birdstamp.export_stage import (
     DEFAULT_EXPORT_STAGE_ID,
     EXPORT_STAGE_GIF_ID,
     EXPORT_STAGE_ID_KEY,
+    EXPORT_STAGE_VIDEO_ID,
     PIPELINE_STAGE_ENABLED_KEY,
     PIPELINE_STAGE_ORDER_KEY,
     STAGE_FOCUS_OVERLAY_ENABLED_KEY,
@@ -1425,6 +1426,9 @@ class BirdStampEditorWindow(
 
         self.video_export_panel = VideoExportPanel()
         self.video_export_panel.frameSizeChanged.connect(self._sync_video_safe_frame)
+        self.video_export_panel.show_safe_frame_check.toggled.connect(
+            lambda _checked: self._schedule_workspace_autosave()
+        )
         self.video_export_panel.exportRequested.connect(self._start_video_export)
         self.video_export_panel.cancelRequested.connect(self._cancel_video_export)
         self.video_export_panel.autoFpsRequested.connect(self._on_video_auto_fps_requested)
@@ -1864,9 +1868,12 @@ class BirdStampEditorWindow(
         if save:
             self._save_image_export_preferences()
         self._refresh_image_export_action_states()
+        if hasattr(self, "video_export_panel"):
+            self._sync_video_safe_frame(self.video_export_panel.current_safe_frame_size())
 
     def _on_export_stage_changed(self, *_args: Any) -> None:
         self._refresh_image_export_action_states()
+        self._sync_video_safe_frame(self.video_export_panel.current_safe_frame_size())
         self._save_image_export_preferences()
         self._schedule_workspace_autosave()
 
@@ -2792,6 +2799,11 @@ class BirdStampEditorWindow(
         self._schedule_workspace_autosave()
 
     def _sync_video_safe_frame(self, size: tuple[int, int] | None) -> None:
+        if (
+            self._selected_export_stage_id() != EXPORT_STAGE_VIDEO_ID
+            or not self.video_export_panel.show_safe_frame_check.isChecked()
+        ):
+            size = None
         if hasattr(self, "preview_label"):
             self.preview_label.canvas.set_video_safe_frame_size(size)
         if hasattr(self, "ab_preview"):

@@ -168,7 +168,7 @@ RAW 源图的去抖动分析、成片预览和导出统一优先读取长边至�
 
 ## 5. 图片、GIF、视频导出与缓存
 
-视频导出面板的尺寸、方向和自定义宽高变化通过 `VideoExportPanel.frameSizeChanged` 同步到主预览和 A/B 预览。画布使用 [video_safe_frame.py](../birdstamp/gui/video_safe_frame.py) 将目标宽高比居中内接于当前裁剪范围（无裁剪框时使用原图范围），以橙色虚线显示安全框和目标尺寸；自动尺寸不显示。辅助线仅在 QWidget 绘制，不进入叠加导出或视频帧。实际视频帧仍由 `normalize_frame_size` 等比缩放并补边，安全框只帮助构图，不改变导出裁剪。
+视频导出面板的尺寸、方向、自定义宽高和「显示安全框」开关变化通过 `VideoExportPanel.frameSizeChanged` 同步到主预览和 A/B 预览。只有选中视频导出且开关开启时，画布才使用 [video_safe_frame.py](../birdstamp/gui/video_safe_frame.py) 将目标宽高比居中内接于当前裁剪范围（无裁剪框时使用原图范围），以橙色虚线显示安全框和目标尺寸；自动尺寸不显示。开关随视频导出参数保存在工作区。辅助线仅在 QWidget 绘制，不进入叠加导出或视频帧。实际视频帧仍由 `normalize_frame_size` 等比缩放并补边，安全框只帮助构图，不改变导出裁剪。
 
 ### 图片和批量作业
 

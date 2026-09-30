@@ -116,6 +116,11 @@ def test_video_frame_size_updates_both_editor_preview_guides() -> None:
         panel = window.video_export_panel
         main = window.preview_label.canvas
         compare = window.ab_preview.preview.canvas
+        assert window._selected_export_stage_id() != "export_video"
+        assert main._video_safe_frame_size is None
+        assert compare._video_safe_frame_size is None
+
+        window.export_stage_buttons["export_video"].setChecked(True)
         assert main._video_safe_frame_size == panel.current_safe_frame_size()
         assert compare._video_safe_frame_size == panel.current_safe_frame_size()
 
@@ -131,6 +136,24 @@ def test_video_frame_size_updates_both_editor_preview_guides() -> None:
             if data.get("mode") == "preset" and data.get("width") == 3840:
                 panel.frame_size_combo.setCurrentIndex(index)
                 break
+        assert main._video_safe_frame_size == (3840, 2160)
+        assert compare._video_safe_frame_size == (3840, 2160)
+
+        panel.show_safe_frame_check.setChecked(False)
+        assert main._video_safe_frame_size is None
+        assert compare._video_safe_frame_size is None
+        assert panel.current_state()["show_safe_frame"] is False
+
+        panel.set_state({**panel.current_state(), "show_safe_frame": True})
+        assert main._video_safe_frame_size == (3840, 2160)
+        assert compare._video_safe_frame_size == (3840, 2160)
+
+        for stage_id in ("export_png", "export_gif"):
+            window.export_stage_buttons[stage_id].setChecked(True)
+            assert main._video_safe_frame_size is None
+            assert compare._video_safe_frame_size is None
+
+        window.export_stage_buttons["export_video"].setChecked(True)
         assert main._video_safe_frame_size == (3840, 2160)
         assert compare._video_safe_frame_size == (3840, 2160)
     finally:
