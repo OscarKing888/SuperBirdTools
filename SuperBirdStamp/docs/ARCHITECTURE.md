@@ -216,6 +216,8 @@ RAW 源图的去抖动分析、成片预览和导出统一优先读取长边至�
 
 模型按钮由 [BirdModelStatus](../birdstamp/gui/bird_model_status.py) 后台完整性校验驱动：已校验模型禁用下载，文件属性变化触发重新校验，校验线程参与窗口关闭等待。
 
+部位候选由 `Recommendation.candidates` 独立返回，`RegionCandidatePreview` 在预检前展示草稿，失败后仍保留诊断；显式采用才进入人工选区。`target_trajectory.build_target_trajectory()` 在推荐和完整分析前按时间构建只读目标鸟轨迹，局部重检消除有包含关系的重复检测框，独立多鸟竞争仍拒绝。并行局部跟踪只读取轨迹中的搜索位置，实际位移仍来自图像对应；相关模型/文件与轨迹版本参与缓存签名。
+
 
 独立序列管线通过 [recognition.py](../birdstamp/image_dejitter/recognition.py) 选择基本参考区匹配或高级局部主体识别。高级方法由 [SubjectLocalTracker](../birdstamp/image_dejitter/subject_local_tracker.py) 生成只含平移的源坐标观测，[subject_sequence.py](../birdstamp/export_stage/subject_sequence.py) 按人工关键帧分段并生成锁定/自然跟随计划，再复用 `ImageProcSequenceAlignStage` 的共同裁切输出。完整人工匹配成为后续片段关键帧；修改关键帧使旧链失效。算法不在 Qt handler 中运行，不创建另一套 YOLO。
 

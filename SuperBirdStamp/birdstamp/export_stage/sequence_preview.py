@@ -27,7 +27,7 @@ from .video_export_cancelled_error import VideoExportCancelledError
 
 REFERENCE_KEYS = ('dejitter_reference_regions', 'dejitter_reference_source',
                   'dejitter_reference_strength', 'dejitter_pad_to_union', ALIGNMENT_MODE_KEY, *MATCHING_KEYS, *SUBJECT_KEYS)
-SEQUENCE_ANALYSIS_VERSION = 8
+SEQUENCE_ANALYSIS_VERSION = 9
 
 
 def sequence_files(seeds, template_paths=None) -> tuple[Path, ...]:
@@ -60,7 +60,13 @@ def sequence_input_key(seeds, template_paths=None) -> str:
         if settings.get(MANUAL_MATCHES_KEY):
             relevant[MANUAL_MATCHES_KEY] = settings[MANUAL_MATCHES_KEY]
         payload.append((path_key(seed.path), relevant))
-    data = (SEQUENCE_ANALYSIS_VERSION, payload, file_signatures(sequence_files(seeds)))
+    identity_signature = None
+    if any(SubjectSettings.from_settings(s.settings).method=='subject_local'
+           and (s.settings.get('dejitter_region_recommendation') or {}).get('local_analysis') for s in seeds):
+        from birdstamp.image_dejitter.bird_observation_cache import detector_signature
+        from birdstamp.image_dejitter.target_trajectory import TRAJECTORY_VERSION
+        identity_signature = (TRAJECTORY_VERSION,detector_signature())
+    data = (SEQUENCE_ANALYSIS_VERSION, payload, file_signatures(sequence_files(seeds)),identity_signature)
     return hashlib.sha256(json.dumps(data, ensure_ascii=False, sort_keys=True, default=str).encode('utf-8')).hexdigest()
 
 
