@@ -5,11 +5,10 @@ from pathlib import Path
 from PyQt6.QtCore import QEvent, QObject, QSize, Qt, QTimer
 from PyQt6.QtGui import QColor, QIcon, QPalette, QPixmap
 from PyQt6.QtWidgets import (
-    QHBoxLayout, QLabel, QListWidget, QListWidgetItem,
+    QCheckBox, QHBoxLayout, QLabel, QListWidget, QListWidgetItem,
     QPushButton, QSpinBox, QStyle, QToolButton, QVBoxLayout, QWidget,
 )
 
-from app_common.toggle_button import ToggleToolButton
 from . import editor_options
 from .editor_utils import path_key
 from .editor_photo_list import PHOTO_COL_ROW, PHOTO_LIST_PATH_ROLE
@@ -81,7 +80,7 @@ class SequenceTransport(QObject):
         self.auto_fps_button = QPushButton('自动')
         self.auto_fps_button.setToolTip('根据当前照片列表的拍摄时间自动计算回放 FPS。')
         self.auto_fps_button.clicked.connect(editor._on_dejitter_auto_fps_requested)
-        self.loop = ToggleToolButton('循环')
+        self.loop = QCheckBox('循环')
         self.loop.setChecked(True)
         for widget in (self.play, self.previous, self.next, self.position, self.preparation):
             row.addWidget(widget)

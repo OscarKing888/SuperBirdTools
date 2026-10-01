@@ -40,6 +40,18 @@ def _add_progress_completion_label(layout, progress_bar, accessible_name):
     return label
 
 
+def _sequence_failure_photo_label(failure_path, paths):
+    """按任务输入顺序标识失败图像；同名文件使用完整路径区分。"""
+    if failure_path is None:
+        return ''
+    sources = tuple(paths)
+    failed_key = path_key(Path(failure_path))
+    for index, path in enumerate(sources, 1):
+        if path_key(Path(path)) == failed_key:
+            return f'第 {index}/{len(sources)} 张图像'
+    return ''
+
+
 class _BirdStampDejitterMixin:
     """去抖动页/共享画布协调；计算与作业结果由无窗口核心持有。"""
 
@@ -236,7 +248,7 @@ class _BirdStampDejitterMixin:
         self.dejitter_pad_to_union_check.setToolTip('关闭：裁掉所有空白，取整组交集。开启：保留整组画面并集，统一画幅，缺失区域补黑。')
         self.dejitter_pad_to_union_check.toggled.connect(self._on_dejitter_options_changed)
         analysis.addWidget(self.dejitter_pad_to_union_check)
-        self.dejitter_show_intersection_check = ToggleToolButton('成片预览显示交集／并集范围框')
+        self.dejitter_show_intersection_check = QCheckBox('成片预览显示交集／并集范围框')
         self.dejitter_show_intersection_check.setChecked(editor_options.DEJITTER_SHOW_INTERSECTION)
         self.dejitter_show_intersection_check.setToolTip('交集框：所有照片共同覆盖的最大无黑边矩形。并集框：整组完整范围。\n开启补边可在成片中完整查看两框；下方示意图始终显示两个范围。')
         self.dejitter_show_intersection_check.toggled.connect(self._on_dejitter_intersection_options_changed)
@@ -256,7 +268,7 @@ class _BirdStampDejitterMixin:
         self.dejitter_tracking_status = QLabel()
         self.dejitter_tracking_status.setWordWrap(True)
         analysis.addWidget(self.dejitter_tracking_status)
-        self.dejitter_debug_check = ToggleToolButton('DEBUG：局部对应点')
+        self.dejitter_debug_check = QCheckBox('DEBUG：局部对应点')
         self.dejitter_debug_check.setChecked(editor_options.DEJITTER_SUBJECT_DEBUG)
         self.dejitter_debug_check.setToolTip('绿点：通过拟合；红点：拒绝。线段连接关键帧点与当前实测点；不表示世界静止，不进入导出。')
         self.dejitter_debug_check.toggled.connect(self._on_dejitter_debug_changed)
@@ -750,21 +762,32 @@ class _BirdStampDejitterMixin:
             worker = self._sequence_worker
             analysis_failed = (self._sequence_progress_kind == 'analysis'
                                and not getattr(worker, 'restore_only', False))
-            self._finish_sequence_progress('导出失败' if self._sequence_exporting else '分析失败')
-            self._sequence_message = f'去抖动任务失败：{message}'
+            sources = tuple(seed.path for seed in getattr(worker, 'seeds', ()) or ())
+            if not sources:
+                sources = tuple(self._list_photo_paths())
+            photo_label = _sequence_failure_photo_label(getattr(worker, 'failure_path', None), sources)
+            location = f'（{photo_label}）' if photo_label else ''
+            progress_label = '导出失败' if self._sequence_exporting else '分析失败'
+            if photo_label:
+                progress_label += f' · {photo_label}'
+            self._finish_sequence_progress(progress_label)
+            self._sequence_message = f'去抖动任务失败{location}：{message}'
             sequence = self._sequence_preview
             if analysis_failed and sequence is not None and sequence.partial:
                 completed, total = len(sequence.jobs), len(sequence.all_jobs)
-                label = f'分析失败 · 已生成前 {completed}/{total} 张成片预览'
+                label = f'分析失败 · {photo_label} · 已生成前 {completed}/{total} 张成片预览' if photo_label else (
+                    f'分析失败 · 已生成前 {completed}/{total} 张成片预览')
                 self.dejitter_analysis_progress.setRange(0, total)
                 self.dejitter_analysis_progress.setValue(completed)
                 self.dejitter_analysis_progress.setFormat(label)
                 self.dejitter_analysis_progress.setToolTip(label)
                 self._sequence_message += f'\n已生成前 {completed}/{total} 张成片预览，切换“成片预览”查看。'
             self._sequence_pending_path = None
-            self._update_dejitter_controls()
             if analysis_failed:
                 self.ab_preview.compare_analysis_failure(getattr(worker, 'failure_path', None))
+            self.dejitter_debug_check.setChecked(True)
+            self._update_dejitter_controls()
+            self._set_status(self._sequence_message)
 
     def _on_sequence_quick_ready(self, token, sequence, frames):
         if not self._accept_sequence_signal(token):
@@ -816,9 +839,12 @@ class _BirdStampDejitterMixin:
         kind = '补边画幅' if padded else '共同裁切'
         self._sequence_message = f'整组 {len(sequence.jobs)} 张已分析；{kind} {sequence.output_size[0]} × {sequence.output_size[1]}；{failed} 张存在部分选区失配。'
         if sequence.partial:
+            photo_label = _sequence_failure_photo_label(
+                sequence.failure.source_path, (job.path for job in sequence.all_jobs.values()))
+            location = f'（{photo_label}）' if photo_label else ''
             self._sequence_message = (f'已生成前 {len(sequence.jobs)}/{len(sequence.all_jobs)} 张成片预览；'
                                       f'{kind} {sequence.output_size[0]} × {sequence.output_size[1]}。\n'
-                                      f'后续分析失败：{sequence.failure}')
+                                      f'后续分析失败{location}：{sequence.failure}')
         if sequence.alignments:
             corrected = sum(a.status == 'rigid' for a in sequence.alignments.values())
             fallback = sum(a.status == 'fallback' for a in sequence.alignments.values())

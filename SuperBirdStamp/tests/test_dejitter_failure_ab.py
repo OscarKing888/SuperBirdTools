@@ -33,6 +33,7 @@ def test_failed_analysis_compares_first_and_selects_exact_failed_original(window
     ab.activate('a')
     ab.mode.setCurrentIndex(1)
     ab.path = paths[1]
+    window.dejitter_debug_check.setChecked(False)
     window.dejitter_preprocess_btn.click()
     wait_until(lambda: window._sequence_worker is None)
     finish(ab)
@@ -53,6 +54,10 @@ def test_failed_analysis_compares_first_and_selects_exact_failed_original(window
     assert len(diagnostics) == 2 and all(not row[2] for row in diagnostics)
     assert len(window._reference_tracking_results) == 3
     assert '失配' in window._sequence_message
+    assert '第 3/3 张图像' in window._sequence_message
+    assert '第 3/3 张图像' in window.dejitter_analysis_progress.format()
+    assert '第 3/3 张图像' in window.statusBar().currentMessage()
+    assert window.dejitter_debug_check.isChecked()
     assert '分析失败' in window.dejitter_analysis_progress.format()
     assert window._sequence_pending_path is None and not window._sequence_upgrade_timer.isActive()
     assert window.dejitter_analysis_progress.value() == 2
@@ -97,6 +102,7 @@ def test_initial_sharp_preview_failure_switches_after_quick_frames_arrive(window
 
     monkeypatch.setattr(sequence_preview.ImageProcPipeline, 'process', fail)
     window.ab_preview.enabled.setChecked(False)
+    window.dejitter_debug_check.setChecked(False)
     window.dejitter_preprocess_btn.click()
     wait_until(lambda: window._sequence_worker is None)
     finish(window.ab_preview)
@@ -107,6 +113,8 @@ def test_initial_sharp_preview_failure_switches_after_quick_frames_arrive(window
     assert window.current_path == paths[1] and window.current_source_image is not None
     assert not window._sequence_result_mode()
     assert '清晰帧生成失败' in window._sequence_message
+    assert '第 2/2 张图像' in window._sequence_message
+    assert window.dejitter_debug_check.isChecked()
     assert '分析失败' in window.dejitter_analysis_progress.format()
 
 
@@ -135,6 +143,7 @@ def test_other_failure_routes_do_not_change_ab_or_selection(window, monkeypatch,
     populate(window, paths)
     ab = window.ab_preview
     ab.enabled.setChecked(False)
+    window.dejitter_debug_check.setChecked(False)
 
     class Failure(QObject):
         failed = pyqtSignal(int, str)
@@ -156,6 +165,9 @@ def test_other_failure_routes_do_not_change_ab_or_selection(window, monkeypatch,
         worker.failed.emit(window._sequence_epoch - (route == 'stale'), '模拟失败')
         assert not ab.enabled.isChecked()
         assert window.current_path == paths[0]
+        assert window.dejitter_debug_check.isChecked() == (route not in {'stale', 'cancel', 'shutdown'})
+        if route in {'unknown', 'removed'}:
+            assert '第 ' not in window._sequence_message
     finally:
         window._sequence_worker = None
         window._sequence_shutdown = False

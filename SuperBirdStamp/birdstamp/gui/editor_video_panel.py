@@ -24,7 +24,6 @@ from PyQt6.QtWidgets import (
 
 from birdstamp.gui import editor_options
 from birdstamp.gui import editor_utils
-from app_common.toggle_button import ToggleToolButton
 from app_common.exif_io import extract_many_with_xmp_priority
 from birdstamp.export_stage import VideoExportCancelledError, VideoExportOptions, VideoFrameJob, export_video
 from birdstamp.export_stage.render_job_seed import RenderJobSeed as VideoExportJobSeed, prepare_render_jobs
@@ -145,7 +144,7 @@ class VideoExportPanel(QGroupBox):
         frame_size_layout.setContentsMargins(0, 0, 0, 0)
         frame_size_layout.setSpacing(8)
         frame_size_layout.addWidget(self.frame_size_combo, stretch=1)
-        self.show_safe_frame_check = ToggleToolButton("显示安全框")
+        self.show_safe_frame_check = QCheckBox("显示安全框")
         self.show_safe_frame_check.setChecked(True)
         self.show_safe_frame_check.setToolTip("仅在选择视频导出时，在预览中显示目标尺寸的构图安全框。")
         self.show_safe_frame_check.toggled.connect(self._emit_frame_size_changed)

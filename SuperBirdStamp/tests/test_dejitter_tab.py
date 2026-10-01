@@ -6,7 +6,7 @@ import numpy as np
 import pytest
 from PIL import Image
 from PyQt6.QtGui import QCloseEvent
-from PyQt6.QtWidgets import QTreeWidgetItem
+from PyQt6.QtWidgets import QCheckBox, QTreeWidgetItem
 
 from test_editor_dejitter import window, _APP
 from test_reference_tracking import images, REGIONS, wait_until, install_sequence
@@ -216,12 +216,15 @@ def test_real_gui_snapshots_are_independent_from_normal_export_and_keep_valid_af
 def test_analysis_error_is_visible_and_releases_worker(window, monkeypatch):
     paths, _, _ = setup_tab(window, monkeypatch)
     paths[1].write_bytes(b'broken')
+    window.dejitter_debug_check.setChecked(False)
     window.dejitter_preprocess_btn.click()
     wait_until(lambda: window._sequence_worker is None)
     assert window._sequence_preview.partial
     assert tuple(window._sequence_preview.jobs) == (path_key(paths[0]),)
     assert path_key(paths[0]) in window._sequence_quick_frames
     assert '失败' in window._sequence_message
+    assert '第 2/2 张图像' in window._sequence_message
+    assert window.dejitter_debug_check.isChecked()
     assert window.dejitter_preprocess_btn.isEnabled()
 
 
@@ -350,6 +353,13 @@ def test_edit_reference_toggle_tracks_toolbar_mode(window, monkeypatch):
     assert toggle.isChecked()
     window._set_edit_mode_button_checked(EDIT_MODE_NONE)
     assert not toggle.isChecked()
+
+
+def test_dejitter_panel_display_options_use_checkboxes(window):
+    assert isinstance(window.dejitter_show_intersection_check, QCheckBox)
+    assert isinstance(window.dejitter_debug_check, QCheckBox)
+    assert isinstance(window.video_export_panel.show_safe_frame_check, QCheckBox)
+    assert isinstance(window.sequence_transport.loop, QCheckBox)
 
 
 def test_clear_all_regions_button_removes_every_region_and_invalidates_result(window, monkeypatch):
