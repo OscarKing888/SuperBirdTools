@@ -27,7 +27,7 @@ from .video_export_cancelled_error import VideoExportCancelledError
 
 REFERENCE_KEYS = ('dejitter_reference_regions', 'dejitter_reference_source',
                   'dejitter_reference_strength', 'dejitter_pad_to_union', ALIGNMENT_MODE_KEY, *MATCHING_KEYS, *SUBJECT_KEYS)
-SEQUENCE_ANALYSIS_VERSION = 7
+SEQUENCE_ANALYSIS_VERSION = 8
 
 
 def sequence_files(seeds, template_paths=None) -> tuple[Path, ...]:
@@ -205,7 +205,7 @@ def prepare_sequence_preview(seeds, template_paths=None, *, cancel_event, progre
     with sequence_photo_errors(reference), decode_image(reference, decoder='auto') as image:
         if cancel_event.is_set():
             raise VideoExportCancelledError('已取消去抖动分析。')
-        tracker = (recognition_strategy(settings).create_tracker(image, regions, options=MatchingOptions.from_settings(settings))
+        tracker = (recognition_strategy(settings).create_tracker(image, regions, options=MatchingOptions.from_settings(settings), settings=settings)
                    if SubjectSettings.from_settings(settings).method == "subject_local"
                    else ReferenceRegionTracker(image, regions, options=MatchingOptions.from_settings(settings)))
         reference_size = image.size

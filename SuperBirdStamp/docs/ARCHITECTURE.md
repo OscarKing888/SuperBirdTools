@@ -212,6 +212,9 @@ RAW 源图的去抖动分析、成片预览和导出统一优先读取长边至�
 
 ### 局部主体去抖动
 
+按算法一键选区由 [region_recommendation.py](../birdstamp/image_dejitter/region_recommendation.py) 和 [RegionRecommendationPanel](../birdstamp/gui/region_recommendation_panel.py) 接入。基本方法推荐通过抽样的背景组合；可选 HRNet 鸟类部位识别目前实验性、默认关闭。局部分析恢复源坐标后复用现有导出。CLI `recommend-regions` / `bird-parts-model`、模型安装、缓存及验证边界见 [自动参考区](AUTO_REFERENCE_REGIONS.md)。
+
+
 独立序列管线通过 [recognition.py](../birdstamp/image_dejitter/recognition.py) 选择基本参考区匹配或高级局部主体识别。高级方法由 [SubjectLocalTracker](../birdstamp/image_dejitter/subject_local_tracker.py) 生成只含平移的源坐标观测，[subject_sequence.py](../birdstamp/export_stage/subject_sequence.py) 按人工关键帧分段并生成锁定/自然跟随计划，再复用 `ImageProcSequenceAlignStage` 的共同裁切输出。完整人工匹配成为后续片段关键帧；修改关键帧使旧链失效。算法不在 Qt handler 中运行，不创建另一套 YOLO。
 
 [SubjectControls](../birdstamp/gui/editor_subject_controls.py) 在去抖动页提供方法/模式/窗口，使用全局设置和现有工作区恢复；真实点 DEBUG 复用 A/B 的源裁切映射，不进入导出。观测有独立 32 MiB 会话缓存，强度/模式变更可复用；整段计划、对应点及预览仍归现有磁盘缓存和 worker 所有。CLI `stabilize` 调用同一分析/导出核心。使用、坐标/失败语义和验证见 [局部主体稳定](SUBJECT_STABILIZATION.md)。

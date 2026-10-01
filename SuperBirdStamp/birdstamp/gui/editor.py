@@ -2759,6 +2759,7 @@ class BirdStampEditorWindow(
             QMessageBox.information(self, "视频导出进行中", "请先中断当前视频导出，或等待导出完成后再关闭窗口。")
             event.ignore()
             return
+        recommendation_stopped = self.dejitter_recommendation.shutdown()
         ab_stopped = self.ab_preview.shutdown()
         source_preview_stopped = self.sequence_transport.shutdown()
         self._invalidate_reference_tracking("正在停止参考区预处理…", shutdown=True)
@@ -2787,7 +2788,7 @@ class BirdStampEditorWindow(
         ) or (
             metadata_worker is not None
             and metadata_worker.isRunning()
-        ) or pending_metadata_running or not self._exiftool_shutdown_done.is_set() or not ab_stopped or not source_preview_stopped or not self._preview_action_pool.is_finished() or not discovery_stopped or self._reference_tracking_worker is not None or self._sequence_worker is not None:
+        ) or not recommendation_stopped or pending_metadata_running or not self._exiftool_shutdown_done.is_set() or not ab_stopped or not source_preview_stopped or not self._preview_action_pool.is_finished() or not discovery_stopped or self._reference_tracking_worker is not None or self._sequence_worker is not None:
             self._set_status("正在安全结束后台任务...")
             event.ignore()
             QTimer.singleShot(100, self.close)

@@ -31,6 +31,40 @@ app = typer.Typer(add_completion=False, no_args_is_help=True, help="极速鸟框
 LOGGER = logging.getLogger("birdstamp")
 
 
+@app.command("recommend-regions")
+def recommend_regions_command(
+    frames: list[Path] = typer.Argument(..., exists=True, dir_okay=False),
+    reference: Path = typer.Option(..., "--reference", exists=True, dir_okay=False),
+    output: Path = typer.Option(..., "--output", "-o"),
+    method: str = typer.Option("reference_region"),
+    part: str = typer.Option("auto", help="auto/head/torso/legs"),
+    target: int | None = typer.Option(None, min=1, help="多鸟时使用报告中从 1 开始的候选编号。"),
+    count: int = typer.Option(9, min=1, max=36),
+    experimental_parts: bool = typer.Option(False, "--experimental-parts"),
+    model_file: Path | None = typer.Option(None, exists=True, dir_okay=False),
+):
+    """按去抖动算法推荐选区，并抽样预检；不导出或修改原片。"""
+    from birdstamp.region_recommendation_cli import recommend_files
+    try:
+        result = recommend_files(frames,reference,output,method=method,part=part,target_index=target,
+            target_count=count,experimental=experimental_parts,model_file=model_file,progress=typer.echo)
+    except (ValueError,OSError) as exc:
+        raise typer.BadParameter(str(exc)) from exc
+    typer.echo(result.message)
+    if result.status != 'ready':
+        raise typer.Exit(2)
+
+
+@app.command("bird-parts-model")
+def bird_parts_model_command(source: Path | None = typer.Option(None, exists=True, dir_okay=False)):
+    """显式下载 109 MiB 官方部位模型，或用 --source 离线导入。"""
+    from birdstamp.image_dejitter.bird_parts.model_store import install_model
+    try:
+        typer.echo(str(install_model(source)))
+    except (ValueError,OSError) as exc:
+        raise typer.BadParameter(str(exc)) from exc
+
+
 @app.command("stabilize")
 def stabilize_command(
     frames: list[Path] = typer.Argument(..., exists=True, dir_okay=False, help="按顺序排列的源照片。"),

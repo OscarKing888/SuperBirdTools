@@ -7,7 +7,8 @@ METHOD_KEY = 'dejitter_recognition_method'
 MODE_KEY = 'dejitter_subject_mode'
 WINDOW_KEY = 'dejitter_subject_window'
 VERSION_KEY = 'dejitter_subject_version'
-SUBJECT_KEYS = (METHOD_KEY, MODE_KEY, WINDOW_KEY, VERSION_KEY)
+RECOMMENDATION_KEY = 'dejitter_region_recommendation'
+SUBJECT_KEYS = (METHOD_KEY, MODE_KEY, WINDOW_KEY, VERSION_KEY, RECOMMENDATION_KEY)
 METHOD_CHOICES = (('基本：参考区匹配', 'reference_region'), ('高级：局部主体跟踪', 'subject_local'))
 
 
@@ -33,7 +34,7 @@ class SubjectSettings:
         return cls(method=method, mode='follow' if settings.get(MODE_KEY) == 'follow' else 'lock', window=window)
 
     def as_settings(self):
-        return dict(zip(SUBJECT_KEYS, (self.method, self.mode, self.window, self.version)))
+        return {METHOD_KEY:self.method, MODE_KEY:self.mode, WINDOW_KEY:self.window, VERSION_KEY:self.version}
 
 
 class RegionTracker(Protocol):
@@ -46,20 +47,24 @@ class RegionTracker(Protocol):
 
 class RecognitionStrategy(ABC):
     @abstractmethod
-    def create_tracker(self, image, regions, *, options) -> RegionTracker:
+    def create_tracker(self, image, regions, *, options, settings=None) -> RegionTracker:
         """创建只读关键帧模板；识别返回观测，不决定输出变换。"""
         raise NotImplementedError
 
 
 class ReferenceRegionRecognition(RecognitionStrategy):
-    def create_tracker(self, image, regions, *, options) -> RegionTracker:
+    def create_tracker(self, image, regions, *, options, settings=None) -> RegionTracker:
         from .reference_region_tracker import ReferenceRegionTracker
         return ReferenceRegionTracker(image, regions, options=options)
 
 
 class SubjectLocalRecognition(RecognitionStrategy):
-    def create_tracker(self, image, regions, *, options) -> RegionTracker:
+    def create_tracker(self, image, regions, *, options, settings=None) -> RegionTracker:
         from .subject_local_tracker import SubjectLocalTracker
+        meta = (settings or {}).get(RECOMMENDATION_KEY) or {}
+        if meta.get('local_analysis') and meta.get('target'):
+            from .local_crop_tracker import LocalCropSubjectTracker
+            return LocalCropSubjectTracker(image, regions, target=meta['target'], options=options)
         return SubjectLocalTracker(image, regions, options=options)
 
 

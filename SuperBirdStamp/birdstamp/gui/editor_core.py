@@ -1751,6 +1751,12 @@ def preload_bird_detector() -> None:
 
 
 def detect_primary_bird_box(image: Image.Image) -> tuple[float, float, float, float] | None:
+    from birdstamp.image_dejitter.bird_candidates import DETECTOR_LOCK
+    with DETECTOR_LOCK:
+        return _detect_primary_bird_box_unlocked(image)
+
+
+def _detect_primary_bird_box_unlocked(image: Image.Image) -> tuple[float, float, float, float] | None:
     global _BIRD_DETECTOR_ERROR_MESSAGE
     detector = _load_bird_detector()
     if detector is None:

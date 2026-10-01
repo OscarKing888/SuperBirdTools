@@ -99,6 +99,8 @@ class _BirdStampReferenceTrackingMixin:
         self._dejitter_manual_matches.clear()
         self._invalidate_reference_tracking()
         self._dejitter_reference_regions = source_regions
+        if hasattr(self,"dejitter_recommendation"):
+            self.dejitter_recommendation.edited_regions(source_regions)
         self._dejitter_reference_source = str(path) if source_regions else None
         self.dejitter_reference_check.setChecked(bool(source_regions))
         self._update_dejitter_reference_clear_enabled()

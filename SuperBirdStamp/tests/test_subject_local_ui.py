@@ -19,7 +19,8 @@ def test_method_form_persists_and_keeps_basic_rotation(window,tmp_path):
     window._update_dejitter_controls()
     assert not window.dejitter_alignment_combo.isEnabled()
     assert window.dejitter_alignment_combo.isHidden()
-    assert not window.dejitter_auto_regions_btn.isEnabled()
+    assert window.dejitter_auto_regions_btn.isEnabled()
+    assert not window.dejitter_recommendation.experimental.isChecked()
     assert controls.window.isEnabled()
     settings=window._build_current_render_settings()
     assert settings[METHOD_KEY]=='subject_local' and settings[MODE_KEY]=='follow'

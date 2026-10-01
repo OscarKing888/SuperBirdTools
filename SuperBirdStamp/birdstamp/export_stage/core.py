@@ -1,4 +1,5 @@
 from __future__ import annotations
+from birdstamp.image_dejitter.region_recommendation import normalize_recommendation
 from birdstamp.image_dejitter.recognition import SubjectSettings
 from birdstamp.image_dejitter.matching_options import normalize_matching_settings
 from birdstamp.image_dejitter.rigid_alignment import ALIGNMENT_MODE_KEY, normalize_alignment_mode
@@ -761,6 +762,7 @@ def _clone_render_settings(settings: dict[str, Any]) -> dict[str, Any]:
         "dejitter_pad_to_union": _parse_bool_value(settings.get("dejitter_pad_to_union"), False),
         **normalize_matching_settings(settings),
         **SubjectSettings.from_settings(settings).as_settings(),
+        'dejitter_region_recommendation': normalize_recommendation(settings.get('dejitter_region_recommendation')),
         ALIGNMENT_MODE_KEY: normalize_alignment_mode(settings.get(ALIGNMENT_MODE_KEY)),
         "dejitter_reference_strength": _parse_percent_setting(settings.get("dejitter_reference_strength"), 100),
         "dejitter_reference_crop_settings": dict(settings["dejitter_reference_crop_settings"])

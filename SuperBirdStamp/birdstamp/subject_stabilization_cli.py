@@ -32,6 +32,9 @@ def stabilize_files(frames, reference, regions_file, output, *, method='subject_
         raise ValueError('输入序列包含重复照片')
     settings = {METHOD_KEY:method,MODE_KEY:mode,WINDOW_KEY:window,'dejitter_reference_source':str(reference),
                 'dejitter_reference_regions':regions,'dejitter_reference_strength':strength,'dejitter_pad_to_union':pad}
+    if isinstance(payload,dict):
+        from birdstamp.image_dejitter.region_recommendation import normalize_recommendation
+        settings['dejitter_region_recommendation'] = normalize_recommendation(payload.get('metadata'))
     seeds = [RenderJobSeed(path,dict(settings),{},False) for path in frames]
     for item in payload.get('keyframes',[]) if isinstance(payload,dict) else ():
         index = item['index']  # 显式序列中的零起始下标，不随文件名排序。

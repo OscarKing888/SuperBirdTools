@@ -149,7 +149,8 @@ def analyze_subject_sequence(jobs, tracker, reference, *, cancel_event, **kwargs
                 if checked.observation is None or checked.observation.displacement is None:
                     raise SequencePhotoError(local_reference,checked.error)
                 offset = np.array(checked.observation.displacement)
-                local_tracker = SubjectLocalTracker(image,boxes,options=tracker.options)
+                local_tracker = (tracker.rekeyframe(image,boxes) if hasattr(tracker,'rekeyframe')
+                                 else SubjectLocalTracker(image,boxes,options=tracker.options))
             # 人工坐标属于全局参考；当前段的参考位置已由关键帧定义。
             local_jobs = [replace(job,settings={k:v for k,v in job.settings.items() if k != MANUAL_MATCHES_KEY}) for job in local_jobs]
         local_tracker.cache_reference = image_file_signature(Path(local_reference))

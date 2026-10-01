@@ -80,24 +80,34 @@ def test_selection_with_padding_roundtrips_but_is_separate_from_template_export(
     assert not any(key.startswith('dejitter_') for key in window._photo_override_settings_from_snapshot(settings))
 
 
-def test_auto_add_regions_keeps_existing_reference_and_invalidates_analysis(window):
-    rng = np.random.default_rng(83)
-    window.current_source_image.close()
-    window.current_source_image = Image.fromarray(rng.integers(15, 240, (300, 450, 3), dtype=np.uint8))
+def _finish_recommendation(window):
+    import time
+    limit=time.monotonic()+10
+    while window.dejitter_recommendation.worker is not None and time.monotonic()<limit:
+        _APP.processEvents()
+        time.sleep(.005)
+    assert window.dejitter_recommendation.worker is None
+
+
+def test_auto_add_regions_keeps_existing_reference_and_invalidates_analysis(window,monkeypatch):
+    from birdstamp.gui import region_recommendation_panel as panel
+    from birdstamp.image_dejitter.region_recommendation import Recommendation
     window.export_tabs.setCurrentWidget(window.dejitter_page)
-    original = (.03, .03, .28, .28)
-    window._commit_source_reference_regions(window.current_path, (original,))
-    window.dejitter_auto_regions_btn.click()
-    assert window._dejitter_reference_regions[0] == original
-    assert len(window._dejitter_reference_regions) == 9
-    assert window._dejitter_reference_source == str(window.current_path)
-    assert window.dejitter_region_list.count() == len(window._dejitter_reference_regions)
+    original=(.03,.03,.28,.28)
+    added=((.6,.3,.8,.5),)
+    def recommend(reference, paths, **kwargs):
+        assert kwargs['existing']==(original,)
+        return Recommendation('ready','抽样预检通过',added,'background',metadata=dict(
+            version=1,auto_regions=added,part='background',resolved_part='background'))
+    monkeypatch.setattr(panel,'recommend_regions',recommend)
+    window._commit_source_reference_regions(window.current_path,(original,))
+    window.dejitter_auto_regions_btn.click();_finish_recommendation(window)
+    assert window._dejitter_reference_regions==(original,*added)
     assert window._sequence_preview is None
-    assert '目标 9 个，已有 1 个，新增 8 个，共 9 个' in window._sequence_message
-    epoch = window._sequence_epoch
-    window.dejitter_auto_regions_btn.click()
-    assert len(window._dejitter_reference_regions) == 9
-    assert window._sequence_epoch == epoch
+    assert window.dejitter_recommendation.metadata['auto_regions']==added
+    # 重新推荐只替换自动区，不能把它作为人工区传回核心。
+    window.dejitter_auto_regions_btn.click();_finish_recommendation(window)
+    assert window._dejitter_reference_regions==(original,*added)
 
 
 def test_auto_region_count_workspace_defaults_and_preferences_do_not_invalidate(window):
@@ -119,20 +129,21 @@ def test_auto_region_count_workspace_defaults_and_preferences_do_not_invalidate(
 
 
 def test_no_auto_candidates_keep_analysis_and_manual_matches(window, monkeypatch):
+    from birdstamp.gui import region_recommendation_panel as panel
+    from birdstamp.image_dejitter.region_recommendation import Recommendation
+    monkeypatch.setattr(panel,'recommend_regions',lambda *a,**k:Recommendation('no_reliable_region','没有可靠选区'))
     window.export_tabs.setCurrentWidget(window.dejitter_page)
-    original = ((.1,.1,.2,.2),)
-    window._commit_source_reference_regions(window.current_path, original)
-    window._sequence_cache_key = 'saved-analysis'
-    window._dejitter_manual_matches['sample'] = {'preserve':True}
-    epoch = window._sequence_epoch
-    messages = []
-    monkeypatch.setattr(window, '_set_status', messages.append)
-    window.dejitter_auto_regions_btn.click()  # 固定黑色预览没有角点。
-    assert window._dejitter_reference_regions == original
-    assert window._sequence_cache_key == 'saved-analysis'
-    assert window._sequence_epoch == epoch
-    assert window._dejitter_manual_matches == {'sample':{'preserve':True}}
-    assert '新增 0 个，共 1 个' in messages[-1] and '尚差 8 个' in messages[-1]
+    original=((.1,.1,.2,.2),)
+    window._commit_source_reference_regions(window.current_path,original)
+    window._sequence_cache_key='saved-analysis'
+    window._dejitter_manual_matches['sample']={'preserve':True}
+    epoch=window._sequence_epoch
+    window.dejitter_auto_regions_btn.click();_finish_recommendation(window)
+    assert window._dejitter_reference_regions==original
+    assert window._sequence_cache_key=='saved-analysis'
+    assert window._sequence_epoch==epoch
+    assert window._dejitter_manual_matches=={'sample':{'preserve':True}}
+    assert window.dejitter_recommendation.status.text()=='没有可靠选区'
 
 
 def test_auto_region_target_survives_workspace_file_without_analysis(window, tmp_path):

@@ -1010,6 +1010,7 @@ class _BirdStampRendererMixin:
         return {
             **(self.dejitter_subject_controls.settings() if hasattr(self, "dejitter_subject_controls")
                else SubjectSettings().as_settings()),
+            "dejitter_region_recommendation": self.dejitter_recommendation.settings() if hasattr(self,"dejitter_recommendation") else {},
             "dejitter_reference_strength": int(slider.value()) if slider is not None else 100,
             ALIGNMENT_MODE_KEY: (self.dejitter_alignment_combo.currentData() if hasattr(self,'dejitter_alignment_combo') else 'translation'),
             **(self.dejitter_matching_controls.settings() if hasattr(self, 'dejitter_matching_controls')
@@ -1310,6 +1311,8 @@ class _BirdStampRendererMixin:
             invalidate()
         if hasattr(self, 'dejitter_subject_controls'):
             self.dejitter_subject_controls.set_settings(settings)
+            if hasattr(self,'dejitter_recommendation'):
+                self.dejitter_recommendation.set_metadata(settings.get('dejitter_region_recommendation'))
         if hasattr(self, 'dejitter_matching_controls'):
             self.dejitter_matching_controls.set_settings(settings)
         if hasattr(self,'dejitter_alignment_combo'):

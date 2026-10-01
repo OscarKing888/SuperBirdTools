@@ -25,9 +25,11 @@ class LocalObservation:
     points: tuple = ()
     region_metrics: tuple = ()  # (候选数, 有效数, 内点数, 覆盖率, dx, dy)
     algorithm_version: int = ALGORITHM_VERSION
+    reference_origin: tuple = (0., 0.)
+    moving_origin: tuple = (0., 0.)
 
     def __post_init__(self):
-        for name in ('analysis_size','source_size','source_per_analysis'):
+        for name in ('analysis_size','source_size','source_per_analysis','reference_origin','moving_origin'):
             object.__setattr__(self,name,tuple(getattr(self,name)))
         for name in ('points','region_metrics'):
             object.__setattr__(self,name,tuple(tuple(row) for row in getattr(self,name)))
