@@ -146,8 +146,11 @@ class _BirdStampDejitterMixin:
         self.dejitter_reference_status.setWordWrap(True)
         form.addWidget(self.dejitter_reference_status)
         buttons = QHBoxLayout()
-        self.dejitter_edit_reference_btn = QPushButton('编辑参考图')
-        self.dejitter_edit_reference_btn.clicked.connect(self._on_edit_reference_photo)
+        self.dejitter_edit_reference_btn = ToggleToolButton('编辑参考图')
+        self.dejitter_edit_reference_btn.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextOnly)
+        self.dejitter_edit_reference_btn.setToolTip('切换参考区编辑模式；开启时定位到参考图。')
+        self.dejitter_edit_reference_btn.setAccessibleName('编辑参考图')
+        self.dejitter_edit_reference_btn.clicked.connect(self._on_edit_reference_toggled)
         self.dejitter_draw_btn = QPushButton('框选 / 追加选区')
         self.dejitter_draw_btn.clicked.connect(self._on_dejitter_draw)
         self.dejitter_auto_regions_btn = QPushButton('一键推荐选区')
@@ -489,6 +492,23 @@ class _BirdStampDejitterMixin:
         else:
             self._set_edit_mode_button_checked(EDIT_MODE_REFERENCE_REGION)
             self._refresh_preview_label(preserve_view=True)
+
+    def _sync_edit_reference_toggle(self):
+        button = getattr(self, 'dejitter_edit_reference_btn', None)
+        modes = getattr(self, '_edit_mode_buttons', None)
+        if button is None or not modes:
+            return
+        blocked = button.blockSignals(True)
+        button.setChecked(modes[EDIT_MODE_REFERENCE_REGION].isChecked())
+        button.blockSignals(blocked)
+
+    def _on_edit_reference_toggled(self, checked):
+        if checked:
+            self._on_edit_reference_photo()
+        else:
+            self._set_edit_mode_button_checked(EDIT_MODE_NONE)
+            self._on_edit_mode_changed()
+        self._sync_edit_reference_toggle()
 
     def _on_dejitter_auto_regions(self):
         self.dejitter_recommendation.recommend()

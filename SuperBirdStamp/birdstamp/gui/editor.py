@@ -2926,6 +2926,9 @@ class BirdStampEditorWindow(
             toolbar.addWidget(btn)
 
         self._edit_mode_buttons[EDIT_MODE_NONE].setChecked(True)
+        self._edit_mode_buttons[EDIT_MODE_REFERENCE_REGION].toggled.connect(
+            self._sync_edit_reference_toggle)
+        self._sync_edit_reference_toggle()
         self.edit_mode_group.buttonClicked.connect(self._on_edit_mode_changed)
 
     def _current_edit_mode_id(self) -> str:

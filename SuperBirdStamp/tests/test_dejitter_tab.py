@@ -6,6 +6,7 @@ import numpy as np
 import pytest
 from PIL import Image
 from PyQt6.QtGui import QCloseEvent
+from PyQt6.QtWidgets import QTreeWidgetItem
 
 from test_editor_dejitter import window, _APP
 from test_reference_tracking import images, REGIONS, wait_until, install_sequence
@@ -17,6 +18,8 @@ from birdstamp.export_stage.sequence_preview import (
 )
 from birdstamp.gui import editor_core, editor_dejitter, editor_options
 from birdstamp.gui.edit_modes import EDIT_MODE_NONE, EDIT_MODE_REFERENCE_REGION, EDIT_MODE_CROP_ADJUST
+from birdstamp.gui.editor_photo_list import PHOTO_COL_ROW, PHOTO_LIST_PATH_ROLE
+from app_common.toggle_button import ToggleToolButton
 from birdstamp.gui.editor_utils import path_key
 from birdstamp.gui.editor_sequence_preview_worker import EditorSequencePreviewWorker
 
@@ -317,6 +320,36 @@ def test_list_deletes_selected_region_then_last_region_and_invalidates_result(wi
     assert window._dejitter_reference_source is None
     assert not window.dejitter_preprocess_btn.isEnabled()
     assert not window.preview_label.canvas.reference_regions()
+
+
+def test_edit_reference_toggle_tracks_toolbar_mode(window, monkeypatch):
+    paths, _, _ = setup_tab(window, monkeypatch)
+    toggle = window.dejitter_edit_reference_btn
+    modes = window._edit_mode_buttons
+    assert isinstance(toggle, ToggleToolButton)
+    assert toggle.isEnabled() and toggle.isChecked()
+    assert modes[EDIT_MODE_REFERENCE_REGION].isChecked()
+
+    toggle.click()
+    assert not toggle.isChecked()
+    assert modes[EDIT_MODE_NONE].isChecked()
+    assert window.preview_label.canvas.edit_mode() == EDIT_MODE_NONE
+
+    reference_item = QTreeWidgetItem()
+    reference_item.setData(PHOTO_COL_ROW, PHOTO_LIST_PATH_ROLE, str(paths[0]))
+    window.photo_list.addTopLevelItem(reference_item)
+    window.current_path = paths[1]
+    toggle.click()
+    assert toggle.isChecked()
+    assert modes[EDIT_MODE_REFERENCE_REGION].isChecked()
+    assert window.current_path == paths[0]
+
+    modes[EDIT_MODE_NONE].click()
+    assert not toggle.isChecked()
+    modes[EDIT_MODE_REFERENCE_REGION].click()
+    assert toggle.isChecked()
+    window._set_edit_mode_button_checked(EDIT_MODE_NONE)
+    assert not toggle.isChecked()
 
 
 def test_clear_all_regions_button_removes_every_region_and_invalidates_result(window, monkeypatch):

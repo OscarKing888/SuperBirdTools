@@ -169,7 +169,7 @@ class _BirdStampReferenceTrackingMixin:
         button.setEnabled(not self._reference_tracking_shutdown and not stopping
                           and (worker is not None or self._reference_tracking_input() is not None))
         source = getattr(self, "_dejitter_reference_source", None)
-        self.dejitter_edit_reference_btn.setEnabled(bool(source) and not self._reference_regions_editable())
+        self.dejitter_edit_reference_btn.setEnabled(bool(source))
         message = self._reference_tracking_message
         if source and not self._reference_regions_editable():
             result = self._tracking_result_for_current()
@@ -268,3 +268,4 @@ class _BirdStampReferenceTrackingMixin:
         self._set_edit_mode_button_checked(EDIT_MODE_REFERENCE_REGION)
         self.photo_list.setCurrentItem(item)
         self._refresh_preview_label(preserve_view=True)
+        self._schedule_workspace_autosave()
