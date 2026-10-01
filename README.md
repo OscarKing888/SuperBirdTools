@@ -185,18 +185,32 @@ Windows 使用 `.venv\Scripts\python.exe` 执行同一脚本。不要再修改�
 `.github/workflows/build-release.yml` 提供两种入口：
 
 - 在 GitHub Actions 页面手动运行时，输入 SemVer 版本号（例如 `0.2.0`），构建结果保留为 14 天的 Actions artifacts。
-- 推送 `v*` tag（例如 `v0.2.0`）时，自动构建 Windows x86_64 和 macOS arm64 合集，生成 `SHA256SUMS.txt`，并创建对应 GitHub Release。
+- 推送 `v*` tag（例如 `v1.0.1`）时，先测试并校验版本规则，再自动构建 Windows x86_64 和 macOS arm64 三应用套件，生成更新清单、增量分卷、完整安装包和 `SHA256SUMS.txt`；附件校验及上传全部成功后发布 GitHub Release。
+- 普通 commit 或只推送 `main` 不触发此发布工作流。手动运行即使选择 Tag，也只生成 Actions artifacts，不发布 Release。
+
+完成本轮提交并合入 `main` 后，从仓库根执行以下命令（将 `v1.0.1` 替换为未使用的新版本号）：
 
 ```bash
-git tag v0.2.0
-git push origin v0.2.0
+# app_common 是独立仓库，CI 必须能下载主仓库引用的子模块提交。
+git -C app_common push origin main
+git push origin main
+git tag -a v1.0.1 -m "Release v1.0.1" main
+git push origin refs/tags/v1.0.1
 ```
+
+本地 `git tag` 不会触发 GitHub；最后一步把 Tag 推到 GitHub 才会启动构建。未提交的本地修改不会进入 Tag。只推送本次 Tag，不使用 `git push --tags` 批量发布历史 Tag；已有版本修复后使用新 Tag，不移动旧 Tag。
+
+Tag 必须是 `v主版本.次版本.修订号`，例如 `v1.0.1`；`v1.0.1-rc.1` 会发布为预发布版。`vtest`、`v1.0` 虽会触发工作流，但版本校验会阻止打包。这里的 SemVer 用于系统打包版本，更新器仍以 Tag 所指向的短 commit 显示版本，并以主线 first-parent 提交数判断更新顺序。
+
+进度见 [Build packages and release](https://github.com/OscarKing888/SuperBirdTools/actions/workflows/build-release.yml)，成功后的下载见 [Releases](https://github.com/OscarKing888/SuperBirdTools/releases)。也可以运行 `gh run list --workflow build-release.yml`，再运行 `gh run watch <运行ID> --exit-status`。仓库需启用 GitHub Actions；发布 job 使用工作流自带的 `GITHUB_TOKEN` 和 `contents: write` 权限，无需额外配置个人令牌。
+
+若 checkout 报 `not our ref`，说明 `app_common` 的 gitlink 提交尚未推送到其远端；先推送子模块，再重跑失败任务。不要通过重置 gitlink 丢弃尚未发布的共享代码。
 
 构建时只更新 `app_metadata.json`，SuperViewer、SuperBirdStamp、两者的 macOS bundle 和 Windows EXE 版本资源均读取该配置；改动只发生在 runner 的临时 checkout 中。CI 还会在打包前移除 BirdStamp 的 autosave/export-state 运行态文件，避免把本机照片路径放入发布包。
 
 Windows merged 包中的 `SuperViewer/` 与 `SuperBirdStamp/` 相互引用，必须保持在同一个 zip 中分发。macOS 产物当前是原生 arm64。自动构建产物均未做 Windows 代码签名或 macOS Developer ID 签名/公证，首次运行时可能出现系统安全提示。
 
-Release 已存在且本工作流的资产齐全时，会保留旧资产而不覆盖；若只存在部分资产，工作流会停止，避免新 checksum 与旧包混用。需要补齐或替换时，请先人工删除该 Release 中本工作流生成的 zip 与 `SHA256SUMS.txt`，再重新运行。当前依赖和外部模型/ffmpeg 资源尚未锁定到完整哈希，因此历史 tag 的重新构建不保证逐字节一致。
+Release 已存在且本工作流的资产齐全时，会保留旧资产而不覆盖；若只存在部分资产，工作流会停止，避免新 checksum 与旧包混用。修复上传失败的草稿时，请先人工删除该草稿中本工作流生成的 ZIP、更新清单 JSON 和 `SHA256SUMS.txt`，再重新运行；已公开版本的内容更新请使用新 Tag。当前依赖和外部模型/ffmpeg 资源尚未锁定到完整哈希，因此历史 tag 的重新构建不保证逐字节一致。
 
 ## 平台差异
 
