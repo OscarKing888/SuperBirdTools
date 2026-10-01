@@ -15,9 +15,11 @@ from birdstamp.image_dejitter.region_tracking_result import image_file_signature
 
 
 def stabilize_files(frames, reference, regions_file, output, *, method='subject_local', mode='lock', strength=100,
-                    window=5, pad=False, debug=False, progress=lambda text: None):
+                    window=5, pad=False, debug=False, progress=lambda text: None, follow_bird=False, follow_window=9):
     if method not in ('reference_region','subject_local') or mode not in ('lock','follow'):
         raise ValueError('未知的识别方法或稳定模式')
+    if follow_bird and method != 'reference_region':
+        raise ValueError('跟随目标鸟只用于基本参考区匹配（两段式稳定）')
     if not 0 <= strength <= 100:
         raise ValueError('补偿强度应在 0–100 之间')
     frames = tuple(Path(p).resolve() for p in frames)
@@ -31,7 +33,8 @@ def stabilize_files(frames, reference, regions_file, output, *, method='subject_
     if len(set(frames)) != len(frames):
         raise ValueError('输入序列包含重复照片')
     settings = {METHOD_KEY:method,MODE_KEY:mode,WINDOW_KEY:window,'dejitter_reference_source':str(reference),
-                'dejitter_reference_regions':regions,'dejitter_reference_strength':strength,'dejitter_pad_to_union':pad}
+                'dejitter_reference_regions':regions,'dejitter_reference_strength':strength,'dejitter_pad_to_union':pad,
+                'dejitter_follow_bird':bool(follow_bird),'dejitter_follow_window':follow_window}
     if isinstance(payload,dict):
         from birdstamp.image_dejitter.region_recommendation import normalize_recommendation
         settings['dejitter_region_recommendation'] = normalize_recommendation(payload.get('metadata'))

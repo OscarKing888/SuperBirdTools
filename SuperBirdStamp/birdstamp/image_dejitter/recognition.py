@@ -8,7 +8,9 @@ MODE_KEY = 'dejitter_subject_mode'
 WINDOW_KEY = 'dejitter_subject_window'
 VERSION_KEY = 'dejitter_subject_version'
 RECOMMENDATION_KEY = 'dejitter_region_recommendation'
-SUBJECT_KEYS = (METHOD_KEY, MODE_KEY, WINDOW_KEY, VERSION_KEY, RECOMMENDATION_KEY)
+FOLLOW_KEY = 'dejitter_follow_bird'            # 基本方法：背景稳定后平滑跟随目标鸟（两段式）
+FOLLOW_WINDOW_KEY = 'dejitter_follow_window'
+SUBJECT_KEYS = (METHOD_KEY, MODE_KEY, WINDOW_KEY, VERSION_KEY, RECOMMENDATION_KEY, FOLLOW_KEY, FOLLOW_WINDOW_KEY)
 METHOD_CHOICES = (('基本：参考区匹配', 'reference_region'), ('高级：局部主体跟踪', 'subject_local'))
 
 
@@ -18,6 +20,8 @@ class SubjectSettings:
     method: str = 'reference_region'
     mode: str = 'lock'
     window: int = 5
+    follow_bird: bool = False
+    follow_window: int = 9
 
     @classmethod
     def from_settings(cls, settings=None):
@@ -27,14 +31,19 @@ class SubjectSettings:
         method = settings.get(METHOD_KEY, 'reference_region') if version == 1 else 'reference_region'
         if method not in tuple(value for _, value in METHOD_CHOICES):
             method = 'reference_region'
-        try:
-            window = max(3, min(31, int(settings.get(WINDOW_KEY, 5)))) | 1
-        except (ValueError, TypeError, OverflowError):
-            window = 5
-        return cls(method=method, mode='follow' if settings.get(MODE_KEY) == 'follow' else 'lock', window=window)
+        def odd(key, default):
+            try:
+                return max(3, min(31, int(settings.get(key, default)))) | 1
+            except (ValueError, TypeError, OverflowError):
+                return default
+        # 跟随目标鸟只属于基本方法；高级方法有自己的“自然跟随”。显式 True 才启用，旧工作区不受影响。
+        follow = method == 'reference_region' and settings.get(FOLLOW_KEY) is True
+        return cls(method=method, mode='follow' if settings.get(MODE_KEY) == 'follow' else 'lock',
+                   window=odd(WINDOW_KEY, 5), follow_bird=follow, follow_window=odd(FOLLOW_WINDOW_KEY, 9))
 
     def as_settings(self):
-        return {METHOD_KEY:self.method, MODE_KEY:self.mode, WINDOW_KEY:self.window, VERSION_KEY:self.version}
+        return {METHOD_KEY:self.method, MODE_KEY:self.mode, WINDOW_KEY:self.window, VERSION_KEY:self.version,
+                FOLLOW_KEY:self.follow_bird, FOLLOW_WINDOW_KEY:self.follow_window}
 
 
 class RegionTracker(Protocol):

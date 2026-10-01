@@ -114,8 +114,12 @@ class TargetTrajectory:
 
 
 def build_target_trajectory(reference, paths, target, *, cancelled=lambda:False,
-                            progress=lambda text:None, detector=detect_bird_candidates):
-    """补齐抽样间的每张检测；参考在中间时分别向两侧关联，失败后不跨越重识别。"""
+                            progress=lambda text:None, detector=detect_bird_candidates, max_gap=0):
+    """补齐抽样间的每张检测；参考在中间时分别向两侧关联，失败后不跨越重识别。
+
+    max_gap>0 只用于平滑构图（两段式跟随）：允许连续漏检至多 max_gap 张后，按最后位置与
+    速度外推重新关联，仍须通过同一唯一性与外观门槛；漏检帧本身仍记为失败。主体锁定保持 0。
+    """
     from birdstamp.decoders.image_decoder import decode_image
     reference = Path(reference)
     ordered = list(dict.fromkeys(Path(p) for p in paths))
@@ -142,6 +146,7 @@ def build_target_trajectory(reference, paths, target, *, cancelled=lambda:False,
     for direction in (ordered[reference_index+1:],list(reversed(ordered[:reference_index]))):
         previous,recent,velocity = tuple(target),anchor,np.zeros(2)
         failure = ''
+        missed = 0
         for path in direction:
             check()
             completed += 1
@@ -153,19 +158,21 @@ def build_target_trajectory(reference, paths, target, *, cancelled=lambda:False,
                 current_size,birds,descriptors = observations(path)
                 if current_size != size:raise ValueError('目标关联：源尺寸或方向不同。')
                 try:
-                    box,descriptor = associate_temporal(previous,velocity,birds,descriptors,anchor,recent)
+                    box,descriptor = associate_temporal(previous,velocity*(missed+1),birds,descriptors,anchor,recent)
                 except ValueError:
                     if detector is not detect_bird_candidates or not refinement_allowed(previous,birds):raise
                     # 高分辨率局部重检必须唯一且较可信，之后仍过同一身份门槛。
                     refined,features=_refined_observations(path,previous,cancelled)
                     if len(refined)!=1 or refined[0].confidence < .6:raise
-                    box,descriptor=associate_temporal(previous,velocity,refined,features,anchor,recent)
-                velocity = _center(box)-_center(previous)
-                previous,recent = box,descriptor
+                    box,descriptor=associate_temporal(previous,velocity*(missed+1),refined,features,anchor,recent)
+                velocity = (_center(box)-_center(previous))/(missed+1)
+                previous,recent,missed = box,descriptor,0
                 frames[_key(path)] = TargetFrame(box,signatures[path])
             except (ValueError,OSError) as exc:
                 frames[_key(path)] = TargetFrame(None,signatures[path],str(exc))
-                failure = f'目标关联中断于 {path.name}，未跨越失败帧重选鸟；请确认目标或补关键帧。'
+                missed += 1
+                if missed > max_gap:
+                    failure = f'目标关联中断于 {path.name}，未跨越失败帧重选鸟；请确认目标或补关键帧。'
     check()
     if any(image_file_signature(p)!=signature for p,signature in signatures.items()):
         raise ValueError('照片在目标关联期间变化，请重新分析。')

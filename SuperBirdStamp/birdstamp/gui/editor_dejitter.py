@@ -845,10 +845,16 @@ class _BirdStampDejitterMixin:
             self._sequence_message = (f'已生成前 {len(sequence.jobs)}/{len(sequence.all_jobs)} 张成片预览；'
                                       f'{kind} {sequence.output_size[0]} × {sequence.output_size[1]}。\n'
                                       f'后续分析失败{location}：{sequence.failure}')
-        if sequence.alignments:
+        if sequence.alignments and any(a.status in ('rigid','fallback') for a in sequence.alignments.values()):
             corrected = sum(a.status == 'rigid' for a in sequence.alignments.values())
             fallback = sum(a.status == 'fallback' for a in sequence.alignments.values())
             self._sequence_message += f'\n旋转估计成功 {corrected} 张，退回平移 {fallback} 张（未纠正旋转）。'
+        follow = [plan.status for plan in sequence.subject_plans.values() if plan.status.startswith('bird_follow')]
+        if follow:
+            trend_only = follow.count('bird_follow_trend')
+            self._sequence_message += (f'\n两段式：背景逐帧去抖，画框跟随目标鸟平滑趋势；'
+                                       f'{len(follow)-trend_only} 张有检测' +
+                                       (f'，{trend_only} 张漏检按邻帧趋势' if trend_only else '') + '。')
         self._reference_tracking_message = self._sequence_message
         self._set_status(self._sequence_message)
         self._update_dejitter_controls()

@@ -27,7 +27,7 @@ from .video_export_cancelled_error import VideoExportCancelledError
 
 REFERENCE_KEYS = ('dejitter_reference_regions', 'dejitter_reference_source',
                   'dejitter_reference_strength', 'dejitter_pad_to_union', ALIGNMENT_MODE_KEY, *MATCHING_KEYS, *SUBJECT_KEYS)
-SEQUENCE_ANALYSIS_VERSION = 11
+SEQUENCE_ANALYSIS_VERSION = 12
 
 
 def sequence_files(seeds, template_paths=None) -> tuple[Path, ...]:
@@ -61,8 +61,9 @@ def sequence_input_key(seeds, template_paths=None) -> str:
             relevant[MANUAL_MATCHES_KEY] = settings[MANUAL_MATCHES_KEY]
         payload.append((path_key(seed.path), relevant))
     identity_signature = None
-    if any(SubjectSettings.from_settings(s.settings).method=='subject_local'
-           and (s.settings.get('dejitter_region_recommendation') or {}).get('local_analysis') for s in seeds):
+    if any((SubjectSettings.from_settings(s.settings).method=='subject_local'
+            and (s.settings.get('dejitter_region_recommendation') or {}).get('local_analysis'))
+           or SubjectSettings.from_settings(s.settings).follow_bird for s in seeds):
         from birdstamp.image_dejitter.bird_observation_cache import detector_signature
         from birdstamp.image_dejitter.target_trajectory import TRAJECTORY_VERSION
         identity_signature = (TRAJECTORY_VERSION,detector_signature())
@@ -143,7 +144,9 @@ def common_alignment_crop(regions, tracking, source_sizes, reference_size, stren
     return boxes, (right - left, bottom - top)
 
 
-def prepare_rigid_geometry(regions, tracking, sizes, reference_size, reference_key, settings, *, cancelled):
+def prepare_rigid_geometry(regions, tracking, sizes, reference_size, reference_key, settings, *, cancelled,
+                           mode='rigid', adjust=None):
+    """adjust(alignments) 可在求共同画幅前整体修改逐帧变换（如两段式稳定的目标鸟跟随）。"""
     alignments = {}
     footprints = []
     intersection = None
@@ -153,11 +156,16 @@ def prepare_rigid_geometry(regions, tracking, sizes, reference_size, reference_k
         if cancelled():
             raise VideoExportCancelledError('已取消去抖动分析。')
         try:
-            alignment = estimate_alignment(regions,result,sizes[key],reference_size,mode='rigid',
+            alignment = estimate_alignment(regions,result,sizes[key],reference_size,mode=mode,
                 strength=settings.get('dejitter_reference_strength',100),options=options,is_reference=key==reference_key)
         except ValueError as exc:
             raise SequencePhotoError(key,f'参考区失配：{result.error or exc}') from exc
         alignments[key] = alignment
+    if adjust is not None:
+        alignments = adjust(alignments)
+    for key,alignment in alignments.items():
+        if cancelled():
+            raise VideoExportCancelledError('已取消去抖动分析。')
         footprint = alignment.footprint(sizes[key],safe=not union)
         if not footprint:
             raise SequencePhotoError(key,'旋转后没有可用的完整画幅。')
@@ -239,8 +247,46 @@ def prepare_sequence_preview(seeds, template_paths=None, *, cancel_event, progre
 
     alignments,canvas_box = {},()
     subject_plans = {}
+    follow = None
+    if SubjectSettings.from_settings(settings).follow_bird:
+        from birdstamp.image_dejitter.bird_follow import prepare_follow_centres, FollowError
+        try:
+            follow = prepare_follow_centres(reference, [job.path for job in jobs], settings, reference_size,
+                                            cancelled=cancel_event.is_set, progress=progress)
+        except InterruptedError as exc:
+            raise VideoExportCancelledError('已取消目标鸟关联。') from exc
+        except FollowError as exc:
+            paths = {path_key(job.path): job.path for job in jobs}
+            raise SequencePhotoError(paths.get(exc.key, reference), str(exc)) from exc
+
+    def follow_adjust(selected):
+        from birdstamp.image_dejitter.bird_follow import follow_offsets, shifted_alignment, FollowError
+        from .subject_sequence import trajectory_times, SubjectFramePlan, check_capture_gaps
+        def adjust(frame_alignments):
+            nonlocal subject_plans
+            keys = tuple(frame_alignments)
+            times,timeline = trajectory_times(selected,keys)
+            check_capture_gaps(keys,times,timeline,())
+            try:
+                offsets,plans = follow_offsets(keys,frame_alignments,follow,times,
+                                               SubjectSettings.from_settings(settings).follow_window,
+                                               reference_key=path_key(reference))
+            except FollowError as exc:
+                raise SequencePhotoError(selected[exc.key].path if exc.key in selected else reference,str(exc)) from exc
+            subject_plans = {k:SubjectFramePlan(status,observed,tuple(map(round,offsets[k])),trend,timeline)
+                             for k,(status,observed,trend) in plans.items()}
+            return {k:shifted_alignment(a,offsets[k]) for k,a in frame_alignments.items()}
+        return adjust
+
     def crop(selected):
         nonlocal alignments,canvas_box,subject_plans
+        if follow is not None:
+            # 两段式：先背景对齐（平移或刚性），再把目标鸟相对背景的平滑趋势加回画框。
+            boxes,size,alignments,canvas_box = prepare_rigid_geometry(
+                regions,{k:tracking[k] for k in selected},sizes,reference_size,path_key(reference),settings,
+                cancelled=cancel_event.is_set,mode=normalize_alignment_mode(settings.get(ALIGNMENT_MODE_KEY)),
+                adjust=follow_adjust(selected))
+            return boxes,size
         if SubjectSettings.from_settings(settings).method == 'subject_local':
             from .subject_sequence import prepare_subject_geometry
             boxes, size, subject_plans = prepare_subject_geometry(

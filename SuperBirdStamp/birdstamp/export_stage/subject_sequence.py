@@ -45,6 +45,16 @@ def trajectory_times(jobs, keys):
     return np.array(values)-values[0], 'capture_time'
 
 
+def check_capture_gaps(keys, times, timeline, boundaries):
+    """大拍摄间隔明确停止，不把分开的拍摄强行接成一个轨迹。"""
+    if timeline == 'capture_time' and len(times) > 1:
+        gaps = np.diff(times)
+        limit = 10.  # 超过十秒的拍摄间隔必须由人工关键帧确认，避免桥接不同拍摄。
+        jumps = [i for i in np.flatnonzero(gaps > limit) if int(i)+1 not in boundaries]
+        if len(jumps):
+            raise SequencePhotoError(keys[int(jumps[0])+1],'拍摄间隔过大，请把不连续拍摄分别分析。')
+
+
 def smooth_path(displacements, times, window):
     """局部线性回归保留匀速趋势，端点不做重复值填充；两帧不外推趋势。"""
     if len(displacements) < 3:
@@ -79,13 +89,7 @@ def prepare_subject_geometry(regions, tracking, sizes, reference_size, settings,
     if options.mode == 'follow':
         for start,end in zip(boundaries,boundaries[1:]):
             target[start:end] = smooth_path(measured[start:end],times[start:end],options.window)
-    # 大拍摄间隔明确停止，不把分开的拍摄强行接成一个轨迹。
-    if timeline == 'capture_time' and len(times) > 1:
-        gaps = np.diff(times)
-        limit = 10.  # 超过十秒的拍摄间隔必须由人工关键帧确认，避免桥接不同拍摄。
-        jumps = [i for i in np.flatnonzero(gaps > limit) if int(i)+1 not in boundaries]
-        if len(jumps):
-            raise SequencePhotoError(keys[int(jumps[0])+1],'拍摄间隔过大，请把不连续拍摄分别分析。')
+    check_capture_gaps(keys,times,timeline,boundaries)
     blend = max(0,min(100,float(settings.get('dejitter_reference_strength',100))))/100
     shifts = np.rint((measured-target)*blend).astype(int)
     union = settings.get('dejitter_pad_to_union',False) is True

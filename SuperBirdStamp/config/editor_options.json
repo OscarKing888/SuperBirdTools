@@ -160,6 +160,8 @@
   "dejitter_subject_window": 5,
   "dejitter_subject_version": 1,
   "dejitter_subject_debug": false,
+  "dejitter_follow_bird": false,
+  "dejitter_follow_window": 9,
   "dejitter_match_rotation_deg": 2.0,
   "dejitter_match_tolerance_pct": 0.3,
   "text_effects": {

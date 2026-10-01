@@ -77,12 +77,15 @@ def stabilize_command(
     window: int = typer.Option(5, min=3, max=31),
     pad: bool = typer.Option(False, "--pad/--no-pad"),
     debug: bool = typer.Option(False, "--debug", help="附加真实对应点 tracks.npz。"),
+    follow_bird: bool = typer.Option(False, "--follow-bird", help="仅基本方法：背景去抖后画框平滑跟随目标鸟（两段式）。"),
+    follow_window: int = typer.Option(9, min=3, max=31, help="目标鸟跟随窗口（帧）。"),
 ) -> None:
     """按基本或高级识别策略去抖动，导出 PNG 和数值诊断。"""
     from birdstamp.subject_stabilization_cli import stabilize_files
     try:
         folder = stabilize_files(frames,reference,regions,output,method=method,mode=mode,
-                                 strength=strength,window=window,pad=pad,debug=debug,progress=typer.echo)
+                                 strength=strength,window=window,pad=pad,debug=debug,progress=typer.echo,
+                                 follow_bird=follow_bird,follow_window=follow_window)
     except (ValueError,OSError) as exc:
         raise typer.BadParameter(str(exc)) from exc
     typer.echo(str(folder))

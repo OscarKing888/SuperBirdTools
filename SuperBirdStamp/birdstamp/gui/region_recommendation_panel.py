@@ -106,12 +106,14 @@ class RegionRecommendationPanel(QWidget):
         return (str(e.current_path),str(reference),image_file_signature(reference) if reference else None,
                 tuple(image_file_signature(Path(p)) for p in paths),
                 tuple(e._dejitter_reference_regions),e.dejitter_subject_controls.method.currentData(),
+                e.dejitter_subject_controls.follow.isChecked(),
                 repr(e.dejitter_matching_controls.settings()),self.part.currentData(),
                 self.experimental.isChecked(),e.dejitter_auto_region_count.value(),repr(self.metadata.get('target')))
 
     def sync(self, advanced):
-        for control in (self.part_label,self.part,self.target_button,self.experimental,self.download,self.offline):
+        for control in (self.part_label,self.part,self.experimental,self.download,self.offline):
             control.setVisible(advanced)
+        self.target_button.setVisible(advanced or self._follow_mode())
         self.cancel_button.setEnabled(self.worker is not None)
         self._sync_model_buttons()
         if self._draft_context is not None and self._draft_context != self.context():
@@ -174,11 +176,35 @@ class RegionRecommendationPanel(QWidget):
         path,_=QFileDialog.getOpenFileName(self,'导入官方 AK 鸟类 HRNet-W32 权重','','PyTorch (*.pth)')
         if path:self.install(path)
 
+    def _follow_mode(self):
+        controls=getattr(self.editor,'dejitter_subject_controls',None)
+        return (controls is not None and controls.method.currentData() != 'subject_local'
+                and controls.follow.isChecked())
+
     def choose_target(self):
         if self.worker:return
         self.metadata.pop('target',None)
         self.editor._invalidate_reference_tracking('目标鸟已变化，请重新推荐并分析。')
-        self.recommend()
+        if self._follow_mode():
+            self.detect_targets()
+        else:
+            self.recommend()
+
+    def detect_targets(self):
+        """两段式跟随只需目标鸟，不生成选区；结果走同一选择对话框与快照核验。"""
+        e=self.editor
+        if self.worker or e._sequence_worker is not None or e._sequence_shutdown or e.current_path is None:return
+        reference=Path(e._dejitter_reference_source or e.current_path)
+        def task(cancelled,progress,preview):
+            from birdstamp.decoders.image_decoder import decode_image
+            from birdstamp.image_dejitter.bird_observation_cache import detect_cached
+            from birdstamp.image_dejitter.region_recommendation import Recommendation
+            progress('识别参考图中的鸟…')
+            with decode_image(reference,decoder='auto') as image:
+                birds=detect_cached(reference,image,cancelled=cancelled)
+            return Recommendation('choose_target' if birds else 'no_target',
+                                  '请选择要跟随的目标鸟。' if birds else '参考图中没有识别到鸟。',birds=birds)
+        self.start(task)
 
     def recommend(self):
         e=self.editor
@@ -263,7 +289,8 @@ class RegionRecommendationPanel(QWidget):
         from PIL.ImageQt import ImageQt
         dialog=QDialog(self);dialog.setWindowTitle('选择要稳定的目标鸟')
         layout=QVBoxLayout(dialog)
-        layout.addWidget(QLabel('点击目标鸟。确认后再次点击“一键推荐”。'))
+        layout.addWidget(QLabel('点击目标鸟。确认后点击“分析并预览成片”。' if self._follow_mode()
+                                else '点击目标鸟。确认后再次点击“一键推荐”。'))
         image=self.editor.current_source_image
         for index,bird in enumerate(birds):
             button=QPushButton(f'鸟 {index+1} · 置信度 {bird.confidence:.0%}')

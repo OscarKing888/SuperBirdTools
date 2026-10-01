@@ -103,3 +103,34 @@ def test_changing_keyframe_invalidates_downstream_debug(window,tmp_path):
     result=window._tracking_result_for_path(seeds[2].path)
     assert result.observation is None and result.matched_count==0
     assert '关键帧已变化' in result.error
+
+
+def test_follow_bird_controls_persist_and_target_button_detects_only(window,tmp_path,monkeypatch):
+    from birdstamp.workspace import write_workspace_json,read_workspace_json
+    from birdstamp.image_dejitter.recognition import FOLLOW_KEY,FOLLOW_WINDOW_KEY
+    controls=window.dejitter_subject_controls
+    panel=window.dejitter_recommendation
+    controls.method.setCurrentIndex(controls.method.findData('reference_region'))
+    assert not controls.follow.isHidden() and not controls.follow_window.isEnabled()
+    assert panel.target_button.isHidden()
+    controls.follow.setChecked(True)
+    controls.follow_window.setValue(11)
+    assert controls.follow_window.isEnabled() and not panel.target_button.isHidden()
+    assert '两段式' in controls.hint.text()
+    settings=window._build_current_render_settings()
+    assert settings[FOLLOW_KEY] is True and settings[FOLLOW_WINDOW_KEY]==11
+    path=tmp_path/'两段式.birdstamp-workspace.json'
+    write_workspace_json(path,window._collect_workspace_payload(path))
+    controls.follow.setChecked(False)
+    window._restore_workspace_payload(read_workspace_json(path),path)
+    assert controls.follow.isChecked() and controls.follow_window.value()==11
+    # 跟随模式下“选择目标鸟”只识别鸟，不运行选区推荐。
+    started=[]
+    monkeypatch.setattr(panel,'detect_targets',lambda:started.append('detect'))
+    monkeypatch.setattr(panel,'recommend',lambda:started.append('recommend'))
+    panel.choose_target()
+    assert started==['detect']
+    # 高级方法隐藏两段式选项，且不把它写入设置。
+    controls.method.setCurrentIndex(controls.method.findData('subject_local'))
+    assert controls.follow.isHidden()
+    assert window._build_current_render_settings()[FOLLOW_KEY] is False
