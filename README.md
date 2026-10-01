@@ -210,3 +210,8 @@ Release 已存在且本工作流的资产齐全时，会保留旧资产而不覆
 - 两个 app 不再各自内嵌 `app_common`，而是共享根目录 submodule。
 - PyInstaller spec 已改为从各自模块目录打包，同时把仓库根加入 `pathex`。
 - 每个 app 新增 `entry.py` / `__main__.py`，解决 sibling `app_common` 的导入问题。
+## 自动更新
+
+完整多应用构建现在同时生成独立 `SuperBirdUpdater`、短 commit 版本文件清单、并行 MD5/SHA-256 校验和文件级增量下载载荷。默认通过公开 GitHub Release 免登录更新；保留百度盘手动入口。
+
+首次安装需解压整个套件，两个主应用与更新器放在同一个可写目录；下载完成后安全关闭两应用，事务安装成功后重启。配置、发布方法、命令行及恢复流程见 [更新器文档](SuperBirdUpdater/README.md)。

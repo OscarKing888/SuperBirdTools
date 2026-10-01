@@ -759,6 +759,9 @@ class MainWindow(QMainWindow):
         about_action = QAction("关于...", self)
         about_action.triggered.connect(self._show_about_dialog)
         help_menu.addAction(about_action)
+        updater_menu = getattr(self, "_updater_menu", None)
+        if updater_menu is not None:
+            self.menuBar().addMenu(updater_menu)
 
     def _send_to_external_app(self, app: dict) -> None:
         """将当前选中的文件发送到指定外部应用。"""
@@ -1663,6 +1666,8 @@ def main():
 
     app.aboutToQuit.connect(stop_receiver)
     window.showMaximized()
+    from SuperBirdUpdater.bridge import attach as attach_updater
+    attach_updater(window, "SuperViewer")
     if argv_files:
         QTimer.singleShot(100, (lambda p: lambda: window._open_received_file_list(p))(argv_files))
     exit_code = app.exec()

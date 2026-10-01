@@ -46,6 +46,11 @@ def main() -> None:
     if len(sys.argv) > 1 and sys.argv[1] == "--check-about":
         from about_diagnostics import main as check_about
         raise SystemExit(check_about("SuperBirdStamp", sys.argv[2:]))
+    if len(sys.argv) > 1 and sys.argv[1] == "--check-runtime":
+        from birdstamp.runtime_diagnostics import main as check_runtime
+        raise SystemExit(check_runtime())
+    from SuperBirdUpdater.runtime import admit_startup
+    admit_startup("SuperBirdStamp")
     try:
         from .main import main as run_main
     except ImportError:

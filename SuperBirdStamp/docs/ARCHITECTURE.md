@@ -279,3 +279,8 @@ $env:QT_QPA_PLATFORM = 'offscreen'
 macOS 使用 `.venv/bin/python3` 执行相同的 `-m pytest` 参数。先运行受影响的专项测试，再按根规则运行完整回归；改 Python 还需对实际变更文件执行 `-m py_compile`。涉及共享格式、XMP 或列表行为时，连同相关 `app_common/tests` 和 SuperViewer 受保护流程一起验证。
 
 GUI 测试必须在构造窗口前将 `birdstamp.config.get_user_data_dir` patch 到临时目录，并按需隔离缓存。构造后才禁用保存不能防止启动读取或初始化真实配置。使用进程级强引用保留 `QApplication`，按实际状态/定时器/线程完成条件等待，不能只增加固定 sleep。自动保存、模板与导出状态的真实用户文件不应成为测试输入或清理对象；离屏测试也不替代 Windows/macOS 打包后启动验证。
+## 独立更新器接入
+
+[`entry.py`](../entry.py) 在业务模块导入前进行 `SuperBirdUpdater.runtime.admit_startup()` 登记。`launch_gui()` 在窗口显示后接入更新菜单、后台检查及独立 IPC；图片/GIF、序列和视频导出中的实例拒绝更新退出。通过准备检查后冻结窗口输入，再调用原 `closeEvent`，保留工作区保存及线程/ExifTool 清理语义。
+
+更新源、文件级下载、自更新隔离与失败恢复由 [SuperBirdUpdater](../../SuperBirdUpdater/README.md) 负责。源码启动不会自动更新，不改变照片导入/发送协议。

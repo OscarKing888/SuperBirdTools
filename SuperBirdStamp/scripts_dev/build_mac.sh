@@ -98,7 +98,8 @@ echo "============================================================"
 echo " Building ${APP_NAME}.app (this may take several minutes) ..."
 echo "============================================================"
 
-"$PYTHON" -m PyInstaller "$SPEC_FILE" --noconfirm --distpath "$DIST_ROOT" --workpath "$WORK_ROOT"
+# 生成的 --arch/--console spec 位于 build 下，资源仍必须从应用目录读取。
+SUPERBIRDSTAMP_APP_ROOT="$PROJECT_ROOT" "$PYTHON" -m PyInstaller "$SPEC_FILE" --noconfirm --distpath "$DIST_ROOT" --workpath "$WORK_ROOT"
 
 if [[ ! -d "$APP_DIR" ]]; then
     echo "ERROR: Build failed — $APP_DIR not found." >&2

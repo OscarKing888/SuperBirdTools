@@ -84,10 +84,23 @@ set "BUILD_EXIT_CODE=%ERRORLEVEL%"
 
 :after_build
 if not "%BUILD_EXIT_CODE%"=="0" exit /b %BUILD_EXIT_CODE%
+if defined PYTHON_EXE (
+  "%PYTHON_EXE%" -m PyInstaller --noconfirm --distpath "%DIST_ROOT%" --workpath "%BUILD_ROOT%\SuperBirdUpdater" "%ROOT_DIR%SuperBirdUpdater\SuperBirdUpdater.spec"
+) else (
+  %PYTHON_LAUNCHER% -m PyInstaller --noconfirm --distpath "%DIST_ROOT%" --workpath "%BUILD_ROOT%\SuperBirdUpdater" "%ROOT_DIR%SuperBirdUpdater\SuperBirdUpdater.spec"
+)
+if errorlevel 1 exit /b 1
+if defined PYTHON_EXE (
+  "%PYTHON_EXE%" "%ROOT_DIR%build_tools\generate_update_manifest.py" --dist "%DIST_ROOT%" --platform windows --arch x86_64 --package
+) else (
+  %PYTHON_LAUNCHER% "%ROOT_DIR%build_tools\generate_update_manifest.py" --dist "%DIST_ROOT%" --platform windows --arch x86_64 --package
+)
+if errorlevel 1 exit /b 1
 
 echo [OK] outputs:
 echo   %DIST_ROOT%\SuperViewer\SuperViewer.exe
 echo   %DIST_ROOT%\SuperBirdStamp\SuperBirdStamp.exe
+echo   %DIST_ROOT%\SuperBirdUpdater\SuperBirdUpdater.exe
+echo   %DIST_ROOT%\updates
 
 endlocal
-
