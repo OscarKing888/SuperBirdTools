@@ -25,6 +25,8 @@
 
 ## 2. 目录选择到可见列表
 
+共享 `DirectoryBrowserWidget._on_dir_context_menu()` 提供“复制完整路径”，取右键节点的绝对路径写入剪贴板，不触发目录选择；空白处和占位节点不显示菜单。
+
 ```mermaid
 flowchart TD
     D[DirectoryBrowserWidget.directory_selected] --> M[MainWindow._on_directory_selected]
@@ -76,9 +78,9 @@ RAW 焦点读取（[`raw_focus_metadata.py`](../../app_common/raw_focus_metadata
 | 超过 HEIF 阈值的 HIF / HEIF / HEIC 缓存未命中 | 显示“正在加载预览”，由完整预览 worker 解码；不能为了生成临时小图在 GUI 线程完整解码 HEVC。失败后显示“无法预览” |
 | RAW | 两段式：GUI 线程只显示当前档位缓存，未命中时显示“正在加载预览”，不提取、不解码 RAW；随后 `_FullPreviewLoader` 经 `_load_full_preview_qimage_raw()` 加载原生尺寸清晰图。默认使用可解码且长边至少 1600 的内嵌 JPEG，并按 JPEG 自身 EXIF 方向显示；缺失、损坏或过小时回退 `_load_sensor_raw_qimage()` 完整解码。提取仍复用 `thumb_stream.get_raw_preview_jpeg()`：先用进程内 LibRaw（长边 ≥1600 直接采用），否则按 ExifTool `JpgFromRaw → PreviewImage → ThumbnailImage` 补查并取较大者 |
 
-快速缓存 provider 是 `SuperViewerTaggedFileListPanel.cached_quick_preview_for_path()`：优先使用当前档位已解码的 `QPixmap`，再用共享 `_resolve_existing_sized_preview_image_path(..., exact_size_only=True)` 读取已有缓存。它不生成缓存、不返回原图冒充缩略图。缓存根和文件命名由 `_browser_core.py` 按每个源文件解析，不能简单用当前选中目录推断。
+快速缓存 provider 是 `SuperViewerTaggedFileListPanel.cached_quick_preview_for_path()`：优先使用当前档位已解码的 `QPixmap`，再用共享 `_resolve_existing_sized_preview_image_path(..., exact_size_only=True)` 读取已有缓存。它不生成缓存、不返回原图冒充缩略图。缓存根和文件命名由 `_browser_core.py` 按每个源文件解析：检查源文件所在目录及向上最多 6 层，取最近的 `.superpicky`，不要求 `report.db`，也不限制距卷根的深度。目录选择不改变缓存归属；报告数据库查找独立保留原规则。没有缓存根时 Viewer 仍询问创建。
 
-BirdStamp 的 [`editor_shared_thumb_cache.py`](../../SuperBirdStamp/birdstamp/gui/editor_shared_thumb_cache.py) 复用同一 `_browser_core.py` 作用域、精确档位校验和原子写入接口，读取并生成 `.superpicky/thumb_cache/256`，也能读取 Viewer 的本地 256 缓存。Viewer 因此可直接使用 BirdStamp 生成的共享 256 档；缺少 `.superpicky` 时 BirdStamp 询问创建，拒绝后在本窗口会话使用自己的本地缓存。
+BirdStamp 的 [`editor_shared_thumb_cache.py`](../../SuperBirdStamp/birdstamp/gui/editor_shared_thumb_cache.py) 复用同一 `_browser_core.py` 作用域、精确档位校验和原子写入接口，读取并生成 `.superpicky/thumb_cache/256`，也能读取 Viewer 的本地 256 缓存。Viewer 因此可直接使用 BirdStamp 生成的共享 256 档；缺少 `.superpicky` 时 BirdStamp 自动在照片所在目录创建；创建失败记录日志并在本窗口会话避免重复尝试，创建或共享写入失败均回退自己的本地缓存，不弹框、不创建 `report.db`。
 
 初始化及切换目录时，A/B 各侧的 `PreviewPanel` 标记 `_fit_next_image`。首个有效小图或完整图显式适应窗口，不套用“保持切图视野”的旧像素倍率；加载占位不消耗此标记。同一请求的清晰图升级再次适应，确保相机预览与 RAW 比例略有差异时仍完整显示。`viewport_interacted` 取消该请求的自动适应，保护用户在等待升级时的手动缩放/平移；后续选图继续遵守既有保持视野策略。回归见 [`test_first_preview_fit.py`](../tests/test_first_preview_fit.py)。
 

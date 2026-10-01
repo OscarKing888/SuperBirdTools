@@ -3,11 +3,11 @@ from __future__ import annotations
 
 from pathlib import Path
 import hashlib
+import logging
 import os
 
 from PIL import Image
 from PyQt6.QtGui import QImage
-from PyQt6.QtWidgets import QApplication, QMessageBox
 
 from app_common.file_browser._browser_core import (
     _existing_persistent_thumb_cache_path_for_exact_size,
@@ -21,6 +21,7 @@ from app_common.file_browser._browser_core import (
 from birdstamp import config
 
 
+_log = logging.getLogger(__name__)
 THUMB_EDGE = 256
 
 
@@ -71,55 +72,42 @@ def write_thumbnail(path: Path, image: Image.Image) -> bool:
         str(path), str(path.parent), THUMB_EDGE, stamp, selected_dir=str(path.parent),
     ):
         return True
-    target = shared or local
-    if not target:
-        return False
     with image.convert("RGB") as rgb:
         if max(rgb.size) > THUMB_EDGE:
             rgb.thumbnail((THUMB_EDGE, THUMB_EDGE), Image.Resampling.LANCZOS)
         data = rgb.tobytes()
         qimage = QImage(data, rgb.width, rgb.height, rgb.width * 3, QImage.Format.Format_RGB888).copy()
-    return _write_persistent_thumb_cache_image(target, qimage, stamp)
+    for target in (shared, local):
+        if not target:
+            continue
+        try:
+            if _write_persistent_thumb_cache_image(target, qimage, stamp):
+                return True
+        except OSError as exc:
+            _log.warning("缩略图缓存写入失败 path=%s: %s", target, exc)
+            continue
+        _log.warning("缩略图缓存写入失败 path=%s", target)
+    return False
 
 
 class SharedThumbnailScope:
-    """Window-session permission for new .superpicky directories."""
+    """自动创建共享缓存目录，并记住本窗口会话内创建失败的目录。"""
 
     def __init__(self) -> None:
-        self.declined: set[Path] = set()
-
-    @staticmethod
-    def _ask(target: Path, parent) -> bool:
-        application = QApplication.instance()
-        if application is None or application.platformName() == "offscreen":
-            return False
-        try:
-            answer = QMessageBox.question(
-                parent, "创建缩略图缓存目录",
-                f"是否在当前目录创建：\n{target}\n\n只会创建目录用于预览缓存，不会创建 report.db。",
-                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-                QMessageBox.StandardButton.Yes,
-            )
-        except Exception:
-            return False
-        return answer == QMessageBox.StandardButton.Yes
+        self.failed_dirs: set[Path] = set()
 
     def ensure(self, path: Path, parent=None) -> bool:
-        directory = path.parent.resolve(strict=False)
+        # 与缓存读取保持相同的路径语义，不解析符号链接到另一棵目录树。
+        directory = Path(os.path.abspath(path.parent))
         if _find_cache_superpicky_dir_for_file(str(path), str(directory)):
             return True
-        if directory in self.declined:
+        if directory in self.failed_dirs:
             return False
         target = directory / ".superpicky"
-        if not self._ask(target, parent):
-            self.declined.add(directory)
-            return False
         try:
-            target.mkdir(parents=True, exist_ok=True)
+            target.mkdir(exist_ok=True)
             return True
         except OSError as exc:
-            self.declined.add(directory)
-            application = QApplication.instance()
-            if application is not None and application.platformName() != "offscreen":
-                QMessageBox.warning(parent, "无法创建缩略图缓存目录", f"无法创建：\n{target}\n\n{exc}")
+            self.failed_dirs.add(directory)
+            _log.warning("无法创建缩略图缓存目录，回退本地缓存 path=%s: %s", target, exc)
             return False

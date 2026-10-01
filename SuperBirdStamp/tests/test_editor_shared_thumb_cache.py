@@ -1,6 +1,8 @@
 from pathlib import Path
 import os
 
+import pytest
+
 from PIL import Image
 
 from app_common.file_browser._browser_core import (
@@ -43,30 +45,97 @@ def test_birdstamp_writes_viewers_exact_256_cache_for_each_file_scope(tmp_path, 
         assert read_thumbnail(path) is None
 
 
-def test_missing_scope_uses_birdstamp_local_cache_and_creation_is_session_scoped(tmp_path, monkeypatch):
+def test_missing_scope_is_created_automatically_without_dialog_or_report(tmp_path, monkeypatch):
+    from PyQt6.QtWidgets import QMessageBox
     monkeypatch.setattr(config, "get_user_data_dir", lambda: tmp_path / "user")
-    path = _source(tmp_path / "photos")
+    monkeypatch.setattr(QMessageBox, "question", lambda *args: pytest.fail("must not ask"))
+    path = _source(tmp_path / "照片")
     scope = SharedThumbnailScope()
-    asked = []
-    monkeypatch.setattr(scope, "_ask", lambda target, parent: asked.append(target) or False)
-    assert not scope.ensure(path)
-    assert not scope.ensure(path)
-    assert len(asked) == 1
-    with Image.new("RGB", (640, 400), "red") as image:
-        assert write_thumbnail(path, image)
-    assert not (path.parent / ".superpicky").exists()
-    with read_thumbnail(path) as cached:
-        assert cached.size == (256, 160)
-
-    accepted = SharedThumbnailScope()
-    monkeypatch.setattr(accepted, "_ask", lambda target, parent: True)
-    assert accepted.ensure(path)
+    assert scope.ensure(path)
+    assert scope.ensure(path)
     assert (path.parent / ".superpicky").is_dir()
     assert not (path.parent / ".superpicky" / "report.db").exists()
     with Image.new("RGB", (640, 400), "blue") as image:
         assert write_thumbnail(path, image)
     with read_thumbnail(path) as cached:
         assert cached.getpixel((0, 0))[2] > 240
+
+
+def test_scope_creation_failure_is_session_scoped_and_uses_local_cache(tmp_path, monkeypatch, caplog):
+    from PyQt6.QtWidgets import QMessageBox
+    monkeypatch.setattr(config, "get_user_data_dir", lambda: tmp_path / "user")
+    monkeypatch.setattr(QMessageBox, "question", lambda *args: pytest.fail("must not ask"))
+    monkeypatch.setattr(QMessageBox, "warning", lambda *args: pytest.fail("must not interrupt preview"))
+    path = _source(tmp_path / "photos")
+    target = path.parent / ".superpicky"
+    calls = []
+    original_mkdir = Path.mkdir
+    def fail_scope(directory, *args, **kwargs):
+        if directory == target:
+            calls.append(directory)
+            raise PermissionError("read only")
+        return original_mkdir(directory, *args, **kwargs)
+    monkeypatch.setattr(Path, "mkdir", fail_scope)
+    scope = SharedThumbnailScope()
+    assert not scope.ensure(path)
+    assert not scope.ensure(path)
+    assert calls == [target]
+    assert "回退本地缓存" in caplog.text
+    with Image.new("RGB", (640, 400), "red") as image:
+        assert write_thumbnail(path, image)
+    assert not target.exists()
+    with read_thumbnail(path) as cached:
+        assert cached.size == (256, 160)
+    # 下一窗口允许重试；外部创建成功后当前窗口也能立即复用。
+    monkeypatch.setattr(Path, "mkdir", original_mkdir)
+    assert SharedThumbnailScope().ensure(path)
+    assert scope.ensure(path)
+
+
+def test_birdstamp_reuses_ancestor_cache_without_creating_leaf_scope(tmp_path, monkeypatch):
+    monkeypatch.setattr(config, "get_user_data_dir", lambda: tmp_path / "user")
+    root = tmp_path / "海湾森林公园"
+    scope = root / ".superpicky"
+    scope.mkdir(parents=True)
+    path = _source(root / "日期" / "优选" / "鸟种" / "连拍" / "照片")
+    assert SharedThumbnailScope().ensure(path)
+    assert not (path.parent / ".superpicky").exists()
+    with Image.new("RGB", (640, 400), "red") as image:
+        assert write_thumbnail(path, image)
+    expected = _persistent_thumb_cache_path_for_file(str(path), str(root), 256, selected_dir=str(root))
+    assert Path(expected).is_file()
+    with read_thumbnail(path) as cached:
+        assert cached.size == (256, 160)
+
+
+@pytest.mark.parametrize("raises", [False, True])
+def test_shared_write_failure_falls_back_to_readable_local_cache(tmp_path, monkeypatch, raises):
+    from birdstamp.gui import editor_shared_thumb_cache as cache
+    monkeypatch.setattr(config, "get_user_data_dir", lambda: tmp_path / "user")
+    path = _source(tmp_path / "photos")
+    assert SharedThumbnailScope().ensure(path)
+    shared = _persistent_thumb_cache_path_for_file(str(path), str(path.parent), 256, selected_dir=str(path.parent))
+    local = cache.local_thumbnail_path(path)
+    original_write = cache._write_persistent_thumb_cache_image
+    calls = []
+    def fail_shared(target, image, stamp):
+        calls.append(target)
+        if target == shared:
+            if raises:
+                raise PermissionError("read only")
+            return False
+        return original_write(target, image, stamp)
+    monkeypatch.setattr(cache, "_write_persistent_thumb_cache_image", fail_shared)
+    with Image.new("RGB", (640, 400), "red") as image:
+        assert write_thumbnail(path, image)
+    assert calls == [shared, str(local)]
+    assert not Path(shared).exists()
+    assert local.is_file()
+    with read_thumbnail(path) as cached:
+        assert cached.size == (256, 160)
+    monkeypatch.setattr(cache, "_write_persistent_thumb_cache_image", lambda *args: False)
+    with Image.new("RGB", (640, 400), "red") as image:
+        assert not write_thumbnail(path, image)
 
 
 def test_corrupt_shared_cache_falls_back_and_rebuilds(tmp_path, monkeypatch):
