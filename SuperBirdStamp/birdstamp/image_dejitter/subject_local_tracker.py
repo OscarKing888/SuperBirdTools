@@ -27,9 +27,12 @@ class LocalObservation:
     algorithm_version: int = ALGORITHM_VERSION
     reference_origin: tuple = (0., 0.)
     moving_origin: tuple = (0., 0.)
+    method: str = 'lk'
+    quality: float = 0.
+    keyframe_paths: tuple = ()
 
     def __post_init__(self):
-        for name in ('analysis_size','source_size','source_per_analysis','reference_origin','moving_origin'):
+        for name in ('analysis_size','source_size','source_per_analysis','reference_origin','moving_origin','keyframe_paths'):
             object.__setattr__(self,name,tuple(getattr(self,name)))
         for name in ('points','region_metrics'):
             object.__setattr__(self,name,tuple(tuple(row) for row in getattr(self,name)))
@@ -38,8 +41,9 @@ class LocalObservation:
 
     def summary(self):
         count = sum(bool(p[6]) for p in self.points)
-        label = {'tracked':'已跟踪','needs_keyframe':'需补关键帧','user_override':'人工关键帧','reference':'参考帧'}.get(self.status,self.status)
-        return f'局部主体 · {label} · 内点 {count}/{len(self.points)}' + (f' · {self.reason}' if self.reason else '')
+        label = {'tracked':'已跟踪','needs_keyframe':'需补关键帧','user_override':'人工关键帧','reference':'参考帧','keyframe_bridge':'双向分段核验'}.get(self.status,self.status)
+        evidence = f'子块 {count}/{len(self.points)}' if self.method == 'ncc_ecc' else f'内点 {count}/{len(self.points)}'
+        return f'局部主体 · {label} · {evidence}' + (f' · {self.reason}' if self.reason else '')
 
 
 def consensus_translation(a, b, threshold=2.5):

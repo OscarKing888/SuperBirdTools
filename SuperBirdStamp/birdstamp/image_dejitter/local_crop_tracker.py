@@ -6,18 +6,41 @@ from .subject_local_tracker import SubjectLocalTracker, LocalObservation
 from .region_tracking_result import RegionTrackingResult, image_file_signature
 from .bird_candidates import detect_bird_candidates, associate_target
 from .matching_options import MatchingOptions
+from .local_registration import LocalRegistrationTracker
 
 
 class LocalCropSubjectTracker(SubjectLocalTracker):
-    def __init__(self, reference, regions, *, target, options=MatchingOptions(), detector=None):
+    def __init__(self, reference, regions, *, target, options=MatchingOptions(), detector=None, analysis_side=None):
         self.regions = tuple(tuple(r) for r in regions)
+        from .manual_region_matches import normalize_match_box
+        target = normalize_match_box(target)
+        if target is None:
+            raise ValueError('目标鸟框无效，请重新选择目标鸟')
         self.target = tuple(target)
         self.reference_size = reference.size
         self.options = options
         self.detector = detector or detect_bird_candidates
         self.target_trajectory = None
         w,h = reference.size
-        self.side = max(64, round(max((target[2]-target[0])*w, (target[3]-target[1])*h)*2))
+        if not self.regions or any(not (0 <= l < r <= 1 and 0 <= t < b <= 1)
+                                   for l,t,r,b in self.regions):
+            raise ValueError('局部主体：参考区必须在原图内')
+        # 人工移动/追加的框也必须属于当前目标，不能把远处背景塞进鸟体裁片。
+        bw,bh = target[2]-target[0],target[3]-target[1]
+        outside = [str(i+1) for i,(l,t,r,b) in enumerate(self.regions)
+                   if l < target[0]-bw*.5 or r > target[2]+bw*.5
+                   or t < target[1]-bh*.5 or b > target[3]+bh*.5]
+        if outside:
+            raise ValueError('选区 '+ '、'.join(outside)+' 远离目标鸟，不能与鸟体局部混用。'
+                             '请删除这些背景选区，或改用基本参考区匹配并只选择背景；若换了参考图，请重新选择目标鸟。')
+        cx,cy = (target[0]+target[2])*w/2,(target[1]+target[3])*h/2
+        extent = max(max(abs(l*w-cx),abs(r*w-cx),abs(t*h-cy),abs(b*h-cy))
+                     for l,t,r,b in self.regions)
+        self.side = max(64, int(np.ceil(max(bw*w,bh*h)*2)), int(np.ceil(extent*2+32)))
+        if analysis_side is not None:
+            if analysis_side < extent*2+2:
+                raise ValueError('当前局部超出固定分析范围，请补人工关键帧')
+            self.side = analysis_side
         self.analysis_size = (min(1024,self.side),)*2
         self.source_per_analysis = np.array((self.side/self.analysis_size[0],)*2)
         self.origin = self._origin(target)
@@ -25,7 +48,7 @@ class LocalCropSubjectTracker(SubjectLocalTracker):
         local = tuple(((l*w-x)/self.side,(t*h-y)/self.side,(r*w-x)/self.side,(b*h-y)/self.side)
                       for l,t,r,b in regions)
         with self._crop(reference,self.origin) as crop:
-            self.inner = SubjectLocalTracker(crop,local,options=options)
+            self.inner = LocalRegistrationTracker(crop,local,options=options)
 
     def _origin(self, box):
         w,h = self.reference_size
@@ -87,7 +110,7 @@ class LocalCropSubjectTracker(SubjectLocalTracker):
         signature = image_file_signature(path)
         reference = getattr(self,'cache_reference',None)
         from .bird_observation_cache import detector_signature
-        key = ('local-crop-v2',reference,signature,self.regions,self.target,self.side,self.analysis_size,detector_signature(),
+        key = ('local-crop-v3',reference,signature,self.regions,self.target,self.side,self.analysis_size,detector_signature(),
                self.target_trajectory.signature if self.target_trajectory is not None else None)
         if cancelled():
             raise InterruptedError('已取消局部主体跟踪')
@@ -97,6 +120,10 @@ class LocalCropSubjectTracker(SubjectLocalTracker):
             if signature and reference and not cancelled() and image_file_signature(path) == signature:
                 cache.put(key,result)
         return result
+
+    def at_keyframe(self, image, boxes, target):
+        return LocalCropSubjectTracker(image,boxes,target=target,options=self.options,
+                                       detector=self.detector,analysis_side=self.side)
 
     def rekeyframe(self, image, boxes):
         w,h = self.reference_size

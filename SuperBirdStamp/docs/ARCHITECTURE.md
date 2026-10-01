@@ -219,6 +219,8 @@ RAW 源图的去抖动分析、成片预览和导出统一优先读取长边至�
 部位候选由 `Recommendation.candidates` 独立返回，`RegionCandidatePreview` 在预检前展示草稿，失败后仍保留诊断；显式采用才进入人工选区。`target_trajectory.build_target_trajectory()` 在推荐和完整分析前按时间构建只读目标鸟轨迹，局部重检消除有包含关系的重复检测框，独立多鸟竞争仍拒绝。并行局部跟踪只读取轨迹中的搜索位置，实际位移仍来自图像对应；相关模型/文件与轨迹版本参与缓存签名。
 
 
+局部鸟体分析的候选变体由 [part_region_variants.py](../birdstamp/image_dejitter/part_region_variants.py) 在可信部位框内生成；[local_registration.py](../birdstamp/image_dejitter/local_registration.py) 提供 LK 失败后的 NCC＋平移 ECC 后端，独立核验唯一性、有效覆盖、反向匹配和分块共同运动。[subject_keyframes.py](../birdstamp/image_dejitter/subject_keyframes.py) 仅在有两个原参考可靠锚点时双向核验最多四帧短段，固定分析比例并还原原锚点坐标；长段/身份中断仍需人工关键帧。回归见 [test_local_registration.py](../tests/test_local_registration.py)，真实结果与限制见 [自动参考区补充记录](AUTO_REFERENCE_REGIONS.md#34-的实现与限制2026-10-01-补充)。
+
 独立序列管线通过 [recognition.py](../birdstamp/image_dejitter/recognition.py) 选择基本参考区匹配或高级局部主体识别。高级方法由 [SubjectLocalTracker](../birdstamp/image_dejitter/subject_local_tracker.py) 生成只含平移的源坐标观测，[subject_sequence.py](../birdstamp/export_stage/subject_sequence.py) 按人工关键帧分段并生成锁定/自然跟随计划，再复用 `ImageProcSequenceAlignStage` 的共同裁切输出。完整人工匹配成为后续片段关键帧；修改关键帧使旧链失效。算法不在 Qt handler 中运行，不创建另一套 YOLO。
 
 [SubjectControls](../birdstamp/gui/editor_subject_controls.py) 在去抖动页提供方法/模式/窗口，使用全局设置和现有工作区恢复；真实点 DEBUG 复用 A/B 的源裁切映射，不进入导出。观测有独立 32 MiB 会话缓存，强度/模式变更可复用；整段计划、对应点及预览仍归现有磁盘缓存和 worker 所有。CLI `stabilize` 调用同一分析/导出核心。使用、坐标/失败语义和验证见 [局部主体稳定](SUBJECT_STABILIZATION.md)。

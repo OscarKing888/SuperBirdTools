@@ -53,7 +53,8 @@ class SubjectControls(QWidget):
         self.mode.setEnabled(advanced)
         self.window.setEnabled(advanced and self.mode.currentData() == 'follow')
         self.hint.setText(('在同一目标上框选有纹理的局部，或使用实验性部位推荐；只平移，不缩放、不旋转。'
-                           '请勿同时选择运动不同的部位。失败帧可拖动全部选区修正，并作为后续帧的新关键帧。'
+                           '请勿把鸟体与远处背景混选。局部推荐区会补充图像配准，并对短失配段做双向关键帧核验。'
+                           '仍失败时，在目标图拖动全部选区修正，即作为后续帧的新关键帧。'
                            '自然跟随保留轨迹趋势；两帧按锁定处理。' if advanced else
                            '基本方法适合静止场景或近似刚性的参考区域；支持平移与轻微旋转。'))
 

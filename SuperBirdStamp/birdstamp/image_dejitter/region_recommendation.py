@@ -47,6 +47,7 @@ class CandidateProposal:
     passed_frames: int = 0
     total_frames: int = 0
     diagnostics: tuple = ()
+    variant: str = ''
 
 
 @dataclass
@@ -137,7 +138,9 @@ def recommend_regions(reference, paths, *, method='reference_region', existing=(
                 target=birds[0].box
             pose=infer(reference,image,target)
             candidates=[c for c in candidates_from_pose(pose,target) if part == 'auto' or c.part == part]
-            proposals=tuple(CandidateProposal(c.part,c.regions,c.confidence,total_frames=len(samples)) for c in candidates)
+            from .part_region_variants import part_region_variants
+            candidates=part_region_variants(image,candidates)
+            proposals=tuple(CandidateProposal(c.part,c.regions,c.confidence,total_frames=len(samples),variant=c.variant) for c in candidates)
             draft=Recommendation('prechecking','已识别到部位候选，正在预检；候选尚不能用于导出。',
                 target=target,birds=birds,candidates=proposals,
                 metadata=dict(version=1,target=target,part=part,local_analysis=True,experimental=experimental,model=MODEL_ID))
@@ -167,7 +170,7 @@ def recommend_regions(reference, paths, *, method='reference_region', existing=(
             for i,(name,regions,tracker,_) in enumerate(trackers):
                 result=tracker.track(image,cancelled=cancelled,target_box=target)
                 passed[i]=result.matched_count==len(regions)
-                diagnostics.append(dict(file=reference.name,part=name,passed=passed[i],reason=result.error,stage='tracking'))
+                diagnostics.append(dict(file=reference.name,part=name,candidate_id=i,passed=passed[i],reason=result.error,stage='tracking'))
     for sample_index,path in enumerate(samples[1:],1):
         check();progress(f'抽样预检 {sample_index}/{len(samples)-1}：{path.name}')
         with decode_image(path,decoder='auto') as moving:
@@ -180,15 +183,15 @@ def recommend_regions(reference, paths, *, method='reference_region', existing=(
                     current_target=frame.box
                     current_parts=candidates_from_pose(infer(path,moving,current_target),current_target)
                 except ValueError as exc:
-                    diagnostics.extend(dict(file=path.name,part=name,passed=False,reason=str(exc),stage='identity' if frame.box is None else 'parts')
-                                       for name,_,_,_ in trackers)
+                    diagnostics.extend(dict(file=path.name,part=name,candidate_id=i,passed=False,reason=str(exc),stage='identity' if frame.box is None else 'parts')
+                                       for i,(name,_,_,_) in enumerate(trackers))
                     passed=[False]*len(trackers);continue
             for i,(name,regions,tracker,confidence) in enumerate(trackers):
                 check()
                 if not passed[i] and method != 'subject_local':
                     continue
                 if moving.size != source_size:
-                    passed[i]=False;diagnostics.append(dict(file=path.name,part=name,reason='源尺寸不同'));continue
+                    passed[i]=False;diagnostics.append(dict(file=path.name,part=name,candidate_id=i,reason='源尺寸不同'));continue
                 if method == 'subject_local':
                     result=tracker.track(moving,cancelled=cancelled,target_box=current_target)
                 else:
@@ -197,7 +200,15 @@ def recommend_regions(reference, paths, *, method='reference_region', existing=(
                 reason=result.error
                 if good and current_parts is not None:
                     matching=[c for c in current_parts if c.part == name]
-                    if not matching or not all(any(iou(b,r) > .1 for c in matching for r in c.regions) for b in result.boxes):
+                    supports=candidates[i].support_ids
+                    if supports:
+                        # 左右腿按关键点身份核验，不因另一条腿可见而改配到另一条。
+                        semantic_ok=all(any(identity in c.support_ids and
+                            iou(box,c.regions[c.support_ids.index(identity)])>.1 for c in matching)
+                            for identity,box in zip(supports,result.boxes))
+                    else:
+                        semantic_ok=all(any(iou(box,r)>.1 for c in matching for r in c.regions) for box in result.boxes)
+                    if not matching or not semantic_ok:
                         good=False;reason='跟踪位置与同名部位证据不一致或部位不可见'
                 if good and name == 'background' and any(iou(b,c.box)>0 for b in result.boxes for c in current_birds):
                     good=False;reason='背景候选进入鸟体范围'
@@ -209,7 +220,7 @@ def recommend_regions(reference, paths, *, method='reference_region', existing=(
                     observed[i][path]=(result.boxes[0],score)
                 else:
                     passed[i]=False
-                diagnostics.append(dict(file=path.name,part=name,regions=regions,passed=good,reason=reason,
+                diagnostics.append(dict(file=path.name,part=name,candidate_id=i,regions=regions,passed=good,reason=reason,
                                         stage='parts' if reason.startswith('跟踪位置') else 'tracking'))
     valid=[i for i,ok in enumerate(passed) if ok]
     valid.sort(key=lambda i:(-round(quality[i],2),{'torso':0,'head':1,'legs':2,'background':0}[trackers[i][0]]))
@@ -255,7 +266,7 @@ def recommend_regions(reference, paths, *, method='reference_region', existing=(
     meta=dict(version=1,target=target,part=name,auto_regions=chosen,local_analysis=method=='subject_local',
               model=MODEL_ID if method=='subject_local' else '',experimental=experimental,resolved_part=name)
     proposals=tuple(CandidateProposal(c.part,c.regions,c.confidence,'passed' if passed[i] else 'failed',
-        sum(bool(d.get('passed')) for d in diagnostics if d.get('part')==c.part),len(samples),
-        tuple(d for d in diagnostics if d.get('part')==c.part)) for i,c in enumerate(candidates)) if method=='subject_local' else ()
+        sum(bool(d.get('passed')) for d in diagnostics if d.get('candidate_id')==i),len(samples),
+        tuple(d for d in diagnostics if d.get('candidate_id')==i),variant=c.variant) for i,c in enumerate(candidates)) if method=='subject_local' else ()
     return Recommendation('ready' if chosen else 'no_reliable_region',message,tuple(chosen),name,target,birds,
                           diagnostics,tuple(p.name for p in samples),meta,proposals)

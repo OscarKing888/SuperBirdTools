@@ -15,6 +15,8 @@ class PartCandidate:
     part: str
     regions: tuple
     confidence: float
+    variant: str = ''
+    support_ids: tuple = ()
 
 
 def decode_heatmaps(heatmaps):
@@ -116,7 +118,8 @@ def candidates_from_pose(pose, bird_box):
         if candidate:
             result.append(PartCandidate(part, (candidate[0],), candidate[1]))
     legs = [region(ids, 2, .025) for ids in ((16,18), (17,19))]
-    legs = [v for v in legs if v]
-    if legs:
-        result.append(PartCandidate('legs', tuple(v[0] for v in legs), min(v[1] for v in legs)))
+    visible = [(i,v) for i,v in enumerate(legs) if v]
+    if visible:
+        result.append(PartCandidate('legs', tuple(v[0] for i,v in visible), min(v[1] for i,v in visible),
+                                    support_ids=tuple(i for i,v in visible)))
     return tuple(result)

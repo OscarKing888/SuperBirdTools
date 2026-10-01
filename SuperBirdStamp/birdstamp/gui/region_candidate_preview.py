@@ -59,7 +59,8 @@ class RegionCandidatePreview(QWidget):
         for c in result.candidates:
             label = ('待预检' if c.status=='pending' else
                      f'{c.passed_frames}/{c.total_frames} 通过 · '+('可推荐' if c.status=='passed' else '需修正'))
-            self.choice.addItem(f'{PART_LABELS.get(c.part,c.part)} · {label}')
+            variant = f' · {c.variant}' if c.variant else ''
+            self.choice.addItem(f'{PART_LABELS.get(c.part,c.part)}{variant} · {label}')
         self.choice.setCurrentIndex(max(0,min(index,self.choice.count()-1)))
         self.choice.blockSignals(False)
         self._render();self.show()

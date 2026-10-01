@@ -165,6 +165,9 @@ def test_full_manual_correction_becomes_new_keyframe(tmp_path):
     assert sequence.output_size == (379,384)
     assert sequence.tracking[path_key(seeds[2].path)].observation.status == 'user_override'
     assert sequence.tracking[path_key(seeds[3].path)].observation.displacement == pytest.approx((133,0),abs=.3)
+    observation=sequence.tracking[path_key(seeds[3].path)].observation
+    offsets=[(p[4]-p[2],p[5]-p[3]) for p in observation.points if p[6]]
+    assert np.median(offsets,axis=0)==pytest.approx((133,0),abs=.3)
 
 
 def test_follow_preserves_constant_speed_and_two_frames_lock(tmp_path):

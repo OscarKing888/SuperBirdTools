@@ -27,7 +27,7 @@ from .video_export_cancelled_error import VideoExportCancelledError
 
 REFERENCE_KEYS = ('dejitter_reference_regions', 'dejitter_reference_source',
                   'dejitter_reference_strength', 'dejitter_pad_to_union', ALIGNMENT_MODE_KEY, *MATCHING_KEYS, *SUBJECT_KEYS)
-SEQUENCE_ANALYSIS_VERSION = 9
+SEQUENCE_ANALYSIS_VERSION = 10
 
 
 def sequence_files(seeds, template_paths=None) -> tuple[Path, ...]:

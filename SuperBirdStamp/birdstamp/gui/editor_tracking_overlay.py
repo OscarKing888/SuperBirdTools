@@ -55,7 +55,7 @@ def subject_debug_points(result, crop=None):
         return ()
     w,h = observation.source_size
     l,t,r,b = crop or (0,0,1,1)
-    accepted = observation.status == 'tracked'
+    accepted = observation.status in ('tracked','keyframe_bridge')
     return tuple(((p[2]/w-l)/(r-l),(p[3]/h-t)/(b-t),
                   (p[4]/w-l)/(r-l),(p[5]/h-t)/(b-t),bool(p[6] and accepted))
                  for p in observation.points)

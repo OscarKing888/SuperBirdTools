@@ -125,6 +125,13 @@ def analyze_subject_sequence(jobs, tracker, reference, *, cancel_event, **kwargs
                     cancelled=cancel_event.is_set,progress=kwargs.get('progress',lambda text:None))
             except InterruptedError as exc:
                 raise VideoExportCancelledError('已取消目标鸟关联') from exc
+    def recover_segments(local_jobs, local_tracker, results):
+        from birdstamp.image_dejitter.subject_keyframes import recover_keyframe_segments
+        try:
+            return recover_keyframe_segments(local_jobs,local_tracker,results,
+                cancelled=cancel_event.is_set,progress=kwargs.get('progress',lambda text:None))
+        except InterruptedError as exc:
+            raise VideoExportCancelledError('已取消分段关键帧核验') from exc
     boundaries = []
     for index,job in enumerate(jobs):
         boxes = valid_manual_boxes(job.settings.get(MANUAL_MATCHES_KEY),job.path,reference,regions)
@@ -137,7 +144,7 @@ def analyze_subject_sequence(jobs, tracker, reference, *, cancel_event, **kwargs
         key = path_key(reference)
         if key in results:
             results[key] = replace(results[key],observation=LocalObservation('reference',displacement=(0.,0.),source_size=reference_size))
-        return results, sizes
+        return recover_segments(jobs,tracker,results), sizes
     tracking,sizes = {},{}
     segments = [(0,None),*boundaries] if boundaries[0][0] != 0 else boundaries
     total_progress = kwargs.pop('progress_counts',lambda *args: None)
@@ -166,6 +173,7 @@ def analyze_subject_sequence(jobs, tracker, reference, *, cancel_event, **kwargs
         current,current_sizes = analyze_sequence_frames(
             local_jobs,local_tracker,local_reference,cancel_event=cancel_event,
             progress_counts=lambda done,total,stage: total_progress(start+done,len(jobs),stage),**kwargs)
+        current = recover_segments(local_jobs,local_tracker,current)
         for key,result in current.items():
             delta = observation_displacement(local_tracker.regions,result,current_sizes[key],reference_size)
             if delta is not None:
@@ -173,7 +181,9 @@ def analyze_subject_sequence(jobs, tracker, reference, *, cancel_event, **kwargs
                 w,h = reference_size
                 global_boxes = tuple((l+delta[0]/w,t+delta[1]/h,r+delta[0]/w,b+delta[1]/h) for l,t,r,b in regions)
                 obs = result.observation or LocalObservation('user_override' if boxes else 'reference',source_size=reference_size)
-                result = replace(result,boxes=global_boxes,observation=replace(obs,displacement=delta),
+                points = tuple((p[0],p[1],p[2]-offset[0],p[3]-offset[1],*p[4:]) for p in obs.points)
+                result = replace(result,boxes=global_boxes,observation=replace(obs,displacement=delta,points=points,
+                                 reference_origin=tuple(np.array(obs.reference_origin)-offset)),
                                  manual_indices=tuple(range(len(regions))) if boxes and key == path_key(local_reference) else result.manual_indices)
             tracking[key] = result
         sizes.update(current_sizes)
