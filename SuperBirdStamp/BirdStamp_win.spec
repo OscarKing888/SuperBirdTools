@@ -42,6 +42,8 @@ def collect_tree(source: Path, dest: str) -> list[tuple[str, str]]:
     for child in source.rglob("*"):
         if not child.is_file():
             continue
+        if child.name in {"editor_autosave.birdstamp-workspace.json", "editor_export_state.json"}:
+            continue
         relative_parent = child.parent.relative_to(source)
         target_dir = dest_root / relative_parent
         items.append((str(child), str(target_dir).replace("\\", "/")))

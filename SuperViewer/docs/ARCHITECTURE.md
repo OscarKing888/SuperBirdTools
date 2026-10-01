@@ -286,3 +286,8 @@ Qt 测试在窗口构造前隔离 `paths_settings` 的应用/用户状态目录�
 - **依赖与打包**：Viewer requirements 增加 `imageio-ffmpeg`；默认使用其平台二进制，也支持 `SUPERVIEWER_FFMPEG`、已有工程 FFmpeg 或 PATH。三个 Viewer spec（macOS、Windows 单应用和 Windows 合并）调用 `build_tools.viewer_ffmpeg.collect_viewer_ffmpeg()` 显式收集平台 FFmpeg 和资源子包；依赖或二进制缺失时直接停止构建，不能仅记录 optional-import 警告后交付不完整应用。构建脚本优先仓库根 `.venv`，Qt Multimedia hook 负责播放器插件。使用应用入口 `--check-video <path> --output <json>` 可在真实打包环境只读检查信息和封面解码，不启动目录扫描或写入缓存。Windows 64 位需要在相应环境安装 requirements 后重新构建并进行平台播放验证。
 
 回归入口：[共享视频与扫描测试](../../app_common/tests/test_video.py)、[真实抽帧/播放/切换/关闭与混合目录测试](../tests/test_video_preview.py)，以及原有预览策略、快切、键盘导航、缓存与 BirdStamp 导航/构图网格测试。命令行信息检查可在根目录执行 `.venv/bin/python3 -m app_common.video /path/to/视频.mp4`（Windows 使用 `.venv\Scripts\python.exe`）。
+## 独立更新器接入
+
+[`entry.py`](../entry.py) 在导入业务模块前调用 `SuperBirdUpdater.runtime.admit_startup()`，登记当前安装目录与进程，遇到安装事务则交给独立等待/恢复进程。源码运行默认不登记。
+
+`main()` 在窗口显示后调用 `SuperBirdUpdater.bridge.attach()`，加入手动检查入口并延迟启动后台检查。新增更新 IPC 与照片发送 IPC 分离；退出仍调用原 `MainWindow.closeEvent`，直到所有线程和外部进程实际结束。协议、下载和事务安装均位于 [SuperBirdUpdater](../../SuperBirdUpdater/README.md)，不进入预览、文件浏览或元数据逻辑。

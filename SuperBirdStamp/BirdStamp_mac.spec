@@ -10,12 +10,13 @@
 from __future__ import annotations
 
 import sys
+import os
 from pathlib import Path
 
 from PyInstaller.utils.hooks import collect_all, collect_submodules
 
 
-APP_ROOT = Path(SPECPATH).resolve()
+APP_ROOT = Path(os.environ.get("SUPERBIRDSTAMP_APP_ROOT", SPECPATH)).resolve()
 REPO_ROOT = APP_ROOT.parent
 ENTRY_SCRIPT = APP_ROOT / "entry.py"
 RUNTIME_HOOK = APP_ROOT / "scripts_dev" / "pyi_rthook_cwd.py"
@@ -43,6 +44,8 @@ def collect_tree(source: Path, dest: str) -> list[tuple[str, str]]:
     dest_root = Path(dest)
     for child in source.rglob("*"):
         if not child.is_file():
+            continue
+        if child.name in {"editor_autosave.birdstamp-workspace.json", "editor_export_state.json"}:
             continue
         relative_parent = child.parent.relative_to(source)
         target_dir = dest_root / relative_parent

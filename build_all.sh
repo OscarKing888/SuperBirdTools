@@ -49,6 +49,9 @@ resolve_python() {
 BUILD_PYTHON="$(resolve_python)"
 # Keep both app builders and post-processing on the same interpreter.
 export PYTHON_BIN="$BUILD_PYTHON"
+if [[ -n "$TARGET_ARCH" ]]; then
+  export SUPERBIRDTOOLS_TARGET_ARCH="$TARGET_ARCH"
+fi
 
 echo "[build_all] python=${BUILD_PYTHON}"
 echo "[build_all] dist=${DIST_ROOT}"
@@ -75,12 +78,28 @@ else
   bash "${ROOT_DIR}/SuperBirdStamp/scripts_dev/build_mac.sh"
 fi
 
+"$BUILD_PYTHON" -m PyInstaller --noconfirm \
+  --distpath "$DIST_ROOT" --workpath "$BUILD_ROOT/SuperBirdUpdater" \
+  "$ROOT_DIR/SuperBirdUpdater/SuperBirdUpdater.spec"
+# BUNDLE 已包含独立运行库，移除其重复 COLLECT 目录。
+if [[ -d "$DIST_ROOT/SuperBirdUpdater.app" && -d "$DIST_ROOT/SuperBirdUpdater" ]]; then
+  rm -rf "$DIST_ROOT/SuperBirdUpdater"
+fi
+
 if [[ $SKIP_DEDUPE -eq 0 ]]; then
   "$BUILD_PYTHON" "${ROOT_DIR}/build_tools/hardlink_dedupe.py" \
     "${DIST_ROOT}/SuperViewer.app" \
     "${DIST_ROOT}/SuperBirdStamp.app"
 fi
 
+MANIFEST_ARGS=(--dist "$DIST_ROOT" --package)
+if [[ -n "$TARGET_ARCH" ]]; then
+  MANIFEST_ARGS+=(--arch "$TARGET_ARCH")
+fi
+"$BUILD_PYTHON" "$ROOT_DIR/build_tools/generate_update_manifest.py" "${MANIFEST_ARGS[@]}"
+
 echo "[OK] outputs:"
 echo "  ${DIST_ROOT}/SuperViewer.app"
 echo "  ${DIST_ROOT}/SuperBirdStamp.app"
+echo "  ${DIST_ROOT}/SuperBirdUpdater.app"
+echo "  ${DIST_ROOT}/updates/"

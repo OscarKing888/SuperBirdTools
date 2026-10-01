@@ -5923,6 +5923,17 @@ def launch_gui(
     app.aboutToQuit.connect(_on_about_to_quit)
     window.showMaximized()
     _log.info("editor window shown")
+    from SuperBirdUpdater.bridge import attach as attach_updater
+
+    def update_exit_reason() -> str:
+        if getattr(window, "_image_export_is_busy", False) or getattr(window, "_sequence_exporting", False):
+            return "图片、GIF 或序列导出进行中，请等待完成。"
+        worker = window._video_export_worker
+        if worker is not None and worker.isRunning():
+            return "视频导出进行中，请等待完成或先中断导出。"
+        return ""
+
+    attach_updater(window, "SuperBirdStamp", ready=update_exit_reason)
 
     def _run_startup_tasks() -> None:
         window._run_deferred_startup_tasks()
