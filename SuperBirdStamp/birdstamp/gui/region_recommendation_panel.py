@@ -9,6 +9,7 @@ from birdstamp.image_dejitter.recognition import RECOMMENDATION_KEY
 from birdstamp.image_dejitter.bird_parts.pose import PART_LABELS
 from birdstamp.image_dejitter.bird_parts.model_store import install_model
 from birdstamp.image_dejitter.region_tracking_result import image_file_signature
+from .bird_model_status import BirdModelStatus
 
 
 class RecommendationWorker(QThread):
@@ -65,6 +66,9 @@ class RegionRecommendationPanel(QWidget):
         layout.addWidget(self.status)
         self.part.currentIndexChanged.connect(self.options_changed)
         self.experimental.toggled.connect(self.options_changed)
+        self.model_status = BirdModelStatus(self)
+        self.model_status.changed.connect(self._sync_model_buttons)
+        self._sync_model_buttons()
 
     def options_changed(self):
         self.cancel()
@@ -103,8 +107,18 @@ class RegionRecommendationPanel(QWidget):
         for control in (self.part_label,self.part,self.target_button,self.experimental,self.download,self.offline):
             control.setVisible(advanced)
         self.cancel_button.setEnabled(self.worker is not None)
-        self.download.setEnabled(self.worker is None)
-        self.offline.setEnabled(self.worker is None)
+        self._sync_model_buttons()
+
+    def _sync_model_buttons(self):
+        status = self.model_status.status
+        installing = self.worker is not None and self._installing
+        labels = {'checking':'正在校验模型…', 'ready':'下载完成 ✅',
+                  'invalid':'重新下载部位模型（109 MiB）', 'missing':'下载部位模型（109 MiB）'}
+        self.download.setText('正在安装模型…' if installing else labels[status.state])
+        self.download.setToolTip(status.message)
+        self.download.setEnabled(not self._shutdown and self.worker is None
+                                 and status.state in ('missing','invalid'))
+        self.offline.setEnabled(not self._shutdown and self.worker is None and status.state != 'checking')
 
     def cancel(self):
         self._snapshot=None
@@ -112,7 +126,8 @@ class RegionRecommendationPanel(QWidget):
 
     def shutdown(self):
         self._shutdown=True;self.cancel()
-        return self.worker is None
+        model_stopped = self.model_status.shutdown()
+        return self.worker is None and model_stopped
 
     def start(self, task, *, installing=False):
         if self.worker or self._shutdown:return
@@ -132,10 +147,15 @@ class RegionRecommendationPanel(QWidget):
             self.status.setText(text)
 
     def on_finished(self):
-        if self.sender() is self.worker:self.worker=None
+        if self.sender() is self.worker:
+            self.worker=None
+            if self._installing:
+                self.model_status.refresh(force=True)
         if not self._shutdown:self.editor._update_dejitter_controls()
 
     def install(self, source=None):
+        if self.model_status.status.state == 'checking':return
+        if source is None and self.model_status.status.state == 'ready':return
         self.start(lambda cancelled,progress:install_model(source,cancelled=cancelled,
             progress=lambda n,t:progress(f'模型安装：{n*100/t:.0f}%')),installing=True)
 

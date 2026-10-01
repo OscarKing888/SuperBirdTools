@@ -1,5 +1,6 @@
 """显式下载/离线导入官方模型；未安装时不访问网络。"""
 import hashlib
+from dataclasses import dataclass
 import os
 from pathlib import Path
 import tempfile
@@ -15,6 +16,38 @@ MODEL_URL = ('https://download.openmmlab.com/mmpose/v1/animal_2d_keypoint/topdow
 def model_path():
     from birdstamp.config import get_user_data_dir
     return Path(get_user_data_dir()) / 'models' / (MODEL_ID + '.pth')
+
+
+def model_file_signature(path):
+    """状态缓存仅在同一文件未被替换或修改时有效，不凭文件名判定安装成功。"""
+    path = Path(path)
+    try:
+        stat = path.stat()
+        return (str(path), stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns, stat.st_ino)
+    except OSError:
+        return (str(path), None)
+
+
+@dataclass(frozen=True)
+class ModelStatus:
+    state: str
+    signature: tuple
+    message: str = ''
+
+
+def inspect_model(path, cancelled=lambda: False):
+    """供后台状态检查使用；只有完整校验通过才报告 ready。"""
+    path = Path(path)
+    signature = model_file_signature(path)
+    try:
+        verify_model(path, cancelled)
+        state, message = 'ready', '部位模型完整性校验通过。'
+    except (ValueError, OSError) as exc:
+        state = 'invalid' if path.exists() else 'missing'
+        message = str(exc)
+    if model_file_signature(path) != signature:
+        return ModelStatus('changed', signature, '模型文件已变化，正在重新校验。')
+    return ModelStatus(state, signature, message)
 
 
 def verify_model(path, cancelled=lambda: False):
