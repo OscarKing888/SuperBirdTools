@@ -138,6 +138,8 @@ RAW 完整解码可能保留内嵌 JPEG 裁掉的传感器边缘。共享 [`raw_
 
 [`ImageInfoTabWidget`](../superviewer/image_info_tab_widget.py) 仅刷新活动页。非活动页更新逻辑路径并进入 `_pending_panels`，在用户打开时刷新。EXIF 页的 `_ExifRowsLoader` 在后台调用 [`exif_helpers.py`](../superviewer/exif_helpers.py) 的 `load_all_exif()`，表格配置与标签显示顺序也在该模块处理。
 
+EXIF 页直接列出 ExifTool 从 RAW 及其他图像读取的已知标签，包含相机 MakerNote。若有对焦距离，`_camera_focus_distance_from_exiftool()` 将其提到优先区，Canon 的上下界保留各自标签和原值；Sony 仅有 ExifTool 合成距离时会明确标为估算。没有距离时不生成占位值。超焦距计算及 ExifTool 的合成超焦距均不显示。
+
 ### 写入层
 
 - 备注入口是 `MainWindow._save_photo_comment_from_info_panel()`；标题及 EXIF 表入口是 `_save_exif_value()`。原始照片和 RAW 不承接这些用户元数据编辑。

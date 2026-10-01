@@ -57,9 +57,9 @@ META_TITLE_TAG_ID = "Title"
 META_TITLE_PRIORITY_KEY = f"{META_IFD_NAME}:{META_TITLE_TAG_ID}"
 META_DESCRIPTION_TAG_ID = "Description"
 META_DESCRIPTION_PRIORITY_KEY = f"{META_IFD_NAME}:{META_DESCRIPTION_TAG_ID}"
-CALC_IFD_NAME = "Calc"
-HYPERFOCAL_TAG_ID = "HyperfocalDistance"
-HYPERFOCAL_PRIORITY_KEY = f"{CALC_IFD_NAME}:{HYPERFOCAL_TAG_ID}"
+FOCUS_DISTANCE_TAG_ID = "FocusDistance"
+FOCUS_DISTANCE_PRIORITY_KEY = f"{META_IFD_NAME}:{FOCUS_DISTANCE_TAG_ID}"
+LEGACY_HYPERFOCAL_PRIORITY_KEY = "Calc:HyperfocalDistance"
 
 EXIFTOOL_KEYS_DUPLICATE_OF_TITLE = frozenset({"XMP-dc:Title", "IFD0:XPTitle", "IFD0:DocumentName"})
 EXIFTOOL_KEYS_DUPLICATE_OF_DESCRIPTION = frozenset({
@@ -77,7 +77,6 @@ IFD_DISPLAY_NAMES = {
     "GPS": "GPS",
     "1st": "缩略图 (1st IFD)",
     "Interop": "Interop IFD",
-    CALC_IFD_NAME: "计算信息",
     "thumbnail": "缩略图数据",
 }
 
@@ -126,7 +125,7 @@ EXIFTOOL_ALIAS_KEY_TO_PIEXIF_KEY = {
 DEFAULT_EXIF_TAG_PRIORITY = [
     META_TITLE_PRIORITY_KEY,
     META_DESCRIPTION_PRIORITY_KEY,
-    HYPERFOCAL_PRIORITY_KEY,
+    FOCUS_DISTANCE_PRIORITY_KEY,
     "0th:271", "0th:272", "0th:306",
     "Exif:33434", "Exif:33437", "Exif:37386", "Exif:37382", "Exif:41996", "Exif:34855",
     "Exif:36867", "Exif:42036", "Exif:41987", "Exif:37378", "Exif:40962", "Exif:40963",
@@ -230,111 +229,36 @@ def format_exif_value(value, expected_type: int | None = None):
     return str(value)
 
 
-def _to_float_exif_number(v) -> float | None:
-    """将 EXIF 数值（含有理数）转为浮点，失败返回 None。"""
-    if isinstance(v, (int, float)):
-        return float(v)
-    if isinstance(v, tuple) and len(v) == 2 and isinstance(v[0], int) and isinstance(v[1], int):
-        if v[1] == 0:
-            return None
-        return float(v[0]) / float(v[1])
-    return None
-
-
-def _to_float_text_number(v) -> float | None:
-    """Parse exiftool values like '1/800', '400 mm', 5.6 into float."""
-    if isinstance(v, (int, float)):
-        return float(v)
-    if isinstance(v, list):
-        for x in v:
-            f = _to_float_text_number(x)
-            if f is not None:
-                return f
-        return None
-    s = _sanitize_display_string(str(v or "")).strip()
-    if not s:
-        return None
-    if "/" in s:
-        a, _, b = s.partition("/")
-        try:
-            num = float(a.strip())
-            den = float(b.strip().split()[0]) if b.strip() else 0.0
-            if den != 0:
-                return num / den
-        except (TypeError, ValueError):
-            pass
-    m = re.search(r"[-+]?\d+(?:\.\d+)?", s)
-    if not m:
-        return None
-    try:
-        return float(m.group(0))
-    except ValueError:
-        return None
-
-
-def _calc_hyperfocal_distance_from_exiftool_obj(obj: dict, default_coc_mm: float = 0.03) -> float | None:
-    """Calculate hyperfocal distance from exiftool json object."""
-    if not isinstance(obj, dict):
-        return None
-
-    def _pick(*keys):
-        for k in keys:
-            if k in obj:
-                f = _to_float_text_number(obj.get(k))
-                if f is not None:
-                    return f
-        return None
-
-    f_mm = _pick("ExifIFD:FocalLength", "EXIF:FocalLength", "Composite:FocalLength")
-    n = _pick("ExifIFD:FNumber", "EXIF:FNumber", "Composite:Aperture")
-    if f_mm is None or n is None or f_mm <= 0 or n <= 0:
-        return None
-
-    coc_mm = default_coc_mm if default_coc_mm > 0 else 0.03
-    focal_35 = _pick("ExifIFD:FocalLengthIn35mmFormat", "EXIF:FocalLengthIn35mmFormat")
-    if focal_35 is not None and focal_35 > 0:
-        crop = focal_35 / f_mm
-        if crop > 0:
-            coc_mm = 0.03 / crop
-    if coc_mm <= 0:
-        coc_mm = 0.03
-
-    h_mm = (f_mm * f_mm) / (n * coc_mm) + f_mm
-    if h_mm <= 0:
-        return None
-    return h_mm / 1000.0
-
-
-def _calc_hyperfocal_distance_m(exif_data: dict, default_coc_mm: float = 0.03) -> float | None:
-    """计算超焦距（米）。"""
-    exif_ifd = exif_data.get("Exif") if isinstance(exif_data, dict) else None
-    if not isinstance(exif_ifd, dict):
-        return None
-    f_mm = _to_float_exif_number(exif_ifd.get(37386))
-    n = _to_float_exif_number(exif_ifd.get(33437))
-    if f_mm is None or n is None or f_mm <= 0 or n <= 0:
-        return None
-
-    coc_mm = default_coc_mm if default_coc_mm > 0 else 0.03
-    focal_35 = _to_float_exif_number(exif_ifd.get(41989))
-    if focal_35 is not None and focal_35 > 0:
-        crop = focal_35 / f_mm
-        if crop > 0:
-            coc_mm = 0.03 / crop
-    if coc_mm <= 0:
-        coc_mm = 0.03
-
-    h_mm = (f_mm * f_mm) / (n * coc_mm) + f_mm
-    if h_mm <= 0:
-        return None
-    return h_mm / 1000.0
-
-
-def _format_hyperfocal_distance(value_m: float | None) -> str:
-    """格式化超焦距显示文本。"""
-    if value_m is None:
-        return "无法计算"
-    return f"{value_m:.2f} m"
+def _camera_focus_distance_from_exiftool(obj: dict, *, use_chinese: bool = False) -> str:
+    """优先显示相机距离；仅在缺失时明确标出 ExifTool 的估算值。"""
+    values = {}
+    for key, raw in obj.items():
+        if not isinstance(key, str) or ":" not in key:
+            continue
+        group, tag = key.split(":", 1)
+        if group in {"Composite", "XMP", "GPS"}:
+            continue
+        if tag not in {"FocusDistanceUpper", "FocusDistanceLower", "FocusDistance", "ManualFocusDistance", "ShootingDistance", "SubjectDistance"}:
+            continue
+        value = _extract_exiftool_text_value(raw).strip()
+        if value and value.lower() not in {"unknown", "undef", "-"}:
+            values[(group, tag)] = value
+    for group, tag in values:
+        if tag in {"FocusDistanceUpper", "FocusDistanceLower"}:
+            parts = [f"{name} {values[(group, name)]}" for name in ("FocusDistanceLower", "FocusDistanceUpper") if (group, name) in values]
+            return f"{group}: {'; '.join(parts)}"
+    for tag in ("FocusDistance", "ManualFocusDistance", "ShootingDistance", "SubjectDistance"):
+        for (group, found_tag), value in values.items():
+            if found_tag == tag:
+                return f"{group}: {value}"
+    # Sony FocusDistance2 由 ExifTool 根据 FocusPosition2 推算，公式可能不准确。
+    for tag in ("FocusDistance", "FocusDistance2"):
+        value = _extract_exiftool_text_value(obj.get(f"Composite:{tag}")).strip()
+        if value and value.lower() not in {"unknown", "undef", "-"}:
+            if use_chinese:
+                return f"ExifTool 估算 ({tag}，可能不准确): {value}"
+            return f"ExifTool estimate ({tag}, may be inaccurate): {value}"
+    return ""
 
 
 def _extract_exiftool_text_value(value) -> str:
@@ -642,7 +566,7 @@ def _build_default_exif_tag_names_zh(token_map: dict | None = None) -> dict:
             result[key] = _translate_tag_name_to_chinese(raw_name, token_map=token_map)
     result[META_TITLE_PRIORITY_KEY] = "标题"
     result[META_DESCRIPTION_PRIORITY_KEY] = "描述"
-    result[HYPERFOCAL_PRIORITY_KEY] = "超焦距"
+    result[FOCUS_DISTANCE_PRIORITY_KEY] = "对焦距离（近似值）"
     return result
 
 
@@ -678,15 +602,15 @@ def get_tag_name(ifd_name: str, tag_id: int, use_chinese: bool = False, names_zh
             zh_name = names_zh.get(META_DESCRIPTION_PRIORITY_KEY) if isinstance(names_zh, dict) else None
             return _sanitize_display_string(zh_name) if isinstance(zh_name, str) and zh_name.strip() else "描述"
         return "Description"
-    if ifd_name == "thumbnail":
-        return "（二进制数据）"
-    if ifd_name == CALC_IFD_NAME and str(tag_id) == HYPERFOCAL_TAG_ID:
+    if ifd_name == META_IFD_NAME and str(tag_id) == FOCUS_DISTANCE_TAG_ID:
         if use_chinese:
             if names_zh is None:
                 names_zh = load_exif_tag_names_zh_from_settings()
-            zh_name = names_zh.get(HYPERFOCAL_PRIORITY_KEY) if isinstance(names_zh, dict) else None
-            return _sanitize_display_string(zh_name) if isinstance(zh_name, str) and zh_name.strip() else "超焦距"
-        return "Hyperfocal Distance"
+            zh_name = names_zh.get(FOCUS_DISTANCE_PRIORITY_KEY) if isinstance(names_zh, dict) else None
+            return _sanitize_display_string(zh_name) if isinstance(zh_name, str) and zh_name.strip() else "对焦距离（近似值）"
+        return "Focus Distance (approx.)"
+    if ifd_name == "thumbnail":
+        return "（二进制数据）"
     key = f"{ifd_name}:{tag_id}"
     t = piexif.TAGS.get(ifd_name, {})
     info = t.get(tag_id)
@@ -897,8 +821,8 @@ def get_all_exif_tag_keys(use_chinese: bool = False) -> list[tuple]:
     result.append((META_TITLE_PRIORITY_KEY, f"{IFD_DISPLAY_NAMES.get(META_IFD_NAME, META_IFD_NAME)} - {title_name}"))
     desc_name = get_tag_name(META_IFD_NAME, META_DESCRIPTION_TAG_ID, use_chinese=use_chinese, names_zh=names_zh)
     result.append((META_DESCRIPTION_PRIORITY_KEY, f"{IFD_DISPLAY_NAMES.get(META_IFD_NAME, META_IFD_NAME)} - {desc_name}"))
-    calc_name = get_tag_name(CALC_IFD_NAME, HYPERFOCAL_TAG_ID, use_chinese=use_chinese, names_zh=names_zh)
-    result.append((HYPERFOCAL_PRIORITY_KEY, f"{IFD_DISPLAY_NAMES.get(CALC_IFD_NAME, CALC_IFD_NAME)} - {calc_name}"))
+    focus_name = get_tag_name(META_IFD_NAME, FOCUS_DISTANCE_TAG_ID, use_chinese=use_chinese, names_zh=names_zh)
+    result.append((FOCUS_DISTANCE_PRIORITY_KEY, f"{IFD_DISPLAY_NAMES[META_IFD_NAME]} - {focus_name}"))
     for ifd_name in ("0th", "Exif", "GPS", "1st", "Interop"):
         ifd_data = piexif.TAGS.get(ifd_name, {})
         if not ifd_data:
@@ -919,7 +843,9 @@ def load_tag_priority_from_settings() -> list:
     base = lst if lst else DEFAULT_EXIF_TAG_PRIORITY.copy()
     normalized = []
     seen = set()
-    for key in (META_TITLE_PRIORITY_KEY, META_DESCRIPTION_PRIORITY_KEY, HYPERFOCAL_PRIORITY_KEY, *base):
+    for key in (META_TITLE_PRIORITY_KEY, META_DESCRIPTION_PRIORITY_KEY, FOCUS_DISTANCE_PRIORITY_KEY, *base):
+        if key == LEGACY_HYPERFOCAL_PRIORITY_KEY:
+            continue
         if not isinstance(key, str) or not key or key in seen:
             continue
         normalized.append(key)
@@ -932,7 +858,9 @@ def save_tag_priority_to_settings(priority_keys: list) -> None:
     data = _load_settings()
     normalized = []
     seen = set()
-    for key in (META_TITLE_PRIORITY_KEY, META_DESCRIPTION_PRIORITY_KEY, HYPERFOCAL_PRIORITY_KEY, *(list(priority_keys) if isinstance(priority_keys, list) else [])):
+    for key in (META_TITLE_PRIORITY_KEY, META_DESCRIPTION_PRIORITY_KEY, FOCUS_DISTANCE_PRIORITY_KEY, *(list(priority_keys) if isinstance(priority_keys, list) else [])):
+        if key == LEGACY_HYPERFOCAL_PRIORITY_KEY:
+            continue
         if not isinstance(key, str) or not key or key in seen:
             continue
         normalized.append(key)
@@ -1003,19 +931,6 @@ def save_preview_grid_line_width_to_settings(width: int | str | None) -> None:
     data = _load_settings()
     data["preview_grid_line_width"] = normalized
     _save_settings(data)
-
-
-def load_hyperfocal_coc_mm_from_settings() -> float:
-    """读取超焦距计算的默认弥散圆（mm），缺省 0.03。"""
-    data = _load_settings()
-    val = data.get("hyperfocal_coc_mm", 0.03)
-    try:
-        f = float(val)
-        if f > 0:
-            return f
-    except (TypeError, ValueError):
-        pass
-    return 0.03
 
 
 def apply_tag_priority(rows: list[tuple], priority_keys: list[str]) -> list[tuple]:
@@ -1133,14 +1048,14 @@ def load_all_exif_exiftool(path: str, tag_label_chinese: bool = False) -> list[t
         get_tag_name(META_IFD_NAME, META_DESCRIPTION_TAG_ID, use_chinese=tag_label_chinese, names_zh=names_zh),
         desc_value, desc_raw_value, None,
     ))
-    rows.append((
-        CALC_IFD_NAME, HYPERFOCAL_TAG_ID,
-        IFD_DISPLAY_NAMES.get(CALC_IFD_NAME, CALC_IFD_NAME),
-        get_tag_name(CALC_IFD_NAME, HYPERFOCAL_TAG_ID, use_chinese=tag_label_chinese, names_zh=names_zh),
-        _format_hyperfocal_distance(_calc_hyperfocal_distance_from_exiftool_obj(obj, default_coc_mm=load_hyperfocal_coc_mm_from_settings())),
-        None, None,
-    ))
-    skip_keys = {"SourceFile", "File:FileName", "File:Directory", "File:FileSize", "File:FileModifyDate", "File:FileAccessDate", "File:FileCreateDate", "File:FilePermissions", "File:FileType", "File:FileTypeExtension", "File:MIMEType"}
+    focus_distance = _camera_focus_distance_from_exiftool(obj, use_chinese=tag_label_chinese)
+    if focus_distance:
+        rows.append((
+            META_IFD_NAME, FOCUS_DISTANCE_TAG_ID, IFD_DISPLAY_NAMES[META_IFD_NAME],
+            get_tag_name(META_IFD_NAME, FOCUS_DISTANCE_TAG_ID, use_chinese=tag_label_chinese, names_zh=names_zh),
+            focus_distance, None, None,
+        ))
+    skip_keys = {"SourceFile", "File:FileName", "File:Directory", "File:FileSize", "File:FileModifyDate", "File:FileAccessDate", "File:FileCreateDate", "File:FilePermissions", "File:FileType", "File:FileTypeExtension", "File:MIMEType", "Composite:HyperfocalDistance"}
     skip_keys |= EXIFTOOL_KEYS_DUPLICATE_OF_TITLE | EXIFTOOL_KEYS_DUPLICATE_OF_DESCRIPTION
     for key, value in obj.items():
         if not isinstance(key, str) or ":" not in key or key in skip_keys:
@@ -1201,13 +1116,13 @@ def load_all_exif(path: str, tag_label_chinese: bool = False) -> list[tuple]:
     ))
     hidden_keys = load_exif_tag_hidden_from_settings()
     if data:
-        hyperfocal_m = _calc_hyperfocal_distance_m(data, default_coc_mm=load_hyperfocal_coc_mm_from_settings())
-        rows.append((
-            CALC_IFD_NAME, HYPERFOCAL_TAG_ID,
-            IFD_DISPLAY_NAMES.get(CALC_IFD_NAME, CALC_IFD_NAME),
-            get_tag_name(CALC_IFD_NAME, HYPERFOCAL_TAG_ID, use_chinese=tag_label_chinese, names_zh=names_zh),
-            _format_hyperfocal_distance(hyperfocal_m), None, None,
-        ))
+        subject_distance = (data.get("Exif") or {}).get(37382)
+        if subject_distance is not None:
+            rows.append((
+                META_IFD_NAME, FOCUS_DISTANCE_TAG_ID, IFD_DISPLAY_NAMES[META_IFD_NAME],
+                get_tag_name(META_IFD_NAME, FOCUS_DISTANCE_TAG_ID, use_chinese=tag_label_chinese, names_zh=names_zh),
+                format_exif_value(subject_distance, expected_type=get_tag_type("Exif", 37382)), None, None,
+            ))
         for ifd_name in ("0th", "Exif", "GPS", "1st", "Interop"):
             ifd_data = data.get(ifd_name)
             if not ifd_data or not isinstance(ifd_data, dict):
