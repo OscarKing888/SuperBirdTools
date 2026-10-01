@@ -2972,6 +2972,7 @@ class BirdStampEditorWindow(
         self._dejitter_manual_matches.clear()
         self._invalidate_reference_tracking("参考区已清除。")
         self._dejitter_reference_regions = ()
+        self.dejitter_recommendation.edited_regions(())
         self._dejitter_reference_source = None
         self.dejitter_reference_check.setChecked(False)
         self._update_dejitter_reference_clear_enabled()

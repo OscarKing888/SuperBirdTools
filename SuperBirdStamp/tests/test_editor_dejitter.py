@@ -75,7 +75,7 @@ def test_selection_with_padding_roundtrips_but_is_separate_from_template_export(
     window._on_canvas_reference_region_changed((preview_box,))
     np.testing.assert_allclose(window._dejitter_reference_regions[0], box)
     assert window.dejitter_reference_check.isChecked()
-    assert not hasattr(window, "dejitter_reference_clear_btn")
+    assert window.dejitter_reference_clear_btn.isEnabled()
     assert window.dejitter_region_list.count() == 1
     settings = window._build_current_render_settings()
     assert settings['dejitter_reference_strength'] == 100

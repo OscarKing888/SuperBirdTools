@@ -181,7 +181,12 @@ class _BirdStampDejitterMixin:
         form.addWidget(self.dejitter_region_list)
         self.dejitter_delete_region_btn = QPushButton('删除选中选区')
         self.dejitter_delete_region_btn.clicked.connect(self._on_delete_dejitter_regions)
-        form.addWidget(self.dejitter_delete_region_btn)
+        self.dejitter_reference_clear_btn = QPushButton('清除所有选中区')
+        self.dejitter_reference_clear_btn.clicked.connect(self._on_dejitter_reference_clear)
+        delete_row = QHBoxLayout()
+        delete_row.addWidget(self.dejitter_delete_region_btn)
+        delete_row.addWidget(self.dejitter_reference_clear_btn)
+        form.addLayout(delete_row)
         self.dejitter_region_list.itemSelectionChanged.connect(self._update_dejitter_controls)
         hint = QLabel('框内拖动；手柄缩放（Shift 保持比例，Alt 对称）。\n'
                       '参考图：空白处 Shift 追加，右键删除；其它原图：修正匹配位置，右键恢复自动匹配。')
@@ -559,6 +564,7 @@ class _BirdStampDejitterMixin:
                 self.dejitter_region_list.addItems(labels)
                 self.dejitter_region_list.blockSignals(False)
             self.dejitter_delete_region_btn.setEnabled(bool(self.dejitter_region_list.selectedItems()))
+            self.dejitter_reference_clear_btn.setEnabled(bool(regions))
         if not self._dejitter_tab_active():
             return
         worker = self._sequence_worker

@@ -319,6 +319,26 @@ def test_list_deletes_selected_region_then_last_region_and_invalidates_result(wi
     assert not window.preview_label.canvas.reference_regions()
 
 
+def test_clear_all_regions_button_removes_every_region_and_invalidates_result(window, monkeypatch):
+    setup_tab(window, monkeypatch)
+    analyze(window)
+    assert window.dejitter_reference_clear_btn.isEnabled()
+    window.dejitter_region_list.clearSelection()
+    assert not window.dejitter_delete_region_btn.isEnabled()
+    window._dejitter_manual_matches['example'] = object()
+    window.dejitter_reference_clear_btn.click()
+    assert window._dejitter_reference_regions == ()
+    assert window._dejitter_reference_source is None
+    assert window.dejitter_region_list.count() == 0
+    assert not window._dejitter_manual_matches
+    assert not window.dejitter_reference_clear_btn.isEnabled()
+    assert not window.dejitter_delete_region_btn.isEnabled()
+    assert window._sequence_preview is None
+    assert not window.dejitter_export_btn.isEnabled()
+    assert not window.dejitter_preprocess_btn.isEnabled()
+    assert not window.preview_label.canvas.reference_regions()
+
+
 def test_edit_view_uses_full_source_and_preserves_source_coordinates_despite_template_padding(window, monkeypatch):
     setup_tab(window, monkeypatch)
     window._preview_outer_pad = (100, 200, 300, 400)
