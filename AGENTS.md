@@ -199,6 +199,8 @@ Follow [ai_rules/AI_CODING_RULES.md](ai_rules/AI_CODING_RULES.md) as the cross-t
 
 ## Unified Toggle Buttons
 
+- SuperViewer 星级/评级与标签过滤徽章保留紧凑外形，选中态复用 `app_common.toggle_button.TOGGLE_CHECKED_STYLE` 的蓝底白字；不要依赖系统 Highlight 色或单独复制颜色常量。
+
 - 两款应用的新增/修改 Toggle 按钮统一使用 `app_common.toggle_button.ToggleToolButton`，不要重复编写局部 checked 样式或依赖系统默认的浅灰选中效果。
 - 预览布尔选项（RAW、A/B、同步视野、焦点显示/居中、鸟体框、裁切效果、安全框等）使用 Toggle 按钮，不使用 QCheckBox；表单中的其它复选框不受此限制。
 - 选中状态必须保持高对比蓝色背景、白色文字/单色图标及高亮边框；未选中状态跟随主题，悬停、按住、键盘焦点、禁用和选中后禁用均须可辨。互斥工具（选择、参考区、裁切、原图/成片）复用同一组件，由 QButtonGroup 保持互斥。

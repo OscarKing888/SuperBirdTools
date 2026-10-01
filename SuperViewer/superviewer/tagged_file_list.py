@@ -15,6 +15,7 @@ from app_common.image_formats import HEIF_EXTENSIONS, RAW_EXTENSIONS
 from app_common.perf_probe import elapsed_ms, perf_counter, perf_log
 from app_common.log import get_logger
 from app_common.qt_theme import is_theme_change_event, scheme_from_palette
+from app_common.toggle_button import TOGGLE_CHECKED_STYLE
 
 from .photo_tags import (
     PhotoTagConfig,
@@ -54,11 +55,7 @@ def _tag_filter_button_style(colors: PanelThemeColors, *, clear: bool = False) -
         f"background: {background}; color: {text};"
         "}"
         f"QToolButton:hover {{ background: {colors.button_hover}; }}"
-        "QToolButton:checked {"
-        "background: palette(highlight); border: 1px solid palette(highlight); "
-        "color: palette(highlighted-text);"
-        "}"
-    )
+    ) + TOGGLE_CHECKED_STYLE
 
 
 def _focus_source_extension_ranks() -> dict[str, int]:
@@ -299,6 +296,9 @@ class SuperViewerTaggedFileListPanel(FileListPanel):
         self._focus_source_index: dict[tuple[str, str], str] = {}
         self._command_history = CommandHistory(max_commands=100)
         super().__init__(parent)
+        # 保留评级徽章的紧凑形状；选中态与预览 Toggle 共用高对比蓝底。
+        for button in self._rating_filter_badge_buttons:
+            button.setStyleSheet(button.styleSheet() + TOGGLE_CHECKED_STYLE)
         self._command_history.add_observer(self.command_history_changed.emit)
         from .tag_library_controller import TagLibraryController
         self.tag_library = TagLibraryController(self)

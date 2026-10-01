@@ -59,6 +59,8 @@ RAW 焦点读取（[`raw_focus_metadata.py`](../../app_common/raw_focus_metadata
 
 ## 3. 预览与连续快切
 
+列表上方的评级（含星级）和标签过滤徽章由 [`SuperViewerTaggedFileListPanel`](../superviewer/tagged_file_list.py) 接入共享 [`TOGGLE_CHECKED_STYLE`](../../app_common/toggle_button.py)，与预览开关保持同样的蓝底白字选中态，同时保留徽章的紧凑尺寸、圆角和原有筛选语义。
+
 ### A/B 对照
 
 预览开关统一使用共享 [ToggleToolButton](../../app_common/toggle_button.py)：对焦点、自动居中、RAW、A/B、视野联动及视频静音均以蓝底白字显示选中态，未选中态跟随主题。组件只负责显示和原生 Qt 开关语义，不改变预览加载策略。
