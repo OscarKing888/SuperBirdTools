@@ -2,7 +2,6 @@
 
 只在已有部位区域内取纹理，不扩到邻近背景，不放宽 LK 的点数门槛。
 """
-from dataclasses import replace
 import numpy as np
 from .subject_local_tracker import SubjectLocalTracker
 
@@ -94,30 +93,5 @@ def register_region(reference, moving, rect, *, cancelled=lambda: False):
     return delta,quality,points
 
 
-class LocalRegistrationTracker(SubjectLocalTracker):
-    """保持 LK 行为；失败时用独立图像配准证据补充，方法写入诊断。"""
-    def track(self, image, *, cancelled=lambda: False):
-        original=super().track(image,cancelled=cancelled)
-        if original.matched_count == len(self.regions) or image.size != self.reference_size:
-            return original
-        moving=self._gray(image)
-        w,h=self.analysis_size
-        deltas,qualities,points=[],[],[]
-        try:
-            for index,(l,t,r,b) in enumerate(self.regions):
-                delta,quality,records=register_region(self.reference,moving,
-                    (round(l*w),round(t*h),round(r*w),round(b*h)),cancelled=cancelled)
-                deltas.append(delta);qualities.append(quality)
-                for x,y,mx,my,fb in records:
-                    a=np.array((x,y))*self.source_per_analysis
-                    z=np.array((mx,my))*self.source_per_analysis
-                    points.append((len(points),index,*a,*z,True,fb))
-            if np.linalg.norm(np.array(deltas)[:,None]-np.array(deltas)[None],axis=2).max() > 1.75:
-                raise ValueError('不同选区运动冲突')
-        except ValueError as exc:
-            reason=original.error+'；局部配准：'+str(exc)
-            return replace(original,error=reason,observation=replace(original.observation,reason=reason))
-        delta=tuple(np.median(deltas,axis=0)*self.source_per_analysis)
-        result=self._result(delta,points,(),'')
-        return replace(result,scores=tuple(qualities),observation=replace(result.observation,
-            method='ncc_ecc',quality=min(qualities)))
+# LK 失败后的独立配准已在 region_measurement 中按区调用；保留名称兼容旧导入。
+LocalRegistrationTracker = SubjectLocalTracker

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
+import json
 from pathlib import Path
 
 from PyQt6.QtCore import QThread, pyqtSignal
@@ -23,7 +24,7 @@ class EditorReferenceTrackingWorker(QThread):
     failed = pyqtSignal(int, str)
 
     def __init__(self, *, token: int, reference: Path, regions: tuple, paths: tuple[Path, ...],
-                 options=MatchingOptions(), method="reference_region", parent=None):
+                 options=MatchingOptions(), method="reference_region", recommendation="", parent=None):
         super().__init__(parent)
         self.token = token
         self.reference = reference
@@ -31,6 +32,7 @@ class EditorReferenceTrackingWorker(QThread):
         self.paths = paths
         self.options = options
         self.method = method
+        self.recommendation = recommendation  # 冻结的推荐元数据 JSON；目标鸟/局部裁片与导出一致
         self.reference_signature = image_file_signature(reference)
 
     def run(self) -> None:
@@ -39,11 +41,19 @@ class EditorReferenceTrackingWorker(QThread):
                 return
             if self.reference_signature is None:
                 raise ValueError(f"无法读取参考照片：{self.reference}")
+            from birdstamp.image_dejitter.recognition import recognition_strategy, METHOD_KEY, RECOMMENDATION_KEY
+            settings = {METHOD_KEY: self.method}
+            if self.recommendation:
+                settings[RECOMMENDATION_KEY] = json.loads(self.recommendation)
             with decode_image(self.reference, decoder="auto") as image:
-                from birdstamp.image_dejitter.recognition import recognition_strategy, METHOD_KEY
-                tracker = recognition_strategy({METHOD_KEY:self.method}).create_tracker(image, self.regions, options=self.options)
+                tracker = recognition_strategy(settings).create_tracker(
+                    image, self.regions, options=self.options, settings=settings)
             if image_file_signature(self.reference) != self.reference_signature:
                 raise ValueError("参考照片已变化，请重新预处理。")
+            tracker.cache_reference = self.reference_signature
+            if hasattr(tracker, "prepare_targets"):
+                # 与导出相同：先建立只读目标鸟轨迹，再逐张跟踪。
+                tracker.prepare_targets(self.reference, list(self.paths), cancelled=self.isInterruptionRequested)
             results = {}
             for index, path in enumerate(self.paths, 1):
                 if self.isInterruptionRequested():
@@ -56,7 +66,10 @@ class EditorReferenceTrackingWorker(QThread):
                         result = RegionTrackingResult(self.regions, signature)
                     else:
                         with decode_image(path, decoder="auto") as image:
-                            result = replace(tracker.track(image, cancelled=self.isInterruptionRequested), signature=signature)
+                            result = (tracker.track_cached(path, image, cancelled=self.isInterruptionRequested)
+                                      if hasattr(tracker, "track_cached")
+                                      else tracker.track(image, cancelled=self.isInterruptionRequested))
+                            result = replace(result, signature=signature)
                     if image_file_signature(path) != signature:
                         raise ValueError("照片在预处理期间已变化")
                 except InterruptedError:
@@ -68,6 +81,15 @@ class EditorReferenceTrackingWorker(QThread):
                 self.progressChanged.emit(self.token, index, len(self.paths))
             if self.isInterruptionRequested():
                 return
+            if hasattr(tracker, "geometry"):
+                # 与导出相同：固定参考失配的片段再做链式关键帧核验。
+                from types import SimpleNamespace
+                from birdstamp.image_dejitter.subject_keyframes import chain_keyframe_segments
+                try:
+                    results = chain_keyframe_segments([SimpleNamespace(path=path) for path in self.paths], tracker,
+                                                      results, cancelled=self.isInterruptionRequested)
+                except InterruptedError:
+                    return
             if image_file_signature(self.reference) != self.reference_signature:
                 raise ValueError("参考照片已变化，请重新预处理。")
             self.resultsReady.emit(self.token, results)

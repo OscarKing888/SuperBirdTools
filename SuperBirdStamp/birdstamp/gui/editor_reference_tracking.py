@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 from birdstamp.image_dejitter.region_tracking_result import RegionTrackingResult, image_file_signature
@@ -32,9 +33,13 @@ class _BirdStampReferenceTrackingMixin:
         regions = tuple(getattr(self, "_dejitter_reference_regions", ()))
         controls = getattr(self, 'dejitter_matching_controls', None)
         options = MatchingOptions.from_settings(controls.settings() if controls else None)
-        return (path_key(Path(source)), regions, options,
-                SubjectSettings.from_settings(self.dejitter_subject_controls.settings()).method
-                if hasattr(self,"dejitter_subject_controls") else "reference_region") if source and regions else None
+        method = (SubjectSettings.from_settings(self.dejitter_subject_controls.settings()).method
+                  if hasattr(self,"dejitter_subject_controls") else "reference_region")
+        panel = getattr(self, "dejitter_recommendation", None)
+        # 目标鸟/局部裁片元数据也是跟踪器定义；与导出管线使用同一份，冻结成可比较的字符串。
+        recommendation = (json.dumps(panel.settings(), sort_keys=True, ensure_ascii=False)
+                          if method == "subject_local" and panel is not None else "")
+        return (path_key(Path(source)), regions, options, method, recommendation) if source and regions else None
 
     def _reference_regions_editable(self) -> bool:
         return self._is_reference_photo(getattr(self, 'current_path', None))
@@ -91,6 +96,31 @@ class _BirdStampReferenceTrackingMixin:
         manual = self._manual_boxes_for_path(path)
         return tuple((manual[i] if i < len(manual) and manual[i] is not None else box) for i, box in enumerate(boxes))
 
+    def _region_texture_hint(self) -> str:
+        """高级方法：框选后即时说明各选区是二维纹理还是只约束单一方向的边缘；最终以分析为准。"""
+        regions = tuple(getattr(self, "_dejitter_reference_regions", ()))
+        image = getattr(self, "current_source_image", None)
+        path = getattr(self, "current_path", None)
+        definition = self._reference_tracking_input()
+        if not regions or image is None or definition is None or definition[3] != "subject_local" \
+                or not self._is_reference_photo(path):
+            return ""
+        key = (path_key(path), regions, image.size)
+        cached = getattr(self, "_region_texture_hint_cache", None)
+        if cached is None or cached[0] != key:
+            from birdstamp.image_dejitter.aperture import classify_regions, texture_summary, aperture_problems
+            try:
+                textures = classify_regions(image, regions)
+            except (ValueError, OSError):
+                return ""
+            text = "选区纹理：" + texture_summary(textures)
+            problems = aperture_problems(textures)
+            if problems:
+                text += "\n⚠ " + "；".join(problems)
+            cached = (key, text)
+            self._region_texture_hint_cache = cached
+        return cached[1]
+
     def _commit_source_reference_regions(self, path, regions):
         """显式绑定画布源路径，A 图提交不能借用 B 图的路径或裁切坐标。"""
         if path is None or not self._is_reference_photo(path):
@@ -106,6 +136,7 @@ class _BirdStampReferenceTrackingMixin:
         self._update_dejitter_reference_clear_enabled()
         self._apply_preview_overlay_options_from_ui()
         self._on_output_settings_changed()
+        self._update_reference_tracking_controls()  # 刷新选区纹理提示
         self._schedule_workspace_autosave()
 
     def _commit_manual_region_match(self, path, index, box, *, original=None):
@@ -171,6 +202,9 @@ class _BirdStampReferenceTrackingMixin:
         source = getattr(self, "_dejitter_reference_source", None)
         self.dejitter_edit_reference_btn.setEnabled(bool(source))
         message = self._reference_tracking_message
+        hint = self._region_texture_hint()
+        if hint:
+            message += "\n" + hint
         if source and not self._reference_regions_editable():
             result = self._tracking_result_for_current()
             if result is not None:
@@ -200,7 +234,8 @@ class _BirdStampReferenceTrackingMixin:
         self._invalidate_reference_tracking("正在预处理跟踪…")
         worker = EditorReferenceTrackingWorker(
             token=self._reference_tracking_token, reference=Path(self._dejitter_reference_source),
-            regions=definition[1], paths=paths, options=definition[2], method=definition[3], parent=self,
+            regions=definition[1], paths=paths, options=definition[2], method=definition[3],
+            recommendation=definition[4], parent=self,
         )
         self._reference_tracking_worker = worker
         worker.resultsReady.connect(self._on_reference_tracking_results)
@@ -216,7 +251,8 @@ class _BirdStampReferenceTrackingMixin:
         return (worker is not None and worker is self._reference_tracking_worker
                 and not self._reference_tracking_shutdown and token == self._reference_tracking_token
                 and not worker.isInterruptionRequested()
-                and self._reference_tracking_input() == (path_key(worker.reference), worker.regions, worker.options, worker.method))
+                and self._reference_tracking_input() == (path_key(worker.reference), worker.regions, worker.options, worker.method,
+                                                         worker.recommendation))
 
     def _on_reference_tracking_results(self, token: int, results: object) -> None:
         if not self._accept_reference_tracking_signal(token):

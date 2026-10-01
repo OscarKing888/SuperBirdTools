@@ -53,13 +53,19 @@ def test_translation_source_coordinates_and_no_rotation(shift):
 
 
 def test_low_texture_and_resolution_refuse_false_success():
+    # 平坦选区在创建时即明确拒绝，不进入逐帧“纹理不足”的笼统失败。
     with Image.new('RGB',(512,384),'white') as source:
-        tracker=SubjectLocalTracker(source,REGIONS)
-        result=tracker.track(source)
+        with pytest.raises(ValueError,match='纹理不足'):
+            SubjectLocalTracker(source,REGIONS)
+    source,moved=images()
+    tracker=SubjectLocalTracker(source,REGIONS)
+    with Image.new('RGB',(512,384),'white') as blank:
+        result=tracker.track(blank)
         assert result.observation.status == 'needs_keyframe'
         assert result.observation.displacement is None and result.matched_count == 0
-        with Image.new('RGB',(384,512)) as different:
-            assert '尺寸' in tracker.track(different).error
+    with Image.new('RGB',(384,512)) as different:
+        assert '尺寸' in tracker.track(different).error
+    source.close(); moved.close()
 
 
 def test_outside_motion_does_not_change_local_anchor():
@@ -103,7 +109,10 @@ def test_large_source_mapping_uses_actual_analysis_scale():
     source,small=images(shift=(7,3))
     with source.resize((2560,1920)) as reference, small.resize((2560,1920)) as moving:
         result=SubjectLocalTracker(reference,REGIONS).track(moving)
-    assert result.observation.analysis_size == (2048,1536)
+    # 每区按自身尺寸取规范比例（几何平均边长≈128 分析像素），并恢复到源像素。
+    from birdstamp.image_dejitter.analysis_window import region_scale
+    assert result.observation.region_scales == pytest.approx(tuple(region_scale((2560,1920),r) for r in REGIONS))
+    assert min(result.observation.region_scales) > 2
     assert result.observation.displacement == pytest.approx((35,15),abs=1)
     source.close(); small.close()
 

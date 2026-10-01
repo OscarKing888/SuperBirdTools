@@ -229,3 +229,66 @@ def test_prediction_cache_tracks_files_parameters_and_cancellation(tmp_path,monk
     monkeypatch.setattr(cache,'MAX_ENTRIES',2)
     for i in range(4):cache.cached_observation(path,'test',(i,),compute,lambda:False)
     assert len(cache._cache)<=2 and sum(cache._sizes.values())<=cache.MAX_BYTES
+
+
+def _leg_pose(left=(.35,.6,.35,.85), right=(.6,.6,.6,.85), reliable=(True,)*4):
+    pose=dict(points=[[.5,.4] for _ in range(23)],scores=[.9]*23,reliable=[False]*23)
+    for k,(x,y),ok in zip((16,18,17,19),((left[0],left[1]),(left[2],left[3]),(right[0],right[1]),(right[2],right[3])),reliable):
+        pose['points'][k]=[x,y];pose['reliable'][k]=ok
+    return pose
+
+
+def test_thin_part_boxes_are_widened_inside_bird_box():
+    box=(.2,.2,.8,.9)
+    narrow=candidates_from_pose(_leg_pose(),box)
+    wide=candidates_from_pose(_leg_pose(),box,(5616,3744))
+    for a,b in zip(narrow[0].regions,wide[0].regions):
+        assert (b[2]-b[0])*5616 >= max(48,.12*min(.6*5616,.7*3744))-1
+        assert (b[2]-b[0]) > (a[2]-a[0])
+        assert box[0] <= b[0] < b[2] <= box[2] and box[1] <= b[1] < b[3] <= box[3]
+
+
+def test_leg_identity_allows_one_consistent_swap_only():
+    from birdstamp.image_dejitter.region_recommendation import semantic_check
+    box=(.2,.2,.8,.9)
+    reference=candidates_from_pose(_leg_pose(),box)[0]
+    tracked=reference.regions
+    swapped=_leg_pose(left=(.6,.6,.6,.85),right=(.35,.6,.35,.85))
+    assert semantic_check(reference,tracked,candidates_from_pose(swapped,box),swapped) == (True,True)
+    same=_leg_pose()
+    assert semantic_check(reference,tracked,candidates_from_pose(same,box),same) == (True,False)
+    # 两个跟踪框都落在同一条腿上：不能各自挑最近的一条。
+    both=(tracked[0],tracked[0])
+    assert semantic_check(reference,both,candidates_from_pose(same,box),same)[0] is False
+    # 当前帧只有一个可靠关键点：整条腿部位框建不出来，但关键点证据仍可核验。
+    partial=_leg_pose(reliable=(True,False,True,True))
+    assert not any(c.support_ids==(0,1) for c in candidates_from_pose(partial,box))
+    assert semantic_check(reference,tracked,candidates_from_pose(partial,box),partial)[0]
+
+
+def test_evidence_score_prefers_smaller_posterior():
+    from birdstamp.image_dejitter.region_recommendation import evidence_score
+    from birdstamp.image_dejitter.region_tracking_result import RegionTrackingResult
+    from birdstamp.image_dejitter.subject_local_tracker import LocalObservation
+    def result(var):
+        return RegionTrackingResult(((0,0,1,1),),observation=LocalObservation('tracked',displacement=(0,0),
+            covariance=(var,0,0,var),region_scales=(2.,)))
+    assert evidence_score(result(.04)) > evidence_score(result(1.)) > 0
+
+
+def test_identity_break_is_named_and_later_samples_not_checked(tmp_path):
+    rng=np.random.default_rng(5)
+    base=Image.fromarray(rng.integers(0,255,(300,400,3),dtype=np.uint8)).filter(ImageFilter.GaussianBlur(1))
+    paths=[tmp_path/f'{i}.png' for i in range(3)]
+    for i,path in enumerate(paths):
+        frame=base.copy();frame.putpixel((0,0),(i,0,0));frame.save(path)
+    bird=BirdCandidate((.3,.25,.7,.8),.9)
+    def detector(image,**kw):
+        return () if image.getpixel((0,0))[0]==1 else (bird,)
+    pose=dict(points=[[.4+(i%3)*.08,.35+(i//3)*.06] for i in range(23)],scores=[.9]*23,reliable=[i<7 or i in (7,8,13,14,15,20) for i in range(23)])
+    result=recommend_regions(paths[0],paths,method='subject_local',experimental=True,target=bird.box,
+        detector=detector,pose_predictor=lambda *a,**kw:pose)
+    assert result.status=='identity_break' and '1.png' in result.message
+    files={d.get('file') for c in result.candidates for d in c.diagnostics}
+    assert '2.png' not in files
+    assert any(d.get('stage')=='identity' for c in result.candidates for d in c.diagnostics)

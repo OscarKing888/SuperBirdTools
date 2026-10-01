@@ -90,6 +90,106 @@ def background_candidates(image, birds=(), existing=()):
     return tuple(dict.fromkeys(result))[:36]
 
 
+LEG_BOX_EXPAND = .25
+PRECHECK_CHAIN_FRAMES = 12
+
+
+def _inside(box, region, expand=LEG_BOX_EXPAND):
+    cx,cy=(box[0]+box[2])/2,(box[1]+box[3])/2
+    w,h=(region[2]-region[0])*expand,(region[3]-region[1])*expand
+    return region[0]-w <= cx <= region[2]+w and region[1]-h <= cy <= region[3]+h
+
+
+PART_KEYPOINTS = {'head':tuple(range(7)),'torso':(7,8,13,14,15,20)}
+LEG_KEYPOINTS = ((16,18),(17,19))
+
+
+def semantic_check(candidate, boxes, current_parts, pose=None):
+    """跟踪位置须有当前帧同名部位证据；返回 (是否一致, 是否左右腿置换)。
+
+    证据二选一：当前帧同名部位框包含跟踪中心，或当前帧该部位的可靠关键点落在
+    跟踪框（外扩 25%）内——单个关键点的翻转一致性失败不应让整条腿“不可见”。
+    邻近边缘框不是解剖部位，不参与核验。腿部允许整组一致的左右置换，但不允许
+    两条腿各自挑最近的一条。
+    """
+    anatomical = boxes[:len(boxes)-candidate.edges] if candidate.edges else boxes
+    matching=[c for c in current_parts if c.part == candidate.part]
+    def keypoints(ids):
+        if pose is None:return ()
+        return tuple(pose['points'][k] for k in ids if pose['reliable'][k])
+    def hit(box, ids):
+        return any(_inside((x,y,x,y),box) for x,y in keypoints(ids))
+    supports=candidate.support_ids
+    if not supports:
+        ids=PART_KEYPOINTS.get(candidate.part,())
+        return all(any(_inside(box,r) or iou(box,r)>.1 for c in matching for r in c.regions) or hit(box,ids)
+                   for box in anatomical),False
+    for swap in (False,True):
+        def target_id(identity):return 1-identity if swap else identity
+        def leg_ok(identity, box):
+            tid=target_id(identity)
+            return (any(tid in c.support_ids and _inside(box,c.regions[c.support_ids.index(tid)]) for c in matching)
+                    or hit(box,LEG_KEYPOINTS[tid]))
+        if all(leg_ok(identity,box) for identity,box in zip(supports,anatomical)):
+            return True,swap
+    return False,False
+
+
+def evidence_score(result):
+    """越高越好：1/(1+后验标准差/最细选区比例)；缺少协方差时退回内点率。"""
+    obs=result.observation
+    if obs is not None and obs.covariance and obs.region_scales:
+        std=float(np.sqrt(max(0.,np.linalg.eigvalsh(np.asarray(obs.covariance).reshape(2,2)).max())))
+        return 1/(1+std/min(obs.region_scales))
+    if obs is not None and obs.region_metrics:
+        return min(m[2]/max(1,m[0]) for m in obs.region_metrics)
+    return min(result.scores or (1.,))
+
+
+def precheck_chain(paths, reference, samples, trackers, candidates, results_by, parts_by_path, passed, quality,
+                   diagnostics, cancelled):
+    """参考后连续的抽样帧（+1、+2…）若固定参考失配，用与完整分析相同的链式关键帧核验。
+
+    只在连续抽样内进行，解码不超过 PRECHECK_CHAIN_FRAMES；远处抽样不做链式，失败如实保留。
+    """
+    from types import SimpleNamespace
+    from .region_tracking_result import RegionTrackingResult
+    from .subject_keyframes import chain_keyframe_segments
+    from birdstamp.gui.editor_utils import path_key
+    ordered=list(dict.fromkeys(paths))
+    if reference not in ordered:return
+    start=ordered.index(reference)
+    run=[reference]
+    for path in ordered[start+1:start+PRECHECK_CHAIN_FRAMES]:
+        if path not in samples:break
+        run.append(path)
+    if len(run) < 3:return
+    for i,(name,regions,tracker,_) in enumerate(trackers):
+        if tracker is None or passed[i]:continue
+        failing=[p for p in run[1:] if p in results_by[i] and results_by[i][p].matched_count != len(regions)]
+        if not failing or any(p not in results_by[i] for p in run[1:]):continue
+        tracking={path_key(reference):RegionTrackingResult(tuple(regions))}
+        tracking.update({path_key(p):results_by[i][p] for p in run[1:]})
+        try:
+            output=chain_keyframe_segments([SimpleNamespace(path=p) for p in run],tracker,tracking,cancelled=cancelled)
+        except (ValueError,OSError):
+            continue
+        for p in failing:
+            result=output[path_key(p)]
+            ok=result.matched_count == len(regions)
+            swapped=False
+            if ok and p in parts_by_path:
+                ok,swapped=semantic_check(candidates[i],result.boxes,*parts_by_path[p])
+            for d in diagnostics:
+                if d.get('candidate_id') == i and d.get('file') == p.name:
+                    d.update(passed=ok,stage='chain' if ok else d.get('stage'),swapped=swapped,
+                             reason='' if ok else d.get('reason',''))
+            if ok:
+                quality[i]=min(quality[i],evidence_score(result))
+        passed[i]=all(d.get('passed') for d in diagnostics if d.get('candidate_id') == i and d.get('file') != reference.name) \
+                  and all(p in results_by[i] for p in samples[1:])
+
+
 def recommend_regions(reference, paths, *, method='reference_region', existing=(), target=None,
                       part='auto', target_count=9, experimental=False, options=MatchingOptions(),
                       cancelled=lambda:False, progress=lambda text:None,
@@ -137,9 +237,9 @@ def recommend_regions(reference, paths, *, method='reference_region', existing=(
                         '请选择要稳定的目标鸟。' if birds else '未识别到鸟，可手动框选。',birds=birds)
                 target=birds[0].box
             pose=infer(reference,image,target)
-            candidates=[c for c in candidates_from_pose(pose,target) if part == 'auto' or c.part == part]
+            candidates=[c for c in candidates_from_pose(pose,target,image.size) if part == 'auto' or c.part == part]
             from .part_region_variants import part_region_variants
-            candidates=part_region_variants(image,candidates)
+            candidates=part_region_variants(image,candidates,target)
             proposals=tuple(CandidateProposal(c.part,c.regions,c.confidence,total_frames=len(samples),variant=c.variant) for c in candidates)
             draft=Recommendation('prechecking','已识别到部位候选，正在预检；候选尚不能用于导出。',
                 target=target,birds=birds,candidates=proposals,
@@ -154,20 +254,29 @@ def recommend_regions(reference, paths, *, method='reference_region', existing=(
                 draft.status='no_reliable_region'
                 draft.message='已检测到目标鸟，但没有可靠的指定部位关键点；请手动选区。'
                 return draft
-            trackers=[(c.part,c.regions,LocalCropSubjectTracker(image,c.regions,target=target,options=options,detector=detector),c.confidence)
-                      for c in candidates]
+            trackers=[]
+            for i,c in enumerate(candidates):
+                try:
+                    tracker=LocalCropSubjectTracker(image,c.regions,target=target,options=options,detector=detector)
+                except ValueError as exc:
+                    # 纹理/孔径不合格的候选单独记失败原因，不中断其他候选。
+                    tracker=None
+                    diagnostics.append(dict(file=reference.name,part=c.part,candidate_id=i,passed=False,reason=str(exc),stage='texture'))
+                trackers.append((c.part,c.regions,tracker,c.confidence))
         else:
             trackers=[('background',(box,),ReferenceRegionTracker(image,(box,),options=options),1.)
                       for box in background_candidates(image,birds,existing)]
         source_size=image.size
-    passed=[True]*len(trackers); quality=[v[3] for v in trackers]
+    passed=[v[2] is not None for v in trackers]; quality=[v[3] for v in trackers]
     observed=[{} for _ in trackers]
+    results_by=[{} for _ in trackers]; parts_by_path={}; identity_break=None
     trajectory=None
     if method == 'subject_local':
         from .target_trajectory import build_target_trajectory
         trajectory=build_target_trajectory(reference,paths,target,cancelled=cancelled,progress=progress,detector=detector)
         with decode_image(reference,decoder='auto') as image:
             for i,(name,regions,tracker,_) in enumerate(trackers):
+                if tracker is None:continue
                 result=tracker.track(image,cancelled=cancelled,target_box=target)
                 passed[i]=result.matched_count==len(regions)
                 diagnostics.append(dict(file=reference.name,part=name,candidate_id=i,passed=passed[i],reason=result.error,stage='tracking'))
@@ -181,14 +290,22 @@ def recommend_regions(reference, paths, *, method='reference_region', existing=(
                     frame=trajectory.frame(path)
                     if frame.box is None:raise ValueError(frame.error)
                     current_target=frame.box
-                    current_parts=candidates_from_pose(infer(path,moving,current_target),current_target)
+                    current_pose=infer(path,moving,current_target)
+                    current_parts=candidates_from_pose(current_pose,current_target,moving.size)
+                    parts_by_path[path]=(current_parts,current_pose)
                 except ValueError as exc:
-                    diagnostics.extend(dict(file=path.name,part=name,candidate_id=i,passed=False,reason=str(exc),stage='identity' if frame.box is None else 'parts')
-                                       for i,(name,_,_,_) in enumerate(trackers))
-                    passed=[False]*len(trackers);continue
+                    stage='identity' if frame.box is None else 'parts'
+                    diagnostics.extend(dict(file=path.name,part=name,candidate_id=i,passed=False,reason=str(exc),stage=stage)
+                                       for i,(name,_,tracker,_) in enumerate(trackers) if tracker is not None)
+                    passed=[False]*len(trackers)
+                    if stage == 'identity':
+                        # 身份中断后不再检查后续抽样（不跨越失败帧重选鸟）；中断前的逐帧结果保留。
+                        identity_break=path.name
+                        break
+                    continue
             for i,(name,regions,tracker,confidence) in enumerate(trackers):
                 check()
-                if not passed[i] and method != 'subject_local':
+                if tracker is None or (not passed[i] and method != 'subject_local'):
                     continue
                 if moving.size != source_size:
                     passed[i]=False;diagnostics.append(dict(file=path.name,part=name,candidate_id=i,reason='源尺寸不同'));continue
@@ -198,30 +315,24 @@ def recommend_regions(reference, paths, *, method='reference_region', existing=(
                     result=tracker.track(moving,cancelled=cancelled)
                 good=result.matched_count == len(regions)
                 reason=result.error
+                swapped=False
                 if good and current_parts is not None:
-                    matching=[c for c in current_parts if c.part == name]
-                    supports=candidates[i].support_ids
-                    if supports:
-                        # 左右腿按关键点身份核验，不因另一条腿可见而改配到另一条。
-                        semantic_ok=all(any(identity in c.support_ids and
-                            iou(box,c.regions[c.support_ids.index(identity)])>.1 for c in matching)
-                            for identity,box in zip(supports,result.boxes))
-                    else:
-                        semantic_ok=all(any(iou(box,r)>.1 for c in matching for r in c.regions) for box in result.boxes)
-                    if not matching or not semantic_ok:
+                    semantic_ok,swapped=semantic_check(candidates[i],result.boxes,current_parts,current_pose)
+                    if not semantic_ok:
                         good=False;reason='跟踪位置与同名部位证据不一致或部位不可见'
+                results_by[i][path]=result
                 if good and name == 'background' and any(iou(b,c.box)>0 for b in result.boxes for c in current_birds):
                     good=False;reason='背景候选进入鸟体范围'
                 if good:
-                    score=min(result.scores or (1.,))
-                    if result.observation and result.observation.region_metrics:
-                        score=min(m[2]/max(1,m[0]) for m in result.observation.region_metrics)
+                    score=evidence_score(result)
                     quality[i]=min(quality[i],score)
                     observed[i][path]=(result.boxes[0],score)
                 else:
                     passed[i]=False
                 diagnostics.append(dict(file=path.name,part=name,candidate_id=i,regions=regions,passed=good,reason=reason,
-                                        stage='parts' if reason.startswith('跟踪位置') else 'tracking'))
+                                        stage='parts' if reason.startswith('跟踪位置') else 'tracking',swapped=swapped))
+    if method == 'subject_local' and identity_break is None:
+        precheck_chain(paths,reference,samples,trackers,candidates,results_by,parts_by_path,passed,quality,diagnostics,cancelled)
     valid=[i for i,ok in enumerate(passed) if ok]
     valid.sort(key=lambda i:(-round(quality[i],2),{'torso':0,'head':1,'legs':2,'background':0}[trackers[i][0]]))
     chosen=[];chosen_indices=[];name=''
@@ -263,10 +374,13 @@ def recommend_regions(reference, paths, *, method='reference_region', existing=(
              if chosen else '没有通过全部抽样帧的可靠选区；请手动选区、补关键帧，或改用背景稳定。')
     if not chosen and method=='subject_local':
         message=f'已识别到目标鸟，保留 {len(candidates)} 个部位候选；预检未全部通过，可在下方查看并采用为人工待修正区。'
+    if identity_break and method=='subject_local':
+        message=f'目标鸟身份在 {identity_break} 中断，未检查其后的抽样；'+message
     meta=dict(version=1,target=target,part=name,auto_regions=chosen,local_analysis=method=='subject_local',
               model=MODEL_ID if method=='subject_local' else '',experimental=experimental,resolved_part=name)
     proposals=tuple(CandidateProposal(c.part,c.regions,c.confidence,'passed' if passed[i] else 'failed',
         sum(bool(d.get('passed')) for d in diagnostics if d.get('candidate_id')==i),len(samples),
         tuple(d for d in diagnostics if d.get('candidate_id')==i),variant=c.variant) for i,c in enumerate(candidates)) if method=='subject_local' else ()
-    return Recommendation('ready' if chosen else 'no_reliable_region',message,tuple(chosen),name,target,birds,
+    status='ready' if chosen else ('identity_break' if identity_break and method=='subject_local' else 'no_reliable_region')
+    return Recommendation(status,message,tuple(chosen),name,target,birds,
                           diagnostics,tuple(p.name for p in samples),meta,proposals)

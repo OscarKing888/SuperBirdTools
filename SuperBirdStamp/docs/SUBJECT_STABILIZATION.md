@@ -19,16 +19,28 @@
 ## 核心及扩展边界
 
 - [recognition.py](../birdstamp/image_dejitter/recognition.py)：`RecognitionStrategy` / `RegionTracker` 接口、注册表及版本化 `SubjectSettings`。基本实现包装原 `ReferenceRegionTracker`；高级实现创建 `SubjectLocalTracker`。这是当前独立序列管线的识别入口，旧 `DeJitterStrategy.stabilize()` 保持显式参考区 API 的兼容性。
-- [subject_local_tracker.py](../birdstamp/image_dejitter/subject_local_tracker.py)：分格 Shi–Tomasi 角点、前后向金字塔 LK、最大位移/有限值/边界/空间覆盖检查、每区共识、区间冲突拒绝、区域等权平移。重叠 ROI 不重复选点；持续点 ID 在同一关键帧内稳定。`LocalObservation` 保存对应点、源尺寸、实际分析尺寸和双轴比例。
+- [subject_local_tracker.py](../birdstamp/image_dejitter/subject_local_tracker.py)：创建时分类选区纹理，每区按自身尺寸取规范分析尺度，逐区测量后做孔径约束联合求解（见下节）。重叠 ROI 不重复选点；持续点 ID 在同一关键帧内稳定。`LocalObservation` 保存对应点、源尺寸、每区纹理类型与比例、逐区测量（`constraints`）、位移后验协方差、各方向由哪些选区约束（`constrained_by`）及链式信息。
+- [analysis_window.py](../birdstamp/image_dejitter/analysis_window.py)：规范分析尺度与窗口。选区几何平均边长换算到约 128 分析像素（不放大），窗口为选区外扩 4% 长边的运动余量并夹回图内，用 `resize(box=…, LANCZOS)` 带预滤波直接从源图采样。
+- [aperture.py](../birdstamp/image_dejitter/aperture.py)：结构张量分类二维纹理 / 单向边缘（电线、枝条）/ 平坦，并给出创建时拒绝说明和 GUI 即时提示。
+- [region_measurement.py](../birdstamp/image_dejitter/region_measurement.py)：二维区为 LK（角点先剔除局部单向的滑动点，粗相关初值＋前后向＋共识，失败时仅对该区调用 NCC/ECC）；单向边缘为 `edge_ncc`：只取法向位置，脊线直线拟合、法向唯一性、正反向一致。
+- [translation_solver.py](../birdstamp/image_dejitter/translation_solver.py)：二维区给完整约束、边缘只给法向约束的加权最小二乘；任一方向后验不足或任一选区冲突即整帧失败并点名。
+- [subject_keyframes.py](../birdstamp/image_dejitter/subject_keyframes.py)：失配段的逐帧链式关键帧（见下节）。
 - [subject_sequence.py](../birdstamp/export_stage/subject_sequence.py)：人工关键帧分段、锁定/自然跟随、`SubjectFramePlan` 和共同裁切。失败不插值成图像观测，不通过旋转或缩放强行拟合姿态。有效且严格递增的拍摄时间优先，否则明确使用输入帧顺序；超过十秒的间隔需要人工关键帧确认或分开分析。
 - [sequence_analysis.py](../birdstamp/export_stage/sequence_analysis.py)：复用现有有界 action 池及线程所有权；高级方法不使用基本方法的邻帧恢复搜索。参数变更/取消/关闭仍经现有 worker 身份及 token 门控，不新增 GUI 线程计算路径。
 - [subject_observation_cache.py](../birdstamp/image_dejitter/subject_observation_cache.py)：会话内 32 MiB / 512 项上限，只存无像素观测。签名含算法版本、源/参考文件属性、ROI 和分析映射；改变强度、跟随模式、输出编码不重跑命中的点跟踪。原图解码和参考角点准备仍可能执行。
 - [sequence_preview_cache.py](../birdstamp/gui/sequence_preview_cache.py)：整段计划及实际对应点随现有磁盘缓存保存，工作区恢复不需重新跟踪；新算法签名使旧派生缓存重新分析，不改变源文件或工作区照片。
 - [editor_subject_controls.py](../birdstamp/gui/editor_subject_controls.py)：表单及中文说明，默认值来自 `config/editor_options.json`。方法/模式/窗口随全局渲染设置持久化，DEBUG 随工作区预览状态保存，不进入分析签名。
 
-统一解码器先处理 EXIF 方向，再在整幅图上生成长边最多 2048 的分析图。没有按鸟体框逐帧缩放，实际映射为 `source = analysis * (source_size / analysis_size)`。不同原图尺寸或方向不隐式拉伸匹配，明确要求分段。原局部位移 `d` 是参考到当前的方向，输出裁切中心位移是 `+d`，等效图像补偿是 `-d`。
+统一解码器先处理 EXIF 方向。每个选区的分析比例 `s = max(1, √(选区源像素面积)/128)` 在参考帧确定、关键帧沿用，所有 LK/相关阈值因此对 84 MP 与 24 MP 原片代表相同的相对精度（旧实现整图压到长边 2048，同一阈值在不同照片上代表 1–5.5 倍源像素）。小于规范尺寸的选区不放大，比例为 1。映射为 `source = window_origin + analysis * s`。不同原图尺寸或方向不隐式拉伸匹配，明确要求分段。原局部位移 `d` 是参考到当前的方向，输出裁切中心位移是 `+d`，等效图像补偿是 `-d`。
 
 新增一键推荐可识别目标鸟，多鸟需点击确认；本地鸟类关键点模型可实验性推荐部位，默认关闭，详见 [自动参考区](AUTO_REFERENCE_REGIONS.md)。人工框选继续可用，不声称完成长时多目标重识别。遮挡、换姿、超过可靠搜索范围时显式要求人工关键帧；不生成中间帧、不恢复失焦细节、不做非刚性变形。自然跟随是主体路径平滑，不是相机运动重建。
+
+## 纹理、孔径约束与链式关键帧（2026-10-01）
+
+- **框选时即判定纹理**：平坦选区、或只有近乎平行的单向边缘（多根电线）时，创建跟踪器即明确拒绝，并说明只能约束哪个方向。高级方法的状态栏即时显示“选区 1：二维纹理；选区 2–4：单向边缘，仅约束竖直方向”。
+- **电线只给法向证据**：沿电线方向的匹配会任意滑动（旧实现把它当成二维位移，导致第 2 张必然失败）。现在电线给竖直（法向）约束，鸟体给水平约束，联合求解；诊断写明各方向由哪些选区约束。
+- **远处电线不宜与鸟体混用**：选区跨越半幅画面时，手持相机约 0.3° 的滚转就会让左右电线的竖直位移相差约 20 源像素，平移模型无法同时满足，会被判为冲突。请选鸟体旁边的电线段。
+- **链式关键帧**：固定参考失配的连续帧，先保留仍能直接匹配原参考的选区（如电线），只把失配的选区（姿态变化的鸟体）改为对最近可靠帧的模板测量，质量下降才换关键帧。两端都有可靠帧时前向/反向两条链必须一致才融合发布（`keyframe_bridge`）；只有单侧锚点（如末尾）时，链的后验标准差不超过 1 倍最细选区比例且不超过 12 段才发布（`keyframe_chain`），否则明确要求人工关键帧。目标鸟身份中断的帧不跨越。编辑器“预处理跟踪”与导出使用同一份推荐元数据、目标轨迹和链式核验。
 
 ## CLI
 
@@ -55,7 +67,7 @@
 
 ## 验证
 
-新增 [test_subject_local.py](../tests/test_subject_local.py) 和 [test_subject_local_ui.py](../tests/test_subject_local_ui.py) 覆盖已知正负位移、完整输出像素一致性、局部外强运动、参考区冲突、纹理缺失、尺寸映射、重叠去重、取消、强度观测复用、人工关键帧、跟随趋势、拍摄间隔、工作区/缓存往返、CLI 输出及源文件不变。
+[test_aperture.py](../tests/test_aperture.py)、[test_analysis_scale.py](../tests/test_analysis_scale.py)、[test_subject_chain.py](../tests/test_subject_chain.py) 覆盖纹理分类、平行/交叉电线、电线＋鸟体联合求解、沿线滑动、重复电线歧义、跨分辨率一致、窗口不越界、抗混叠采样、渐变姿态双向桥接、单侧链上限与电线竖直锚定。[test_subject_local.py](../tests/test_subject_local.py) 和 [test_subject_local_ui.py](../tests/test_subject_local_ui.py) 覆盖已知正负位移、完整输出像素一致性、局部外强运动、参考区冲突、纹理缺失、尺寸映射、重叠去重、取消、强度观测复用、人工关键帧、跟随趋势、拍摄间隔、工作区/缓存往返、CLI 输出及源文件不变。
 
 2026-09-30 使用实验的三对黑脸琵鹭照片验证，分别读取 HIF 与 JPG 原片（5616×3744），人工腿部多边形取外接矩形，分析长边 2048。两种格式的三组均通过；JPG 的实际整数裁切补偿如下：
 
@@ -66,5 +78,7 @@
 | DSC09911 / DSC09912 | +16, +46 | 5600×3698 |
 
 这不是相机运动真值精度。矩形选区和区域等权与原多边形实验不同，不能要求拟合数字完全相同。JPG 原片通过 SHA-256 前后比对未改变；验证输出和原片不加入仓库。macOS 离屏验证不替代 Windows 64 位及打包 GUI 冒烟。
+
+2026-10-01 三宝鸟 41 张 11232×7488 TIFF（用户原工作区：鸟体 1 区 + 远处电线 3 区）：旧实现第 2 张即失败（电线 LK 2/59、10/140）；新实现 3753、3754 直接通过，3755 起报“选区 2 与其余选区运动冲突（残差 16.6 源像素）”——远处电线与右侧电线竖直位移差来自相机滚转。改为“鸟体＋鸟旁两段电线”后 3752–3755 通过（3755 为链式）；3756–3758 鸟转身展翅（含运动模糊），明确要求关键帧。在 3759 设人工关键帧后 3759–3769 共 11 张通过（8 张链式，σ≤2.6 源像素），3770 因单侧链误差超限停止。黑脸琵鹭三对：全分辨率与 50% 缩小副本的头/躯干位移相差 0.1–0.5 源像素。数字仅代表本机这批素材，Windows 与打包应用未实测。
 
 算法 API 参照 [OpenCV 稀疏金字塔 LK 文档](https://docs.opencv.org/4.x/dc/d6b/group__video__track.html)；实验来源为 `origin/experiment/subject-stabilization-debug-20260930` 的 `experiments/subject_stabilization/IMPLEMENTATION_PLAN.md`。

@@ -27,9 +27,12 @@ def test_independent_registration_subpixel_translation(shift):
 
 
 def test_fallback_is_independent_of_lk_thresholds(monkeypatch):
+    from birdstamp.image_dejitter import region_measurement
     source,moving=images()
     tracker=LocalRegistrationTracker(source,((.25,.25,.5,.6),))
-    monkeypatch.setattr(SubjectLocalTracker,'track',lambda self,*a,**k:self._result(None,(),(),'LK 无可靠点'))
+    # LK 完全失败时只对该区调用独立 NCC/ECC 配准，方法与证据如实记录。
+    monkeypatch.setattr(region_measurement,'_lk',lambda template,moving,init,levels:(
+        template.corners.copy(),np.zeros(len(template.corners),bool),np.full(len(template.corners),np.inf)))
     result=tracker.track(moving)
     assert result.observation.method=='ncc_ecc'
     assert result.observation.displacement==pytest.approx((8,-5),abs=.2)
@@ -118,16 +121,38 @@ def test_bidirectional_bridge_source_coordinates_and_identity_gate(tmp_path):
     with pytest.raises(InterruptedError):recover_keyframe_segments(jobs,tracker,results,cancelled=lambda:True)
 
 
-def test_bridge_requires_global_anchors_and_two_sided_agreement(tmp_path):
+def test_tail_chain_is_bounded_and_two_sided_chains_must_agree(tmp_path):
     jobs,tracker,results=bridge_case(tmp_path)
     key=path_key(jobs[-1].path);results[key]=tracker._failed('末尾无锚点')
-    assert recover_keyframe_segments(jobs,tracker,results,cancelled=lambda:False)[key].matched_count==0
+    # 末尾只有单侧锚点：在误差与链数上限内以链式关键帧发布，并标明方向。
+    tail=recover_keyframe_segments(jobs,tracker,results,cancelled=lambda:False)[key]
+    assert tail.observation.status=='keyframe_chain' and tail.observation.chain[2]=='forward'
+    assert tail.observation.displacement==pytest.approx((16,8),abs=.4)
     key=path_key(jobs[2].path);results[key]=tracker._failed('固定参考失配')
     right=path_key(jobs[3].path);r=results[right]
     # 伪造右锚点移到完全不同纹理，两条链不能悄悄平均。
     boxes=tuple((l+.08,t,r+.08,b) for l,t,r,b in r.boxes)
     results[right]=replace(r,boxes=boxes,observation=replace(r.observation,displacement=(53.,6.)))
-    assert recover_keyframe_segments(jobs,tracker,results,cancelled=lambda:False)[key].matched_count==0
+    output=recover_keyframe_segments(jobs,tracker,results,cancelled=lambda:False)[key]
+    assert output.matched_count==0 and '前向与反向' in output.error
+
+
+def test_chain_drift_and_link_limits_are_explicit(tmp_path,monkeypatch):
+    from birdstamp.image_dejitter import subject_keyframes
+    jobs,tracker,results=bridge_case(tmp_path,6)
+    for j in jobs[2:]:results[path_key(j.path)]=tracker._failed('姿态变化')
+    monkeypatch.setattr(subject_keyframes,'CHAIN_STD',.01)
+    output=recover_keyframe_segments(jobs,tracker,results,cancelled=lambda:False)
+    assert all(output[path_key(j.path)].matched_count==0 for j in jobs[2:])
+    assert '链式累计误差超限' in output[path_key(jobs[2].path)].error
+    monkeypatch.setattr(subject_keyframes,'CHAIN_STD',1.)
+    monkeypatch.setattr(subject_keyframes,'REKEY_LK',2.)   # 每帧都换关键帧
+    monkeypatch.setattr(subject_keyframes,'MAX_CHAIN_LINKS',2)
+    output=recover_keyframe_segments(jobs,tracker,results,cancelled=lambda:False)
+    links=[output[path_key(j.path)].observation.chain for j in jobs[2:4]]
+    assert [c[0] for c in links]==[1,2]
+    assert output[path_key(jobs[4].path)].matched_count==0
+    assert '链式累计误差超限' in output[path_key(jobs[4].path)].error and '3 段' in output[path_key(jobs[4].path)].error
 
 
 def test_bridge_is_used_by_actual_export_geometry(tmp_path,monkeypatch):
@@ -178,22 +203,24 @@ def test_subpixel_refinement_and_fixed_keyframe_scale():
     assert delta==pytest.approx((5.3,-3.6),abs=.25)
     tracker=LocalCropSubjectTracker(source,((.3,.3,.45,.55),),target=(.25,.2,.55,.65))
     next_tracker=tracker.at_keyframe(source,tracker.regions,(.245,.19,.555,.66))
-    assert next_tracker.side==tracker.side and next_tracker.analysis_size==tracker.analysis_size
+    # 关键帧沿用固定分析比例与纹理角色，阈值尺度不随目标框变化。
+    assert next_tracker.geometry==tracker.geometry and next_tracker.analysis_size==tracker.analysis_size
     source.close()
 
 
-def test_long_gap_is_not_accepted_as_unbounded_chain(tmp_path):
+def test_long_gap_is_chained_from_both_anchors(tmp_path):
     jobs,tracker,results=bridge_case(tmp_path,7)
     for j in jobs[1:-1]:results[path_key(j.path)]=tracker._failed('长失配段')
     recovered=recover_keyframe_segments(jobs,tracker,results,cancelled=lambda:False)
-    assert all(recovered[path_key(j.path)].matched_count==0 for j in jobs[1:-1])
-    assert '超过 4 帧' in recovered[path_key(jobs[1].path)].error
+    for i,j in enumerate(jobs[1:-1],1):
+        obs=recovered[path_key(j.path)].observation
+        assert obs.status=='keyframe_bridge' and obs.displacement==pytest.approx((i*4,i*2),abs=.4)
 
 
 def test_cancellation_during_bridge_is_not_swallowed_as_io_error(tmp_path,monkeypatch):
     jobs,tracker,results=bridge_case(tmp_path)
     results[path_key(jobs[2].path)]=tracker._failed('固定参考失配')
     def interrupted(*args,**kwargs):raise InterruptedError('核验中取消')
-    monkeypatch.setattr(LocalCropSubjectTracker,'at_keyframe',interrupted)
+    monkeypatch.setattr(LocalCropSubjectTracker,'template_at',interrupted)
     with pytest.raises(InterruptedError,match='核验中取消'):
         recover_keyframe_segments(jobs,tracker,results,cancelled=lambda:False)

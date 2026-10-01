@@ -230,3 +230,28 @@ def test_tracking_and_export_use_same_displacement():
     tracked = ReferenceRegionTracker(ref, REGIONS).track(target).boxes[0]
     preview_delta = ((tracked[0] - REGIONS[0][0]) * 200, (tracked[1] - REGIONS[0][1]) * 160)
     np.testing.assert_allclose(np.subtract(centers[1], centers[0]), preview_delta, atol=1)
+
+
+def test_worker_uses_recommendation_target_like_export(tmp_path, monkeypatch):
+    """编辑器预处理与导出使用同一份推荐元数据：有目标鸟时走局部引导跟踪并建立轨迹。"""
+    import json
+    from birdstamp.image_dejitter.local_crop_tracker import LocalCropSubjectTracker
+    ref, target = images()
+    paths = (tmp_path/'参考.png', tmp_path/'第二张.png')
+    ref.save(paths[0]); target.save(paths[1])
+    created, prepared = [], []
+    original = LocalCropSubjectTracker.__init__
+    def init(self, *args, **kwargs):
+        created.append(kwargs.get('target')); original(self, *args, **kwargs)
+    monkeypatch.setattr(LocalCropSubjectTracker, '__init__', init)
+    monkeypatch.setattr(LocalCropSubjectTracker, 'prepare_targets', lambda self, reference, paths, **kw: prepared.append(reference))
+    monkeypatch.setattr(LocalCropSubjectTracker, '_target_box', lambda self, image, **kw: self.target)
+    recommendation = json.dumps({'version':1,'local_analysis':True,'target':[.05,.1,.95,.9]})
+    worker = EditorReferenceTrackingWorker(token=1, reference=paths[0], regions=REGIONS, paths=paths,
+                                           method='subject_local', recommendation=recommendation)
+    delivered = []
+    worker.resultsReady.connect(lambda token, results: delivered.append(results))
+    worker.run()
+    assert created == [[.05,.1,.95,.9]] and prepared == [paths[0]]
+    result = delivered[0][path_key(paths[1])]
+    assert result.observation.displacement == pytest.approx((5,-3), abs=.3), result.error

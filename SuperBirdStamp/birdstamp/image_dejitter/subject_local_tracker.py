@@ -1,16 +1,23 @@
-"""人工局部的固定关键帧 LK 跟踪；不加载检测器，不估计缩放或旋转。
+"""人工局部的固定关键帧跟踪；不加载检测器，不估计缩放或旋转。
 
-像素阈值统一作用于长边最多 2048 的分析图。坐标恢复使用实际双轴比例，
-EXIF 方向由共用 decoder 统一。参考虚拟锚点固定，不随可见点质心漂移。
+每个选区按自身尺寸换算到规范分析尺度（见 analysis_window），像素阈值因此对
+任何分辨率的照片都代表相同的相对精度。选区先分为二维纹理 / 单向边缘 / 平坦：
+单向边缘（电线、枝条）只提供法向约束，与二维区一起做孔径约束联合求解。
+EXIF 方向由共用 decoder 统一，所有点与位移均以源像素记录。
 """
 from dataclasses import dataclass, replace
 import numpy as np
-from PIL import Image
 
 from .matching_options import MatchingOptions
 from .region_tracking_result import RegionTrackingResult
+from .analysis_window import region_scale, region_window, motion_margin
+from .aperture import classify_texture, aperture_problems, direction_label
+from .region_measurement import (Measurement, make_template, measure, consensus_translation,  # noqa: F401
+                                 MIN_INLIERS)
+from .translation_solver import solve_translation
 
-ALGORITHM_VERSION = 1
+ALGORITHM_VERSION = 2
+MAX_REGIONS = 28
 
 
 @dataclass(frozen=True, slots=True)
@@ -30,161 +37,170 @@ class LocalObservation:
     method: str = 'lk'
     quality: float = 0.
     keyframe_paths: tuple = ()
+    region_kinds: tuple = ()     # 每区 '2d' / '1d'
+    region_scales: tuple = ()    # 每区源像素/分析像素
+    constraints: tuple = ()      # 每区 Measurement.row()
+    covariance: tuple = ()       # 位移后验协方差 2×2 展平（源像素²）
+    constrained_by: tuple = ()   # ((方向, 后验标准差, (区号...)), ...)
+    chain: tuple = ()            # (链数, 后验标准差源像素, 方向 'forward'/'reverse'/'both')
 
     def __post_init__(self):
-        for name in ('analysis_size','source_size','source_per_analysis','reference_origin','moving_origin','keyframe_paths'):
+        for name in ('analysis_size','source_size','source_per_analysis','reference_origin','moving_origin',
+                     'keyframe_paths','region_kinds','region_scales','covariance','chain'):
             object.__setattr__(self,name,tuple(getattr(self,name)))
         for name in ('points','region_metrics'):
             object.__setattr__(self,name,tuple(tuple(row) for row in getattr(self,name)))
+        object.__setattr__(self,'constraints',tuple(Measurement.from_row(row).row() for row in self.constraints))
+        object.__setattr__(self,'constrained_by',tuple((str(l),None if s is None else float(s),tuple(int(i) for i in r))
+                                                       for l,s,r in self.constrained_by))
         if self.displacement is not None:
             object.__setattr__(self,'displacement',tuple(self.displacement))
 
     def summary(self):
         count = sum(bool(p[6]) for p in self.points)
-        label = {'tracked':'已跟踪','needs_keyframe':'需补关键帧','user_override':'人工关键帧','reference':'参考帧','keyframe_bridge':'双向分段核验'}.get(self.status,self.status)
-        evidence = f'子块 {count}/{len(self.points)}' if self.method == 'ncc_ecc' else f'内点 {count}/{len(self.points)}'
-        return f'局部主体 · {label} · {evidence}' + (f' · {self.reason}' if self.reason else '')
+        label = {'tracked':'已跟踪','needs_keyframe':'需补关键帧','user_override':'人工关键帧','reference':'参考帧',
+                 'keyframe_bridge':'双向分段核验','keyframe_chain':'链式关键帧'}.get(self.status,self.status)
+        evidence = {'ncc_ecc':'子块','lk':'内点'}.get(self.method,'证据')
+        text = f'局部主体 · {label} · {evidence} {count}/{len(self.points)}'
+        if self.chain:
+            text += f' · {self.chain[0]} 段链，σ≈{self.chain[1]:.1f} 源像素'
+        if self.constrained_by and '1d' in self.region_kinds:
+            text += ' · ' + ' · '.join(f'{d}←选区 {"、".join(str(i+1) for i in r)}' for d,_,r in self.constrained_by if r)
+        return text + (f' · {self.reason}' if self.reason else '')
 
 
-def consensus_translation(a, b, threshold=2.5):
-    delta = np.asarray(b, dtype=float) - np.asarray(a, dtype=float)
-    if not len(delta):
-        return None, np.zeros(0, bool)
-    if not np.isfinite(delta).all():
-        raise ValueError('局部主体：对应点包含非有限值')
-    counts = np.zeros(len(delta), dtype=int)
-    for start in range(0, len(delta), 128):
-        counts[start:start+128] = (np.linalg.norm(delta[start:start+128, None] - delta[None], axis=2) < threshold).sum(axis=1)
-    selected = np.linalg.norm(delta - delta[counts.argmax()], axis=1) < threshold
-    for _ in range(3):
-        displacement = np.median(delta[selected], axis=0)
-        updated = np.linalg.norm(delta - displacement, axis=1) < threshold
-        if not updated.any():
-            break
-        selected = updated
-    return np.median(delta[selected], axis=0), selected
+@dataclass(frozen=True, slots=True)
+class SubjectGeometry:
+    """固定的每区分析比例与纹理角色；关键帧重建时沿用，保证阈值尺度不变。"""
+    kinds: tuple
+    normals: tuple
+    scales: tuple
+
+
+def _source_box(box, size):
+    return (box[0]*size[0], box[1]*size[1], box[2]*size[0], box[3]*size[1])
 
 
 class SubjectLocalTracker:
     supports_recovery = False
 
-    def __init__(self, reference, regions, *, options=MatchingOptions()):
+    def __init__(self, reference, regions, *, options=MatchingOptions(), geometry=None):
         try:
-            import cv2
+            import cv2  # noqa: F401
         except ImportError as exc:
             raise ValueError('高级局部跟踪需要 OpenCV；请安装项目依赖或选择基本方法。') from exc
         self.options = options
         self.regions = tuple(tuple(float(v) for v in r) for r in regions)
-        if not self.regions or len(self.regions) > 28:
-            raise ValueError('局部主体：请选择 1–28 个局部参考区')
+        if not self.regions or len(self.regions) > MAX_REGIONS:
+            raise ValueError(f'局部主体：请选择 1–{MAX_REGIONS} 个局部参考区')
         for l,t,r,b in self.regions:
             if not (0 <= l < r <= 1 and 0 <= t < b <= 1):
                 raise ValueError('局部主体：参考区必须在图像内')
         self.reference_size = reference.size
-        scale = min(1., 2048 / max(reference.size))
-        self.analysis_size = tuple(max(1, round(v*scale)) for v in reference.size)
-        self.source_per_analysis = np.array(reference.size) / np.array(self.analysis_size)
-        self.reference = self._gray(reference)
-        self.points = []
-        occupied = np.zeros(self.reference.shape, np.uint8)
-        w,h = self.analysis_size
-        for l,t,r,b in self.regions:
-            mask = np.zeros_like(occupied)
-            x0,y0,x1,y1 = round(l*w),round(t*h),round(r*w),round(b*h)
-            mask[y0:y1,x0:x1] = 255
-            mask[occupied > 0] = 0  # 重叠区域的点不能重复投票。
-            occupied |= mask
-            candidates = cv2.goodFeaturesToTrack(self.reference, maxCorners=560, qualityLevel=.006,
-                                                minDistance=7, mask=mask, blockSize=5)
-            candidates = np.empty((0,2), np.float32) if candidates is None else candidates[:,0]
-            # 每格限额，保留角点质量顺序，避免少数边缘垄断投票。
-            cells, selected = {}, []
-            for point in candidates:
-                cell = (min(3,int((point[0]-x0)*4/max(1,x1-x0))), min(3,int((point[1]-y0)*4/max(1,y1-y0))))
-                if cells.get(cell,0) < 9 and len(selected) < 140:
-                    selected.append(point)
-                    cells[cell] = cells.get(cell,0)+1
-            self.points.append(np.asarray(selected, np.float32).reshape(-1,1,2))
+        self.margin = motion_margin(reference.size)
+        if geometry is None:
+            scales = tuple(region_scale(reference.size, box) for box in self.regions)
+            textures = []
+            for box,scale in zip(self.regions,scales):
+                textures.append(classify_texture(region_window(reference.size,box,scale,0.).gray(reference)))
+            problems = aperture_problems(textures)
+            if problems:
+                raise ValueError('局部主体：' + '；'.join(problems))
+            geometry = SubjectGeometry(tuple(t.kind for t in textures),tuple(t.normal for t in textures),scales)
+        self.geometry = geometry
+        self.templates = tuple(self._template(reference,i,box) for i,box in enumerate(self.regions))
+        sparse = [str(t.index+1) for t in self.templates if t.kind == '2d' and len(t.corners) < MIN_INLIERS]
+        if sparse:
+            raise ValueError(f'局部主体：选区 {"、".join(sparse)} 可跟踪角点不足，请改选有清晰细节的部位')
+        self.analysis_size = tuple(t.window.size for t in self.templates)
+        self.source_per_analysis = np.array((min(self.geometry.scales),)*2)
 
-    def _gray(self, image):
-        with image.resize(self.analysis_size, Image.Resampling.LANCZOS) as small:
-            with small.convert('L') as gray:
-                return np.array(gray)
+    # ---- 模板 ----
+    def _template(self, image, index, box, *, base=(0.,0.), base_cov=(0.,0.,0.,0.), links=0, source=''):
+        earlier = [_source_box(r,image.size) for r in self.regions[:index]]
+        def exclude(window, points):
+            # 重叠区域的点不能重复投票：位于更早选区内的角点归前者。
+            src = window.to_source(points) - np.asarray(base)
+            hit = np.zeros(len(points),bool)
+            for l,t,r,b in earlier:
+                hit |= (src[:,0] >= l) & (src[:,0] < r) & (src[:,1] >= t) & (src[:,1] < b)
+            return hit
+        return make_template(image,box,index=index,kind=self.geometry.kinds[index],normal=self.geometry.normals[index],
+                             scale=self.geometry.scales[index],margin=self.margin,base=base,base_cov=base_cov,
+                             links=links,source=source,exclude=exclude)
 
-    def track(self, image, *, cancelled=lambda: False):
-        import cv2
+    def template_at(self, index, image, *, base, base_cov=(0.,0.,0.,0.), links=0, source=''):
+        """以另一张已解出位移的照片为该区新关键帧；尺度与纹理角色不变。"""
+        w,h = self.reference_size
+        l,t,r,b = self.regions[index]
+        box = (l+base[0]/w,t+base[1]/h,r+base[0]/w,b+base[1]/h)
+        if not (0 <= box[0] < box[2] <= 1 and 0 <= box[1] < box[3] <= 1):
+            raise ValueError(f'选区 {index+1} 在关键帧上越界')
+        template = self._template(image,index,box,base=base,base_cov=base_cov,links=links,source=source)
+        if template.kind == '2d' and len(template.corners) < MIN_INLIERS:
+            raise ValueError(f'选区 {index+1} 在关键帧上可跟踪角点不足')
+        return template
+
+    # ---- 测量与求解 ----
+    def measure_regions(self, image, templates=None, *, prior=(0.,0.), cancelled=lambda: False):
+        return [measure(t,image,prior=prior,cancelled=cancelled) for t in (templates or self.templates)]
+
+    def track(self, image, *, cancelled=lambda: False, prior=(0.,0.)):
         def check():
             if cancelled():
                 raise InterruptedError('局部主体跟踪已取消')
         check()
         if image.size != self.reference_size:
-            return self._result(None, (), (), '源尺寸或方向不同，请分段设置新参考')
-        moving = self._gray(image)
-        w,h = self.analysis_size
-        kwargs = dict(winSize=(25,25), maxLevel=min(4,max(0,int(np.log2(max(1,min(w,h)/32))))), criteria=(3,40,.005))
-        records, metrics, deltas, all_valid, all_inliers = [], [], [], 0, 0
-        reasons = []
-        point_id = 0
-        for index, points in enumerate(self.points):
-            check()
-            a = points[:,0]
-            b = a.copy()
-            valid = np.zeros(len(a), bool)
-            fb = np.full(len(a), np.inf)
-            if len(a):
-                q, status, _ = cv2.calcOpticalFlowPyrLK(self.reference, moving, points, None, **kwargs)
-                check()
-                if q is not None and status is not None:
-                    # OpenCV 的失败点可能非有限；反向跟踪只接收有限坐标。
-                    finite = np.isfinite(q).all(axis=(1,2))
-                    safe = np.where(finite[:,None,None], q, points)
-                    rev, reverse_status, _ = cv2.calcOpticalFlowPyrLK(moving,self.reference,safe,None,**kwargs)
-                    b = safe[:,0]
-                    if rev is not None and reverse_status is not None:
-                        fb = np.linalg.norm(a-rev[:,0],axis=1)
-                        valid = (finite & status[:,0].astype(bool) & reverse_status[:,0].astype(bool)
-                                 & np.isfinite(fb) & (fb < 1.5) & (np.linalg.norm(b-a,axis=1) < 100)
-                                 & (b[:,0] >= 0) & (b[:,0] < w) & (b[:,1] >= 0) & (b[:,1] < h))
-            delta, selected = consensus_translation(a[valid],b[valid])
-            inliers = np.zeros(len(a),bool)
-            inliers[np.flatnonzero(valid)[selected]] = True
-            n = int(inliers.sum())
-            # 归一化覆盖以区域长边投影衡量；窄腿也允许沿纵向分布。
-            region = self.regions[index]
-            span = max((region[2]-region[0])*w,(region[3]-region[1])*h)
-            coverage = float(np.ptp(a[inliers],axis=0).max()/max(1,span)) if n else 0.
-            good = delta is not None and n >= 5 and valid.sum() >= .4*len(a) and n >= .5*valid.sum() and coverage >= .2
-            if not good:
-                reasons.append(f'选区 {index+1} 纹理、覆盖或可靠点不足')
-            else:
-                deltas.append(delta)
-            metrics.append((len(a),int(valid.sum()),n,coverage,*(tuple(float(v) for v in delta) if delta is not None else (None,None))))
-            all_valid += int(valid.sum())
-            all_inliers += n
-            for j,(p,q) in enumerate(zip(a,b)):
-                ps,qs = p*self.source_per_analysis,q*self.source_per_analysis
-                records.append((point_id,index,*map(float,ps),*map(float,qs),bool(inliers[j] and good),float(fb[j]) if np.isfinite(fb[j]) else None))
-                point_id += 1
+            return self._result(None,(),(),'源尺寸或方向不同，请分段设置新参考')
+        measurements = self.measure_regions(image,prior=prior,cancelled=cancelled)
         check()
-        if len(deltas) > 1 and np.linalg.norm(np.array(deltas)[:,None]-np.array(deltas)[None],axis=2).max() > 3.5:
-            reasons.append('参考局部运动冲突，可能有姿态变化；请修正匹配或设置新关键帧')
-        if all_inliers < 12 or all_inliers < .5*all_valid:
-            reasons.append('共同平移证据不足')
-        if reasons:
-            return self._result(None,records,metrics,'；'.join(reasons))
-        # 各区域等权；角点较多的区域不会压过其它局部。
-        delta = np.median(np.array(deltas),axis=0)*self.source_per_analysis
-        return self._result(tuple(map(float,delta)),records,metrics,'')
+        return self.solve_result(measurements)
 
-    def _result(self, delta, points, metrics, reason):
+    def solve_result(self, measurements, *, status='tracked', max_std=None, chain=(), keyframe_paths=()):
+        measurements = sorted(measurements,key=lambda m:m.index)
+        ok = [m for m in measurements if m.ok]
+        failed = [m.index for m in measurements if not m.ok]
+        reasons = [m.reason for m in measurements if not m.ok]
+        solve = solve_translation(ok,failed=failed,max_std=max_std) if ok else None
+        if solve is not None and not solve.ok and (not failed or '方向缺少约束' in solve.reason):
+            reasons.append(solve.reason)
+        if not ok and not reasons:
+            reasons.append('共同平移证据不足')
+        delta = solve.displacement if solve is not None and solve.ok and not failed else None
+        points = tuple((i,*p[1:6],bool(p[6] and delta is not None),p[7])
+                       for i,p in enumerate(p for m in measurements for p in m.points))
+        methods = sorted({m.method for m in ok})
+        origins = next((m.origins for m in measurements if m.origins),())
+        extra = dict(constraints=tuple(m.row() for m in measurements),
+                     covariance=solve.covariance if delta is not None else (),
+                     constrained_by=solve.constrained_by if solve is not None else (),
+                     method=methods[0] if len(methods) == 1 else ('+'.join(methods) or 'lk'),
+                     quality=min((m.quality for m in ok),default=0.),chain=chain if delta is not None else (),
+                     keyframe_paths=keyframe_paths if delta is not None else (),
+                     reference_origin=origins[:2] or (0.,0.),moving_origin=origins[2:] or (0.,0.))
+        result = self._result(delta,points,tuple(m.metrics for m in measurements),'；'.join(dict.fromkeys(reasons)),
+                              status=status,**extra)
+        if delta is not None:
+            scores = tuple(m.quality for m in measurements)
+            result = replace(result,scores=scores)
+        return result
+
+    def _result(self, delta, points, metrics, reason, *, status='tracked', **extra):
         w,h = self.reference_size
         boxes = tuple((l+delta[0]/w,t+delta[1]/h,r+delta[0]/w,b+delta[1]/h) for l,t,r,b in self.regions) if delta else (None,)*len(self.regions)
         if delta and any(not (0 <= l < r <= 1 and 0 <= t < b <= 1) for l,t,r,b in boxes):
             delta,boxes,reason = None,(None,)*len(self.regions),'局部参考越界，请设置新关键帧'
-        observation = LocalObservation('tracked' if delta else 'needs_keyframe',reason,delta,self.analysis_size,
-                                       self.reference_size,tuple(map(float,self.source_per_analysis)),tuple(points),tuple(metrics))
+            extra.update(covariance=(),chain=(),keyframe_paths=())
+        observation = LocalObservation(status if delta else 'needs_keyframe',reason,
+                                       None if delta is None else tuple(map(float,delta)),
+                                       self.templates[0].window.size if getattr(self,'templates',None) else (),
+                                       self.reference_size,tuple(map(float,self.source_per_analysis)),tuple(points),tuple(metrics),
+                                       region_kinds=self.geometry.kinds,region_scales=tuple(map(float,self.geometry.scales)),**extra)
         return RegionTrackingResult(boxes,error=reason,scores=(1. if delta else 0.,)*len(boxes),
                                     reasons=(reason,)*len(boxes),predicted_boxes=self.regions,observation=observation)
+
+    def cache_key(self):
+        return (ALGORITHM_VERSION,getattr(self,'cache_reference',None),self.regions,self.reference_size,self.geometry)
 
     def track_cached(self, path, image, *, cancelled):
         from . import subject_observation_cache as cache
@@ -193,7 +209,7 @@ class SubjectLocalTracker:
             raise InterruptedError('局部主体跟踪已取消')
         reference_signature = getattr(self, 'cache_reference', None)
         signature = image_file_signature(path)
-        key = (ALGORITHM_VERSION, reference_signature, signature, self.regions, self.reference_size, self.analysis_size)
+        key = (*self.cache_key(),signature)
         result = cache.get(key) if reference_signature and signature else None
         if result is None:
             result = self.track(image,cancelled=cancelled)
@@ -202,20 +218,57 @@ class SubjectLocalTracker:
                 cache.put(key,result)
         return result
 
+    def motion_prior(self, path, image=None, *, cancelled=lambda: False):
+        """链式核验用的额外运动先验（源像素）；整图跟踪器没有独立先验。"""
+        return None
+
+    def identity_error(self, path):
+        """链式核验前的目标身份检查；整图跟踪器没有目标身份。"""
+        return ''
+
     def recover(self, image, result, previous, following, *, cancelled=lambda: False):
-        # 不借邻帧插值伪造图像观测；只能显式人工修正/补参考。
+        # 不借邻帧插值伪造图像观测；链式关键帧另由 subject_keyframes 用真实图像核验。
         return result
+
+    def at_keyframe(self, image, boxes, target=None):
+        return SubjectLocalTracker(image,boxes,options=self.options,geometry=self.geometry)
+
+    def rekeyframe(self, image, boxes):
+        return SubjectLocalTracker(image,boxes,options=self.options,geometry=self.geometry)
 
     def resolve_manual(self, result, manual_boxes, size):
         from .manual_region_matches import apply_manual_boxes
         result = apply_manual_boxes(result,manual_boxes)
-        offsets = [((b[0]+b[2]-r[0]-r[2])*size[0]/2,(b[1]+b[3]-r[1]-r[3])*size[1]/2)
-                   for r,b in zip(self.regions,result.boxes) if b is not None]
-        if len(offsets) != len(self.regions):
+        if any(b is None for b in result.boxes) or len(result.boxes) != len(self.regions):
             return replace(result,boxes=(None,)*len(self.regions),observation=None,error='请修正所有失败选区，或设置新的局部参考')
-        d = np.array(offsets)/self.source_per_analysis
-        if np.linalg.norm(d[:,None]-d[None],axis=2).max() > 3.5:
-            return replace(result,boxes=(None,)*len(self.regions),observation=None,error='人工局部位置冲突，请确认各区域属于同一运动')
-        delta = tuple(map(float,np.median(offsets,axis=0)))
-        observation = LocalObservation('user_override',displacement=delta,source_size=size)
+        measurements = []
+        for i,(r,b) in enumerate(zip(self.regions,result.boxes)):
+            offset = np.array(((b[0]+b[2]-r[0]-r[2])*size[0]/2,(b[1]+b[3]-r[1]-r[3])*size[1]/2))
+            scale,normal = self.geometry.scales[i],np.array(self.geometry.normals[i])
+            sigma = .5*scale
+            if self.geometry.kinds[i] == '1d':
+                # 沿电线拖动是任意的；只比较法向分量。
+                measurements.append(Measurement(i,'1d',True,value=(float(normal @ offset),),normal=tuple(normal),
+                                                covariance=(sigma**2,),scale=scale,method='manual'))
+            else:
+                measurements.append(Measurement(i,'2d',True,value=tuple(map(float,offset)),normal=tuple(normal),
+                                                covariance=(sigma**2,0.,0.,sigma**2),scale=scale,method='manual',inliers=MIN_INLIERS*2))
+        solve = solve_translation(measurements)
+        if not solve.ok:
+            error = ('人工局部位置冲突，请确认各区域属于同一运动' if '冲突' in solve.reason
+                     else f'人工局部位置无法确定共同平移：{solve.reason}')
+            return replace(result,boxes=(None,)*len(self.regions),observation=None,error=error)
+        delta = tuple(map(float,solve.displacement))
+        observation = LocalObservation('user_override',displacement=delta,source_size=size,
+                                       region_kinds=self.geometry.kinds,region_scales=tuple(map(float,self.geometry.scales)))
         return replace(result,error='',reasons=('',)*len(self.regions),observation=observation)
+
+
+def describe_constraints(observation):
+    """诊断文本：各方向由哪些选区约束。"""
+    return '；'.join(f'{d}方向 σ≈{s:.1f} 源像素 ← 选区 {"、".join(str(i+1) for i in r)}'
+                     for d,s,r in observation.constrained_by if r and s is not None)
+
+
+__all__ = ['SubjectLocalTracker','LocalObservation','SubjectGeometry','consensus_translation','direction_label',
+           'describe_constraints','ALGORITHM_VERSION']

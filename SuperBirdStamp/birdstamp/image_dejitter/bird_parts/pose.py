@@ -17,6 +17,7 @@ class PartCandidate:
     confidence: float
     variant: str = ''
     support_ids: tuple = ()
+    edges: int = 0        # 末尾若干非解剖的邻近单向边缘框（电线/枝条），不参与同名部位核验
 
 
 def decode_heatmaps(heatmaps):
@@ -98,9 +99,24 @@ def predict_parts(image, bird_box, *, path=None, device=None, cancelled=lambda: 
     return dict(model=MODEL_ID, points=points.tolist(), scores=scores.tolist(), reliable=reliable.tolist())
 
 
-def candidates_from_pose(pose, bird_box):
+MIN_PART_PX = 48       # 部位框细轴最小源像素；细腿框过窄时角点不足以通过跟踪门槛
+MIN_PART_FRACTION = .12  # 或鸟框短边的比例，取较大者
+
+
+def candidates_from_pose(pose, bird_box, source_size=None):
     p, scores, valid = np.array(pose['points']), np.array(pose['scores']), np.array(pose['reliable'])
     bw, bh = bird_box[2]-bird_box[0], bird_box[3]-bird_box[1]
+    def widen(a, z):
+        # 细轴居中扩到最小尺寸，但始终夹在鸟框内，不扩入背景。
+        if source_size is None:
+            return a, z
+        size = np.array(source_size, float)
+        minimum = max(MIN_PART_PX, MIN_PART_FRACTION*min(bw*size[0], bh*size[1]))/size
+        span = np.maximum(z-a, minimum)
+        centre = (a+z)/2
+        a = np.clip(centre-span/2, bird_box[:2], None); z = np.clip(a+span, None, bird_box[2:])
+        a = np.maximum(np.minimum(a, z-span), bird_box[:2])
+        return a, z
     def region(indices, minimum, margin):
         ids = [i for i in indices if valid[i]]
         if len(ids) < minimum:
@@ -110,6 +126,7 @@ def candidates_from_pose(pose, bird_box):
         a = np.maximum(a-pad, bird_box[:2]); z = np.minimum(z+pad, bird_box[2:])
         if min(z-a) <= 0:
             return None
+        a, z = widen(a, z)
         return tuple(map(float, (*a,*z))), float(scores[ids].min())
     result = []
     for part, indices, minimum, margin in [('head', range(7), 3, .035),
