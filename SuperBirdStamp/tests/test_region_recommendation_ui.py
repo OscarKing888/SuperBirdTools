@@ -2,7 +2,7 @@ import threading
 from pathlib import Path
 from PyQt6.QtWidgets import QApplication
 from test_editor_dejitter import window, _APP, _finish_recommendation
-from birdstamp.image_dejitter.region_recommendation import Recommendation
+from birdstamp.image_dejitter.region_recommendation import Recommendation,CandidateProposal
 from birdstamp.image_dejitter.recognition import RECOMMENDATION_KEY
 
 
@@ -72,3 +72,79 @@ def test_failed_preflight_shows_frame_and_reason_in_analysis(window,monkeypatch)
     _finish_recommendation(window)
     assert 'frame2.JPG 头部：部位不可见' in window.dejitter_tracking_status.text()
     assert not window._dejitter_reference_regions
+
+
+def draft_result():
+    candidate=CandidateProposal('head',((.2,.2,.4,.5),),.8,'failed',1,2,
+        (dict(file='second.JPG',passed=False,reason='纹理对应不足'),))
+    return Recommendation('no_reliable_region','已找到部位，预检未通过',target=(.1,.1,.6,.8),
+        metadata=dict(version=1,target=(.1,.1,.6,.8),part='auto',experimental=True,local_analysis=True),
+        candidates=(candidate,))
+
+
+def test_failed_draft_visible_but_only_explicit_adoption_creates_manual_regions(window,monkeypatch):
+    from birdstamp.gui import region_recommendation_panel as module
+    window.export_tabs.setCurrentWidget(window.dejitter_page)
+    monkeypatch.setattr(module,'recommend_regions',lambda *a,**kw:draft_result())
+    panel=window.dejitter_recommendation
+    panel.recommend();_finish_recommendation(window)
+    assert panel.candidates.choice.count()==1
+    assert '1/2' in panel.candidates.choice.currentText()
+    assert 'second.JPG' in panel.candidates.detail.text()
+    assert not window._dejitter_reference_regions
+    assert not window.dejitter_export_btn.isEnabled()
+    panel.candidates.apply.click()
+    assert window._dejitter_reference_regions==draft_result().candidates[0].regions
+    assert not panel.metadata['auto_regions']
+    assert panel.metadata['target']==draft_result().target
+    assert not window.dejitter_export_btn.isEnabled()
+
+
+def test_draft_does_not_replace_manual_region_and_disappears_after_source_change(window,monkeypatch):
+    from birdstamp.gui import region_recommendation_panel as module
+    original=((.6,.2,.8,.5),)
+    window._commit_source_reference_regions(window.current_path,original)
+    monkeypatch.setattr(module,'recommend_regions',lambda *a,**kw:draft_result())
+    panel=window.dejitter_recommendation
+    panel.recommend();_finish_recommendation(window)
+    panel.candidates.apply.click()
+    assert window._dejitter_reference_regions==original
+    assert '人工区冲突' in panel.status.text()
+    window.current_path=window.current_path.with_name('other.png')
+    panel.sync(True)
+    assert panel.candidates.result is None
+    assert not panel.candidates.apply.isEnabled()
+
+
+def test_candidates_arrive_before_preflight_finishes_and_cancel_discards_them(window,monkeypatch):
+    from birdstamp.gui import region_recommendation_panel as module
+    import time
+    release=threading.Event()
+    def recommend(*a,**kw):
+        kw['candidate_callback'](draft_result())
+        release.wait(5)
+        return draft_result()
+    monkeypatch.setattr(module,'recommend_regions',recommend)
+    panel=window.dejitter_recommendation;panel.recommend()
+    deadline=time.monotonic()+2
+    while panel.candidates.result is None and time.monotonic()<deadline:
+        _APP.processEvents();time.sleep(.005)
+    assert panel.candidates.result is not None
+    assert panel.worker is not None
+    assert not panel.candidates.apply.isEnabled()
+    panel.cancel();release.set();_finish_recommendation(window)
+    assert panel.candidates.result is None
+    assert not window._dejitter_reference_regions
+
+
+def test_switching_candidate_does_not_paint_into_base_image(window):
+    from PIL import Image
+    preview=window.dejitter_recommendation.candidates
+    a=CandidateProposal('head',((.2,.2,.3,.3),),.9)
+    b=CandidateProposal('torso',((.5,.5,.6,.6),),.9)
+    preview.set_result(Recommendation('failed','',target=(.1,.1,.8,.8),candidates=(a,b)),
+                       Image.new('RGB',(300,300),'blue'))
+    preview.choice.setCurrentIndex(1)
+    assert all(preview._base.pixelColor(x,y).red()==0
+               for x in range(preview._base.width()) for y in range(preview._base.height()))
+    assert preview.minimumHeight()>=preview.layout().sizeHint().height()

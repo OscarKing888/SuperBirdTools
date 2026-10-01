@@ -15,6 +15,7 @@ from .bird_model_status import BirdModelStatus
 class RecommendationWorker(QThread):
     ready = pyqtSignal(object)
     message = pyqtSignal(str)
+    preview = pyqtSignal(object)
 
     def __init__(self, task, parent):
         super().__init__(parent)
@@ -22,7 +23,7 @@ class RecommendationWorker(QThread):
 
     def run(self):
         try:
-            result=self.task(self.isInterruptionRequested,self.message.emit)
+            result=self.task(self.isInterruptionRequested,self.message.emit,self.preview.emit)
             if not self.isInterruptionRequested():
                 self.ready.emit(result)
         except InterruptedError:
@@ -41,6 +42,7 @@ class RegionRecommendationPanel(QWidget):
         self._snapshot=None
         self._installing=False
         self._shutdown=False
+        self._draft_context=None
         layout=QVBoxLayout(self);layout.setContentsMargins(0,0,0,0)
         row=QHBoxLayout()
         self.part_label=QLabel('稳定部位');row.addWidget(self.part_label)
@@ -64,6 +66,10 @@ class RegionRecommendationPanel(QWidget):
         layout.addLayout(row)
         self.status=QLabel('一键推荐会抽样预检；已有人工选区会保留。');self.status.setWordWrap(True)
         layout.addWidget(self.status)
+        from .region_candidate_preview import RegionCandidatePreview
+        self.candidates=RegionCandidatePreview(self)
+        self.candidates.adopt.connect(self.adopt_candidate)
+        layout.addWidget(self.candidates)
         self.part.currentIndexChanged.connect(self.options_changed)
         self.experimental.toggled.connect(self.options_changed)
         self.model_status = BirdModelStatus(self)
@@ -108,6 +114,9 @@ class RegionRecommendationPanel(QWidget):
             control.setVisible(advanced)
         self.cancel_button.setEnabled(self.worker is not None)
         self._sync_model_buttons()
+        if self._draft_context is not None and self._draft_context != self.context():
+            self.candidates.clear();self._draft_context=None
+        self.candidates.apply.setEnabled(self.worker is None and not self._shutdown and self._draft_context is not None)
 
     def _sync_model_buttons(self):
         status = self.model_status.status
@@ -122,6 +131,7 @@ class RegionRecommendationPanel(QWidget):
 
     def cancel(self):
         self._snapshot=None
+        self.candidates.clear();self._draft_context=None
         if self.worker:self.worker.requestInterruption()
 
     def shutdown(self):
@@ -137,6 +147,7 @@ class RegionRecommendationPanel(QWidget):
         self.worker=worker
         worker.message.connect(self.on_message)
         worker.ready.connect(self.on_ready)
+        worker.preview.connect(self.on_candidates)
         worker.finished.connect(self.on_finished)
         worker.finished.connect(worker.deleteLater)
         self.editor._update_dejitter_controls()
@@ -156,7 +167,7 @@ class RegionRecommendationPanel(QWidget):
     def install(self, source=None):
         if self.model_status.status.state == 'checking':return
         if source is None and self.model_status.status.state == 'ready':return
-        self.start(lambda cancelled,progress:install_model(source,cancelled=cancelled,
+        self.start(lambda cancelled,progress,preview:install_model(source,cancelled=cancelled,
             progress=lambda n,t:progress(f'模型安装：{n*100/t:.0f}%')),installing=True)
 
     def import_model(self):
@@ -184,7 +195,35 @@ class RegionRecommendationPanel(QWidget):
                     target=self.metadata.get('target'),part=self.part.currentData(),
                     target_count=e.dejitter_auto_region_count.value(),experimental=self.experimental.isChecked(),
                     options=MatchingOptions.from_settings(e.dejitter_matching_controls.settings()))
-        self.start(lambda cancelled,progress:recommend_regions(reference,paths,cancelled=cancelled,progress=progress,**kwargs))
+        self.candidates.clear();self._draft_context=None
+        self.start(lambda cancelled,progress,preview:recommend_regions(reference,paths,cancelled=cancelled,
+            progress=progress,candidate_callback=preview,**kwargs))
+
+    def _show_candidates(self, result):
+        self._draft_context=self.context() if result.candidates else None
+        self.candidates.set_result(result,self.editor.current_source_image)
+        self.candidates.apply.setEnabled(self.worker is None and self._draft_context is not None)
+
+    def on_candidates(self, result):
+        if (self.sender() is self.worker and not self._shutdown and not self.worker.isInterruptionRequested()
+                and self._snapshot is not None and self._snapshot==self.context()):
+            self._show_candidates(result)
+
+    def adopt_candidate(self, candidate):
+        e=self.editor
+        if self.worker or self._draft_context is None or self._draft_context!=self.context() or self._shutdown:return
+        result=self.candidates.result
+        old_auto={tuple(r) for r in self.metadata.get('auto_regions',[])}
+        if any(tuple(r) not in old_auto for r in e._dejitter_reference_regions):
+            self.status.setText('已保留人工选区。请先处理人工区冲突，再采用候选，避免混合不同部位。');return
+        metadata=dict(result.metadata,part=candidate.part,resolved_part=candidate.part,auto_regions=[])
+        e._commit_source_reference_regions(e.current_path,candidate.regions)
+        self.set_metadata(metadata)
+        e._on_output_settings_changed();e._schedule_workspace_autosave()
+        e._on_dejitter_draw()
+        self.status.setText('已采用为人工待修正区；请在参考图调整，完整分析通过后才能导出。')
+        e._sequence_message=self.status.text();e._update_dejitter_controls()
+        e._refresh_preview_label(preserve_view=True)
 
     def on_ready(self, result):
         if self.sender() is not self.worker or self._shutdown or self.worker.isInterruptionRequested():return
@@ -196,6 +235,7 @@ class RegionRecommendationPanel(QWidget):
         if result.status == 'choose_target':
             self.show_targets(result.birds);return
         if result.status != 'ready':
+            self._show_candidates(result)
             reasons=list(dict.fromkeys(
                 f"{d.get('file','')} {PART_LABELS.get(d.get('part'),'')}：{d['reason']}"
                 for d in result.diagnostics if d.get('reason') and not d.get('passed',False)))
@@ -215,6 +255,7 @@ class RegionRecommendationPanel(QWidget):
         self.status.setText(f'推荐：{label}。{result.message}')
         e._on_output_settings_changed();e._schedule_workspace_autosave();e._update_dejitter_controls()
         e._sequence_message=self.status.text()
+        self._show_candidates(result)
         e._update_dejitter_controls()
         e._refresh_preview_label(preserve_view=True)
 

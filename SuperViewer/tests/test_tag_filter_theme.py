@@ -51,7 +51,8 @@ def _assert_colors(panel, scheme):
     for button in panel._tag_filter_buttons.values():
         assert colors.chip_bg in button.styleSheet()
         assert colors.chip_text in button.styleSheet()
-        assert "palette(highlighted-text)" in button.styleSheet()
+        assert "#1769c2" in button.styleSheet()
+        assert "#ffffff" in button.styleSheet()
     if panel._tag_filter_menu_button is not None:
         assert colors.chip_text in panel._tag_filter_menu_button.styleSheet()
     if panel._tag_filter_clear_button is not None:

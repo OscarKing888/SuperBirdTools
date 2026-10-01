@@ -15,6 +15,7 @@ class LocalCropSubjectTracker(SubjectLocalTracker):
         self.reference_size = reference.size
         self.options = options
         self.detector = detector or detect_bird_candidates
+        self.target_trajectory = None
         w,h = reference.size
         self.side = max(64, round(max((target[2]-target[0])*w, (target[3]-target[1])*h)*2))
         self.analysis_size = (min(1024,self.side),)*2
@@ -37,14 +38,26 @@ class LocalCropSubjectTracker(SubjectLocalTracker):
         return image.transform(self.analysis_size,Image.Transform.AFFINE,
                                (scale,0,x,0,scale,y),Image.Resampling.BICUBIC)
 
-    def track(self, image, *, cancelled=lambda: False, source_path=None):
+    def prepare_targets(self, reference, paths, *, cancelled, progress=lambda text:None):
+        from .target_trajectory import build_target_trajectory
+        self.target_trajectory = build_target_trajectory(reference,paths,self.target,
+            cancelled=cancelled,progress=progress,detector=self.detector)
+
+    def track(self, image, *, cancelled=lambda: False, source_path=None, target_box=None):
         if image.size != self.reference_size:
             return self._failed('源尺寸或方向不同，请分段设置新参考')
         try:
             from .bird_observation_cache import detect_cached
-            birds = (detect_cached(source_path,image,cancelled=cancelled)
-                     if source_path and self.detector is detect_bird_candidates else self.detector(image,cancelled=cancelled))
-            target = associate_target(self.target,birds)
+            if target_box is not None:
+                target = target_box
+            elif self.target_trajectory is not None and source_path is not None:
+                frame = self.target_trajectory.frame(source_path)
+                if frame.box is None:return self._failed(frame.error)
+                target = frame.box
+            else:
+                birds = (detect_cached(source_path,image,cancelled=cancelled)
+                         if source_path and self.detector is detect_bird_candidates else self.detector(image,cancelled=cancelled))
+                target = associate_target(self.target,birds)
         except ValueError as exc:
             return self._failed(str(exc))
         origin = self._origin(target)
@@ -74,7 +87,8 @@ class LocalCropSubjectTracker(SubjectLocalTracker):
         signature = image_file_signature(path)
         reference = getattr(self,'cache_reference',None)
         from .bird_observation_cache import detector_signature
-        key = ('local-crop-v1',reference,signature,self.regions,self.target,self.side,self.analysis_size,detector_signature())
+        key = ('local-crop-v2',reference,signature,self.regions,self.target,self.side,self.analysis_size,detector_signature(),
+               self.target_trajectory.signature if self.target_trajectory is not None else None)
         if cancelled():
             raise InterruptedError('已取消局部主体跟踪')
         result = cache.get(key) if signature and reference else None

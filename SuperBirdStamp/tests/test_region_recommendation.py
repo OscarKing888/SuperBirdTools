@@ -62,6 +62,26 @@ def test_unvalidated_model_is_not_offered_as_default(tmp_path):
     assert result.status=='unvalidated' and not result.regions
 
 
+def test_failed_part_candidates_are_returned_separately_from_export_regions(tmp_path):
+    image=Image.new('RGB',(400,300),(90,140,180))
+    paths=[tmp_path/'one.png',tmp_path/'two.png']
+    for path in paths:image.save(path)
+    pose=dict(points=[[.4+(i%3)*.04,.3+(i//3)*.025] for i in range(23)],
+              scores=[.9]*23,reliable=[i<7 for i in range(23)])
+    stages=[]
+    result=recommend_regions(paths[0],paths,method='subject_local',experimental=True,
+        detector=lambda *a,**kw:(BirdCandidate((.2,.1,.8,.9),.8),),pose_predictor=lambda *a,**kw:pose,
+        candidate_callback=lambda r:stages.append(('candidates',r)),progress=lambda s:stages.append(('progress',s)))
+    assert result.status=='no_reliable_region' and not result.regions
+    assert len(result.candidates)==1 and result.candidates[0].part=='head'
+    assert result.candidates[0].status=='failed'
+    assert result.candidates[0].total_frames==2
+    early=next(i for i,v in enumerate(stages) if v[0]=='candidates')
+    trajectory=next(i for i,v in enumerate(stages) if v[0]=='progress' and v[1].startswith('关联目标鸟'))
+    assert early<trajectory
+    assert not stages[early][1].regions
+
+
 def test_multi_bird_returns_candidates_before_model_load(tmp_path):
     path=tmp_path/'ref.png';Image.new('RGB',(400,300)).save(path)
     birds=(BirdCandidate((.1,.1,.3,.6),.8),BirdCandidate((.6,.2,.9,.8),.7))
