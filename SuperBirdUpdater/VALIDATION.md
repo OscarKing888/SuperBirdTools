@@ -4,6 +4,7 @@
 
 已完成：
 
+- 合入 main 的候选预览、时序关联和过滤徽章功能后，更新器与相关集成专项：116 passed、2 skipped；合并无代码冲突，共享子模块沿用 main 的已提交版本。
 - 更新器、构建工具、Viewer 主题及 BirdStamp 工作区/关闭专项：78 passed、2 skipped（Windows 专属检查）。
 - 全仓回归：1660 passed、2 skipped、60 subtests passed、15 failed。失败项中 13 项在未修改的 main 上复现，涉及 macOS 运行 Windows Perl DLL、原照片发送 IPC、去抖动 UI、旧缓存升级和原图预览缓存；另 2 项为整套运行中出现的 Viewer 选择/主题与 BirdStamp 恢复时关闭时序失败，两项单独及专项组合运行通过。未将这些失败标为更新器验收通过，也未修改无关功能来掩盖失败。
 - macOS `build_all.sh` 完成三应用打包、增量分卷与完整安装 ZIP；`--check-about` 验证两个打包应用身份及资源，独立更新器 `--diagnose` 成功。

@@ -11,6 +11,7 @@ import zlib
 
 from .common import BLOCK_SIZE, Cancelled, UpdateError, hash_file
 from .manifest import checked_path, matches, mutable_path, validate
+from .locking import FileLock
 from .sources import RangeUnsupported
 
 
@@ -76,6 +77,13 @@ def _download(source, entry: dict, asset: dict, cache: Path, cancel, allow_full:
 def prepare(root: Path, manifest: dict, source, cache: Path, *, cancel=None,
             progress=None, allow_full: bool = False) -> list[dict]:
     validate(manifest)
+    cache.mkdir(parents=True, exist_ok=True)
+    with FileLock(cache / ".download.lock"):
+        return _prepare(root, manifest, source, cache, cancel=cancel, progress=progress, allow_full=allow_full)
+
+
+def _prepare(root: Path, manifest: dict, source, cache: Path, *, cancel=None,
+             progress=None, allow_full: bool = False) -> list[dict]:
     cancel = cancel or threading.Event()
     cache.mkdir(parents=True, exist_ok=True)
     changed = changed_entries(root, manifest, cancel)

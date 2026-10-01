@@ -106,7 +106,10 @@ def main(argv=None) -> int:
             return app.exec()
         finally:
             if args.apply_job:
-                retire_helper(root)
+                try:
+                    retire_helper(root)
+                except OSError:
+                    logging.exception("temporary helper cleanup deferred")
             lock.close()
     except Exception as exc:
         logging.exception("updater failed")

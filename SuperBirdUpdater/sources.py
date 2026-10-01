@@ -114,7 +114,7 @@ class HttpSource:
             with _open(self.asset_urls[name]) as response, part.open("wb") as dest:
                 if response.status != 200:
                     raise UpdateError("整包下载响应无效")
-                while block := response.read(BLOCK_SIZE):
+                while block := response.read1(BLOCK_SIZE):
                     if cancel.is_set():
                         raise Cancelled("更新已取消")
                     size += len(block)
@@ -161,7 +161,7 @@ class HttpSource:
             while remaining:
                 if cancel.is_set():
                     raise Cancelled("更新已取消")
-                block = response.read(min(BLOCK_SIZE, remaining))
+                block = response.read1(min(BLOCK_SIZE, remaining))
                 if not block:
                     raise UpdateError("范围下载中断")
                 remaining -= len(block)

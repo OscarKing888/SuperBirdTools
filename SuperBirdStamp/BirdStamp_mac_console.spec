@@ -33,6 +33,9 @@ from app_identity import load_app_identity
 APP_INFO = load_app_identity("SuperBirdStamp", REPO_ROOT / "app_metadata.json")
 
 
+from SuperBirdUpdater.manifest import excluded_path
+
+
 def collect_tree(source: Path, dest: str) -> list[tuple[str, str]]:
     if not source.exists():
         return []
@@ -44,7 +47,7 @@ def collect_tree(source: Path, dest: str) -> list[tuple[str, str]]:
     for child in source.rglob("*"):
         if not child.is_file():
             continue
-        if child.name in {"editor_autosave.birdstamp-workspace.json", "editor_export_state.json"}:
+        if excluded_path(child.as_posix()):
             continue
         relative_parent = child.parent.relative_to(source)
         target_dir = dest_root / relative_parent

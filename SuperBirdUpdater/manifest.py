@@ -47,9 +47,11 @@ def mutable_path(value: str) -> bool:
 
 def excluded_path(value: str) -> bool:
     p = PurePosixPath(value)
+    parts = tuple(part.casefold() for part in p.parts)
+    config_cache = any(parts[i:i+2] == ("config", "cache") for i in range(len(parts) - 1))
     return (p.name in {"editor_autosave.birdstamp-workspace.json", "editor_export_state.json",
                        ".DS_Store", "last_selected_directory.txt", ".last_folder.txt", "SuperViewerUser.cfg"}
-            or p.name.startswith("._") or p.suffix == ".log"
+            or config_cache or p.name.startswith("._") or p.suffix == ".log"
             or any(part in {"__pycache__", "logs", ".superpicky", ".cache"} for part in p.parts))
 
 
