@@ -32,8 +32,16 @@ def window(tmp_path, monkeypatch):
     monkeypatch.setattr(instance, '_on_output_settings_changed', lambda *args: (
         instance._refresh_global_export_settings_snapshot(), instance._mark_all_photo_exports_dirty()))
     yield instance
-    instance.close()
+    # 关闭会等待所属 worker；隔离目录的 monkeypatch 必须持续到真正关闭。
+    import time
+    from PyQt6.QtCore import QEvent
+    deadline = time.monotonic() + 10
+    while not instance.close():
+        assert time.monotonic() < deadline, '测试窗口未能结束后台任务'
+        _APP.processEvents()
+        time.sleep(.01)
     instance.deleteLater()
+    _APP.sendPostedEvents(None, QEvent.Type.DeferredDelete)
     _APP.processEvents()
 
 

@@ -118,12 +118,20 @@ def analyze_subject_sequence(jobs, tracker, reference, *, cancel_event, **kwargs
     from birdstamp.image_dejitter.region_tracking_result import RegionTrackingResult, image_file_signature
     from .sequence_analysis import analyze_sequence_frames
     regions, reference_size = tracker.regions, tracker.reference_size
+    def prepare_targets(local_tracker, local_reference, local_jobs):
+        if hasattr(local_tracker,'prepare_targets'):
+            try:
+                local_tracker.prepare_targets(local_reference,[job.path for job in local_jobs],
+                    cancelled=cancel_event.is_set,progress=kwargs.get('progress',lambda text:None))
+            except InterruptedError as exc:
+                raise VideoExportCancelledError('已取消目标鸟关联') from exc
     boundaries = []
     for index,job in enumerate(jobs):
         boxes = valid_manual_boxes(job.settings.get(MANUAL_MATCHES_KEY),job.path,reference,regions)
         if boxes and all(box is not None for box in boxes) and path_key(job.path) != path_key(reference):
             boundaries.append((index,boxes))
     if not boundaries:
+        prepare_targets(tracker,reference,jobs)
         tracker.cache_reference = image_file_signature(Path(reference))
         results, sizes = analyze_sequence_frames(jobs,tracker,reference,cancel_event=cancel_event,**kwargs)
         key = path_key(reference)
@@ -154,6 +162,7 @@ def analyze_subject_sequence(jobs, tracker, reference, *, cancel_event, **kwargs
             # 人工坐标属于全局参考；当前段的参考位置已由关键帧定义。
             local_jobs = [replace(job,settings={k:v for k,v in job.settings.items() if k != MANUAL_MATCHES_KEY}) for job in local_jobs]
         local_tracker.cache_reference = image_file_signature(Path(local_reference))
+        prepare_targets(local_tracker,local_reference,local_jobs)
         current,current_sizes = analyze_sequence_frames(
             local_jobs,local_tracker,local_reference,cancel_event=cancel_event,
             progress_counts=lambda done,total,stage: total_progress(start+done,len(jobs),stage),**kwargs)
