@@ -96,17 +96,23 @@ def analyze(window):
 
 def test_tab_switch_preserves_canvas_modes_and_all_auxiliary_controls(window, monkeypatch):
     canvas = window.preview_label.canvas
+    window.ratio_combo.setCurrentIndex(window.ratio_combo.findData(1))
     window._set_edit_mode_button_checked(EDIT_MODE_CROP_ADJUST)
     paths, target, seeds = setup_tab(window, monkeypatch)
+    assert window._ordinary_edit_mode == EDIT_MODE_CROP_ADJUST
     assert window.export_tabs.tabText(1) == '去抖动'
     assert canvas is window.preview_label.canvas
     assert canvas.edit_mode() == EDIT_MODE_REFERENCE_REGION
     window.preview_grid_combo.setCurrentIndex(window.preview_grid_combo.findData('thirds'))
     window.show_focus_box_check.setChecked(True)
     window.show_bird_box_check.setChecked(True)
-    analyze(window)
+    window.dejitter_preprocess_btn.click()
+    assert window._current_edit_mode_id() == EDIT_MODE_NONE
+    assert not window.dejitter_edit_reference_btn.isChecked()
     assert window._sequence_result_mode()
     assert canvas.edit_mode() == EDIT_MODE_NONE
+    wait_until(lambda: window._sequence_worker is None)
+    assert window._sequence_preview is not None, window._sequence_message
     assert canvas._composition_grid_mode == 'thirds'
     assert canvas._crop_effect_box == (0, 0, 1, 1)
     assert canvas._focus_box is not None
@@ -120,7 +126,9 @@ def test_tab_switch_preserves_canvas_modes_and_all_auxiliary_controls(window, mo
     window.export_tabs.setCurrentIndex(1)
     assert canvas.edit_mode() == EDIT_MODE_NONE
     window.dejitter_view_tabs.setCurrentIndex(0)
-    assert canvas.edit_mode() == EDIT_MODE_REFERENCE_REGION
+    assert canvas.edit_mode() == EDIT_MODE_NONE
+    assert window._current_edit_mode_id() == EDIT_MODE_NONE
+    assert not window.dejitter_edit_reference_btn.isChecked()
     assert len(canvas.reference_regions()) == 2
 
 
@@ -145,7 +153,7 @@ def test_result_switching_photo_maps_focus_bird_and_grid_through_final_crop(wind
     # 切回源图视图后显示源图跟踪坐标，不保留成片裁切坐标。
     window.dejitter_view_tabs.setCurrentIndex(0)
     assert len(window.preview_label.canvas.reference_regions()) == 2
-    assert window.preview_label.canvas.edit_mode() == EDIT_MODE_REFERENCE_REGION
+    assert window.preview_label.canvas.edit_mode() == EDIT_MODE_NONE
     assert not window.preview_label.canvas.reference_region_creation_enabled
 
 

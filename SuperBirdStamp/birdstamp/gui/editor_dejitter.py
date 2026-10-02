@@ -650,6 +650,7 @@ class _BirdStampDejitterMixin:
         if not self._reference_tracking_input():
             self._show_error('缺少参考区', '请先框选一个或多个参考区。')
             return
+        self._set_edit_mode_button_checked(EDIT_MODE_NONE)
         self._invalidate_sequence_preview()
         self._sequence_message = '正在准备整组分析…'
         seeds = self._build_dejitter_seeds(paths)
