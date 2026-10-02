@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Any, Callable, Iterable
 
 from PIL import Image, ImageColor, ImageDraw, ImageOps
-from PyQt6.QtCore import QEvent, QPoint, QPointF, QRect, QRectF, Qt, QThread, QTimer, pyqtSignal
+from PyQt6.QtCore import QEvent, QPoint, QPointF, QRect, QRectF, QSize, Qt, QThread, QTimer, pyqtSignal
 from PyQt6.QtGui import (
     QAction,
     QColor,
@@ -338,6 +338,25 @@ _normalize_template_field = editor_template.normalize_template_field
 _deep_copy_payload = editor_template.deep_copy_payload
 
 
+class _FitContentListWidget(QListWidget):
+    """高度贴合行数的列表：不留空白、不出滚动条，字体/样式变化后自动重算。"""
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.model().rowsInserted.connect(lambda *_args: self.updateGeometry())
+        self.model().rowsRemoved.connect(lambda *_args: self.updateGeometry())
+
+    def sizeHint(self) -> QSize:
+        rows_height = sum(self.sizeHintForRow(i) for i in range(self.count()))
+        height = max(rows_height, self.fontMetrics().height()) + 2 * self.frameWidth() + 2
+        return QSize(super().sizeHint().width(), height)
+
+    def minimumSizeHint(self) -> QSize:
+        return self.sizeHint()
+
+
 class _ReportDBListWidget(QListWidget):
     """支持拖放 report.db 文件的列表控件。"""
 
@@ -610,8 +629,16 @@ def _birdstamp_app_subtitle(about_info: dict[str, Any] | None = None) -> str:
     return birdstamp.APP_INFO.subtitle
 
 
-def _build_birdstamp_main_window_title(about_info: dict[str, Any] | None = None) -> str:
-    return birdstamp.APP_INFO.window_title(about_info)
+UNTITLED_WORKSPACE_TITLE = "Untitled*"
+
+
+def _build_birdstamp_main_window_title(
+    about_info: dict[str, Any] | None = None,
+    workspace_path: Path | None = None,
+) -> str:
+    """标题栏前缀显示当前工作区路径；从未保存过时显示 Untitled*。"""
+    workspace_label = str(workspace_path) if isinstance(workspace_path, Path) else UNTITLED_WORKSPACE_TITLE
+    return f"{workspace_label} - {birdstamp.APP_INFO.window_title(about_info)}"
 
 
 def _load_birdstamp_about_images() -> list[dict]:
@@ -636,7 +663,7 @@ class BirdStampEditorWindow(
     ) -> None:
         super().__init__()
         self._about_info = _load_birdstamp_about_info()
-        self.setWindowTitle(_build_birdstamp_main_window_title(self._about_info))
+        self._refresh_window_title()
         self.resize(1420, 920)
         self.setMinimumSize(1120, 720)
 
@@ -1299,13 +1326,12 @@ class BirdStampEditorWindow(
         pipeline_order_row = QHBoxLayout()
         pipeline_order_row.setContentsMargins(0, 0, 0, 0)
         pipeline_order_row.setSpacing(6)
-        self.pipeline_stage_list = QListWidget()
+        self.pipeline_stage_list = _FitContentListWidget()
         self.pipeline_stage_list.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         self.pipeline_stage_list.setDragDropMode(QAbstractItemView.DragDropMode.NoDragDrop)
-        self.pipeline_stage_list.setFixedHeight(104)
         self.pipeline_stage_list.currentRowChanged.connect(lambda _row: self._refresh_pipeline_stage_move_buttons())
         self.pipeline_stage_list.itemChanged.connect(self._on_pipeline_stage_item_changed)
-        pipeline_order_row.addWidget(self.pipeline_stage_list, 1)
+        pipeline_order_row.addWidget(self.pipeline_stage_list, 1, Qt.AlignmentFlag.AlignTop)
         pipeline_btn_col = QVBoxLayout()
         pipeline_btn_col.setContentsMargins(0, 0, 0, 0)
         pipeline_btn_col.setSpacing(6)
@@ -1445,6 +1471,8 @@ class BirdStampEditorWindow(
             else:
                 self.video_export_panel.set_status_text(f"未找到 ffmpeg，目标: {preferred_ffmpeg_binary_path()}")
         export_root.addWidget(self.video_export_panel)
+        # 本页被拉高时多余空间留在底部，避免撑开「处理管线」把列表挤到中间。
+        export_root.addStretch(1)
 
         export_section = CollapsibleSection("导出", expanded=True)
         self.export_tabs = CurrentPageTabWidget()
@@ -2722,10 +2750,15 @@ class BirdStampEditorWindow(
         )
         return answer == QMessageBox.StandardButton.Yes
 
+    def _refresh_window_title(self) -> None:
+        self.setWindowTitle(
+            _build_birdstamp_main_window_title(getattr(self, "_about_info", None), self._workspace_path)
+        )
+
     def _show_about_dialog(self) -> None:
         about_info = _load_birdstamp_about_info()
         self._about_info = about_info
-        self.setWindowTitle(_build_birdstamp_main_window_title(about_info))
+        self._refresh_window_title()
         about_images = _load_birdstamp_about_images()
         show_about_dialog(self, about_info, images=about_images)
 
