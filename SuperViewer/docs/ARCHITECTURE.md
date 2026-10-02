@@ -18,6 +18,7 @@
 | 标签模型/命令 | [`photo_tags.py`](../superviewer/photo_tags.py)、[`photo_tag_commands.py`](../superviewer/photo_tag_commands.py) | 配置树、XMP subject 读写、逐照片逆操作 |
 | 元数据编辑同步 | [`metadata_edit_sync.py`](../superviewer/metadata_edit_sync.py)：`sync_saved_xmp_edit()` | EXIF 表写入成功后，将 XMP 字段映射回列表及标签缓存 |
 | 主题与设置 | [`ui_theme.py`](../superviewer/ui_theme.py)、[`paths_settings.py`](../superviewer/paths_settings.py) | 系统深浅色、语义颜色、资源路径、窗口状态与上次目录 |
+| 鸟清晰度检测 | [`bird_sharpness_controller.py`](../superviewer/bird_sharpness_controller.py)：`BirdSharpnessController`；算法包 [`bird_sharpness`](../../bird_sharpness/)；字段 [`bird_sharpness_fields.py`](../../app_common/bird_sharpness_fields.py) | 目录树/文件右键菜单 → 单一后台 worker 全分辨率检测 → 写 XMP → `sync_metadata_edit_for_path()` 刷新列表「鸟清晰」列、缩略图底栏与信息页。算法与字段见 [鸟清晰度检测](../../docs/bird_sharpness.md) |
 
 `image_info_tabs.py` 与共享 `_browser.py` 是兼容导出入口。新功能应定位到具体实现模块，避免往兼容文件继续堆逻辑。`main.py` 保留部分供已有脚本使用的导出；移动模块时要检查这些调用。
 
@@ -25,7 +26,7 @@
 
 ## 2. 目录选择到可见列表
 
-共享 `DirectoryBrowserWidget._on_dir_context_menu()` 提供“复制完整路径”，取右键节点的绝对路径写入剪贴板，不触发目录选择；空白处和占位节点不显示菜单。
+共享 `DirectoryBrowserWidget._on_dir_context_menu()` 提供“复制完整路径”，取右键节点的绝对路径写入剪贴板，不触发目录选择；空白处和占位节点不显示菜单。宿主通过 `add_context_menu_extender(callback(menu, path))` 追加目录动作（如鸟清晰度检测），文件列表/缩略图菜单对应 `FileListPanel.add_file_context_menu_extender(callback(menu, paths))`；扩展回调异常只记日志，不影响菜单。
 
 ```mermaid
 flowchart TD
@@ -253,6 +254,7 @@ Qt 进度回调只更新界面/初始需求提示，实际任务完成和需求�
 | 备注/标题/EXIF 字段写入 | Main 保存回调、`metadata_edit_sync.py`、`PhotoMetaDataXMP` | [编辑同步](../tests/test_main_window_metadata_sync.py)、[中文与 XML 字段替换](../../app_common/tests/test_xmp_field_replacement.py) |
 | 重命名/复制/剪切及侧车 | Main 重命名；共享 `_paste_clipboard_to_current_dir()` 及事务 helpers | [窗口文件操作](../tests/test_main_window_safety.py)、[剪贴板侧车](../../app_common/tests/test_file_browser_clipboard_sidecars.py) |
 | 主题/布局/信息页懒加载 | `ui_theme.py`、`ImageInfoTabWidget`、各页 `apply_theme()` | [主窗口主题](../tests/test_main_window_theme.py)、[标签栏主题](../tests/test_tag_filter_theme.py)、[懒加载](../tests/test_image_info_lazy_loading.py) |
+| 鸟清晰度阈值、字段或菜单 | [`bird_sharpness/scoring.py`](../../bird_sharpness/scoring.py)、[`bird_sharpness_fields.py`](../../app_common/bird_sharpness_fields.py)、`BirdSharpnessController` | [算法与评分](../../bird_sharpness/tests/test_bird_sharpness.py)、[字段与显示](../../app_common/tests/test_bird_sharpness_fields.py)、[控制器](../tests/test_bird_sharpness_controller.py) |
 | 工作线程或关窗逻辑 | 所有者的 request/finished/shutdown 方法 | [EXIF 生命周期](../tests/test_exif_worker_lifecycle.py)、[窗口关闭](../tests/test_main_window_safety.py)、[共享关闭](../../app_common/tests/test_file_browser_shutdown.py) |
 
 重命名会先检查源图和同目录同名 XMP 的目标冲突，支持大小写改名并在失败时回滚。剪切/覆盖使用共享文件事务；源数据或目标原文件无法完整恢复时必须保留恢复文件并报告位置。新增文件动作应复用这些路径，不能只移动图片而遗漏侧车。

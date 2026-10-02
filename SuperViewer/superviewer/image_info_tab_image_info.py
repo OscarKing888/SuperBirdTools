@@ -24,6 +24,7 @@ from app_common.file_browser._browser_core import (
     _metadata_species_text,
     _metadata_value_from_candidates,
 )
+from app_common.bird_sharpness_fields import bird_sharpness_from_meta
 from app_common.log import get_logger
 from app_common.perf_probe import perf_log
 from app_common.psd_composite import read_psd_composite_size
@@ -68,6 +69,7 @@ _BASIC_INFO_ROWS = (
     "镜头",
     "连拍",
     "锐度",
+    "鸟清晰度",
     "美学",
     "对焦",
     "添加日期",
@@ -75,6 +77,14 @@ _BASIC_INFO_ROWS = (
     "修改日期",
 )
 _log = get_logger("superviewer.image_info_tab_image_info")
+
+
+def _bird_sharpness_text(metadata: dict | None) -> str:
+    display = bird_sharpness_from_meta(metadata)
+    if display is None:
+        return ""
+    sigma = display.sigma
+    return display.label if sigma is None else f"{display.label}（模糊半径 {sigma:.2f}px）"
 
 
 def mark_write_action_disabled(target, tooltip: str = "") -> None:
@@ -724,6 +734,7 @@ class ImageInfoTabPanel_ImageInfo(ImageInfoTabPanel):
             "镜头": _metadata_lens_model_text(metadata) or "-",
             "连拍": _metadata_burst_text(metadata) or "-",
             "锐度": _metadata_sharpness_text(metadata) or "-",
+            "鸟清晰度": _bird_sharpness_text(metadata) or "-",
             "美学": _metadata_aesthetic_text(metadata) or "-",
             "对焦": _metadata_focus_status_text(metadata) or "-",
             "添加日期": _format_timestamp(stat.st_ctime if stat is not None else None),

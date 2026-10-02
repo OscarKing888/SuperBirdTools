@@ -132,6 +132,7 @@ try:
     )
     from .superviewer.super_viewer_user_options_dialog import SuperViewerUserOptionsDialog
     from .superviewer.tagged_file_list import SuperViewerTaggedFileListPanel
+    from .superviewer.bird_sharpness_controller import BirdSharpnessController
     from .superviewer.preview_key_router import PreviewKeyRouter
     from .superviewer.viewer_ab_preview import ViewerABPreview
     from .superviewer.tag_history_actions import TagHistoryActions
@@ -213,6 +214,7 @@ except ImportError:
     )
     from superviewer.super_viewer_user_options_dialog import SuperViewerUserOptionsDialog
     from superviewer.tagged_file_list import SuperViewerTaggedFileListPanel
+    from superviewer.bird_sharpness_controller import BirdSharpnessController
     from superviewer.preview_key_router import PreviewKeyRouter
     from superviewer.viewer_ab_preview import ViewerABPreview
     from superviewer.tag_history_actions import TagHistoryActions
@@ -358,6 +360,8 @@ class MainWindow(QMainWindow):
 
         # 连接目录选择 → 文件列表加载
         self._dir_browser.directory_selected.connect(self._on_directory_selected)
+        # 鸟清晰度检测：目录树 / 文件列表右键菜单 → 后台检测 → 写 XMP → 刷新列表与缩略图
+        self._bird_sharpness = BirdSharpnessController(self, self._file_list, self._dir_browser)
         # 连接文件列表选中 → 预览 + 元信息刷新
         self._file_list.file_fast_preview_requested.connect(self._on_file_fast_preview_requested)
         self._file_list.file_fast_preview_pixmap_requested.connect(
@@ -1537,6 +1541,10 @@ class MainWindow(QMainWindow):
                 self._file_list.request_shutdown()
             except Exception:
                 pass
+            try:
+                self._bird_sharpness.request_shutdown()
+            except Exception:
+                pass
             # Closing the shared stay-open process interrupts metadata calls
             # before the bounded worker waits below.  Its process teardown is
             # kept off the GUI thread because a wedged child may need a bounded
@@ -1563,16 +1571,20 @@ class MainWindow(QMainWindow):
         directory_scans_done = not self._file_list.has_pending_directory_scans()
         pool_pending = getattr(self._file_list, 'has_pending_pool_work', lambda: False)
         directory_scans_done = directory_scans_done and not pool_pending()
-        pending_state = (focus_done, tabs_done, preview_done, exiftool_done, directory_scans_done)
+        bird_sharpness_done = self._bird_sharpness.is_shutdown_done()
+        pending_state = (
+            focus_done, tabs_done, preview_done, exiftool_done, directory_scans_done, bird_sharpness_done,
+        )
         if not all(pending_state):
             if pending_state != self._shutdown_pending_state:
                 _log.info(
-                    "[shutdown] waiting focus=%s image_info=%s preview=%s exiftool=%s directory_scans_and_pool=%s",
+                    "[shutdown] waiting focus=%s image_info=%s preview=%s exiftool=%s directory_scans_and_pool=%s bird_sharpness=%s",
                     focus_done,
                     tabs_done,
                     preview_done,
                     exiftool_done,
                     directory_scans_done,
+                    bird_sharpness_done,
                 )
                 self._shutdown_pending_state = pending_state
             event.ignore()
