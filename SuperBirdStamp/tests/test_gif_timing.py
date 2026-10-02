@@ -161,3 +161,91 @@ def test_gui_completion_status_reports_temporal_sampling(tmp_path, monkeypatch):
     assert "按时间采样" in harness.messages[-1]
     assert (tmp_path / "finished__wechat.gif").is_file()
     assert "finished__wechat.gif" in harness.messages[-1]
+
+
+def test_repeat_passes_append_full_sequence_with_independent_fps(tmp_path):
+    paths = _frames(tmp_path, 15)
+    timing = build_gif_frame_timing(15, 20, (10, 5))
+
+    assert timing.segment_fps == (20.0, 10.0, 5.0)
+    assert timing.frame_indices == tuple(range(15)) * 3
+    assert timing.durations_ms == (50,) * 15 + (100,) * 15 + (200,) * 15
+    assert timing.duration_ms == 750 + 1500 + 3000
+    assert timing.input_frame_count == 15
+    assert "20 → 10 → 5 FPS" in timing.summary()
+    assert "3 遍" in timing.summary()
+
+    events = []
+    outputs = export_gif(
+        paths,
+        GifExportOptions(output_path=tmp_path / "repeat.gif", fps=20, repeat_fps=(10, 5), scale_factors=(0.5,)),
+        progress_callback=events.append,
+    )
+    results = [_read_gif(path) for path in outputs]
+    assert results[0] == results[1]
+    durations, colors = results[0]
+    assert durations == list(timing.durations_ms)
+    assert colors == [(index * 2, 255 - index * 2, 40) for index in timing.frame_indices]
+    assert events[-1].encoded_frame_count == 45
+    assert events[-1].total == 45
+    assert events[-1].duration_ms == 5250
+
+
+def test_repeat_passes_quantize_and_sample_each_pass_independently():
+    timing = build_gif_frame_timing(24, 24, (240, 30))
+    first, sampled, last = timing.durations_ms[:24], timing.durations_ms[24:34], timing.durations_ms[34:]
+
+    assert abs(sum(first) - 1000) <= 5
+    assert sampled == (10,) * 10 and timing.frame_indices[24:34] == tuple(round(i * 2.4) for i in range(10))
+    assert abs(sum(last) - 800) <= 5 and timing.frame_indices[34:] == tuple(range(24))
+    assert "按时间采样" in timing.summary()
+
+
+@pytest.mark.parametrize("repeat", [(math.nan,), (0,), (10, -1), ("x",)])
+def test_invalid_repeat_fps_fails_before_writing_output(tmp_path, repeat):
+    target = tmp_path / "invalid-repeat.gif"
+    with pytest.raises(ValueError, match="第 .* 遍 FPS"):
+        export_gif(_frames(tmp_path, 2), GifExportOptions(output_path=target, fps=10, repeat_fps=repeat))
+    assert not target.exists()
+
+
+def test_gui_export_passes_repeat_fps_and_reports_all_passes(tmp_path):
+    class Harness(_BirdStampExporterMixin):
+        def __init__(self):
+            self.counts = []
+            self.messages = []
+
+        def _begin_image_export_progress(self, **kwargs):
+            self.counts.append((0, kwargs["total"]))
+            return 1
+
+        def _set_image_export_progress(self, current, total, **kwargs):
+            self.counts.append((current, total))
+
+        def _finish_image_export_progress(self, *, current, total, **kwargs):
+            self.counts.append((current, total))
+
+        def _set_status(self, message):
+            self.messages.append(message)
+
+    harness = Harness()
+    output = harness._export_gif_from_frame_paths(
+        _frames(tmp_path, 4), tmp_path / "gui-repeat.gif", fps=20, loop=0, scale_factors=[], repeat_fps=[10],
+    )[0]
+
+    assert harness.counts[0] == (0, 8) and harness.counts[-1] == (8, 8)
+    assert _read_gif(output)[0] == [50] * 4 + [100] * 4
+    assert "20 → 10 FPS" in harness.messages[-1]
+
+
+def test_cli_repeat_fps_option(tmp_path):
+    from typer.testing import CliRunner
+    from birdstamp.cli import app
+
+    frames = _frames(tmp_path, 3)
+    target = tmp_path / "cli-repeat.gif"
+    result = CliRunner().invoke(
+        app, ["gif", *map(str, frames), "-o", str(target), "--fps", "20", "--repeat-fps", "10", "--repeat-fps", "5"],
+    )
+    assert result.exit_code == 0, result.output
+    assert _read_gif(target)[0] == [50] * 3 + [100] * 3 + [200] * 3

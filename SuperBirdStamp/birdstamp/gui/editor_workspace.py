@@ -99,6 +99,18 @@ def _recent_workspace_paths(raw: object, *, newest: Path | None = None) -> list[
 
 
 class _BirdStampWorkspaceMixin:
+    @property
+    def _workspace_path(self) -> Path | None:
+        return self.__dict__.get("_workspace_path_value")
+
+    @_workspace_path.setter
+    def _workspace_path(self, value: Path | None) -> None:
+        # 所有保存/打开/新建/去抖动切换都经由此赋值，统一刷新标题栏中的工作区路径。
+        self.__dict__["_workspace_path_value"] = value
+        refresh = getattr(self, "_refresh_window_title", None)
+        if callable(refresh):
+            refresh()
+
     def _open_dejitter_export_workspace(self, folder, paths):
         """先持久保存两个完整工作区，再复用增量恢复流程切换照片列表。"""
         from .dejitter_export_workspace import unused_workspace_path, exported_workspace_payload
@@ -416,6 +428,7 @@ class _BirdStampWorkspaceMixin:
             PIPELINE_STAGE_ORDER_KEY: list(self._current_pipeline_stage_order()),
             PIPELINE_STAGE_ENABLED_KEY: dict(self._current_pipeline_stage_enabled_map()),
             "gif_fps": gif_request.fps,
+            "gif_repeat_fps": list(gif_request.repeat_fps),
             "gif_loop": gif_request.loop,
             "gif_keep_frame_images": gif_request.keep_frame_images,
             "gif_scale_factors": list(gif_request.scale_factors),
@@ -468,6 +481,8 @@ class _BirdStampWorkspaceMixin:
                 keep_frame_images=state.get("gif_keep_frame_images"),
                 scale_factors=state.get("gif_scale_factors"),
                 wechat_sticker=state.get("gif_wechat_sticker", editor_options.DEFAULT_GIF_WECHAT_STICKER),
+                # 旧工作区没有重复播放设置，按只播放一遍恢复。
+                repeat_fps=state.get("gif_repeat_fps") or [],
             )
         finally:
             _restore_widget_signals(widgets_state)

@@ -131,3 +131,84 @@ def test_scale_label_keeps_room_for_native_checkbox_paint() -> None:
             assert field.rect().contains(check.geometry())
     finally:
         panel.close()
+
+
+def test_repeat_passes_add_halved_fps_remove_and_restore(monkeypatch, tmp_path) -> None:
+    from birdstamp import config
+    from birdstamp.gui.editor_workspace import _BirdStampWorkspaceMixin
+
+    monkeypatch.setattr(config, "get_user_data_dir", lambda: tmp_path)
+    panel = editor_gif_panel.GifExportPanel()
+    signals = []
+    panel.optionsChanged.connect(lambda: signals.append(True))
+    try:
+        panel.set_state(fps=20)
+        assert panel.current_request().repeat_fps == []
+        panel.add_repeat_button.click()
+        panel.add_repeat_button.click()
+        assert panel.current_request().repeat_fps == [10.0, 5.0]
+        assert [label.text() for _row, label, _spin in panel._repeat_rows] == ["第 2 遍", "第 3 遍"]
+        assert len(signals) == 2
+
+        panel._repeat_rows[1][2].setValue(3)
+        assert panel.current_request().repeat_fps == [10.0, 3.0]
+        assert len(signals) == 3
+
+        remove_first = panel._repeat_rows[0][0].findChildren(editor_gif_panel.QPushButton)[0]
+        remove_first.click()
+        assert panel.current_request().repeat_fps == [3.0]
+        assert [label.text() for _row, label, _spin in panel._repeat_rows] == ["第 2 遍"]
+        assert len(signals) == 4
+
+        signals.clear()
+        panel.set_state(repeat_fps=[12, "bad", 0, 999, float("inf")])
+        assert panel.current_request().repeat_fps == [12.0, 240.0]
+        assert not signals
+
+        class Harness(_BirdStampWorkspaceMixin):
+            gif_export_panel = panel
+            _image_export_last_output_dir = None
+            _batch_export_last_output_dir = None
+
+            def _selected_output_suffix(self):
+                return "gif"
+
+            def _selected_export_stage_id(self):
+                return "export_gif"
+
+            def _current_pipeline_stage_order(self):
+                return []
+
+            def _current_pipeline_stage_enabled_map(self):
+                return {}
+
+            def _save_image_export_preferences(self):
+                pass
+
+            def _refresh_image_export_action_states(self):
+                pass
+
+        harness = Harness()
+        workspace = tmp_path / "session.json"
+        state = harness._collect_workspace_image_export_state(workspace)
+        assert state["gif_repeat_fps"] == [12.0, 240.0]
+        panel.set_state(repeat_fps=[])
+        harness._apply_workspace_image_export_state(state, workspace)
+        assert panel.current_request().repeat_fps == [12.0, 240.0]
+        del state["gif_repeat_fps"]
+        harness._apply_workspace_image_export_state(state, workspace)
+        assert panel.current_request().repeat_fps == []
+        assert not signals
+    finally:
+        panel.close()
+
+
+def test_repeat_pass_count_is_limited() -> None:
+    panel = editor_gif_panel.GifExportPanel()
+    try:
+        limit = editor_gif_panel.GIF_REPEAT_PASS_LIMIT
+        panel.set_state(repeat_fps=[10] * (limit + 3))
+        assert len(panel.current_request().repeat_fps) == limit
+        assert not panel.add_repeat_button.isEnabled()
+    finally:
+        panel.close()

@@ -630,8 +630,16 @@ def _birdstamp_app_subtitle(about_info: dict[str, Any] | None = None) -> str:
     return birdstamp.APP_INFO.subtitle
 
 
-def _build_birdstamp_main_window_title(about_info: dict[str, Any] | None = None) -> str:
-    return birdstamp.APP_INFO.window_title(about_info)
+UNTITLED_WORKSPACE_TITLE = "Untitled*"
+
+
+def _build_birdstamp_main_window_title(
+    about_info: dict[str, Any] | None = None,
+    workspace_path: Path | None = None,
+) -> str:
+    """标题栏前缀显示当前工作区路径；从未保存过时显示 Untitled*。"""
+    workspace_label = str(workspace_path) if isinstance(workspace_path, Path) else UNTITLED_WORKSPACE_TITLE
+    return f"{workspace_label} - {birdstamp.APP_INFO.window_title(about_info)}"
 
 
 def _load_birdstamp_about_images() -> list[dict]:
@@ -657,7 +665,7 @@ class BirdStampEditorWindow(
     ) -> None:
         super().__init__()
         self._about_info = _load_birdstamp_about_info()
-        self.setWindowTitle(_build_birdstamp_main_window_title(self._about_info))
+        self._refresh_window_title()
         self.resize(1420, 920)
         self.setMinimumSize(1120, 720)
 
@@ -2457,6 +2465,7 @@ class BirdStampEditorWindow(
             keep_frame_images=keep_frame_images_value,
             scale_factors=scale_factors,
             wechat_sticker=self._load_editor_export_state_value("gif_wechat_sticker", None),
+            repeat_fps=self._load_editor_export_state_value("gif_repeat_fps", None),
         )
         self._refresh_image_export_action_states()
 
@@ -2470,6 +2479,7 @@ class BirdStampEditorWindow(
         for stage_id, enabled_key in _PIPELINE_STAGE_ENABLED_KEYS.items():
             self._save_editor_export_state_value(enabled_key, bool(stage_enabled.get(stage_id, True)))
         self._save_editor_export_state_value("gif_fps", gif_request.fps)
+        self._save_editor_export_state_value("gif_repeat_fps", list(gif_request.repeat_fps))
         self._save_editor_export_state_value("gif_loop", gif_request.loop)
         self._save_editor_export_state_value("gif_keep_frame_images", gif_request.keep_frame_images)
         self._save_editor_export_state_value("gif_scale_factors", list(gif_request.scale_factors))
@@ -2742,10 +2752,15 @@ class BirdStampEditorWindow(
         )
         return answer == QMessageBox.StandardButton.Yes
 
+    def _refresh_window_title(self) -> None:
+        self.setWindowTitle(
+            _build_birdstamp_main_window_title(getattr(self, "_about_info", None), self._workspace_path)
+        )
+
     def _show_about_dialog(self) -> None:
         about_info = _load_birdstamp_about_info()
         self._about_info = about_info
-        self.setWindowTitle(_build_birdstamp_main_window_title(about_info))
+        self._refresh_window_title()
         about_images = _load_birdstamp_about_images()
         show_about_dialog(self, about_info, images=about_images)
 

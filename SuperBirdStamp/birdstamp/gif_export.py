@@ -20,6 +20,8 @@ class GifExportOptions:
     output_path: Path
     fps: float = 24.0
     loop: int = 0
+    # 完整序列之后追加的重复段，每段整组播放一遍并使用各自的 FPS。
+    repeat_fps: tuple[float, ...] = ()
     scale_factors: tuple[float, ...] = ()
     background_color: str = DEFAULT_GIF_BACKGROUND_COLOR
     wechat_sticker: bool = False
@@ -53,6 +55,7 @@ class GifFrameTiming:
     frame_indices: tuple[int, ...]
     durations_ms: tuple[int, ...]
     duration_ms: int
+    segment_fps: tuple[float, ...] = ()
 
     @property
     def encoded_frame_count(self) -> int:
@@ -62,8 +65,19 @@ class GifFrameTiming:
     def effective_fps(self) -> float:
         return self.encoded_frame_count * 1000.0 / self.duration_ms
 
+    @property
+    def segment_count(self) -> int:
+        return max(1, len(self.segment_fps))
+
     def summary(self) -> str:
-        sampling = "，已按时间采样" if self.requested_fps > 100 else ""
+        segment_fps = self.segment_fps or (self.requested_fps,)
+        sampling = "，已按时间采样" if max(segment_fps) > 100 else ""
+        if len(segment_fps) > 1:
+            fps_text = " → ".join(f"{fps:g}" for fps in segment_fps)
+            return (
+                f"请求 {fps_text} FPS（完整序列 {len(segment_fps)} 遍），GIF 实际平均 {self.effective_fps:.3f} FPS"
+                f"（{self.encoded_frame_count} 帧，{self.duration_ms / 1000.0:.3f} 秒{sampling}）"
+            )
         return (
             f"请求 {self.requested_fps:g} FPS，GIF 实际 {self.effective_fps:.3f} FPS"
             f"（{self.encoded_frame_count} 帧，{self.duration_ms / 1000.0:.3f} 秒{sampling}）"
@@ -77,12 +91,11 @@ def validate_gif_export_options(options: GifExportOptions) -> GifExportOptions:
     if options.output_path is None:
         raise ValueError("GIF 输出路径不能为空。")
 
-    try:
-        fps = float(options.fps)
-    except Exception as exc:
-        raise ValueError("GIF FPS 无效。") from exc
-    if not math.isfinite(fps) or fps <= 0:
-        raise ValueError("GIF FPS 必须为大于 0 的有限数值。")
+    fps = _validated_fps(options.fps, "GIF FPS")
+    repeat_fps = tuple(
+        _validated_fps(value, f"GIF 第 {index} 遍 FPS")
+        for index, value in enumerate(options.repeat_fps or (), start=2)
+    )
 
     try:
         loop = int(options.loop)
@@ -110,24 +123,40 @@ def validate_gif_export_options(options: GifExportOptions) -> GifExportOptions:
         output_path=options.normalized_output_path(),
         fps=fps,
         loop=loop,
+        repeat_fps=repeat_fps,
         scale_factors=tuple(scales),
         background_color=background_color,
         wechat_sticker=bool(options.wechat_sticker),
     )
 
 
-def build_gif_frame_timing(frame_count: int, fps: float) -> GifFrameTiming:
+def build_gif_frame_timing(frame_count: int, fps: float, repeat_fps: Sequence[float] = ()) -> GifFrameTiming:
     """Quantize cumulative time to GIF's 10 ms ticks, sampling above 100 FPS.
 
-    A nonempty clip always has at least one 10 ms frame. Otherwise its total
-    duration differs from the requested timeline by at most half a tick.
+    ``repeat_fps`` appends further passes over the complete sequence, each with
+    its own rate. Every pass is quantized independently, so each pass keeps its
+    own timeline: a nonempty pass always has at least one 10 ms frame, otherwise
+    its duration differs from the requested one by at most half a tick.
     """
     if frame_count <= 0:
         raise ValueError("GIF 帧为空。")
-    requested_fps = float(fps)
-    if not math.isfinite(requested_fps) or requested_fps <= 0:
-        raise ValueError("GIF FPS 必须为大于 0 的有限数值。")
-    rate = Fraction(str(requested_fps))
+    requested_fps = _validated_fps(fps, "GIF FPS")
+    segment_fps = (requested_fps,) + tuple(
+        _validated_fps(value, f"GIF 第 {index} 遍 FPS") for index, value in enumerate(repeat_fps or (), start=2)
+    )
+    indices: list[int] = []
+    durations: list[int] = []
+    for rate in segment_fps:
+        segment_indices, segment_durations = _build_segment_timing(frame_count, rate)
+        indices.extend(segment_indices)
+        durations.extend(segment_durations)
+    return GifFrameTiming(
+        requested_fps, frame_count, tuple(indices), tuple(durations), sum(durations), segment_fps,
+    )
+
+
+def _build_segment_timing(frame_count: int, fps: float) -> tuple[tuple[int, ...], tuple[int, ...]]:
+    rate = Fraction(str(fps))
     if rate > 100:
         encoded_count = max(1, round(frame_count * 100 / rate))
         indices = tuple(min(frame_count - 1, round(index * rate / 100)) for index in range(encoded_count))
@@ -138,7 +167,17 @@ def build_gif_frame_timing(frame_count: int, fps: float) -> GifFrameTiming:
         durations = tuple((end - start) * 10 for start, end in zip(boundaries, boundaries[1:]))
     if max(durations) > 655350:
         raise ValueError("GIF 单帧时长不能超过 655.35 秒，请提高 FPS。")
-    return GifFrameTiming(requested_fps, frame_count, indices, durations, sum(durations))
+    return indices, durations
+
+
+def _validated_fps(value: object, label: str) -> float:
+    try:
+        fps = float(value)  # type: ignore[arg-type]
+    except Exception as exc:
+        raise ValueError(f"{label} 无效。") from exc
+    if not math.isfinite(fps) or fps <= 0:
+        raise ValueError(f"{label} 必须为大于 0 的有限数值。")
+    return fps
 
 
 def build_gif_variant_output_paths(output_path: Path, scale_factors: Iterable[float]) -> list[tuple[float, Path]]:
@@ -202,7 +241,7 @@ def export_gif(
     normalized_frame_paths = [Path(path).resolve(strict=False) for path in frame_paths]
     if not normalized_frame_paths:
         raise ValueError("没有可用于合成 GIF 的图片。")
-    timing = build_gif_frame_timing(len(normalized_frame_paths), validated.fps)
+    timing = build_gif_frame_timing(len(normalized_frame_paths), validated.fps, validated.repeat_fps)
     sampled_frame_paths = [normalized_frame_paths[index] for index in timing.frame_indices]
 
     output_path = validated.normalized_output_path()
@@ -216,7 +255,7 @@ def export_gif(
         message=f"正在检查 GIF 编码帧尺寸。{timing.summary()}",
         timing=timing,
     )
-    target_size = resolve_gif_target_size(sampled_frame_paths)
+    target_size = resolve_gif_target_size(list(dict.fromkeys(sampled_frame_paths)))
 
     output_specs = [(1.0, output_path)]
     if validated.wechat_sticker:
@@ -321,16 +360,20 @@ def _save_gif_variant(
     optimize: bool = False,
 ) -> None:
     frames: list[Image.Image] = []
+    # 重复段会多次引用同一输入帧：每个路径只解码、缩放一次，避免内存随遍数增长。
+    prepared: dict[Path, Image.Image] = {}
     try:
         for frame_path in frame_paths:
-            with Image.open(frame_path) as image:
-                frames.append(
-                    normalize_gif_frame_size(
+            frame = prepared.get(frame_path)
+            if frame is None:
+                with Image.open(frame_path) as image:
+                    frame = normalize_gif_frame_size(
                         image,
                         target_size,
                         background_color=background_color,
                     )
-                )
+                prepared[frame_path] = frame
+            frames.append(frame)
             if frame_prepared_callback is not None:
                 frame_prepared_callback(len(frames))
         if not frames:
@@ -349,7 +392,7 @@ def _save_gif_variant(
             disposal=2,
         )
     finally:
-        for frame in frames:
+        for frame in prepared.values():
             try:
                 frame.close()
             except Exception:
