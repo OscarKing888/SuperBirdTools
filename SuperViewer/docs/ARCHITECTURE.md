@@ -109,6 +109,8 @@ Viewer 在列表子类中启用 `enable_key_navigation_playback`、`enable_in_me
 
 预览图键盘焦点由 [`PreviewKeyRouter`](../superviewer/preview_key_router.py) 接入：点击画布即可获得焦点，按键转交当前列表/缩略图视图，保留原始修饰键、自动重复标记和 press/release。Copy/Cut/Paste 复用文件列表已有的局部快捷键对象；全局菜单快捷键不重复注册。文件列表仍是唯一的选择与长按节拍所有者；画布失焦、隐藏或窗口失活时停止长按。路由只安装到图片画布，输入框、预览工具栏及视频控件保留原生行为，Tab 保留焦点导航。回归见 [`test_preview_key_router.py`](../tests/test_preview_key_router.py)，包括双视图导航、多选、评级/排除/精选、删除、剪贴板、8/24/60 FPS 与松键单次提交。
 
+区间选择由共享 `FileListPanel` 的 `enable_range_mark_shortcuts` 开关控制，默认关闭（SuperBirdStamp 保持原生按键），`SuperViewerTaggedFileListPanel` 开启。`[` 记录当前图路径为起点（`_range_mark_start_path`，按路径保存，过滤/排序后按当前行序解析，切换目录清除）；`]` 用一个 `QItemSelection` 选中起点到当前图的整段行，当前图不变、不重新加载预览。起点被过滤掉时不选区间，只提示。按键在视图事件过滤器里被吞掉，避免 Qt 原生 keyboardSearch 跳转；预览画布经 `PreviewKeyRouter` 转发同样生效。回归见 [`test_file_browser_range_mark.py`](../../app_common/tests/test_file_browser_range_mark.py)。
+
 新增预览回调必须检查它是否会在播放期间触发。后台元数据和完整预览完成信号也要保留当前选择及播放状态检查，不能绕过上述规则。
 
 ## 4. 焦点来源与显示

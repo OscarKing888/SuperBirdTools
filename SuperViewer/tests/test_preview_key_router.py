@@ -151,6 +151,21 @@ def test_shift_selection_and_input_focus_remain_native(ui):
     assert len(browser.full) == count
 
 
+def test_bracket_range_marks_select_contiguous_paths_from_canvas(ui):
+    _, browser, canvas, _, view, paths = ui
+    view.setCurrentIndex(view.model().index(3, 0))
+    QTest.keyClick(canvas, Qt.Key.Key_BracketLeft)
+    for _ in range(4):
+        QTest.keyClick(canvas, Qt.Key.Key_Right if view is browser._list_widget else Qt.Key.Key_Down)
+    assert view.currentIndex().row() == 7
+    full_count = len(browser.full)
+    QTest.keyClick(canvas, Qt.Key.Key_BracketRight)
+    assert browser._active_view_selected_paths() == [os.path.normpath(p) for p in paths[3:8]]
+    assert view.currentIndex().row() == 7
+    assert len(browser.full) == full_count
+    assert _APP.focusWidget() is canvas
+
+
 @pytest.mark.parametrize('event_type', [QEvent.Type.WindowDeactivate, QEvent.Type.Hide])
 def test_canvas_lifecycle_stops_owned_timer(ui, event_type):
     _, browser, canvas, _, _, _ = ui
