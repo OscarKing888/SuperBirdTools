@@ -57,7 +57,10 @@ def test_user_text_override_keeps_bundled_images_and_central_identity(monkeypatc
     assert info['作者'] == '中文作者'
     assert info['version'] == birdstamp.APP_INFO.version
     assert info['app_name'] == birdstamp.APP_INFO.app_name
-    assert editor._build_birdstamp_main_window_title(info) == birdstamp.APP_INFO.window_title(info)
+    app_title = birdstamp.APP_INFO.window_title(info)
+    assert editor._build_birdstamp_main_window_title(info) == f'Untitled* - {app_title}'
+    workspace = tmp_path / '工作区' / '白鹭.birdstamp-workspace.json'
+    assert editor._build_birdstamp_main_window_title(info, workspace) == f'{workspace} - {app_title}'
     images = editor._load_birdstamp_about_images()
     assert len(images) == 2
     assert all(Path(image['path']).parent == Path(editor._bundled_about_cfg_path()).parent / 'images' for image in images)

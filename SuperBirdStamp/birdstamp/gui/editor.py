@@ -629,8 +629,16 @@ def _birdstamp_app_subtitle(about_info: dict[str, Any] | None = None) -> str:
     return birdstamp.APP_INFO.subtitle
 
 
-def _build_birdstamp_main_window_title(about_info: dict[str, Any] | None = None) -> str:
-    return birdstamp.APP_INFO.window_title(about_info)
+UNTITLED_WORKSPACE_TITLE = "Untitled*"
+
+
+def _build_birdstamp_main_window_title(
+    about_info: dict[str, Any] | None = None,
+    workspace_path: Path | None = None,
+) -> str:
+    """标题栏前缀显示当前工作区路径；从未保存过时显示 Untitled*。"""
+    workspace_label = str(workspace_path) if isinstance(workspace_path, Path) else UNTITLED_WORKSPACE_TITLE
+    return f"{workspace_label} - {birdstamp.APP_INFO.window_title(about_info)}"
 
 
 def _load_birdstamp_about_images() -> list[dict]:
@@ -655,7 +663,7 @@ class BirdStampEditorWindow(
     ) -> None:
         super().__init__()
         self._about_info = _load_birdstamp_about_info()
-        self.setWindowTitle(_build_birdstamp_main_window_title(self._about_info))
+        self._refresh_window_title()
         self.resize(1420, 920)
         self.setMinimumSize(1120, 720)
 
@@ -2740,10 +2748,15 @@ class BirdStampEditorWindow(
         )
         return answer == QMessageBox.StandardButton.Yes
 
+    def _refresh_window_title(self) -> None:
+        self.setWindowTitle(
+            _build_birdstamp_main_window_title(getattr(self, "_about_info", None), self._workspace_path)
+        )
+
     def _show_about_dialog(self) -> None:
         about_info = _load_birdstamp_about_info()
         self._about_info = about_info
-        self.setWindowTitle(_build_birdstamp_main_window_title(about_info))
+        self._refresh_window_title()
         about_images = _load_birdstamp_about_images()
         show_about_dialog(self, about_info, images=about_images)
 
