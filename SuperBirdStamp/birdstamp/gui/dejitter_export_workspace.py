@@ -24,6 +24,7 @@ def exported_workspace_payload(source_payload, paths, workspace_path, *, sequenc
                     custom_center_x=None, custom_center_y=None,
                     crop_padding_top=0, crop_padding_bottom=0, crop_padding_left=0, crop_padding_right=0)
     state['dejitter_manual_matches'] = []
+    state['dejitter_relay_anchors'] = []
     state['sequence_preview'].update(input_key=None, active=False, view='edit')
     state['preview'].update(edit_mode='none', preview_scale_percent=None)
     records = [serialize_workspace_path(path, workspace_path=workspace_path) for path in paths]

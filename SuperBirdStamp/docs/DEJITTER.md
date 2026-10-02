@@ -40,6 +40,26 @@
 
 部分预览只保留在本次会话，“导出全部”仍需整组分析成功后使用。修改任一输入照片/XMP、列表顺序或参考参数会使它失效；修正失败原因后重新分析即可替换为完整结果。部分结果不会写入完整分析缓存，避免下次分析误命中而跳过失败照片。
 
+## 接力追踪（失败后添加新选区继续）
+
+原选区在某张照片之后出画、被鸟或枝叶长期遮挡、或场景明显变化时，逐张手动修正已不现实。此时在失败照片上建立**接力参考图**，框选一组新的稳定纹理，之后的照片改为匹配这组接力选区：
+
+1. 分析失败后，A/B 对照右侧已选中失败照片，提示中会建议接力。保持选中该照片（也可改选失败前任一张更合适的照片），点击选区组里的 **从当前照片接力追踪**。
+2. 编辑构图自动进入选区工具；若 A/B 已开启，左侧 A 切到**衔接照片**（朝原参考图方向相邻的那一张，通常是上一张）。在当前照片上框选新的稳定纹理，操作与参考图相同（Shift 追加、八手柄缩放、右键删除、**一键推荐选区**、列表删除/清除）。所选纹理必须同时出现在衔接照片中，并与原选区属于同一运动。
+3. 重新点击 **分析并预览成片**。整组仍一次分析：接力之前的照片匹配原参考区；从接力参考图起到下一张接力参考图之前的照片匹配接力选区；接力参考图通过衔接照片对接力选区的真实匹配接回原参考图坐标，因此整组输出同一画幅、同一共同裁切，导出与普通整组相同。
+4. 后面再次失败时，可在新的失败照片上继续接力，链条逐段相接。
+
+规则与边界：
+
+- 原参考图在列表中间时，参考图之前的照片向前接力，衔接照片是接力参考图的下一张。原参考图本身不能接力；参考图不在列表中时，第一张也不能接力（没有衔接照片）。
+- 衔接照片必须真实匹配到接力选区，不使用插值或预测位置；找不到时分析在接力参考图处失败并说明原因，之前的成功前缀照常预览。
+- 接力段内的照片同样可以在原图修正**接力选区**的匹配位置（右键恢复自动匹配）；画面、成片、A/B 和缩略图条中的接力诊断框标为“接力1”“接力2”…，缩略图条标出接力参考图。
+- 补偿强度、对齐方式（平移／平移＋旋转）与补边对整条链统一生效：先合成到原参考图的 100% 变换，再按强度插值。接力链中任一环节旋转证据不足时，该照片标记“未纠正旋转”。
+- 修改接力选区、移除接力（**移除接力**）、移动接力参考图在列表中的位置、或接力参考图原文件变化，都会使分析结果失效；原文件变化后该接力不再生效。清除原参考区会同时清除全部接力；只修改原参考区保留接力及接力段内的手动修正。
+- 只框选、尚未添加选区的接力参考图在分析时忽略。接力随工作区保存（`editor_state.dejitter_relay_anchors`），完整分析缓存同时保存每张照片所属的接力选区。局部主体方法暂不支持接力。
+
+非 GUI 调用：在 `RenderJobSeed.settings['dejitter_relay_anchors']` 中传入 `relay_settings_value([relay_record(path, regions), …])`（[relay_anchors.py](../birdstamp/image_dejitter/relay_anchors.py)）；`prepare_sequence_preview` 返回的 `SequencePreview.relay_segments` 给出各照片所属接力参考图及选区。回归见 [test_dejitter_relay.py](../tests/test_dejitter_relay.py)。
+
 ## 自动选区数量与分布
 
 “目标数量”指已有选区加新选区的总数。已有数量达到或超过目标时，重复点击不会继续增加，也不删除已有选区。数量随工作区保存，旧工作区缺失时使用 `editor_options.json` 的 `dejitter_auto_region_count`（默认 9）；只修改数量不使现有分析失效，实际追加选区后才需要重新分析。
@@ -92,6 +112,7 @@
 
 - 默认交集模式分析后，“编辑构图”和 A 原图对照用青色虚线标出成片保留范围并遮暗外围，沿用工具栏“裁切效果”开关。分析信息显示当前原图面积保留比例；低于一半时提示可开启补边。标记和遮罩不写入导出。
 - [sequence_geometry.py](../birdstamp/image_dejitter/sequence_geometry.py)：越界画幅的补边裁切几何、有界成片缩略图与原图坐标转换，焦点、鸟体和跟踪辅助层共用。
+- [relay_anchors.py](../birdstamp/image_dejitter/relay_anchors.py)、[sequence_relay.py](../birdstamp/export_stage/sequence_relay.py)、[editor_dejitter_relay.py](../birdstamp/gui/editor_dejitter_relay.py)：接力记录校验与分段、衔接匹配与变换合成、界面状态。
 - [manual_region_matches.py](../birdstamp/image_dejitter/manual_region_matches.py)：逐照片/逐编号手动匹配、文件与参考定义校验；API 调用可通过 `manual_match_record()` 生成记录并放入对应 `RenderJobSeed.settings['dejitter_manual_matches']`。
 - [region_consensus.py](../birdstamp/image_dejitter/region_consensus.py)：可靠位移组选择、离群剔除、逐区拒绝原因与预测框。
 - [region_motion.py](../birdstamp/image_dejitter/region_motion.py)：可靠组的刚性运动复核、逐区位移预测；供补查及角度超限诊断复用。

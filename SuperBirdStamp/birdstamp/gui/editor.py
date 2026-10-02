@@ -164,6 +164,7 @@ from birdstamp.gui.editor_crop_calculator import _BirdStampCropMixin
 from birdstamp.gui.editor_renderer import _BirdStampRendererMixin
 from birdstamp.gui.editor_reference_tracking import _BirdStampReferenceTrackingMixin
 from birdstamp.gui.editor_dejitter import _BirdStampDejitterMixin
+from birdstamp.gui.editor_dejitter_relay import _BirdStampDejitterRelayMixin
 from birdstamp.gui.editor_exporter import _BirdStampExporterMixin
 from birdstamp.export_stage import (
     DEFAULT_EXPORT_STAGE_ID,
@@ -645,6 +646,7 @@ class BirdStampEditorWindow(
     _BirdStampRendererMixin,
     _BirdStampReferenceTrackingMixin,
     _BirdStampDejitterMixin,
+    _BirdStampDejitterRelayMixin,
     _BirdStampExporterMixin,
     _BirdStampWorkspaceMixin,
 ):
@@ -2990,9 +2992,15 @@ class BirdStampEditorWindow(
         self._on_output_settings_changed()
 
     def _on_dejitter_reference_clear(self) -> None:
+        if self._relay_anchor_for_path(self.current_path) is not None:
+            # 接力参考图上只清除接力选区，保留原参考区和其它接力。
+            self._commit_relay_regions(self.current_path, ())
+            self._refresh_preview_label(preserve_view=True)
+            return
         if not self._dejitter_reference_regions:
             return
         self._dejitter_manual_matches.clear()
+        self._clear_relay_anchors()
         self._invalidate_reference_tracking("参考区已清除。")
         self._dejitter_reference_regions = ()
         self.dejitter_recommendation.edited_regions(())
@@ -3019,8 +3027,9 @@ class BirdStampEditorWindow(
 
     def _update_dejitter_reference_clear_enabled(self) -> None:
         btn = getattr(self, "dejitter_reference_clear_btn", None)
+        relay = self._relay_anchor_for_path(getattr(self, "current_path", None))
         if btn is not None:
-            btn.setEnabled(bool(getattr(self, "_dejitter_reference_regions", ())))
+            btn.setEnabled(bool(relay.regions if relay is not None else getattr(self, "_dejitter_reference_regions", ())))
         check = getattr(self, "dejitter_reference_check", None)
         if check is not None:
             regions = getattr(self, "_dejitter_reference_regions", ())
@@ -3029,9 +3038,11 @@ class BirdStampEditorWindow(
             self.dejitter_reference_value_label.setText(f"{self.dejitter_reference_strength_slider.value()}%")
             source = getattr(self, "_dejitter_reference_source", None)
             state = "已启用" if check.isChecked() else "已停用"
-            self.dejitter_reference_status.setText(
-                f"{Path(source).name} · {len(regions)} 个区域 · {state}" if source and regions else "尚未选择参考区")
-            self.dejitter_reference_status.setToolTip(str(source or ""))
+            text = f"{Path(source).name} · {len(regions)} 个区域 · {state}" if source and regions else "尚未选择参考区"
+            if relay is not None:
+                text = f"接力参考图 {relay.path.name} · {len(relay.regions)} 个接力选区（原参考：{text}）"
+            self.dejitter_reference_status.setText(text)
+            self.dejitter_reference_status.setToolTip(str(relay.path if relay is not None else source or ""))
         self._update_reference_tracking_controls()
 
     def _get_crop_padding_state(self) -> dict[str, Any]:
@@ -4956,6 +4967,7 @@ class BirdStampEditorWindow(
         self._dejitter_reference_regions = ()
         self._dejitter_reference_source = None
         self._dejitter_manual_matches.clear()
+        self._clear_relay_anchors()
         self.dejitter_reference_check.blockSignals(True)
         self.dejitter_reference_check.setChecked(False)
         self.dejitter_reference_check.blockSignals(False)

@@ -69,6 +69,7 @@ class SequencePreviewCache:
                                     source_size=sequence.source_sizes[key], pixel_box=sequence.pixel_boxes.get(key),
                                     alignment=asdict(sequence.alignments[key]) if key in sequence.alignments else None,
                                     subject_plan=asdict(sequence.subject_plans[key]) if key in sequence.subject_plans else None,
+                                    relay=sequence.relay_segments.get(key),
                                     tracking=asdict(sequence.tracking[key])))
             document = dict(version=CACHE_VERSION, input_key=sequence.input_key,
                             output_size=sequence.output_size, signatures=sequence.signatures, frames=records,
@@ -167,6 +168,14 @@ class SequencePreviewCache:
                 if box is not None:
                     sequence.pixel_boxes[frame_key] = box
                 sequence.tracking[frame_key] = result
+                relay = record.get('relay')
+                if relay is not None:
+                    # 接力段诊断框按接力选区编号；没有接力的旧缓存不含此字段。
+                    anchor, relay_boxes = relay
+                    relay_boxes = tuple(tuple(float(v) for v in box) for box in relay_boxes)
+                    if not isinstance(anchor, str) or len(relay_boxes) != len(result.boxes):
+                        raise ValueError('成片缓存接力选区无效')
+                    sequence.relay_segments[frame_key] = (anchor, relay_boxes)
                 if record.get("subject_plan"):
                     from birdstamp.export_stage.subject_sequence import SubjectFramePlan
                     sequence.subject_plans[frame_key] = SubjectFramePlan(**record["subject_plan"])
