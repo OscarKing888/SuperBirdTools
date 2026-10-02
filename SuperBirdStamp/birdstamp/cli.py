@@ -96,6 +96,9 @@ def gif_command(
     frames: list[Path] = typer.Argument(..., exists=True, dir_okay=False, help="按播放顺序排列的已渲染图片。"),
     output: Path = typer.Option(..., "--output", "-o", help="GIF 输出路径。"),
     fps: float = typer.Option(24.0, help="每秒帧数。"),
+    repeat_fps: list[float] = typer.Option(
+        [], "--repeat-fps", help="完整序列再播放一遍的 FPS，可重复指定，例如 --repeat-fps 10 --repeat-fps 5。",
+    ),
     loop: int = typer.Option(0, help="循环次数，0 表示无限循环。"),
     wechat: bool = typer.Option(False, "--wechat/--no-wechat", help="额外生成不超过 5 MB 的微信表情版本。"),
 ) -> None:
@@ -103,7 +106,7 @@ def gif_command(
     from birdstamp.gif_export import GifExportOptions, export_gif
 
     try:
-        outputs = export_gif(frames, GifExportOptions(output, fps=fps, loop=loop, wechat_sticker=wechat))
+        outputs = export_gif(frames, GifExportOptions(output, fps=fps, loop=loop, repeat_fps=tuple(repeat_fps or ()), wechat_sticker=wechat))
     except (ValueError, OSError) as exc:
         raise typer.BadParameter(str(exc)) from exc
     for path in outputs:

@@ -204,6 +204,7 @@ RAW 源图的去抖动分析、成片预览和导出统一优先读取长边至�
 - GIF 时间粒度为 10 ms。请求不超过 100 FPS 时保留所有输入帧，按累计时间量化每帧时长，避免逐帧取整累计误差；例如 24 FPS 使用不同的 10 ms 倍数时长组合。
 - [GifExportPanel](../birdstamp/gui/editor_gif_panel.py) 保留 1–240 FPS 输入。超过 100 FPS 时按原始总时长采样到 100 FPS，部分输入帧不会进入 GIF，编码帧数会改变，不能再假设一张输入图对应一帧 GIF。
 - 总时长通常与请求时长相差不超过 5 ms；非空片段最少是一帧 10 ms，极短片段受此下限约束。所有帧时长均非零，主输出与缩放变体复用同一时间计划。
+- 重复播放：`GifExportOptions.repeat_fps`（`build_gif_frame_timing` 的 `repeat_fps`）在主 FPS 那一遍之后，按各自 FPS 把完整序列再追加若干遍，例如 15 张照片按 20 → 10 → 5 FPS 得到 45 个编码帧。每遍独立按上述规则量化/采样，`GifFrameTiming.segment_fps` 记录各遍 FPS，`effective_fps` 为整段平均值；`input_frame_count` 仍是输入图片数。编码时同一输入帧只解码缩放一次，内存不随遍数增长。面板「重复播放」逐行添加（默认取上一遍 FPS 的一半，最多 16 遍），随导出偏好和工作区的 `gif_repeat_fps` 保存，旧工作区恢复为只播放一遍；CLI 用可重复的 `--repeat-fps`。回归见 [test_gif_timing.py](../tests/test_gif_timing.py)、[test_gif_export_panel.py](../tests/test_gif_export_panel.py)。
 - `GifExportProgress` 的 `current` / `total` 使用计划编码帧数，另有 `input_frame_count`、`encoded_frame_count`、`requested_fps`、`effective_fps`、`duration_ms` 和变体序号。非 GUI 调用方也应展示实际 FPS 与时长；GUI 的进度和完成摘要已展示这些信息。
 
 当前 Pillow GIF 编码会在内存中保留一个变体的全部采样帧，尚非流式编码。编码器可能合并相同帧，播放器也可能施加自身最小时长；上述进度表达导出的时间计划，不能用来假设文件必然包含同等数量的独立帧记录或所有播放器具有相同播放策略。

@@ -610,6 +610,7 @@ class _BirdStampExporterMixin:
                 loop=gif_request.loop,
                 scale_factors=gif_request.scale_factors,
                 wechat_sticker=gif_request.wechat_sticker,
+                repeat_fps=list(getattr(gif_request, "repeat_fps", None) or ()),
             )
         except Exception:
             self._reset_image_export_progress(expected_token=prepare_token)
@@ -626,7 +627,10 @@ class _BirdStampExporterMixin:
                     pass
         elapsed = time.perf_counter() - started_at
         timing_text = self._format_image_export_timing_summary(max(1, len(frame_paths)), elapsed)
-        timing_text = f"{build_gif_frame_timing(len(frame_paths), gif_request.fps).summary()} | {timing_text}"
+        gif_timing = build_gif_frame_timing(
+            len(frame_paths), gif_request.fps, list(getattr(gif_request, "repeat_fps", None) or ()),
+        )
+        timing_text = f"{gif_timing.summary()} | {timing_text}"
         outputs_text = "，".join(path.name for path in gif_paths)
         self._clear_photo_export_dirty(paths)
         if gif_request.keep_frame_images and frame_output_dir is not None:
@@ -649,16 +653,18 @@ class _BirdStampExporterMixin:
         loop: int,
         scale_factors: list[float],
         wechat_sticker: bool = False,
+        repeat_fps: list[float] | None = None,
     ) -> list[Path]:
         variant_paths = build_gif_variant_output_paths(output_path.with_suffix(".gif"), scale_factors)
         total_outputs = 1 + len(variant_paths) + int(wechat_sticker)
-        timing = build_gif_frame_timing(len(frame_paths), fps)
+        timing = build_gif_frame_timing(len(frame_paths), fps, repeat_fps or ())
         progress_token = self._begin_image_export_progress(total=timing.encoded_frame_count, label="GIF 合成", phase_text="编码中")
         try:
             options = GifExportOptions(
                 output_path=output_path,
                 fps=fps,
                 loop=loop,
+                repeat_fps=tuple(repeat_fps or ()),
                 scale_factors=tuple(scale_factors),
                 wechat_sticker=wechat_sticker,
                 background_color=self._gif_background_color_for_export(),

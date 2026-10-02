@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+import math
 
 from PyQt6.QtCore import QRect, QSize, pyqtSignal
 from PyQt6.QtGui import QResizeEvent
@@ -19,10 +20,34 @@ from PyQt6.QtWidgets import (
 )
 
 from birdstamp.gui import editor_options
+from birdstamp.gui.editor_collapsible import refresh_layout_chain
 
 GIF_SCALE_OPTIONS = editor_options.GIF_SCALE_OPTIONS
 DEFAULT_GIF_FPS = editor_options.DEFAULT_GIF_FPS
 DEFAULT_GIF_LOOP = editor_options.DEFAULT_GIF_LOOP
+GIF_FPS_MIN = 1
+GIF_FPS_MAX = 240
+GIF_REPEAT_PASS_LIMIT = 16
+
+
+def normalize_gif_repeat_fps(values: object) -> list[float]:
+    """Parse persisted repeat-pass FPS values, dropping invalid entries."""
+    if not isinstance(values, (list, tuple)):
+        return []
+    result: list[float] = []
+    for value in values:
+        if isinstance(value, bool):
+            continue
+        try:
+            fps = float(value)
+        except Exception:
+            continue
+        if not math.isfinite(fps) or fps <= 0:
+            continue
+        result.append(float(max(GIF_FPS_MIN, min(GIF_FPS_MAX, int(round(fps))))))
+        if len(result) >= GIF_REPEAT_PASS_LIMIT:
+            break
+    return result
 
 
 class _ScaleOptionsLayout(QLayout):
@@ -108,6 +133,7 @@ class GifExportRequest:
     keep_frame_images: bool
     scale_factors: list[float]
     wechat_sticker: bool = True
+    repeat_fps: list[float] = field(default_factory=list)
 
 
 class GifExportPanel(QGroupBox):
@@ -119,6 +145,7 @@ class GifExportPanel(QGroupBox):
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__("GIF 选项", parent)
         self._scale_checks: list[tuple[float, QCheckBox]] = []
+        self._repeat_rows: list[tuple[QWidget, QLabel, QSpinBox]] = []
         self._build_ui()
 
     def _build_ui(self) -> None:
@@ -132,7 +159,7 @@ class GifExportPanel(QGroupBox):
         form.setVerticalSpacing(6)
 
         self.fps_spin = QSpinBox()
-        self.fps_spin.setRange(1, 240)
+        self.fps_spin.setRange(GIF_FPS_MIN, GIF_FPS_MAX)
         self.fps_spin.setSingleStep(1)
         self.fps_spin.setValue(max(1, int(round(float(DEFAULT_GIF_FPS)))))
         self.fps_spin.valueChanged.connect(lambda _value: self.optionsChanged.emit())
@@ -147,6 +174,22 @@ class GifExportPanel(QGroupBox):
         fps_layout.addWidget(self.auto_fps_button)
         fps_layout.addStretch(1)
         form.addRow("FPS", fps_widget)
+
+        repeat_widget = QWidget()
+        self._repeat_layout = QVBoxLayout(repeat_widget)
+        self._repeat_layout.setContentsMargins(0, 0, 0, 0)
+        self._repeat_layout.setSpacing(4)
+        self.add_repeat_button = QPushButton("添加一遍")
+        self.add_repeat_button.setToolTip(
+            "在完整序列之后再按新的 FPS 播放一遍，可添加多遍，例如 20 → 10 → 5 FPS。"
+        )
+        self.add_repeat_button.clicked.connect(self._on_add_repeat_clicked)
+        add_row = QHBoxLayout()
+        add_row.setContentsMargins(0, 0, 0, 0)
+        add_row.addWidget(self.add_repeat_button)
+        add_row.addStretch(1)
+        self._repeat_layout.addLayout(add_row)
+        form.addRow("重复播放", repeat_widget)
 
         self.loop_spin = QSpinBox()
         self.loop_spin.setRange(0, 9999)
@@ -179,6 +222,7 @@ class GifExportPanel(QGroupBox):
 
         hint_label = QLabel(
             "按当前照片列表顺序合成 GIF，并生成勾选的缩小版本。"
+            "重复播放会把完整序列按各自 FPS 依次追加到同一个 GIF。"
             "GIF 以 10 毫秒计时；高于 100 FPS 时按原总时长采样到 100 FPS，部分输入帧不会写入 GIF。"
         )
         hint_label.setStyleSheet("color: #7A7A7A; font-size: 11px;")
@@ -199,7 +243,68 @@ class GifExportPanel(QGroupBox):
             keep_frame_images=bool(self.keep_frames_check.isChecked()),
             scale_factors=scales,
             wechat_sticker=self.wechat_sticker_check.isChecked(),
+            repeat_fps=self.repeat_fps(),
         )
+
+    def repeat_fps(self) -> list[float]:
+        return [float(spin.value()) for _row, _label, spin in self._repeat_rows]
+
+    def _on_add_repeat_clicked(self) -> None:
+        previous = self._repeat_rows[-1][2].value() if self._repeat_rows else self.fps_spin.value()
+        # 默认减半，便于快速得到 20 → 10 → 5 这样的渐慢回放。
+        self._append_repeat_row(max(GIF_FPS_MIN, int(round(previous / 2.0))))
+        self._after_repeat_rows_changed()
+        self.optionsChanged.emit()
+
+    def _on_remove_repeat_clicked(self, row: QWidget) -> None:
+        for index, (candidate, _label, _spin) in enumerate(self._repeat_rows):
+            if candidate is row:
+                del self._repeat_rows[index]
+                break
+        else:
+            return
+        self._repeat_layout.removeWidget(row)
+        row.hide()
+        row.deleteLater()
+        self._after_repeat_rows_changed()
+        self.optionsChanged.emit()
+
+    def _append_repeat_row(self, fps: float) -> None:
+        row = QWidget()
+        row_layout = QHBoxLayout(row)
+        row_layout.setContentsMargins(0, 0, 0, 0)
+        row_layout.setSpacing(8)
+        label = QLabel()
+        spin = QSpinBox()
+        spin.setRange(GIF_FPS_MIN, GIF_FPS_MAX)
+        spin.setSuffix(" FPS")
+        spin.setValue(max(GIF_FPS_MIN, min(GIF_FPS_MAX, int(round(float(fps))))))
+        spin.valueChanged.connect(lambda _value: self.optionsChanged.emit())
+        remove_button = QPushButton("删除")
+        remove_button.setToolTip("删除这一遍重复播放。")
+        remove_button.clicked.connect(lambda _checked=False, target=row: self._on_remove_repeat_clicked(target))
+        row_layout.addWidget(label)
+        row_layout.addWidget(spin)
+        row_layout.addWidget(remove_button)
+        row_layout.addStretch(1)
+        self._repeat_layout.insertWidget(len(self._repeat_rows), row)
+        self._repeat_rows.append((row, label, spin))
+
+    def _after_repeat_rows_changed(self) -> None:
+        for index, (_row, label, _spin) in enumerate(self._repeat_rows, start=2):
+            label.setText(f"第 {index} 遍")
+        self.add_repeat_button.setEnabled(len(self._repeat_rows) < GIF_REPEAT_PASS_LIMIT)
+        refresh_layout_chain(self)
+
+    def _set_repeat_fps(self, values: list[float]) -> None:
+        for row, _label, _spin in self._repeat_rows:
+            self._repeat_layout.removeWidget(row)
+            row.hide()
+            row.deleteLater()
+        self._repeat_rows.clear()
+        for fps in values:
+            self._append_repeat_row(fps)
+        self._after_repeat_rows_changed()
 
     def set_state(
         self,
@@ -209,6 +314,7 @@ class GifExportPanel(QGroupBox):
         keep_frame_images: bool | None = None,
         scale_factors: list[float] | tuple[float, ...] | None = None,
         wechat_sticker: bool | None = None,
+        repeat_fps: list[float] | tuple[float, ...] | None = None,
     ) -> None:
         wechat_was_blocked = self.wechat_sticker_check.blockSignals(True)
         self.fps_spin.blockSignals(True)
@@ -220,7 +326,7 @@ class GifExportPanel(QGroupBox):
             if wechat_sticker is not None:
                 self.wechat_sticker_check.setChecked(bool(wechat_sticker))
             if fps is not None:
-                self.fps_spin.setValue(max(1, min(240, int(round(float(fps))))))
+                self.fps_spin.setValue(max(GIF_FPS_MIN, min(GIF_FPS_MAX, int(round(float(fps))))))
             if loop is not None:
                 self.loop_spin.setValue(max(0, int(loop)))
             if keep_frame_images is not None:
@@ -229,6 +335,9 @@ class GifExportPanel(QGroupBox):
                 selected = {round(float(scale), 6) for scale in scale_factors if float(scale) > 0}
                 for scale, check in self._scale_checks:
                     check.setChecked(round(float(scale), 6) in selected)
+            if repeat_fps is not None:
+                # 新建的行在连接信号前设置初值，恢复状态不会发出 optionsChanged。
+                self._set_repeat_fps(normalize_gif_repeat_fps(repeat_fps))
         finally:
             self.wechat_sticker_check.blockSignals(wechat_was_blocked)
             for _scale, check in reversed(self._scale_checks):

@@ -416,6 +416,7 @@ class _BirdStampWorkspaceMixin:
             PIPELINE_STAGE_ORDER_KEY: list(self._current_pipeline_stage_order()),
             PIPELINE_STAGE_ENABLED_KEY: dict(self._current_pipeline_stage_enabled_map()),
             "gif_fps": gif_request.fps,
+            "gif_repeat_fps": list(gif_request.repeat_fps),
             "gif_loop": gif_request.loop,
             "gif_keep_frame_images": gif_request.keep_frame_images,
             "gif_scale_factors": list(gif_request.scale_factors),
@@ -468,6 +469,8 @@ class _BirdStampWorkspaceMixin:
                 keep_frame_images=state.get("gif_keep_frame_images"),
                 scale_factors=state.get("gif_scale_factors"),
                 wechat_sticker=state.get("gif_wechat_sticker", editor_options.DEFAULT_GIF_WECHAT_STICKER),
+                # 旧工作区没有重复播放设置，按只播放一遍恢复。
+                repeat_fps=state.get("gif_repeat_fps") or [],
             )
         finally:
             _restore_widget_signals(widgets_state)
