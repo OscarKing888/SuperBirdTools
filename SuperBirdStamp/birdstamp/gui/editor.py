@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Any, Callable, Iterable
 
 from PIL import Image, ImageColor, ImageDraw, ImageOps
-from PyQt6.QtCore import QEvent, QPoint, QPointF, QRect, QRectF, Qt, QThread, QTimer, pyqtSignal
+from PyQt6.QtCore import QEvent, QPoint, QPointF, QRect, QRectF, QSize, Qt, QThread, QTimer, pyqtSignal
 from PyQt6.QtGui import (
     QAction,
     QColor,
@@ -62,6 +62,8 @@ from PyQt6.QtWidgets import (
     QSizePolicy,
     QSlider,
     QSplitter,
+    QStyle,
+    QStyleOptionTabWidgetFrame,
     QToolButton,
     QTreeWidget,
     QTreeWidgetItem,
@@ -336,6 +338,80 @@ _DEFAULT_TEMPLATE_FONT_TYPE = editor_utils.DEFAULT_TEMPLATE_FONT_TYPE
 _normalize_template_font_type = editor_utils.normalize_template_font_type
 _normalize_template_field = editor_template.normalize_template_field
 _deep_copy_payload = editor_template.deep_copy_payload
+
+
+class _FitContentListWidget(QListWidget):
+    """高度贴合行数的列表：不留空白、不出滚动条，字体/样式变化后自动重算。"""
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.model().rowsInserted.connect(lambda *_args: self.updateGeometry())
+        self.model().rowsRemoved.connect(lambda *_args: self.updateGeometry())
+
+    def sizeHint(self) -> QSize:
+        rows_height = sum(self.sizeHintForRow(i) for i in range(self.count()))
+        height = max(rows_height, self.fontMetrics().height()) + 2 * self.frameWidth() + 2
+        return QSize(super().sizeHint().width(), height)
+
+    def minimumSizeHint(self) -> QSize:
+        return self.sizeHint()
+
+
+class _CurrentPageTabWidget(QTabWidget):
+    """高度只跟随当前页的 QTabWidget。
+
+    QTabWidget 默认按最高页定高，短页底部会留下大片空白；这里让未显示页的高度不参与布局。
+    """
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.currentChanged.connect(self._fit_to_current_page)
+
+    def tabInserted(self, index: int) -> None:
+        super().tabInserted(index)
+        self._fit_to_current_page(self.currentIndex())
+
+    def _fit_to_current_page(self, index: int) -> None:
+        for i in range(self.count()):
+            page = self.widget(i)
+            if page is None:
+                continue
+            # QStackedLayout 计算最小尺寸时跳过 Ignored 页。
+            vertical = QSizePolicy.Policy.Preferred if i == index else QSizePolicy.Policy.Ignored
+            page.setSizePolicy(page.sizePolicy().horizontalPolicy(), vertical)
+        self.updateGeometry()
+
+    def _extra_height(self, page_height) -> int:
+        """所有页最大高度与当前页高度之差。"""
+        current = self.currentWidget()
+        if current is None:
+            return 0
+        tallest = max(page_height(self.widget(i)) for i in range(self.count()))
+        return max(0, tallest - page_height(current))
+
+    def sizeHint(self) -> QSize:
+        # Qt6 的 QTabWidget.sizeHint 不看 size policy，取所有页最大值；扣掉与当前页的高度差。
+        hint = super().sizeHint()
+        return QSize(hint.width(), hint.height() - self._extra_height(lambda page: page.sizeHint().height()))
+
+    def heightForWidth(self, width: int) -> int:
+        # QStackedLayout.heightForWidth 同样取所有页最大值（有自动换行 QLabel 时布局走这条路径）。
+        height = super().heightForWidth(width)
+        if height < 0:
+            return height
+        option = QStyleOptionTabWidgetFrame()
+        self.initStyleOption(option)
+        option.state = QStyle.StateFlag.State_None
+        padding = self.style().sizeFromContents(QStyle.ContentsType.CT_TabWidget, option, QSize(0, 0), self)
+        stack_width = width - padding.width()
+
+        def page_height(page: QWidget) -> int:
+            page_hfw = page.heightForWidth(stack_width)
+            return page_hfw if page_hfw >= 0 else page.sizeHint().height()
+
+        return height - self._extra_height(page_height)
 
 
 class _ReportDBListWidget(QListWidget):
@@ -1299,13 +1375,12 @@ class BirdStampEditorWindow(
         pipeline_order_row = QHBoxLayout()
         pipeline_order_row.setContentsMargins(0, 0, 0, 0)
         pipeline_order_row.setSpacing(6)
-        self.pipeline_stage_list = QListWidget()
+        self.pipeline_stage_list = _FitContentListWidget()
         self.pipeline_stage_list.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         self.pipeline_stage_list.setDragDropMode(QAbstractItemView.DragDropMode.NoDragDrop)
-        self.pipeline_stage_list.setFixedHeight(104)
         self.pipeline_stage_list.currentRowChanged.connect(lambda _row: self._refresh_pipeline_stage_move_buttons())
         self.pipeline_stage_list.itemChanged.connect(self._on_pipeline_stage_item_changed)
-        pipeline_order_row.addWidget(self.pipeline_stage_list, 1)
+        pipeline_order_row.addWidget(self.pipeline_stage_list, 1, Qt.AlignmentFlag.AlignTop)
         pipeline_btn_col = QVBoxLayout()
         pipeline_btn_col.setContentsMargins(0, 0, 0, 0)
         pipeline_btn_col.setSpacing(6)
@@ -1445,9 +1520,11 @@ class BirdStampEditorWindow(
             else:
                 self.video_export_panel.set_status_text(f"未找到 ffmpeg，目标: {preferred_ffmpeg_binary_path()}")
         export_root.addWidget(self.video_export_panel)
+        # 去抖动页更高时 QTabWidget 会把本页撑到同高，多余空间留在底部，避免撑开「处理管线」。
+        export_root.addStretch(1)
 
         export_section = CollapsibleSection("导出", expanded=True)
-        self.export_tabs = QTabWidget()
+        self.export_tabs = _CurrentPageTabWidget()
         self.export_tabs.addTab(export_content, "导出设置")
         self.export_tabs.addTab(self.dejitter_page, "去抖动")
         self.export_tabs.currentChanged.connect(self._on_export_tab_changed)
