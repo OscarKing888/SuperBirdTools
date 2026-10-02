@@ -436,7 +436,7 @@ class _BirdStampWorkspaceMixin:
         output_format_buttons = getattr(self, "output_format_buttons", {}) or {}
         widgets_state = _block_widget_signals(
             *list(output_format_buttons.values()),
-            self.gif_export_panel.fps_spin,
+            self.gif_export_panel.fps_combo,
             self.gif_export_panel.loop_spin,
             self.gif_export_panel.keep_frames_check,
             *[check for _scale, check in getattr(self.gif_export_panel, "_scale_checks", [])],

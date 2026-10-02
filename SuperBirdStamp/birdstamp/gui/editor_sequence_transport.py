@@ -6,10 +6,11 @@ from PyQt6.QtCore import QEvent, QObject, QSize, Qt, QTimer
 from PyQt6.QtGui import QColor, QIcon, QPalette, QPixmap
 from PyQt6.QtWidgets import (
     QCheckBox, QHBoxLayout, QLabel, QListWidget, QListWidgetItem,
-    QPushButton, QSpinBox, QStyle, QToolButton, QVBoxLayout, QWidget,
+    QPushButton, QStyle, QToolButton, QVBoxLayout, QWidget,
 )
 
 from . import editor_options
+from .editor_fps_combo import FpsComboBox
 from .editor_utils import path_key
 from .editor_photo_list import PHOTO_COL_ROW, PHOTO_LIST_PATH_ROLE
 from .editor_source_quick_loader import SourceQuickLoader
@@ -70,11 +71,9 @@ class SequenceTransport(QObject):
         self.refresh_media_icons()
         self.position = QLabel('0 / 0')
         self.preparation = QLabel('')
-        self.fps = QSpinBox()
-        self.fps.setRange(1, 30)
-        self.fps.setValue(editor_options.DEJITTER_PLAYBACK_FPS)
-        self.fps.setSuffix(' 帧/秒')
+        self.fps = FpsComboBox(1, 30, editor_options.DEJITTER_PLAYBACK_FPS)
         self.fps.setToolTip('播放和长按方向键的预览速度')
+        self.fps_unit = QLabel('帧/秒')
         self.fps.valueChanged.connect(lambda value: self.timer.setInterval(round(1000 / value)))
         self.timer.setInterval(round(1000 / self.fps.value()))
         self.auto_fps_button = QPushButton('自动')
@@ -86,6 +85,7 @@ class SequenceTransport(QObject):
             row.addWidget(widget)
         row.addStretch(1)
         row.addWidget(self.fps)
+        row.addWidget(self.fps_unit)
         row.addWidget(self.auto_fps_button)
         row.addWidget(self.loop)
         layout.addLayout(row)
