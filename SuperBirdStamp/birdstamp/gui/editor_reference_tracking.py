@@ -26,6 +26,10 @@ class _BirdStampReferenceTrackingMixin:
         self._reference_tracking_definition = None
         self._reference_tracking_signature = None
         self._dejitter_manual_matches = {}
+        # 接力参考图：path_key → relay_record；列表位置决定其接力段。
+        self._dejitter_relay_anchors = {}
+        self._dejitter_relay_version = 0
+        self._dejitter_relay_cache = None
         self._reference_tracking_message = "框选参考区后点击预处理，可切图查看跟踪结果。"
 
     def _reference_tracking_input(self):
@@ -42,7 +46,8 @@ class _BirdStampReferenceTrackingMixin:
         return (path_key(Path(source)), regions, options, method, recommendation) if source and regions else None
 
     def _reference_regions_editable(self) -> bool:
-        return self._is_reference_photo(getattr(self, 'current_path', None))
+        # 原参考图与接力参考图都可直接框选；其它照片只修正所属定义的匹配位置。
+        return self._is_definition_photo(getattr(self, 'current_path', None))
 
     def _is_reference_photo(self, path):
         source = getattr(self, "_dejitter_reference_source", None)
@@ -57,7 +62,8 @@ class _BirdStampReferenceTrackingMixin:
 
     def _manual_boxes_for_path(self, path):
         record = self._dejitter_manual_matches.get(path_key(path)) if path is not None else None
-        return valid_manual_boxes(record, path, self._dejitter_reference_source, self._dejitter_reference_regions)
+        source, regions = self._definition_for_path(path, effective=True)
+        return valid_manual_boxes(record, path, source, regions)
 
     def _manual_record_for_path(self, path):
         return self._dejitter_manual_matches.get(path_key(path)) if any(self._manual_boxes_for_path(path)) else None
@@ -87,12 +93,13 @@ class _BirdStampReferenceTrackingMixin:
                                   signature=image_file_signature(current))
 
     def _tracking_diagnostics_for_path(self, path):
-        return self._tracking_result_for_path(path) or RegionTrackingResult((None,) * len(self._dejitter_reference_regions))
+        return self._tracking_result_for_path(path) or RegionTrackingResult((None,) * len(self._definition_for_path(path)[1]))
 
     def _editable_regions_for_path(self, path):
-        if self._is_reference_photo(path):
-            return self._dejitter_reference_regions
-        boxes = editable_match_boxes(self._dejitter_reference_regions, self._tracking_result_for_path(path))
+        regions = self._definition_for_path(path)[1]
+        if self._is_definition_photo(path):
+            return regions
+        boxes = editable_match_boxes(regions, self._tracking_result_for_path(path))
         manual = self._manual_boxes_for_path(path)
         return tuple((manual[i] if i < len(manual) and manual[i] is not None else box) for i, box in enumerate(boxes))
 
@@ -123,10 +130,20 @@ class _BirdStampReferenceTrackingMixin:
 
     def _commit_source_reference_regions(self, path, regions):
         """显式绑定画布源路径，A 图提交不能借用 B 图的路径或裁切坐标。"""
-        if path is None or not self._is_reference_photo(path):
+        if path is None or not self._is_definition_photo(path):
             return
         source_regions = tuple(box for value in regions or () if (box := normalize_match_box(value)) is not None)
-        self._dejitter_manual_matches.clear()
+        if not self._is_reference_photo(path):
+            self._commit_relay_regions(path, source_regions)
+            self._refresh_preview_label(preserve_view=True)
+            return
+        if self._dejitter_reference_source:
+            # 接力段的修正以接力参考图为定义，原参考选区变化不影响它们的编号。
+            self._drop_manual_matches_for_source(self._dejitter_reference_source)
+        else:
+            self._dejitter_manual_matches.clear()
+        if not source_regions:
+            self._clear_relay_anchors()
         self._invalidate_reference_tracking()
         self._dejitter_reference_regions = source_regions
         if hasattr(self,"dejitter_recommendation"):
@@ -140,16 +157,16 @@ class _BirdStampReferenceTrackingMixin:
         self._schedule_workspace_autosave()
 
     def _commit_manual_region_match(self, path, index, box, *, original=None):
-        if not self._region_edit_enabled(path, original=original) or self._is_reference_photo(path):
+        if not self._region_edit_enabled(path, original=original) or self._is_definition_photo(path):
             return
-        regions = self._dejitter_reference_regions
+        source, regions = self._definition_for_path(path)
         if not 0 <= index < len(regions) or (box is not None and normalize_match_box(box) is None):
             return
         boxes = list(self._manual_boxes_for_path(path) or (None,) * len(regions))
         boxes[index] = normalize_match_box(box) if box is not None else None
         key = path_key(path)
         if any(b is not None for b in boxes):
-            self._dejitter_manual_matches[key] = manual_match_record(path, self._dejitter_reference_source, regions, boxes)
+            self._dejitter_manual_matches[key] = manual_match_record(path, source, regions, boxes)
         else:
             self._dejitter_manual_matches.pop(key, None)
         # 旧分析和旧后台回调失效，已知自动诊断留作其它编号的编辑底图。
@@ -168,10 +185,14 @@ class _BirdStampReferenceTrackingMixin:
             if not isinstance(record, dict) or not isinstance(record.get('path'), str):
                 continue
             path = Path(record['path'])
-            boxes = valid_manual_boxes(record, path, self._dejitter_reference_source, self._dejitter_reference_regions)
+            # 接力段的修正以接力参考图为定义；恢复时尚不依赖列表顺序。
+            source = record.get('reference')
+            regions = self._definition_regions_for_source(source) if isinstance(source, str) else None
+            if regions is None:
+                continue
+            boxes = valid_manual_boxes(record, path, source, regions)
             if any(boxes):
-                self._dejitter_manual_matches[path_key(path)] = manual_match_record(
-                    path, self._dejitter_reference_source, self._dejitter_reference_regions, boxes)
+                self._dejitter_manual_matches[path_key(path)] = manual_match_record(path, source, regions, boxes)
 
     def _invalidate_reference_tracking(self, message="参考区或照片列表已变化，请重新预处理。", *, shutdown=False) -> None:
         self._invalidate_sequence_preview(shutdown=shutdown)

@@ -428,6 +428,7 @@ class _BirdStampWorkspaceMixin:
             PIPELINE_STAGE_ORDER_KEY: list(self._current_pipeline_stage_order()),
             PIPELINE_STAGE_ENABLED_KEY: dict(self._current_pipeline_stage_enabled_map()),
             "gif_fps": gif_request.fps,
+            "gif_repeat_fps": list(gif_request.repeat_fps),
             "gif_loop": gif_request.loop,
             "gif_keep_frame_images": gif_request.keep_frame_images,
             "gif_scale_factors": list(gif_request.scale_factors),
@@ -480,6 +481,8 @@ class _BirdStampWorkspaceMixin:
                 keep_frame_images=state.get("gif_keep_frame_images"),
                 scale_factors=state.get("gif_scale_factors"),
                 wechat_sticker=state.get("gif_wechat_sticker", editor_options.DEFAULT_GIF_WECHAT_STICKER),
+                # 旧工作区没有重复播放设置，按只播放一遍恢复。
+                repeat_fps=state.get("gif_repeat_fps") or [],
             )
         finally:
             _restore_widget_signals(widgets_state)
@@ -653,6 +656,7 @@ class _BirdStampWorkspaceMixin:
                 "preview": self._collect_workspace_preview_state(),
                 "sequence_preview": self._collect_sequence_workspace_state(),
                 "dejitter_manual_matches": list(self._dejitter_manual_matches.values()),
+                "dejitter_relay_anchors": self._relay_settings_value(),
             },
         }
 
@@ -930,6 +934,8 @@ class _BirdStampWorkspaceMixin:
             restore_dejitter = getattr(self, "_restore_dejitter_reference_from_settings", None)
             if callable(restore_dejitter):
                 restore_dejitter(current_render_settings)
+            # 接力参考图先恢复，接力段内的手动修正才能按接力选区校验。
+            self._restore_relay_anchors(editor_state.get('dejitter_relay_anchors'))
             self._restore_manual_region_matches(editor_state.get('dejitter_manual_matches'))
             update_clear = getattr(self, "_update_dejitter_reference_clear_enabled", None)
             if callable(update_clear):

@@ -102,10 +102,11 @@ class RegionRecommendationPanel(QWidget):
     def context(self):
         e=self.editor
         paths=tuple(e._list_photo_paths())
-        reference=Path(e._dejitter_reference_source or e.current_path) if e.current_path else None
+        source,regions=e._definition_for_path(e.current_path)
+        reference=Path(source or e.current_path) if e.current_path else None
         return (str(e.current_path),str(reference),image_file_signature(reference) if reference else None,
                 tuple(image_file_signature(Path(p)) for p in paths),
-                tuple(e._dejitter_reference_regions),e.dejitter_subject_controls.method.currentData(),
+                tuple(regions),e.dejitter_subject_controls.method.currentData(),
                 e.dejitter_subject_controls.follow.isChecked(),
                 repr(e.dejitter_matching_controls.settings()),self.part.currentData(),
                 self.experimental.isChecked(),e.dejitter_auto_region_count.value(),repr(self.metadata.get('target')))
@@ -214,9 +215,12 @@ class RegionRecommendationPanel(QWidget):
         if e.current_path is None:return
         from birdstamp.image_dejitter.matching_options import MatchingOptions
         auto={tuple(r) for r in self.metadata.get('auto_regions',[])}
-        manual=tuple(r for r in e._dejitter_reference_regions if tuple(r) not in auto)
-        reference=Path(e._dejitter_reference_source or e.current_path)
-        paths=tuple(e._list_photo_paths())
+        source,regions=e._definition_for_path(e.current_path)
+        relay=e._relay_anchor_for_path(e.current_path) is not None
+        # 接力参考图只补足接力选区，抽样预检也只用匹配这组选区的照片。
+        manual=tuple(regions) if relay else tuple(r for r in regions if tuple(r) not in auto)
+        reference=Path(source or e.current_path)
+        paths=e._definition_paths_for_path(e.current_path)
         kwargs=dict(method=e.dejitter_subject_controls.method.currentData(),existing=manual,
                     target=self.metadata.get('target'),part=self.part.currentData(),
                     target_count=e.dejitter_auto_region_count.value(),experimental=self.experimental.isChecked(),
@@ -273,6 +277,13 @@ class RegionRecommendationPanel(QWidget):
             self.editor._update_dejitter_controls()
             return
         e=self.editor
+        if e._relay_anchor_for_path(e.current_path) is not None:
+            # 接力选区不改写原参考区的推荐元数据。
+            e._commit_source_reference_regions(e.current_path,(*e._definition_for_path(e.current_path)[1],*result.regions))
+            self.status.setText(f'已补充接力选区。{result.message}')
+            e._sequence_message=self.status.text();e._update_dejitter_controls()
+            e._refresh_preview_label(preserve_view=True)
+            return
         old_auto={tuple(r) for r in self.metadata.get('auto_regions',[])}
         manual=tuple(r for r in e._dejitter_reference_regions if tuple(r) not in old_auto)
         e._commit_source_reference_regions(e.current_path,(*manual,*result.regions))

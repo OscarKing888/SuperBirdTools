@@ -56,18 +56,30 @@ class SequenceAnalysisAction(WorkerAction):
 def analyze_sequence_frames(jobs, tracker, reference, *, cancel_event, preview_source=None,
                             progress=lambda message: None,
                             progress_counts=lambda current, total, stage: None, analysis_workers=0,
-                            photo_errors=None):
-    """preview_source 在池线程调用；传入 photo_errors 可保留失败前已派发的结果。"""
+                            photo_errors=None, segment_trackers=None):
+    """preview_source 在池线程调用；传入 photo_errors 可保留失败前已派发的结果。
+
+    segment_trackers 把接力段照片映射到 (接力跟踪器, 接力参考图路径)；其余照片匹配原参考图。
+    """
     keys = tuple(path_key(job.path) for job in jobs)
     positions = {key: index for index, key in enumerate(keys)}
     failure_index = len(keys)
     tracking, sizes = {}, {}
-    reference_key = path_key(reference)
-    manual_boxes = {path_key(job.path): valid_manual_boxes(job.settings.get(MANUAL_MATCHES_KEY),
-                                                         job.path, reference, tracker.regions) for job in jobs}
-    if reference_key in keys:
-        tracking[reference_key] = RegionTrackingResult(tracker.regions, signature=image_file_signature(reference))
-        sizes[reference_key] = tracker.reference_size
+    definitions = dict(segment_trackers or {})
+
+    def definition(key):
+        return definitions.get(key, (tracker, reference))
+
+    manual_boxes = {}
+    for job in jobs:
+        owner, source = definition(path_key(job.path))
+        manual_boxes[path_key(job.path)] = valid_manual_boxes(job.settings.get(MANUAL_MATCHES_KEY),
+                                                              job.path, source, owner.regions)
+    identities = {key: (owner, source) for key, (owner, source) in
+                  ((key, definition(key)) for key in keys) if path_key(source) == key}
+    for key, (owner, source) in identities.items():
+        tracking[key] = RegionTrackingResult(owner.regions, signature=image_file_signature(source))
+        sizes[key] = owner.reference_size
     # 分析另有 FFT 临时数组；尺寸缺失/小图也至少按 2400 万像素估算预算。
     max_pixels = max(24_000_000, estimate_video_job_max_pixels(jobs),
                      tracker.reference_size[0] * tracker.reference_size[1])
@@ -131,28 +143,32 @@ def analyze_sequence_frames(jobs, tracker, reference, *, cancel_event, preview_s
 
     try:
         _LOG.info('sequence analysis start photos=%s workers=%s', len(jobs), workers)
-        actions = (SequenceAnalysisAction(job.path, tracker, cancelled=cancelled, preview_source=preview_source,
-                                           manual_boxes=manual_boxes[path_key(job.path)])
-                   for job in jobs if path_key(job.path) != reference_key)
+        actions = (SequenceAnalysisAction(job.path, definition(path_key(job.path))[0], cancelled=cancelled,
+                                           preview_source=preview_source, manual_boxes=manual_boxes[path_key(job.path)])
+                   for job in jobs if path_key(job.path) not in identities)
         run_phase(actions, '对齐照片', len(jobs), len(tracking))
         # 用列表顺序恢复字典；完成顺序不能改变邻帧或最终输出的语义。
         tracking = {key: tracking[key] for key in keys if key in tracking}
         sizes = {key: sizes[key] for key in keys if key in sizes}
         first_pass = dict(tracking)
         recovery_actions = []
-        for index in (range(1, min(failure_index, len(jobs) - 1))
-                      if getattr(tracker, 'supports_recovery', True) else ()):
+        for index in range(1, min(failure_index, len(jobs) - 1)):
             check()
             if any(key not in first_pass for key in keys[index - 1:index + 2]):
                 continue
+            owner = definition(keys[index])[0]
+            # 邻帧证据只在同一组选区内有效；接力段边界两侧的编号含义不同。
+            if (not getattr(owner, 'supports_recovery', True)
+                    or any(definition(key)[0] is not owner for key in (keys[index - 1], keys[index + 1]))):
+                continue
             result = first_pass[keys[index]]
-            if result.matched_count == len(tracker.regions):
+            if result.matched_count == len(owner.regions):
                 continue
             previous, following = first_pass[keys[index - 1]], first_pass[keys[index + 1]]
             if any(box is None and previous.boxes[i] is not None and following.boxes[i] is not None
                    for i, box in enumerate(result.boxes)):
                 recovery_actions.append(SequenceAnalysisAction(
-                    jobs[index].path, tracker, cancelled=cancelled, recovery=(result, previous, following),
+                    jobs[index].path, owner, cancelled=cancelled, recovery=(result, previous, following),
                     manual_boxes=manual_boxes[keys[index]]))
         if recovery_actions:
             run_phase(recovery_actions, '核验遮挡', len(recovery_actions))

@@ -1,6 +1,11 @@
 """跟踪诊断只用于预览；失败框是预测位置，绝不参与裁切或导出。"""
 
-def tracking_overlays(regions, result, crop=None, *, alignment=None, source_size=None, canvas_box=None):
+def relay_prefix(sequence, key):
+    """接力段的诊断框加前缀，避免与原参考选区编号混淆。"""
+    return '接力' if sequence is not None and key in sequence.relay_segments else ''
+
+
+def tracking_overlays(regions, result, crop=None, *, alignment=None, source_size=None, canvas_box=None, prefix=''):
     if result is None:
         return ()
     left, top, right, bottom = crop or (0, 0, 1, 1)
@@ -14,10 +19,11 @@ def tracking_overlays(regions, result, crop=None, *, alignment=None, source_size
         transformed = (alignment.output_polygon(box, source_size, canvas_box) if alignment else
                        ((box[0]-left)/(right-left), (box[1]-top)/(bottom-top),
                         (box[2]-left)/(right-left), (box[3]-top)/(bottom-top)))
+        number = f'{prefix}{index+1}'
         if matched:
-            label = f'{index+1} · 手动' if index in result.manual_indices else str(index+1)
+            label = f'{number} · 手动' if index in result.manual_indices else number
         else:
-            label = f"{index+1} · {'预计位置' if located else '未定位'}"
+            label = f"{number} · {'预计位置' if located else '未定位'}"
         overlays.append((transformed, label, matched))
     return tuple(overlays)
 
@@ -27,7 +33,7 @@ def polygon_bounds(points):
             max(x for x,y in points),max(y for x,y in points)) if points else None
 
 
-def apply_frame_alignment(state, frame, focus, bird, regions, tracking):
+def apply_frame_alignment(state, frame, focus, bird, regions, tracking, *, prefix=''):
     """A/B and main preview use the same native-pixel transform, including focus centering."""
     alignment = frame.alignment
     state.focus_polygon = alignment.output_polygon(focus,frame.source_size,frame.canvas_box)
@@ -35,7 +41,7 @@ def apply_frame_alignment(state, frame, focus, bird, regions, tracking):
     state.bird_polygon = alignment.output_polygon(bird,frame.source_size,frame.canvas_box)
     state.bird_box = None
     state.reference_diagnostics = tracking_overlays(regions,tracking,alignment=alignment,
-        source_size=frame.source_size,canvas_box=frame.canvas_box)
+        source_size=frame.source_size,canvas_box=frame.canvas_box,prefix=prefix)
 
 
 def apply_alignment_crop(state, sequence, key):

@@ -398,11 +398,13 @@ class ABPreview(QObject):
         bird = editor._bird_box_cache.get(editor._source_signature(self.path))
         state.bird_box = editor_core.transform_source_box_after_crop_padding(
             bird, crop_box=crop, source_width=width, source_height=height, pt=pad[0], pb=pad[1], pl=pad[2], pr=pad[3]) if crop else bird
-        regions = editor._dejitter_reference_regions
+        # 接力段照片按接力参考图的选区编号；参考图与接力参考图都可直接框选。
+        regions = editor._definition_for_path(self.path)[1]
+        prefix = '接力' if editor._relay_owner_for_path(self.path) is not None else ''
         tracking = editor._tracking_result_for_path(self.path)
         canvas = self.preview.canvas
         can_edit = self._can_edit()
-        reference = editor._is_reference_photo(self.path)
+        reference = editor._is_definition_photo(self.path)
         canvas.reference_region_creation_enabled = reference
         canvas.set_edit_mode(EDIT_MODE_REFERENCE_REGION if can_edit else EDIT_MODE_NONE)
         diagnostics = editor._tracking_diagnostics_for_path(self.path) if can_edit else tracking
@@ -414,10 +416,10 @@ class ABPreview(QObject):
                 metadata, source_width=width, source_height=height, crop_box=None,
                 outer_pad=(0, 0, 0, 0), apply_ratio_crop=False,
                 camera_type=editor_core.resolve_focus_camera_type_from_metadata(metadata))
-            apply_frame_alignment(state, self.frame, focus, bird, regions, diagnostics)
+            apply_frame_alignment(state, self.frame, focus, bird, regions, diagnostics, prefix=prefix)
         else:
             source_crop = source_normalized_crop(sequence.source_sizes[key], sequence.pixel_boxes[key]) if self.frame and sequence else None
-            state.reference_diagnostics = tracking_overlays(regions, diagnostics, source_crop)
+            state.reference_diagnostics = tracking_overlays(regions, diagnostics, source_crop, prefix=prefix)
         if editor.dejitter_debug_check.isChecked():
             from .editor_tracking_overlay import subject_debug_points
             state.subject_points = subject_debug_points(diagnostics,

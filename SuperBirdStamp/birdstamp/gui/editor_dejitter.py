@@ -14,6 +14,7 @@ from birdstamp.export_stage.sequence_preview import sequence_input_key
 from birdstamp.export_stage.sequence_intersection import normalized_intersection_box, normalized_union_box
 from birdstamp.image_dejitter.region_tracking_result import image_file_signature
 from birdstamp.image_dejitter.manual_region_matches import MANUAL_MATCHES_KEY
+from birdstamp.image_dejitter.relay_anchors import RELAY_ANCHORS_KEY
 from . import editor_core, editor_options
 from .edit_modes import EDIT_MODE_NONE, EDIT_MODE_REFERENCE_REGION
 from .editor_preview_canvas import EditorPreviewOverlayState
@@ -202,9 +203,27 @@ class _BirdStampDejitterMixin:
         delete_row.addWidget(self.dejitter_delete_region_btn)
         delete_row.addWidget(self.dejitter_reference_clear_btn)
         form.addLayout(delete_row)
+        relay_row = QHBoxLayout()
+        self.dejitter_relay_add_btn = QPushButton('从当前照片接力追踪')
+        self._dejitter_relay_tooltip = (
+            '某张照片跟踪失败（原选区出画、被遮挡或场景已变）时使用：\n'
+            '把当前照片设为接力参考图，在它上面框选新的稳定纹理；之后的照片改为匹配这组接力选区，\n'
+            '并通过相邻且已对齐的衔接照片接回原参考图坐标，整组仍输出同一画幅。')
+        self.dejitter_relay_add_btn.setToolTip(self._dejitter_relay_tooltip)
+        self.dejitter_relay_add_btn.clicked.connect(self._on_dejitter_relay_add)
+        self.dejitter_relay_remove_btn = QPushButton('移除接力')
+        self.dejitter_relay_remove_btn.setToolTip('移除当前接力参考图；其后照片恢复匹配上一组选区。')
+        self.dejitter_relay_remove_btn.clicked.connect(self._on_dejitter_relay_remove)
+        relay_row.addWidget(self.dejitter_relay_add_btn, 1)
+        relay_row.addWidget(self.dejitter_relay_remove_btn)
+        form.addLayout(relay_row)
+        self.dejitter_relay_status = QLabel()
+        self.dejitter_relay_status.setWordWrap(True)
+        self.dejitter_relay_status.hide()
+        form.addWidget(self.dejitter_relay_status)
         self.dejitter_region_list.itemSelectionChanged.connect(self._update_dejitter_controls)
         hint = QLabel('框内拖动；手柄缩放（Shift 保持比例，Alt 对称）。\n'
-                      '参考图：空白处 Shift 追加，右键删除；其它原图：修正匹配位置，右键恢复自动匹配。')
+                      '参考图／接力参考图：空白处 Shift 追加，右键删除；其它原图：修正匹配位置，右键恢复自动匹配。')
         hint.setWordWrap(True)
         form.addWidget(hint)
         layout.addWidget(reference)
@@ -568,8 +587,21 @@ class _BirdStampDejitterMixin:
         self.dejitter_recommendation.sync(self.dejitter_subject_controls.method.currentData() == 'subject_local')
         regions = getattr(self, '_dejitter_reference_regions', ())
         source = self._dejitter_reference_source
-        self.dejitter_reference_status.setText(f'{Path(source).name} · {len(regions)} 个选区' if source and regions else '尚未选择参考区')
+        relay = self._relay_anchor_for_path(self.current_path)
+        owner = relay or self._relay_owner_for_path(self.current_path)
+        status = f'{Path(source).name} · {len(regions)} 个选区' if source and regions else '尚未选择参考区'
+        if relay is not None:
+            status = f'接力参考图 {relay.path.name} · {len(relay.regions)} 个接力选区（原参考：{status}）'
+        self.dejitter_reference_status.setText(status)
         self.dejitter_reference_strength_slider.setEnabled(bool(regions))
+        relay_block = self._relay_add_block_reason(self.current_path)
+        self.dejitter_relay_add_btn.setEnabled(not relay_block)
+        self.dejitter_relay_add_btn.setToolTip(self._dejitter_relay_tooltip
+                                               + (f'\n\n当前不可用：{relay_block}' if relay_block else ''))
+        self.dejitter_relay_remove_btn.setEnabled(relay is not None and self._sequence_worker is None)
+        relay_text = self._relay_status_text()
+        self.dejitter_relay_status.setText(relay_text)
+        self.dejitter_relay_status.setVisible(bool(relay_text))
         self._sync_dejitter_method_controls()
         self.dejitter_edit_reference_btn.setEnabled(bool(self._dejitter_reference_source))
         self.dejitter_auto_regions_btn.setEnabled(
@@ -583,20 +615,24 @@ class _BirdStampDejitterMixin:
             detail = '强度 0%：不补偿位移。' + detail
         self.dejitter_effective_status.setText(detail if regions else '请先在参考图框选一个或多个区域。')
         if hasattr(self, 'dejitter_region_list'):
-            labels = [f'选区 {index + 1}  ·  {round((box[2]-box[0])*100)}% × {round((box[3]-box[1])*100)}%'
-                      for index, box in enumerate(regions)]
+            # 列表编辑当前照片所属的定义：接力段显示接力选区，其余显示原参考选区。
+            listed = owner.regions if owner is not None else regions
+            prefix = '接力选区' if owner is not None else '选区'
+            labels = [f'{prefix} {index + 1}  ·  {round((box[2]-box[0])*100)}% × {round((box[3]-box[1])*100)}%'
+                      for index, box in enumerate(listed)]
             auto = {tuple(r) for r in self.dejitter_recommendation.metadata.get('auto_regions', [])}
             from birdstamp.image_dejitter.bird_parts.pose import PART_LABELS
             part = PART_LABELS.get(self.dejitter_recommendation.metadata.get('resolved_part'), '背景')
-            labels = [label + (f' · {part}（自动）' if tuple(box) in auto else ' · 人工')
-                      for label, box in zip(labels, regions)]
+            labels = [label + (f' · 第 {owner.index + 1} 张' if owner is not None else
+                               f' · {part}（自动）' if tuple(box) in auto else ' · 人工')
+                      for label, box in zip(labels, listed)]
             if labels != [self.dejitter_region_list.item(i).text() for i in range(self.dejitter_region_list.count())]:
                 self.dejitter_region_list.blockSignals(True)
                 self.dejitter_region_list.clear()
                 self.dejitter_region_list.addItems(labels)
                 self.dejitter_region_list.blockSignals(False)
             self.dejitter_delete_region_btn.setEnabled(bool(self.dejitter_region_list.selectedItems()))
-            self.dejitter_reference_clear_btn.setEnabled(bool(regions))
+            self.dejitter_reference_clear_btn.setEnabled(bool(relay.regions if relay is not None else regions))
         if not self._dejitter_tab_active():
             return
         worker = self._sequence_worker
@@ -784,8 +820,13 @@ class _BirdStampDejitterMixin:
                 self.dejitter_analysis_progress.setToolTip(label)
                 self._sequence_message += f'\n已生成前 {completed}/{total} 张成片预览，切换“成片预览”查看。'
             self._sequence_pending_path = None
+            failure_path = getattr(worker, 'failure_path', None)
+            if (analysis_failed and failure_path is not None and '接力' not in message
+                    and not self._relay_add_block_reason(Path(failure_path), ignore_worker=True)):
+                self._sequence_message += ('\n若此后画面已变化（原选区出画、被遮挡），可在失败照片点击“从当前照片接力追踪”，'
+                                           '框选新的稳定纹理后重新分析。')
             if analysis_failed:
-                self.ab_preview.compare_analysis_failure(getattr(worker, 'failure_path', None))
+                self.ab_preview.compare_analysis_failure(failure_path)
             self.dejitter_debug_check.setChecked(True)
             self._update_dejitter_controls()
             self._set_status(self._sequence_message)
@@ -850,6 +891,9 @@ class _BirdStampDejitterMixin:
             corrected = sum(a.status == 'rigid' for a in sequence.alignments.values())
             fallback = sum(a.status == 'fallback' for a in sequence.alignments.values())
             self._sequence_message += f'\n旋转估计成功 {corrected} 张，退回平移 {fallback} 张（未纠正旋转）。'
+        relayed = [sequence.relay_segments[k][0] for k in sequence.jobs if k in sequence.relay_segments]
+        if relayed:
+            self._sequence_message += f'\n使用 {len(set(relayed))} 张接力参考图，{len(relayed)} 张照片匹配接力选区。'
         follow = [plan.status for plan in sequence.subject_plans.values() if plan.status.startswith('bird_follow')]
         if follow:
             trend_only = follow.count('bird_follow_trend')
@@ -927,7 +971,7 @@ class _BirdStampDejitterMixin:
             )
             state = EditorPreviewOverlayState(focus_box=focus,
                                               bird_box=bird, crop_effect_box=(0, 0, 1, 1))
-            from .editor_tracking_overlay import tracking_overlays, apply_frame_alignment
+            from .editor_tracking_overlay import tracking_overlays, apply_frame_alignment, relay_prefix
             if frame.alignment and frame.alignment.rotated:
                 focus = editor_core.resolve_focus_box_after_processing(
                     job.raw_metadata, source_width=width, source_height=height, crop_box=None,
@@ -935,11 +979,13 @@ class _BirdStampDejitterMixin:
                     camera_type=editor_core.resolve_focus_camera_type_from_metadata(job.raw_metadata))
                 apply_frame_alignment(state, frame, focus,
                     self._bird_box_cache.get(self._source_signature(self.current_path)),
-                    self._dejitter_reference_regions, sequence.tracking.get(key))
+                    sequence.regions_for(key, self._dejitter_reference_regions), sequence.tracking.get(key),
+                    prefix=relay_prefix(sequence, key))
             else:
                 state.reference_diagnostics = tracking_overlays(
-                    self._dejitter_reference_regions, sequence.tracking.get(key),
-                    source_normalized_crop(frame.source_size, sequence.pixel_boxes[key]))
+                    sequence.regions_for(key, self._dejitter_reference_regions), sequence.tracking.get(key),
+                    source_normalized_crop(frame.source_size, sequence.pixel_boxes[key]),
+                    prefix=relay_prefix(sequence, key))
             if self.dejitter_debug_check.isChecked():
                 from .editor_tracking_overlay import subject_debug_points
                 state.subject_points = subject_debug_points(sequence.tracking.get(key),
@@ -976,6 +1022,9 @@ class _BirdStampDejitterMixin:
 
     def _build_dejitter_seeds(self, paths):
         settings = self._dejitter_reference_settings()
+        relays = self._relay_settings_value() if self._relay_enabled() else []
+        if relays:
+            settings[RELAY_ANCHORS_KEY] = relays
         seeds = []
         for path in paths:
             key = path_key(path)
@@ -990,12 +1039,19 @@ class _BirdStampDejitterMixin:
         rows = {self.dejitter_region_list.row(item) for item in self.dejitter_region_list.selectedItems()}
         if not rows:
             return
-        self._dejitter_manual_matches.clear()
+        owner = self._relay_owner_for_path(self.current_path)
+        if owner is not None:
+            self._commit_relay_regions(owner.path, tuple(box for index, box in enumerate(owner.regions)
+                                                         if index not in rows))
+            self._refresh_preview_label(preserve_view=True)
+            return
+        self._drop_manual_matches_for_source(self._dejitter_reference_source)
         self._dejitter_reference_regions = tuple(box for index, box in enumerate(self._dejitter_reference_regions)
                                                 if index not in rows)
         if not self._dejitter_reference_regions:
             self._dejitter_reference_source = None
             self.dejitter_reference_check.setChecked(False)
+            self._clear_relay_anchors()
         self._invalidate_reference_tracking('选区已删除，请重新分析。')
         self._update_dejitter_reference_clear_enabled()
         self._refresh_preview_label(preserve_view=True)
@@ -1087,8 +1143,10 @@ class _BirdStampDejitterMixin:
                 if apply_alignment_crop(state, self._sequence_preview, key):
                     options.show_crop_effect = self.show_crop_effect_check.isChecked()
         if not editable:
+            regions = self._definition_for_path(self.current_path)[1]
             state.reference_diagnostics = tracking_overlays(
-                self._dejitter_reference_regions, self._tracking_diagnostics_for_path(self.current_path) if can_edit else tracked)
+                regions, self._tracking_diagnostics_for_path(self.current_path) if can_edit else tracked,
+                prefix='接力' if self._relay_owner_for_path(self.current_path) is not None else '')
         if self.dejitter_debug_check.isChecked():
             from .editor_tracking_overlay import subject_debug_points
             state.subject_points = subject_debug_points(tracked)

@@ -131,6 +131,10 @@ class _BirdStampRendererMixin:
         current = getattr(self, "current_path", None)
         if source and current and _path_key(Path(source)) == _path_key(current):
             return getattr(self, "_dejitter_reference_regions", ())
+        relay = getattr(self, "_relay_anchor_for_path", None)
+        anchor = relay(current) if callable(relay) and current else None
+        if anchor is not None:
+            return anchor.regions
         getter = getattr(self, "_tracking_result_for_current", None)
         result = getter() if callable(getter) else None
         return tuple(box for box in result.boxes if box is not None) if result else ()

@@ -150,12 +150,15 @@ class SequenceTransport(QObject):
             key = path_key(path)
             result = sequence.tracking[key]
             reference_frame = reference and key == path_key(Path(reference))
+            relay = sequence.relay_segments.get(key)
+            relay_frame = relay is not None and key == path_key(Path(relay[0]))
             partial = result.matched_count < len(result.boxes)
-            label = f'{index + 1}' + (' · 参考' if reference_frame else '') + (' · 待检查' if partial else '')
+            label = (f'{index + 1}' + (' · 参考' if reference_frame else '') + (' · 接力' if relay_frame else '')
+                     + (' · 待检查' if partial else ''))
             item = QListWidgetItem(label)
             alignment = sequence.alignments.get(key)
             if alignment and alignment.status == 'fallback':
-                item.setText(f'{index + 1} · 未纠正旋转')
+                item.setText(f'{index + 1}' + (' · 接力' if relay_frame else '') + ' · 未纠正旋转')
             frame = self._result_frames.get(key)
             if frame:
                 item.setIcon(QIcon(QPixmap.fromImage(frame.image).scaled(

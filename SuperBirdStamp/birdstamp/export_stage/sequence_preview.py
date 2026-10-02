@@ -17,6 +17,7 @@ from birdstamp.image_dejitter.rigid_alignment import ALIGNMENT_MODE_KEY, normali
 from birdstamp.image_dejitter.alignment_bounds import intersect_convex, outward_bounds, largest_pixel_rectangle, has_complete_pixel
 from birdstamp.image_dejitter.region_tracking_result import image_file_signature
 from birdstamp.image_dejitter.manual_region_matches import MANUAL_MATCHES_KEY
+from birdstamp.image_dejitter.relay_anchors import RELAY_ANCHORS_KEY
 from birdstamp.image_pipeline import ImageProcContext, ImageProcPipeline
 from birdstamp.image_pipeline.image_proc_stage.image_proc_sequence_align_stage import ImageProcSequenceAlignStage
 from .render_job_seed import prepare_render_jobs
@@ -59,6 +60,9 @@ def sequence_input_key(seeds, template_paths=None) -> str:
         relevant = {key: settings.get(key) for key in REFERENCE_KEYS}
         if settings.get(MANUAL_MATCHES_KEY):
             relevant[MANUAL_MATCHES_KEY] = settings[MANUAL_MATCHES_KEY]
+        if settings.get(RELAY_ANCHORS_KEY):
+            # 只在使用接力时加入签名，未使用接力的已有缓存保持有效。
+            relevant[RELAY_ANCHORS_KEY] = settings[RELAY_ANCHORS_KEY]
         payload.append((path_key(seed.path), relevant))
     identity_signature = None
     if any((SubjectSettings.from_settings(s.settings).method=='subject_local'
@@ -91,6 +95,14 @@ class SequencePreview:
     intersection_box: tuple | None = None
     union_box: tuple | None = None
     subject_plans: dict = field(default_factory=dict)
+    # 接力段照片 → (接力参考图路径, 接力选区)；诊断框按这组选区编号，而不是原参考选区。
+    relay_segments: dict = field(default_factory=dict)
+    # 接力参考图 → 衔接照片匹配接力选区的结果，仅供当前会话诊断。
+    relay_bridges: dict = field(default_factory=dict)
+
+    def regions_for(self, key, default=()):
+        segment = self.relay_segments.get(key)
+        return segment[1] if segment else default
 
     def frame_crop_plan(self, key):
         from birdstamp.image_dejitter.sequence_geometry import aligned_crop_plan
@@ -112,8 +124,11 @@ class SequencePreview:
 
 
 def common_alignment_crop(regions, tracking, source_sizes, reference_size, strength=100, *, pad_to_union=False,
-                          options=MatchingOptions()):
-    """选区并集提供平移证据；最终对全部画面求交集，补边时改求并集。"""
+                          options=MatchingOptions(), fixed=None):
+    """选区并集提供平移证据；最终对全部画面求交集，补边时改求并集。
+
+    fixed 给出接力段照片 100% 强度的 (dx, dy) 或 SequencePhotoError，仍按列表顺序参与求交。
+    """
     shifts = {}
     bounds = None
     rw, rh = reference_size
@@ -121,15 +136,21 @@ def common_alignment_crop(regions, tracking, source_sizes, reference_size, stren
     lower, upper = (min, max) if pad_to_union else (max, min)
     for key, result in tracking.items():
         width, height = source_sizes[key]
-        offsets = [(((box[0] + box[2]) * width - (region[0] + region[2]) * rw) / 2,
-                    ((box[1] + box[3]) * height - (region[1] + region[3]) * rh) / 2)
-                   for region, box in zip(regions, result.boxes) if box is not None]
-        if not offsets:
-            raise SequencePhotoError(key, f'参考区失配，{result.error or "没有可靠匹配"}。请在参考图调整或追加选区后重新分析，无需逐张框选。')
-        translation = select_translation(regions, result, (width, height), reference_size, options=options)
-        if translation is None:
-            raise SequencePhotoError(key, '多个参考区运动不一致且没有可区分的可靠匹配，请调整参考选区。')
-        dx, dy, _ = translation
+        if fixed and key in fixed:
+            if isinstance(fixed[key], SequencePhotoError):
+                raise fixed[key]
+            dx, dy = fixed[key]
+        else:
+            offsets = [(((box[0] + box[2]) * width - (region[0] + region[2]) * rw) / 2,
+                        ((box[1] + box[3]) * height - (region[1] + region[3]) * rh) / 2)
+                       for region, box in zip(regions, result.boxes) if box is not None]
+            if not offsets:
+                raise SequencePhotoError(key, f'参考区失配，{result.error or "没有可靠匹配"}。'
+                                              '请在参考图调整或追加选区；若此后画面已变化，可在这张照片“接力追踪”后重新分析。')
+            translation = select_translation(regions, result, (width, height), reference_size, options=options)
+            if translation is None:
+                raise SequencePhotoError(key, '多个参考区运动不一致且没有可区分的可靠匹配，请调整参考选区。')
+            dx, dy, _ = translation
         dx, dy = round(dx * blend), round(dy * blend)
         shifts[key] = (dx, dy)
         current = (-dx, -dy, width - dx, height - dy)
@@ -145,8 +166,11 @@ def common_alignment_crop(regions, tracking, source_sizes, reference_size, stren
 
 
 def prepare_rigid_geometry(regions, tracking, sizes, reference_size, reference_key, settings, *, cancelled,
-                           mode='rigid', adjust=None):
-    """adjust(alignments) 可在求共同画幅前整体修改逐帧变换（如两段式稳定的目标鸟跟随）。"""
+                           mode='rigid', adjust=None, fixed=None):
+    """adjust(alignments) 可在求共同画幅前整体修改逐帧变换（如两段式稳定的目标鸟跟随）。
+
+    fixed 给出接力段照片已按强度插值的 FrameAlignment 或 SequencePhotoError。
+    """
     alignments = {}
     footprints = []
     intersection = None
@@ -155,11 +179,17 @@ def prepare_rigid_geometry(regions, tracking, sizes, reference_size, reference_k
     for key,result in tracking.items():
         if cancelled():
             raise VideoExportCancelledError('已取消去抖动分析。')
+        if fixed and key in fixed:
+            if isinstance(fixed[key], SequencePhotoError):
+                raise fixed[key]
+            alignments[key] = fixed[key]
+            continue
         try:
             alignment = estimate_alignment(regions,result,sizes[key],reference_size,mode=mode,
                 strength=settings.get('dejitter_reference_strength',100),options=options,is_reference=key==reference_key)
         except ValueError as exc:
-            raise SequencePhotoError(key,f'参考区失配：{result.error or exc}') from exc
+            raise SequencePhotoError(key,f'参考区失配：{result.error or exc}。'
+                                         '若此后画面已变化，可在这张照片“接力追踪”后重新分析。') from exc
         alignments[key] = alignment
     if adjust is not None:
         alignments = adjust(alignments)
@@ -227,13 +257,28 @@ def prepare_sequence_preview(seeds, template_paths=None, *, cancel_event, progre
             preview_source(reference, image)
     photo_errors = {}
     from .subject_sequence import analyze_subject_sequence
-    analyzer = analyze_subject_sequence if SubjectSettings.from_settings(settings).method == "subject_local" else analyze_sequence_frames
+    subject_local = SubjectSettings.from_settings(settings).method == "subject_local"
+    relay = None
+    if not subject_local:
+        # 接力：失败处起改匹配新选区，再经相邻已对齐照片接回原参考图坐标。
+        from .sequence_relay import RelayPlan
+        relay = RelayPlan.resolve(jobs, reference, settings)
+    if relay is not None:
+        progress('正在准备接力参考图…')
+        relay.prepare_trackers(tracker.options, cancel_event=cancel_event, preview_source=preview_source,
+                               photo_errors=photo_errors if allow_partial else None)
+    analyzer = analyze_subject_sequence if subject_local else analyze_sequence_frames
     tracking, sizes = analyzer(
-        jobs, tracker, reference, cancel_event=cancel_event, preview_source=preview_source,
+        [job for job in jobs if relay is None or path_key(job.path) not in relay.errors],
+        tracker, reference, cancel_event=cancel_event, preview_source=preview_source,
         progress=progress, progress_counts=progress_counts, analysis_workers=analysis_workers,
-        photo_errors=photo_errors if allow_partial else None)
+        photo_errors=photo_errors if allow_partial else None,
+        **({'segment_trackers': relay.segment_trackers()} if relay is not None else {}))
     if cancel_event.is_set():
         raise VideoExportCancelledError('已取消去抖动分析。')
+    if relay is not None:
+        relay.track_bridges(tracking, cancel_event=cancel_event, progress_counts=progress_counts,
+                            allow_partial=allow_partial)
     if tracking_ready is not None and not cancel_event.is_set():
         tracking_ready(key, dict(tracking), signatures)
     progress_counts(0, 0, '计算共同画幅')
@@ -278,6 +323,15 @@ def prepare_sequence_preview(seeds, template_paths=None, *, cancel_event, progre
             return {k:shifted_alignment(a,offsets[k]) for k,a in frame_alignments.items()}
         return adjust
 
+    relay_values = (relay.alignments(regions, tracking, sizes, path_key(reference), reference_size, settings,
+                                     rigid=normalize_alignment_mode(settings.get(ALIGNMENT_MODE_KEY)) == 'rigid',
+                                     options=tracker.options) if relay is not None else {})
+
+    def relay_fixed(index):
+        # 0：插值后的 FrameAlignment；1：100% 平移，由平移裁切按强度取整。
+        return {key: value if isinstance(value, SequencePhotoError) else value[index]
+                for key, value in relay_values.items()} or None
+
     def crop(selected):
         nonlocal alignments,canvas_box,subject_plans
         if follow is not None:
@@ -285,7 +339,7 @@ def prepare_sequence_preview(seeds, template_paths=None, *, cancel_event, progre
             boxes,size,alignments,canvas_box = prepare_rigid_geometry(
                 regions,{k:tracking[k] for k in selected},sizes,reference_size,path_key(reference),settings,
                 cancelled=cancel_event.is_set,mode=normalize_alignment_mode(settings.get(ALIGNMENT_MODE_KEY)),
-                adjust=follow_adjust(selected))
+                adjust=follow_adjust(selected),fixed=relay_fixed(0))
             return boxes,size
         if SubjectSettings.from_settings(settings).method == 'subject_local':
             from .subject_sequence import prepare_subject_geometry
@@ -296,12 +350,12 @@ def prepare_sequence_preview(seeds, template_paths=None, *, cancel_event, progre
         if normalize_alignment_mode(settings.get(ALIGNMENT_MODE_KEY)) == 'rigid':
             boxes,size,alignments,canvas_box = prepare_rigid_geometry(
                 regions,{k:tracking[k] for k in selected},sizes,reference_size,path_key(reference),settings,
-                cancelled=cancel_event.is_set)
+                cancelled=cancel_event.is_set,fixed=relay_fixed(0))
             return boxes,size
         return common_alignment_crop(regions, {k: tracking[k] for k in selected}, sizes, reference_size,
                                      settings.get('dejitter_reference_strength', 100),
                                      pad_to_union=settings.get('dejitter_pad_to_union', False) is True,
-                                     options=tracker.options)
+                                     options=tracker.options, fixed=relay_fixed(1))
 
     if failure is not None and not accepted:
         raise failure
@@ -328,7 +382,10 @@ def prepare_sequence_preview(seeds, template_paths=None, *, cancel_event, progre
                              tracking=tracking, bird_boxes=dict(bird_boxes or {}),
                              pixel_boxes=boxes, source_sizes={k: sizes[k] for k in accepted},
                              output_size=output_size, input_jobs=input_jobs if failure else {}, failure=failure,
-                             alignments=alignments,canvas_box=canvas_box,subject_plans=subject_plans)
+                             alignments=alignments,canvas_box=canvas_box,subject_plans=subject_plans,
+                             relay_segments=relay.segment_regions() if relay is not None else {},
+                             relay_bridges=({k: v for k, v in relay.bridges.items()
+                                             if not isinstance(v, SequencePhotoError)} if relay is not None else {}))
     from .sequence_intersection import compute_intersection_box, compute_union_box
     result.intersection_box = (compute_intersection_box(result, cancelled=cancel_event.is_set)
                                if settings.get('dejitter_pad_to_union', False) is True
