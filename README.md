@@ -188,17 +188,31 @@ Windows 使用 `.venv\Scripts\python.exe` 执行同一脚本。不要再修改�
 - 推送 `v*` tag（例如 `v1.0.1`）时，先测试并校验版本规则，再自动构建 Windows x86_64 和 macOS arm64 三应用套件，生成更新清单、增量分卷、完整安装包和 `SHA256SUMS.txt`；附件校验及上传全部成功后发布 GitHub Release。
 - 普通 commit 或只推送 `main` 不触发此发布工作流。手动运行即使选择 Tag，也只生成 Actions artifacts，不发布 Release。
 
-完成本轮提交并合入 `main` 后，从仓库根执行以下命令（将 `v1.0.1` 替换为未使用的新版本号）：
+完成本轮提交并合入 `main` 后，在检出 `main` 的仓库根运行版本工具（将 `1.0.1` 替换为未使用的新版本号）：
 
 ```bash
-# app_common 是独立仓库，CI 必须能下载主仓库引用的子模块提交。
-git -C app_common push origin main
-git push origin main
-git tag -a v1.0.1 -m "Release v1.0.1" main
-git push origin refs/tags/v1.0.1
+./bump-version.sh 1.0.1
 ```
 
-本地 `git tag` 不会触发 GitHub；最后一步把 Tag 推到 GitHub 才会启动构建。未提交的本地修改不会进入 Tag。只推送本次 Tag，不使用 `git push --tags` 批量发布历史 Tag；已有版本修复后使用新 Tag，不移动旧 Tag。
+```bat
+:: Windows
+bump-version.bat 1.0.1
+```
+
+[build_tools/bump_version.py](build_tools/bump_version.py) 先校验版本号和仓库状态，再通过 `set_build_version.py` 只更新 `app_metadata.json`（`build_number` 默认保持当前值，可用 `--build-number N` 指定）。入口脚本随后直接用 Git 命令：
+
+1. `git commit --only` 仅提交 `app_metadata.json`（`Bump version to 1.0.1`），保留其他暂存内容和本地运行态修改；
+2. 在该提交上创建附注 Tag `v1.0.1`（`Release v1.0.1`）；
+3. `git -C app_common push origin main`：CI 必须能下载主仓库引用的子模块提交；
+4. `git push --atomic origin main v1.0.1`：`main` 与 Tag 要么一起推送成功，要么远端都不变。
+
+推送要求当前 checkout 在 `main`，`app_common` 的 gitlink 提交必须已在 `app_common` 的 `main` 上；`app_metadata.json` 有未提交修改、版本低于已提交版本或 Tag 已用于其他内容时，都会在修改文件前停止。提交失败保留文件修改；Tag 失败保留版本提交，修复后用同一版本重跑即可补建。推送失败（例如远端 `main` 有新提交）保留本地提交和 Tag，把 `origin/main` 合入 `main` 后用同一版本重跑即可推送，不会再次提交。
+
+- `--no-push`：只在本地提交和打 Tag，之后不带该参数重跑同一版本即可推送；也可在功能分支上使用。
+- `--no-tag`：提交并推送 `main`，不创建或推送 Tag（不会触发发布）。
+- `--no-commit`：只更新 `app_metadata.json`。直接运行 `build_tools/bump_version.py` 也只支持此模式。
+
+推送 Tag 后 GitHub 才会启动构建。未提交的本地修改不会进入 Tag。只推送本次 Tag，不使用 `git push --tags` 批量发布历史 Tag；已有版本修复后使用新 Tag，不移动旧 Tag。回归检查：`.venv/bin/python3 -m pytest build_tools/tests/test_bump_version.py -q`。
 
 Tag 必须是 `v主版本.次版本.修订号`，例如 `v1.0.1`；`v1.0.1-rc.1` 会发布为预发布版。`vtest`、`v1.0` 虽会触发工作流，但版本校验会阻止打包。这里的 SemVer 用于系统打包版本，更新器仍以 Tag 所指向的短 commit 显示版本，并以主线 first-parent 提交数判断更新顺序。
 
