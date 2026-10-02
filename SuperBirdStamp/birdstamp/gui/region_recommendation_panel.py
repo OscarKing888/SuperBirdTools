@@ -33,6 +33,17 @@ class RecommendationWorker(QThread):
                 self.message.emit(str(exc))
 
 
+class _MessageLabel(QLabel):
+    """隐藏的消息存储；文字变化时通知 HUD 刷新。"""
+    message_changed = pyqtSignal(str)
+
+    def setText(self, text):
+        changed = text != self.text()
+        super().setText(text)
+        if changed:
+            self.message_changed.emit(text)
+
+
 class RegionRecommendationPanel(QWidget):
     def __init__(self, editor):
         super().__init__(editor)
@@ -41,31 +52,31 @@ class RegionRecommendationPanel(QWidget):
         self.metadata={}
         self._snapshot=None
         self._installing=False
+        self.task_kind=None
         self._shutdown=False
         self._draft_context=None
+        # 面板只承载“2. 选区”中的候选草稿；部位、目标鸟和模型控件由编辑器放入“1. 方式”。
         layout=QVBoxLayout(self);layout.setContentsMargins(0,0,0,0)
-        row=QHBoxLayout()
-        self.part_label=QLabel('稳定部位');row.addWidget(self.part_label)
+        self.part_label=QLabel('稳定部位')
         self.part=QComboBox()
         for value,label in PART_LABELS.items():self.part.addItem(label,value)
-        row.addWidget(self.part)
-        self.target_button=QPushButton('选择目标鸟')
+        self.target_label=QLabel('目标鸟')
+        self.target_button=QPushButton('选择目标鸟…')
+        self.target_button.setToolTip('在参考图中识别鸟，选择要稳定或跟随的那一只。')
         self.target_button.clicked.connect(self.choose_target)
-        row.addWidget(self.target_button);layout.addLayout(row)
         self.experimental=QCheckBox('使用实验性部位识别（需检查推荐位置）')
         self.experimental.setToolTip('真实样本的背身和遮挡仍可能误识别；未作为正式默认能力开放。')
-        layout.addWidget(self.experimental)
-        row=QHBoxLayout()
+        self.model_label=QLabel('部位模型')
+        self.model_row=QWidget()
+        row=QHBoxLayout(self.model_row);row.setContentsMargins(0,0,0,0)
         self.download=QPushButton('下载部位模型（109 MiB）')
-        self.offline=QPushButton('导入模型')
-        self.cancel_button=QPushButton('取消')
-        self.download.clicked.connect(lambda:self.install())
+        self.offline=QPushButton('导入…')
+        self.offline.setToolTip('导入官方 AK 鸟类 HRNet-W32 权重（.pth），用于离线安装。')
+        self.download.clicked.connect(self._on_download_clicked)
         self.offline.clicked.connect(self.import_model)
-        self.cancel_button.clicked.connect(self.cancel)
-        for button in (self.download,self.offline,self.cancel_button):row.addWidget(button)
-        layout.addLayout(row)
-        self.status=QLabel('一键推荐会抽样预检；已有人工选区会保留。');self.status.setWordWrap(True)
-        layout.addWidget(self.status)
+        row.addWidget(self.download,1);row.addWidget(self.offline)
+        # 状态文字不再占面板位置：保存在隐藏标签里，由预览区 HUD 显示。
+        self.status=_MessageLabel('',self);self.status.setWordWrap(True);self.status.hide()
         from .region_candidate_preview import RegionCandidatePreview
         self.candidates=RegionCandidatePreview(self)
         self.candidates.adopt.connect(self.adopt_candidate)
@@ -111,10 +122,15 @@ class RegionRecommendationPanel(QWidget):
                 self.experimental.isChecked(),e.dejitter_auto_region_count.value(),repr(self.metadata.get('target')))
 
     def sync(self, advanced):
-        for control in (self.part_label,self.part,self.experimental,self.download,self.offline):
-            control.setVisible(advanced)
-        self.target_button.setVisible(advanced or self._follow_mode())
-        self.cancel_button.setEnabled(self.worker is not None)
+        controls=getattr(self.editor,'dejitter_subject_controls',None)
+        rows=((self.part,advanced),(self.experimental,advanced),(self.model_row,advanced),
+              (self.target_button,advanced or self._follow_mode()))
+        for control,visible in rows:
+            if controls is not None:
+                controls.set_row_visible(control,visible)
+            else:
+                control.setVisible(visible)
+        self.target_button.setEnabled(self.worker is None and not self._shutdown)
         self._sync_model_buttons()
         if self._draft_context is not None and self._draft_context != self.context():
             self.candidates.clear();self._draft_context=None
@@ -125,10 +141,11 @@ class RegionRecommendationPanel(QWidget):
         installing = self.worker is not None and self._installing
         labels = {'checking':'正在校验模型…', 'ready':'下载完成 ✅',
                   'invalid':'重新下载部位模型（109 MiB）', 'missing':'下载部位模型（109 MiB）'}
-        self.download.setText('正在安装模型…' if installing else labels[status.state])
-        self.download.setToolTip(status.message)
-        self.download.setEnabled(not self._shutdown and self.worker is None
-                                 and status.state in ('missing','invalid'))
+        # 安装中按钮即为取消入口，不再单设常驻“取消”按钮。
+        self.download.setText('取消下载' if installing else labels[status.state])
+        self.download.setToolTip('正在安装模型，点击取消。' if installing else status.message)
+        self.download.setEnabled(not self._shutdown and (installing or (
+            self.worker is None and status.state in ('missing','invalid'))))
         self.offline.setEnabled(not self._shutdown and self.worker is None and status.state != 'checking')
 
     def cancel(self):
@@ -141,9 +158,10 @@ class RegionRecommendationPanel(QWidget):
         model_stopped = self.model_status.shutdown()
         return self.worker is None and model_stopped
 
-    def start(self, task, *, installing=False):
+    def start(self, task, *, installing=False, kind='recommend'):
         if self.worker or self._shutdown:return
         self._installing=installing
+        self.task_kind='install' if installing else kind
         self._snapshot=self.context()
         worker=RecommendationWorker(task,self)
         self.worker=worker
@@ -161,10 +179,20 @@ class RegionRecommendationPanel(QWidget):
 
     def on_finished(self):
         if self.sender() is self.worker:
+            interrupted=self.worker.isInterruptionRequested()
             self.worker=None
+            self.task_kind=None
             if self._installing:
                 self.model_status.refresh(force=True)
+            # 结束后的结论（含“已丢弃旧推荐”“模型已安装”）成为预览区 HUD 的当前状态。
+            if not interrupted and not self._shutdown and self.status.text():
+                self.editor._sequence_message=self.status.text()
         if not self._shutdown:self.editor._update_dejitter_controls()
+
+    def _on_download_clicked(self):
+        if self.worker is not None and self._installing:
+            self.cancel();return
+        self.install()
 
     def install(self, source=None):
         if self.model_status.status.state == 'checking':return
@@ -204,7 +232,7 @@ class RegionRecommendationPanel(QWidget):
                 birds=detect_cached(reference,image,cancelled=cancelled)
             return Recommendation('choose_target' if birds else 'no_target',
                                   '请选择要跟随的目标鸟。' if birds else '参考图中没有识别到鸟。',birds=birds)
-        self.start(task)
+        self.start(task,kind='detect')
 
     def recommend(self):
         e=self.editor
@@ -290,7 +318,7 @@ class RegionRecommendationPanel(QWidget):
         dialog=QDialog(self);dialog.setWindowTitle('选择要稳定的目标鸟')
         layout=QVBoxLayout(dialog)
         layout.addWidget(QLabel('点击目标鸟。确认后点击“分析并预览成片”。' if self._follow_mode()
-                                else '点击目标鸟。确认后再次点击“一键推荐”。'))
+                                else '点击目标鸟。确认后再次点击“一键推荐选区”。'))
         image=self.editor.current_source_image
         for index,bird in enumerate(birds):
             button=QPushButton(f'鸟 {index+1} · 置信度 {bird.confidence:.0%}')
@@ -301,7 +329,7 @@ class RegionRecommendationPanel(QWidget):
                     button.setIconSize(QSize(140,100))
             def select(checked=False, box=bird.box):
                 self.metadata['target']=box
-                self.target_button.setText('更换目标鸟')
+                self.target_button.setText('更换目标鸟…')
                 self.editor._invalidate_reference_tracking('目标鸟已确认，请重新推荐并分析。')
                 self.editor._on_output_settings_changed()
                 self.editor._schedule_workspace_autosave();dialog.accept()

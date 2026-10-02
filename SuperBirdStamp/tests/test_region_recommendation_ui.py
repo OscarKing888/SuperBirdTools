@@ -58,7 +58,9 @@ def test_group_ownership_and_default_experimental_gate(window):
     panel=window.dejitter_recommendation
     assert window.dejitter_selection_group.isAncestorOf(panel)
     assert not panel.experimental.isChecked()
-    assert window.dejitter_analysis_group.isAncestorOf(window.dejitter_subject_controls)
+    assert window.dejitter_method_group.isAncestorOf(window.dejitter_subject_controls)
+    assert window.dejitter_method_group.isAncestorOf(panel.target_button)
+    assert window.dejitter_analysis_group.isAncestorOf(window.dejitter_preprocess_btn)
     assert window.dejitter_export_group.isAncestorOf(window.dejitter_export_btn)
 
 

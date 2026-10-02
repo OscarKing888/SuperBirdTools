@@ -200,7 +200,7 @@ class _BirdStampReferenceTrackingMixin:
         button.setEnabled(not self._reference_tracking_shutdown and not stopping
                           and (worker is not None or self._reference_tracking_input() is not None))
         source = getattr(self, "_dejitter_reference_source", None)
-        self.dejitter_edit_reference_btn.setEnabled(bool(source))
+        self.dejitter_edit_reference_btn.setEnabled(bool(source) or self.current_path is not None)
         message = self._reference_tracking_message
         hint = self._region_texture_hint()
         if hint:
