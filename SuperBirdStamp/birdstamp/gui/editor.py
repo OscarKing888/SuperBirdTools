@@ -151,7 +151,7 @@ from birdstamp.gui.editor_photo_list import (
     PhotoListItem,
     PhotoListWidget,
 )
-from birdstamp.gui.editor_collapsible import CollapsibleSection
+from birdstamp.gui.editor_collapsible import CollapsibleSection, CurrentPageTabWidget
 from birdstamp.gui.editor_gif_panel import GifExportPanel
 from birdstamp.gui.editor_video_panel import (
     VideoExportJobSeed,
@@ -1447,7 +1447,7 @@ class BirdStampEditorWindow(
         export_root.addWidget(self.video_export_panel)
 
         export_section = CollapsibleSection("导出", expanded=True)
-        self.export_tabs = QTabWidget()
+        self.export_tabs = CurrentPageTabWidget()
         self.export_tabs.addTab(export_content, "导出设置")
         self.export_tabs.addTab(self.dejitter_page, "去抖动")
         self.export_tabs.currentChanged.connect(self._on_export_tab_changed)
