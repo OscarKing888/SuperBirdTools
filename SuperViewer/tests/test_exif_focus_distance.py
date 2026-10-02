@@ -1,6 +1,12 @@
 """EXIF 页的相机对焦距离展示。"""
 
+import importlib
+
 from SuperViewer.superviewer import exif_helpers as exif
+
+
+def test_main_module_imports_current_exif_api():
+    assert importlib.import_module("SuperViewer.main").MainWindow is not None
 
 
 def _read_exiftool_rows(monkeypatch, metadata):
