@@ -99,6 +99,18 @@ def _recent_workspace_paths(raw: object, *, newest: Path | None = None) -> list[
 
 
 class _BirdStampWorkspaceMixin:
+    @property
+    def _workspace_path(self) -> Path | None:
+        return self.__dict__.get("_workspace_path_value")
+
+    @_workspace_path.setter
+    def _workspace_path(self, value: Path | None) -> None:
+        # 所有保存/打开/新建/去抖动切换都经由此赋值，统一刷新标题栏中的工作区路径。
+        self.__dict__["_workspace_path_value"] = value
+        refresh = getattr(self, "_refresh_window_title", None)
+        if callable(refresh):
+            refresh()
+
     def _open_dejitter_export_workspace(self, folder, paths):
         """先持久保存两个完整工作区，再复用增量恢复流程切换照片列表。"""
         from .dejitter_export_workspace import unused_workspace_path, exported_workspace_payload

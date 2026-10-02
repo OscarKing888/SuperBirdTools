@@ -669,6 +669,7 @@ def test_new_workspace_clears_session_and_restores_editor_defaults(tmp_path, mon
 
         assert window.photo_list.topLevelItemCount() == 0
         assert window._workspace_path is None
+        assert window.windowTitle().startswith("Untitled* - ")
         assert window._dejitter_view == "edit"
         assert window.export_tabs.currentWidget() is not window.dejitter_page
         assert not window.ab_preview.enabled.isChecked()

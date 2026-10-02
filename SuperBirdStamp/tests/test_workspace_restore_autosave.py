@@ -109,9 +109,12 @@ def test_recent_workspace_menu_tracks_saved_and_opened_files(window, tmp_path):
     second = tmp_path / "乙" / "编辑.birdstamp-workspace.json"
     window._autosave_workspace_now()
     assert not window.recent_workspaces_menu.isEnabled()
+    assert window.windowTitle().startswith("Untitled* - ")
 
     window._save_workspace_to_path(first)
+    assert window.windowTitle().startswith(f"{first} - ")
     window._save_workspace_to_path(second)
+    assert window.windowTitle().startswith(f"{second} - ")
     actions = window.recent_workspaces_menu.actions()
     assert [action.toolTip() for action in actions] == [str(second), str(first)]
     assert all("编辑.birdstamp-workspace.json" in action.text() for action in actions)
@@ -119,6 +122,7 @@ def test_recent_workspace_menu_tracks_saved_and_opened_files(window, tmp_path):
 
     actions[1].trigger()
     assert window._workspace_path == first
+    assert window.windowTitle().startswith(f"{first} - ")
     assert window._load_editor_export_state_value("recent_workspace_paths") == [str(first), str(second)]
     second.unlink()
     window._refresh_recent_workspace_menu()
