@@ -218,7 +218,7 @@ class CropPaddingEditorWidget(QWidget):
             margins = layout.contentsMargins()
             extra_h = margins.top() + margins.bottom()
         return QSize(
-            max(self.uniform_spin.width(), uniform_hint.width() + self._details_toggle.width() + 8),
+            uniform_hint.width() + self._details_toggle.width() + 8,
             uniform_hint.height() + extra_h,
         )
 

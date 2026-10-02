@@ -62,8 +62,6 @@ from PyQt6.QtWidgets import (
     QSizePolicy,
     QSlider,
     QSplitter,
-    QStyle,
-    QStyleOptionTabWidgetFrame,
     QToolButton,
     QTreeWidget,
     QTreeWidgetItem,
@@ -153,7 +151,7 @@ from birdstamp.gui.editor_photo_list import (
     PhotoListItem,
     PhotoListWidget,
 )
-from birdstamp.gui.editor_collapsible import CollapsibleSection
+from birdstamp.gui.editor_collapsible import CollapsibleSection, CurrentPageTabWidget
 from birdstamp.gui.editor_gif_panel import GifExportPanel
 from birdstamp.gui.editor_video_panel import (
     VideoExportJobSeed,
@@ -357,61 +355,6 @@ class _FitContentListWidget(QListWidget):
 
     def minimumSizeHint(self) -> QSize:
         return self.sizeHint()
-
-
-class _CurrentPageTabWidget(QTabWidget):
-    """高度只跟随当前页的 QTabWidget。
-
-    QTabWidget 默认按最高页定高，短页底部会留下大片空白；这里让未显示页的高度不参与布局。
-    """
-
-    def __init__(self, parent: QWidget | None = None) -> None:
-        super().__init__(parent)
-        self.currentChanged.connect(self._fit_to_current_page)
-
-    def tabInserted(self, index: int) -> None:
-        super().tabInserted(index)
-        self._fit_to_current_page(self.currentIndex())
-
-    def _fit_to_current_page(self, index: int) -> None:
-        for i in range(self.count()):
-            page = self.widget(i)
-            if page is None:
-                continue
-            # QStackedLayout 计算最小尺寸时跳过 Ignored 页。
-            vertical = QSizePolicy.Policy.Preferred if i == index else QSizePolicy.Policy.Ignored
-            page.setSizePolicy(page.sizePolicy().horizontalPolicy(), vertical)
-        self.updateGeometry()
-
-    def _extra_height(self, page_height) -> int:
-        """所有页最大高度与当前页高度之差。"""
-        current = self.currentWidget()
-        if current is None:
-            return 0
-        tallest = max(page_height(self.widget(i)) for i in range(self.count()))
-        return max(0, tallest - page_height(current))
-
-    def sizeHint(self) -> QSize:
-        # Qt6 的 QTabWidget.sizeHint 不看 size policy，取所有页最大值；扣掉与当前页的高度差。
-        hint = super().sizeHint()
-        return QSize(hint.width(), hint.height() - self._extra_height(lambda page: page.sizeHint().height()))
-
-    def heightForWidth(self, width: int) -> int:
-        # QStackedLayout.heightForWidth 同样取所有页最大值（有自动换行 QLabel 时布局走这条路径）。
-        height = super().heightForWidth(width)
-        if height < 0:
-            return height
-        option = QStyleOptionTabWidgetFrame()
-        self.initStyleOption(option)
-        option.state = QStyle.StateFlag.State_None
-        padding = self.style().sizeFromContents(QStyle.ContentsType.CT_TabWidget, option, QSize(0, 0), self)
-        stack_width = width - padding.width()
-
-        def page_height(page: QWidget) -> int:
-            page_hfw = page.heightForWidth(stack_width)
-            return page_hfw if page_hfw >= 0 else page.sizeHint().height()
-
-        return height - self._extra_height(page_height)
 
 
 class _ReportDBListWidget(QListWidget):
@@ -1520,11 +1463,11 @@ class BirdStampEditorWindow(
             else:
                 self.video_export_panel.set_status_text(f"未找到 ffmpeg，目标: {preferred_ffmpeg_binary_path()}")
         export_root.addWidget(self.video_export_panel)
-        # 去抖动页更高时 QTabWidget 会把本页撑到同高，多余空间留在底部，避免撑开「处理管线」。
+        # 本页被拉高时多余空间留在底部，避免撑开「处理管线」把列表挤到中间。
         export_root.addStretch(1)
 
         export_section = CollapsibleSection("导出", expanded=True)
-        self.export_tabs = _CurrentPageTabWidget()
+        self.export_tabs = CurrentPageTabWidget()
         self.export_tabs.addTab(export_content, "导出设置")
         self.export_tabs.addTab(self.dejitter_page, "去抖动")
         self.export_tabs.currentChanged.connect(self._on_export_tab_changed)

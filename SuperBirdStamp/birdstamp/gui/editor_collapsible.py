@@ -1,7 +1,88 @@
 from __future__ import annotations
 
-from PyQt6.QtCore import Qt, pyqtSignal
-from PyQt6.QtWidgets import QFrame, QScrollArea, QSizePolicy, QToolButton, QVBoxLayout, QWidget
+from typing import Callable
+
+from PyQt6.QtCore import QSize, Qt, pyqtSignal
+from PyQt6.QtWidgets import (
+    QFrame,
+    QScrollArea,
+    QSizePolicy,
+    QStyle,
+    QStyleOptionTabWidgetFrame,
+    QTabWidget,
+    QToolButton,
+    QVBoxLayout,
+    QWidget,
+)
+
+
+class CurrentPageTabWidget(QTabWidget):
+    """高度只跟随当前页的 QTabWidget，避免被最高的隐藏页撑开。
+
+    QTabWidget/QStackedLayout 默认取所有页 sizeHint 的最大值；改为只按当前页计算，
+    当前页内容展开/收起时整个分组高度才会随之增减。
+    """
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.currentChanged.connect(self._on_current_changed)
+
+    def tabInserted(self, index: int) -> None:  # type: ignore[override]
+        super().tabInserted(index)
+        self._on_current_changed(self.currentIndex())
+
+    def _on_current_changed(self, index: int) -> None:
+        for i in range(self.count()):
+            page = self.widget(i)
+            if page is None:
+                continue
+            policy = QSizePolicy.Policy.Preferred if i == index else QSizePolicy.Policy.Ignored
+            page.setSizePolicy(policy, policy)
+        self.updateGeometry()
+        refresh_layout_chain(self)
+
+    def _current_page_height(self, full_height: int, page_height: Callable[[QWidget], int]) -> int:
+        current = self.currentWidget()
+        if current is None:
+            return full_height
+        tallest = 0
+        for i in range(self.count()):
+            page = self.widget(i)
+            if page is not None and self.isTabVisible(i):
+                tallest = max(tallest, page_height(page))
+        return full_height - tallest + page_height(current)
+
+    def sizeHint(self) -> QSize:  # type: ignore[override]
+        full = super().sizeHint()
+        return QSize(full.width(), self._current_page_height(full.height(), lambda w: w.sizeHint().height()))
+
+    def minimumSizeHint(self) -> QSize:  # type: ignore[override]
+        full = super().minimumSizeHint()
+        return QSize(
+            full.width(),
+            self._current_page_height(full.height(), lambda w: w.minimumSizeHint().height()),
+        )
+
+    def heightForWidth(self, width: int) -> int:  # type: ignore[override]
+        # 含自动换行内容时父布局走 heightForWidth，QStackedLayout 同样取所有页最大值。
+        full = super().heightForWidth(width)
+        current = self.currentWidget()
+        stack = current.parentWidget() if current is not None else None
+        if full < 0 or current is None or stack is None:
+            return full
+        opt = QStyleOptionTabWidgetFrame()
+        self.initStyleOption(opt)
+        padding = self.style().sizeFromContents(QStyle.ContentsType.CT_TabWidget, opt, QSize(0, 0), self)
+        page_width = width - padding.width()
+        if self.tabPosition() in (QTabWidget.TabPosition.West, QTabWidget.TabPosition.East):
+            page_width -= self.tabBar().sizeHint().width()
+        page_width = max(0, page_width)
+        if current.hasHeightForWidth():
+            current_height = current.heightForWidth(page_width)
+        else:
+            current_height = current.sizeHint().height()
+        current_height = max(current_height, current.minimumSizeHint().height())
+        return full - stack.heightForWidth(page_width) + current_height
 
 
 def refresh_layout_chain(widget: QWidget | None) -> None:
