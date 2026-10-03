@@ -2319,11 +2319,12 @@ def build_ffmpeg_command(
 def _codec_args_for_options(options: VideoExportOptions) -> list[str]:
     validated = validate_video_export_options(options)
     if validated.codec == "rawvideo":
+        # AVI 未压缩 RGB 为 BI_RGB DIB，按 BGR 字节序存储；rgb24 会被播放器读成红蓝互换。
         return [
             "-c:v",
             "rawvideo",
             "-pix_fmt",
-            "rgb24",
+            "bgr24",
         ]
     if validated.codec == "h265":
         return [
