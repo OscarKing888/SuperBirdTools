@@ -318,7 +318,7 @@ def test_result_xmp_fields_use_superpicky_formats() -> None:
     assert out["XMP-superpicky:bird_sharpness_bird_count"] == "2"
     assert out["XMP-superpicky:bird_sharpness_head_sigma"] == "1.269"
     assert out["XMP-superpicky:bird_sharpness_motion_ratio"] == "1.23"
-    assert out["XMP-superpicky:bird_sharpness_version"] == "sbt-blur-v2"
+    assert out["XMP-superpicky:bird_sharpness_version"] == "sbt-blur-v3"
     # No bird: the focus/whole-image value still fills the sharpness slot.
     focus = BirdSharpnessResult(path="x", verdict="no_bird", score=420, sigma=0.9, region="focus").to_xmp_fields()
     assert focus[bsf.SHARPNESS_XMP_KEY] == "420.00"
@@ -443,3 +443,34 @@ def test_action_writes_sidecar_skips_existing_and_respects_cancel(tmp_path, monk
     late = BirdSharpnessAction(fake, str(other), str(other), cancelled=lambda: next(flags)).execute()
     assert late.cancelled and not late.written
     assert not other.with_suffix(".xmp").exists()
+
+
+def test_heavily_blurred_noisy_head_is_soft_not_sharp(monkeypatch) -> None:
+    """Regression (DSC04757, ISO 6400): an eye is found but the head has no edge above
+    the noise; the few weak noise-biased edges used to read as ~0.7 px "sharp"."""
+    scene = _scene([(900, 600, 300, 7.0)], noise=0.02, seed=5)
+    _install_image(monkeypatch, scene)
+    models = _StubModels([(900, 600, 300)], full_w=1800)
+    result = BirdSharpnessAnalyzer(models, focus_provider=_no_focus).analyze("dark.ARW")
+    assert result.verdict in (bsf.VERDICT_SOFT, bsf.VERDICT_MOTION)
+    assert result.head_sigma is None and result.sigma >= 1.55
+    assert result.score is not None and result.score <= 100
+
+
+def test_weak_edges_near_noise_are_not_measured() -> None:
+    rng = np.random.default_rng(7)
+    img = _blurred_disc(0.5)
+    weak = 0.4 + (img - img.mean()) * 0.04 + rng.normal(0, 0.01, img.shape).astype(np.float32)
+    assert EdgeBlurField(weak).strongest_edge_blur(None).sigma is None
+    strong = img + rng.normal(0, 0.01, img.shape).astype(np.float32)
+    assert EdgeBlurField(strong).strongest_edge_blur(None).sigma == pytest.approx(_expected(0.5), rel=0.15)
+
+
+def test_classify_blank_head() -> None:
+    from bird_sharpness.scoring import blank_head_sigma
+
+    verdict, score = classify(None, 1.2, 1.1, eye_visible=True, head_blank=True)
+    assert verdict == bsf.VERDICT_SOFT and score == sigma_to_score(1.55) == 100
+    verdict, score = classify(None, 2.0, 1.8, eye_visible=True, head_blank=True)
+    assert verdict == bsf.VERDICT_MOTION and score == sigma_to_score(2.0)
+    assert blank_head_sigma(None) == 1.55
