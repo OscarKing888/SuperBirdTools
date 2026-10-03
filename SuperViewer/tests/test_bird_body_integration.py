@@ -17,8 +17,8 @@ from SuperViewer.tests.test_directory_selection_responsiveness import window, _A
 def test_bird_body_fast_frame_uses_display_identity_without_io(window, monkeypatch, side, memory_frame):
     window.ab_preview.enabled.setChecked(True)
     window.ab_preview.activate(side)
-    window.check_show_focus.setChecked(False)
-    window.check_show_bird.setChecked(True)
+    (window.ab_preview.a_panel if side == 'a' else window.ab_preview.b_panel).overlays.focus.setChecked(False)
+    (window.ab_preview.a_panel if side == 'a' else window.ab_preview.b_panel).overlays.bird.setChecked(True)
     panel = window._active_preview_panel()
     source = os.path.normpath("photos/鸟.ARW")
     box = (.2, .25, .7, .8)
@@ -44,8 +44,8 @@ def test_bird_body_fast_frame_uses_display_identity_without_io(window, monkeypat
     assert not panel._full_preview_timer.isActive()
     # 缺少下一帧时保持旧画面，开关不能错误使用列表中已前进的身份。
     window._file_list._selected_display_path = "photos/skipped.ARW"
-    window.check_show_bird.setChecked(False)
-    window.check_show_bird.setChecked(True)
+    (window.ab_preview.a_panel if side == 'a' else window.ab_preview.b_panel).overlays.bird.setChecked(False)
+    (window.ab_preview.a_panel if side == 'a' else window.ab_preview.b_panel).overlays.bird.setChecked(True)
     assert panel.canvas._bird_box == box
     window._on_file_fast_preview_pixmap_requested("photos/uncached.ARW", pixels, 256)
     assert panel.canvas._bird_box is None
