@@ -83,3 +83,14 @@ def test_window_retains_task_until_real_finished(versions, tmp_path, monkeypatch
             window.task.wait(5000)
         window.deleteLater()
         _APP.processEvents()
+
+
+def test_update_dialog_prefers_complete_release_version(versions, tmp_path, monkeypatch):
+    root, _, assets, current, candidate = versions
+    candidate = {**candidate, "release_version": "1.2.22222222"}
+    atomic_json(assets / "update-linux-x86_64.json", candidate)
+    atomic_json(root / CONFIG_NAME, {"source": "local", "directory": str(assets)})
+    monkeypatch.setattr(gui, "platform_id", lambda: "linux")
+    monkeypatch.setattr(gui, "architecture", lambda: "x86_64")
+    controller = SimpleNamespace(root=root, state=tmp_path, automatic=False)
+    assert gui.UpdateWindow._check(controller, lambda *_: None)[:2] == (current["version"], "1.2.22222222")

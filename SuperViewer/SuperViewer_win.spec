@@ -34,6 +34,9 @@ from build_tools.viewer_bird_body import collect_viewer_bird_body
 bird_datas, bird_binaries, bird_hiddenimports = collect_viewer_bird_body(REPO_ROOT)
 
 from build_tools.windows_version import version_resource
+from build_tools.set_build_version import prepare_build_metadata
+
+BUILD_METADATA = prepare_build_metadata(REPO_ROOT)
 
 def collect_tree(source: Path, dest: str) -> list[tuple[str, str]]:
     if not source.exists():
@@ -53,7 +56,7 @@ def collect_tree(source: Path, dest: str) -> list[tuple[str, str]]:
 
 
 datas: list[tuple[str, str]] = list(video_datas) + denoise_datas + bird_datas
-datas.extend(collect_tree(REPO_ROOT / "app_metadata.json", "."))
+datas.extend(collect_tree(BUILD_METADATA, "."))
 datas.extend(collect_tree(APP_ROOT / "about.cfg", "."))
 datas.extend(collect_tree(APP_ROOT / "super_viewer.cfg", "."))
 datas.extend(collect_tree(APP_ROOT / "tags.cfg", "."))
@@ -86,7 +89,7 @@ exe = EXE(
     [],
     exclude_binaries=True,
     name="SuperViewer",
-    version=version_resource("SuperViewer", REPO_ROOT / "app_metadata.json"),
+    version=version_resource("SuperViewer", BUILD_METADATA),
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,

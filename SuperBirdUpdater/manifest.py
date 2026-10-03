@@ -76,6 +76,12 @@ def validate(data: dict) -> dict:
         _hash(data["app_common_commit"], 40)
         if not isinstance(data["version"], str) or not 7 <= len(data["version"]) <= 40 or not data["commit"].startswith(data["version"]):
             raise UpdateError("短版本号与 commit 不匹配")
+        if "release_version" in data:
+            version = data["release_version"]
+            if (not isinstance(version, str)
+                    or not re.fullmatch(r"(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.[0-9a-f]{8}", version)
+                    or version.rsplit(".", 1)[1] != data["commit"][:8]):
+                raise UpdateError("发行版本号与 commit 不匹配")
         _integer(data["revision"], "revision")
         assets = data["assets"]
         if not isinstance(assets, dict) or len(assets) > 990:

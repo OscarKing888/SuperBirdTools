@@ -30,8 +30,11 @@ for candidate in (REPO_ROOT, APP_ROOT):
 
 
 from app_identity import load_app_identity
+from build_tools.set_build_version import prepare_build_metadata
 
-APP_INFO = load_app_identity("SuperBirdStamp", REPO_ROOT / "app_metadata.json")
+BUILD_METADATA = prepare_build_metadata(REPO_ROOT)
+
+APP_INFO = load_app_identity("SuperBirdStamp", BUILD_METADATA)
 
 
 from SuperBirdUpdater.manifest import excluded_path
@@ -67,7 +70,7 @@ ultralytics_datas, ultralytics_binaries, ultralytics_hiddenimports = collect_all
 # Project-specific data files
 # --------------------------------------------------------------------------- #
 project_datas = [
-    *collect_tree(REPO_ROOT / "app_metadata.json", "."),
+    *collect_tree(BUILD_METADATA, "."),
     *collect_tree(APP_ROOT / "about.cfg", "."),
     *collect_tree(APP_ROOT / "models", "models"),
     *collect_tree(APP_ROOT / "icons", "icons"),

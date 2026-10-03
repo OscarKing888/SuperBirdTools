@@ -60,7 +60,8 @@ def main(argv=None) -> int:
                     raise UpdateError("没有可用的新版本")
                 prepare(root, candidate, source, args.prepare, allow_full=args.allow_full)
                 atomic_json(args.prepare / "candidate.json", candidate)
-            print(json.dumps({"current": current["version"], "available": candidate["version"] if candidate else None,
+            print(json.dumps({"current": current.get("release_version", current["version"]),
+                              "available": candidate.get("release_version", candidate["version"]) if candidate else None,
                               "update": bool(candidate and newer(current, candidate))}, ensure_ascii=False))
             return 0
         if args.apply:

@@ -129,7 +129,8 @@ class UpdateWindow(QDialog):
         if self.automatic and settings.get("skipped_commit") == candidate["commit"]:
             return None
         self.candidate = candidate
-        return current["version"], candidate["version"], self.source.notes
+        return (current.get("release_version", current["version"]),
+                candidate.get("release_version", candidate["version"]), self.source.notes)
 
     def _checked(self, result, error):
         if error:
