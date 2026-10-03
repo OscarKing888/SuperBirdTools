@@ -33,7 +33,7 @@ from .focus import FocusProvider, default_focus_box, focus_window
 from .image_source import AnalysisImage, load_analysis_image
 from .metrics import EdgeBlurField, full_image_blur
 from .models import BirdDetection, BirdSharpnessModels
-from .scoring import ALGORITHM_VERSION, VERDICT_ERROR, VERDICT_NO_BIRD, classify, sigma_to_score
+from .scoring import ALGORITHM_VERSION, VERDICT_ERROR, VERDICT_NO_BIRD, blank_head_sigma, classify, sigma_to_score
 
 _log = get_logger("bird_sharpness")
 
@@ -269,17 +269,22 @@ class BirdSharpnessAnalyzer:
                 head_stats = field_.strongest_edge_blur(head)
             eye_abs = (round(float(eye[0] + X1), 1), round(float(eye[1] + Y1), 1))
             head_sigma = head_stats.sigma if head_stats is not None else None
+            head_blank = head_stats is not None and head_sigma is None
             verdict, score = classify(head_sigma, body_stats.sigma, motion_ratio,
-                                      eye_visible=eye_vis >= EYE_VISIBLE_MIN)
-            sigma = head_sigma if head_sigma is not None else body_stats.sigma
+                                      eye_visible=eye_vis >= EYE_VISIBLE_MIN, head_blank=head_blank)
+            if head_blank:
+                sigma = blank_head_sigma(body_stats.sigma)
+            else:
+                sigma = head_sigma if head_sigma is not None else body_stats.sigma
         else:
             # No eye model: the whole bird's strongest edges stand in for the head.
             head_stats = field_.strongest_edge_blur(bird_px)
             head_sigma = None
             sigma = head_stats.sigma
-            verdict, score = classify(sigma, body_stats.sigma, motion_ratio, eye_visible=True)
+            verdict, score = classify(sigma, body_stats.sigma, motion_ratio, eye_visible=True,
+                                      head_blank=sigma is None)
             if sigma is None:
-                sigma = body_stats.sigma
+                sigma = blank_head_sigma(body_stats.sigma)
         return BirdMeasurement(
             verdict=verdict,
             score=score,

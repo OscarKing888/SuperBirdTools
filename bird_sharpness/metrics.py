@@ -31,10 +31,13 @@ MIN_HEAD_EDGES = 20
 MIN_BODY_EDGES = 60
 DIRECTION_BINS = 8
 MIN_EDGES_PER_DIRECTION = 15
-# Edges must rise this far above the estimated sensor noise. Pure noise peaks at
-# ~0.6 x sigma_noise in mag0, and noise "edges" look perfectly sharp, so smooth
-# regions (sky, bokeh) would otherwise report impossible sub-0.6 px radii.
-NOISE_EDGE_FACTOR = 2.0
+# Edges must rise this far above the estimated sensor noise (edge SNR). Pure noise
+# peaks at ~0.6 x sigma_noise in mag0, and noise inflates the pre-reblur gradient
+# more than the re-blurred one, so weak edges read too sharp: on a badly blurred
+# ISO 6400 head the only edges left sit at ~3x noise and measured "sharp". Real
+# head edges of sharp birds sit at >= 4.7x (labelled set), blurred-but-contrasty
+# ones at 15x+.
+NOISE_EDGE_FACTOR = 4.0
 
 
 @dataclass(frozen=True)
