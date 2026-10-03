@@ -105,7 +105,9 @@ def allocate_destinations(paths, options: DenoiseOptions) -> list[str]:
         if key not in occupied:
             try:
                 occupied[key] = {_portable_key(p.name) for p in directory.iterdir()}
-            except FileNotFoundError:
+            except OSError:
+                # 无法列举某张的输出位置时，交给单张导出报告错误；不能中断其他源目录。
+                # 导出仍会检查现有图像/XMP，并以不覆盖方式发布文件。
                 occupied[key] = set()
         used = occupied[key]
         stem = f"{source.stem}_denoised"

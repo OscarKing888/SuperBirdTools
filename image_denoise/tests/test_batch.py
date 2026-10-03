@@ -137,6 +137,33 @@ def test_probe_failure_does_not_block_other_images(tmp_path):
     assert [r.status for r in result] == ["failed", "success"]
 
 
+def test_output_subdir_is_file_fails_only_its_photo_during_real_export(tmp_path):
+    from PIL import Image
+    import tifffile
+
+    paths = []
+    for directory in (tmp_path / "受阻", tmp_path / "正常"):
+        directory.mkdir()
+        source = directory / "照片.png"
+        Image.new("RGB", (24, 16), "gray").save(source)
+        paths.append(source)
+    blocker = paths[0].parent / "denoised"
+    blocker.write_bytes(b"existing file must survive")
+    originals = [path.read_bytes() for path in paths]
+
+    results = run_batch(paths, DenoiseOptions(strength=0, device="cpu"),
+                        memory_provider=lambda: (32 * GIB, 24 * GIB))
+
+    assert [result.status for result in results] == ["failed", "success"]
+    assert results[0].error
+    assert blocker.read_bytes() == b"existing file must survive"
+    assert [path.read_bytes() for path in paths] == originals
+    destination = Path(results[1].destination)
+    pixels = tifffile.imread(destination)
+    assert pixels.shape == (16, 24, 3) and pixels.dtype.name == "uint16"
+    assert destination.with_suffix(".xmp").is_file()
+
+
 def test_serial_fallback_executes_on_coordinator_and_callback_failure_is_isolated(tmp_path):
     owner = threading.get_ident()
     threads = []
