@@ -31,6 +31,13 @@ except ImportError:  # pragma: no cover - PyQt5 fallback
 _log = get_logger("bird_sharpness.viewer")
 
 
+def _viewer_focus_box(path: str, width: int, height: int):
+    """Worker-thread focus lookup shared with the preview overlay (metadata, then report.db)."""
+    from .focus_preview_loader import _load_focus_box_for_preview
+
+    return _load_focus_box_for_preview(path, width, height, allow_report_db_fallback=True)
+
+
 @dataclass
 class BirdSharpnessJob:
     """Either explicit ``items`` [(display_path, source_path)] or a ``directory`` scan."""
@@ -59,6 +66,7 @@ class BirdSharpnessWorker(QThread):
     item_skipped = pyqtSignal(object)
     failed = pyqtSignal(str)
     load_changed = pyqtSignal(object)  # WorkerLoad snapshot for the progress window
+    warning_changed = pyqtSignal(str)
 
     def __init__(self, job: BirdSharpnessJob, analyzer_holder: "BirdSharpnessController", pool=None) -> None:
         super().__init__()
@@ -114,6 +122,9 @@ class BirdSharpnessWorker(QThread):
             self.status_changed.emit("正在加载检测模型…")
             analyzer = self._holder.analyzer()
             analyzer.load()
+            models = getattr(analyzer, "models", None)
+            if models is not None and getattr(models, "has_keypoints", True) is False:
+                self.warning_changed.emit("未找到鸟眼关键点模型：鸟体按整只鸟计算，翅膀/尾羽和遮挡树叶会干扰结果，准确度明显降低。")
 
             def make(item, on_stage=None):
                 display_path, source_path = item
@@ -274,7 +285,8 @@ class BirdSharpnessController(QObject):
             if self._analyzer is None:
                 from bird_sharpness.analyzer import BirdSharpnessAnalyzer
 
-                self._analyzer = BirdSharpnessAnalyzer()
+                # Same focus-box loader as the preview overlay, so the measured window is what users see.
+                self._analyzer = BirdSharpnessAnalyzer(focus_provider=_viewer_focus_box)
             return self._analyzer
 
     @property
@@ -357,6 +369,7 @@ class BirdSharpnessController(QObject):
         worker.item_skipped.connect(lambda p, w=worker: self._on_skipped(w, p))
         worker.failed.connect(lambda msg, w=worker: self._on_failed(w, msg))
         worker.load_changed.connect(lambda load, w=worker: self._on_load(w, load))
+        worker.warning_changed.connect(lambda text, w=worker: self._on_warning(w, text))
         worker.finished.connect(lambda w=worker: self._on_thread_finished(w))
         _log.info("[BirdSharpness] start job title=%r dir=%r recursive=%s items=%s skip_existing=%s",
                   job.title, job.directory, job.recursive, len(job.items), job.skip_existing)
@@ -379,6 +392,10 @@ class BirdSharpnessController(QObject):
     def _on_progress(self, worker, done: int, total: int, name: str) -> None:
         if worker is self._worker and self._dialog is not None:
             self._dialog.set_progress(done, total, name)
+
+    def _on_warning(self, worker, text: str) -> None:
+        if worker is self._worker and self._dialog is not None:
+            self._dialog.set_warning(text)
 
     def _on_load(self, worker, load) -> None:
         if worker is self._worker and self._dialog is not None:

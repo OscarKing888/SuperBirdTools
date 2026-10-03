@@ -82,14 +82,14 @@ def main(argv: List[str] | None = None) -> int:
             row["xmp_written"] = written.strip()
             print(json.dumps(row, ensure_ascii=False), flush=True)
             return
-        sigma = result.head_sigma if result.head_sigma is not None else result.body_sigma
+        sigma = result.sigma
         sigma_text = "-" if sigma is None else f"{sigma:.2f}"
         score_text = "-" if result.score is None else str(result.score)
         label = verdict_label(result.verdict) or result.verdict
         extra = f" {result.error}" if result.error else ""
         print(
             f"[{index}/{total}] {os.path.basename(result.path)}  {label}  score={score_text}  "
-            f"sigma={sigma_text}  eye={result.eye_visibility}  {result.elapsed_s:.1f}s{written}{extra}",
+            f"sigma={sigma_text}  region={result.region or '-'}  birds={result.bird_count}  eye={result.eye_visibility}  {result.elapsed_s:.1f}s{written}{extra}",
             flush=True,
         )
 

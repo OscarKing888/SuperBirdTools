@@ -89,3 +89,17 @@ def test_dialog_stays_generic_for_jobs_without_worker_load() -> None:
     finally:
         dialog._running = False
         dialog.close()
+
+
+def test_info_panel_text_names_region_and_bird_count() -> None:
+    from SuperViewer.superviewer.image_info_tab_image_info import _bird_sharpness_text
+
+    assert _bird_sharpness_text({"bird_sharpness_verdict": "sharp", "bird_sharpness_sigma": "0.66",
+                                 "bird_sharpness_region": "bird", "bird_sharpness_bird_count": "3"}) \
+        == "清晰（鸟体区域，模糊半径 0.66px，3 只鸟中最清晰）"
+    assert _bird_sharpness_text({"bird_sharpness_verdict": "no_bird", "bird_sharpness_sigma": "0.91",
+                                 "bird_sharpness_region": "focus"}) == "无鸟（焦点区域，模糊半径 0.91px）"
+    # v1 sidecars (no region/sigma fields) keep their old wording
+    assert _bird_sharpness_text({"bird_sharpness_verdict": "soft", "bird_sharpness_head_sigma": "1.27"}) \
+        == "失焦（模糊半径 1.27px）"
+    assert _bird_sharpness_text({}) == ""

@@ -299,6 +299,10 @@ class BirdSharpnessProgressDialog(QDialog):
 
         self.stats = QLabel("", self)
         self._last_name = ""
+        self.warning = QLabel("", self)
+        self.warning.setWordWrap(True)
+        self.warning.setStyleSheet("color: #c99a06;")
+        self.warning.setVisible(False)
 
         self.load_view = WorkerLoadView(self)
         self.load_view.setVisible(False)
@@ -323,6 +327,7 @@ class BirdSharpnessProgressDialog(QDialog):
         layout.addWidget(self.label)
         layout.addWidget(self.bar)
         layout.addWidget(self.stats)
+        layout.addWidget(self.warning)
         layout.addSpacing(4)
         layout.addWidget(self.load_view)
         layout.addWidget(self.pool_note)
@@ -387,6 +392,10 @@ class BirdSharpnessProgressDialog(QDialog):
             plain.append(f"XMP 写入失败 {write_failures}")
         self._summary_plain = "，".join(plain)
         self.summary.setText("&nbsp;&nbsp;&nbsp;".join(chips))
+
+    def set_warning(self, text: str) -> None:
+        self.warning.setText(f"⚠ {text}" if text else "")
+        self.warning.setVisible(bool(text))
 
     def set_summary(self, text: str) -> None:
         """Plain-text summary for jobs without verdict counts."""

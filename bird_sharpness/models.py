@@ -1,10 +1,13 @@
 """Model discovery and lazy loading for bird sharpness detection.
 
-Two models are needed (neither is committed to git):
+Models (none is committed to git):
 
-* a YOLO *segmentation* model (COCO class 14 = bird), e.g. ``yolo11l-seg.pt``;
-* the CUB-200 eye/beak keypoint model ``cub200_keypoint_resnet50_slim.pth``
-  (same weights SuperPicky uses).
+* bird detector: a YOLO *segmentation* model (``yolo11l-seg.pt`` …, per-bird
+  pixel masks) is preferred; a plain detection model (``yolo11n.pt`` …, the one
+  SuperViewer's bird overlay ships) is the fallback and gives per-bird boxes;
+* optional CUB-200 eye/beak keypoint model ``cub200_keypoint_resnet50_slim.pth``
+  (same weights SuperPicky uses). Without it each bird is measured as a whole
+  instead of at the head.
 
 They are searched, in order, in ``$SUPERBIRD_SHARPNESS_MODEL_DIR``, the
 bundled ``models`` resource directories of a packaged app, the repository's
@@ -29,6 +32,8 @@ _log = get_logger("bird_sharpness")
 MODEL_DIR_ENV = "SUPERBIRD_SHARPNESS_MODEL_DIR"
 DEVICE_ENV = "SUPERBIRD_SHARPNESS_DEVICE"
 SEG_MODEL_NAMES = ("yolo11l-seg.pt", "yolo11m-seg.pt", "yolo11s-seg.pt", "yolo11n-seg.pt")
+DET_MODEL_NAMES = ("yolo11n.pt", "yolo11s.pt", "yolov8n.pt")
+BIRD_CONFIDENCE_MIN = 0.25
 KEYPOINT_MODEL_NAME = "cub200_keypoint_resnet50_slim.pth"
 BIRD_CLASS_ID = 14
 KEYPOINT_INPUT_SIZE = 416
@@ -90,22 +95,29 @@ def find_model(names: Iterable[str]) -> Optional[Path]:
 class ModelPaths:
     segmentation: Optional[Path]
     keypoint: Optional[Path]
+    detection: Optional[Path] = None
+
+    @property
+    def detector(self) -> Optional[Path]:
+        return self.segmentation or self.detection
 
     @property
     def complete(self) -> bool:
-        return self.segmentation is not None and self.keypoint is not None
+        """A bird detector is required; the keypoint model only refines head measurement."""
+        return self.detector is not None
 
     def missing_description(self) -> str:
-        missing = []
-        if self.segmentation is None:
-            missing.append(" / ".join(SEG_MODEL_NAMES))
-        if self.keypoint is None:
-            missing.append(KEYPOINT_MODEL_NAME)
-        return "、".join(missing)
+        if self.detector is None:
+            return " / ".join(SEG_MODEL_NAMES + DET_MODEL_NAMES)
+        return ""
 
 
 def resolve_model_paths() -> ModelPaths:
-    return ModelPaths(find_model(SEG_MODEL_NAMES), find_model((KEYPOINT_MODEL_NAME,)))
+    return ModelPaths(
+        find_model(SEG_MODEL_NAMES),
+        find_model((KEYPOINT_MODEL_NAME,)),
+        find_model(DET_MODEL_NAMES),
+    )
 
 
 def check_runtime() -> Optional[str]:
@@ -118,7 +130,7 @@ def check_runtime() -> Optional[str]:
     paths = resolve_model_paths()
     if not paths.complete:
         return (
-            f"找不到模型文件：{paths.missing_description()}。"
+            f"找不到鸟体识别模型：{paths.missing_description()}。"
             f"请放入 SuperViewer/models，或设置环境变量 {MODEL_DIR_ENV}，或安装 SuperPicky。"
         )
     return None
@@ -179,6 +191,15 @@ class _KeypointNet:
         return PartLocalizer()
 
 
+@dataclass
+class BirdDetection:
+    """One detected bird at detection-image resolution."""
+
+    confidence: float
+    box: tuple  # (x1, y1, x2, y2) in detection-image pixels
+    mask: Optional[object] = None  # uint8 HxW mask at detection resolution (segmentation models)
+
+
 class BirdSharpnessModels:
     """Holds the loaded detector + keypoint model; thread-safe lazy initialisation."""
 
@@ -187,12 +208,21 @@ class BirdSharpnessModels:
         self._lock = threading.RLock()
         self._seg = None
         self._kp = None
+        self._masks = False
         self._torch = None
         self.device = "cpu"
 
     @property
     def loaded(self) -> bool:
-        return self._seg is not None and self._kp is not None
+        return self._seg is not None
+
+    @property
+    def has_keypoints(self) -> bool:
+        return self._kp is not None
+
+    @property
+    def has_masks(self) -> bool:
+        return self._masks
 
     def load(self) -> None:
         with self._lock:
@@ -208,25 +238,38 @@ class BirdSharpnessModels:
                 raise BirdSharpnessModelError(f"无法加载 Torch/Ultralytics：{exc}") from exc
             self._torch = torch
             self.device = select_device(torch)
-            _log.info("[BirdSharpness] loading YOLO-seg=%s keypoint=%s device=%s", paths.segmentation, paths.keypoint, self.device)
-            seg = YOLO(str(paths.segmentation))
+            detector_path = paths.detector
+            masks = paths.segmentation is not None
+            _log.info("[BirdSharpness] loading YOLO=%s (masks=%s) keypoint=%s device=%s",
+                      detector_path, masks, paths.keypoint, self.device)
+            seg = YOLO(str(detector_path))
             names = getattr(seg, "names", {}) or {}
             if names and str(names.get(BIRD_CLASS_ID, "")).lower() != "bird":
-                raise BirdSharpnessModelError(f"YOLO 模型类别 {BIRD_CLASS_ID} 不是 bird：{paths.segmentation}")
-            kp = _KeypointNet.build(torch)
-            checkpoint = torch.load(str(paths.keypoint), map_location="cpu", weights_only=True)
-            if isinstance(checkpoint, dict) and "model_state_dict" in checkpoint:
-                checkpoint = checkpoint["model_state_dict"]
-            kp.load_state_dict(checkpoint)
-            kp.eval()
-            try:
-                kp.to(self.device)
-            except Exception as exc:
-                _log.warning("[BirdSharpness] Keypoint model cannot use device=%s, falling back to CPU: %s", self.device, exc)
-                self.device = "cpu"
-                kp.to("cpu")
+                raise BirdSharpnessModelError(f"YOLO 模型类别 {BIRD_CLASS_ID} 不是 bird：{detector_path}")
+            kp = None
+            if paths.keypoint is not None:
+                try:
+                    kp = _KeypointNet.build(torch)
+                    checkpoint = torch.load(str(paths.keypoint), map_location="cpu", weights_only=True)
+                    if isinstance(checkpoint, dict) and "model_state_dict" in checkpoint:
+                        checkpoint = checkpoint["model_state_dict"]
+                    kp.load_state_dict(checkpoint)
+                    kp.eval()
+                    try:
+                        kp.to(self.device)
+                    except Exception as exc:
+                        _log.warning("[BirdSharpness] Keypoint model cannot use device=%s, falling back to CPU: %s", self.device, exc)
+                        self.device = "cpu"
+                        kp.to("cpu")
+                except Exception as exc:
+                    # Optional refinement: measure whole birds instead of failing the job.
+                    _log.warning("[BirdSharpness] Keypoint model unusable, measuring whole birds: %s", exc)
+                    kp = None
+            else:
+                _log.info("[BirdSharpness] Keypoint model not found; measuring whole birds")
             self._seg = seg
             self._kp = kp
+            self._masks = masks
 
     def release(self) -> None:
         with self._lock:
@@ -244,22 +287,45 @@ class BirdSharpnessModels:
                 except Exception:
                     pass
 
-    def segment(self, bgr_small):
-        """Run YOLO-seg on a small BGR image; returns the ultralytics ``Results`` or ``None``."""
+    def detect_birds(self, bgr_small) -> list:
+        """Every bird in a small BGR image as :class:`BirdDetection`, strongest first."""
         self.load()
         with self._lock:
-            kwargs = dict(classes=[BIRD_CLASS_ID], conf=0.25, retina_masks=True, verbose=False)
+            kwargs = dict(classes=[BIRD_CLASS_ID], conf=BIRD_CONFIDENCE_MIN, verbose=False)
+            if self._masks:
+                kwargs["retina_masks"] = True
             try:
-                return self._seg.predict(bgr_small, device=self.device, **kwargs)[0]
+                det = self._seg.predict(bgr_small, device=self.device, **kwargs)[0]
             except Exception as exc:
                 if self.device == "cpu":
                     raise
                 _log.warning("[BirdSharpness] YOLO failed on device=%s, retrying on CPU: %s", self.device, exc)
-                return self._seg.predict(bgr_small, device="cpu", **kwargs)[0]
+                det = self._seg.predict(bgr_small, device="cpu", **kwargs)[0]
+        boxes = getattr(det, "boxes", None)
+        if boxes is None or len(boxes) == 0:
+            return []
+        import numpy as np
+
+        confs = boxes.conf.cpu().numpy()
+        xyxy = boxes.xyxy.cpu().numpy()
+        masks = getattr(det, "masks", None)
+        mask_data = masks.data.cpu().numpy() if (self._masks and masks is not None) else None
+        out = []
+        for i in range(len(confs)):
+            mask = mask_data[i].astype(np.uint8) if mask_data is not None and i < len(mask_data) else None
+            out.append(BirdDetection(float(confs[i]), tuple(float(v) for v in xyxy[i]), mask))
+        out.sort(key=lambda d: d.confidence * max(0.0, d.box[2] - d.box[0]) * max(0.0, d.box[3] - d.box[1]),
+                 reverse=True)
+        return out
 
     def keypoints(self, rgb_crop):
-        """Return ``(coords[3,2] normalised, visibility[3])`` for left eye, right eye, beak."""
+        """Return ``(coords[3,2] normalised, visibility[3])`` for left eye, right eye, beak.
+
+        ``None`` when the optional keypoint model is unavailable.
+        """
         self.load()
+        if self._kp is None:
+            return None
         import numpy as np
         from PIL import Image
 

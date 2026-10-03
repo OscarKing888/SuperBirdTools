@@ -11,6 +11,7 @@ import os
 from contextlib import nullcontext
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Optional, Tuple
 
 import numpy as np
 
@@ -22,6 +23,9 @@ class AnalysisImage:
     rgb8: np.ndarray   # HxWx3 uint8, display-referred, for detection models
     gray: np.ndarray   # HxW float32 0..1, gamma-encoded luminance for blur measurement
     is_raw: bool
+    # Normalised (left, top, right, bottom) of the camera JPEG frame inside these
+    # pixels; RAW output keeps sensor margins that camera/focus coordinates exclude.
+    camera_crop: Optional[Tuple[float, float, float, float]] = None
 
     @property
     def long_edge(self) -> int:
@@ -38,7 +42,10 @@ def _rawpy_source(path: str):
 def _load_raw(path: str) -> AnalysisImage:
     import rawpy
 
+    from app_common.raw_preview_geometry import rawpy_camera_crop_box
+
     with _rawpy_source(path) as source, rawpy.imread(source) as raw:
+        camera_crop = rawpy_camera_crop_box(getattr(raw, "sizes", None))
         rgb16 = raw.postprocess(
             use_camera_wb=True,
             output_bps=16,
@@ -49,7 +56,8 @@ def _load_raw(path: str) -> AnalysisImage:
     # Green carries half the Bayer samples and most luminance; it avoids chroma noise.
     gray = rgb16[..., 1].astype(np.float32) / 65535.0
     rgb8 = (rgb16 >> 8).astype(np.uint8)
-    return AnalysisImage(rgb8=rgb8, gray=gray, is_raw=True)
+    return AnalysisImage(rgb8=rgb8, gray=gray, is_raw=True,
+                         camera_crop=tuple(float(v) for v in camera_crop) if camera_crop else None)
 
 
 def _load_pillow(path: str) -> AnalysisImage:

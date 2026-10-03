@@ -84,7 +84,14 @@ def _bird_sharpness_text(metadata: dict | None) -> str:
     if display is None:
         return ""
     sigma = display.sigma
-    return display.label if sigma is None else f"{display.label}（模糊半径 {sigma:.2f}px）"
+    details = []
+    if display.region_label:
+        details.append(f"{display.region_label}区域")
+    if sigma is not None:
+        details.append(f"模糊半径 {sigma:.2f}px")
+    if display.bird_count and display.bird_count > 1:
+        details.append(f"{display.bird_count} 只鸟中最清晰")
+    return f"{display.label}（{'，'.join(details)}）" if details else display.label
 
 
 def mark_write_action_disabled(target, tooltip: str = "") -> None:
