@@ -29,6 +29,9 @@ from .scoring import (
 DISPLAY_LONG_EDGE = 2400
 ROI_LONG_EDGE = 2400
 
+# Birds not found on the whole frame are flagged in the conclusion.
+FOUND_LABELS = {"full_fine": "（复检）", "focus_weak": "（焦点复检）", "focus_zoom": "（焦点放大复检）"}
+
 # Colours (RGB) shared by step images and the viewer legend.
 C_SHARP = (46, 157, 79)
 C_USABLE = (201, 154, 6)
@@ -48,6 +51,7 @@ BIRD_COLORS = [(0, 200, 255), (255, 120, 200), (120, 255, 120), (255, 200, 60), 
 
 STEP_DECODE = "decode"
 STEP_DETECT = "detect"
+STEP_RECHECK = "recheck"
 STEP_BIRD = "bird"
 STEP_HEAD = "head"
 STEP_EDGES = "edges"
@@ -297,6 +301,7 @@ class AnalysisTracer:
         self._focus_px = None
         self._image_shape = (0, 0)
         self._bird_boxes: List[Tuple[int, int, int, int]] = []
+        self._det_scale = 1.0
 
     # ── shared frame ──
     def _display(self, box):
@@ -338,6 +343,7 @@ class AnalysisTracer:
         sh, sw = img.shape[:2]
         rows = []
         self._bird_boxes = []
+        self._det_scale = scale_to_full
         for i, det in enumerate(detections):
             color = BIRD_COLORS[i % len(BIRD_COLORS)]
             x1, y1, x2, y2 = (v / scale_to_full for v in det.box)
@@ -359,8 +365,90 @@ class AnalysisTracer:
         legend.append((hex_color(C_FOCUS), "相机焦点框"))
         desc = ("在 1024 px 副本上找出全部鸟（置信度 ≥ 0.25）。每只鸟后续只用自己的像素单独计算一组清晰度，"
                 "最后取最好的一只。" if detections else
-                "没有识别到鸟：改用相机焦点区域；没有焦点时用全图。")
+                "全图没有置信度 ≥ 0.25 的鸟：下一步复检伪装或被遮挡的鸟；仍没有时有焦点用焦点区域，没有焦点用全图。")
         self.trace.common.append(TraceStep(STEP_DETECT, "鸟体识别", desc, img, "full", metrics, legend=legend))
+
+    def recheck(self, check) -> None:
+        """Step for :meth:`BirdSharpnessAnalyzer._recheck` (first pass found no bird)."""
+        from . import analyzer as A
+        from .models import FOUND_FOCUS_WEAK, FOUND_FULL_FINE
+
+        img = _dim(self._overview, None, 0.55)
+        lw = _line_w(img)
+        font = max(0.4, lw * 0.45)
+
+        def label(box, text, color):
+            x1, y1 = (int(v) for v in self._display(box)[:2])
+            cv2.putText(img, text, (x1 + 2 * lw, max(12, y1 - 2 * lw)), cv2.FONT_HERSHEY_SIMPLEX, font, color,
+                        max(1, lw // 2), cv2.LINE_AA)
+
+        for window in check.windows:
+            _rect(img, self._display(window["box"]), C_CROP, max(1, lw // 2), dashed=True)
+        for conf, box in check.candidates:
+            _rect(img, self._display(box), C_WEAK, max(1, lw // 2))
+            label(box, f"{conf:.2f}", C_WEAK)
+        for window in check.windows:
+            for conf, box, ok in window["detections"]:
+                if not ok:
+                    _rect(img, self._display(box), C_REJECT_LINE, max(1, lw // 2), dashed=True)
+        accepted_full = []
+        for i, det in enumerate(check.accepted):
+            box = tuple(v / self._det_scale for v in det.box)
+            accepted_full.append(tuple(int(v) for v in box))
+            color = BIRD_COLORS[i % len(BIRD_COLORS)]
+            _rect(img, self._display(box), color, lw + 1)
+            label(box, f"#{i + 1} {det.confidence:.2f}", color)
+        if check.focus_box is not None:
+            _rect(img, self._display(check.focus_box), C_FOCUS, lw + 1)
+        self._bird_boxes = accepted_full
+
+        fine = check.source == FOUND_FULL_FINE
+        rows = [(f"全图 {A.RECHECK_IMGSZ} px 输入再识别",
+                 f"找到 {len(check.accepted)} 只（置信度 ≥ {A.BIRD_CONFIDENCE_MIN:.2f}），直接采纳" if fine else
+                 "仍没有置信度 ≥ %.2f 的鸟" % A.BIRD_CONFIDENCE_MIN)]
+        if not fine and check.focus_box is None:
+            rows.append(("焦点处复检", "跳过（没有相机焦点）"))
+        elif not fine:
+            weak_best = max((c for c, _ in check.candidates), default=None)
+            rows.append(("焦点处弱候选", f"{len(check.candidates)} 个" +
+                         ("" if weak_best is None else f"，最高置信度 {weak_best:.2f}")))
+            weak_ok = check.source == FOUND_FOCUS_WEAK
+            rows.append(("规则一：弱候选压在焦点上",
+                         f"置信度 ≥ {A.FOCUS_WEAK_CONFIDENCE:.2f} 且重叠 ≥ {A.FOCUS_WEAK_OVERLAP:.0%}："
+                         + ("通过" if weak_ok else "未通过")))
+            if weak_ok:
+                rows.append(("规则二：放大复检", "不需要"))
+            elif not check.windows:
+                rows.append(("规则二：放大复检", "跳过（焦点处没有任何弱候选可作印证）"))
+            for window in check.windows:
+                x1, y1, x2, y2 = window["box"]
+                dets = window["detections"]
+                best = max((c for c, _, _ in dets), default=None)
+                passed = any(ok for _, _, ok in dets)
+                rows.append((f"放大窗口 {x2 - x1} px",
+                             "无鸟" if best is None else
+                             f"最高 {best:.2f}，" + ("与弱候选位置一致：通过" if passed else "与弱候选位置不一致：不采信")))
+        rows.append(("结果", f"找到 {len(check.accepted)} 只鸟" if check.accepted else
+                     ("仍判为无鸟，改用焦点区域" if check.focus_box is not None else "仍判为无鸟，改用全图")))
+        legend = [(hex_color(C_FOCUS), "相机焦点框"), (hex_color(C_WEAK), "焦点处弱候选（< 0.25）"),
+                  (hex_color(C_CROP), "放大窗口"), (hex_color(C_REJECT_LINE), "放大后误认（未被印证，舍弃）")]
+        if check.accepted:
+            legend.append((hex_color(BIRD_COLORS[0]), "采纳的鸟"))
+        if check.windows:
+            zoom_to = self._display(check.windows[-1]["box"])
+        elif check.focus_box is not None:
+            zoom_to = _expand(self._display(check.focus_box), 4.0, img.shape)
+        else:
+            zoom_to = None
+        self.trace.common.append(TraceStep(
+            STEP_RECHECK, "复检",
+            f"第一遍（{A.DETECT_IMGSZ} px 网络输入）没有鸟时复检伪装或被枝叶遮挡的鸟：先用 {A.RECHECK_IMGSZ} px 输入"
+            "把全图再识别一次，小而暗的鸟置信度会更高；仍没有时，相机焦点往往就落在鸟上，于是"
+            f"①焦点处的弱候选（≥ {A.FOCUS_WEAK_CONFIDENCE:.2f}）大部分压在焦点框上即采纳；"
+            "②否则以焦点为中心放大（长边 1/6、1/4、1/2.5）重新识别，放大后的鸟还必须与弱候选位置一致——"
+            "放大后的暗色树叶也常被认成鸟，单凭放大结果不采信。焦点处只采纳一只鸟。",
+            img, "full", rows, legend=legend,
+            focus_rect=None if zoom_to is None else tuple(int(v) for v in _expand(zoom_to, 1.3, img.shape))))
 
     # ── per bird ──
     def bird(self, index: int, image, roi, mask: np.ndarray, body: np.ndarray, head: Optional[np.ndarray],
@@ -581,7 +669,8 @@ class AnalysisTracer:
             if bird.get("sigma") is not None:
                 points.append({"sigma": bird["sigma"], "score": bird["score"], "label": f"#{i + 1}",
                                "color": hex_color(color), "best": best})
-            rows.append((f"鸟 #{i + 1}{'（最佳）' if best else ''}",
+            found = FOUND_LABELS.get(bird.get("found_by", ""), "")
+            rows.append((f"鸟 #{i + 1}{'（最佳）' if best else ''}{found}",
                          f"{verdict_label(bird['verdict'])} · σ {_fmt(bird.get('sigma'))} · 分数 {_fmt(bird.get('score'), '%d')}"))
         if result.region_box is not None and result.region != fields.REGION_BIRD:
             _rect(img, self._display(result.region_box), C_WINDOW, lw + 1)
