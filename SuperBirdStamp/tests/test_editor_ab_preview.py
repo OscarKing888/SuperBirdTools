@@ -19,6 +19,39 @@ def finish(ab):
     wait_until(lambda: ab.worker is None and not ab.pending)
 
 
+@pytest.mark.parametrize('suffix, modes', [
+    ('.ARW', ('raw', 'denoised', 'default')),
+    ('.jpg', ('denoised', 'default')),
+])
+def test_viewport_source_button_cycles_supported_modes(window, tmp_path, suffix, modes):
+    from app_common.preview_canvas import PreviewWithStatusBar
+    from birdstamp.gui.editor_preview_canvas import EditorPreviewCanvas
+    from birdstamp.gui.editor_preview_viewport import PreviewViewportPanel
+
+    panel = PreviewViewportPanel('测试', PreviewWithStatusBar(canvas=EditorPreviewCanvas()))
+    try:
+        panel.set_path(tmp_path / f'照片{suffix}')
+        emitted = []
+        panel.source_mode_changed.connect(emitted.append)
+        labels = {'default': '默认预览', 'raw': '显示 RAW', 'denoised': '显示降噪'}
+        for mode in modes:
+            panel.source_button.click()
+            assert panel.source_mode() == mode
+            assert panel.source_button.text() == labels[mode]
+        assert emitted == list(modes)
+        panel.mode.setCurrentIndex(1)
+        assert not panel.source_button.isEnabled()
+        panel.source_button.click()
+        assert panel.source_mode() == modes[-1]
+        panel.mode.setCurrentIndex(0)
+        assert panel.source_button.isEnabled()
+        panel.set_path(tmp_path / '视频.mp4')
+        assert panel.source_button.isHidden()
+    finally:
+        panel.close()
+        panel.deleteLater()
+
+
 def test_photo_list_refreshes_only_clicked_active_view(window, monkeypatch):
     from test_sequence_transport import populate
     paths, target = install_sequence(window, monkeypatch)
@@ -177,12 +210,13 @@ def test_raw_toggle_is_independent_per_viewport_and_keeps_export_source(window, 
     assert ab.preview.canvas._focus_box == pytest.approx(raw_focus)
     ab.select_a(jpeg)
     finish(ab)
-    assert not ab.a_panel.show_raw.isVisible()
+    assert ab.a_panel.source_button.isVisible()
+    assert ab.a_panel.source_button.text() == '默认预览'
     ab.select_a(raw)
     finish(ab)
     assert ab.a_panel.show_raw.isChecked() and ab.a_panel.show_raw.isVisible()
     ab.mode.setCurrentIndex(1)
-    assert not ab.a_panel.show_raw.isVisible()
+    assert not ab.a_panel.source_button.isEnabled()
     ab.mode.setCurrentIndex(0)
     finish(ab)
     assert ab.a_panel.show_raw.isVisible()
@@ -190,6 +224,165 @@ def test_raw_toggle_is_independent_per_viewport_and_keeps_export_source(window, 
     with image_decoder.decode_image(raw) as exported:
         assert exported.size == (1600, 800)
         assert exported.getpixel((0, 0))[2] > 200
+
+
+def test_source_cycle_denoised_pixels_are_independent_and_keep_export_source(window, monkeypatch, tmp_path):
+    from birdstamp.decoders import image_decoder
+    from image_denoise.export import _prepare_sidecar
+    from test_sequence_transport import populate
+
+    source = tmp_path / '中文原图.jpg'
+    Image.new('RGB', (100, 100), 'red').save(source)
+    output = tmp_path / 'denoised' / '中文原图_denoised.jpg'
+    output.parent.mkdir()
+    Image.new('RGB', (100, 100), 'blue').save(output)
+    _prepare_sidecar(source, output.with_suffix('.xmp'), 100, 100, camera_crop=(.1, .2, .9, .8))
+    monkeypatch.setattr(window, '_schedule_async_bird_detect', lambda *_args: None)
+    metadata = {'Make': 'SONY', 'ExifImageWidth': 100, 'ExifImageHeight': 100,
+                'SubjectArea': [50, 50, 20, 20]}
+    monkeypatch.setattr(window, '_metadata_snapshot_for_selection', lambda _path: dict(metadata))
+    window.raw_metadata_cache[path_key(source)] = dict(metadata)
+    bird = (.2, .3, .7, .8)
+    window._bird_box_cache[window._source_signature(source)] = bird
+    populate(window, [source])
+    window._on_photo_selected(window._find_photo_item_by_path(source), None, target_view='b')
+    wait_until(lambda: window._preview_decode_worker is None and window.current_source_image is not None)
+    ab = window.ab_preview
+    ab.enabled.setChecked(True)
+    finish(ab)
+    original_focus = ab.preview.canvas._focus_box
+
+    ab.b_panel.source_button.click()
+    wait_until(lambda: window._preview_decode_worker is None and window.current_source_image is not None)
+    assert ab.b_panel.source_mode() == 'denoised'
+    assert ab.b_panel.source_button.text() == '显示降噪'
+    assert window.current_source_image.getpixel((0, 0))[2] > 240
+    assert window.current_path == source
+    assert ab.a_panel.source_mode() == 'default'
+    assert ab.image.pixelColor(0, 0).red() > 240
+    assert ab.preview.canvas._focus_box == pytest.approx(original_focus)
+    assert ab.preview.canvas._bird_box == pytest.approx(bird)
+    expected_focus = tuple((.1 + value * .8) if index % 2 == 0 else (.2 + value * .6)
+                           for index, value in enumerate(original_focus))
+    assert window.preview_label.canvas._focus_box == pytest.approx(expected_focus)
+
+    ab.a_panel.source_button.click()
+    finish(ab)
+    assert ab.a_panel.source_mode() == 'denoised'
+    assert ab.image.pixelColor(0, 0).blue() > 240
+    assert ab.preview.canvas._focus_box == pytest.approx(expected_focus)
+    assert ab.preview.canvas._bird_box == pytest.approx((.26, .38, .66, .68))
+    assert '显示降噪' in ab.preview._status_label.text()
+    ab.a_panel.source_button.click()
+    finish(ab)
+    assert ab.a_panel.source_mode() == 'default'
+    assert ab.image.pixelColor(0, 0).red() > 240
+    assert window.current_source_image.getpixel((0, 0))[2] > 240
+    with image_decoder.decode_image(source) as exported:
+        assert exported.getpixel((0, 0))[0] > 240
+
+
+def test_a_missing_denoised_falls_back_without_changing_requested_mode(window, monkeypatch):
+    paths, _ = install_sequence(window, monkeypatch)
+    monkeypatch.setattr(window, '_schedule_async_bird_detect', lambda *_args: None)
+    ab = window.ab_preview
+    ab.enabled.setChecked(True)
+    finish(ab)
+    ab.a_panel.set_source_mode('denoised')
+    finish(ab)
+    assert ab.path == paths[0]
+    assert ab.image is not None
+    assert ab.a_panel.source_mode() == 'denoised'
+    assert ab.actual_source_mode == 'default'
+    assert '未找到降噪成片' in ab.preview._status_label.text()
+
+
+def test_a_playback_source_changes_defer_output_lookup_until_stop(window, monkeypatch):
+    paths, _ = install_sequence(window, monkeypatch)
+    monkeypatch.setattr(window, '_schedule_async_bird_detect', lambda *_args: None)
+    ab = window.ab_preview
+    ab.enabled.setChecked(True)
+    finish(ab)
+    from birdstamp.gui import editor_ab_preview
+    real_worker = editor_ab_preview.EditorPreviewDecodeWorker
+    modes = []
+    def worker(*args, **kwargs):
+        modes.append(kwargs.get('source_mode'))
+        return real_worker(*args, **kwargs)
+    monkeypatch.setattr(editor_ab_preview, 'EditorPreviewDecodeWorker', worker)
+    monkeypatch.setattr(window, '_sequence_fast_preview_active', lambda: True)
+    ab.a_panel.set_source_mode('denoised')
+    ab.select_a(paths[1])
+    ab._start()
+    assert ab.worker is None and ab.pending
+    assert modes == []
+    monkeypatch.setattr(window, '_sequence_fast_preview_active', lambda: False)
+    finish(ab)
+    assert modes == ['denoised']
+
+
+def test_a_source_change_invalidates_late_denoised_frame(window, monkeypatch):
+    paths, _ = install_sequence(window, monkeypatch)
+    ab = window.ab_preview
+    ab.enabled.setChecked(True)
+    finish(ab)
+    ab.a_panel.set_source_mode('denoised')
+    previous_token = ab.token
+    ab.a_panel.set_source_mode('default')
+    stale = Image.new('RGB', (20, 10), 'blue')
+    ab._decoded(previous_token, str(paths[0]), stale, stale.size)
+    assert ab.actual_source_mode == 'default'
+    with pytest.raises(ValueError):
+        stale.getpixel((0, 0))
+    finish(ab)
+
+
+def test_a_playback_rejects_late_full_frame_even_before_next_cached_selection(window, monkeypatch):
+    paths, _ = install_sequence(window, monkeypatch)
+    ab = window.ab_preview
+    ab.enabled.setChecked(True)
+    finish(ab)
+    retained = ab.image
+    monkeypatch.setattr(window, '_sequence_fast_preview_active', lambda: True)
+    stale = Image.new('RGB', (20, 10), 'blue')
+    ab._decoded(ab.token, str(paths[0]), stale, stale.size)
+    assert ab.image is retained
+    with pytest.raises(ValueError):
+        stale.getpixel((0, 0))
+
+
+def test_a_source_geometry_maps_reference_overlays_and_inverse_edits(window, monkeypatch):
+    from birdstamp.gui.edit_modes import EDIT_MODE_REFERENCE_REGION
+    from birdstamp.gui.preview_source_geometry import camera_to_preview_box
+
+    paths, _, _ = setup_tab(window, monkeypatch)
+    window._set_edit_mode_button_checked(EDIT_MODE_REFERENCE_REGION)
+    ab = window.ab_preview
+    ab.enabled.setChecked(True)
+    finish(ab)
+    crop = (.1, .2, .9, .8)
+    ab.camera_crop_box = crop
+    original = window._dejitter_reference_regions
+    ab._display()
+    displayed = ab.preview.canvas.reference_regions()
+    for source, shown in zip(original, displayed):
+        assert shown == pytest.approx(camera_to_preview_box(source, crop))
+    ab._edit_reference_regions(displayed)
+    for source, saved in zip(original, window._dejitter_reference_regions):
+        assert saved == pytest.approx(source)
+    assert window._dejitter_reference_source == str(paths[0])
+
+    ab.select_a(paths[1])
+    finish(ab)
+    ab.camera_crop_box = crop
+    corrected = (.15, .25, .35, .45)
+    ab._edit_match(0, camera_to_preview_box(corrected, crop))
+    assert window._manual_boxes_for_path(paths[1])[0] == pytest.approx(corrected)
+    # 传感器外圈不属于相机预览，不能把无纹理选区覆盖成有效手动匹配。
+    ab._edit_match(0, (0, 0, .05, .1))
+    assert window._manual_boxes_for_path(paths[1])[0] == pytest.approx(corrected)
+    ab._edit_match(0, None)
+    assert not any(window._manual_boxes_for_path(paths[1]))
 
 
 def test_a_keeps_owned_worker_until_finished_and_close_waits(window, monkeypatch):

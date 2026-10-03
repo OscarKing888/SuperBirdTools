@@ -9,6 +9,9 @@ from app_common.file_browser._work_policy import WorkKind
 from app_common.image_formats import HEIF_EXTENSIONS, RAW_EXTENSIONS
 
 from birdstamp.decoders.image_decoder import decode_image, decode_image_for_preview, read_decoded_image_size
+from birdstamp.decoders.preview_source import (
+    load_denoised_preview, normalize_preview_source_mode, set_preview_source_info,
+)
 from birdstamp import perf
 from .editor_shared_thumb_cache import THUMB_EDGE, read_thumbnail, write_thumbnail
 
@@ -21,17 +24,21 @@ def cached_preview_image(path: Path, max_long_edge: int) -> Image.Image | None:
 class EditorPreviewAction(WorkerAction):
     """读取单张预览；Qt 协调线程与 A/B 视图共用同一动作。"""
 
-    def __init__(self, path, max_long_edge, quick_only, emit_quick, emit_full, *, cancelled, show_raw=False):
+    def __init__(self, path, max_long_edge, quick_only, emit_quick, emit_full, *, cancelled,
+                 show_raw=False, source_mode=None):
         super().__init__(cancelled=cancelled)
         self.path = Path(path)
         self.max_long_edge = max_long_edge
         self.quick_only = quick_only
         self.emit_quick = emit_quick
         self.emit_full = emit_full
-        self.show_raw = bool(show_raw)
+        self.source_mode = normalize_preview_source_mode(source_mode, show_raw=show_raw)
+        self.show_raw = self.source_mode == "raw"
 
     def execute(self):
         image: Image.Image | None = None
+        quick_emitted = False
+        denoised_full = False
         try:
             if self.is_cancelled():
                 return
@@ -51,8 +58,10 @@ class EditorPreviewAction(WorkerAction):
                 return
             if image is not None:
                 if full_size is not None:
+                    set_preview_source_info(image, self.path, "default")
                     self.emit_quick(image, full_size)
                     image = None
+                    quick_emitted = True
                 else:
                     image.close()
                     image = None
@@ -60,7 +69,7 @@ class EditorPreviewAction(WorkerAction):
                     return
             if self.is_cancelled():
                 return
-            if (image is None and not self.quick_only and self.max_long_edge == 0
+            if (not quick_emitted and not self.quick_only and self.max_long_edge == 0
                     and self.path.suffix.lower() not in HEIF_EXTENSIONS | RAW_EXTENSIONS):
                 quick = decode_image_for_preview(self.path, max_long_edge=THUMB_EDGE, decoder="auto")
                 try:
@@ -68,6 +77,7 @@ class EditorPreviewAction(WorkerAction):
                     quick_size = properties.get("size") or read_decoded_image_size(self.path)
                     write_thumbnail(self.path, quick)
                     if not self.is_cancelled():
+                        set_preview_source_info(quick, self.path, "default")
                         self.emit_quick(quick, quick_size)
                         quick = None
                 finally:
@@ -79,17 +89,30 @@ class EditorPreviewAction(WorkerAction):
             if not self.quick_only:
                 edge = self.max_long_edge
             with perf.span("preview.quick_decode" if self.quick_only else "preview.decode", path=str(self.path)):
-                if edge == 0:
-                    image = (decode_image_for_preview(self.path, max_long_edge=2**31 - 1,
-                                                      decoder="auto", show_raw=True)
-                             if self.show_raw else decode_image(self.path, decoder="auto"))
-                else:
-                    kwargs = {"show_raw": True} if self.show_raw else {}
-                    image = decode_image_for_preview(self.path, max_long_edge=edge, decoder="auto", **kwargs)
+                note = ""
+                if not self.quick_only and self.source_mode == "denoised":
+                    image, note = load_denoised_preview(
+                        self.path, max_long_edge=edge, cancelled=self.is_cancelled,
+                    )
+                    denoised_full = image is not None
+                if self.is_cancelled():
+                    return
+                if image is None:
+                    # 快切始终使用普通源图缩略图，绝不将 RAW/降噪来源写进共享缩略图。
+                    show_raw = self.show_raw and not self.quick_only
+                    if edge == 0:
+                        image = (decode_image_for_preview(self.path, max_long_edge=2**31 - 1,
+                                                         decoder="auto", show_raw=True)
+                                 if show_raw else decode_image(self.path, decoder="auto"))
+                    else:
+                        kwargs = {"show_raw": True} if show_raw else {}
+                        image = decode_image_for_preview(self.path, max_long_edge=edge, decoder="auto", **kwargs)
+                    actual_mode = "raw" if show_raw and self.path.suffix.lower() in RAW_EXTENSIONS else "default"
+                    set_preview_source_info(image, self.path, actual_mode, note)
             if self.is_cancelled():
                 return
             properties = image.info.get("birdstamp_source_properties") or {}
-            full_size = properties.get("size") or full_size
+            full_size = properties.get("size") or (image.size if denoised_full else full_size)
             if full_size is None:
                 try:
                     full_size = read_decoded_image_size(self.path)
@@ -124,6 +147,7 @@ class EditorPreviewDecodeWorker(QThread):
         max_long_edge: int,
         quick_only: bool = False,
         show_raw: bool = False,
+        source_mode: str | None = None,
         pool=None,
         parent=None,
     ) -> None:
@@ -132,7 +156,8 @@ class EditorPreviewDecodeWorker(QThread):
         self._path = Path(path).resolve(strict=False)
         self._max_long_edge = max(0, int(max_long_edge))
         self._quick_only = bool(quick_only)
-        self._show_raw = bool(show_raw)
+        self._source_mode = normalize_preview_source_mode(source_mode, show_raw=show_raw)
+        self._show_raw = self._source_mode == "raw"
         self._pool = pool
 
     def run(self) -> None:
@@ -141,7 +166,7 @@ class EditorPreviewDecodeWorker(QThread):
                 self._path, self._max_long_edge, self._quick_only,
                 lambda image, size: self.quick_decoded.emit(self._token, str(self._path), image, size),
                 lambda image, size: self.decoded.emit(self._token, str(self._path), image, size),
-                cancelled=self.isInterruptionRequested, show_raw=self._show_raw,
+                cancelled=self.isInterruptionRequested, source_mode=self._source_mode,
             )
             if self._pool is None:
                 action.execute()

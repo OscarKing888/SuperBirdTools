@@ -112,12 +112,16 @@ class _BirdStampReferenceTrackingMixin:
         if not regions or image is None or definition is None or definition[3] != "subject_local" \
                 or not self._is_reference_photo(path):
             return ""
-        key = (path_key(path), regions, image.size)
+        from app_common.raw_preview_geometry import RAW_FOCUS_CROP_KEY
+        from .preview_source_geometry import camera_to_preview_box
+        camera_crop = image.info.get(RAW_FOCUS_CROP_KEY)
+        pixel_regions = tuple(camera_to_preview_box(box, camera_crop) for box in regions)
+        key = (path_key(path), regions, image.size, id(image), camera_crop)
         cached = getattr(self, "_region_texture_hint_cache", None)
         if cached is None or cached[0] != key:
             from birdstamp.image_dejitter.aperture import classify_regions, texture_summary, aperture_problems
             try:
-                textures = classify_regions(image, regions)
+                textures = classify_regions(image, pixel_regions)
             except (ValueError, OSError):
                 return ""
             text = "选区纹理：" + texture_summary(textures)
@@ -159,6 +163,11 @@ class _BirdStampReferenceTrackingMixin:
     def _commit_manual_region_match(self, path, index, box, *, original=None):
         if not self._region_edit_enabled(path, original=original) or self._is_definition_photo(path):
             return
+        if box is not None and original is None:
+            # B 画布传入实际显示像素；A 已按自己的来源几何转为相机坐标后传 original=True。
+            box = self._reference_region_preview_to_source(box)
+            if box is None:
+                return  # RAW 边缘以外没有原图纹理，不能清除已有的手动匹配。
         source, regions = self._definition_for_path(path)
         if not 0 <= index < len(regions) or (box is not None and normalize_match_box(box) is None):
             return

@@ -1,5 +1,6 @@
 """降噪预览来源校验、旧成片兼容及实际 RAW 几何回归。"""
 import os
+import json
 import xml.etree.ElementTree as ET
 
 import numpy as np
@@ -116,3 +117,53 @@ def test_registry_has_bounded_capacity_and_registration_does_no_stat(tmp_path, m
         preview.register_denoised_output(tmp_path / str(i), tmp_path / f"out{i}")
     assert len(preview._recent) == 2
     assert preview._key(tmp_path / "0") not in preview._recent
+
+
+def test_saved_history_finds_custom_output_and_still_verifies_source(tmp_path):
+    source, other = tmp_path / "中文 鸟.jpg", tmp_path / "other.jpg"
+    source.write_bytes(b"source")
+    other.write_bytes(b"other")
+    output = _output(source, tmp_path / "任意输出" / "custom.jpg")
+    history = tmp_path / "history.json"
+    history.write_text(json.dumps([[str(source), str(output)], [str(other), str(output)]], ensure_ascii=False), encoding="utf-8")
+    assert preview.find_denoised_preview(source) is None
+    assert preview.find_denoised_preview(source, history_path=history).path == str(output)
+    assert preview.find_denoised_preview(other, history_path=history) is None
+    source.write_bytes(b"changed source")
+    assert preview.find_denoised_preview(source, history_path=history) is None
+
+
+@pytest.mark.parametrize("payload", ["{invalid", '{}', '[null, 3, ["bad"], ["a", null]]'])
+def test_bad_history_is_ignored(tmp_path, payload):
+    source = tmp_path / "source.jpg"
+    source.write_bytes(b"input")
+    history = tmp_path / "history.json"
+    history.write_text(payload, encoding="utf-8")
+    assert preview.find_denoised_preview(source, history_path=history) is None
+
+
+def test_history_is_bounded_and_does_not_create_user_state(tmp_path, monkeypatch):
+    source = tmp_path / "source.jpg"
+    source.write_bytes(b"input")
+    output = _output(source, tmp_path / "custom" / "output.jpg")
+    history = tmp_path / "history.json"
+    history.write_text(json.dumps([[str(source), str(output)], ["other", "other"]]), encoding="utf-8")
+    monkeypatch.setattr(preview, "_RECENT_LIMIT", 1)
+    assert preview.find_denoised_preview(source, history_path=history) is None
+    history.write_text(" " * (4 * 1024 * 1024 + 1), encoding="utf-8")
+    assert preview.find_denoised_preview(source, history_path=history) is None
+    missing = tmp_path / "missing" / "history.json"
+    assert preview.find_denoised_preview(source, history_path=missing) is None
+    assert not missing.parent.exists()
+
+
+@pytest.mark.parametrize("platform, suffix", [
+    ("win32", "SuperViewer/denoise_previews.json"),
+    ("darwin", "Library/Application Support/SuperViewer/denoise_previews.json"),
+    ("linux", ".superviewer/denoise_previews.json"),
+])
+def test_preview_history_path_matches_viewer_platform_state(tmp_path, monkeypatch, platform, suffix):
+    monkeypatch.setattr(preview.sys, "platform", platform)
+    monkeypatch.setattr(preview.Path, "home", lambda: tmp_path)
+    monkeypatch.setenv("APPDATA", str(tmp_path))
+    assert preview.denoise_preview_history_path() == tmp_path / suffix

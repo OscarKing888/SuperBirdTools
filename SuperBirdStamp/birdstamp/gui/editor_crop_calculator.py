@@ -10,6 +10,8 @@ from typing import Any
 
 from PIL import Image
 
+from app_common.raw_preview_geometry import RAW_FOCUS_CROP_KEY, map_camera_focus_box
+from birdstamp.gui.preview_source_geometry import preview_to_camera_box
 from birdstamp import perf as birdstamp_perf
 from birdstamp.gui import editor_core, editor_options
 from birdstamp.gui.edit_modes import EDIT_MODE_CROP_ADJUST
@@ -37,7 +39,8 @@ class _BirdStampCropMixin:
         signature = self._source_signature(path)
         if signature in self._bird_box_cache:
             birdstamp_perf.plog("bird_box cache_hit path=%s", path)
-            return self._bird_box_cache[signature]
+            return map_camera_focus_box(self._bird_box_cache[signature],
+                                        source_image.info.get(RAW_FOCUS_CROP_KEY) if source_image is not None else None)
 
         with birdstamp_perf.span("bird_box", path=str(path), from_cache=False):
             image = source_image
@@ -50,7 +53,7 @@ class _BirdStampCropMixin:
                     return None
 
             bird_box = _detect_primary_bird_box(image)
-        self._bird_box_cache[signature] = bird_box
+        self._bird_box_cache[signature] = preview_to_camera_box(bird_box, image.info.get(RAW_FOCUS_CROP_KEY))
         if bird_box is None and not self._bird_detect_error_reported and _get_bird_detector_error_message():
             self._set_status(f"鸟体识别不可用: {_get_bird_detector_error_message()}")
             self._bird_detect_error_reported = True
@@ -81,7 +84,7 @@ class _BirdStampCropMixin:
             signature = self._source_signature(path)
             if signature not in self._bird_box_cache:
                 self._schedule_async_bird_detect(path, image)
-            return self._bird_box_cache.get(signature)
+            return map_camera_focus_box(self._bird_box_cache.get(signature), image.info.get(RAW_FOCUS_CROP_KEY))
         return self._bird_box_for_path(path, source_image=image)
 
     def _crop_edit_mode_active(self) -> bool:
@@ -125,13 +128,31 @@ class _BirdStampCropMixin:
                 center_mode=str(settings.get("center_mode") or _CENTER_MODE_IMAGE),
                 preview_only=preview_only,
             )
+        source_size = self._crop_plan_source_size(path) or image.size
+        camera_crop = image.info.get(RAW_FOCUS_CROP_KEY)
+        if camera_crop is not None:
+            # 工作区裁切框属于相机画幅；换预览来源不能重写其归一化坐标。
+            camera_crop = map_camera_focus_box((0, 0, 1, 1), camera_crop)
+            left, top, right, bottom = camera_crop
+            camera_size = (max(1, round(source_size[0] * (right - left))),
+                           max(1, round(source_size[1] * (bottom - top))))
+            camera_plan, camera_pad = _compute_crop_plan_for_image(
+                image=image, raw_metadata=raw_metadata, settings=settings,
+                bird_box=preview_to_camera_box(bird_box, camera_crop),
+                crop_edit_active=self._crop_edit_mode_active(), source_size=camera_size,
+            )
+            if camera_plan is None:
+                return (None, (0, 0, 0, 0))
+            camera_box = editor_core.crop_box_to_source(camera_plan, camera_size, camera_pad)
+            return editor_core._crop_plan_from_override(
+                *source_size, map_camera_focus_box(camera_box, camera_crop))
         return _compute_crop_plan_for_image(
             image=image,
             raw_metadata=raw_metadata,
             settings=settings,
             bird_box=bird_box,
             crop_edit_active=self._crop_edit_mode_active(),
-            source_size=self._crop_plan_source_size(path),
+            source_size=source_size,
         )
 
     def _compute_crop_box_for_image(
