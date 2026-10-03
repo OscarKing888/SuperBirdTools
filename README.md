@@ -67,12 +67,15 @@ macOS：
 ./.venv/bin/python3 -m SuperBirdStamp
 ```
 
-从根目录运行完整测试：
+从根目录手动运行完整测试（应用启动和 `run.sh` / `run.bat` 都不会触发测试）：
 
 ```powershell
-$env:QT_QPA_PLATFORM='offscreen'
-.\.venv\Scripts\python.exe -m pytest
+.\run_tests.bat
 ```
+
+macOS / Linux 用 `./run_tests.sh`。脚本使用仓库 `.venv`（在 worktree 中自动使用主 checkout 的 `.venv`，也可用 `PYTHON_EXE` 指定），其余参数原样传给 pytest，例如 `./run_tests.sh SuperViewer/tests -k tag`。
+
+GUI 测试默认以 Qt `offscreen` 运行，不在桌面弹出窗口：根目录 [conftest.py](conftest.py) 在导入任何测试前设置 `QT_QPA_PLATFORM=offscreen`，直接运行 `python -m pytest` 同样生效。需要观察真实窗口调试时加 `--show-windows`（或设置 `SUPERBIRD_TEST_SHOW_WINDOWS=1`）；显式设置的 `QT_QPA_PLATFORM` 优先。
 
 `pytest.ini` 会加入根目录与 `SuperBirdStamp` 包路径，无需临时改用全局解释器。
 

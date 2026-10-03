@@ -98,6 +98,7 @@ Follow [ai_rules/AI_CODING_RULES.md](ai_rules/AI_CODING_RULES.md) as the cross-t
 - Run `<repo>/.venv/bin/python3 -m py_compile ...` on changed Python files on macOS.
 - From the repo root, `pytest.ini` supplies both `.` and `SuperBirdStamp` on `PYTHONPATH`; use `<repo>\.venv\Scripts\python.exe -m pytest ...` on Windows or `<repo>/.venv/bin/python3 -m pytest ...` on macOS.
 - For headless Qt checks on Windows PowerShell, set `$env:QT_QPA_PLATFORM='offscreen'` before invoking pytest or a GUI smoke test.
+- Tests never pop windows by default: root `conftest.py` sets `QT_QPA_PLATFORM=offscreen` before any test module imports PyQt (an explicit value wins; `SUPERBIRD_TEST_SHOW_WINDOWS=1` keeps native windows for visual debugging). Do not remove it, and keep standalone GUI smoke scripts outside pytest offscreen too, because users keep working in the apps while agents run tests. `run_tests.sh` / `run_tests.bat` are the manual entry points (worktree-aware `.venv` lookup, `--show-windows`, other arguments passed to pytest); tests are never run by app startup or `run.sh` / `run.bat`.
 - For metadata changes: write + read-back verification with Chinese sample values.
 - For `.spec` changes: packaged startup smoke test.
 - For `init_dev.py` changes: run at least `.venv\Scripts\python.exe init_dev.py --dry-run` on Windows or `.venv/bin/python3 init_dev.py --dry-run` on macOS from the repo root when `.venv` exists.
