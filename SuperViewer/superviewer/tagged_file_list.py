@@ -228,6 +228,7 @@ class SuperViewerTaggedFileListPanel(FileListPanel):
     include_videos = True
     use_unified_worker_pool = True
     video_playback_stop_requested = pyqtSignal()
+    playback_state_changed = pyqtSignal(bool)
     use_preview_cache = True
     enable_key_navigation_playback = True
     enable_range_mark_shortcuts = True
@@ -532,6 +533,20 @@ class SuperViewerTaggedFileListPanel(FileListPanel):
     def _start_key_navigation_playback(self, event, *, view_name: str) -> None:
         self.video_playback_stop_requested.emit()
         super()._start_key_navigation_playback(event, view_name=view_name)
+
+    def _on_key_navigation_playback_tick(self) -> None:
+        # 缺少缩略图时快切信号可能不发出，仍须在首帧之前暂停后台鸟体分析。
+        if self._key_navigation_playback_active and not getattr(self, "_playback_notified", False):
+            self._playback_notified = True
+            self.playback_state_changed.emit(True)
+        super()._on_key_navigation_playback_tick()
+
+    def _stop_key_navigation_playback(self, *, commit: bool) -> None:
+        notified = getattr(self, "_playback_notified", False)
+        super()._stop_key_navigation_playback(commit=commit)
+        self._playback_notified = False
+        if notified:
+            self.playback_state_changed.emit(False)
 
     def cached_quick_preview_for_path(self, path: str, size: int) -> QPixmap | None:
         """Reuse the same exact-tier cache resolver as held-key playback."""

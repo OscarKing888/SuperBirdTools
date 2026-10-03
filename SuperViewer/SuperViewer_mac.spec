@@ -30,6 +30,10 @@ from build_tools.viewer_denoise import collect_viewer_denoise
 
 denoise_datas, denoise_binaries, denoise_hiddenimports = collect_viewer_denoise(REPO_ROOT)
 
+from build_tools.viewer_bird_body import collect_viewer_bird_body
+
+bird_datas, bird_binaries, bird_hiddenimports = collect_viewer_bird_body(REPO_ROOT)
+
 from app_identity import load_app_identity
 
 APP_INFO = load_app_identity("SuperViewer", REPO_ROOT / "app_metadata.json")
@@ -52,7 +56,7 @@ def collect_tree(source: Path, dest: str) -> list[tuple[str, str]]:
     return items
 
 
-datas: list[tuple[str, str]] = list(video_datas) + denoise_datas
+datas: list[tuple[str, str]] = list(video_datas) + denoise_datas + bird_datas
 datas.extend(collect_tree(REPO_ROOT / "app_metadata.json", "."))
 datas.extend(collect_tree(APP_ROOT / "about.cfg", "."))
 datas.extend(collect_tree(APP_ROOT / "super_viewer.cfg", "."))
@@ -67,10 +71,10 @@ datas.extend(collect_tree(APP_COMMON_ROOT / "exif_io" / "exiftools_mac", "app_co
 a = Analysis(
     [str(ENTRY_SCRIPT)],
     pathex=[str(APP_ROOT), str(REPO_ROOT)],
-    binaries=denoise_binaries,
+    binaries=denoise_binaries + bird_binaries,
     datas=datas,
     hiddenimports=collect_submodules("app_common")
-    + collect_submodules("superviewer") + video_hiddenimports + denoise_hiddenimports,
+    + collect_submodules("superviewer") + video_hiddenimports + denoise_hiddenimports + bird_hiddenimports,
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],

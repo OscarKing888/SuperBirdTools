@@ -48,12 +48,16 @@ class ViewerViewportPanel(QWidget):
         self.filename.setSizePolicy(_POLICY.Ignored, _POLICY.Preferred)
         row.addWidget(self.filename, 1)
         self.raw_toggle = ToggleToolButton(parent=self.toolbar)
-        self.raw_toggle.setText("显示 RAW")
+        self.source_button = self.raw_toggle  # 保留旧工具栏引用，来源状态由 PreviewPanel 拥有。
+        self.raw_toggle.setText("默认预览")
         self.raw_toggle.setCheckable(True)
         self.raw_toggle.setChecked(preview.show_raw())
-        self.raw_toggle.setAccessibleName(f"{name} 显示 RAW")
-        self.raw_toggle.setToolTip("开启：完整 RAW 解码；关闭：优先内嵌预览。仅影响本侧视口。")
-        self.raw_toggle.toggled.connect(preview.set_show_raw)
+        self.raw_toggle.setAccessibleName(f"{name} 预览来源")
+        self.raw_toggle.setToolTip(
+            "点击切换：默认预览 → 显示 RAW → 显示降噪（非 RAW 照片跳过 RAW）。\n"
+            "默认优先相机内嵌预览；降噪显示已生成的成片，缺失时显示原图并提示。\n"
+            "仅影响本侧视口；连续按键期间保持缩略图，松键后加载所选来源。")
+        self.raw_toggle.clicked.connect(self._cycle_preview_source)
         row.addWidget(self.raw_toggle)
         preview.source_changed.connect(self._update_available)
         self.center = center if center is not None else ToggleToolButton("自动焦点居中")
@@ -120,13 +124,26 @@ class ViewerViewportPanel(QWidget):
         sync_preview_scale_preset_combo(self.scale, value)
 
     def _update_available(self, *_args):
-        self.raw_toggle.setVisible(Path(self.preview.current_path() or "").suffix.lower() in RAW_EXTENSIONS)
-        self.raw_toggle.setChecked(self.preview.show_raw())
+        path = self.preview.source_identity_path()
+        self.raw_toggle.setVisible(bool(path) and not is_video(path))
+        mode = self.preview.preview_source_mode()
+        self.raw_toggle.setText({"default": "默认预览", "raw": "显示 RAW", "denoised": "显示降噪"}[mode])
+        if mode == "raw" and Path(path).suffix.lower() not in RAW_EXTENSIONS:
+            self.raw_toggle.setText("默认预览")
+        self.raw_toggle.setChecked(mode == "denoised" or (mode == "raw" and Path(path).suffix.lower() in RAW_EXTENSIONS))
         available = (self.preview.current_display_scale_percent() is not None
                      and not is_video(self.preview.current_path() or ""))
         self.fit.setEnabled(available)
         self.scale.setEnabled(available)
         self.center.setEnabled(available)
+
+    def _cycle_preview_source(self):
+        raw = Path(self.preview.source_identity_path()).suffix.lower() in RAW_EXTENSIONS
+        modes = ("default", "raw", "denoised") if raw else ("default", "denoised")
+        current = self.preview.preview_source_mode()
+        if current not in modes:
+            current = "default"
+        self.preview.set_preview_source_mode(modes[(modes.index(current) + 1) % len(modes)])
 
     def eventFilter(self, watched, event):
         kind = event.type()

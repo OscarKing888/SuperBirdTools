@@ -9,6 +9,8 @@
 
 照片单选/多选及目录右键可启动 NAFNet 本地降噪。RAW 完整显影后处理，默认另存 16 位 TIFF 和 XMP，不修改原文件。在“设置 → 用户选项 → 降噪”中可配置输出目录、JPEG/TIFF、强度、设备及并发。模型随完整安装包提供，运行无需联网。使用限制、CLI 与模型预下载见 [批量 RGB 降噪说明](../docs/image_denoise.md)。
 
+每个预览视口可点击来源按钮循环切换“默认预览 → 显示 RAW → 显示降噪”（非 RAW 跳过 RAW），A/B 两侧独立。降噪模式显示已有成片，未找到时保留原图并提示。“显示鸟体”在后台识别主体鸟并将鸟框缓存到 XMP；长按方向键期间只显示缓存框，松键后再处理最终照片。具体缓存、模型及坐标规则见 [预览架构](docs/ARCHITECTURE.md#显示鸟体)。
+
 ## 代码结构（重构后）
 
 - **main.py**：应用入口 `main()`、主窗口类 `MainWindow`、构图线常量与线宽图标；对脚本兼容的 re-export（`QApplication`、`RAW_EXTENSIONS`、`_load_preview_pixmap_for_canvas`、`_load_exifread_metadata_for_focus`、`_resolve_focus_calc_image_size`、`_load_focus_box_for_preview`）。脚本仍可 `import main` 使用上述符号。

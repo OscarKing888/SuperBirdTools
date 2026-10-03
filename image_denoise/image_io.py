@@ -12,6 +12,7 @@ from app_common.image_formats import (
     RAW_IMAGE_EXTENSIONS, HEIF_IMAGE_EXTENSIONS, PHOTOSHOP_IMAGE_EXTENSIONS,
     SUPPORTED_IMAGE_EXTENSIONS,
 )
+from app_common.raw_preview_geometry import rawpy_camera_crop_box
 from .types import UnsupportedImage, check_cancelled
 
 
@@ -19,6 +20,7 @@ from .types import UnsupportedImage, check_cancelled
 class DecodedImage:
     rgb: np.ndarray
     alpha: np.ndarray | None = None
+    camera_crop: tuple | None = None
 
 
 def srgb_profile() -> bytes:
@@ -227,8 +229,9 @@ def decode_image(path: str | Path, *, cancelled=None) -> DecodedImage:
             array = raw.postprocess(use_camera_wb=True, use_auto_wb=False,
                                     output_color=rawpy.ColorSpace.sRGB, output_bps=16,
                                     gamma=(1, 1), no_auto_bright=True, half_size=False)
+            camera_crop = rawpy_camera_crop_box(getattr(raw, "sizes", None))
         check_cancelled(cancelled)
-        return DecodedImage(linear_to_srgb(array.astype(np.float32) / 65535))
+        return DecodedImage(linear_to_srgb(array.astype(np.float32) / 65535), camera_crop=camera_crop)
     if suffix in HEIF_IMAGE_EXTENSIONS:
         import pillow_heif
         image = pillow_heif.open_heif(path, convert_hdr_to_8bit=False, hdr_to_16bit=True)

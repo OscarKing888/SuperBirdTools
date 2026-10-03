@@ -19,6 +19,7 @@
 | 元数据编辑同步 | [`metadata_edit_sync.py`](../superviewer/metadata_edit_sync.py)：`sync_saved_xmp_edit()` | EXIF 表写入成功后，将 XMP 字段映射回列表及标签缓存 |
 | 主题与设置 | [`ui_theme.py`](../superviewer/ui_theme.py)、[`paths_settings.py`](../superviewer/paths_settings.py) | 系统深浅色、语义颜色、资源路径、窗口状态与上次目录 |
 | 鸟清晰度检测 | [`bird_sharpness_controller.py`](../superviewer/bird_sharpness_controller.py)：`BirdSharpnessController`；算法包 [`bird_sharpness`](../../bird_sharpness/)；字段 [`bird_sharpness_fields.py`](../../app_common/bird_sharpness_fields.py) | 目录树/文件右键菜单 → 协调线程把每张照片的 `BirdSharpnessAction` 提交到共享 `BrowserWorkPool`（`WorkKind.ANALYSIS`，低优先级并行；进度窗口 [`bird_sharpness_progress.py`](../superviewer/bird_sharpness_progress.py) 显示逐线程负载）→ 写 XMP → `sync_metadata_edit_for_path()` 刷新列表「鸟清晰」列、缩略图底栏与信息页。算法与字段见 [鸟清晰度检测](../../docs/bird_sharpness.md) |
+| 鸟体显示 | [`bird_body_controller.py`](../superviewer/bird_body_controller.py)、[`bird_body_worker.py`](../superviewer/bird_body_worker.py)、[`bird_body.py`](../superviewer/bird_body.py) | 停留选中 → 共享池 `BirdBodyAction` → 有版本及源指纹的 XMP 缓存 → 各视口按实际像素几何绘制，长按仅查内存 |
 | 计算连拍信息 | [`burst_info_controller.py`](../superviewer/burst_info_controller.py)：`BurstInfoController`；规则 [`app_common/burst_info.py`](../../app_common/burst_info.py) | 目录树右键 → 参数对话框（相邻最大间隔、每组最少张数）→ `BurstInfoWorker` 用共享 ExifTool 批量读亚秒拍摄时间 → `plan_bursts()` 按目录分组编号 → `write_burst_plan()` 写 XMP `burst_id`/`burst_position` → `sync_metadata_edits_for_paths()` 一次刷新「连拍」列与分组底框 |
 
 `image_info_tabs.py` 与共享 `_browser.py` 是兼容导出入口。新功能应定位到具体实现模块，避免往兼容文件继续堆逻辑。`main.py` 保留部分供已有脚本使用的导出；移动模块时要检查这些调用。
@@ -92,13 +93,29 @@ BirdStamp 的 [`editor_shared_thumb_cache.py`](../../SuperBirdStamp/birdstamp/gu
 
 `full_preview_ready(path)` 通知主窗口：对仍选中的照片补充焦点请求，并调用信息页 `refresh_metadata_fields()` 补齐尺寸等字段。它不会重新加载整页、重置文件名或覆盖备注草稿。`source_pixmap_for_path()` 只暴露真正完整加载的图，避免把快速档位尺寸当作照片尺寸。
 
-### 显示 RAW
+### 预览来源三态切换
 
-`ViewerViewportPanel.raw_toggle` 在单视口和 A/B 两侧工具栏分别提供“显示 RAW”，仅当前源文件本身为 RAW 时可见。`PreviewPanel.set_show_raw()` 默认关闭；每侧在当前窗口会话独立记忆，切换照片、隐藏 A 侧或暂时查看 JPEG/视频不会重置，不写入用户配置。开启后 `_FullPreviewLoader` 直接通过 rawpy 完整解码（相机白平衡、8-bit 输出、LibRaw 方向），原生尺寸显示；Windows 非 ASCII 路径使用二进制流并在完成后关闭。
+`ViewerViewportPanel.source_button` 在单视口和 A/B 两侧工具栏分别提供“默认预览 → 显示 RAW → 显示降噪”循环；非 RAW 照片跳过 RAW，视频隐藏按钮。`PreviewPanel.set_preview_source_mode()` 接受 `default/raw/denoised`，默认 `default`，保留 `set_show_raw()` 兼容入口；每侧在当前窗口会话独立记忆，切换照片、隐藏 A 侧或暂时查看 JPEG/视频不会重置，不写入用户配置。RAW 模式由 `_FullPreviewLoader` 直接通过 rawpy 完整解码（相机白平衡、8-bit 输出、LibRaw 方向），原生尺寸显示；Windows 非 ASCII 路径使用二进制流并在完成后关闭。
 
 模式变化使 `_preview_request_token` 递增，绕过同路径复用并取消旧任务；worker 在启动时固定本次模式，旧 token 的结果不能替换当前图像。长按期间开关只改变目标模式，仍显示精确档位小图，松键后才升级最终选中帧。两侧各自保持单 worker 和一个最新待处理请求；不建立完整 RAW 缓存，也不把完整 RAW 写入共享缩略图。解码失败保留快速图并提示关闭开关重试。构图叠加导出仍按默认内嵌优先规则取图，开关不改变导出来源或当前视口。
 
+降噪模式在完整预览 worker 中调用 [`find_denoised_preview()`](../../image_denoise/preview.py)，校验成片 XMP 的源路径、大小、修改时间及实际 RAW 裁切几何；找不到或无法解码时回退原图并显示原因。主窗口及信息页仍以原照片为身份。新降噪输出的 `DenoiseController.output_ready` 刷新两侧匹配视口；长按期间延迟到最终提交。[`denoise_preview_history.py`](../superviewer/denoise_preview_history.py) 为自选输出位置提供最多 2048 项的本机持久索引，初始化载入、导出 worker 原子保存，热路径只用内存，源照片 XMP 不因降噪索引而修改。成片来源与导出约束见 [降噪说明](../../docs/image_denoise.md)。
+
 这是视口会话选项，不新增 CLI 参数。回归见 [`test_raw_preview_toggle.py`](../tests/test_raw_preview_toggle.py)：1600 阈值、损坏回退、方向、中文路径、A/B 独立状态、迟到任务、快切结束升级及叠加导出。
+
+### 显示鸟体
+
+公共“显示鸟体”按钮默认关闭，作用于 A/B 两侧，显示置信度与面积综合评分最高的主体鸟框。[`BirdBodyController`](../superviewer/bird_body_controller.py) 维护最多 2048 项内存 LRU、两个视口请求和 180 ms 停留定时器；普通选中稳定后把 `BirdBodyAction` 交给已有 `BrowserWorkPool` 的低优先级 `ANALYSIS` 配额。同图 A/B 请求去重，离开、关闭或长按时协作取消，完成信号通过 Qt 队列回到 GUI 并核验请求与源身份。创建者保留 Future 到真实完成，不另建线程池。
+
+[`bird_body.py`](../superviewer/bird_body.py) 不依赖 Qt，复用现有模型位置和设备选择，惰性加载本地 YOLO（不自动下载），只识别 bird 类。识别图缩至长边 1280；RAW 优先使用足够大的相机内嵌预览，否则后台显影并将传感器鸟框逆映射到相机坐标。GPU 失败回退 CPU。缺模型、解码或写入失败在状态栏和日志中说明；XMP 写入失败仍可使用本次内存结果。
+
+`XMP-superpicky:bird_body_cache_<扩展名>` 保存算法版本、源文件大小/纳秒修改时间/扩展名指纹、`camera` 坐标标记及归一化鸟框，`box:null` 明确缓存“无鸟”。同名 RAW/JPEG 共用侧车但分别保存结果；源文件改变或缓存损坏后重新计算。写前再次核验指纹和取消状态，通过共享 `PhotoMetaDataXMP` 完整事务锁防止后台缓存覆盖同时发生的标签、备注等编辑，只写 XMP，不改原图和 report.db。
+
+快切 handler 只读取已显示源身份对应的内存结果，不读 XMP、不提交检测。Viewer 列表的 `playback_state_changed` 在第一帧之前暂停控制器，即使因缺少缩略图跳过全部帧，也不会启动停留任务。切回普通选中才重新校验缓存。蓝色框由 [`BirdBodyOverlayMixin`](../superviewer/bird_body_overlay.py) 通过共享画布绘制扩展点叠加；`PreviewPanel` 保存相机框，按当前实际 RAW/降噪像素的裁切几何重映射。普通小图、全图升级、A/B 与叠加导出均保留各自坐标。
+
+CLI：从仓库根目录使用共享 `.venv` 运行 `python -m SuperViewer.superviewer.bird_body <照片> [--no-write]`，调用同一 WorkerAction，可独立检查缓存命中与识别结果。回归入口：`test_bird_body.py`、`test_bird_body_controller.py`、`test_bird_body_overlay.py`、`test_bird_body_integration.py` 及共享 `test_xmp_concurrent_writes.py`。
+
+独立 Viewer 初始化通过 [`prepare_bird_body_model.py`](../../build_tools/prepare_bird_body_model.py) 复用本仓库已有 `yolo11n.pt`，缺少时调用 BirdStamp 的模型准备入口；权重仍被 Git 忽略。三个 Viewer 打包目标通过 [`collect_viewer_bird_body()`](../../build_tools/viewer_bird_body.py) 收集本地模型及 Ultralytics 运行资源，离线构建时缺资源明确失败。源码与打包程序均提供 `--check-bird-body <照片> [--output <诊断.json>]` 的只读诊断入口，验证实际资源发现、图片解码和推理，不写照片 XMP；Windows CUDA 和 macOS MPS/CPU 共用相同回退规则。
 
 ### 按住方向键
 

@@ -66,7 +66,7 @@ def _run(cmd: list[str], *, cwd: Path, dry_run: bool) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(description="初始化 SuperViewer 开发环境。")
     parser.add_argument("--dry-run", action="store_true", help="只打印将执行的步骤，不实际执行。")
-    parser.add_argument("--skip-assets", action="store_true", help="跳过 NAFNet 降噪模型预下载。")
+    parser.add_argument("--skip-assets", action="store_true", help="跳过 NAFNet 降噪与 YOLO 鸟体模型预下载。")
     args = parser.parse_args()
 
     app_root = _app_root()
@@ -81,6 +81,8 @@ def main() -> None:
     _run([str(target_python), "-m", "pip", "install", "-r", str(requirements_path)], cwd=app_root, dry_run=args.dry_run)
     if not args.skip_assets:
         _run([str(target_python), str(_repo_root(app_root) / "build_tools" / "download_denoise_model.py")],
+             cwd=app_root, dry_run=args.dry_run)
+        _run([str(target_python), str(_repo_root(app_root) / "build_tools" / "prepare_bird_body_model.py")],
              cwd=app_root, dry_run=args.dry_run)
 
 

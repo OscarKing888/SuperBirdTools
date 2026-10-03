@@ -20,6 +20,7 @@ def denoise_file(source, destination, options: DenoiseOptions, *, cancelled=None
         check_cancelled(cancelled)
         if not 0 <= options.strength <= 100:
             raise ValueError("降噪强度必须为 0–100")
+        source_stat = source.stat()
         decoded = decode_image(source, cancelled=cancelled)
         if options.format == "jpeg" and decoded.alpha is not None and np.any(decoded.alpha < 1):
             raise ValueError("JPEG 不支持透明通道，请将降噪输出格式改为 TIFF")
@@ -36,7 +37,8 @@ def denoise_file(source, destination, options: DenoiseOptions, *, cancelled=None
                 output *= options.strength / 100
                 output += decoded.rgb * (1 - options.strength / 100)
         check_cancelled(cancelled)
-        export_image(source, destination, output, decoded.alpha, options, cancelled=cancelled)
+        export_image(source, destination, output, decoded.alpha, options, cancelled=cancelled,
+                     camera_crop=decoded.camera_crop, source_stat=source_stat)
         return DenoiseResult(str(source), str(destination), device=device, tile_size=tile_size)
     except DenoiseCancelled:
         return DenoiseResult(str(source), status="cancelled", error="已取消")

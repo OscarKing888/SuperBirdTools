@@ -17,6 +17,10 @@ def _bootstrap_repo_root() -> Path:
 
 def main() -> None:
     _bootstrap_repo_root()
+    if len(sys.argv) > 1 and sys.argv[1] == "--check-bird-body":
+        # 打包诊断可读已有缓存并离线推理，始终禁止写入照片侧车。
+        from superviewer.bird_body import main as check_bird_body
+        raise SystemExit(check_bird_body([*sys.argv[2:], "--no-write"]))
     if len(sys.argv) > 1 and sys.argv[1] == "--check-denoise":
         from superviewer.denoise_diagnostics import main as check_denoise
         raise SystemExit(check_denoise(sys.argv[2:]))

@@ -64,6 +64,14 @@ class DenoiseWorker(QThread):
     def cancelled(self):
         return self._cancel.is_set() or self.isInterruptionRequested()
 
+    def _publish_result(self, result):
+        if result.status == "success" and result.destination:
+            from image_denoise.preview import register_denoised_output
+
+            register_denoised_output(result.source, result.destination)
+            self._holder._preview_history.record(result.source, result.destination)
+        self.result_ready.emit(result)
+
     def run(self):
         from image_denoise.batch import collect_image_paths, run_batch
 
@@ -79,7 +87,7 @@ class DenoiseWorker(QThread):
             self.results = run_batch(paths, self.job.options, pool=self._pool,
                                      engine=(self._holder.engine(self.job.options.device)
                                              if self.job.options.strength else None),
-                                     cancelled=self.cancelled, on_result=self.result_ready.emit,
+                                     cancelled=self.cancelled, on_result=self._publish_result,
                                      on_progress=self.progress_changed.emit,
                                      on_status=self.status_changed.emit, on_tile=self.tile_progress.emit,
                                      serial=self._pool is None)
@@ -176,8 +184,17 @@ class DenoiseProgressDialog(QDialog):
 
 
 class DenoiseController(QObject):
+    output_ready = pyqtSignal(str, str)
+
     def __init__(self, main_window, file_list, dir_browser=None):
         super().__init__(main_window)
+        from .denoise_preview_history import DenoisePreviewHistory
+        from .paths_settings import _get_user_state_dir
+        from image_denoise.preview import register_denoised_output
+
+        self._preview_history = DenoisePreviewHistory(Path(_get_user_state_dir()) / "denoise_previews.json")
+        for source, destination in self._preview_history.entries():
+            register_denoised_output(source, destination)
         self._main, self._file_list = main_window, file_list
         self._worker = self._dialog = self._engine = None
         self._engine_device = None
@@ -320,6 +337,8 @@ class DenoiseController(QObject):
         self._counts[result.status] += 1
         _log.info("[Denoise] result source=%r destination=%r status=%s error=%s",
                   result.source, result.destination, result.status, result.error)
+        if result.status == "success" and result.destination:
+            self.output_ready.emit(result.source, result.destination)
         if self._dialog is not None:
             self._dialog.add_result(result)
             self._dialog.summary.setText(_summary(self._counts))

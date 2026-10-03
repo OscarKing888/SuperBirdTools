@@ -18,6 +18,7 @@ from app_common.exif_io.photo_meta import PhotoMetaDataXMP
 from app_common.exif_io.xmp_sidecar import _photo_descriptions
 from .image_io import srgb_profile
 from .types import DenoiseOptions, check_cancelled
+from .preview import NAMESPACE, source_provenance, register_denoised_output
 
 RDF = "http://www.w3.org/1999/02/22-rdf-syntax-ns#"
 TIFF = "http://ns.adobe.com/tiff/1.0/"
@@ -39,7 +40,8 @@ def _exiftool(args: list[str], *, allow_empty=False) -> None:
         raise RuntimeError(f"降噪元数据保存失败：{result.stderr or result.stdout}")
 
 
-def _prepare_sidecar(source: Path, staged: Path, width: int, height: int) -> None:
+def _prepare_sidecar(source: Path, staged: Path, width: int, height: int, *, camera_crop=None,
+                     source_stat=None) -> None:
     existing = find_same_stem_xmp_sidecar(str(source))
     tree = ET.parse(existing) if existing else PhotoMetaDataXMP._new_xmp_tree()
     root = tree.getroot()
@@ -57,6 +59,9 @@ def _prepare_sidecar(source: Path, staged: Path, width: int, height: int) -> Non
         PhotoMetaDataXMP._replace_text_node(descriptions, f"{{{uri}}}{key}", str(value))
     for key in (f"{{{XMP}}}Thumbnails", f"{{{TIFF}}}BitsPerSample", f"{{{TIFF}}}Compression"):
         PhotoMetaDataXMP._remove_property(descriptions, key)
+    # 来源记录仅写到成片侧车，原图及原侧车保持不变。
+    for key, value in source_provenance(source, camera_crop, source_stat=source_stat).items():
+        PhotoMetaDataXMP._replace_text_node(descriptions, f"{{{NAMESPACE}}}{key}", value)
     tree.write(staged, encoding="utf-8", xml_declaration=True)
 
 
@@ -142,9 +147,19 @@ def _publish_new(staged: Path, target: Path) -> tuple[int, int]:
 
 
 def export_image(source: Path, destination: Path, rgb: np.ndarray,
-                 alpha: np.ndarray | None, options: DenoiseOptions, *, cancelled=None) -> None:
+                 alpha: np.ndarray | None, options: DenoiseOptions, *, cancelled=None,
+                 camera_crop=None, source_stat=None) -> None:
     source, destination = Path(source).resolve(), Path(destination).absolute()
+    source_stat = source_stat or source.stat()
+
+    def ensure_source_unchanged():
+        current = source.stat()
+        if ((current.st_size, current.st_mtime_ns, current.st_ino) !=
+                (source_stat.st_size, source_stat.st_mtime_ns, source_stat.st_ino)):
+            raise RuntimeError("降噪期间原图已变化，未发布过期成片，请重试")
+
     check_cancelled(cancelled)
+    ensure_source_unchanged()
     destination.parent.mkdir(parents=True, exist_ok=True)
     _check_destination(source, destination)
     if options.format == "jpeg" and alpha is not None and np.any(alpha < 1):
@@ -159,7 +174,8 @@ def export_image(source: Path, destination: Path, rgb: np.ndarray,
             icc_path = temporary / "output.icc"
             icc_path.write_bytes(profile)
             height, width = rgb.shape[:2]
-            _prepare_sidecar(source, staged_sidecar, width, height)
+            _prepare_sidecar(source, staged_sidecar, width, height, camera_crop=camera_crop,
+                             source_stat=source_stat)
             check_cancelled(cancelled)
             if options.format == "tiff":
                 import tifffile
@@ -181,8 +197,10 @@ def export_image(source: Path, destination: Path, rgb: np.ndarray,
             copy_output_metadata(source, staged_image, staged_sidecar, rgb, icc_path, cancelled=cancelled)
             _check_destination(source, destination)
             check_cancelled(cancelled)
+            ensure_source_unchanged()
             for staged, target in ((staged_sidecar, destination.with_suffix(".xmp")), (staged_image, destination)):
                 published.append((target, _publish_new(staged, target)))
+        register_denoised_output(source, destination)
     except BaseException as exc:
         retained = []
         for path, identity in reversed(published):

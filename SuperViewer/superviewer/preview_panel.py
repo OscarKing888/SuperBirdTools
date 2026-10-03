@@ -29,6 +29,7 @@ from app_common.preview_canvas import (
     normalize_preview_composition_grid_mode,
 )
 from app_common.superviewer_user_options import get_keep_view_on_switch
+from .bird_body_overlay import BirdBodyOverlayMixin
 
 from .focus_preview_loader import _load_preview_pixmap_for_canvas
 from .qt_compat import (
@@ -52,9 +53,11 @@ _QUICK_PREVIEW_SIZE = 512
 _QUICK_PREVIEW_FALLBACK_SIZE = 128
 _FULL_PREVIEW_DELAY_MS = 80
 _HEIF_PIL_OPENER_REGISTERED = False
+_PREVIEW_NOTE_KEY = "superviewer_preview_note"
+_DENOISED_PATH_KEY = "superviewer_denoised_path"
 
 
-class ViewerPreviewCanvas(_FocusCenteredPreviewCanvas):
+class ViewerPreviewCanvas(BirdBodyOverlayMixin, _FocusCenteredPreviewCanvas):
     """Expose viewport changes for optional A/B linking without changing loading policy."""
 
     viewport_interacted = pyqtSignal()
@@ -485,20 +488,67 @@ def _load_full_preview_qimage(path: str) -> QImage | None:
     return qt_qimg if qt_pixels > 0 else None
 
 
+def _load_denoised_preview_qimage(path: str, *, cancelled=None) -> QImage | None:
+    """成片查找、XML 读取及解码均位于完整预览 worker，绝不在快切路径运行。"""
+    from app_common.superviewer_user_options import get_runtime_user_options
+    from image_denoise.preview import find_denoised_preview
+    from image_denoise.types import DenoiseOptions, DenoiseCancelled
+
+    settings = get_runtime_user_options()
+    options = DenoiseOptions(**{key: settings[f"denoise_{key}"] for key in
+                                ("output_mode", "subdir", "output_directory", "format",
+                                 "strength", "device", "workers")})
+    note = "未找到降噪成片，当前显示原图；可通过右键菜单执行降噪"
+    try:
+        result = find_denoised_preview(path, options, cancelled=cancelled)
+        if cancelled is not None and cancelled():
+            return None
+        if result is not None:
+            image = _load_full_preview_qimage(result.path)
+            if image is not None and not image.isNull():
+                crop = result.camera_crop
+                if result.legacy and Path(path).suffix.lower() in RAW_EXTENSIONS:
+                    # 旧成片未记录几何时仅在后台读取 LibRaw 尺寸，不进行二次显影。
+                    import rawpy
+                    with open(path, "rb") as stream, rawpy.imread(stream) as raw:
+                        crop = rawpy_camera_crop_box(raw.sizes)
+                if crop is not None:
+                    image.setText(RAW_FOCUS_CROP_KEY, json.dumps(crop))
+                image.setText(_PREVIEW_NOTE_KEY, "显示降噪成片")
+                image.setText(_DENOISED_PATH_KEY, result.path)
+                return image
+            note = "降噪成片解码失败，当前显示原图"
+    except DenoiseCancelled:
+        return None
+    except Exception:
+        _log.exception("[preview.denoised] source=%r lookup/decode failed", path)
+        note = "降噪成片读取失败，当前显示原图"
+    if cancelled is not None and cancelled():
+        return None
+    image = _load_full_preview_qimage(path)
+    if image is not None and not image.isNull():
+        image.setText(_PREVIEW_NOTE_KEY, note)
+    return image
+
+
 class _FullPreviewLoader(QThread):
     loaded = pyqtSignal(int, str, object, float)
 
-    def __init__(self, token: int, path: str, parent=None, *, show_raw: bool = False) -> None:
+    def __init__(self, token: int, path: str, parent=None, *, show_raw: bool = False,
+                 source_mode: str | None = None) -> None:
         super().__init__(parent)
         self._token = int(token)
-        self._show_raw = bool(show_raw)
+        self._source_mode = source_mode or ("raw" if show_raw else "default")
+        self._show_raw = self._source_mode == "raw"
         self._path = os.path.normpath(path) if path else ""
 
     def run(self) -> None:
         started = _time.perf_counter()
         qimg = None
         if not self.isInterruptionRequested():
-            if self._show_raw and Path(self._path).suffix.lower() in RAW_EXTENSIONS:
+            if self._source_mode == "denoised":
+                qimg = _load_denoised_preview_qimage(self._path, cancelled=self.isInterruptionRequested)
+            elif self._show_raw and Path(self._path).suffix.lower() in RAW_EXTENSIONS:
                 qimg = _load_sensor_raw_qimage(self._path)
             else:
                 qimg = _load_full_preview_qimage(self._path)
@@ -528,9 +578,14 @@ class PreviewPanel(QWidget):
         self.setMinimumSize(320, 240)
         self.setAcceptDrops(False)
         self._current_path = None
+        self._source_identity_path = ""
         self._focus_cache_path = ""
         self._show_raw = False
+        self._preview_source_mode = "default"
+        self._preview_note = ""
+        self._denoised_display_path = ""
         self._source_focus_box = None
+        self._source_bird_box = None
         self._raw_focus_crop_box = None
         self._last_quick_size = None
         self._fit_next_image = True
@@ -538,6 +593,7 @@ class PreviewPanel(QWidget):
         self._preview_request_token = 0
         self._full_preview_loaded = False
         self._fast_preview_only = False
+        self._navigation_playback_active = False
         self._full_preview_loader: _FullPreviewLoader | None = None
         self._pending_full_preview_request: tuple[int, str] | None = None
         self._shutdown_requested = False
@@ -572,23 +628,74 @@ class PreviewPanel(QWidget):
         return self._show_raw
 
     def set_show_raw(self, enabled: bool) -> None:
-        enabled = bool(enabled)
-        if self._shutdown_requested or enabled == self._show_raw:
-            return
-        self._show_raw = enabled
-        path = self._current_path
-        if path and Path(path).suffix.lower() in RAW_EXTENSIONS:
-            load_full = not self._fast_preview_only
-            # 模式属于请求身份；强制绕过同路径复用，并让迟到结果失效。
-            focus_box = self._source_focus_box
-            self._current_path = None
-            self.set_image(path, load_full=load_full, quick_size=self._last_quick_size)
-            self.set_focus_box(focus_box)
+        self.set_preview_source_mode("raw" if enabled else "default")
+
+    def preview_source_mode(self) -> str:
+        return self._preview_source_mode
+
+    def source_identity_path(self) -> str:
+        return self._source_identity_path or self._current_path or ""
+
+    def set_source_identity(self, path: str) -> None:
+        """缓存 JPEG 作为显示路径时，工具栏仍依据真正源图判断 RAW 模式。"""
+        self._source_identity_path = os.path.normpath(path) if path else ""
         self.source_changed.emit()
+
+    def set_navigation_playback_active(self, active: bool) -> None:
+        active = bool(active)
+        if active == self._navigation_playback_active:
+            return
+        self._navigation_playback_active = active
+        if active:
+            # 首个重复帧缓存未就绪时可能保留已提交画面，仍必须冻结其完整任务。
+            self._preview_request_token += 1
+            self._fast_preview_only = True
+            self._cancel_pending_full_preview()
+
+    def set_preview_source_mode(self, mode: str) -> None:
+        if mode not in {"default", "raw", "denoised"}:
+            raise ValueError(f"未知预览来源：{mode}")
+        if self._shutdown_requested or mode == self._preview_source_mode:
+            return
+        old_mode = self._preview_source_mode
+        self._preview_source_mode = mode
+        self._show_raw = mode == "raw"
+        path = self.source_identity_path()
+        from app_common.video import is_video
+        if path and not is_video(path) and (Path(path).suffix.lower() in RAW_EXTENSIONS
+                                           or "denoised" in (old_mode, mode)):
+            # 模式属于请求身份；强制绕过同路径复用，并让迟到结果失效。
+            if self._navigation_playback_active or self._fast_preview_only:
+                # 长按切模式时连缓存磁盘查询都不做，松键才读取最终来源。
+                self._preview_request_token += 1
+                self._cancel_pending_full_preview()
+                self.source_changed.emit()
+                return
+            focus_box = self._source_focus_box
+            bird_box = self._source_bird_box
+            self._current_path = None
+            self.set_image(path, load_full=True, quick_size=self._last_quick_size)
+            self.set_focus_box(focus_box)
+            self.set_bird_box(bird_box)
+        self.source_changed.emit()
+
+    def refresh_denoised_preview(self, source: str) -> None:
+        """新成片发布后升级仍停留在该源图的视口；长按时留待最终选择。"""
+        if (self._shutdown_requested or self._preview_source_mode != "denoised"
+                or self._navigation_playback_active or self._fast_preview_only
+                or not self._is_current_path(source)):
+            return
+        focus_box, bird_box = self._source_focus_box, self._source_bird_box
+        self._current_path = None
+        self.set_image(source, quick_size=self._last_quick_size)
+        self.set_focus_box(focus_box)
+        self.set_bird_box(bird_box)
 
     def set_image(self, path: str, *, load_full: bool = True, quick_size: int | None = None):
         if self._shutdown_requested:
             return
+        if self._navigation_playback_active:
+            load_full = False
         self._last_quick_size = quick_size
         t0 = _time.perf_counter()
         norm_path = os.path.normpath(path) if path else path
@@ -617,13 +724,17 @@ class PreviewPanel(QWidget):
         self._preview_request_token += 1
         token = self._preview_request_token
         self._current_path = norm_path
+        self._source_identity_path = norm_path or ""
         self._focus_cache_path = norm_path
         self.source_changed.emit()
         self._full_preview_loaded = False
         self._fast_preview_only = not bool(load_full)
         self._cancel_pending_full_preview()
         self._raw_focus_crop_box = None
+        self._preview_note = ""
+        self._denoised_display_path = ""
         self.set_focus_box(None)
+        self.set_bird_box(None)
         load_t0 = _time.perf_counter()
         target_size = _quick_preview_target_size(self._canvas, quick_size)
         pix = None
@@ -632,7 +743,8 @@ class PreviewPanel(QWidget):
         full_decode_busy = active_loader is not None and active_loader.isRunning()
         # RAW never decodes in the GUI thread: the embedded camera preview is
         # extracted and decoded by the owned full worker (two-stage display).
-        if load_full and path and not full_decode_busy and _should_load_full_preview_sync(path):
+        if (load_full and path and self._preview_source_mode != "denoised"
+                and not full_decode_busy and _should_load_full_preview_sync(path)):
             qimg = _load_full_preview_qimage(path)
             if qimg is not None and not qimg.isNull():
                 pix = QPixmap.fromImage(qimg)
@@ -719,13 +831,17 @@ class PreviewPanel(QWidget):
         started_at = _time.perf_counter()
         self._preview_request_token += 1
         self._current_path = os.path.normpath(path) if path else path
+        self._source_identity_path = self._current_path or ""
         self._focus_cache_path = self._current_path
         self.source_changed.emit()
         self._full_preview_loaded = False
         self._fast_preview_only = True
         self._cancel_pending_full_preview()
         self._raw_focus_crop_box = None
+        self._preview_note = ""
+        self._denoised_display_path = ""
         self.set_focus_box(None)
+        self.set_bird_box(None)
 
         target_size = _quick_preview_target_size(self._canvas, quick_size)
         output = None
@@ -778,13 +894,17 @@ class PreviewPanel(QWidget):
         self._fit_next_image = True
         self._first_image_fit_token = None
         self._current_path = None
+        self._source_identity_path = ""
         self._focus_cache_path = ""
         self.source_changed.emit()
         self._full_preview_loaded = False
         self._fast_preview_only = False
         self._cancel_pending_full_preview()
         self._raw_focus_crop_box = None
+        self._preview_note = ""
+        self._denoised_display_path = ""
         self.set_focus_box(None)
+        self.set_bird_box(None)
         self._canvas.set_source_pixmap(None)
         self._set_preview_status_text(None, None)
 
@@ -839,7 +959,7 @@ class PreviewPanel(QWidget):
             loader.requestInterruption()
 
     def _start_full_preview_loader(self) -> None:
-        if self._shutdown_requested:
+        if self._shutdown_requested or self._navigation_playback_active:
             return
         path = os.path.normpath(str(self._current_path or ""))
         if not path or not os.path.isfile(path):
@@ -858,13 +978,13 @@ class PreviewPanel(QWidget):
         self._launch_full_preview_loader(token, path)
 
     def _launch_full_preview_loader(self, token: int, path: str) -> None:
-        if self._shutdown_requested:
+        if self._shutdown_requested or self._navigation_playback_active:
             return
         if int(token) != int(self._preview_request_token):
             return
         if not path or not self._is_current_path(path) or not os.path.isfile(path):
             return
-        loader = _FullPreviewLoader(token, path, self, show_raw=self._show_raw)
+        loader = _FullPreviewLoader(token, path, self, source_mode=self._preview_source_mode)
         loader.loaded.connect(self._on_full_preview_loaded)
         loader.finished.connect(self._on_full_preview_loader_finished)
         self._full_preview_loader = loader
@@ -896,15 +1016,18 @@ class PreviewPanel(QWidget):
         self._launch_full_preview_loader(token, path)
 
     def _on_full_preview_loaded(self, token: int, path: str, qimg, load_ms: float) -> None:
-        if self._shutdown_requested or int(token) != int(self._preview_request_token):
+        if (self._shutdown_requested or self._navigation_playback_active
+                or int(token) != int(self._preview_request_token)):
             return
         if not path or not self._current_path:
             return
         if not self._is_current_path(path):
             return
         if qimg is None or qimg.isNull():
+            if self._preview_source_mode == "denoised":
+                self._preview_status_label.setText("降噪成片与原图均无法预览，可切换预览来源重试")
             if self._show_raw and Path(path).suffix.lower() in RAW_EXTENSIONS:
-                self._preview_status_label.setText("RAW 解码失败，可关闭‘显示 RAW’重试内嵌预览")
+                self._preview_status_label.setText("RAW 解码失败，可切回‘默认预览’重试内嵌预览")
             if not self._has_canvas_pixmap():
                 self._canvas.setText(f"无法预览\n{Path(path).name}")
             perf_log(
@@ -923,7 +1046,10 @@ class PreviewPanel(QWidget):
             self._raw_focus_crop_box = json.loads(qimg.text(RAW_FOCUS_CROP_KEY) or "null")
         except (ValueError, TypeError):
             self._raw_focus_crop_box = None
+        self._preview_note = qimg.text(_PREVIEW_NOTE_KEY)
+        self._denoised_display_path = qimg.text(_DENOISED_PATH_KEY)
         self.set_focus_box(self._source_focus_box)
+        self.set_bird_box(self._source_bird_box)
         self._set_canvas_pixmap(pix)
         self._set_preview_status_text(pix.width(), pix.height())
         self._full_preview_loaded = True
@@ -972,21 +1098,25 @@ class PreviewPanel(QWidget):
 
     def render_source_pixmap_with_overlays(self) -> QPixmap | None:
         path = self._current_path or ""
-        if Path(path).suffix.lower() in RAW_EXTENSIONS and (self._show_raw or not self._full_preview_loaded):
-            # RAW 开关只控制视口。叠加导出固定使用默认来源且不改变当前请求/画布。
-            image = _load_full_preview_qimage_raw(path)
+        if (self._preview_source_mode == "denoised" or
+                (Path(path).suffix.lower() in RAW_EXTENSIONS and (self._show_raw or not self._full_preview_loaded))):
+            # 来源切换只控制视口。叠加导出固定使用默认来源且不改变当前请求/画布。
+            image = _load_full_preview_qimage(path)
             if image is None or image.isNull():
                 return None
             original = self._canvas._source_pixmap
             original_focus = self._canvas._focus_box
+            original_bird = self._canvas._bird_box
             try:
                 export_crop = json.loads(image.text(RAW_FOCUS_CROP_KEY) or "null")
                 self._canvas._focus_box = map_camera_focus_box(self._source_focus_box, export_crop)
+                self._canvas._bird_box = map_camera_focus_box(self._source_bird_box, export_crop)
                 self._canvas._source_pixmap = QPixmap.fromImage(image)
                 return self._canvas.render_source_pixmap_with_overlays()
             finally:
                 self._canvas._source_pixmap = original
                 self._canvas._focus_box = original_focus
+                self._canvas._bird_box = original_bird
         self._ensure_full_preview_loaded_sync()
         return self._canvas.render_source_pixmap_with_overlays()
 
@@ -1010,6 +1140,13 @@ class PreviewPanel(QWidget):
     def set_auto_focus_center(self, enabled: bool) -> None:
         """自动以焦点（缺失时为图像中心）为缩放和切图基准。"""
         self._canvas.set_auto_focus_center(enabled)
+
+    def set_bird_box(self, bird_box) -> None:
+        self._source_bird_box = bird_box
+        self._canvas.set_bird_box(map_camera_focus_box(bird_box, self._raw_focus_crop_box))
+
+    def set_show_bird_box(self, enabled: bool) -> None:
+        self._canvas.set_show_bird_box(enabled)
 
     def set_show_focus_enabled(self, enabled: bool) -> None:
         """开关「显示对焦点」叠加层。"""
@@ -1046,7 +1183,8 @@ class PreviewPanel(QWidget):
         else:
             resolution_text = f"{self._preview_resolution[0]}x{self._preview_resolution[1]}"
         scale_text = format_preview_scale_percent(self.current_display_scale_percent())
-        self._preview_status_label.setText(f"当前预览分辨率: {resolution_text} | 当前缩放: {scale_text}")
+        note = f" | {self._preview_note}" if self._preview_note else ""
+        self._preview_status_label.setText(f"当前预览分辨率: {resolution_text} | 当前缩放: {scale_text}{note}")
 
     def _on_canvas_display_scale_percent_changed(self, scale_percent: object) -> None:
         self._refresh_preview_status_text()

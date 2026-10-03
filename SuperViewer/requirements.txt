@@ -15,3 +15,9 @@ torch>=2.10,<2.11
 tifffile>=2025.6.11
 imagecodecs>=2025.3.30
 psutil>=6.0
+
+# Bird-body preview uses the same detector and package versions as BirdStamp.
+ultralytics>=8.3,<9.0
+torchvision>=0.25,<0.26
+opencv-python>=4.6,<5.0
+lap>=0.5.12

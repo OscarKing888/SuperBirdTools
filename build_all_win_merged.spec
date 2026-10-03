@@ -97,6 +97,13 @@ from build_tools.viewer_denoise import collect_viewer_denoise
 
 denoise_datas, denoise_binaries, denoise_hiddenimports = collect_viewer_denoise(REPO_ROOT)
 
+from build_tools.viewer_bird_body import collect_viewer_bird_body
+
+bird_datas, bird_binaries, bird_hiddenimports = collect_viewer_bird_body(
+    REPO_ROOT,
+    ultralytics_assets=(ultralytics_datas, ultralytics_binaries, ultralytics_hiddenimports),
+)
+
 
 # --------------------------------------------------------------------------- #
 # SuperViewer
@@ -105,6 +112,7 @@ use_app_workpath("superviewer")
 superviewer_datas = [
     *video_datas,
     *denoise_datas,
+    *bird_datas,
     *collect_tree(REPO_ROOT / "app_metadata.json", "."),
     *collect_tree(SUPERVIEWER_ROOT / "about.cfg", "."),
     *collect_tree(SUPERVIEWER_ROOT / "super_viewer.cfg", "."),
@@ -119,10 +127,10 @@ superviewer_datas = [
 superviewer_a = Analysis(
     [str(SUPERVIEWER_ROOT / "entry.py")],
     pathex=[str(SUPERVIEWER_ROOT), str(REPO_ROOT)],
-    binaries=denoise_binaries,
+    binaries=denoise_binaries + bird_binaries,
     datas=superviewer_datas,
     hiddenimports=collect_submodules("app_common")
-    + collect_submodules("superviewer") + video_hiddenimports + denoise_hiddenimports,
+    + collect_submodules("superviewer") + video_hiddenimports + denoise_hiddenimports + bird_hiddenimports,
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],

@@ -42,6 +42,7 @@ from app_common.exif_io import (
     _get_exiftool_tag_target,
 )
 from app_common.file_browser import DirectoryBrowserWidget
+from app_common.file_browser._browser_core import _get_cached_actual_path
 from app_common.image_formats import HEIF_EXTENSIONS, IMAGE_EXTENSIONS, RAW_EXTENSIONS
 from app_common.video import is_video
 from app_common.preview_canvas import (
@@ -133,6 +134,7 @@ try:
     from .superviewer.super_viewer_user_options_dialog import SuperViewerUserOptionsDialog
     from .superviewer.tagged_file_list import SuperViewerTaggedFileListPanel
     from .superviewer.bird_sharpness_controller import BirdSharpnessController
+    from .superviewer.bird_body_controller import BirdBodyController
     from .superviewer.denoise_controller import DenoiseController
     from .superviewer.burst_info_controller import BurstInfoController
     from .superviewer.preview_key_router import PreviewKeyRouter
@@ -217,6 +219,7 @@ except ImportError:
     from superviewer.super_viewer_user_options_dialog import SuperViewerUserOptionsDialog
     from superviewer.tagged_file_list import SuperViewerTaggedFileListPanel
     from superviewer.bird_sharpness_controller import BirdSharpnessController
+    from superviewer.bird_body_controller import BirdBodyController
     from superviewer.denoise_controller import DenoiseController
     from superviewer.burst_info_controller import BurstInfoController
     from superviewer.preview_key_router import PreviewKeyRouter
@@ -393,6 +396,12 @@ class MainWindow(QMainWindow):
         self.check_show_focus.setToolTip("在预览图上叠加显示相机对焦点（来自原始 RAW/HEIF 元数据）。")
         self.check_show_focus.toggled.connect(self._on_preview_overlay_toggled)
         overlay_row.addWidget(self.check_show_focus)
+        self.check_show_bird = ToggleToolButton("显示鸟体")
+        self.check_show_bird.setToolTip(
+            "显示检测到的主体鸟框。停留后在后台计算并缓存到 XMP；连续浏览只使用已有缓存。"
+        )
+        self.check_show_bird.toggled.connect(self._on_bird_body_toggled)
+        overlay_row.addWidget(self.check_show_bird)
         self.check_auto_focus_center = ToggleToolButton("自动焦点居中")
         self.check_auto_focus_center.setChecked(load_auto_focus_center_from_settings())
         self.check_auto_focus_center.setToolTip(
@@ -467,6 +476,11 @@ class MainWindow(QMainWindow):
         self.preview_a.set_composition_grid_line_width(self.combo_preview_grid_line_width.currentData())
         self.preview_a.set_keep_view_on_switch(bool(get_keep_view_on_switch()))
         self.preview_a.full_preview_ready.connect(lambda path: self._on_full_preview_ready(path, panel=self.preview_a))
+        self._bird_body = BirdBodyController(self, pool_provider=self._file_list.background_work_pool)
+        self._file_list.playback_state_changed.connect(self._bird_body.set_playback_active)
+        self._file_list.playback_state_changed.connect(self._on_preview_playback_state_changed)
+        self._bird_body.status_changed.connect(lambda message: self.statusBar().showMessage(message, 6000))
+        self._denoise.output_ready.connect(self._on_denoised_output_ready)
         self.ab_preview = ViewerABPreview(
             self, self.preview_panel, self.preview_a,
             b_center=self.check_auto_focus_center, b_scale=self.combo_preview_scale,
@@ -565,6 +579,8 @@ class MainWindow(QMainWindow):
 
     def _on_directory_selected(self, path: str):
         """目录树选中目录后，保存路径到设置与 .last_folder.txt，并刷新文件列表。"""
+        self._bird_body.clear_panel(self.preview_a)
+        self._bird_body.clear_panel(self.preview_panel)
         self.preview_a.clear_image()
         self.preview_panel.clear_image()
         self.ab_preview.set_side_path("a", "")
@@ -630,7 +646,9 @@ class MainWindow(QMainWindow):
             if path:
                 self.preview_a.set_image(path, quick_size=self._file_list.preview_quick_size())
                 self.preview_a.set_focus_box(self.preview_panel._source_focus_box)
+                self._bird_body.show_source(self.preview_a, path)
         else:
+            self._bird_body.clear_panel(self.preview_a)
             self.preview_a.clear_image()
             self.ab_preview.set_side_path("a", "")
             self.ab_preview.video_info["a"] = None
@@ -692,6 +710,7 @@ class MainWindow(QMainWindow):
         quick_size_fn = getattr(self._file_list, "preview_quick_size", None)
         quick_size = quick_size_fn() if callable(quick_size_fn) else None
         panel = self._active_preview_panel()
+        panel.set_navigation_playback_active(False)
         panel.set_image(path, quick_size=quick_size)
         side = "a" if panel is self.preview_a else "b"
         self.ab_preview.video_info[side] = None
@@ -725,6 +744,11 @@ class MainWindow(QMainWindow):
         panel = getattr(self, "_active_preview_panel", lambda: self.preview_panel)()
         panel.set_image(path, load_full=False, quick_size=quick_size)
         self._update_preview_focus_box(path, allow_async_load=False, panel=panel)
+        if getattr(self, "_bird_body", None) is not None:
+            source = self._file_list.get_selected_display_path() or path
+            source = _get_cached_actual_path(source) or source
+            panel.set_source_identity(source)
+            self._bird_body.show_source(panel, source, committed=False)
 
     def _on_file_fast_preview_pixmap_requested(self, path: str, pixmap, quick_size: int) -> None:
         """直接复用缩略图视图已解码的当前档位帧，避免 JPEG 落盘再读。"""
@@ -733,6 +757,10 @@ class MainWindow(QMainWindow):
         panel = getattr(self, "_active_preview_panel", lambda: self.preview_panel)()
         panel.set_quick_pixmap(path, pixmap, quick_size=quick_size)
         self._update_preview_focus_box(path, allow_async_load=False, panel=panel)
+        if getattr(self, "_bird_body", None) is not None:
+            source = _get_cached_actual_path(path) or path
+            panel.set_source_identity(source)
+            self._bird_body.show_source(panel, source, committed=False)
 
     def _init_menu_bar(self):
         file_menu = self.menuBar().addMenu("文件")
@@ -1159,7 +1187,7 @@ class MainWindow(QMainWindow):
             self.video_info_panel.set_path(path if video else '')
             other_path = self.preview_a.current_path() if self._active_preview_panel() is self.preview_panel else self.preview_panel.current_path()
             overlay_available = not video or (self.ab_preview.enabled.isChecked() and bool(other_path) and not is_video(other_path))
-            for control in (self.check_show_focus, self.combo_preview_grid, self.combo_preview_grid_line_width):
+            for control in (self.check_show_focus, self.check_show_bird, self.combo_preview_grid, self.combo_preview_grid_line_width):
                 control.setEnabled(overlay_available)
             self.ab_preview.a_panel._update_available()
             self.ab_preview.b_panel._update_available()
@@ -1171,6 +1199,10 @@ class MainWindow(QMainWindow):
         self.image_info_tabs.on_photo_selected('' if is_video(path) else path)
         tabs_ms = (_time.perf_counter() - tabs_t0) * 1000.0
         self._update_preview_focus_box(path, panel=self._active_preview_panel())
+        self._bird_body.show_source(
+            self._active_preview_panel(), path,
+            committed=not self._file_list._key_navigation_playback_active,
+        )
         perf_log(
             _log,
             "[PERF][image_switch][info] END path=%r label_ms=%.1f tabs_ms=%.1f total_ms=%.1f",
@@ -1257,6 +1289,29 @@ class MainWindow(QMainWindow):
         for panel in (self.preview_panel, self.preview_a):
             panel.set_show_focus_enabled(enabled)
         self._refresh_preview_focus_options()
+
+    def _on_bird_body_toggled(self, enabled: bool) -> None:
+        self._bird_body.set_enabled(enabled)
+        playing = self._file_list._key_navigation_playback_active
+        for panel in (self.preview_panel, self.preview_a):
+            # 已显示帧的身份由控制器保存，不能拿播放中已跳过的下一帧替代。
+            source = getattr(panel, "_bird_body_source_path", "") or panel.current_path()
+            if source:
+                self._bird_body.show_source(panel, source, committed=not playing)
+
+    def _on_preview_playback_state_changed(self, playing: bool) -> None:
+        # 首个重复帧可能因缺缓存被跳过；仍须立即抑制活动视口的完整解码。
+        if playing:
+            self._active_preview_panel().set_navigation_playback_active(True)
+        else:
+            for panel in (self.preview_panel, self.preview_a):
+                panel.set_navigation_playback_active(False)
+
+    def _on_denoised_output_ready(self, source: str, destination: str) -> None:
+        if self._shutdown_requested:
+            return
+        for panel in (self.preview_panel, self.preview_a):
+            panel.refresh_denoised_preview(source)
 
     def _on_auto_focus_center_toggled(self, enabled: bool) -> None:
         self.preview_panel.set_auto_focus_center(enabled)
@@ -1545,6 +1600,10 @@ class MainWindow(QMainWindow):
             except Exception:
                 pass
             try:
+                self._bird_body.shutdown()
+            except Exception:
+                pass
+            try:
                 self._file_list.request_shutdown()
             except Exception:
                 pass
@@ -1588,15 +1647,16 @@ class MainWindow(QMainWindow):
         directory_scans_done = directory_scans_done and not pool_pending()
         bird_sharpness_done = self._bird_sharpness.is_shutdown_done()
         denoise_done = self._denoise.is_shutdown_done()
+        bird_body_done = self._bird_body.is_shutdown_done()
         burst_info_done = self._burst_info.is_shutdown_done()
         pending_state = (
             focus_done, tabs_done, preview_done, exiftool_done, directory_scans_done, bird_sharpness_done,
-            burst_info_done, denoise_done,
+            burst_info_done, denoise_done, bird_body_done,
         )
         if not all(pending_state):
             if pending_state != self._shutdown_pending_state:
                 _log.info(
-                    "[shutdown] waiting focus=%s image_info=%s preview=%s exiftool=%s directory_scans_and_pool=%s bird_sharpness=%s burst_info=%s denoise=%s",
+                    "[shutdown] waiting focus=%s image_info=%s preview=%s exiftool=%s directory_scans_and_pool=%s bird_sharpness=%s burst_info=%s denoise=%s bird_body=%s",
                     focus_done,
                     tabs_done,
                     preview_done,
@@ -1605,6 +1665,7 @@ class MainWindow(QMainWindow):
                     bird_sharpness_done,
                     burst_info_done,
                     denoise_done,
+                    bird_body_done,
                 )
                 self._shutdown_pending_state = pending_state
             event.ignore()

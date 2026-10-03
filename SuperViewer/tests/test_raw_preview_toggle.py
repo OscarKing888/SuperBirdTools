@@ -154,7 +154,9 @@ def test_ab_toolbar_raw_visibility_and_session_state(window, tmp_path, monkeypat
     assert window.preview_panel.show_raw()
     assert ab.a_panel.toolbar.height() == ab.b_panel.toolbar.height()
     window.preview_panel.set_image(str(jpg))
-    assert ab.b_panel.raw_toggle.isHidden() and ab.b_panel.raw_toggle.isChecked()
+    # 非 RAW 也能查看降噪成片；记住 RAW 偏好，但此时按钮显示默认预览。
+    assert ab.b_panel.source_button.isVisible() and not ab.b_panel.source_button.isChecked()
+    assert ab.b_panel.source_button.text() == "默认预览" and window.preview_panel.show_raw()
     window.preview_panel.set_image(str(raw), load_full=False, quick_size=256)
     assert ab.b_panel.raw_toggle.isVisible() and ab.b_panel.raw_toggle.isChecked()
     assert not window.preview_panel._full_preview_timer.isActive()
