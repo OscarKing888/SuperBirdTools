@@ -17,6 +17,9 @@ def _bootstrap_repo_root() -> Path:
 
 def main() -> None:
     _bootstrap_repo_root()
+    if len(sys.argv) > 1 and sys.argv[1] == "--check-denoise":
+        from superviewer.denoise_diagnostics import main as check_denoise
+        raise SystemExit(check_denoise(sys.argv[2:]))
     if len(sys.argv) > 1 and sys.argv[1] == '--check-video':
         # 无窗口的只读打包诊断：不会扫描目录或写入用户的缩略图缓存。
         from superviewer.video_diagnostics import main as check_video

@@ -23,6 +23,7 @@
 **/*.log
 /super_viewer.cfg
 /SuperViewer/SuperViewerUser.cfg
+/SuperViewer/models/denoise/
 
 SuperBirdStamp/tools/ffmpeg/macos/ffmpeg
 SuperBirdStamp/tools/ffmpeg/windows/ffmpeg.exe

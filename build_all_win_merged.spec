@@ -93,6 +93,10 @@ def share_base_library(primary_analysis, dependent_analysis) -> None:
 # isolated worker from loading Qt's older MSVC runtime before Torch.
 ultralytics_datas, ultralytics_binaries, ultralytics_hiddenimports = collect_all("ultralytics")
 
+from build_tools.viewer_denoise import collect_viewer_denoise
+
+denoise_datas, denoise_binaries, denoise_hiddenimports = collect_viewer_denoise(REPO_ROOT)
+
 
 # --------------------------------------------------------------------------- #
 # SuperViewer
@@ -100,6 +104,7 @@ ultralytics_datas, ultralytics_binaries, ultralytics_hiddenimports = collect_all
 use_app_workpath("superviewer")
 superviewer_datas = [
     *video_datas,
+    *denoise_datas,
     *collect_tree(REPO_ROOT / "app_metadata.json", "."),
     *collect_tree(SUPERVIEWER_ROOT / "about.cfg", "."),
     *collect_tree(SUPERVIEWER_ROOT / "super_viewer.cfg", "."),
@@ -114,14 +119,14 @@ superviewer_datas = [
 superviewer_a = Analysis(
     [str(SUPERVIEWER_ROOT / "entry.py")],
     pathex=[str(SUPERVIEWER_ROOT), str(REPO_ROOT)],
-    binaries=[],
+    binaries=denoise_binaries,
     datas=superviewer_datas,
     hiddenimports=collect_submodules("app_common")
-    + collect_submodules("superviewer") + video_hiddenimports,
+    + collect_submodules("superviewer") + video_hiddenimports + denoise_hiddenimports,
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=[],
+    excludes=["IPython", "notebook", "nbformat", "matplotlib", "tkinter", "__main__"],
     noarchive=False,
     optimize=0,
 )

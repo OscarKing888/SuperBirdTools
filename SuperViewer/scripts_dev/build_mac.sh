@@ -31,6 +31,8 @@ else
   SELECTED_PYTHON="python3"
 fi
 
+"${SELECTED_PYTHON}" "${REPO_ROOT}/build_tools/download_denoise_model.py"
+
 "${SELECTED_PYTHON}" -m PyInstaller \
   "${PYINSTALLER_ARGS[@]}" \
   --distpath "${DIST_ROOT}" \

@@ -126,6 +126,15 @@ jobs:
               throw "Missing build output: $path"
             }
           }
+          $env:SUPERBIRD_DENOISE_MODEL_DIR = ""
+          $denoiseReport = Join-Path $env:RUNNER_TEMP "denoise-windows.json"
+          $probe = Start-Process -FilePath "dist/SuperViewer/SuperViewer.exe" `
+            -ArgumentList @("--check-denoise", "--device", "cpu", "--output", "`"$denoiseReport`"") `
+            -Wait -PassThru
+          if ($probe.ExitCode -ne 0) { throw "Packaged NAFNet inference failed: $($probe.ExitCode)" }
+          $denoise = Get-Content -LiteralPath $denoiseReport -Raw | ConvertFrom-Json
+          if (-not $denoise.ok) { throw "Packaged NAFNet inference failed: $($denoise.error)" }
+          Get-Content -LiteralPath $denoiseReport
           & "dist/SuperBirdUpdater/SuperBirdUpdater.exe" --diagnose
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           New-Item -ItemType Directory -Path "release" -Force | Out-Null
@@ -189,6 +198,9 @@ jobs:
           test -x "dist/SuperViewer.app/Contents/MacOS/SuperViewer"
           test -x "dist/SuperBirdStamp.app/Contents/MacOS/SuperBirdStamp"
           test -x "dist/SuperBirdUpdater.app/Contents/MacOS/SuperBirdUpdater"
+          SUPERBIRD_DENOISE_MODEL_DIR="" "dist/SuperViewer.app/Contents/MacOS/SuperViewer" \
+            --check-denoise --device cpu --output "$RUNNER_TEMP/denoise-macos.json"
+          cat "$RUNNER_TEMP/denoise-macos.json"
           "dist/SuperBirdUpdater.app/Contents/MacOS/SuperBirdUpdater" --diagnose
           test -f "dist/updates/update-macos-arm64.json"
           mkdir -p release

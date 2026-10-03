@@ -9,8 +9,8 @@ opencv-python>=4.6,<5.0
 ultralytics>=8.3,<9.0
 # Ultralytics tracker modules are imported during PyInstaller collection.
 lap>=0.5.12
-torch>=2.2
-torchvision>=0.17
+torch>=2.10,<2.11
+torchvision>=0.25,<0.26
 
 # Optional extras:
 rawpy>=0.20

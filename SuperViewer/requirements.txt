@@ -9,3 +9,9 @@ rawpy>=0.19.0
 pillow-heif>=0.16.0
 pyinstaller
 imageio-ffmpeg>=0.5.1
+
+# NAFNet inference (shared environment already uses Torch for BirdStamp).
+torch>=2.10,<2.11
+tifffile>=2025.6.11
+imagecodecs>=2025.3.30
+psutil>=6.0

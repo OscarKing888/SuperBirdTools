@@ -261,6 +261,14 @@ Qt 进度回调只更新界面/初始需求提示，实际任务完成和需求�
 
 重命名会先检查源图和同目录同名 XMP 的目标冲突，支持大小写改名并在失败时回滚。剪切/覆盖使用共享文件事务；源数据或目标原文件无法完整恢复时必须保留恢复文件并报告位置。新增文件动作应复用这些路径，不能只移动图片而遗漏侧车。
 
+## 批量 RGB 降噪
+
+[`DenoiseController`](../superviewer/denoise_controller.py) 通过现有目录/文件菜单 extender 接入窗口，沿用真实源路径解析，保有 `DenoiseWorker` 至实际 `QThread.finished`。窗口关闭请求取消并等待所有降噪动作结束。用户选项对话框的降噪页通过共享 `superviewer_user_options` 保存规范化配置，设置不触发图片解码或模型载入。
+
+[`image_denoise.batch.run_batch()`](../../image_denoise/batch.py) 负责输入快照、Unicode/大小写无关输出命名、内存预算和有界提交；GUI 使用现有 `BrowserWorkPool` 的 `WorkKind.ANALYSIS` 与需求租约，CLI 使用自己拥有的有界 executor。单图 [`DenoiseAction`](../../image_denoise/actions.py) 调用无 Qt 的 [`denoise_file()`](../../image_denoise/pipeline.py)，完成高位深 sRGB 解码、可取消分块推理、元数据及 TIFF/JPEG/XMP 发布。此链路独立于受保护的预览缓存与 RAW 显示开关。
+
+模型只在后台首次使用时加载；运行时不下载。固定模型清单/查找在 `image_denoise.models`，下载器与三个 spec 的资源门禁在 `build_tools`。算法、默认设置、资源和 CLI 详见 [批量降噪](../../docs/image_denoise.md)，回归位于 `image_denoise/tests` 和 Viewer 的 `test_denoise_controller.py`。
+
 ## 10. 扩展与验证步骤
 
 1. 从上表定位控件入口和状态所有者，阅读对应测试；涉及共享实现时同时检查 BirdStamp 调用。约定源图路径、显示路径、缓存路径，明确是否需要写 XMP。

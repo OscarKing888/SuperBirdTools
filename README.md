@@ -12,6 +12,7 @@
 - [2026-09-07 审查、修复与后续建议](docs/REVIEW_2026-09-07.md)
 - [SuperViewer 架构与功能定位](SuperViewer/docs/ARCHITECTURE.md)
 - [SuperBirdStamp 架构与功能定位](SuperBirdStamp/docs/ARCHITECTURE.md)
+- [SuperViewer 批量 RGB 降噪、模型预下载与离线打包](docs/image_denoise.md)
 
 ## 目录原则
 

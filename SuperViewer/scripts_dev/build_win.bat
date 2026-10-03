@@ -6,6 +6,14 @@ for %%I in ("%SCRIPT_DIR%..") do set "ROOT_DIR=%%~fI"
 for %%I in ("%ROOT_DIR%..") do set "REPO_ROOT=%%~fI"
 cd /d "%ROOT_DIR%"
 
+rem 与合并构建相同，保护 PyInstaller 的隔离进程免受 Qt/MSVC 加载顺序影响。
+set "PYINSTALLER_BOOTSTRAP_DIR=%REPO_ROOT%\build_tools\pyinstaller_bootstrap"
+if defined PYTHONPATH (
+  set "PYTHONPATH=%PYINSTALLER_BOOTSTRAP_DIR%;%PYTHONPATH%"
+) else (
+  set "PYTHONPATH=%PYINSTALLER_BOOTSTRAP_DIR%"
+)
+
 if defined SUPERBIRDTOOLS_DIST_ROOT (
   set "DIST_ROOT=%SUPERBIRDTOOLS_DIST_ROOT%"
 ) else (
@@ -38,6 +46,8 @@ goto :build_with_python
 
 :build_with_exe
 echo [INFO] Using Python: %PYTHON_EXE%
+"%PYTHON_EXE%" "%REPO_ROOT%\build_tools\download_denoise_model.py"
+if errorlevel 1 exit /b 1
 "%PYTHON_EXE%" -c "import PyQt6" >nul 2>nul
 if errorlevel 1 (
   echo [ERROR] Selected Python does not have PyQt6: %PYTHON_EXE%
@@ -53,6 +63,8 @@ goto :after_build
 
 :build_with_launcher
 echo [INFO] Using Python launcher: py -3
+py -3 "%REPO_ROOT%\build_tools\download_denoise_model.py"
+if errorlevel 1 exit /b 1
 py -3 -c "import PyQt6" >nul 2>nul
 if errorlevel 1 (
   echo [ERROR] Python launcher py -3 does not resolve to an environment with PyQt6.
@@ -68,6 +80,8 @@ goto :after_build
 
 :build_with_python
 echo [INFO] Using Python: python
+python "%REPO_ROOT%\build_tools\download_denoise_model.py"
+if errorlevel 1 exit /b 1
 python -c "import PyQt6" >nul 2>nul
 if errorlevel 1 (
   echo [ERROR] Python does not have PyQt6: python
