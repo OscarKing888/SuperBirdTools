@@ -136,7 +136,7 @@ def test_menus_offer_start_then_stop_while_busy(env) -> None:
     controller, file_list, analyzer, folder, paths = env
     menu = QMenu()
     controller.extend_file_menu(menu, paths)
-    assert [a.text() for a in menu.actions()] == ["检测鸟清晰度（2 张）"]
+    assert [a.text() for a in menu.actions()] == ["查看清晰度计算过程…", "检测鸟清晰度（2 张）"]
     dir_menu = QMenu()
     controller.extend_directory_menu(dir_menu, str(folder))
     sub = dir_menu.actions()[0].menu()
@@ -148,10 +148,11 @@ def test_menus_offer_start_then_stop_while_busy(env) -> None:
     assert _wait(analyzer.entered.is_set)
     busy_menu = QMenu()
     controller.extend_file_menu(busy_menu, paths)
-    assert [a.text() for a in busy_menu.actions()] == ["停止鸟清晰度检测"]
+    # the read-only trace viewer stays available while a batch job runs
+    assert [a.text() for a in busy_menu.actions()] == ["查看清晰度计算过程…", "停止鸟清晰度检测"]
     assert not controller.start(BirdSharpnessJob(title="again", items=[(paths[0], paths[0])]))
     assert controller.messages == ["已有鸟清晰度检测任务在运行。"]
-    busy_menu.actions()[0].trigger()
+    next(a for a in busy_menu.actions() if a.text() == "停止鸟清晰度检测").trigger()
     gate.set()
     assert _wait(lambda: not controller.busy)
     assert len(analyzer.analyzed) == 1  # stopped after the in-flight photo

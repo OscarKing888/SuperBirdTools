@@ -48,6 +48,8 @@ def main(argv: List[str] | None = None) -> int:
     parser.add_argument("-r", "--recursive", action="store_true", help="递归子目录")
     parser.add_argument("--write-xmp", action="store_true", help="把结果写入同名 XMP sidecar")
     parser.add_argument("--json", action="store_true", help="逐行输出 JSON")
+    parser.add_argument("--trace", metavar="DIR",
+                        help="导出每张照片的计算过程（各步骤 PNG + trace.json）到 DIR/<文件名>/")
     parser.add_argument(
         "-j", "--workers", type=int, default=min(6, max(1, (os.cpu_count() or 2) // 2)),
         help="并行检测的照片数（模型推理串行，解码与计算并行；默认 CPU 核数的一半，最多 6）",
@@ -95,7 +97,20 @@ def main(argv: List[str] | None = None) -> int:
 
     analyzer = BirdSharpnessAnalyzer()
     try:
-        results = analyze_paths(paths, analyzer=analyzer, on_result=report, workers=max(1, args.workers))
+        if args.trace:
+            from .trace import AnalysisTracer
+
+            results = []
+            for index, path in enumerate(paths, start=1):
+                tracer = AnalysisTracer()
+                result = analyzer.analyze(path, tracer=tracer)
+                results.append(result)
+                if tracer.trace is not None:
+                    out_dir = os.path.join(args.trace, os.path.splitext(os.path.basename(path))[0])
+                    tracer.trace.export(out_dir)
+                report(index, len(paths), result)
+        else:
+            results = analyze_paths(paths, analyzer=analyzer, on_result=report, workers=max(1, args.workers))
     finally:
         analyzer.release()
     return 0 if all(r.ok for r in results) else 3

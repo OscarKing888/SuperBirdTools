@@ -83,3 +83,40 @@ class BirdSharpnessAction(WorkerAction):
             self._set_stage(STAGE_WRITE)
             outcome.written = write_result(self.source_path, outcome.result)
         return outcome
+
+
+@dataclass
+class BirdSharpnessTraceOutcome:
+    source_path: str
+    trace: Optional[object] = None   # bird_sharpness.trace.AnalysisTrace
+    result: Optional[BirdSharpnessResult] = None
+    cancelled: bool = False
+    error: str = ""
+
+
+class BirdSharpnessTraceAction(WorkerAction):
+    """Analyse one photo with a tracer for the step viewer. Read-only: never writes XMP."""
+
+    def __init__(self, analyzer: BirdSharpnessAnalyzer, source_path: str, *,
+                 cancelled: Callable[[], bool] = lambda: False):
+        super().__init__(cancelled=cancelled)
+        self.analyzer = analyzer
+        self.source_path = os.path.normpath(source_path)
+
+    def execute(self) -> BirdSharpnessTraceOutcome:
+        if self.is_cancelled():
+            return BirdSharpnessTraceOutcome(self.source_path, cancelled=True)
+        from .models import check_runtime
+        from .trace import AnalysisTracer
+
+        reason = check_runtime()
+        if reason:
+            return BirdSharpnessTraceOutcome(self.source_path, error=reason)
+
+        tracer = AnalysisTracer()
+        result = self.analyzer.analyze(self.source_path, tracer=tracer, cancelled=self.is_cancelled)
+        if self.is_cancelled():
+            return BirdSharpnessTraceOutcome(self.source_path, cancelled=True)
+        if not result.ok:
+            return BirdSharpnessTraceOutcome(self.source_path, result=result, error=result.error or "分析失败")
+        return BirdSharpnessTraceOutcome(self.source_path, trace=tracer.trace, result=result)

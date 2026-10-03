@@ -257,6 +257,12 @@ class BirdSharpnessWorker(QThread):
             publish()
 
 
+class _TraceBridge(QObject):
+    """Delivers trace outcomes from pool threads to the GUI thread (queued signal)."""
+
+    done = pyqtSignal(object, object)  # request, BirdSharpnessTraceOutcome or Exception
+
+
 class BirdSharpnessController(QObject):
     """Owns the analyzer (models load once per session) and the single running job."""
 
@@ -273,6 +279,10 @@ class BirdSharpnessController(QObject):
         self._skipped = 0
         self._write_failures = 0
         self._failure_message = ""
+        self._trace_requests: list = []  # [dialog, future, cancel_event]
+        self._trace_executor = None  # fallback when the browser pool is unavailable
+        self._trace_bridge = _TraceBridge(self)
+        self._trace_bridge.done.connect(self._on_trace_done)
         if dir_browser is not None:
             dir_browser.add_context_menu_extender(self.extend_directory_menu)
         add_extender = getattr(file_list, "add_file_context_menu_extender", None)
@@ -319,6 +329,10 @@ class BirdSharpnessController(QObject):
             )
 
     def extend_file_menu(self, menu, paths: list[str]) -> None:
+        if paths:
+            trace_act = menu.addAction("查看清晰度计算过程…")
+            trace_act.setToolTip("逐步显示这张照片的清晰度是如何算出来的（只读，不写入）")
+            trace_act.triggered.connect(lambda checked=False, p=paths[0]: self.show_trace(p))
         if self.busy:
             self._add_stop_action(menu)
             return
@@ -327,6 +341,74 @@ class BirdSharpnessController(QObject):
             return
         act = menu.addAction(f"检测鸟清晰度（{count} 张）")
         act.triggered.connect(lambda checked=False, p=list(paths): self.start_for_paths(p))
+
+    # ── per-photo computation trace ───────────────────────────────────────
+    def show_trace(self, path: str):
+        """Open a step viewer for one photo; the trace runs as a pool ANALYSIS action."""
+        if self._shutdown_requested:
+            return None
+        from bird_sharpness.actions import BirdSharpnessTraceAction
+
+        from .bird_sharpness_trace_view import BirdSharpnessTraceDialog
+
+        resolve = getattr(self._file_list, "_resolve_source_path_for_action", None)
+        source = path
+        if callable(resolve):
+            try:
+                source = resolve(path) or path
+            except Exception:
+                source = path
+        dialog = BirdSharpnessTraceDialog(self._main, source)
+        cancel = threading.Event()
+        request = [dialog, None, cancel]
+        action = BirdSharpnessTraceAction(self.analyzer(), source, cancelled=cancel.is_set)
+        pool_getter = getattr(self._file_list, "background_work_pool", None)
+        pool = pool_getter() if callable(pool_getter) else None
+        future = None
+        if pool is not None:
+            from app_common.file_browser._work_pool import BrowserPoolClosed
+            from app_common.file_browser._work_policy import WorkKind
+
+            try:
+                future = pool.submit_action(action, kind=WorkKind.ANALYSIS)
+            except BrowserPoolClosed:
+                future = None
+        if future is None:
+            if self._trace_executor is None:
+                from concurrent.futures import ThreadPoolExecutor
+
+                self._trace_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="bird-sharpness-trace")
+            future = self._trace_executor.submit(action.execute)
+        request[1] = future
+        self._trace_requests.append(request)
+        bridge = self._trace_bridge
+        future.add_done_callback(lambda f, r=request: bridge.done.emit(r, f))
+        dialog.closed.connect(lambda _d, r=request: self._cancel_trace(r))
+        dialog.show()
+        return dialog
+
+    def _cancel_trace(self, request) -> None:
+        request[2].set()
+        future = request[1]
+        if future is not None and not future.done():
+            future.cancel()
+
+    def _on_trace_done(self, request, future) -> None:
+        if request in self._trace_requests:
+            self._trace_requests.remove(request)
+        dialog = request[0]
+        if self._shutdown_requested or request[2].is_set() or future.cancelled():
+            return
+        try:
+            outcome = future.result()
+        except Exception as exc:
+            _log.error("[BirdSharpness] trace failed path=%r: %r", dialog.path, exc)
+            dialog.set_error(f"{type(exc).__name__}: {exc}")
+            return
+        if outcome.trace is not None:
+            dialog.set_trace(outcome.trace)
+        elif not outcome.cancelled:
+            dialog.set_error(outcome.error or "分析失败")
 
     def start_for_paths(self, paths: list[str]) -> None:
         resolve = getattr(self._file_list, "_resolve_source_path_for_action", None)
@@ -472,13 +554,24 @@ class BirdSharpnessController(QObject):
     # ── shutdown ──────────────────────────────────────────────────────────
     def request_shutdown(self) -> None:
         self._shutdown_requested = True
+        for request in list(self._trace_requests):
+            self._cancel_trace(request)
+            try:
+                request[0].close()
+            except Exception:
+                pass
+        if self._trace_executor is not None:
+            self._trace_executor.shutdown(wait=False, cancel_futures=True)
         if self._worker is not None:
             self._worker.stop()
-        else:
+        elif not self._trace_requests:
             self._release_models()
 
     def is_shutdown_done(self) -> bool:
-        return self._worker is None
+        traces_done = all(r[1] is None or r[1].done() for r in self._trace_requests)
+        if self._shutdown_requested and self._worker is None and traces_done and self._analyzer is not None:
+            self._release_models()
+        return self._worker is None and traces_done
 
     def _release_models(self) -> None:
         with self._analyzer_lock:

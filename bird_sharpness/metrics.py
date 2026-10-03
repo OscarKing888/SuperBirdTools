@@ -40,6 +40,25 @@ MIN_EDGES_PER_DIRECTION = 15
 NOISE_EDGE_FACTOR = 4.0
 
 
+@dataclass
+class EdgeSelection:
+    """Which edge pixels a measurement used, kept so a trace can show exactly that.
+
+    Masks are full-size booleans over the field; ``ys/xs/sigma`` are the measured
+    (valid, step-like) edges and their blur radii.
+    """
+
+    candidates: np.ndarray        # Canny edges inside the region
+    passed_noise: np.ndarray      # ... strong enough above the noise level
+    selected: np.ndarray          # ... strongest fraction actually measured
+    line_like: np.ndarray         # selected but rejected as thinner than a step edge
+    ys: np.ndarray
+    xs: np.ndarray
+    sigma: np.ndarray
+    noise_sigma: float
+    threshold: float              # gradient magnitude needed to pass the noise test
+
+
 @dataclass(frozen=True)
 class EdgeBlurStats:
     sigma: Optional[float]
@@ -76,6 +95,9 @@ def _stats(samples: np.ndarray) -> EdgeBlurStats:
     )
 
 
+edge_stats = _stats  # public alias: stats of a sample array (median / quartiles / count)
+
+
 class EdgeBlurField:
     """Pre-computed gradient fields of one grayscale ROI, reused by all region queries."""
 
@@ -102,28 +124,46 @@ class EdgeBlurField:
             self._canny_cache[key] = cv2.Canny(self._u8, low, high, L2gradient=True).astype(bool)
         return self._canny_cache[key]
 
-    def _sigma_at(self, sel: np.ndarray) -> np.ndarray:
+    def _sigma_and_valid(self, sel: np.ndarray):
+        """Per-pixel blur radius for ``sel`` plus which pixels are valid step edges."""
         ratio = self.mag0[sel] / np.maximum(self.mag1[sel], 1e-9)
-        ratio = ratio[ratio > 1.02]
-        total = self.reblur_sigma / np.sqrt(ratio ** 2 - 1.0)
+        total = self.reblur_sigma / np.sqrt(np.maximum(ratio ** 2 - 1.0, 1e-12))
         # A step edge already smoothed by pre_sigma cannot measure below it. Thinner
         # structures (eye-ring lines, catchlights, twigs) do and would read as
         # impossibly sharp, so they are not edges for this estimator.
-        total = total[total >= self.pre_sigma]
-        return np.sqrt(total ** 2 - self.pre_sigma ** 2)
+        valid = (ratio > 1.02) & (total >= self.pre_sigma)
+        sigma = np.sqrt(np.maximum(total ** 2 - self.pre_sigma ** 2, 0.0))
+        return sigma, valid
+
+    def _sigma_at(self, sel: np.ndarray) -> np.ndarray:
+        sigma, valid = self._sigma_and_valid(sel)
+        return sigma[valid]
+
+    def select_strongest_edges(self, region: Optional[np.ndarray], *, top_fraction: float = 0.05,
+                               min_edges: int = MIN_HEAD_EDGES) -> EdgeSelection:
+        """The strongest above-noise edges inside ``region`` (``None`` = everywhere)."""
+        candidates = self._edges(30, 90)
+        if region is not None:
+            candidates = candidates & region
+        threshold = NOISE_EDGE_FACTOR * self.noise_sigma
+        passed = candidates & (self.mag0 > threshold)
+        selected = np.zeros_like(passed)
+        n = int(passed.sum())
+        if n >= min_edges:
+            keep = max(top_fraction, min(1.0, 30.0 / n))
+            thr = float(np.quantile(self.mag0[passed], 1.0 - keep))
+            selected = passed & (self.mag0 >= thr)
+        ys, xs = np.nonzero(selected)
+        sigma, valid = self._sigma_and_valid(selected)
+        line_like = np.zeros_like(selected)
+        line_like[ys[~valid], xs[~valid]] = True
+        return EdgeSelection(candidates, passed, selected, line_like, ys[valid], xs[valid],
+                             sigma[valid].astype(np.float32), float(self.noise_sigma), float(threshold))
 
     def strongest_edge_samples(self, region: Optional[np.ndarray], *, top_fraction: float = 0.05,
                                min_edges: int = MIN_HEAD_EDGES) -> np.ndarray:
         """Blur radii at the strongest edges inside ``region`` (``None`` = everywhere)."""
-        edges = self._edges(30, 90) & (self.mag0 > NOISE_EDGE_FACTOR * self.noise_sigma)
-        if region is not None:
-            edges = edges & region
-        n = int(edges.sum())
-        if n < min_edges:
-            return np.empty(0, np.float32)
-        keep = max(top_fraction, min(1.0, 30.0 / n))
-        thr = float(np.quantile(self.mag0[edges], 1.0 - keep))
-        return self._sigma_at(edges & (self.mag0 >= thr))
+        return self.select_strongest_edges(region, top_fraction=top_fraction, min_edges=min_edges).sigma
 
     def strongest_edge_blur(self, region: Optional[np.ndarray], *, top_fraction: float = 0.05,
                             min_edges: int = MIN_HEAD_EDGES) -> EdgeBlurStats:
@@ -137,13 +177,20 @@ class EdgeBlurField:
         per edge-orientation bin differs strongly between directions.
         Returns ``(EdgeBlurStats, motion_ratio_or_None)``.
         """
+        stats, motion_ratio, _detail = self.body_blur_detail(region, min_edges=min_edges)
+        return stats, motion_ratio
+
+    def body_blur_detail(self, region: np.ndarray, *, min_edges: int = MIN_BODY_EDGES):
+        """``body_blur`` plus ``(ys, xs, sigma, per_direction_medians)`` for traces."""
+        empty = (np.empty(0, int), np.empty(0, int), np.empty(0, np.float32), [None] * DIRECTION_BINS)
         if not region.any():
-            return EdgeBlurStats(None, None, None, 0), None
+            return EdgeBlurStats(None, None, None, 0), None, empty
         noise_floor = float(np.median(self.mag0[region]))
         edges = self._edges(20, 60) & region & (self.mag0 > 4.0 * noise_floor)
         n = int(edges.sum())
         if n < min_edges:
-            return EdgeBlurStats(None, None, None, n), None
+            return EdgeBlurStats(None, None, None, n), None, empty
+        ys, xs = np.nonzero(edges)
         ratio = self.mag0[edges] / np.maximum(self.mag1[edges], 1e-9)
         ok = ratio > 1.02
         total = self.reblur_sigma / np.sqrt(np.maximum(ratio ** 2 - 1.0, 1e-6))
@@ -151,29 +198,34 @@ class EdgeBlurField:
         sig = np.sqrt(np.maximum(total ** 2 - self.pre_sigma ** 2, 0.0))
         theta = np.mod(np.arctan2(self.gy0[edges], self.gx0[edges]), np.pi)
         per_dir = []
+        by_bin = []
         for k in range(DIRECTION_BINS):
             center = k * np.pi / DIRECTION_BINS
             dist = np.abs(np.angle(np.exp(2j * (theta - center)))) / 2.0
             sel = ok & (dist < np.pi / (2 * DIRECTION_BINS))
             if int(sel.sum()) >= MIN_EDGES_PER_DIRECTION:
                 per_dir.append(float(np.median(sig[sel])))
+                by_bin.append(per_dir[-1])
+            else:
+                by_bin.append(None)
         motion_ratio = None
         if len(per_dir) >= DIRECTION_BINS // 2:
             motion_ratio = float(max(per_dir) / max(min(per_dir), 0.3))
+        detail = (ys[ok], xs[ok], sig[ok].astype(np.float32), by_bin)
         valid = sig[ok]
         if valid.size < 8:
-            return EdgeBlurStats(None, None, None, int(valid.size)), motion_ratio
+            return EdgeBlurStats(None, None, None, int(valid.size)), motion_ratio, detail
         stats = EdgeBlurStats(
             float(np.median(valid)), float(np.percentile(valid, 25)), float(np.percentile(valid, 75)), int(valid.size)
         )
-        return stats, motion_ratio
+        return stats, motion_ratio, detail
 
 
 FULL_IMAGE_TILE = 1024
 
 
 def full_image_blur(gray: np.ndarray, *, tile: int = FULL_IMAGE_TILE, top_fraction: float = 0.05,
-                    cancelled=lambda: False) -> EdgeBlurStats:
+                    cancelled=lambda: False, tile_report=None) -> EdgeBlurStats:
     """Whole-image blur radius, tile by tile so memory stays bounded on 25-60 MP frames.
 
     Each tile contributes the radii at its own strongest edges; the result is the
@@ -191,4 +243,6 @@ def full_image_blur(gray: np.ndarray, *, tile: int = FULL_IMAGE_TILE, top_fracti
             part = EdgeBlurField(block).strongest_edge_samples(None, top_fraction=top_fraction)
             if part.size:
                 samples.append(part)
+            if tile_report is not None:
+                tile_report(x, y, block.shape[1], block.shape[0], part)
     return _stats(np.concatenate(samples) if samples else np.empty(0, np.float32))

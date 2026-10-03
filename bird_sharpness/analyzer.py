@@ -31,7 +31,7 @@ from app_common.log import get_logger
 
 from .focus import FocusProvider, default_focus_box, focus_window
 from .image_source import AnalysisImage, load_analysis_image
-from .metrics import EdgeBlurField, full_image_blur
+from .metrics import EdgeBlurField, edge_stats, full_image_blur
 from .models import BirdDetection, BirdSharpnessModels
 from .scoring import ALGORITHM_VERSION, VERDICT_ERROR, VERDICT_NO_BIRD, blank_head_sigma, classify, sigma_to_score
 
@@ -139,6 +139,49 @@ class BirdSharpnessResult:
         return out
 
 
+DUPLICATE_CONTAINMENT = 0.7
+
+
+def dedupe_detections(detections: List[BirdDetection]) -> List[BirdDetection]:
+    """Drop detections lying mostly inside a stronger one.
+
+    Segmentation sometimes splits one bird at an occluding branch into two
+    instances (DSC04512: whole bird + upper half); both would measure the same head
+    and inflate the bird count. ``detections`` must be strongest first.
+    """
+    kept: List[BirdDetection] = []
+    for det in detections:
+        x1, y1, x2, y2 = det.box
+        area = max(1e-6, (x2 - x1) * (y2 - y1))
+        duplicate = False
+        for other in kept:
+            ox1, oy1, ox2, oy2 = other.box
+            inter = max(0.0, min(x2, ox2) - max(x1, ox1)) * max(0.0, min(y2, oy2) - max(y1, oy1))
+            if inter / area >= DUPLICATE_CONTAINMENT:
+                duplicate = True
+                break
+        if not duplicate:
+            kept.append(det)
+    return kept
+
+
+def valid_bounds(image: AnalysisImage) -> Tuple[int, int, int, int]:
+    """Pixel bounds of real picture content: the camera frame inside RAW output.
+
+    Some RAW outputs (e.g. Sony M-size) carry black padding outside the camera
+    frame; its hard border would otherwise read as a perfectly sharp edge.
+    """
+    H, W = image.gray.shape[:2]
+    crop = image.camera_crop
+    if not crop:
+        return 0, 0, W, H
+    x1, y1 = int(np.ceil(crop[0] * W)), int(np.ceil(crop[1] * H))
+    x2, y2 = int(np.floor(crop[2] * W)), int(np.floor(crop[3] * H))
+    if x2 - x1 < 32 or y2 - y1 < 32:
+        return 0, 0, W, H
+    return x1, y1, x2, y2
+
+
 def _resize_long_edge(img: np.ndarray, long_edge: int) -> Tuple[np.ndarray, float]:
     h, w = img.shape[:2]
     scale = min(1.0, float(long_edge) / float(max(h, w)))
@@ -166,29 +209,45 @@ class BirdSharpnessAnalyzer:
         self.models.release()
 
     def analyze(self, path: str, *, on_stage: Optional[Callable[[str], None]] = None,
-                cancelled: Callable[[], bool] = lambda: False) -> BirdSharpnessResult:
+                cancelled: Callable[[], bool] = lambda: False, tracer=None) -> BirdSharpnessResult:
+        """Analyse one photo. ``tracer`` (:class:`~bird_sharpness.trace.AnalysisTracer`)
+        records every key step with the exact data used; ``None`` costs nothing."""
         t0 = time.perf_counter()
         try:
-            result = self._analyze(path, on_stage or (lambda stage: None), cancelled)
+            result = self._analyze(path, on_stage or (lambda stage: None), cancelled, tracer)
         except Exception as exc:
             _log.error("[BirdSharpness] analysis failed path=%r: %s", path, traceback.format_exc())
             result = BirdSharpnessResult(path=path, verdict=VERDICT_ERROR, error=f"{type(exc).__name__}: {exc}")
         result.elapsed_s = round(time.perf_counter() - t0, 3)
+        if tracer is not None and getattr(tracer, "trace", None) is not None and result.ok:
+            tracer.result(result)
         return result
 
     # ── pipeline ──────────────────────────────────────────────────────────
-    def _analyze(self, path: str, on_stage: Callable[[str], None], cancelled) -> BirdSharpnessResult:
+    def _analyze(self, path: str, on_stage: Callable[[str], None], cancelled, tracer=None) -> BirdSharpnessResult:
         on_stage(STAGE_DECODE)
+        t_decode = time.perf_counter()
         image = load_analysis_image(path)
+        focus_px = _UNSET = object()
+        if tracer is not None:
+            focus_px = self._focus_box_px(path, image)
+            tracer.decode(path, image, focus_px, decode_s=time.perf_counter() - t_decode)
         on_stage(STAGE_DETECT)
         H, W = image.gray.shape[:2]
         small, scale = _resize_long_edge(image.rgb8, DETECT_LONG_EDGE)
-        detections = self.models.detect_birds(cv2.cvtColor(small, cv2.COLOR_RGB2BGR))[:MAX_BIRDS]
+        detections = dedupe_detections(self.models.detect_birds(cv2.cvtColor(small, cv2.COLOR_RGB2BGR)))[:MAX_BIRDS]
+        if tracer is not None:
+            tracer.detect(detections, scale, has_masks=bool(getattr(self.models, "has_masks", True)),
+                          has_keypoints=bool(getattr(self.models, "has_keypoints", True)))
         on_stage(STAGE_MEASURE)
         if detections:
-            birds = [self._measure_bird(image, det, scale) for det in detections]
+            birds = [self._measure_bird(image, det, scale, index=i, tracer=tracer) for i, det in enumerate(detections)]
+            if tracer is not None:
+                tracer.mark_best(birds.index(max(birds, key=BirdMeasurement.rank)))
             return self._bird_result(path, birds, max(H, W))
-        return self._no_bird_result(path, image, cancelled)
+        return self._no_bird_result(path, image, cancelled, tracer,
+                                    focus_px=None if focus_px is _UNSET else focus_px,
+                                    focus_known=focus_px is not _UNSET)
 
     def _bird_result(self, path: str, birds: List[BirdMeasurement], long_edge: int) -> BirdSharpnessResult:
         best = max(birds, key=BirdMeasurement.rank)
@@ -213,7 +272,8 @@ class BirdSharpnessAnalyzer:
             image_long_edge=long_edge,
         )
 
-    def _measure_bird(self, image: AnalysisImage, det: BirdDetection, scale: float) -> BirdMeasurement:
+    def _measure_bird(self, image: AnalysisImage, det: BirdDetection, scale: float, *, index: int = 0,
+                      tracer=None) -> BirdMeasurement:
         H, W = image.gray.shape[:2]
         bx1, by1, bx2, by2 = (v / scale for v in det.box)
         x1, y1 = max(0, int(bx1)), max(0, int(by1))
@@ -244,13 +304,16 @@ class BirdSharpnessAnalyzer:
         body = cv2.erode(mask, np.ones((BODY_MASK_ERODE_PX, BODY_MASK_ERODE_PX), np.uint8)).astype(bool)
         if not body.any():
             body = bird_px
-        body_stats, motion_ratio = field_.body_blur(body)
+        body_stats, motion_ratio, body_detail = field_.body_blur_detail(body)
 
         keypoints = self.models.keypoints(np.ascontiguousarray(image.rgb8[Y1:Y2, X1:X2]))
         eye_vis = None
         eye_abs = None
         radius = None
         head_stats = None
+        head = None
+        selection = None
+        trace_keypoints = None
         if keypoints is not None:
             coords, vis = keypoints
             pts = coords * np.array([cw, ch], np.float32)  # left eye, right eye, beak
@@ -262,11 +325,13 @@ class BirdSharpnessAnalyzer:
             else:
                 radius = HEAD_RADIUS_BOX_RATIO * max(bw, bh)
             radius = max(radius, HEAD_RADIUS_MIN_PX)
+            trace_keypoints = (pts, vis, radius)
             if eye_vis >= EYE_VISIBLE_MIN:
                 yy, xx = np.ogrid[:ch, :cw]
                 dilated = cv2.dilate(mask, np.ones((HEAD_MASK_DILATE_PX, HEAD_MASK_DILATE_PX), np.uint8)).astype(bool)
                 head = ((xx - eye[0]) ** 2 + (yy - eye[1]) ** 2 <= radius ** 2) & dilated
-                head_stats = field_.strongest_edge_blur(head)
+                selection = field_.select_strongest_edges(head)
+                head_stats = edge_stats(selection.sigma)
             eye_abs = (round(float(eye[0] + X1), 1), round(float(eye[1] + Y1), 1))
             head_sigma = head_stats.sigma if head_stats is not None else None
             head_blank = head_stats is not None and head_sigma is None
@@ -278,14 +343,15 @@ class BirdSharpnessAnalyzer:
                 sigma = head_sigma if head_sigma is not None else body_stats.sigma
         else:
             # No eye model: the whole bird's strongest edges stand in for the head.
-            head_stats = field_.strongest_edge_blur(bird_px)
+            selection = field_.select_strongest_edges(bird_px)
+            head_stats = edge_stats(selection.sigma)
             head_sigma = None
             sigma = head_stats.sigma
             verdict, score = classify(sigma, body_stats.sigma, motion_ratio, eye_visible=True,
                                       head_blank=sigma is None)
             if sigma is None:
                 sigma = blank_head_sigma(body_stats.sigma)
-        return BirdMeasurement(
+        measurement = BirdMeasurement(
             verdict=verdict,
             score=score,
             sigma=_r3(sigma),
@@ -300,6 +366,10 @@ class BirdSharpnessAnalyzer:
             head_edges=head_stats.edge_count if head_stats is not None else 0,
             masked=det.mask is not None,
         )
+        if tracer is not None:
+            tracer.bird(index, image, (X1, Y1, X2, Y2), bird_px, body, head, trace_keypoints, selection,
+                        body_detail, measurement)
+        return measurement
 
     def _focus_box_px(self, path: str, image: AnalysisImage) -> Optional[Tuple[float, float, float, float]]:
         """Camera focus box mapped onto the decoded pixels (RAW sensor margins included)."""
@@ -325,18 +395,33 @@ class BirdSharpnessAnalyzer:
             return None
         return (l * W, t * H, r * W, b * H)
 
-    def _no_bird_result(self, path: str, image: AnalysisImage, cancelled) -> BirdSharpnessResult:
+    def _no_bird_result(self, path: str, image: AnalysisImage, cancelled, tracer=None, *,
+                        focus_px=None, focus_known: bool = False) -> BirdSharpnessResult:
         H, W = image.gray.shape[:2]
+        vx1, vy1, vx2, vy2 = valid_bounds(image)
         region, region_box, stats = "", None, None
-        focus_px = self._focus_box_px(path, image)
+        if not focus_known:
+            focus_px = self._focus_box_px(path, image)
         if focus_px is not None:
-            fx1, fy1, fx2, fy2 = focus_window(focus_px, W, H)
-            stats = EdgeBlurField(image.gray[fy1:fy2, fx1:fx2]).strongest_edge_blur(None)
+            # The window stays inside the camera frame (shifted, not shrunk).
+            wx1, wy1, wx2, wy2 = focus_window(
+                (focus_px[0] - vx1, focus_px[1] - vy1, focus_px[2] - vx1, focus_px[3] - vy1), vx2 - vx1, vy2 - vy1)
+            fx1, fy1, fx2, fy2 = wx1 + vx1, wy1 + vy1, wx2 + vx1, wy2 + vy1
+            selection = EdgeBlurField(image.gray[fy1:fy2, fx1:fx2]).select_strongest_edges(None)
+            stats = edge_stats(selection.sigma)
             region, region_box = fields.REGION_FOCUS, (fx1, fy1, fx2, fy2)
+            if tracer is not None:
+                tracer.focus_window(image, region_box, selection, stats)
         if stats is None or stats.sigma is None:
             # No focus point (or nothing measurable there): default whole-image measurement.
-            stats = full_image_blur(image.gray, cancelled=cancelled)
-            region, region_box = fields.REGION_FULL, (0, 0, W, H)
+            tiles = [] if tracer is not None else None
+            stats = full_image_blur(
+                image.gray[vy1:vy2, vx1:vx2], cancelled=cancelled,
+                tile_report=None if tiles is None else
+                (lambda x, y, w, h, part: tiles.append((x + vx1, y + vy1, w, h, part))))
+            region, region_box = fields.REGION_FULL, (vx1, vy1, vx2, vy2)
+            if tracer is not None:
+                tracer.full_image(tiles, stats)
         return BirdSharpnessResult(
             path=path,
             verdict=VERDICT_NO_BIRD,
