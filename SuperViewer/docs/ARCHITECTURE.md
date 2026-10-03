@@ -18,7 +18,7 @@
 | 标签模型/命令 | [`photo_tags.py`](../superviewer/photo_tags.py)、[`photo_tag_commands.py`](../superviewer/photo_tag_commands.py) | 配置树、XMP subject 读写、逐照片逆操作 |
 | 元数据编辑同步 | [`metadata_edit_sync.py`](../superviewer/metadata_edit_sync.py)：`sync_saved_xmp_edit()` | EXIF 表写入成功后，将 XMP 字段映射回列表及标签缓存 |
 | 主题与设置 | [`ui_theme.py`](../superviewer/ui_theme.py)、[`paths_settings.py`](../superviewer/paths_settings.py) | 系统深浅色、语义颜色、资源路径、窗口状态与上次目录 |
-| 鸟清晰度检测 | [`bird_sharpness_controller.py`](../superviewer/bird_sharpness_controller.py)：`BirdSharpnessController`；算法包 [`bird_sharpness`](../../bird_sharpness/)；字段 [`bird_sharpness_fields.py`](../../app_common/bird_sharpness_fields.py) | 目录树/文件右键菜单 → 单一后台 worker 全分辨率检测 → 写 XMP → `sync_metadata_edit_for_path()` 刷新列表「鸟清晰」列、缩略图底栏与信息页。算法与字段见 [鸟清晰度检测](../../docs/bird_sharpness.md) |
+| 鸟清晰度检测 | [`bird_sharpness_controller.py`](../superviewer/bird_sharpness_controller.py)：`BirdSharpnessController`；算法包 [`bird_sharpness`](../../bird_sharpness/)；字段 [`bird_sharpness_fields.py`](../../app_common/bird_sharpness_fields.py) | 目录树/文件右键菜单 → 协调线程把每张照片的 `BirdSharpnessAction` 提交到共享 `BrowserWorkPool`（`WorkKind.ANALYSIS`，低优先级并行）→ 写 XMP → `sync_metadata_edit_for_path()` 刷新列表「鸟清晰」列、缩略图底栏与信息页。算法与字段见 [鸟清晰度检测](../../docs/bird_sharpness.md) |
 
 `image_info_tabs.py` 与共享 `_browser.py` 是兼容导出入口。新功能应定位到具体实现模块，避免往兼容文件继续堆逻辑。`main.py` 保留部分供已有脚本使用的导出；移动模块时要检查这些调用。
 

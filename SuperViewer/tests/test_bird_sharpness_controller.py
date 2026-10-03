@@ -166,3 +166,83 @@ def test_shutdown_waits_for_worker_and_releases_models(env) -> None:
     assert controller._dialog is None
     # late results after shutdown must not touch the list
     assert len(file_list.synced) <= 1
+
+
+class _PeakAnalyzer(_FakeAnalyzer):
+    def __init__(self, gate=None, delay=0.05):
+        super().__init__(gate)
+        self.delay = delay
+        self.lock = threading.Lock()
+        self.active = self.peak = 0
+
+    def analyze(self, path):
+        with self.lock:
+            self.active += 1
+            self.peak = max(self.peak, self.active)
+        try:
+            time.sleep(self.delay)
+            return super().analyze(path)
+        finally:
+            with self.lock:
+                self.active -= 1
+
+
+@pytest.fixture
+def pooled(env, monkeypatch, tmp_path):
+    from app_common.file_browser._work_pool import BrowserWorkPool
+
+    controller, file_list, _analyzer, folder, paths = env
+    for i in range(6):
+        extra = folder / f"c{i}.jpg"
+        Image.new("RGB", (16, 12), "gray").save(extra)
+        paths.append(str(extra))
+    pool = BrowserWorkPool(6, 2, analysis_workers=3)
+    file_list.background_work_pool = lambda: pool
+    analyzer = _PeakAnalyzer()
+    monkeypatch.setattr(controller, "analyzer", lambda: analyzer)
+    yield controller, file_list, analyzer, folder, paths, pool
+    pool.shutdown(timeout=5)
+
+
+def test_job_runs_actions_in_parallel_on_shared_pool(pooled) -> None:
+    controller, file_list, analyzer, folder, paths, pool = pooled
+    controller.start(BirdSharpnessJob(title="t", directory=str(folder)))
+    assert _wait(lambda: not controller.busy)
+    assert sorted(analyzer.analyzed) == sorted(os.path.normpath(p) for p in paths)
+    assert 1 < analyzer.peak <= 3
+    assert len(file_list.synced) == len(paths)
+    assert all(PhotoMetaDataXMP().read(p).get("bird_sharpness_verdict") for p in paths)
+    assert controller._dialog.label.text() == "检测完成。"
+    snap = pool.snapshot()
+    assert snap["analysis_active"] == 0 and snap["analysis_queued"] == 0
+
+
+def test_stop_withdraws_queued_actions_and_waits_for_running_ones(pooled) -> None:
+    controller, file_list, analyzer, folder, paths, pool = pooled
+    gate = threading.Event()
+    analyzer.gate = gate
+    controller.start(BirdSharpnessJob(title="t", directory=str(folder)))
+    assert _wait(lambda: analyzer.active == 3)
+    controller.stop()
+    assert _wait(lambda: pool.snapshot()["analysis_queued"] == 0)
+    assert controller.busy  # running photos still own the job
+    gate.set()
+    assert _wait(lambda: not controller.busy)
+    assert len(analyzer.analyzed) == 3
+    assert file_list.synced == {}  # results finished after stop are dropped, not written
+    assert not any(PhotoMetaDataXMP().read(p).get("bird_sharpness_verdict") for p in paths)
+    assert controller._dialog.label.text() == "已停止。"
+
+
+def test_browser_pool_shutdown_ends_job_and_releases_models(pooled) -> None:
+    controller, file_list, analyzer, folder, paths, pool = pooled
+    gate = threading.Event()
+    analyzer.gate = gate
+    controller.start(BirdSharpnessJob(title="t", directory=str(folder)))
+    assert _wait(lambda: analyzer.active == 3)
+    pool.request_shutdown()  # browser closes first, as in MainWindow.closeEvent
+    controller.request_shutdown()
+    gate.set()
+    assert _wait(controller.is_shutdown_done)
+    assert len(analyzer.analyzed) == 3
+    assert controller._dialog is None

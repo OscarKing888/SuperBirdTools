@@ -201,16 +201,45 @@ def analyze_paths(
     analyzer: Optional[BirdSharpnessAnalyzer] = None,
     cancel_event: Optional[threading.Event] = None,
     on_result: Optional[ProgressCallback] = None,
+    workers: int = 1,
 ) -> List[BirdSharpnessResult]:
-    """Analyze files in order; stops early when ``cancel_event`` is set."""
+    """Analyze files, ``workers`` at a time; results are returned in input order.
+
+    ``on_result`` runs on the calling thread in completion order. Stops submitting
+    new files once ``cancel_event`` is set and waits for the ones in flight.
+    """
     items = [os.path.normpath(p) for p in paths]
     analyzer = analyzer or BirdSharpnessAnalyzer()
-    results: List[BirdSharpnessResult] = []
-    for index, path in enumerate(items, start=1):
-        if cancel_event is not None and cancel_event.is_set():
-            break
-        result = analyzer.analyze(path)
-        results.append(result)
+    total = len(items)
+    by_index: Dict[int, BirdSharpnessResult] = {}
+
+    def cancelled() -> bool:
+        return cancel_event is not None and cancel_event.is_set()
+
+    def report(result: BirdSharpnessResult) -> None:
         if on_result is not None:
-            on_result(index, len(items), result)
-    return results
+            on_result(len(by_index), total, result)
+
+    if workers <= 1:
+        for index, path in enumerate(items):
+            if cancelled():
+                break
+            by_index[index] = analyzer.analyze(path)
+            report(by_index[index])
+    else:
+        from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
+
+        analyzer.load()
+        pending = {}
+        next_index = 0
+        with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="bird-sharpness") as executor:
+            while pending or (next_index < total and not cancelled()):
+                while next_index < total and len(pending) < workers * 2 and not cancelled():
+                    pending[executor.submit(analyzer.analyze, items[next_index])] = next_index
+                    next_index += 1
+                done, _ = wait(pending, return_when=FIRST_COMPLETED)
+                for future in done:
+                    index = pending.pop(future)
+                    by_index[index] = future.result()
+                    report(by_index[index])
+    return [by_index[i] for i in sorted(by_index)]

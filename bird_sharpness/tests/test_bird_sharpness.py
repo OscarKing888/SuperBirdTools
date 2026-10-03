@@ -274,3 +274,89 @@ def test_collect_image_paths_filters_and_recurses(tmp_path) -> None:
     deep = [Path(p).name for p in collect_image_paths([str(tmp_path)], recursive=True)]
     assert flat == ["a.ARW", "b.jpg"]
     assert sorted(deep) == ["a.ARW", "b.jpg", "c.HIF"]
+
+
+# ── WorkerAction / parallel execution ────────────────────────────────────────
+
+class _CountingAnalyzer:
+    """Thread-safe fake that records peak concurrency."""
+
+    def __init__(self, delay=0.05):
+        import threading
+
+        self.delay = delay
+        self.lock = threading.Lock()
+        self.active = self.peak = 0
+        self.calls = []
+
+    def load(self):
+        pass
+
+    def analyze(self, path):
+        import time
+
+        with self.lock:
+            self.active += 1
+            self.peak = max(self.peak, self.active)
+            self.calls.append(path)
+        time.sleep(self.delay)
+        with self.lock:
+            self.active -= 1
+        sigma = 0.7 if "sharp" in os.path.basename(path) else 1.3
+        verdict, score = classify(sigma, 1.0, 1.1, eye_visible=True)
+        return BirdSharpnessResult(path=path, verdict=verdict, score=score, head_sigma=sigma)
+
+
+def test_analyze_paths_parallel_keeps_input_order_and_reports_every_file() -> None:
+    from bird_sharpness.analyzer import analyze_paths
+
+    paths = [f"/p/{'sharp' if i % 2 else 'soft'}_{i}.ARW" for i in range(12)]
+    fake = _CountingAnalyzer()
+    seen = []
+    results = analyze_paths(paths, analyzer=fake, workers=4, on_result=lambda i, n, r: seen.append((i, n)))
+    assert [r.path for r in results] == [os.path.normpath(p) for p in paths]
+    assert fake.peak > 1
+    assert [i for i, _ in seen] == list(range(1, 13)) and all(n == 12 for _, n in seen)
+
+
+def test_analyze_paths_parallel_stops_submitting_after_cancel() -> None:
+    import threading
+
+    from bird_sharpness.analyzer import analyze_paths
+
+    cancel = threading.Event()
+    fake = _CountingAnalyzer(delay=0.02)
+    results = analyze_paths([f"/p/{i}.ARW" for i in range(40)], analyzer=fake, workers=2,
+                            cancel_event=cancel, on_result=lambda i, n, r: cancel.set() if i == 3 else None)
+    assert 3 <= len(results) < 40
+
+
+def test_action_writes_sidecar_skips_existing_and_respects_cancel(tmp_path, monkeypatch) -> None:
+    from app_common.exif_io.exiftool_path import get_exiftool_executable_path
+    from app_common.exif_io.photo_meta import PhotoMetaDataReportDB, PhotoMetaDataXMP
+    from bird_sharpness.actions import BirdSharpnessAction
+
+    if not get_exiftool_executable_path():
+        pytest.skip("ExifTool is unavailable")
+    monkeypatch.setattr(PhotoMetaDataReportDB, "_row_for", lambda *_args: None)
+    photo = tmp_path / "鹰鹃_sharp.jpg"
+    Image.new("RGB", (16, 12), "gray").save(photo)
+    fake = _CountingAnalyzer(delay=0)
+
+    outcome = BirdSharpnessAction(fake, str(photo), str(photo)).execute()
+    assert outcome.written and outcome.result.verdict == bsf.VERDICT_SHARP
+    assert PhotoMetaDataXMP().read(str(photo))["bird_sharpness_verdict"] == "sharp"
+
+    again = BirdSharpnessAction(fake, str(photo), str(photo), skip_existing=True).execute()
+    assert again.skipped and again.result is None and len(fake.calls) == 1
+
+    before = BirdSharpnessAction(fake, str(photo), str(photo), cancelled=lambda: True).execute()
+    assert before.cancelled and len(fake.calls) == 1
+
+    # Cancelled while analysing: the result is dropped instead of being written.
+    other = tmp_path / "其它_soft.jpg"
+    Image.new("RGB", (16, 12), "gray").save(other)
+    flags = iter([False, True])
+    late = BirdSharpnessAction(fake, str(other), str(other), cancelled=lambda: next(flags)).execute()
+    assert late.cancelled and not late.written
+    assert not other.with_suffix(".xmp").exists()

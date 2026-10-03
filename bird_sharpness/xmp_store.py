@@ -35,3 +35,12 @@ def browser_meta_updates(result: BirdSharpnessResult) -> Dict[str, object]:
         sharp = "%06.2f" % float(result.score)
         updates.update({"XMP:City": sharp, "city": sharp, "sharpness": sharp})
     return updates
+
+
+def already_analyzed(path: str, version: str, *, reader: Optional[PhotoMetaDataXMP] = None) -> bool:
+    """True when the sidecar already holds a verdict written by algorithm ``version``."""
+    try:
+        rec = (reader or PhotoMetaDataXMP()).read(path)
+    except Exception:
+        return False
+    return bool(str(rec.get(fields.FIELD_VERDICT) or "").strip()) and str(rec.get(fields.FIELD_VERSION) or "") == version

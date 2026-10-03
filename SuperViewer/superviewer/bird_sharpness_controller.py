@@ -2,9 +2,11 @@
 """SuperViewer integration of bird sharpness detection.
 
 Directory-tree and file-list context menus start a background job that runs
-``bird_sharpness`` on each photo, writes the result to the same-stem XMP sidecar
-and refreshes the affected list/thumbnail rows. Only one job runs at a time; the
-worker is owned until its real ``QThread.finished`` and shutdown is latched.
+``bird_sharpness`` on each photo (one ``BirdSharpnessAction`` per photo on the
+browser's shared worker pool, several photos in parallel), writes the result to
+the same-stem XMP sidecar and refreshes the affected list/thumbnail rows. Only one
+job runs at a time; its coordinator is owned until its real ``QThread.finished``
+and shutdown is latched.
 """
 from __future__ import annotations
 
@@ -14,12 +16,7 @@ import threading
 from collections import Counter
 from dataclasses import dataclass, field
 
-from app_common.bird_sharpness_fields import (
-    FIELD_VERDICT,
-    FIELD_VERSION,
-    VERDICT_ERROR,
-    VERDICT_STYLES,
-)
+from app_common.bird_sharpness_fields import VERDICT_ERROR, VERDICT_STYLES
 from app_common.log import get_logger
 
 from .qt_compat import QDialog, QHBoxLayout, QLabel, QPushButton, QThread, QVBoxLayout, pyqtSignal
@@ -45,18 +42,16 @@ class BirdSharpnessJob:
     skip_existing: bool = False
 
 
-def _already_analyzed(source_path: str, version: str) -> bool:
-    from app_common.exif_io.photo_meta import PhotoMetaDataXMP
-
-    try:
-        rec = PhotoMetaDataXMP().read(source_path)
-    except Exception:
-        return False
-    return bool(str(rec.get(FIELD_VERDICT) or "").strip()) and str(rec.get(FIELD_VERSION) or "") == version
-
-
 class BirdSharpnessWorker(QThread):
-    """Runs one job; never touches widgets."""
+    """Coordinates one job; never touches widgets.
+
+    Loads the models once, enumerates the photos and feeds ``BirdSharpnessAction``
+    units into the browser's shared ``BrowserWorkPool`` as ``WorkKind.ANALYSIS``
+    (bounded in-flight window, demand lease while producing). Without a pool the
+    same actions run sequentially on this thread. ``run()`` returns only after
+    every submitted action is finished or cancelled, so ``QThread.finished`` means
+    no analysis of this job is still running.
+    """
 
     status_changed = pyqtSignal(str)
     progress_changed = pyqtSignal(int, int, str)
@@ -64,11 +59,13 @@ class BirdSharpnessWorker(QThread):
     item_skipped = pyqtSignal(object)
     failed = pyqtSignal(str)
 
-    def __init__(self, job: BirdSharpnessJob, analyzer_holder: "BirdSharpnessController") -> None:
+    def __init__(self, job: BirdSharpnessJob, analyzer_holder: "BirdSharpnessController", pool=None) -> None:
         super().__init__()
         self.job = job
         self._holder = analyzer_holder
+        self._pool = pool
         self._cancel = threading.Event()
+        self.max_parallel = 0
 
     def stop(self) -> None:
         self._cancel.set()
@@ -86,6 +83,14 @@ class BirdSharpnessWorker(QThread):
         paths = collect_image_paths([self.job.directory], recursive=self.job.recursive)
         return [(os.path.normpath(p), os.path.normpath(p)) for p in paths]
 
+    def _emit_outcome(self, outcome) -> None:
+        if outcome.skipped:
+            self.item_skipped.emit(outcome.display_path)
+        elif outcome.result is not None:
+            if outcome.result.verdict != VERDICT_ERROR and not outcome.written:
+                _log.warning("[BirdSharpness] XMP write failed path=%r", outcome.source_path)
+            self.result_ready.emit(outcome.display_path, outcome.result, outcome.written)
+
     def run(self) -> None:
         try:
             try:
@@ -98,8 +103,7 @@ class BirdSharpnessWorker(QThread):
             if reason:
                 self.failed.emit(reason)
                 return
-            from bird_sharpness.scoring import ALGORITHM_VERSION
-            from bird_sharpness.xmp_store import write_result
+            from bird_sharpness.actions import BirdSharpnessAction
 
             items = self._job_items()
             total = len(items)
@@ -109,24 +113,98 @@ class BirdSharpnessWorker(QThread):
             self.status_changed.emit("正在加载检测模型…")
             analyzer = self._holder.analyzer()
             analyzer.load()
-            for index, (display_path, source_path) in enumerate(items):
-                if self._cancelled():
-                    break
-                self.progress_changed.emit(index, total, os.path.basename(display_path))
-                if self.job.skip_existing and _already_analyzed(source_path, ALGORITHM_VERSION):
-                    self.item_skipped.emit(display_path)
-                    continue
-                result = analyzer.analyze(source_path)
-                written = False
-                if result.verdict != VERDICT_ERROR and not self._cancelled():
-                    written = write_result(source_path, result)
-                    if not written:
-                        _log.warning("[BirdSharpness] XMP write failed path=%r", source_path)
-                self.result_ready.emit(display_path, result, written)
-            self.progress_changed.emit(total, total, "")
+
+            def make(item):
+                display_path, source_path = item
+                return BirdSharpnessAction(
+                    analyzer, display_path, source_path,
+                    skip_existing=self.job.skip_existing, cancelled=self._cancelled,
+                )
+
+            if self._pool is None:
+                self._run_sequential(items, make)
+            else:
+                self._run_on_pool(items, make)
         except Exception as exc:
             _log.error("[BirdSharpness] job failed: %s", traceback.format_exc())
             self.failed.emit(f"{type(exc).__name__}: {exc}")
+
+    def _run_sequential(self, items, make) -> None:
+        total = len(items)
+        self.max_parallel = 1
+        self.progress_changed.emit(0, total, "")
+        for done, item in enumerate(items, start=1):
+            if self._cancelled():
+                break
+            outcome = make(item).execute()
+            if outcome.cancelled:
+                break
+            self._emit_outcome(outcome)
+            self.progress_changed.emit(done, total, os.path.basename(item[0]))
+
+    def _run_on_pool(self, items, make) -> None:
+        from concurrent.futures import FIRST_COMPLETED, wait
+
+        from app_common.file_browser._work_pool import BrowserPoolClosed
+        from app_common.file_browser._work_policy import WorkKind
+        from bird_sharpness.analyzer import BirdSharpnessResult
+
+        pool = self._pool
+        total = len(items)
+        workers = max(1, int(getattr(pool, "analysis_workers", 1)))
+        self.max_parallel = workers
+        window = workers * 2
+        self.status_changed.emit(f"正在检测（{workers} 线程并行）…")
+        self.progress_changed.emit(0, total, "")
+        try:
+            token = pool.begin_producer(WorkKind.ANALYSIS)
+        except BrowserPoolClosed:
+            self._cancel.set()
+            return
+        pending: dict = {}
+        next_index = 0
+        done = 0
+        cancel_sent = False
+        try:
+            while pending or (next_index < total and not self._cancelled()):
+                while next_index < total and len(pending) < window and not self._cancelled():
+                    try:
+                        future = pool.submit_action(make(items[next_index]), kind=WorkKind.ANALYSIS)
+                    except BrowserPoolClosed:
+                        self._cancel.set()
+                        break
+                    pending[future] = items[next_index]
+                    next_index += 1
+                if not pending:
+                    break
+                finished, _ = wait(list(pending), timeout=0.2, return_when=FIRST_COMPLETED)
+                if self._cancelled() and not cancel_sent:
+                    # Queued actions are withdrawn; running ones finish their current photo.
+                    cancel_sent = True
+                    for future in list(pending):
+                        pool.cancel(future)
+                for future in finished:
+                    display_path, source_path = pending.pop(future)
+                    if future.cancelled():
+                        continue
+                    try:
+                        outcome = future.result()
+                    except Exception as exc:
+                        _log.error("[BirdSharpness] action failed path=%r: %r", source_path, exc)
+                        from bird_sharpness.actions import BirdSharpnessOutcome
+
+                        outcome = BirdSharpnessOutcome(
+                            display_path, source_path,
+                            result=BirdSharpnessResult(path=source_path, verdict=VERDICT_ERROR,
+                                                       error=f"{type(exc).__name__}: {exc}"),
+                        )
+                    if outcome.cancelled:
+                        continue
+                    done += 1
+                    self._emit_outcome(outcome)
+                    self.progress_changed.emit(done, total, os.path.basename(display_path))
+        finally:
+            pool.end_producer(WorkKind.ANALYSIS, token)
 
 
 class BirdSharpnessProgressDialog(QDialog):
@@ -176,7 +254,7 @@ class BirdSharpnessProgressDialog(QDialog):
     def set_progress(self, done: int, total: int, name: str) -> None:
         self.bar.setRange(0, max(1, total))
         self.bar.setValue(done)
-        self.label.setText(f"正在检测 {min(done + 1, total)}/{total}：{name}" if name else f"已处理 {done}/{total}")
+        self.label.setText(f"已完成 {done}/{total}：{name}" if name else f"已完成 {done}/{total}")
 
     def set_summary(self, text: str) -> None:
         self.summary.setText(text)
@@ -298,7 +376,9 @@ class BirdSharpnessController(QObject):
         self._skipped = 0
         self._write_failures = 0
         self._failure_message = ""
-        worker = BirdSharpnessWorker(job, self)
+        pool_getter = getattr(self._file_list, "background_work_pool", None)
+        pool = pool_getter() if callable(pool_getter) else None
+        worker = BirdSharpnessWorker(job, self, pool)
         self._worker = worker
         dialog = BirdSharpnessProgressDialog(self._main, job.title)
         self._dialog = dialog
