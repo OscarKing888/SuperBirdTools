@@ -10,15 +10,14 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import re
 import subprocess
 import sys
 from pathlib import Path
 
 # 兼容直接执行本脚本；只依赖标准库，不需要 Qt 或第三方包。
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from app_identity import normalize_build_number, normalize_version
-from build_tools.set_build_version import apply_build_version
+from app_identity import normalize_build_number, normalize_version_prefix, version_prefix
+from build_tools.set_build_version import apply_build_version, resolve_build_version
 
 ENTRY_ENV = "SUPERBIRDTOOLS_BUMP_ENTRY"
 METADATA_FILE = "app_metadata.json"
@@ -51,18 +50,9 @@ def _git_out(root: Path, *args: str) -> str:
     return _git(root, *args).stdout.strip()
 
 
-def _semver_key(version: str) -> tuple:
-    """SemVer precedence key; build metadata is ignored."""
-
-    core, _, prerelease = version.split("+", 1)[0].partition("-")
-    numbers = tuple(int(part) for part in core.split("."))
-    if not prerelease:
-        return numbers, (1,)
-    identifiers = tuple(
-        (0, int(part), "") if part.isdigit() else (1, 0, part)
-        for part in prerelease.split(".")
-    )
-    return numbers, (0, identifiers)
+def _version_key(version: str) -> tuple[int, ...]:
+    # hash 无大小顺序；同一主次版本允许从新提交继续发布。
+    return tuple(int(part) for part in version_prefix(version).split("."))
 
 
 def _read_metadata(text: str) -> dict:
@@ -77,10 +67,11 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
         prog="bump-version",
         description=(
             "Update app_metadata.json, then (from bump-version.sh / bump-version.bat) commit it, "
-            "create the annotated tag vX.Y.Z, push app_common main, and push main with the tag."
+            "create the annotated tag vX.Y.HASH from the final HEAD, push app_common main, and push main with the tag."
         ),
     )
-    parser.add_argument("version", help="SemVer value, optionally prefixed with v.")
+    parser.add_argument("version", help="MAJOR.MINOR, optionally prefixed with v; the 8-character commit hash is automatic.")
+    parser.add_argument("--finalize", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument(
         "--build-number",
         help="Positive integer macOS CFBundleVersion; defaults to the current value.",
@@ -92,7 +83,7 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
     )
     args = parser.parse_args(argv)
     try:
-        args.version = normalize_version(args.version)
+        args.version = normalize_version_prefix(args.version)
         if args.build_number is not None:
             args.build_number = normalize_build_number(args.build_number)
     except ValueError as exc:
@@ -106,7 +97,6 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
 def prepare(argv: list[str], root: Path) -> dict[str, object]:
     args = _parse_args(argv)
     version = args.version
-    tag = f"v{version}"
     metadata_path = root / METADATA_FILE
     plan = {
         "version": version,
@@ -137,22 +127,27 @@ def prepare(argv: list[str], root: Path) -> dict[str, object]:
             if _git_out(root, "branch", "--show-current") != "main":
                 raise BumpError("Pushing a release requires this checkout to be on main; use --no-push to commit and tag locally. No files were changed.")
             plan["submodule"] = _check_submodule(root)
-        if _git(root, "check-ref-format", f"refs/tags/{tag}", check=False).returncode != 0:
-            raise BumpError(f"{tag} is not a valid Git tag name. No files were changed.")
-        if _git(root, "rev-parse", "-q", "--verify", f"refs/tags/{tag}", check=False).returncode == 0:
-            tagged = _read_metadata(_git_out(root, "show", f"{tag}^{{commit}}:{METADATA_FILE}"))
-            if tagged.get("version") != version or _git_out(
-                root, "diff", "--name-only", f"{tag}^{{commit}}", "HEAD", "--", METADATA_FILE
-            ):
-                raise BumpError(f"Version tag {tag} already exists for a different {METADATA_FILE}; use a new version. No files were changed.")
-            _info(f"Version {version} is already committed and tagged as {tag}; no new commit needed.")
-            return plan
         committed = _read_metadata(_git_out(root, "show", f"HEAD:{METADATA_FILE}"))
-        if _semver_key(version) < _semver_key(normalize_version(str(committed.get("version", "")))):
+        if _version_key(version) < _version_key(str(committed.get("version", ""))):
             raise BumpError(f"The new version must not be lower than the committed version {committed.get('version')}. No files were changed.")
 
     current = _read_metadata(metadata_path.read_text(encoding="utf-8"))
     build_number = args.build_number or normalize_build_number(current.get("build_number", "1"))
+    # 在任何写入之前验证 Git 可读；--no-commit 也不能伪造 hash。
+    resolved = resolve_build_version(root, version)
+    tag = f"v{resolved}"
+    if args.finalize:
+        if not args.commit or current["version"] != version:
+            raise BumpError("Finalize requires the committed version prefix. No files were changed.")
+        plan["version"] = resolved
+        plan["create_tag"] = args.tag
+        if args.tag and _git(root, "rev-parse", "-q", "--verify", f"refs/tags/{tag}", check=False).returncode == 0:
+            if (_git_out(root, "rev-parse", f"{tag}^{{commit}}") != _git_out(root, "rev-parse", "HEAD")
+                    or _git_out(root, "cat-file", "-t", f"refs/tags/{tag}") != "tag"):
+                raise BumpError(f"Version tag {tag} already exists for a different commit or is not annotated; it will not be overwritten.")
+            plan["create_tag"] = False
+            _info(f"Reusing existing annotated tag {tag}.")
+        return plan
     apply_build_version(root, version, build_number=build_number)
     _info(f"Updated {METADATA_FILE}: version {current.get('version')} -> {version}, build_number {build_number}.")
     if not args.commit:

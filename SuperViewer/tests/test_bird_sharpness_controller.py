@@ -50,7 +50,7 @@ class _FakeAnalyzer:
     def release(self):
         self.released = True
 
-    def analyze(self, path, on_stage=None):
+    def analyze(self, path, on_stage=None, cancelled=None):
         if on_stage is not None:
             on_stage("decode")
         self.entered.set()
@@ -180,13 +180,13 @@ class _PeakAnalyzer(_FakeAnalyzer):
         self.lock = threading.Lock()
         self.active = self.peak = 0
 
-    def analyze(self, path, on_stage=None):
+    def analyze(self, path, on_stage=None, cancelled=None):
         with self.lock:
             self.active += 1
             self.peak = max(self.peak, self.active)
         try:
             time.sleep(self.delay)
-            return super().analyze(path, on_stage)
+            return super().analyze(path, on_stage, cancelled)
         finally:
             with self.lock:
                 self.active -= 1
@@ -263,3 +263,16 @@ def test_browser_pool_shutdown_ends_job_and_releases_models(pooled) -> None:
     assert _wait(controller.is_shutdown_done)
     assert len(analyzer.analyzed) == 3
     assert controller._dialog is None
+
+
+def test_missing_eye_model_is_reported_in_progress_window(env) -> None:
+    controller, file_list, analyzer, _folder, paths = env
+
+    class _NoEyeModels:
+        has_keypoints = False
+
+    analyzer.models = _NoEyeModels()
+    controller.start_for_paths(paths)
+    assert _wait(lambda: not controller.busy)
+    assert "未找到鸟眼关键点模型" in controller._dialog.warning.text()
+    assert not controller._dialog.warning.isHidden()

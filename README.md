@@ -163,15 +163,18 @@ SuperBirdStamp\\build_win.bat
 
 ## 应用名称、版本与 About 配置
 
-只需修改根目录 [app_metadata.json](app_metadata.json)：`version` 是两应用共用的 SemVer 版本，`build_number` 是 macOS 构建号；`apps` 下分别配置 `product_name`（短名称）和 `subtitle`（副标题）。`window_title` 是共用标题模板，也可在某个 app 内单独覆盖，支持 `{app_name}`、`{product_name}`、`{subtitle}`、`{version}`、`{author}`。修改后重启应用；发行包需要重新构建。
+根目录 [app_metadata.json](app_metadata.json) 保存两应用共用的版本前缀 `version`（如 `1.2`）和 `build_number`；完整显示版本固定为 `主版本.次版本.HEAD前8位`，例如 `1.2.a1b2c3d4`。前两段通过 `bump-version` 传入，第三段不能手填。`apps` 下分别配置 `product_name`（短名称）和 `subtitle`（副标题）。`window_title` 支持 `{app_name}`、`{product_name}`、`{subtitle}`、`{version}`、`{author}`，也可在某个 app 内覆盖。
 
-[app_identity.py](app_identity.py) 供 About、主窗口、Qt 应用信息和打包共用。macOS plist 与 Windows EXE 版本资源直接读取同一配置。可执行文件名、工作区格式标识和用户数据目录仍是稳定的 `SuperViewer` / `SuperBirdStamp`。版本也可以通过原有脚本更新（现在只写一份 JSON）：
+[app_identity.py](app_identity.py) 供 About、主窗口、Qt 应用信息和打包共用。源码启动从 Git HEAD 生成完整版本；构建工具 [set_build_version.py](build_tools/set_build_version.py) 将完整版本写入 `build/version/app_metadata.json`，所有 spec 收集这份生成配置，打包后无需 Git。生成文件不提交，源码配置不会因为 build 变脏；相同内容不重复写入，以保留增量缓存。直接运行 spec 也会自动生成配置。
 
 ```bash
-.venv/bin/python3 build_tools/set_build_version.py 0.2.0 --build-number 2
+# 只查看实际版本
+.venv/bin/python3 build_tools/set_build_version.py --check-only
+# 生成构建配置，不改源码版本前缀
+.venv/bin/python3 build_tools/set_build_version.py --build-number 2
 ```
 
-Windows 使用 `.venv\Scripts\python.exe` 执行同一脚本。不要再修改两个包的 `__version__` 或 spec 中的版本常量。
+Windows 使用 `.venv\Scripts\python.exe` 执行同一脚本。macOS `CFBundleShortVersionString` 使用 `主版本.次版本.0`，Windows 固定数字资源使用 `主版本.次版本.0.0`；完整 hash 版本用于应用显示、EXE 字符串资源、Tag 和安装包名。[Apple 数字版本格式](https://developer.apple.com/documentation/bundleresources/information-property-list/cfbundleshortversionstring)和 [Windows 数字版本资源](https://learn.microsoft.com/en-us/windows/win32/api/verrsrc/ns-verrsrc-vs_fixedfileinfo)不接受 hash 字母。`build_number` 继续作为 macOS 构建号；CI 使用运行编号。不要再修改两个包的 `__version__` 或 spec 中的版本常量。
 
 两个应用各自的 [Viewer about.cfg](SuperViewer/about.cfg) 和 [BirdStamp about.cfg](SuperBirdStamp/about.cfg) 继续配置作者、链接、二维码图片。`app_name` / `version` 保留占位符，实际值取自统一配置。`images` 中的 `path` 相对于该配置文件，`size` 指显示长边，`label` 是说明，`url` 是点击链接；`images: []` 隐藏图片。二维码按窗口宽度换行，超出屏幕高度时滚动。BirdStamp 兼容用户配置目录中的 `about.cfg` 覆盖，省略图片字段时继承内置图片。完整规则见 [共享 About 文档](app_common/about_dialog/README.md)。
 
@@ -188,37 +191,37 @@ Windows 使用 `.venv\Scripts\python.exe` 执行同一脚本。不要再修改�
 
 `.github/workflows/build-release.yml` 提供两种入口：
 
-- 在 GitHub Actions 页面手动运行时，输入 SemVer 版本号（例如 `0.2.0`），构建结果保留为 14 天的 Actions artifacts。
-- 推送 `v*` tag（例如 `v1.0.1`）时，先测试并校验版本规则，再自动构建 Windows x86_64 和 macOS arm64 三应用套件，生成更新清单、增量分卷、完整安装包和 `SHA256SUMS.txt`；附件校验及上传全部成功后发布 GitHub Release。
+- 在 GitHub Actions 页面手动运行时，输入前两段版本号（例如 `1.2`），第三段取所选 ref 的实际 HEAD 前 8 位，构建结果保留为 14 天的 Actions artifacts。
+- 推送 `v*` tag（例如 `v1.2.a1b2c3d4`）时，先测试并校验版本规则，再以 `--clean` 构建 Windows x86_64 和 macOS arm64 三应用套件，生成更新清单、增量分卷、完整安装包和 `SHA256SUMS.txt`；附件校验及上传全部成功后发布 GitHub Release。
 - 普通 commit 或只推送 `main` 不触发此发布工作流。手动运行即使选择 Tag，也只生成 Actions artifacts，不发布 Release。
 
-完成本轮提交并合入 `main` 后，在检出 `main` 的仓库根运行版本工具（将 `1.0.1` 替换为未使用的新版本号）：
+完成本轮提交并合入 `main` 后，在检出 `main` 的仓库根运行版本工具：
 
 ```bash
-./bump-version.sh 1.0.1
+./bump-version.sh 1.2
 ```
 
 ```bat
 :: Windows
-bump-version.bat 1.0.1
+bump-version.bat 1.2
 ```
 
-[build_tools/bump_version.py](build_tools/bump_version.py) 先校验版本号和仓库状态，再通过 `set_build_version.py` 只更新 `app_metadata.json`（`build_number` 默认保持当前值，可用 `--build-number N` 指定）。入口脚本随后直接用 Git 命令：
+[build_tools/bump_version.py](build_tools/bump_version.py) 先校验前两段版本号和仓库状态，再只更新 `app_metadata.json` 的前缀（`build_number` 默认保持当前值，可用 `--build-number N` 指定）。入口脚本随后直接用 Git 命令：
 
-1. `git commit --only` 仅提交 `app_metadata.json`（`Bump version to 1.0.1`），保留其他暂存内容和本地运行态修改；
-2. 在该提交上创建附注 Tag `v1.0.1`（`Release v1.0.1`）；
+1. 有配置变化时，`git commit --only` 仅提交 `app_metadata.json`（`Bump version to 1.2`），保留其他暂存内容和本地运行态修改；
+2. **提交完成后**读取 HEAD 的前 8 位，在该提交上创建附注 Tag `v1.2.<hash>`；避免把提交自身的 hash 写回提交内容造成循环；
 3. `git -C app_common push origin main`：CI 必须能下载主仓库引用的子模块提交；
-4. `git push --atomic origin main v1.0.1`：`main` 与 Tag 要么一起推送成功，要么远端都不变。
+4. `git push --atomic origin main v1.2.<hash>`：`main` 与本次 Tag 要么一起推送成功，要么远端都不变。
 
-推送要求当前 checkout 在 `main`，`app_common` 的 gitlink 提交必须已在 `app_common` 的 `main` 上；`app_metadata.json` 有未提交修改、版本低于已提交版本或 Tag 已用于其他内容时，都会在修改文件前停止。提交失败保留文件修改；Tag 失败保留版本提交，修复后用同一版本重跑即可补建。推送失败（例如远端 `main` 有新提交）保留本地提交和 Tag，把 `origin/main` 合入 `main` 后用同一版本重跑即可推送，不会再次提交。
+推送要求当前 checkout 在 `main`，`app_common` 的 gitlink 提交必须已在子模块的 `main` 上。源码版本配置有未提交修改或前两段低于已提交版本时，修改文件前停止。提交失败保留文件修改；Tag 失败保留版本提交，修复后用相同前两段重跑即可补建。已有 Tag 不覆盖；在同一个 HEAD 重跑会复用相同的附注 Tag，不重复提交。如果已有新代码提交（包括合入 `origin/main` 后产生的合并提交），同一个 `1.2` 会生成新的 hash Tag，旧 Tag 保留但不批量推送。
 
-- `--no-push`：只在本地提交和打 Tag，之后不带该参数重跑同一版本即可推送；也可在功能分支上使用。
+- `--no-push`：只在本地提交和打 Tag，之后不带该参数重跑即可推送；也可在功能分支上使用。
 - `--no-tag`：提交并推送 `main`，不创建或推送 Tag（不会触发发布）。
-- `--no-commit`：只更新 `app_metadata.json`。直接运行 `build_tools/bump_version.py` 也只支持此模式。
+- `--no-commit`：只更新 `app_metadata.json` 的版本前缀。直接运行 `build_tools/bump_version.py` 也只支持此模式。
 
-推送 Tag 后 GitHub 才会启动构建。未提交的本地修改不会进入 Tag。只推送本次 Tag，不使用 `git push --tags` 批量发布历史 Tag；已有版本修复后使用新 Tag，不移动旧 Tag。回归检查：`.venv/bin/python3 -m pytest build_tools/tests/test_bump_version.py -q`。
+Tag 必须是 `v主版本.次版本.8位小写hash`，hash 必须等于 Tag 所指 commit 的前 8 位，前两段也必须与该提交的源码配置一致。旧数字三段版本、预发布后缀、错误 hash 都会在 CI 校验时被拒绝。更新器用 `release_version` 显示完整版本，同时保留旧清单的短 commit `version` 字段，兼容已发布更新器；更新顺序仍按主线 first-parent 提交数判断，不能对 hash 排大小。
 
-Tag 必须是 `v主版本.次版本.修订号`，例如 `v1.0.1`；`v1.0.1-rc.1` 会发布为预发布版。`vtest`、`v1.0` 虽会触发工作流，但版本校验会阻止打包。这里的 SemVer 用于系统打包版本，更新器仍以 Tag 所指向的短 commit 显示版本，并以主线 first-parent 提交数判断更新顺序。
+本地 `build_all.sh` / `build_all.bat` 和单应用 spec 均自动生成当前 commit 版本。CI 通过 `SUPERBIRDTOOLS_BUILD_VERSION` 和 `SUPERBIRDTOOLS_BUILD_NUMBER` 传递统一版本与构建号，两个平台再次验证与各自 HEAD 一致。完整安装包名为 `SuperBirdTools-1.2.<hash>-<platform>-<arch>.zip`。回归检查：`.venv/bin/python3 -m pytest build_tools/tests/test_bump_version.py build_tools/tests/test_set_build_version.py -q`。
 
 进度见 [Build packages and release](https://github.com/OscarKing888/SuperBirdTools/actions/workflows/build-release.yml)，成功后的下载见 [Releases](https://github.com/OscarKing888/SuperBirdTools/releases)。也可以运行 `gh run list --workflow build-release.yml`，再运行 `gh run watch <运行ID> --exit-status`。仓库需启用 GitHub Actions；发布 job 使用工作流自带的 `GITHUB_TOKEN` 和 `contents: write` 权限，无需额外配置个人令牌。
 

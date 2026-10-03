@@ -35,8 +35,11 @@ from build_tools.viewer_bird_body import collect_viewer_bird_body
 bird_datas, bird_binaries, bird_hiddenimports = collect_viewer_bird_body(REPO_ROOT)
 
 from app_identity import load_app_identity
+from build_tools.set_build_version import prepare_build_metadata
 
-APP_INFO = load_app_identity("SuperViewer", REPO_ROOT / "app_metadata.json")
+BUILD_METADATA = prepare_build_metadata(REPO_ROOT)
+
+APP_INFO = load_app_identity("SuperViewer", BUILD_METADATA)
 
 
 def collect_tree(source: Path, dest: str) -> list[tuple[str, str]]:
@@ -57,7 +60,7 @@ def collect_tree(source: Path, dest: str) -> list[tuple[str, str]]:
 
 
 datas: list[tuple[str, str]] = list(video_datas) + denoise_datas + bird_datas
-datas.extend(collect_tree(REPO_ROOT / "app_metadata.json", "."))
+datas.extend(collect_tree(BUILD_METADATA, "."))
 datas.extend(collect_tree(APP_ROOT / "about.cfg", "."))
 datas.extend(collect_tree(APP_ROOT / "super_viewer.cfg", "."))
 datas.extend(collect_tree(APP_ROOT / "tags.cfg", "."))

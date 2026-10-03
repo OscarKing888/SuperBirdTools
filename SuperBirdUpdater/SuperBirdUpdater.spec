@@ -7,8 +7,11 @@ from pathlib import Path
 ROOT = Path(SPECPATH).resolve().parent
 sys.path.insert(0, str(ROOT))
 from app_identity import load_app_identity
+from build_tools.set_build_version import prepare_build_metadata
 
-identity = load_app_identity("SuperViewer", ROOT / "app_metadata.json")
+BUILD_METADATA = prepare_build_metadata(ROOT)
+
+identity = load_app_identity("SuperViewer", BUILD_METADATA)
 target_arch = os.environ.get("SUPERBIRDTOOLS_TARGET_ARCH") or None
 a = Analysis(
     [str(ROOT / "SuperBirdUpdater" / "entry.py")],

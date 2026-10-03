@@ -74,7 +74,7 @@ class BirdSharpnessAction(WorkerAction):
         if self.skip_existing and already_analyzed(self.source_path, ALGORITHM_VERSION):
             outcome.skipped = True
             return outcome
-        outcome.result = self.analyzer.analyze(self.source_path, on_stage=self._set_stage)
+        outcome.result = self.analyzer.analyze(self.source_path, on_stage=self._set_stage, cancelled=self.is_cancelled)
         # A stop request during analysis must not leave a freshly written sidecar behind.
         if self.is_cancelled():
             outcome.cancelled = True

@@ -18,11 +18,17 @@ from .manifest import MAX_ASSET_SIZE, excluded_path, validate
 
 
 def git_identity(repo: Path) -> dict:
+    from build_tools.set_build_version import prepare_build_metadata
+    from app_identity import load_app_identity
+
     def git(*args, cwd=repo):
         return subprocess.check_output(["git", "-C", str(cwd), *args], text=True).strip()
     if git("rev-parse", "--is-shallow-repository") == "true":
         raise UpdateError("生成更新版本需要完整 Git 历史；CI checkout 请设置 fetch-depth: 0")
-    return {"commit": git("rev-parse", "HEAD"), "version": git("rev-parse", "--short=8", "HEAD"),
+    commit = git("rev-parse", "HEAD")
+    release_version = load_app_identity("SuperViewer", prepare_build_metadata(repo)).version
+    # 保留 schema 1 的短 hash 字段，已发布的更新器仍能读取新清单。
+    return {"commit": commit, "version": commit[:8], "release_version": release_version,
             "revision": int(git("rev-list", "--count", "--first-parent", "HEAD")),
             "app_common_commit": git("rev-parse", "HEAD", cwd=repo / "app_common")}
 
@@ -126,7 +132,8 @@ def generate(root: Path, output: Path, identity: dict, target: str, arch: str,
 
 def package_suite(root: Path, output: Path, manifest: dict, repo: Path) -> Path:
     """完整安装包与增量清单来自同一份最终产物，保留 macOS 链接和权限。"""
-    name = f"SuperBirdTools-{manifest['version']}-{manifest['platform']}-{manifest['arch']}"
+    version = manifest.get("release_version", manifest["version"])
+    name = f"SuperBirdTools-{version}-{manifest['platform']}-{manifest['arch']}"
     result = output / f"{name}.zip"
     output.mkdir(parents=True, exist_ok=True)
     # zipfile 不自动保存 symlink，因此显式编码 Unix 类型和链接目标。

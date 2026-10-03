@@ -33,7 +33,12 @@ def test_bad_identity_reports_config_location(tmp_path):
         load_app_identity('SuperViewer', path)
 
 
-def test_windows_version_resource_round_trips_chinese_names(monkeypatch, tmp_path):
+@pytest.mark.parametrize(("version", "numeric"), [
+    ("2.4.6-rc.1+ci.7", "(2, 4, 6, 0)"),
+    ("2.4.ffffffff", "(2, 4, 0, 0)"),
+    ("2.4.01234567", "(2, 4, 0, 0)"),
+])
+def test_windows_version_resource_round_trips_chinese_names(monkeypatch, tmp_path, version, numeric):
     import sys
     import types
     import importlib.util
@@ -58,12 +63,22 @@ def test_windows_version_resource_round_trips_chinese_names(monkeypatch, tmp_pat
     source = app_identity.metadata_path()
     path = tmp_path / 'app_metadata.json'
     path.write_bytes(source.read_bytes())
-    apply_build_version(tmp_path, '2.4.6-rc.1+ci.7', build_number='7')
+    apply_build_version(tmp_path, version, build_number='7')
     resource = version_resource('SuperViewer', path)
     parsed = VSVersionInfo()
     parsed.fromRaw(resource.toRaw())
     content = str(parsed)
     assert '极速鸟瞰' in content
-    assert '2.4.6-rc.1+ci.7' in content
-    assert 'filevers=(2, 4, 6, 0)' in content
+    assert version in content
+    assert f'filevers={numeric}' in content
     assert 'SuperViewer.exe' in content
+
+
+def test_frozen_package_requires_stamped_hash(monkeypatch, tmp_path):
+    raw = json.loads(app_identity.metadata_path().read_text(encoding="utf-8"))
+    raw["version"] = "1.2"
+    path = tmp_path / "app_metadata.json"
+    path.write_text(json.dumps(raw), encoding="utf-8")
+    monkeypatch.setattr(app_identity.sys, "frozen", True, raising=False)
+    with pytest.raises(ValueError, match="complete commit version"):
+        load_app_identity("SuperViewer", path)

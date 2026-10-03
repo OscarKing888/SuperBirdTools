@@ -84,4 +84,4 @@ def test_aggregate_passes_selected_python_to_both_builders(tmp_path: Path, overr
 
     # 两款应用脚本完成后，独立更新器也必须使用同一个解释器。
     assert result.returncode == 73, result.stdout + result.stderr
-    assert probe.read_text(encoding="utf-8").splitlines() == [str(expected)] * 3
+    assert probe.read_text(encoding="utf-8").splitlines() == [str(expected)] * 4

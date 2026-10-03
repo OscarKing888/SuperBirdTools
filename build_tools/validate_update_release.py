@@ -17,14 +17,15 @@ def validate_release(directory: Path) -> None:
         raise UpdateError("Release 存在超过 2 GiB 的附件")
     manifests = [load(directory / f"update-{platform}-{arch}.json")
                  for platform, arch in (("windows", "x86_64"), ("macos", "arm64"))]
-    if len({(m["commit"], m["revision"], m["app_common_commit"]) for m in manifests}) != 1:
+    if len({(m["commit"], m["revision"], m["app_common_commit"], m.get("release_version")) for m in manifests}) != 1:
         raise UpdateError("不同平台的更新产物不是同一源码版本")
     for manifest in manifests:
         for name, asset in manifest["assets"].items():
             hashes = hash_file(directory / name)
             if any(hashes[k] != asset[k] for k in ("size", "sha256")):
                 raise UpdateError(f"更新附件损坏: {name}")
-        package = directory / f"SuperBirdTools-{manifest['version']}-{manifest['platform']}-{manifest['arch']}.zip"
+        version = manifest.get("release_version", manifest["version"])
+        package = directory / f"SuperBirdTools-{version}-{manifest['platform']}-{manifest['arch']}.zip"
         if not package.is_file():
             raise UpdateError(f"缺少首次安装包: {package.name}")
 

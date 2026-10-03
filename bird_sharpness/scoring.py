@@ -12,8 +12,9 @@ The SuperPicky sharpness scale is 0..1000 with these meaningful gates
 
 The blur radius ``sigma`` (pixels at full analysis resolution, Gaussian-equivalent)
 is mapped piecewise-linearly so that those gates line up with what a 100% view
-shows: ``sigma <= 0.80`` crisp, ``0.80..1.0`` usable, ``> 1.0`` soft and
-``>= 1.5`` clearly blurred. Calibrated on a Sony ILCE-1M2 ISO 2500-3200 burst
+shows: ``sigma <= 0.85`` crisp, ``0.85..1.05`` usable, ``> 1.05`` soft and
+``>= 1.55`` clearly blurred (v2: noise-level and line-like edges excluded, which
+lifts every radius by ~0.05-0.1 px versus v1's 0.80/1.00/1.50). Calibrated on a Sony ILCE-1M2 ISO 2500-3200 burst
 (LibRaw LINEAR demosaic, analysis at full output resolution); sigma is in pixels
 of that resolution, so the same thresholds describe what a 100% view shows.
 """
@@ -33,20 +34,20 @@ from app_common.bird_sharpness_fields import (
     VERDICT_USABLE,
 )
 
-ALGORITHM_VERSION = "sbt-blur-v1"
+ALGORITHM_VERSION = "sbt-blur-v2"
 
 # (sigma_px, score) anchors, sigma ascending / score descending.
 SCORE_ANCHORS: Tuple[Tuple[float, float], ...] = (
-    (0.45, 1000.0),
-    (0.80, 500.0),
-    (1.00, 300.0),
-    (1.50, 100.0),
-    (2.50, 0.0),
+    (0.50, 1000.0),
+    (0.85, 500.0),
+    (1.05, 300.0),
+    (1.55, 100.0),
+    (2.55, 0.0),
 )
 
-SIGMA_SHARP_MAX = 0.80
-SIGMA_USABLE_MAX = 1.00
-SIGMA_BLURRED_MIN = 1.50
+SIGMA_SHARP_MAX = 0.85
+SIGMA_USABLE_MAX = 1.05
+SIGMA_BLURRED_MIN = 1.55
 # Directional blur ratio (max/min over edge orientations) that marks motion blur.
 MOTION_RATIO_MIN = 1.5
 # Without a visible eye the head cannot be confirmed sharp: cap below "usable".

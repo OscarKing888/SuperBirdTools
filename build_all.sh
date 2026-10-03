@@ -57,6 +57,8 @@ echo "[build_all] python=${BUILD_PYTHON}"
 echo "[build_all] dist=${DIST_ROOT}"
 echo "[build_all] build=${BUILD_ROOT}"
 
+"$BUILD_PYTHON" "$ROOT_DIR/build_tools/set_build_version.py"
+
 # Clear PyInstaller's shared native-library cache only once, before Viewer.
 # BirdStamp can then reuse libraries processed by Viewer in this same build.
 if [[ $CLEAN -eq 1 ]]; then

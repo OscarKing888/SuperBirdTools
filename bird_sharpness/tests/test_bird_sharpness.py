@@ -75,8 +75,8 @@ def test_score_mapping_is_monotonic_and_matches_superpicky_gates() -> None:
     scores = [sigma_to_score(s) for s in sigmas]
     assert all(a >= b for a, b in zip(scores, scores[1:]))
     assert sigma_to_score(SCORE_ANCHORS[0][0]) == 1000
-    assert sigma_to_score(1.0) == 300  # SuperPicky 3-star eligibility gate
-    assert sigma_to_score(1.5) == 100  # SuperPicky reject gate
+    assert sigma_to_score(1.05) == 300  # SuperPicky 3-star eligibility gate
+    assert sigma_to_score(1.55) == 100  # SuperPicky reject gate
     assert sigma_to_score(None) is None
     assert sigma_to_score(float("nan")) is None
 
@@ -85,7 +85,7 @@ def test_score_mapping_is_monotonic_and_matches_superpicky_gates() -> None:
     ("head", "body", "ratio", "eye", "verdict"),
     [
         (0.70, 0.9, 1.1, True, bsf.VERDICT_SHARP),
-        (0.95, 0.9, 1.1, True, bsf.VERDICT_USABLE),
+        (1.00, 0.9, 1.1, True, bsf.VERDICT_USABLE),
         (1.27, 1.0, 1.2, True, bsf.VERDICT_SOFT),
         (1.42, 1.6, 1.8, True, bsf.VERDICT_MOTION),
         (None, 1.64, 1.8, False, bsf.VERDICT_MOTION),
@@ -101,52 +101,22 @@ def test_classify(head, body, ratio, eye, verdict) -> None:
         assert score <= NO_EYE_SCORE_CAP
 
 
-# ── pipeline geometry with stub models (no Torch needed) ──────────────────────
+# ── pipeline with stub models (no Torch needed) ──────────────────────────────
 
-class _T:
-    """Minimal tensor stand-in exposing ``.cpu().numpy()``."""
-
-    def __init__(self, array):
-        self._a = np.asarray(array)
-
-    def cpu(self):
-        return self
-
-    def numpy(self):
-        return self._a
-
-    def __getitem__(self, item):
-        return _T(self._a[item])
-
-    def __len__(self):
-        return len(self._a)
-
-
-class _Boxes:
-    def __init__(self, xyxy, conf):
-        self.xyxy = _T(np.asarray(xyxy, np.float32))
-        self.conf = _T(np.asarray(conf, np.float32))
-
-    def __len__(self):
-        return len(self.conf)
-
-
-class _Masks:
-    def __init__(self, data):
-        self.data = _T(np.asarray(data, np.float32))
-
-
-class _Det:
-    def __init__(self, boxes, masks):
-        self.boxes = boxes
-        self.masks = masks
+from bird_sharpness.focus import focus_window
+from bird_sharpness.models import BirdDetection
 
 
 class _StubModels:
-    """Bird = bright disc centred at (cx, cy); eye at its centre, beak to the right."""
+    """Birds are bright discs; each detection's eye sits at its crop centre, beak to the right.
 
-    def __init__(self, cx, cy, r, *, eye_vis=0.99, found=True):
-        self.cx, self.cy, self.r, self.eye_vis, self.found = cx, cy, r, eye_vis, found
+    ``birds``: [(cx, cy, r)] in full-resolution pixels. ``masks=False`` mimics the
+    yolo11n box-only detector, ``keypoints=False`` a missing CUB keypoint model.
+    """
+
+    def __init__(self, birds, *, full_w, eye_vis=0.99, masks=True, keypoints=True):
+        self.birds, self.full_w, self.eye_vis = list(birds), full_w, eye_vis
+        self.masks, self.has_kp = masks, keypoints
         self.crop_shapes = []
 
     def load(self):
@@ -155,91 +125,204 @@ class _StubModels:
     def release(self):
         pass
 
-    def segment(self, bgr_small):
+    def detect_birds(self, bgr_small):
         h, w = bgr_small.shape[:2]
-        if not self.found:
-            return _Det(_Boxes(np.zeros((0, 4)), []), None)
         s = w / self.full_w
-        mask = np.zeros((h, w), np.float32)
-        cv2.circle(mask, (int(self.cx * s), int(self.cy * s)), int(self.r * s), 1.0, -1)
-        box = [(self.cx - self.r) * s, (self.cy - self.r) * s, (self.cx + self.r) * s, (self.cy + self.r) * s]
-        return _Det(_Boxes([box], [0.9]), _Masks([mask]))
+        out = []
+        for cx, cy, r in self.birds:
+            mask = None
+            if self.masks:
+                mask = np.zeros((h, w), np.uint8)
+                cv2.circle(mask, (int(cx * s), int(cy * s)), int(r * s), 1, -1)
+            out.append(BirdDetection(0.9, ((cx - r) * s, (cy - r) * s, (cx + r) * s, (cy + r) * s), mask))
+        return out
 
     def keypoints(self, rgb_crop):
+        if not self.has_kp:
+            return None
         self.crop_shapes.append(rgb_crop.shape)
         h, w = rgb_crop.shape[:2]
-        # eye at crop centre (bird centre), beak 0.3 r to the right
         eye = (0.5, 0.5)
-        beak = (0.5 + 0.3 * self.r / w, 0.5)
+        beak = (0.5 + 60.0 / w, 0.5)
         return np.array([eye, eye, beak], np.float32), np.array([self.eye_vis, 0.1, 0.9], np.float32)
 
 
-def _install_image(monkeypatch, gray: np.ndarray) -> None:
+def _install_image(monkeypatch, gray: np.ndarray, camera_crop=None) -> None:
     rgb8 = np.repeat((np.clip(gray, 0, 1) * 255).astype(np.uint8)[..., None], 3, axis=2)
-    monkeypatch.setattr(analyzer_mod, "load_analysis_image", lambda path: AnalysisImage(rgb8, gray, False))
+    monkeypatch.setattr(analyzer_mod, "load_analysis_image",
+                        lambda path: AnalysisImage(rgb8, gray, False, camera_crop))
 
 
-def _bird_image(sigma: float) -> np.ndarray:
-    img = np.full((1200, 1800), 0.15, np.float32)
-    cv2.circle(img, (900, 600), 300, 0.75, -1)
-    # plumage-like dark spots inside the bird
-    for dx in range(-200, 201, 60):
-        for dy in range(-200, 201, 60):
-            if dx * dx + dy * dy < 220 ** 2:
-                cv2.circle(img, (900 + dx, 600 + dy), 9, 0.3, -1)
-    return cv2.GaussianBlur(img, (0, 0), sigma)
+def _scene(birds=(), *, size=(1200, 1800), texture=(), noise=0.004, seed=1) -> np.ndarray:
+    """Flat background; ``birds`` [(cx, cy, r, sigma)]; ``texture`` [(x, y, half, sigma)] patches."""
+    h, w = size
+    img = np.full((h, w), 0.15, np.float32)
+    for cx, cy, r, sigma in birds:
+        layer = img.copy()
+        cv2.circle(layer, (cx, cy), r, 0.75, -1)
+        for dx in range(-r + 40, r - 39, 50):
+            for dy in range(-r + 40, r - 39, 50):
+                if dx * dx + dy * dy < (r - 40) ** 2:
+                    cv2.circle(layer, (cx + dx, cy + dy), 8, 0.3, -1)
+        layer = cv2.GaussianBlur(layer, (0, 0), sigma)
+        pad = r + 30
+        img[cy - pad:cy + pad, cx - pad:cx + pad] = layer[cy - pad:cy + pad, cx - pad:cx + pad]
+    for x, y, half, sigma in texture:
+        layer = img.copy()
+        for i in range(-half, half, 16):
+            cv2.rectangle(layer, (x + i, y - half), (x + i + 7, y + half), 0.8, -1)
+        layer = cv2.GaussianBlur(layer, (0, 0), sigma)
+        img[y - half - 20:y + half + 20, x - half - 20:x + half + 20] = \
+            layer[y - half - 20:y + half + 20, x - half - 20:x + half + 20]
+    img += np.random.default_rng(seed).normal(0, noise, img.shape).astype(np.float32)
+    return img
+
+
+def _no_focus(path, w, h):
+    return None
 
 
 @pytest.mark.parametrize(("sigma", "verdict"), [(0.3, bsf.VERDICT_SHARP), (1.6, bsf.VERDICT_SOFT)])
 def test_analyzer_measures_head_region_at_full_resolution(monkeypatch, sigma, verdict) -> None:
-    _install_image(monkeypatch, _bird_image(sigma))
-    models = _StubModels(900, 600, 300)
-    models.full_w = 1800
-    result = BirdSharpnessAnalyzer(models).analyze("bird.jpg")
+    _install_image(monkeypatch, _scene([(900, 600, 300, sigma)]))
+    models = _StubModels([(900, 600, 300)], full_w=1800)
+    result = BirdSharpnessAnalyzer(models, focus_provider=_no_focus).analyze("bird.jpg")
     assert result.verdict == verdict, result
-    # curved edges sit slightly below the axis-aligned 0.73 px floor
+    assert result.region == bsf.REGION_BIRD and result.bird_count == 1
+    assert result.sigma == result.head_sigma
     assert result.head_sigma == pytest.approx(_expected(sigma), abs=0.2)
     assert result.eye_xy == pytest.approx((900, 600), abs=3)
     # keypoints see the padded full-resolution bird crop, not the 1024 px detection image
     assert models.crop_shapes[0][0] > 600
 
 
+def test_each_bird_is_measured_separately_and_the_sharpest_wins(monkeypatch) -> None:
+    _install_image(monkeypatch, _scene([(450, 600, 260, 1.8), (1350, 600, 260, 0.3)]))
+    for order in ([(450, 600, 260), (1350, 600, 260)], [(1350, 600, 260), (450, 600, 260)]):
+        result = BirdSharpnessAnalyzer(_StubModels(order, full_w=1800), focus_provider=_no_focus).analyze("b.jpg")
+        assert result.bird_count == 2 and len(result.birds) == 2
+        assert result.verdict == bsf.VERDICT_SHARP
+        assert result.bird_box[0] > 900  # the right-hand (sharp) bird decided the photo
+        per_bird = sorted(b["sigma"] for b in result.birds)
+        assert per_bird[0] == result.sigma and per_bird[1] > 1.4  # soft bird kept its own value
+
+
+def test_box_only_detector_without_keypoint_model_measures_whole_bird(monkeypatch) -> None:
+    _install_image(monkeypatch, _scene([(900, 600, 300, 0.3)]))
+    models = _StubModels([(900, 600, 300)], full_w=1800, masks=False, keypoints=False)
+    result = BirdSharpnessAnalyzer(models, focus_provider=_no_focus).analyze("bird.jpg")
+    assert result.region == bsf.REGION_BIRD
+    assert result.head_sigma is None and result.eye_visibility is None
+    assert result.sigma == pytest.approx(_expected(0.3), abs=0.2)
+    assert result.verdict == bsf.VERDICT_SHARP  # not capped as "no eye": there is no eye model
+
+
 def test_analyzer_without_visible_eye_caps_score(monkeypatch) -> None:
-    _install_image(monkeypatch, _bird_image(0.6))
-    models = _StubModels(900, 600, 300, eye_vis=0.1)
-    models.full_w = 1800
-    result = BirdSharpnessAnalyzer(models).analyze("bird.jpg")
+    _install_image(monkeypatch, _scene([(900, 600, 300, 0.3)]))
+    models = _StubModels([(900, 600, 300)], full_w=1800, eye_vis=0.1)
+    result = BirdSharpnessAnalyzer(models, focus_provider=_no_focus).analyze("bird.jpg")
     assert result.head_sigma is None
     assert result.verdict == bsf.VERDICT_NO_EYE
     assert result.score is not None and result.score <= NO_EYE_SCORE_CAP
 
 
-def test_analyzer_reports_no_bird_and_errors(monkeypatch) -> None:
-    _install_image(monkeypatch, _bird_image(0.6))
-    models = _StubModels(900, 600, 300, found=False)
-    models.full_w = 1800
-    assert BirdSharpnessAnalyzer(models).analyze("bird.jpg").verdict == bsf.VERDICT_NO_BIRD
+@pytest.mark.parametrize(("focus", "expected_box"), [
+    # small focus box -> 128 x 128 window centred on it
+    ((0.495, 0.495, 0.505, 0.505), (836, 536, 964, 664)),
+    # wider than 128 -> the focus box itself; its 60 px tall side widened to 128
+    ((0.4, 0.475, 0.6, 0.525), (720, 536, 1080, 664)),
+])
+def test_no_bird_measures_focus_window(monkeypatch, focus, expected_box) -> None:
+    _install_image(monkeypatch, _scene(texture=[(900, 600, 200, 0.8)]))
+    seen = []
 
+    def provider(path, w, h):
+        seen.append((w, h))
+        return focus
+
+    result = BirdSharpnessAnalyzer(_StubModels([], full_w=1800), focus_provider=provider).analyze("x.jpg")
+    assert seen == [(1800, 1200)]
+    assert result.verdict == bsf.VERDICT_NO_BIRD and result.region == bsf.REGION_FOCUS
+    assert result.region_box == expected_box
+    assert result.sigma == pytest.approx(_expected(0.8), abs=0.25)
+    assert result.score == sigma_to_score(result.sigma) and result.score is not None
+
+
+def test_focus_box_maps_through_raw_camera_crop(monkeypatch) -> None:
+    # RAW output keeps sensor margins: the camera frame is the inner 10%..90% here.
+    _install_image(monkeypatch, _scene(texture=[(900, 600, 200, 0.8)]), camera_crop=(0.1, 0.1, 0.9, 0.9))
+    seen = []
+
+    def provider(path, w, h):
+        seen.append((w, h))
+        return (0.495, 0.495, 0.505, 0.505)
+
+    result = BirdSharpnessAnalyzer(_StubModels([], full_w=1800), focus_provider=provider).analyze("x.ARW")
+    assert seen == [(1440, 960)]  # provider works in the camera frame
+    x1, y1, x2, y2 = result.region_box
+    assert ((x1 + x2) / 2, (y1 + y2) / 2) == pytest.approx((900, 600), abs=2)
+
+
+def test_no_bird_without_focus_measures_whole_image(monkeypatch) -> None:
+    _install_image(monkeypatch, _scene(texture=[(500, 400, 150, 1.0), (1300, 800, 150, 1.0)]))
+    result = BirdSharpnessAnalyzer(_StubModels([], full_w=1800), focus_provider=_no_focus).analyze("x.jpg")
+    assert result.region == bsf.REGION_FULL and result.region_box == (0, 0, 1800, 1200)
+    assert result.sigma == pytest.approx(_expected(1.0), abs=0.25)
+
+
+def test_featureless_focus_window_falls_back_to_whole_image(monkeypatch) -> None:
+    # Focus on flat, noisy sky: noise must not read as a perfectly sharp edge.
+    _install_image(monkeypatch, _scene(texture=[(1500, 900, 150, 1.0)], noise=0.01))
+    result = BirdSharpnessAnalyzer(_StubModels([], full_w=1800),
+                                   focus_provider=lambda p, w, h: (0.2, 0.2, 0.21, 0.21)).analyze("x.jpg")
+    assert result.region == bsf.REGION_FULL
+    assert result.sigma is not None and result.sigma > 0.6
+
+
+def test_noise_and_thin_lines_are_not_measured_as_sharp_edges() -> None:
+    noise = 0.4 + np.random.default_rng(3).normal(0, 0.01, (400, 400)).astype(np.float32)
+    assert EdgeBlurField(noise).strongest_edge_blur(None).sigma is None
+    lines = np.full((400, 400), 0.2, np.float32)
+    for x in range(20, 380, 25):
+        lines[:, x] = 0.9  # 1 px bright lines (twigs, eye-ring highlights)
+    samples = EdgeBlurField(lines).strongest_edge_samples(None)
+    assert samples.size == 0 or float(np.median(samples)) > 0.4
+
+
+def test_focus_window_rules() -> None:
+    assert focus_window((100, 100, 110, 110), 1000, 800) == (41, 41, 169, 169)
+    assert focus_window((0, 0, 10, 10), 1000, 800) == (0, 0, 128, 128)  # shifted inside, not shrunk
+    assert focus_window((995, 795, 1000, 800), 1000, 800) == (872, 672, 1000, 800)
+    assert focus_window((100, 100, 400, 150), 1000, 800) == (100, 61, 400, 189)
+    assert focus_window((10, 10, 20, 20), 100, 60) == (0, 0, 100, 60)  # image smaller than the window
+
+
+def test_analyzer_reports_errors(monkeypatch) -> None:
     def boom(path):
         raise OSError("damaged file")
 
     monkeypatch.setattr(analyzer_mod, "load_analysis_image", boom)
-    failed = BirdSharpnessAnalyzer(models).analyze("broken.ARW")
+    failed = BirdSharpnessAnalyzer(_StubModels([], full_w=1800)).analyze("broken.ARW")
     assert failed.verdict == bsf.VERDICT_ERROR and "damaged" in failed.error
     assert failed.to_xmp_fields() == {}
 
 
 def test_result_xmp_fields_use_superpicky_formats() -> None:
-    result = BirdSharpnessResult(path="x", verdict="soft", score=193, head_sigma=1.2689, body_sigma=1.1,
-                                 motion_ratio=1.234, eye_visibility=0.998)
+    result = BirdSharpnessResult(path="x", verdict="soft", score=193, sigma=1.2689, region="bird", bird_count=2,
+                                 head_sigma=1.2689, body_sigma=1.1, motion_ratio=1.234, eye_visibility=0.998)
     out = result.to_xmp_fields()
     assert out[bsf.SHARPNESS_XMP_KEY] == "193.00"
     assert out["XMP-superpicky:bird_sharpness_verdict"] == "soft"
+    assert out["XMP-superpicky:bird_sharpness_sigma"] == "1.269"
+    assert out["XMP-superpicky:bird_sharpness_region"] == "bird"
+    assert out["XMP-superpicky:bird_sharpness_bird_count"] == "2"
     assert out["XMP-superpicky:bird_sharpness_head_sigma"] == "1.269"
     assert out["XMP-superpicky:bird_sharpness_motion_ratio"] == "1.23"
-    no_bird = BirdSharpnessResult(path="x", verdict="no_bird").to_xmp_fields()
-    assert bsf.SHARPNESS_XMP_KEY not in no_bird
-    assert no_bird["XMP-superpicky:bird_sharpness_head_sigma"] == ""
+    assert out["XMP-superpicky:bird_sharpness_version"] == "sbt-blur-v2"
+    # No bird: the focus/whole-image value still fills the sharpness slot.
+    focus = BirdSharpnessResult(path="x", verdict="no_bird", score=420, sigma=0.9, region="focus").to_xmp_fields()
+    assert focus[bsf.SHARPNESS_XMP_KEY] == "420.00"
+    assert focus["XMP-superpicky:bird_sharpness_head_sigma"] == ""
 
 
 def test_write_result_roundtrip_on_chinese_path(tmp_path, monkeypatch) -> None:
@@ -292,7 +375,7 @@ class _CountingAnalyzer:
     def load(self):
         pass
 
-    def analyze(self, path, on_stage=None):
+    def analyze(self, path, on_stage=None, cancelled=None):
         import time
 
         with self.lock:
