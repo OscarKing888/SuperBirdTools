@@ -1345,7 +1345,7 @@ class BirdStampEditorWindow(
         self.pipeline_stage_down_btn.clicked.connect(lambda: self._move_pipeline_stage(1))
         pipeline_btn_col.addWidget(self.pipeline_stage_up_btn)
         pipeline_btn_col.addWidget(self.pipeline_stage_down_btn)
-        pipeline_btn_col.addStretch()
+        pipeline_btn_col.setAlignment(Qt.AlignmentFlag.AlignTop)
         pipeline_order_row.addLayout(pipeline_btn_col)
         pipeline_layout.addLayout(pipeline_order_row)
 
@@ -1353,6 +1353,8 @@ class BirdStampEditorWindow(
         self.pipeline_stage_options_layout.setContentsMargins(0, 0, 0, 0)
         self.pipeline_stage_options_layout.setSpacing(6)
         pipeline_layout.addLayout(self.pipeline_stage_options_layout)
+        # 列表行与各 Stage 分组都不纵向扩展；分组被拉高时空白只出现在底部，Stage 分组始终紧贴列表。
+        pipeline_layout.addStretch(1)
 
         self._setup_pipeline_stage_option_groups()
         self._set_pipeline_stage_order(normalize_pipeline_stage_order(None), save=False, mark_dirty=False)

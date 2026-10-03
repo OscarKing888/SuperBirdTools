@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import os
 from typing import Callable
 
-from PyQt6.QtCore import QSize, Qt, pyqtSignal
+from PyQt6.QtCore import QSize, Qt, QTimer, pyqtSignal
 from PyQt6.QtWidgets import (
     QFrame,
+    QGroupBox,
     QScrollArea,
     QSizePolicy,
     QStyle,
@@ -14,6 +16,8 @@ from PyQt6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
+
+from app_common.log import get_logger
 
 
 class CurrentPageTabWidget(QTabWidget):
@@ -40,6 +44,7 @@ class CurrentPageTabWidget(QTabWidget):
             page.setSizePolicy(policy, policy)
         self.updateGeometry()
         refresh_layout_chain(self)
+        schedule_layout_dump(self.widget(index), f"tab changed -> {index}")
 
     def _current_page_height(self, full_height: int, page_height: Callable[[QWidget], int]) -> int:
         current = self.currentWidget()
@@ -83,6 +88,95 @@ class CurrentPageTabWidget(QTabWidget):
             current_height = current.sizeHint().height()
         current_height = max(current_height, current.minimumSizeHint().height())
         return full - stack.heightForWidth(page_width) + current_height
+
+
+_LAYOUT_DEBUG = os.environ.get("BIRDSTAMP_LAYOUT_DEBUG", "").strip() not in {"", "0", "false", "no"}
+_layout_log = get_logger("layout_debug")
+
+
+def _describe_widget(widget: QWidget) -> str:
+    name = type(widget).__name__
+    title = ""
+    if isinstance(widget, QGroupBox):
+        title = widget.title()
+    elif isinstance(widget, QToolButton):
+        title = widget.text()
+    label = widget.objectName() or title
+    return f"{name}({label})" if label else name
+
+
+def _hfw_text(widget: QWidget) -> str:
+    if not widget.hasHeightForWidth():
+        return "-"
+    return str(widget.heightForWidth(widget.width()))
+
+
+def dump_layout_chain(widget: QWidget | None, reason: str) -> None:
+    """BIRDSTAMP_LAYOUT_DEBUG=1 时记录 widget 到左侧滚动区的各层尺寸，用于排查布局空白。
+
+    每层输出 geometry / sizeHint / heightForWidth 及其 layout 子项；只读，不触发重排。
+    实际高度超出自身 heightForWidth（无则 sizeHint）时标记 TALLER，即多余空间落在该层。
+    """
+    if not _LAYOUT_DEBUG or widget is None:
+        return
+    _layout_log.info("---- layout dump: %s ----", reason)
+    current: QWidget | None = widget
+    depth = 0
+    while current is not None:
+        geometry = current.geometry()
+        hint = current.sizeHint()
+        hfw = _hfw_text(current)
+        layout = current.layout()
+        items: list[str] = []
+        if layout is not None:
+            for index in range(layout.count()):
+                item = layout.itemAt(index)
+                if item is None:
+                    continue
+                child = item.widget()
+                if child is not None and child.isHidden():
+                    continue
+                item_rect = item.geometry()
+                item_name = _describe_widget(child) if child is not None else type(item).__name__
+                item_hfw = item.heightForWidth(item_rect.width()) if item.hasHeightForWidth() else "-"
+                items.append(
+                    f"{item_name} y={item_rect.y()} h={item_rect.height()} "
+                    f"hint={item.sizeHint().height()} hfw={item_hfw}"
+                )
+        expected = int(hfw) if hfw != "-" else hint.height()
+        taller = " TALLER" if 0 <= expected < geometry.height() - 2 and not isinstance(current, QScrollArea) else ""
+        _layout_log.info(
+            "%s%s geo=(%d,%d %dx%d) hint=%dx%d min=%d hfw=%s policy=%s%s",
+            "  " * depth,
+            _describe_widget(current),
+            geometry.x(), geometry.y(), geometry.width(), geometry.height(),
+            hint.width(), hint.height(),
+            current.minimumSizeHint().height(),
+            hfw,
+            current.sizePolicy().verticalPolicy().name,
+            taller,
+        )
+        for line in items:
+            _layout_log.info("%s  - %s", "  " * depth, line)
+        if isinstance(current, QScrollArea):
+            break
+        current = current.parentWidget()
+        depth += 1
+
+
+def schedule_layout_dump(widget: QWidget | None, reason: str) -> None:
+    """布局稳定后（下一轮事件循环及 300ms 后）各记录一次。"""
+    if not _LAYOUT_DEBUG or widget is None:
+        return
+
+    def _dump(suffix: str) -> None:
+        try:
+            dump_layout_chain(widget, f"{reason} {suffix}")
+        except RuntimeError:
+            pass  # 定时器触发前控件已销毁（如关闭了模板管理对话框）
+
+    QTimer.singleShot(0, lambda: _dump("+0ms"))
+    QTimer.singleShot(300, lambda: _dump("+300ms"))
 
 
 def refresh_layout_chain(widget: QWidget | None) -> None:

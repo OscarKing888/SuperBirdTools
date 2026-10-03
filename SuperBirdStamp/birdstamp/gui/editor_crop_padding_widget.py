@@ -18,7 +18,7 @@ from PyQt6.QtWidgets import (
 )
 
 from birdstamp.gui import editor_core, editor_utils
-from birdstamp.gui.editor_collapsible import refresh_layout_chain
+from birdstamp.gui.editor_collapsible import refresh_layout_chain, schedule_layout_dump
 from birdstamp.gui.color_editor import ColorEditor
 
 _DEFAULT_CROP_PADDING_PX = editor_core.DEFAULT_CROP_PADDING_PX
@@ -209,6 +209,7 @@ class CropPaddingEditorWidget(QWidget):
         self.updateGeometry()
         self.detailsToggled.emit(state)
         refresh_layout_chain(self)
+        schedule_layout_dump(self, f"crop padding details {'expanded' if state else 'collapsed'}")
 
     def _collapsed_size_hint(self) -> QSize:
         uniform_hint = self.uniform_spin.sizeHint()
