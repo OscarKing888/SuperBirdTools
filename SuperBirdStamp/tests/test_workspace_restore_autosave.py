@@ -165,3 +165,78 @@ def test_recent_workspace_menu_includes_preexisting_last_workspace(window, tmp_p
     window._refresh_recent_workspace_menu()
 
     assert [action.toolTip() for action in window.recent_workspaces_menu.actions()] == [str(previous)]
+
+
+def _text_scale(path: Path) -> float:
+    return read_workspace_json(path)["editor_state"]["current_render_settings"]["text_scale"]
+
+
+def test_parameter_change_autosaves_named_workspace(window, tmp_path):
+    named = tmp_path / "工作区" / "白鹭.birdstamp-workspace.json"
+    window._save_workspace_to_path(named)
+    original = _text_scale(named)
+
+    window.text_scale_slider.setValue(window.text_scale_slider.value() + 25)
+    assert window._workspace_autosave_timer.isActive()
+    window._autosave_workspace_now()
+
+    assert _text_scale(named) != original
+    assert _text_scale(named) == _text_scale(window._workspace_autosave_path())
+    assert read_workspace_json(window._workspace_autosave_path())["current_workspace_path"] == str(named)
+    assert "current_workspace_path" not in read_workspace_json(named)
+
+
+def test_untitled_parameter_change_only_updates_session_autosave(window, tmp_path):
+    window.text_scale_slider.setValue(window.text_scale_slider.value() + 25)
+    window._autosave_workspace_now()
+
+    assert window._workspace_path is None
+    assert "current_workspace_path" not in read_workspace_json(window._workspace_autosave_path())
+    assert not list(tmp_path.glob("*.birdstamp-workspace.json"))
+
+
+def test_opening_workspace_does_not_rewrite_it(window, tmp_path):
+    named = tmp_path / "打开.birdstamp-workspace.json"
+    window._save_workspace_to_path(named)
+    window._workspace_path = None
+    original = named.read_bytes()
+
+    window._open_workspace_path(named)
+    assert window._workspace_path == named
+    window._autosave_workspace_now()
+
+    assert named.read_bytes() == original
+
+
+def test_switching_workspace_flushes_pending_parameter_change(window, tmp_path):
+    first = tmp_path / "甲.birdstamp-workspace.json"
+    second = tmp_path / "乙.birdstamp-workspace.json"
+    window._save_workspace_to_path(second)
+    window._save_workspace_to_path(first)
+    original = _text_scale(first)
+
+    window.text_scale_slider.setValue(window.text_scale_slider.value() + 25)
+    window._open_workspace_path(second)
+
+    assert window._workspace_path == second
+    assert _text_scale(first) != original
+
+
+def test_startup_autosave_restore_keeps_named_workspace_current(window, tmp_path):
+    named = tmp_path / "恢复.birdstamp-workspace.json"
+    window._save_workspace_to_path(named)
+    window.text_scale_slider.setValue(window.text_scale_slider.value() + 25)
+    window._autosave_workspace_now()
+    payload = read_workspace_json(window._workspace_autosave_path())
+    photo = tmp_path / "白鹭.png"
+    Image.new("RGB", (8, 8), (20, 40, 80)).save(photo)
+    payload["photos"] = [{"path": str(photo)}]
+    write_workspace_json(window._workspace_autosave_path(), payload)
+    window._workspace_path = None
+
+    assert window._restore_autosave_workspace_on_startup()
+    while window._workspace_restore_in_progress():
+        window._process_workspace_restore_photo_batch()
+
+    assert window._workspace_path == named
+    assert window.windowTitle().startswith(f"{named} - ")
