@@ -42,6 +42,7 @@ class _FakeAnalyzer:
         self.gate = gate
         self.analyzed: list[str] = []
         self.loaded = self.released = False
+        self.entered = threading.Event()
 
     def load(self):
         self.loaded = True
@@ -49,7 +50,10 @@ class _FakeAnalyzer:
     def release(self):
         self.released = True
 
-    def analyze(self, path):
+    def analyze(self, path, on_stage=None):
+        if on_stage is not None:
+            on_stage("decode")
+        self.entered.set()
         if self.gate is not None:
             self.gate.wait(5)
         self.analyzed.append(os.path.normpath(path))
@@ -112,7 +116,7 @@ def test_file_job_writes_xmp_and_refreshes_list(env) -> None:
     updates = file_list.synced[os.path.normpath(paths[1])]
     assert bsf.bird_sharpness_from_meta(updates).text() == "失焦 1.30"
     assert updates["XMP:City"] == "180.00"
-    assert "清晰 1" in controller._dialog.summary.text() and "失焦 1" in controller._dialog.summary.text()
+    assert "清晰 1" in controller._dialog.summary_text() and "失焦 1" in controller._dialog.summary_text()
     assert controller._dialog.button.text() == "关闭"
 
 
@@ -125,7 +129,7 @@ def test_directory_job_skips_photos_already_analyzed_with_same_version(env) -> N
     controller.start(BirdSharpnessJob(title="t", directory=str(folder), skip_existing=True))
     assert _wait(lambda: not controller.busy)
     assert analyzer.analyzed == [os.path.normpath(paths[1])]
-    assert "已跳过 1" in controller._dialog.summary.text()
+    assert "已跳过 1" in controller._dialog.summary_text()
 
 
 def test_menus_offer_start_then_stop_while_busy(env) -> None:
@@ -141,6 +145,7 @@ def test_menus_offer_start_then_stop_while_busy(env) -> None:
     gate = threading.Event()
     analyzer.gate = gate
     controller.start_for_paths(paths)
+    assert _wait(analyzer.entered.is_set)
     busy_menu = QMenu()
     controller.extend_file_menu(busy_menu, paths)
     assert [a.text() for a in busy_menu.actions()] == ["停止鸟清晰度检测"]
@@ -175,13 +180,13 @@ class _PeakAnalyzer(_FakeAnalyzer):
         self.lock = threading.Lock()
         self.active = self.peak = 0
 
-    def analyze(self, path):
+    def analyze(self, path, on_stage=None):
         with self.lock:
             self.active += 1
             self.peak = max(self.peak, self.active)
         try:
             time.sleep(self.delay)
-            return super().analyze(path)
+            return super().analyze(path, on_stage)
         finally:
             with self.lock:
                 self.active -= 1
@@ -204,8 +209,14 @@ def pooled(env, monkeypatch, tmp_path):
     pool.shutdown(timeout=5)
 
 
-def test_job_runs_actions_in_parallel_on_shared_pool(pooled) -> None:
+def test_job_runs_actions_in_parallel_on_shared_pool(pooled, monkeypatch) -> None:
+    from SuperViewer.superviewer.bird_sharpness_progress import BirdSharpnessProgressDialog
+
     controller, file_list, analyzer, folder, paths, pool = pooled
+    loads = []
+    original = BirdSharpnessProgressDialog.set_load
+    monkeypatch.setattr(BirdSharpnessProgressDialog, "set_load",
+                        lambda self, load: (loads.append(load), original(self, load)))
     controller.start(BirdSharpnessJob(title="t", directory=str(folder)))
     assert _wait(lambda: not controller.busy)
     assert sorted(analyzer.analyzed) == sorted(os.path.normpath(p) for p in paths)
@@ -215,6 +226,12 @@ def test_job_runs_actions_in_parallel_on_shared_pool(pooled) -> None:
     assert controller._dialog.label.text() == "检测完成。"
     snap = pool.snapshot()
     assert snap["analysis_active"] == 0 and snap["analysis_queued"] == 0
+    # Live load: every snapshot uses the pool's capacity, lanes are stable slots, the last one is idle.
+    assert loads and all(load.capacity == 3 and len(load.lanes) == 3 for load in loads)
+    assert max(load.busy for load in loads) > 1
+    assert any(load.queued for load in loads)
+    assert loads[-1].busy == 0
+    assert all(load.pool_threads == 6 for load in loads)
 
 
 def test_stop_withdraws_queued_actions_and_waits_for_running_ones(pooled) -> None:
