@@ -34,6 +34,11 @@ DEVICE_ENV = "SUPERBIRD_SHARPNESS_DEVICE"
 SEG_MODEL_NAMES = ("yolo11l-seg.pt", "yolo11m-seg.pt", "yolo11s-seg.pt", "yolo11n-seg.pt")
 DET_MODEL_NAMES = ("yolo11n.pt", "yolo11s.pt", "yolov8n.pt")
 BIRD_CONFIDENCE_MIN = 0.25
+# How a bird was found (BirdDetection.source).
+FOUND_FULL = "full"              # whole frame, confidence >= BIRD_CONFIDENCE_MIN
+FOUND_FULL_FINE = "full_fine"    # whole frame at the finer recheck input size
+FOUND_FOCUS_WEAK = "focus_weak"  # weak whole-frame candidate lying on the camera focus box
+FOUND_FOCUS_ZOOM = "focus_zoom"  # zoomed window around the focus point, confirmed by a weak candidate
 KEYPOINT_MODEL_NAME = "cub200_keypoint_resnet50_slim.pth"
 BIRD_CLASS_ID = 14
 KEYPOINT_INPUT_SIZE = 416
@@ -198,6 +203,7 @@ class BirdDetection:
     confidence: float
     box: tuple  # (x1, y1, x2, y2) in detection-image pixels
     mask: Optional[object] = None  # uint8 HxW mask at detection resolution (segmentation models)
+    source: str = FOUND_FULL
 
 
 class BirdSharpnessModels:
@@ -287,11 +293,18 @@ class BirdSharpnessModels:
                 except Exception:
                     pass
 
-    def detect_birds(self, bgr_small) -> list:
-        """Every bird in a small BGR image as :class:`BirdDetection`, strongest first."""
+    def detect_birds(self, bgr_small, *, conf: float = BIRD_CONFIDENCE_MIN, imgsz: Optional[int] = None) -> list:
+        """Every bird in a small BGR image as :class:`BirdDetection`, strongest first.
+
+        ``conf`` below :data:`BIRD_CONFIDENCE_MIN` returns weak candidates too (the
+        analyzer only uses them next to the camera focus point); ``imgsz`` is the
+        network input size (Ultralytics default when ``None``).
+        """
         self.load()
         with self._lock:
-            kwargs = dict(classes=[BIRD_CLASS_ID], conf=BIRD_CONFIDENCE_MIN, verbose=False)
+            kwargs = dict(classes=[BIRD_CLASS_ID], conf=conf, verbose=False)
+            if imgsz:
+                kwargs["imgsz"] = int(imgsz)
             if self._masks:
                 kwargs["retina_masks"] = True
             try:

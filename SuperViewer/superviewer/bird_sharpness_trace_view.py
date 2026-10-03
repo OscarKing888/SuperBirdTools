@@ -51,7 +51,7 @@ _RICH = getattr(getattr(Qt, "TextFormat", Qt), "RichText")
 _FRAME_NONE = getattr(getattr(QFrame, "Shape", QFrame), "NoFrame")
 
 STEP_ICONS = {
-    "decode": "解码", "detect": "识别", "bird": "鸟体", "head": "头部", "edges": "边缘",
+    "decode": "解码", "detect": "识别", "recheck": "复检", "bird": "鸟体", "head": "头部", "edges": "边缘",
     "distribution": "分布", "focus": "焦点", "tiles": "分块", "result": "结论",
 }
 _CIRCLED = "①②③④⑤⑥⑦⑧⑨⑩⑪⑫"

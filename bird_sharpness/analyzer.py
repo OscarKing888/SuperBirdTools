@@ -4,7 +4,9 @@ Pipeline (see ``docs/bird_sharpness.md``):
 
 1. decode the full-resolution image (RAW via LibRaw);
 2. detect every bird on a 1024 px copy (segmentation masks, or boxes from a
-   plain detector);
+   plain detector); when none is confident, look again at a finer network input
+   and next to the camera focus point for a camouflaged bird
+   (:meth:`BirdSharpnessAnalyzer._recheck`);
 3. per bird, measure only that bird's pixels: blur radius at the strongest edges
    of ``eye circle ∩ bird`` when the keypoint model finds an eye, the whole bird
    otherwise, plus body median/directional blur for motion; the bird with the
@@ -20,7 +22,7 @@ import os
 import traceback
 import threading
 import time
-from dataclasses import asdict, dataclass, field as dc_field
+from dataclasses import asdict, dataclass, field as dc_field, replace
 from typing import Callable, Dict, Iterable, List, Optional, Tuple
 
 import cv2
@@ -32,12 +34,15 @@ from app_common.log import get_logger
 from .focus import FocusProvider, default_focus_box, focus_window
 from .image_source import AnalysisImage, load_analysis_image
 from .metrics import EdgeBlurField, edge_stats, full_image_blur
-from .models import BirdDetection, BirdSharpnessModels
+from .models import (BIRD_CONFIDENCE_MIN, FOUND_FOCUS_WEAK, FOUND_FOCUS_ZOOM, FOUND_FULL, FOUND_FULL_FINE,
+                     BirdDetection, BirdSharpnessModels)
 from .scoring import ALGORITHM_VERSION, VERDICT_ERROR, VERDICT_NO_BIRD, blank_head_sigma, classify, sigma_to_score
 
 _log = get_logger("bird_sharpness")
 
-DETECT_LONG_EDGE = 1024
+DETECT_LONG_EDGE = 1024  # detection copy
+DETECT_IMGSZ = 640  # first-pass network input (the size the YOLO models are trained at)
+RECHECK_IMGSZ = 1024  # second pass when the first finds no bird: small, dark birds score higher
 MAX_BIRDS = 8
 CROP_PAD_RATIO = 0.15
 EYE_VISIBLE_MIN = 0.5
@@ -75,6 +80,7 @@ class BirdMeasurement:
     head_radius: Optional[float] = None
     head_edges: int = 0
     masked: bool = False
+    found_by: str = FOUND_FULL
 
     def rank(self) -> tuple:
         # Best bird: highest score, then smallest blur radius, then detector confidence.
@@ -165,6 +171,77 @@ def dedupe_detections(detections: List[BirdDetection]) -> List[BirdDetection]:
     return kept
 
 
+# Recheck for camouflaged birds (DSC05167: a nightjar on a branch at dusk). The
+# first pass keeps its 640 px network input, which finds large or blurred birds
+# best, so photos with a bird there are unaffected. When it finds none, the
+# 1024 px copy is detected again at 1024 px input: a confident bird there is
+# taken as is; otherwise, with a camera focus point, one bird at the focus point
+# is accepted on either
+#   1. a weak (1024 px) candidate lying mostly on the focus box, or
+#   2. a confident bird in a zoomed window around the focus point that a weak
+#      candidate confirms at the same place.
+# Zoomed windows alone are not trusted: dark leaves against the sky read as
+# birds at 0.3-0.8 once magnified. Calibrated on the 2026-10-02 Century Park set
+# (two disjoint samples of ~320 frames): 25 hidden birds found, every accepted
+# one verified by eye; 1 of 590 random non-bird focus spots accepted (a pine cone).
+FOCUS_CANDIDATE_CONFIDENCE = 0.05  # weakest candidate kept as evidence
+FOCUS_WEAK_CONFIDENCE = 0.10
+FOCUS_WEAK_OVERLAP = 0.5
+FOCUS_ZOOM_DIVISORS = (6.0, 4.0, 2.5)  # window side = image long edge / divisor
+FOCUS_ZOOM_IMGSZ = 640
+FOCUS_ZOOM_OVERLAP = 0.2
+FOCUS_ZOOM_AGREEMENT_IOU = 0.3
+
+Box = Tuple[float, float, float, float]
+
+
+def _area(box: Box) -> float:
+    return max(0.0, box[2] - box[0]) * max(0.0, box[3] - box[1])
+
+
+def _intersection(a: Box, b: Box) -> float:
+    return max(0.0, min(a[2], b[2]) - max(a[0], b[0])) * max(0.0, min(a[3], b[3]) - max(a[1], b[1]))
+
+
+def box_overlap(a: Box, b: Box) -> float:
+    """Intersection over the smaller box: 1.0 when one box lies inside the other."""
+    return _intersection(a, b) / max(1e-6, min(_area(a), _area(b)))
+
+
+def box_iou(a: Box, b: Box) -> float:
+    inter = _intersection(a, b)
+    return inter / max(1e-6, _area(a) + _area(b) - inter)
+
+
+def zoom_window(focus_px: Box, bounds: Tuple[int, int, int, int], side: float) -> Tuple[int, int, int, int]:
+    """Square ``side`` px window centred on the focus box, shifted (not shrunk) inside ``bounds``."""
+    bx1, by1, bx2, by2 = bounds
+    cx, cy = (focus_px[0] + focus_px[2]) / 2.0, (focus_px[1] + focus_px[3]) / 2.0
+
+    def span(center: float, lo: int, hi: int) -> Tuple[int, int]:
+        size = int(min(side, hi - lo))
+        start = int(round(min(max(lo, center - size / 2.0), hi - size)))
+        return start, start + size
+
+    x1, x2 = span(cx, bx1, bx2)
+    y1, y2 = span(cy, by1, by2)
+    return x1, y1, x2, y2
+
+
+@dataclass
+class Recheck:
+    """What the no-bird recheck looked at and what it accepted (full-resolution boxes)."""
+
+    focus_box: Optional[Box]
+    candidates: List[Tuple[float, Box]] = dc_field(default_factory=list)  # weak candidates touching focus
+    windows: List[dict] = dc_field(default_factory=list)  # {"box", "detections": [(conf, box, accepted)]}
+    accepted: List[BirdDetection] = dc_field(default_factory=list)  # detection-image coordinates
+
+    @property
+    def source(self) -> str:
+        return self.accepted[0].source if self.accepted else ""
+
+
 def valid_bounds(image: AnalysisImage) -> Tuple[int, int, int, int]:
     """Pixel bounds of real picture content: the camera frame inside RAW output.
 
@@ -188,6 +265,46 @@ def _resize_long_edge(img: np.ndarray, long_edge: int) -> Tuple[np.ndarray, floa
     if scale >= 1.0:
         return img, 1.0
     return cv2.resize(img, (max(1, round(w * scale)), max(1, round(h * scale))), interpolation=cv2.INTER_AREA), scale
+
+
+def _window_detection(det: BirdDetection, box_full: Box, window, scale: float, small_shape) -> BirdDetection:
+    """A zoomed-window detection expressed like a whole-frame one (detection-image coordinates)."""
+    mask = None
+    if det.mask is not None:
+        x1, y1, x2, y2 = window
+        sh, sw = small_shape
+        sx1, sy1 = int(round(x1 * scale)), int(round(y1 * scale))
+        sx2, sy2 = min(sw, max(sx1 + 1, int(round(x2 * scale)))), min(sh, max(sy1 + 1, int(round(y2 * scale))))
+        part = cv2.resize(np.asarray(det.mask, np.float32), (sx2 - sx1, sy2 - sy1), interpolation=cv2.INTER_AREA)
+        mask = np.zeros((sh, sw), np.uint8)
+        mask[sy1:sy2, sx1:sx2] = (part >= 0.5).astype(np.uint8)
+    return BirdDetection(det.confidence, tuple(v * scale for v in box_full), mask, FOUND_FOCUS_ZOOM)
+
+
+def _focus_part(det: BirdDetection, focus_px: Box, scale: float) -> BirdDetection:
+    """Keep only the mask piece on the focus box, and fit the box to it.
+
+    Weak candidates' masks often carry stray patches of sky and branches next to
+    the bird (DSC05167); their edges would be measured as the bird's.
+    """
+    if det.mask is None:
+        return det
+    mask = (np.asarray(det.mask) > 0).astype(np.uint8)
+    count, labels, stats, _ = cv2.connectedComponentsWithStats(mask, connectivity=8)
+    if count <= 2:
+        return det
+    h, w = mask.shape[:2]
+    fx1, fy1 = max(0, int(focus_px[0] * scale)), max(0, int(focus_px[1] * scale))
+    fx2, fy2 = min(w, int(np.ceil(focus_px[2] * scale)) + 1), min(h, int(np.ceil(focus_px[3] * scale)) + 1)
+    on_focus = np.bincount(labels[fy1:fy2, fx1:fx2].ravel(), minlength=count)
+    on_focus[0] = 0
+    best = int(np.argmax(on_focus)) if on_focus.max() > 0 else 1 + int(np.argmax(stats[1:, cv2.CC_STAT_AREA]))
+    x, y, bw, bh = (int(v) for v in stats[best, :4])
+    b = det.box
+    box = (max(float(x), b[0]), max(float(y), b[1]), min(float(x + bw), b[2]), min(float(y + bh), b[3]))
+    if box[2] <= box[0] or box[3] <= box[1]:
+        box = (float(x), float(y), float(x + bw), float(y + bh))
+    return replace(det, mask=(labels == best).astype(np.uint8), box=box)
 
 
 class BirdSharpnessAnalyzer:
@@ -235,10 +352,18 @@ class BirdSharpnessAnalyzer:
         on_stage(STAGE_DETECT)
         H, W = image.gray.shape[:2]
         small, scale = _resize_long_edge(image.rgb8, DETECT_LONG_EDGE)
-        detections = dedupe_detections(self.models.detect_birds(cv2.cvtColor(small, cv2.COLOR_RGB2BGR)))[:MAX_BIRDS]
+        small_bgr = cv2.cvtColor(small, cv2.COLOR_RGB2BGR)
+        detections = dedupe_detections(self.models.detect_birds(small_bgr, imgsz=DETECT_IMGSZ))[:MAX_BIRDS]
         if tracer is not None:
             tracer.detect(detections, scale, has_masks=bool(getattr(self.models, "has_masks", True)),
                           has_keypoints=bool(getattr(self.models, "has_keypoints", True)))
+        if not detections and not cancelled():
+            if focus_px is _UNSET:
+                focus_px = self._focus_box_px(path, image)
+            recheck = self._recheck(image, small_bgr, scale, focus_px, cancelled)
+            detections = recheck.accepted
+            if tracer is not None:
+                tracer.recheck(recheck)
         on_stage(STAGE_MEASURE)
         if detections:
             birds = [self._measure_bird(image, det, scale, index=i, tracer=tracer) for i, det in enumerate(detections)]
@@ -248,6 +373,57 @@ class BirdSharpnessAnalyzer:
         return self._no_bird_result(path, image, cancelled, tracer,
                                     focus_px=None if focus_px is _UNSET else focus_px,
                                     focus_known=focus_px is not _UNSET)
+
+    def _recheck(self, image: AnalysisImage, small_bgr, scale: float, focus_px: Optional[Box],
+                 cancelled) -> Recheck:
+        """Second look when the first pass found no bird (see the FOCUS_* notes above)."""
+        H, W = image.gray.shape[:2]
+        candidates = self.models.detect_birds(small_bgr, conf=FOCUS_CANDIDATE_CONFIDENCE, imgsz=RECHECK_IMGSZ)
+        check = Recheck(None if focus_px is None else tuple(focus_px))
+        confident = [replace(d, source=FOUND_FULL_FINE) for d in candidates if d.confidence >= BIRD_CONFIDENCE_MIN]
+        if confident:
+            check.accepted = dedupe_detections(confident)[:MAX_BIRDS]
+            return check
+        if focus_px is None:
+            return check
+        near = []
+        for det in candidates:
+            box = tuple(v / scale for v in det.box)
+            if _intersection(box, focus_px) > 0:
+                near.append((det, box))
+        check.candidates = [(d.confidence, b) for d, b in near]
+        # One bird at the focus point: a weak candidate split in head and body must not count twice.
+        weak = [d for d, b in near
+                if d.confidence >= FOCUS_WEAK_CONFIDENCE and box_overlap(b, focus_px) >= FOCUS_WEAK_OVERLAP]
+        if weak:
+            best = max(weak, key=lambda d: d.confidence)
+            check.accepted = [_focus_part(replace(best, source=FOUND_FOCUS_WEAK), focus_px, scale)]
+            return check
+        anchors = [b for _, b in near if box_overlap(b, focus_px) >= FOCUS_ZOOM_OVERLAP]
+        if not anchors:
+            return check  # nothing bird-like at the focus point: skip the zoomed inferences
+        bounds = valid_bounds(image)
+        small_shape = small_bgr.shape[:2]
+        for divisor in FOCUS_ZOOM_DIVISORS:
+            if cancelled():
+                break
+            win = zoom_window(focus_px, bounds, max(H, W) / divisor)
+            x1, y1, x2, y2 = win
+            crop = cv2.cvtColor(np.ascontiguousarray(image.rgb8[y1:y2, x1:x2]), cv2.COLOR_RGB2BGR)
+            found = []
+            for det in self.models.detect_birds(crop, conf=BIRD_CONFIDENCE_MIN, imgsz=FOCUS_ZOOM_IMGSZ):
+                box = (det.box[0] + x1, det.box[1] + y1, det.box[2] + x1, det.box[3] + y1)
+                ok = (box_overlap(box, focus_px) >= FOCUS_ZOOM_OVERLAP
+                      and any(box_iou(box, a) >= FOCUS_ZOOM_AGREEMENT_IOU for a in anchors))
+                found.append((det, box, ok))
+            check.windows.append({"box": win, "divisor": divisor,
+                                  "detections": [(d.confidence, b, ok) for d, b, ok in found]})
+            accepted = [(d, b) for d, b, ok in found if ok]
+            if accepted:
+                det, box = max(accepted, key=lambda item: item[0].confidence)
+                check.accepted = [_focus_part(_window_detection(det, box, win, scale, small_shape), focus_px, scale)]
+                break
+        return check
 
     def _bird_result(self, path: str, birds: List[BirdMeasurement], long_edge: int) -> BirdSharpnessResult:
         best = max(birds, key=BirdMeasurement.rank)
@@ -365,6 +541,7 @@ class BirdSharpnessAnalyzer:
             head_radius=None if radius is None else round(float(radius), 1),
             head_edges=head_stats.edge_count if head_stats is not None else 0,
             masked=det.mask is not None,
+            found_by=getattr(det, "source", FOUND_FULL),
         )
         if tracer is not None:
             tracer.bird(index, image, (X1, Y1, X2, Y2), bird_px, body, head, trace_keypoints, selection,

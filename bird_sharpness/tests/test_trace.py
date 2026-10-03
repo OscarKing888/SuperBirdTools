@@ -62,10 +62,11 @@ def test_focus_and_full_image_traces(monkeypatch) -> None:
     scene = _scene(texture=[(900, 600, 200, 0.8)])
     result, _p, trace = _run(monkeypatch, scene, [], focus=lambda p, w, h: (0.495, 0.495, 0.505, 0.505))
     assert result.region == bsf.REGION_FOCUS
-    assert [s.key for s in trace.steps_for()] == ["decode", "detect", "focus", "edges", "distribution", "result"]
+    assert [s.key for s in trace.steps_for()] == ["decode", "detect", "recheck", "focus", "edges", "distribution",
+                                                    "result"]
     result, _p, trace = _run(monkeypatch, scene, [])
     assert result.region == bsf.REGION_FULL
-    assert [s.key for s in trace.steps_for()] == ["decode", "detect", "tiles", "result"]
+    assert [s.key for s in trace.steps_for()] == ["decode", "detect", "recheck", "tiles", "result"]
 
 
 def test_raw_padding_outside_camera_frame_is_never_measured(monkeypatch) -> None:
