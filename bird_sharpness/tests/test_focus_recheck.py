@@ -186,3 +186,15 @@ def test_stray_mask_patches_away_from_the_focus_point_are_dropped(monkeypatch) -
     x1, y1, x2, y2 = result.bird_box
     assert y2 < 800 and abs((y1 + y2) / 2 - 600) < 20  # box refitted to the bird piece
     assert result.sigma == pytest.approx(_confident_sigma(monkeypatch), abs=0.02)
+
+
+def test_find_missed_bird_runs_only_the_recheck(monkeypatch) -> None:
+    # SuperViewer's preview box has its own first pass and asks only for the recheck.
+    _install_image(monkeypatch, _scene([(900, 600, 150, 0.3)], size=SIZE))
+    models = _CamouflageStub([(900, 600, 150, 0.15)])
+    missed = BirdSharpnessAnalyzer(models, focus_provider=_focus).find_missed_bird("夜鹰.ARW")
+    assert [c[2] for c in models.calls] == [RECHECK_IMGSZ]
+    assert missed.source == FOUND_FOCUS_WEAK and missed.camera_crop is None
+    assert missed.box == pytest.approx((750 / SIZE[1], 450 / SIZE[0], 1050 / SIZE[1], 750 / SIZE[0]), abs=0.01)
+    nothing = BirdSharpnessAnalyzer(_CamouflageStub([]), focus_provider=_focus).find_missed_bird("夜鹰.ARW")
+    assert nothing is None

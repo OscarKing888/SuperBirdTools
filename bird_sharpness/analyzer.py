@@ -242,6 +242,20 @@ class Recheck:
         return self.accepted[0].source if self.accepted else ""
 
 
+@dataclass(frozen=True)
+class MissedBird:
+    """A bird found by :meth:`BirdSharpnessAnalyzer.find_missed_bird`.
+
+    ``box`` is normalised to the decoded pixels (display orientation), which for
+    RAW include the sensor margins outside ``camera_crop``.
+    """
+
+    box: Box
+    camera_crop: Optional[Tuple[float, float, float, float]]
+    source: str
+    confidence: float
+
+
 def valid_bounds(image: AnalysisImage) -> Tuple[int, int, int, int]:
     """Pixel bounds of real picture content: the camera frame inside RAW output.
 
@@ -424,6 +438,26 @@ class BirdSharpnessAnalyzer:
                 check.accepted = [_focus_part(_window_detection(det, box, win, scale, small_shape), focus_px, scale)]
                 break
         return check
+
+    def find_missed_bird(self, path: str, *, cancelled: Callable[[], bool] = lambda: False) -> Optional[MissedBird]:
+        """Run only the no-bird recheck, for callers with their own first pass.
+
+        SuperViewer's preview bird box detects on a small embedded preview; when
+        that finds nothing it asks here, so camouflaged birds get the same
+        calibrated rules (full-resolution decode for the zoomed windows).
+        """
+        image = load_analysis_image(path)
+        if cancelled():
+            return None
+        H, W = image.gray.shape[:2]
+        small, scale = _resize_long_edge(image.rgb8, DETECT_LONG_EDGE)
+        focus_px = self._focus_box_px(path, image)
+        check = self._recheck(image, cv2.cvtColor(small, cv2.COLOR_RGB2BGR), scale, focus_px, cancelled)
+        if not check.accepted or cancelled():
+            return None
+        det = max(check.accepted, key=lambda d: d.confidence * _area(d.box))
+        x1, y1, x2, y2 = (v / scale for v in det.box)
+        return MissedBird((x1 / W, y1 / H, x2 / W, y2 / H), image.camera_crop, det.source, float(det.confidence))
 
     def _bird_result(self, path: str, birds: List[BirdMeasurement], long_edge: int) -> BirdSharpnessResult:
         best = max(birds, key=BirdMeasurement.rank)

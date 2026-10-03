@@ -21,7 +21,9 @@ from app_common.image_formats import HEIF_EXTENSIONS, PHOTOSHOP_EXTENSIONS, RAW_
 from app_common.log import get_logger
 
 _log = get_logger("superviewer.bird_body")
-ALGORITHM_VERSION = "bird-body-v1"
+ALGORITHM_VERSION = "bird-body-v2"  # v2: camouflaged-bird recheck when the first pass finds none
+# v1 boxes stay valid (the first pass is unchanged); only v1 "no bird" entries are re-detected.
+_COMPATIBLE_BOX_VERSIONS = ("bird-body-v1",)
 FIELD_CACHE = "bird_body_cache"
 MAX_DETECT_LONG_EDGE = 1280
 _MODEL_NAMES = ("yolo11n.pt", "yolo11s.pt", "yolov8n.pt")
@@ -76,7 +78,10 @@ def result_from_metadata(path: str, metadata: dict, fingerprint: str | None = No
         return None
     try:
         data = json.loads(value)
-        if not isinstance(data, dict) or data.get("version") != ALGORITHM_VERSION:
+        if not isinstance(data, dict):
+            return None
+        version = data.get("version")
+        if version != ALGORITHM_VERSION and not (version in _COMPATIBLE_BOX_VERSIONS and data.get("box") is not None):
             return None
         if data.get("geometry") != "camera" or "box" not in data:
             return None
@@ -88,7 +93,7 @@ def result_from_metadata(path: str, metadata: dict, fingerprint: str | None = No
         # Do not quietly repair corrupt/out-of-frame saved coordinates into a hit.
         if raw_box is not None and tuple(raw_box) != box:
             return None
-        return BirdBodyResult(box, source)
+        return BirdBodyResult(box, source, version)
     except (ValueError, TypeError, OverflowError):
         return None
 
@@ -238,6 +243,59 @@ class BirdBodyDetector:
 @lru_cache(maxsize=1)
 def default_detector() -> BirdBodyDetector:
     return BirdBodyDetector()
+
+
+def _viewer_focus_box(path: str, width: int, height: int):
+    """Worker-thread focus lookup shared with the preview overlay (metadata, then report.db)."""
+    from .focus_preview_loader import _load_focus_box_for_preview
+
+    return _load_focus_box_for_preview(path, width, height, allow_report_db_fallback=True)
+
+
+class MissedBirdFinder:
+    """Second look for camouflaged birds, shared with bird sharpness (``find_missed_bird``).
+
+    Runs only when the preview's first pass found no bird. Uses the sharpness
+    detector (segmentation model preferred) without the eye model.
+    """
+
+    def __init__(self):
+        self._lock = threading.Lock()
+        self._analyzer = None
+        self._unavailable = ""
+
+    def _get(self):
+        with self._lock:
+            if self._analyzer is None and not self._unavailable:
+                from bird_sharpness.analyzer import BirdSharpnessAnalyzer
+                from bird_sharpness.models import BirdSharpnessModels, ModelPaths, check_runtime, resolve_model_paths
+
+                reason = check_runtime()
+                if reason:
+                    self._unavailable = reason
+                    _log.info("[bird.body] camouflaged-bird recheck unavailable: %s", reason)
+                else:
+                    paths = resolve_model_paths()
+                    models = BirdSharpnessModels(ModelPaths(paths.segmentation, None, paths.detection))
+                    self._analyzer = BirdSharpnessAnalyzer(models, focus_provider=_viewer_focus_box)
+            return self._analyzer
+
+    def find(self, path: str, *, cancelled=lambda: False):
+        """Normalised camera-frame box of a missed bird, or ``None``."""
+        analyzer = self._get()
+        if analyzer is None or cancelled():
+            return None
+        missed = analyzer.find_missed_bird(path, cancelled=cancelled)
+        if missed is None:
+            return None
+        _log.info("[bird.body] recheck found bird path=%r source=%s conf=%.2f",
+                  path, missed.source, missed.confidence)
+        return camera_box_from_raw(missed.box, missed.camera_crop)
+
+
+@lru_cache(maxsize=1)
+def default_missed_bird_finder() -> MissedBirdFinder:
+    return MissedBirdFinder()
 
 
 def main(argv=None) -> int:
