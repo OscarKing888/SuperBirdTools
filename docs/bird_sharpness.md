@@ -1,12 +1,12 @@
 # 鸟清晰度检测（bird_sharpness）
 
-判断“对上焦了，但鸟本身是否清晰”。常规 Laplacian 方差 / Tenengrad 在高 ISO、暗色羽毛、叶子遮挡的鸟片上失效：像素级梯度主要反映噪点和对比度，框内的清晰树叶也会冒充鸟。本模块改为在**全分辨率**下测量**鸟头部边缘的模糊半径**（像素），与人眼 100% 查看的结论一致。
+判断“对上焦了，但鸟本身是否清晰”。常规 Laplacian 方差 / Tenengrad 在高 ISO、暗色羽毛、叶子遮挡的鸟片上失效：像素级梯度主要反映噪点和对比度，框内的清晰树叶也会冒充鸟。本模块改为在**全分辨率**下测量**鸟头部边缘的模糊半径**（像素），与人眼 100% 查看的结论一致。与 SuperPicky Tenengrad 锐度的区别和实测对比见 [对比文档](bird_sharpness_vs_superpicky.md)。
 
 ## 算法
 
 代码：[analyzer.py](../bird_sharpness/analyzer.py)、[metrics.py](../bird_sharpness/metrics.py)、[focus.py](../bird_sharpness/focus.py)、[scoring.py](../bird_sharpness/scoring.py)。整套流程在一个 `BirdSharpnessAction`（WorkerAction）里执行。
 
-1. **解码全分辨率**：RAW 用 LibRaw（LINEAR 去马赛克，绿色通道），不用内嵌预览（Sony 仅 1616 px，100% 下 1 px 的软在缩略图上看不出）。同时记录相机 JPEG 画幅在 RAW 输出中的位置（`camera_crop`），焦点框按它映射。见 [image_source.py](../bird_sharpness/image_source.py)。
+1. **解码全分辨率**：RAW 用 LibRaw（LINEAR 去马赛克，绿色通道），不用内嵌预览：内嵌预览是相机处理过的 JPEG，机内锐化会让糊掉的边缘重新变“锐”，降噪和 8 位压缩也会改变边缘宽度；有的预览还很小（如 Sony ARW 的 PreviewImage 只有 1616 px，100% 下 1 px 的软看不出）。并非所有内嵌预览都小——2026-10-02 这批 ARW 内嵌的就是 5616×3744 全尺寸 JPEG，但同样经过了机内处理。同时记录相机 JPEG 画幅在 RAW 输出中的位置（`camera_crop`），焦点框按它映射。见 [image_source.py](../bird_sharpness/image_source.py)。
 2. **鸟体识别（全部鸟）**：在 1024 px 副本上（网络输入 640 px，即模型训练尺寸）找出所有 bird（置信度 ≥ 0.25，最多 8 只）；面积 ≥ 70% 落在更强检测框内的检测视为同一只鸟被树枝切开，合并。有分割模型（`yolo11l-seg.pt` 等）时用每只鸟的像素掩膜；只有检测模型（`yolo11n.pt`，打包版 Viewer 自带）时用鸟框内核（四边各内缩 8%）。
 3. **逐只鸟只算自己的像素**：每只鸟单独得到一组清晰度。
    - 有 CUB-200 关键点模型（与 SuperPicky 同一权重）且看得到眼：头部区域 = 以眼为圆心、半径 1.2×眼喙距的圆 ∩ 该鸟像素，取头部模糊半径；看不到眼：用身体 σ，分数封顶 299（`no_eye`）。

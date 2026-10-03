@@ -332,7 +332,7 @@ class AnalysisTracer:
                     f"{int(focus_px[2] - focus_px[0])} × {int(focus_px[3] - focus_px[1])} px")]
         self.trace.common.append(TraceStep(
             STEP_DECODE, "解码全分辨率",
-            "清晰度以全分辨率像素计（100% 观看）。RAW 不用 1616 px 内嵌预览，而用 LibRaw 解码；"
+            "清晰度以全分辨率像素计（100% 观看）。RAW 不用内嵌预览（相机 JPEG 经过机内锐化、降噪，有的还很小），而用 LibRaw 解码；"
             "焦点框按相机画幅映射到解码像素上。",
             img, "full", metrics, legend=legend))
 

@@ -14,6 +14,7 @@
 - [SuperBirdStamp 架构与功能定位](SuperBirdStamp/docs/ARCHITECTURE.md)
 - [SuperViewer 批量 RGB 降噪、模型预下载与离线打包](docs/image_denoise.md)
 - [鸟清晰度检测：算法、阈值、存储与模型](docs/bird_sharpness.md)
+- [鸟清晰度检测与 SuperPicky 锐度算法对比](docs/bird_sharpness_vs_superpicky.md)
 
 ## 鸟识别模型与 SuperPicky
 
@@ -41,7 +42,7 @@ SuperPicky 的鸟眼模型：
    - Windows：`%ProgramFiles%\SuperPicky`、`%LOCALAPPDATA%\SuperPicky` 下的 `_internal\models` 或 `models`；
 5. 与本仓库同级的 SuperPicky 源码目录 `SuperPicky/models`。
 
-所以要获得完整的鸟清晰度检测，请安装 SuperPicky，或把上面两个文件放进 `SuperViewer/models`。打包版 SuperViewer 目前只带 `yolo11n.pt`，没装 SuperPicky 的电脑只能按鸟框测整只鸟，检测进度窗口会提示。SuperPicky 自带的其他模型（飞行判断 `superFlier_efficientnet.pth`、鸟种识别 `model20240824.pth`、美学评分 `cfanet_iaa_ava_res50`）目前没有使用。细节见 [鸟清晰度检测](docs/bird_sharpness.md#模型)。
+所以要获得完整的鸟清晰度检测，请安装 SuperPicky，或把上面两个文件放进 `SuperViewer/models`。打包版 SuperViewer 目前只带 `yolo11n.pt`，没装 SuperPicky 的电脑只能按鸟框测整只鸟，检测进度窗口会提示。SuperPicky 自带的其他模型（飞行判断 `superFlier_efficientnet.pth`、鸟种识别 `model20240824.pth`、美学评分 `cfanet_iaa_ava_res50`）目前没有使用。细节见 [鸟清晰度检测](docs/bird_sharpness.md#模型)；两者清晰度算法的区别与实测对比见 [与 SuperPicky 锐度算法对比](docs/bird_sharpness_vs_superpicky.md)。
 
 ## 目录原则
 

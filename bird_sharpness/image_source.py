@@ -1,8 +1,10 @@
 """Full-resolution image decoding for sharpness analysis.
 
 Blur radii are measured in pixels of the camera's full output, so RAW files are
-demosaiced with LibRaw instead of using the small embedded preview (Sony's is
-only 1616 px wide, where a 1 px softness at 100% becomes invisible).
+demosaiced with LibRaw instead of using the embedded preview: that is a camera
+JPEG whose in-camera sharpening, noise reduction and 8-bit compression change
+edge widths, and on some files it is also small (Sony's ARW PreviewImage is
+1616 px wide, where a 1 px softness at 100% becomes invisible).
 """
 
 from __future__ import annotations
