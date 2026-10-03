@@ -227,6 +227,7 @@ class SuperViewerTaggedFileListPanel(FileListPanel):
     use_report_db = True
     include_videos = True
     use_unified_worker_pool = True
+    show_thumbnail_sort_controls = True
     video_playback_stop_requested = pyqtSignal()
     playback_state_changed = pyqtSignal(bool)
     use_preview_cache = True
