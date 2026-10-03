@@ -36,6 +36,7 @@ DET_MODEL_NAMES = ("yolo11n.pt", "yolo11s.pt", "yolov8n.pt")
 BIRD_CONFIDENCE_MIN = 0.25
 # How a bird was found (BirdDetection.source).
 FOUND_FULL = "full"              # whole frame, confidence >= BIRD_CONFIDENCE_MIN
+FOUND_FULL_LIFTED = "full_lifted"  # whole frame with dark mid-tones lifted
 FOUND_FULL_FINE = "full_fine"    # whole frame at the finer recheck input size
 FOUND_FOCUS_WEAK = "focus_weak"  # weak whole-frame candidate lying on the camera focus box
 FOUND_FOCUS_ZOOM = "focus_zoom"  # zoomed window around the focus point, confirmed by a weak candidate

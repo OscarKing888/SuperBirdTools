@@ -35,7 +35,7 @@ from .focus import FocusProvider, default_focus_box, focus_window
 from .image_source import AnalysisImage, load_analysis_image
 from .metrics import EdgeBlurField, edge_stats, full_image_blur
 from .models import (BIRD_CONFIDENCE_MIN, FOUND_FOCUS_WEAK, FOUND_FOCUS_ZOOM, FOUND_FULL, FOUND_FULL_FINE,
-                     BirdDetection, BirdSharpnessModels)
+                     FOUND_FULL_LIFTED, BirdDetection, BirdSharpnessModels)
 from .scoring import ALGORITHM_VERSION, VERDICT_ERROR, VERDICT_NO_BIRD, blank_head_sigma, classify, sigma_to_score
 
 _log = get_logger("bird_sharpness")
@@ -173,9 +173,11 @@ def dedupe_detections(detections: List[BirdDetection]) -> List[BirdDetection]:
 
 # Recheck for camouflaged birds (DSC05167: a nightjar on a branch at dusk). The
 # first pass keeps its 640 px network input, which finds large or blurred birds
-# best, so photos with a bird there are unaffected. When it finds none, the
-# 1024 px copy is detected again at 1024 px input: a confident bird there is
-# taken as is; otherwise, with a camera focus point, one bird at the focus point
+# best, so photos with a bird there are unaffected. When it finds none:
+# 0. a dark frame (backlit dusk: bright sky, dark bird) is detected again with
+#    its mid-tones lifted, like the camera JPEG's tone curve (LIFT_* below);
+# then the 1024 px copy is detected again at 1024 px input: a confident bird there
+# is taken as is; otherwise, with a camera focus point, one bird at the focus point
 # is accepted on either
 #   1. a weak (1024 px) candidate lying mostly on the focus box, or
 #   2. a confident bird in a zoomed window around the focus point that a weak
@@ -184,6 +186,16 @@ def dedupe_detections(detections: List[BirdDetection]) -> List[BirdDetection]:
 # birds at 0.3-0.8 once magnified. Calibrated on the 2026-10-02 Century Park set
 # (two disjoint samples of ~320 frames): 25 hidden birds found, every accepted
 # one verified by eye; 1 of 590 random non-bird focus spots accepted (a pine cone).
+# Mid-tone lift for detection only (never measured): gamma bringing the median
+# luma to LIFT_MEDIAN_TARGET. A plain gain does nothing here because the sky is
+# already bright. Lifting before the first pass instead would lose 4 and move 27
+# of 329 found birds and add 4 false birds (branches, trunk knots) next to real
+# ones; as a fallback it found 14 of 33 missed birds (all real) in a 362-frame
+# sample of the 2026-10-02 set.
+LIFT_MEDIAN_TARGET = 100.0
+LIFT_GAMMA_MIN = 0.35
+LIFT_DARK_GAMMA = 0.9  # lift only when the gamma would be below this (median luma < ~85)
+
 FOCUS_CANDIDATE_CONFIDENCE = 0.05  # weakest candidate kept as evidence
 FOCUS_WEAK_CONFIDENCE = 0.10
 FOCUS_WEAK_OVERLAP = 0.5
@@ -228,11 +240,25 @@ def zoom_window(focus_px: Box, bounds: Tuple[int, int, int, int], side: float) -
     return x1, y1, x2, y2
 
 
+def lift_midtones(img: np.ndarray, *, bgr: bool = False) -> Tuple[np.ndarray, float]:
+    """``(lifted copy, gamma)`` of a uint8 colour image; gamma 1.0 (same array) when not dark."""
+    weights = np.array([0.114, 0.587, 0.299] if bgr else [0.299, 0.587, 0.114], np.float32)
+    median = float(np.median(img.reshape(-1, 3)[::7].astype(np.float32) @ weights)) / 255.0
+    median = min(max(median, 1e-3), 0.999)
+    gamma = float(np.log(LIFT_MEDIAN_TARGET / 255.0) / np.log(median))
+    gamma = min(1.0, max(LIFT_GAMMA_MIN, gamma))
+    if gamma >= 1.0:
+        return img, 1.0
+    lut = np.clip(np.power(np.arange(256) / 255.0, gamma) * 255.0 + 0.5, 0, 255).astype(np.uint8)
+    return lut[img], gamma
+
+
 @dataclass
 class Recheck:
     """What the no-bird recheck looked at and what it accepted (full-resolution boxes)."""
 
     focus_box: Optional[Box]
+    lift_gamma: Optional[float] = None  # set when the dark-frame lifted pass ran
     candidates: List[Tuple[float, Box]] = dc_field(default_factory=list)  # weak candidates touching focus
     windows: List[dict] = dc_field(default_factory=list)  # {"box", "detections": [(conf, box, accepted)]}
     accepted: List[BirdDetection] = dc_field(default_factory=list)  # detection-image coordinates
@@ -295,11 +321,11 @@ def _window_detection(det: BirdDetection, box_full: Box, window, scale: float, s
     return BirdDetection(det.confidence, tuple(v * scale for v in box_full), mask, FOUND_FOCUS_ZOOM)
 
 
-def _focus_part(det: BirdDetection, focus_px: Box, scale: float) -> BirdDetection:
-    """Keep only the mask piece on the focus box, and fit the box to it.
+def _focus_part(det: BirdDetection, focus_px: Optional[Box], scale: float) -> BirdDetection:
+    """Keep only the mask piece on the focus box (the largest without one), and fit the box to it.
 
-    Weak candidates' masks often carry stray patches of sky and branches next to
-    the bird (DSC05167); their edges would be measured as the bird's.
+    Recheck masks often carry stray patches of sky and branches next to the bird
+    (DSC05167); their edges would be measured as the bird's.
     """
     if det.mask is None:
         return det
@@ -308,10 +334,12 @@ def _focus_part(det: BirdDetection, focus_px: Box, scale: float) -> BirdDetectio
     if count <= 2:
         return det
     h, w = mask.shape[:2]
-    fx1, fy1 = max(0, int(focus_px[0] * scale)), max(0, int(focus_px[1] * scale))
-    fx2, fy2 = min(w, int(np.ceil(focus_px[2] * scale)) + 1), min(h, int(np.ceil(focus_px[3] * scale)) + 1)
-    on_focus = np.bincount(labels[fy1:fy2, fx1:fx2].ravel(), minlength=count)
-    on_focus[0] = 0
+    on_focus = np.zeros(count, np.int64)
+    if focus_px is not None:
+        fx1, fy1 = max(0, int(focus_px[0] * scale)), max(0, int(focus_px[1] * scale))
+        fx2, fy2 = min(w, int(np.ceil(focus_px[2] * scale)) + 1), min(h, int(np.ceil(focus_px[3] * scale)) + 1)
+        on_focus = np.bincount(labels[fy1:fy2, fx1:fx2].ravel(), minlength=count)
+        on_focus[0] = 0
     best = int(np.argmax(on_focus)) if on_focus.max() > 0 else 1 + int(np.argmax(stats[1:, cv2.CC_STAT_AREA]))
     x, y, bw, bh = (int(v) for v in stats[best, :4])
     b = det.box
@@ -392,8 +420,18 @@ class BirdSharpnessAnalyzer:
                  cancelled) -> Recheck:
         """Second look when the first pass found no bird (see the FOCUS_* notes above)."""
         H, W = image.gray.shape[:2]
-        candidates = self.models.detect_birds(small_bgr, conf=FOCUS_CANDIDATE_CONFIDENCE, imgsz=RECHECK_IMGSZ)
         check = Recheck(None if focus_px is None else tuple(focus_px))
+        lifted, gamma = lift_midtones(small_bgr, bgr=True)
+        if gamma < LIFT_DARK_GAMMA:
+            check.lift_gamma = gamma
+            found = self.models.detect_birds(lifted, imgsz=DETECT_IMGSZ)
+            if found:
+                check.accepted = [_focus_part(replace(d, source=FOUND_FULL_LIFTED), focus_px, scale)
+                                  for d in dedupe_detections(found)[:MAX_BIRDS]]
+                return check
+            if cancelled():
+                return check
+        candidates = self.models.detect_birds(small_bgr, conf=FOCUS_CANDIDATE_CONFIDENCE, imgsz=RECHECK_IMGSZ)
         confident = [replace(d, source=FOUND_FULL_FINE) for d in candidates if d.confidence >= BIRD_CONFIDENCE_MIN]
         if confident:
             check.accepted = dedupe_detections(confident)[:MAX_BIRDS]
