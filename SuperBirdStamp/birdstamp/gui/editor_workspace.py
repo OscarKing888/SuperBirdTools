@@ -48,6 +48,8 @@ _workspace_log = get_logger("birdstamp.workspace")
 _LAST_WORKSPACE_PATH_KEY = "last_workspace_path"
 _RECENT_WORKSPACE_PATHS_KEY = "recent_workspace_paths"
 _RECENT_WORKSPACE_LIMIT = 10
+# 仅写入会话自动保存文件：记录它对应的已命名工作区，重启后继续自动保存到该文件。
+_AUTOSAVE_CURRENT_WORKSPACE_KEY = "current_workspace_path"
 _PIPELINE_STAGE_ENABLED_VALUE_KEYS = (
     STAGE_TEMPLATE_CROP_ENABLED_KEY,
     STAGE_RESIZE_LIMIT_ENABLED_KEY,
@@ -106,7 +108,9 @@ class _BirdStampWorkspaceMixin:
     @_workspace_path.setter
     def _workspace_path(self, value: Path | None) -> None:
         # 所有保存/打开/新建/去抖动切换都经由此赋值，统一刷新标题栏中的工作区路径。
+        # 新路径对应的文件刚写入或刚读取，与界面一致，因此清除待写回标记。
         self.__dict__["_workspace_path_value"] = value
+        self._workspace_dirty = False
         refresh = getattr(self, "_refresh_window_title", None)
         if callable(refresh):
             refresh()
@@ -196,6 +200,14 @@ class _BirdStampWorkspaceMixin:
             self._workspace_autosave_suspend_depth = max(0, depth)
 
     def _schedule_workspace_autosave(self) -> None:
+        """参数修改：同时写回会话自动保存文件和当前已命名工作区。"""
+        if not self._workspace_autosave_enabled():
+            return
+        self._workspace_dirty = True
+        self._schedule_session_autosave()
+
+    def _schedule_session_autosave(self) -> None:
+        """仅刷新会话自动保存文件；打开工作区本身不改写用户的工作区文件。"""
         if not self._workspace_autosave_enabled():
             return
         timer = getattr(self, "_workspace_autosave_timer", None)
@@ -209,12 +221,39 @@ class _BirdStampWorkspaceMixin:
     def _autosave_workspace_now(self) -> None:
         if not self._workspace_autosave_enabled():
             return
+        current_path = self._workspace_path
         try:
             workspace_path = self._workspace_autosave_path()
             payload = self._collect_workspace_payload(workspace_path)
+            if isinstance(current_path, Path):
+                payload[_AUTOSAVE_CURRENT_WORKSPACE_KEY] = str(current_path)
             write_workspace_json(workspace_path, payload)
         except Exception as exc:
             _workspace_log.warning("workspace autosave failed: %s", exc)
+        if not (getattr(self, "_workspace_dirty", False) and isinstance(current_path, Path)):
+            return
+        try:
+            write_workspace_json(current_path, self._collect_workspace_payload(current_path))
+        except Exception as exc:
+            # 保留待写回标记，下一次参数修改或关闭窗口时重试。
+            _workspace_log.warning("workspace autosave to %s failed: %s", current_path, exc)
+            self._set_status(f"工作区自动保存失败：{exc}")
+            return
+        self._workspace_dirty = False
+
+    def _flush_pending_workspace_autosave(self) -> None:
+        timer = getattr(self, "_workspace_autosave_timer", None)
+        if timer is None or not timer.isActive():
+            return
+        timer.stop()
+        self._autosave_workspace_now()
+
+    def _recovered_workspace_path(self, payload: dict[str, Any]) -> Path | None:
+        raw = payload.get(_AUTOSAVE_CURRENT_WORKSPACE_KEY) if isinstance(payload, dict) else None
+        if not isinstance(raw, str) or not raw.strip():
+            return None
+        path = Path(raw)
+        return path if path.is_file() else None
 
     def _restore_autosave_workspace_on_startup(self) -> bool:
         workspace_path = self._workspace_autosave_path()
@@ -235,6 +274,7 @@ class _BirdStampWorkspaceMixin:
                 status_label="已恢复自动保存工作区",
                 mark_as_current_workspace=False,
                 autosave_after_restore=False,
+                recovered_workspace_path=self._recovered_workspace_path(payload),
             )
         except Exception as exc:
             _workspace_log.warning("workspace autosave restore failed: %s", exc)
@@ -824,6 +864,7 @@ class _BirdStampWorkspaceMixin:
                 missing_template_names = set()
             status_label = str(context.get("status_label") or "工作区已加载")
             mark_as_current_workspace = bool(context.get("mark_as_current_workspace", True))
+            recovered_workspace_path = context.get("recovered_workspace_path")
             preview_scale_percent = context.get("preview_scale_percent")
             selected_photos = context.get("selected_photos")
             if not isinstance(selected_photos, list):
@@ -869,6 +910,8 @@ class _BirdStampWorkspaceMixin:
             if mark_as_current_workspace and isinstance(workspace_path, Path):
                 self._workspace_path = workspace_path
                 self._save_workspace_last_path(workspace_path)
+            elif isinstance(recovered_workspace_path, Path):
+                self._workspace_path = recovered_workspace_path
             else:
                 self._workspace_path = None
 
@@ -901,7 +944,7 @@ class _BirdStampWorkspaceMixin:
 
             self._restore_sequence_workspace_state(context.get("sequence_preview_state"))
             if bool(context.get("autosave_after_restore", True)):
-                self._schedule_workspace_autosave()
+                self._schedule_session_autosave()
 
     def _restore_workspace_payload(
         self,
@@ -911,10 +954,13 @@ class _BirdStampWorkspaceMixin:
         status_label: str = "工作区已加载",
         mark_as_current_workspace: bool = True,
         autosave_after_restore: bool = True,
+        recovered_workspace_path: Path | None = None,
     ) -> None:
         if self._video_export_worker is not None and self._video_export_worker.isRunning():
             self._show_error("视频导出进行中", "请先中断当前视频导出，再加载工作区。")
             return
+        # 切换前把尚未写回的参数修改保存到原工作区。
+        self._flush_pending_workspace_autosave()
 
         self._cancel_workspace_restore_in_progress()
 
@@ -1044,6 +1090,7 @@ class _BirdStampWorkspaceMixin:
                 "status_label": status_label,
                 "mark_as_current_workspace": mark_as_current_workspace,
                 "autosave_after_restore": autosave_after_restore,
+                "recovered_workspace_path": recovered_workspace_path,
                 "preview_scale_percent": preview_scale_percent,
                 "sequence_preview_state": editor_state.get("sequence_preview"),
                 "selected_photos": selected_photos,
