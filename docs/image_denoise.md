@@ -15,7 +15,7 @@ SuperViewer 使用本地 NAFNet-SIDD width64 模型对照片进行 RGB 降噪。
 
 成片为 `<原主干>_denoised.tif/jpg`，对应同名 `.xmp`；冲突自动追加 `_2` 等编号。比较名称时统一 Unicode 规范化并忽略大小写。目录扫描先固定源文件集合，排除隐藏缓存目录、默认/指定的降噪子目录以及当前固定输出目录，不跟随目录符号链接。目录扫描也跳过已有 `_denoised` 成片；需要再次处理时可显式选择该文件。
 
-预览工具栏的来源按钮按“默认预览 → 显示 RAW → 显示降噪”循环，非 RAW 照片跳过 RAW，A/B 两侧独立记忆本会话选择。“显示降噪”只查找已有成片，缺失或损坏时回退原图并在预览状态中提示。文件查找、XMP 校验及成片解码都在完整预览 worker 中执行；长按仍显示原照片的精确档位缩略图，松键后才升级成片。当前照片的降噪任务完成后，已处于降噪模式的视口自动刷新。
+两款应用预览工具栏的来源按钮按“默认预览 → 显示 RAW → 显示降噪”循环；右侧箭头展开互斥单选菜单，可直接选择目标来源。菜单勾选与该视口实际模式同步，非 RAW 照片跳过 RAW，A/B 两侧独立记忆本会话选择。“显示降噪”只查找已有成片，缺失或损坏时回退原图并在预览状态中提示。文件查找、XMP 校验及成片解码都在完整预览 worker 中执行；长按仍显示原照片的精确档位缩略图，松键后才升级成片。当前照片的降噪任务完成后，已处于降噪模式的视口自动刷新。
 
 [`preview.py`](../image_denoise/preview.py) 通过成片 XMP 中的源路径、文件大小、修改时间及 RAW 裁切几何验证对应关系，不靠固定输出目录中的同名文件猜测。旧成片仅在源子目录且同名来源无歧义时兼容。GUI 自选输出位置记录在本机用户状态目录的 `denoise_previews.json`（最多 2048 项）；重新打开 Viewer 后仍可查找，索引只提供候选提示，实际成片仍须通过来源校验。源照片及其 XMP 不因新增索引而修改。
 
@@ -23,7 +23,7 @@ SuperViewer 使用本地 NAFNet-SIDD width64 模型对照片进行 RGB 降噪。
 
 ## 算法与数据保留
 
-无 Qt 核心在 [`image_denoise`](../image_denoise/)，入口为 `denoise_file()`、`DenoiseOptions`、`DenoiseResult`。RAW 经相机白平衡、全尺寸 16 位线性 sRGB 显影，再应用 sRGB 编码曲线。模型接受 float32 RGB `[0,1]`；不会读取缩略图或 RAW 内嵌 JPEG。普通图片按 ICC 转入 sRGB，高位深 PNG/TIFF 不经过 Pillow 的 8 位 RGB 缓冲区。
+无 Qt 核心在 [`image_denoise`](../image_denoise/)，入口为 `denoise_file()`、`DenoiseOptions`、`DenoiseResult`。RAW 经相机白平衡、全尺寸 16 位线性 sRGB 显影，再按 LibRaw 默认有效画幅裁去传感器填充并应用 sRGB 编码曲线。裁切使用扣除传感器边距、应用显示旋转后的几何，不按黑色像素猜测范围；缺少有效几何时保留完整图像。`image_io.camera_frame_pixels()` 在模型推理前完成裁切，新输出已处于相机画幅，XMP 的 `denoise_camera_crop` 为 `null`，焦点/鸟体不再重复应用 RAW 边距。旧成片的实际像素不会自动重写；需要重新降噪或另存修正版。模型接受 float32 RGB `[0,1]`；不会读取缩略图或 RAW 内嵌 JPEG。普通图片按 ICC 转入 sRGB，高位深 PNG/TIFF 不经过 Pillow 的 8 位 RGB 缓冲区。
 
 模型遵循 [NAFNet 官方 SIDD width64 配置](https://github.com/megvii-research/NAFNet/blob/main/options/test/SIDD/NAFNet-width64.yml)。默认 FP32、512 分块、128 重叠，边界加权融合；整图累加器留在 CPU。内存不足会缩小分块并整张重试，设备失败回退 CPU，日志记录实际设备。NAFNet 包含全局池化，因此分块结果不保证与整图逐像素一致；应结合真实照片检查羽毛与平滑背景，不把测试集分数当成本相机的画质保证。
 

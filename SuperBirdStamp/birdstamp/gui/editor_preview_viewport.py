@@ -4,6 +4,7 @@ from PyQt6.QtGui import QPalette
 from PyQt6.QtWidgets import QButtonGroup, QComboBox, QFrame, QHBoxLayout, QLabel, QPushButton, QSizePolicy, QStyle, QToolButton, QVBoxLayout, QWidget
 
 from app_common.toggle_button import ToggleToolButton
+from app_common.preview_source_menu import PreviewSourceMenu
 from app_common.preview_canvas import configure_preview_scale_preset_combo, sync_preview_scale_preset_combo
 from app_common.video import is_video
 from birdstamp.constants import RAW_EXTENSIONS
@@ -82,6 +83,9 @@ class PreviewViewportPanel(QWidget):
             '导出仍使用原有来源设置。')
         self.show_raw.setAccessibleName(f'{name} 预览来源')
         self.show_raw.clicked.connect(self._cycle_preview_source)
+        self.source_menu = PreviewSourceMenu(self.show_raw)
+        self.source_menu.mode_selected.connect(self.set_source_mode)
+        self.source_menu.aboutToShow.connect(self._update_raw_toggle_visibility)
         tools.addWidget(self.show_raw)
         self.mode.currentIndexChanged.connect(lambda _index: self._update_raw_toggle_visibility())
         self.center = center if center is not None else ToggleToolButton()
@@ -139,6 +143,7 @@ class PreviewViewportPanel(QWidget):
         self.source_button.setVisible(bool(path and not is_video(path)))
         self.source_button.setEnabled(bool(path and self.mode.currentIndex() == 0))
         mode = self.effective_source_mode()
+        self.source_menu.sync(mode, raw_available=bool(path and path.suffix.lower() in RAW_EXTENSIONS))
         self.source_button.setText({'default': '默认预览', 'raw': '显示 RAW', 'denoised': '显示降噪'}[mode])
         self.source_button.setChecked(mode != 'default')
 

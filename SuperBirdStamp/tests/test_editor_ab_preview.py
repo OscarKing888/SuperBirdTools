@@ -19,6 +19,27 @@ def finish(ab):
     wait_until(lambda: ab.worker is None and not ab.pending)
 
 
+def test_source_radio_menu_is_independent_and_tracks_effective_mode(window, tmp_path):
+    a, b = window.ab_preview.a_panel, window.ab_preview.b_panel
+    a.set_path(tmp_path / '照片.ARW')
+    b.set_path(tmp_path / '另一张.ARW')
+    changes = []
+    a.source_mode_changed.connect(changes.append)
+    a.source_menu.mode_actions['denoised'].trigger()
+    assert a.source_mode() == 'denoised' and b.source_mode() == 'default'
+    assert a.source_menu.group.checkedAction().data() == 'denoised'
+    a.source_button.click()
+    assert a.source_mode() == 'default'
+    a.source_menu.mode_actions['raw'].trigger()
+    a.set_path(tmp_path / '照片.jpg')
+    assert a.source_menu.group.checkedAction().data() == 'default'
+    assert not a.source_menu.mode_actions['raw'].isEnabled()
+    assert a.source_mode() == 'raw'
+    a.mode.setCurrentIndex(1)
+    assert not a.source_button.isEnabled()
+    assert changes == ['denoised', 'default', 'raw']
+
+
 @pytest.mark.parametrize('suffix, modes', [
     ('.ARW', ('raw', 'denoised', 'default')),
     ('.jpg', ('denoised', 'default')),

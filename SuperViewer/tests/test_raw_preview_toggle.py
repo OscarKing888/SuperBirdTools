@@ -218,3 +218,32 @@ def test_failed_raw_worker_keeps_quick_preview_and_allows_toggle_back(tmp_path, 
     finally:
         panel.shutdown()
         panel.close()
+
+
+def test_source_menu_selects_one_viewport_and_preserves_quick_navigation(window, tmp_path):
+    panels = [window.preview_a, window.preview_panel]
+    toolbars = [window.ab_preview.a_panel, window.ab_preview.b_panel]
+    raw = tmp_path / '照片.ARW'
+    raw.touch()
+    try:
+        for panel in panels:
+            panel.set_quick_pixmap(str(raw), QPixmap.fromImage(_image()))
+        menu = toolbars[0].source_menu
+        menu.mode_actions['denoised'].trigger()
+        assert panels[0].preview_source_mode() == 'denoised'
+        assert panels[1].preview_source_mode() == 'default'
+        assert menu.group.checkedAction().data() == 'denoised'
+        assert not panels[0]._full_preview_timer.isActive()
+        assert panels[0]._full_preview_loader is None
+        toolbars[0].source_button.click()
+        assert menu.group.checkedAction().data() == 'default'
+        menu.mode_actions['raw'].trigger()
+        panels[0].set_quick_pixmap(str(tmp_path / '照片.jpg'), QPixmap.fromImage(_image()))
+        assert menu.group.checkedAction().data() == 'default'
+        assert not menu.mode_actions['raw'].isEnabled()
+        assert panels[0].preview_source_mode() == 'raw'  # 非 RAW 只改变有效显示，不丢偏好。
+    finally:
+        for panel in panels:
+            panel.shutdown()
+        for toolbar in toolbars:
+            toolbar.close()

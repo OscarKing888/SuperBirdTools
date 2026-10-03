@@ -97,7 +97,7 @@ BirdStamp 的 [`editor_shared_thumb_cache.py`](../../SuperBirdStamp/birdstamp/gu
 
 ### 预览来源三态切换
 
-`ViewerViewportPanel.source_button` 在单视口和 A/B 两侧工具栏分别提供“默认预览 → 显示 RAW → 显示降噪”循环；非 RAW 照片跳过 RAW，视频隐藏按钮。`PreviewPanel.set_preview_source_mode()` 接受 `default/raw/denoised`，默认 `default`，保留 `set_show_raw()` 兼容入口；每侧在当前窗口会话独立记忆，切换照片、隐藏 A 侧或暂时查看 JPEG/视频不会重置，不写入用户配置。RAW 模式由 `_FullPreviewLoader` 直接通过 rawpy 完整解码（相机白平衡、8-bit 输出、LibRaw 方向），原生尺寸显示；Windows 非 ASCII 路径使用二进制流并在完成后关闭。
+`ViewerViewportPanel.source_button` 在单视口和 A/B 两侧工具栏分别提供“默认预览 → 显示 RAW → 显示降噪”循环，右侧箭头通过共享 [`PreviewSourceMenu`](../../app_common/preview_source_menu.py) 的互斥 QActionGroup 直接选择来源；菜单静默同步当前有效模式，非 RAW 照片禁用 RAW 项，主按钮循环时跳过 RAW，视频隐藏按钮。`PreviewPanel.set_preview_source_mode()` 接受 `default/raw/denoised`，默认 `default`，保留 `set_show_raw()` 兼容入口；每侧在当前窗口会话独立记忆，切换照片、隐藏 A 侧或暂时查看 JPEG/视频不会重置，不写入用户配置。RAW 模式由 `_FullPreviewLoader` 直接通过 rawpy 完整解码（相机白平衡、8-bit 输出、LibRaw 方向），原生尺寸显示；Windows 非 ASCII 路径使用二进制流并在完成后关闭。
 
 模式变化使 `_preview_request_token` 递增，绕过同路径复用并取消旧任务；worker 在启动时固定本次模式，旧 token 的结果不能替换当前图像。长按期间开关只改变目标模式，仍显示精确档位小图，松键后才升级最终选中帧。两侧各自保持单 worker 和一个最新待处理请求；不建立完整 RAW 缓存，也不把完整 RAW 写入共享缩略图。解码失败保留快速图并提示关闭开关重试。构图叠加导出仍按默认内嵌优先规则取图，开关不改变导出来源或当前视口。
 

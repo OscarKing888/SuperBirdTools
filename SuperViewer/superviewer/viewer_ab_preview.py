@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 
 from app_common.toggle_button import ToggleToolButton
+from app_common.preview_source_menu import PreviewSourceMenu
 from app_common.preview_canvas import configure_preview_scale_preset_combo, sync_preview_scale_preset_combo
 from app_common.video import is_video
 from app_common.image_formats import RAW_EXTENSIONS
@@ -58,6 +59,9 @@ class ViewerViewportPanel(QWidget):
             "默认优先相机内嵌预览；降噪显示已生成的成片，缺失时显示原图并提示。\n"
             "仅影响本侧视口；连续按键期间保持缩略图，松键后加载所选来源。")
         self.raw_toggle.clicked.connect(self._cycle_preview_source)
+        self.source_menu = PreviewSourceMenu(self.raw_toggle)
+        self.source_menu.mode_selected.connect(preview.set_preview_source_mode)
+        self.source_menu.aboutToShow.connect(self._update_available)
         row.addWidget(self.raw_toggle)
         preview.source_changed.connect(self._update_available)
         self.center = center if center is not None else ToggleToolButton("自动焦点居中")
@@ -127,6 +131,7 @@ class ViewerViewportPanel(QWidget):
         path = self.preview.source_identity_path()
         self.raw_toggle.setVisible(bool(path) and not is_video(path))
         mode = self.preview.preview_source_mode()
+        self.source_menu.sync(mode, raw_available=Path(path).suffix.lower() in RAW_EXTENSIONS)
         self.raw_toggle.setText({"default": "默认预览", "raw": "显示 RAW", "denoised": "显示降噪"}[mode])
         if mode == "raw" and Path(path).suffix.lower() not in RAW_EXTENSIONS:
             self.raw_toggle.setText("默认预览")

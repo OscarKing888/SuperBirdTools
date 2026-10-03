@@ -41,6 +41,23 @@ def linear_to_srgb(value: np.ndarray) -> np.ndarray:
     return result
 
 
+def camera_frame_pixels(array: np.ndarray, camera_crop) -> np.ndarray:
+    """按 LibRaw 的已旋转有效画幅裁去传感器填充，不按像素黑色猜测边界。"""
+    if camera_crop is None:
+        return array
+    try:
+        left, top, right, bottom = (float(value) for value in camera_crop)
+        if not (0 <= left < right <= 1 and 0 <= top < bottom <= 1):
+            return array
+        height, width = array.shape[:2]
+        x0, y0, x1, y1 = round(left * width), round(top * height), round(right * width), round(bottom * height)
+        if x0 >= x1 or y0 >= y1:
+            return array
+        return np.ascontiguousarray(array[y0:y1, x0:x1])
+    except (TypeError, ValueError):
+        return array
+
+
 def orient_pixels(array: np.ndarray, orientation: int) -> np.ndarray:
     if orientation == 2:
         return np.flip(array, 1)
@@ -231,7 +248,10 @@ def decode_image(path: str | Path, *, cancelled=None) -> DecodedImage:
                                     gamma=(1, 1), no_auto_bright=True, half_size=False)
             camera_crop = rawpy_camera_crop_box(getattr(raw, "sizes", None))
         check_cancelled(cancelled)
-        return DecodedImage(linear_to_srgb(array.astype(np.float32) / 65535), camera_crop=camera_crop)
+        # 在推理前裁去无效边缘，避免黑色填充参与模型上下文并写进成片。
+        array = camera_frame_pixels(array, camera_crop)
+        # 输出已是相机画幅，焦点/鸟体不应再次套用 RAW 的边距变换。
+        return DecodedImage(linear_to_srgb(array.astype(np.float32) / 65535))
     if suffix in HEIF_IMAGE_EXTENSIONS:
         import pillow_heif
         image = pillow_heif.open_heif(path, convert_hdr_to_8bit=False, hdr_to_16bit=True)
