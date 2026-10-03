@@ -133,6 +133,7 @@ try:
     from .superviewer.super_viewer_user_options_dialog import SuperViewerUserOptionsDialog
     from .superviewer.tagged_file_list import SuperViewerTaggedFileListPanel
     from .superviewer.bird_sharpness_controller import BirdSharpnessController
+    from .superviewer.denoise_controller import DenoiseController
     from .superviewer.burst_info_controller import BurstInfoController
     from .superviewer.preview_key_router import PreviewKeyRouter
     from .superviewer.viewer_ab_preview import ViewerABPreview
@@ -216,6 +217,7 @@ except ImportError:
     from superviewer.super_viewer_user_options_dialog import SuperViewerUserOptionsDialog
     from superviewer.tagged_file_list import SuperViewerTaggedFileListPanel
     from superviewer.bird_sharpness_controller import BirdSharpnessController
+    from superviewer.denoise_controller import DenoiseController
     from superviewer.burst_info_controller import BurstInfoController
     from superviewer.preview_key_router import PreviewKeyRouter
     from superviewer.viewer_ab_preview import ViewerABPreview
@@ -310,7 +312,7 @@ class MainWindow(QMainWindow):
         self._shutdown_requested = False
         self._shutdown_finalized = False
         self._shutdown_started_at: float | None = None
-        self._shutdown_pending_state: tuple[bool, bool, bool, bool, bool] | None = None
+        self._shutdown_pending_state: tuple[bool, ...] | None = None
         self._ab_pre_sizes: list[int] | None = None
         self._focus_display_panel = None
         self._exiftool_shutdown_thread: threading.Thread | None = None
@@ -364,6 +366,7 @@ class MainWindow(QMainWindow):
         self._dir_browser.directory_selected.connect(self._on_directory_selected)
         # 鸟清晰度检测：目录树 / 文件列表右键菜单 → 后台检测 → 写 XMP → 刷新列表与缩略图
         self._bird_sharpness = BirdSharpnessController(self, self._file_list, self._dir_browser)
+        self._denoise = DenoiseController(self, self._file_list, self._dir_browser)
         # 计算连拍信息：目录树右键 → 按拍摄时间分组 → 写 XMP burst_id/burst_position → 刷新连拍显示
         self._burst_info = BurstInfoController(self, self._file_list, self._dir_browser)
         # 连接文件列表选中 → 预览 + 元信息刷新
@@ -1550,6 +1553,10 @@ class MainWindow(QMainWindow):
             except Exception:
                 pass
             try:
+                self._denoise.request_shutdown()
+            except Exception:
+                pass
+            try:
                 self._burst_info.request_shutdown()
             except Exception:
                 pass
@@ -1580,15 +1587,16 @@ class MainWindow(QMainWindow):
         pool_pending = getattr(self._file_list, 'has_pending_pool_work', lambda: False)
         directory_scans_done = directory_scans_done and not pool_pending()
         bird_sharpness_done = self._bird_sharpness.is_shutdown_done()
+        denoise_done = self._denoise.is_shutdown_done()
         burst_info_done = self._burst_info.is_shutdown_done()
         pending_state = (
             focus_done, tabs_done, preview_done, exiftool_done, directory_scans_done, bird_sharpness_done,
-            burst_info_done,
+            burst_info_done, denoise_done,
         )
         if not all(pending_state):
             if pending_state != self._shutdown_pending_state:
                 _log.info(
-                    "[shutdown] waiting focus=%s image_info=%s preview=%s exiftool=%s directory_scans_and_pool=%s bird_sharpness=%s burst_info=%s",
+                    "[shutdown] waiting focus=%s image_info=%s preview=%s exiftool=%s directory_scans_and_pool=%s bird_sharpness=%s burst_info=%s denoise=%s",
                     focus_done,
                     tabs_done,
                     preview_done,
@@ -1596,6 +1604,7 @@ class MainWindow(QMainWindow):
                     directory_scans_done,
                     bird_sharpness_done,
                     burst_info_done,
+                    denoise_done,
                 )
                 self._shutdown_pending_state = pending_state
             event.ignore()

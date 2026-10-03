@@ -67,6 +67,8 @@ goto launcher_ready
 
 :python_ready
 echo [INFO] Using Python: %PYTHON_EXE%
+"%PYTHON_EXE%" "%ROOT_DIR%build_tools\download_denoise_model.py"
+if errorlevel 1 exit /b 1
 "%PYTHON_EXE%" -m PyInstaller %PYINSTALLER_ARGS% ^
   --distpath "%DIST_ROOT%" ^
   --workpath "%BUILD_ROOT%\merged_win" ^
@@ -76,6 +78,8 @@ goto after_build
 
 :launcher_ready
 echo [INFO] Using Python launcher: %PYTHON_LAUNCHER%
+%PYTHON_LAUNCHER% "%ROOT_DIR%build_tools\download_denoise_model.py"
+if errorlevel 1 exit /b 1
 %PYTHON_LAUNCHER% -m PyInstaller %PYINSTALLER_ARGS% ^
   --distpath "%DIST_ROOT%" ^
   --workpath "%BUILD_ROOT%\merged_win" ^

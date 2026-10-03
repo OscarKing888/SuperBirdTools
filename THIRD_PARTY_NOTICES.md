@@ -31,3 +31,9 @@ The following components remain subject to their own upstream licenses and notic
 - Runtime dependencies are declared in `requirements.txt`.
 - Each dependency remains under its own upstream license.
 - When distributing binaries or source bundles, review upstream license obligations for all shipped dependencies.
+
+## 5. NAFNet RGB denoising
+
+- The inference architecture in `image_denoise/architecture.py` is adapted from the official [NAFNet](https://github.com/megvii-research/NAFNet) implementation; it retains the upstream MIT notice and the applicable BasicSR Apache 2.0 notice.
+- The pinned NAFNet-SIDD width64 weights are downloaded separately and are not committed to Git. Their revision, SHA-256 and source are recorded in `image_denoise/models.py`.
+- See [the denoising provenance notice](image_denoise/NOTICE.txt) and [upstream license texts](image_denoise/THIRD_PARTY_LICENSE.txt). Both notices are included with packaged SuperViewer resources.

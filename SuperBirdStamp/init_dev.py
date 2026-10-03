@@ -22,7 +22,9 @@ def _is_monorepo_root(path: Path) -> bool:
 def _selected_venv_dir(app_root: Path) -> Path:
     repo_root = _repo_root(app_root)
     if _is_monorepo_root(repo_root):
-        return repo_root / ".venv"
+        sys.path.insert(0, str(repo_root))
+        from build_tools.dev_environment import shared_venv_dir
+        return shared_venv_dir(repo_root)
     return app_root / ".venv"
 
 
@@ -32,10 +34,10 @@ def _venv_python(venv_dir: Path) -> Path:
     return venv_dir / "bin" / "python3"
 
 
-def _ensure_venv(app_root: Path) -> Path:
+def _ensure_venv(app_root: Path, *, dry_run: bool = False) -> Path:
     venv_dir = _selected_venv_dir(app_root)
     python_path = _venv_python(venv_dir)
-    if python_path.is_file():
+    if python_path.is_file() or dry_run:
         return python_path
 
     print(f"[SuperBirdStamp init] creating venv: {venv_dir}")
@@ -70,16 +72,17 @@ def main() -> None:
     app_root = _app_root()
     os.chdir(app_root)
 
-    target_python = _ensure_venv(app_root)
-    _reexec_if_needed(target_python)
+    target_python = _ensure_venv(app_root, dry_run=args.dry_run)
+    if not args.dry_run:
+        _reexec_if_needed(target_python)
 
     requirements_path = app_root / "requirements.txt"
-    _run([sys.executable, "-m", "pip", "install", "--upgrade", "pip", "setuptools", "wheel"], cwd=app_root, dry_run=args.dry_run)
-    _run([sys.executable, "-m", "pip", "install", "-r", str(requirements_path)], cwd=app_root, dry_run=args.dry_run)
+    _run([str(target_python), "-m", "pip", "install", "--upgrade", "pip", "setuptools", "wheel"], cwd=app_root, dry_run=args.dry_run)
+    _run([str(target_python), "-m", "pip", "install", "-r", str(requirements_path)], cwd=app_root, dry_run=args.dry_run)
 
     if not args.skip_assets:
-        _run([sys.executable, str(app_root / "scripts_dev" / "install_yolo11n.py")], cwd=app_root, dry_run=args.dry_run)
-        _run([sys.executable, str(app_root / "scripts_dev" / "install_ffmpeg_tool.py")], cwd=app_root, dry_run=args.dry_run)
+        _run([str(target_python), str(app_root / "scripts_dev" / "install_yolo11n.py")], cwd=app_root, dry_run=args.dry_run)
+        _run([str(target_python), str(app_root / "scripts_dev" / "install_ffmpeg_tool.py")], cwd=app_root, dry_run=args.dry_run)
 
 
 if __name__ == "__main__":

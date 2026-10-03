@@ -1,0 +1,25 @@
+NAFNet — Simple Baselines for Image Restoration
+Copyright (c) 2022 megvii-model. All Rights Reserved.
+https://github.com/megvii-research/NAFNet
+Architecture source commit: 2b4af71ebe098a92a75910c233a3965a3e93ede4
+
+SuperBirdTools includes an adapted, inference-only implementation of
+basicsr/models/archs/NAFNet_arch.py and the LayerNorm2d calculation from
+basicsr/models/archs/arch_util.py. BasicSR training utilities, custom autograd
+backward functions, local-conversion code and demonstrations are omitted.
+Layer normalization uses ordinary PyTorch operations; checkpoint parameter
+names, FP32 calculations and the official SIDD width64 topology are retained.
+
+BasicSR portions: Copyright 2018-2020 BasicSR Authors.
+The complete upstream MIT and Apache-2.0 license text is reproduced in
+THIRD_PARTY_LICENSE.txt, distributed alongside this notice.
+
+Reference:
+Liangyu Chen, Xiaojie Chu, Xiangyu Zhang and Jian Sun.
+Simple Baselines for Image Restoration, ECCV 2022, arXiv:2204.04676.
+
+The pretrained NAFNet-SIDD-width64 checkpoint is acquired separately from the
+author's published NAFNet demo at revision
+5964ed4955416df99210106b708e4a2df9e9eca0:
+https://huggingface.co/spaces/chuxiaojie/NAFNet
+The checkpoint is not committed to the SuperBirdTools Git repository.

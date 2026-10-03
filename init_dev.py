@@ -6,6 +6,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+from build_tools.dev_environment import shared_venv_dir
+
 
 def _repo_root() -> Path:
     return Path(__file__).resolve().parent
@@ -17,10 +19,10 @@ def _venv_python(venv_dir: Path) -> Path:
     return venv_dir / "bin" / "python3"
 
 
-def _ensure_repo_venv(repo_root: Path) -> Path:
-    venv_dir = repo_root / ".venv"
+def _ensure_repo_venv(repo_root: Path, *, dry_run: bool = False) -> Path:
+    venv_dir = shared_venv_dir(repo_root)
     python_path = _venv_python(venv_dir)
-    if python_path.is_file():
+    if python_path.is_file() or dry_run:
         return python_path
 
     print(f"[init_dev] creating venv: {venv_dir}")
@@ -54,19 +56,23 @@ def _app_init_scripts(repo_root: Path) -> list[Path]:
 def main() -> None:
     parser = argparse.ArgumentParser(description="初始化 SuperBirdTools 开发环境。")
     parser.add_argument("--dry-run", action="store_true", help="只打印将执行的步骤，不实际执行。")
+    parser.add_argument("--skip-assets", action="store_true", help="跳过两款应用的资源下载。")
     args = parser.parse_args()
 
     repo_root = _repo_root()
     os.chdir(repo_root)
 
-    repo_python = _ensure_repo_venv(repo_root)
-    _reexec_if_needed(repo_python)
+    repo_python = _ensure_repo_venv(repo_root, dry_run=args.dry_run)
+    if not args.dry_run:
+        _reexec_if_needed(repo_python)
 
     scripts = _app_init_scripts(repo_root)
     for script_path in scripts:
         cmd = [sys.executable, str(script_path)]
         if args.dry_run:
             cmd.append("--dry-run")
+        if args.skip_assets:
+            cmd.append("--skip-assets")
         _run(cmd, cwd=repo_root)
 
 

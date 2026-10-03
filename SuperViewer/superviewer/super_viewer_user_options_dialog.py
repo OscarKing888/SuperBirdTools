@@ -12,6 +12,8 @@ from app_common.superviewer_user_options import (
     USER_OPTIONS_FILENAME,
     get_runtime_user_options,
     get_user_options_path,
+    normalize_user_options,
+    valid_denoise_subdir,
 )
 
 from .qt_compat import (
@@ -21,7 +23,13 @@ from .qt_compat import (
     QDialogButtonBox,
     QGridLayout,
     QLabel,
+    QLineEdit,
+    QFileDialog,
+    QMessageBox,
+    QPushButton,
     QSpinBox,
+    QTabWidget,
+    QWidget,
     QVBoxLayout,
 )
 
@@ -31,9 +39,9 @@ class SuperViewerUserOptionsDialog(QDialog):
         super().__init__(parent)
         self.setWindowTitle("用户选项")
         self.setModal(True)
-        self.resize(540, 310)
+        self.resize(650, 470)
 
-        opts = dict(options or get_runtime_user_options())
+        opts = normalize_user_options(options or get_runtime_user_options())
         cpu_count = max(1, os.cpu_count() or 1)
         max_workers = max(64, cpu_count * 2)
         metadata_default = max(1, min(8, cpu_count // 4 or 1))
@@ -122,12 +130,74 @@ class SuperViewerUserOptionsDialog(QDialog):
         grid.addWidget(self._chk_perf_probes, row, 1)
         grid.addWidget(QLabel("默认关闭"), row, 2)
 
-        layout.addLayout(grid)
+        tabs = QTabWidget(self)
+        general = QWidget(tabs)
+        general_layout = QVBoxLayout(general)
+        general_layout.addLayout(grid)
+        tabs.addTab(general, "浏览与性能")
+        layout.addWidget(tabs)
 
         note = QLabel("缩略视图会根据当前缩略图大小自动匹配最合适的一档预览图。")
         note.setWordWrap(True)
         note.setStyleSheet("color: #aaa; font-size: 12px;")
-        layout.addWidget(note)
+        general_layout.addWidget(note)
+        general_layout.addStretch(1)
+
+        denoise = QWidget(tabs)
+        denoise_layout = QVBoxLayout(denoise)
+        denoise_grid = QGridLayout()
+        denoise_grid.setVerticalSpacing(10)
+        self._combo_denoise_mode = QComboBox(denoise)
+        for label, value in (("每张照片所在目录的子目录", "source_subdir"),
+                             ("固定输出目录", "fixed"), ("每次开始时选择目录", "ask")):
+            self._combo_denoise_mode.addItem(label, value)
+        self._combo_denoise_mode.setCurrentIndex(self._combo_denoise_mode.findData(opts["denoise_output_mode"]))
+        denoise_grid.addWidget(QLabel("输出位置"), 0, 0)
+        denoise_grid.addWidget(self._combo_denoise_mode, 0, 1, 1, 2)
+        self._edit_denoise_subdir = QLineEdit(str(opts["denoise_subdir"]), denoise)
+        denoise_grid.addWidget(QLabel("子目录名称"), 1, 0)
+        denoise_grid.addWidget(self._edit_denoise_subdir, 1, 1, 1, 2)
+        self._edit_denoise_directory = QLineEdit(str(opts["denoise_output_directory"]), denoise)
+        self._button_denoise_directory = QPushButton("浏览…", denoise)
+        self._button_denoise_directory.clicked.connect(self._choose_denoise_directory)
+        denoise_grid.addWidget(QLabel("固定目录"), 2, 0)
+        denoise_grid.addWidget(self._edit_denoise_directory, 2, 1)
+        denoise_grid.addWidget(self._button_denoise_directory, 2, 2)
+        self._combo_denoise_format = QComboBox(denoise)
+        self._combo_denoise_format.addItem("TIFF（16 位，无损）", "tiff")
+        self._combo_denoise_format.addItem("JPEG（质量 95）", "jpeg")
+        self._combo_denoise_format.setCurrentIndex(self._combo_denoise_format.findData(opts["denoise_format"]))
+        denoise_grid.addWidget(QLabel("输出格式"), 3, 0)
+        denoise_grid.addWidget(self._combo_denoise_format, 3, 1, 1, 2)
+        self._spin_denoise_strength = QSpinBox(denoise)
+        self._spin_denoise_strength.setRange(0, 100)
+        self._spin_denoise_strength.setSuffix(" %")
+        self._spin_denoise_strength.setValue(int(opts["denoise_strength"]))
+        self._spin_denoise_strength.setToolTip("100% 使用完整降噪结果；降低强度会与原图混合，保留更多纹理。")
+        denoise_grid.addWidget(QLabel("降噪强度"), 4, 0)
+        denoise_grid.addWidget(self._spin_denoise_strength, 4, 1)
+        self._combo_denoise_device = QComboBox(denoise)
+        for label, value in (("自动（CUDA → MPS → CPU）", "auto"), ("CPU", "cpu")):
+            self._combo_denoise_device.addItem(label, value)
+        self._combo_denoise_device.setCurrentIndex(max(0, self._combo_denoise_device.findData(opts["denoise_device"])))
+        denoise_grid.addWidget(QLabel("计算设备"), 5, 0)
+        denoise_grid.addWidget(self._combo_denoise_device, 5, 1, 1, 2)
+        self._spin_denoise_workers = QSpinBox(denoise)
+        self._spin_denoise_workers.setRange(1, 4)
+        self._spin_denoise_workers.setValue(int(opts["denoise_workers"]))
+        self._spin_denoise_workers.setToolTip("多张照片并行解码和保存；模型逐块推理。实际并行数受共享线程池与可用内存限制。")
+        denoise_grid.addWidget(QLabel("最多并行照片数"), 6, 0)
+        denoise_grid.addWidget(self._spin_denoise_workers, 6, 1)
+        denoise_layout.addLayout(denoise_grid)
+        denoise_note = QLabel("NAFNet RGB 降噪。原图保持不变，重名成片会自动编号。\n"
+                             "RAW 将先渲染为 sRGB 再降噪。\n"
+                             "在照片或目录右键菜单中开始降噪；新的设置用于下一批任务。", denoise)
+        denoise_note.setWordWrap(True)
+        denoise_layout.addWidget(denoise_note)
+        denoise_layout.addStretch(1)
+        tabs.addTab(denoise, "批量降噪")
+        self._combo_denoise_mode.currentIndexChanged.connect(self._update_denoise_mode)
+        self._update_denoise_mode()
 
         buttons = QDialogButtonBox(
             (
@@ -141,7 +211,27 @@ class SuperViewerUserOptionsDialog(QDialog):
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
 
-    def selected_options(self) -> dict[str, int]:
+    def _choose_denoise_directory(self) -> None:
+        path = QFileDialog.getExistingDirectory(self, "选择降噪输出目录", self._edit_denoise_directory.text())
+        if path:
+            self._edit_denoise_directory.setText(path)
+
+    def _update_denoise_mode(self, *_args) -> None:
+        mode = self._combo_denoise_mode.currentData()
+        self._edit_denoise_subdir.setEnabled(mode == "source_subdir")
+        self._edit_denoise_directory.setEnabled(mode == "fixed")
+        self._button_denoise_directory.setEnabled(mode == "fixed")
+
+    def accept(self) -> None:
+        if not valid_denoise_subdir(self._edit_denoise_subdir.text().strip()):
+            QMessageBox.information(self, "批量降噪", "请输入兼容 Windows 的单个子目录名称，不能包含斜线或保留字符。")
+            return
+        if self._combo_denoise_mode.currentData() == "fixed" and not self._edit_denoise_directory.text().strip():
+            QMessageBox.information(self, "批量降噪", "请选择固定输出目录。")
+            return
+        super().accept()
+
+    def selected_options(self) -> dict[str, int | str]:
         return {
             "thumbnail_loader_workers": int(self._spin_thumb_loader_workers.value()),
             "metadata_loader_workers": int(self._spin_metadata_loader_workers.value()),
@@ -150,4 +240,11 @@ class SuperViewerUserOptionsDialog(QDialog):
             "key_navigation_fps": int(self._combo_key_navigation_fps.currentData()),
             "keep_view_on_switch": int(self._chk_keep_view.isChecked()),
             KEY_PERF_PROBES_ENABLED: int(self._chk_perf_probes.isChecked()),
+            "denoise_output_mode": str(self._combo_denoise_mode.currentData()),
+            "denoise_subdir": self._edit_denoise_subdir.text().strip(),
+            "denoise_output_directory": self._edit_denoise_directory.text().strip(),
+            "denoise_format": str(self._combo_denoise_format.currentData()),
+            "denoise_strength": self._spin_denoise_strength.value(),
+            "denoise_device": str(self._combo_denoise_device.currentData()),
+            "denoise_workers": self._spin_denoise_workers.value(),
         }
