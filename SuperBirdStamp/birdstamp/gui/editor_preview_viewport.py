@@ -1,7 +1,7 @@
 """A/B 共用视口：照片信息及操作工具栏、画布和状态栏。"""
 from PyQt6.QtCore import QEvent, Qt, pyqtSignal
 from PyQt6.QtGui import QPalette
-from PyQt6.QtWidgets import QButtonGroup, QComboBox, QFrame, QHBoxLayout, QLabel, QSizePolicy, QStyle, QToolButton, QVBoxLayout, QWidget
+from PyQt6.QtWidgets import QButtonGroup, QComboBox, QFrame, QHBoxLayout, QLabel, QSizePolicy, QStyle, QStyleFactory, QToolButton, QVBoxLayout, QWidget
 
 from app_common.toggle_button import ToggleToolButton
 from app_common.preview_source_menu import PreviewSourceMenu
@@ -117,6 +117,7 @@ class PreviewViewportPanel(QWidget):
             self._sync_scale(preview.current_display_scale_percent())
         self.zoom_button = zoom_menu(self.scale)
         tools.addWidget(self.zoom_button)
+        self._apply_compact_toolbar_style()
         layout.addWidget(self.toolbar)
         self.viewport_frame = QFrame()
         self.viewport_frame.setObjectName('ABViewportFrame')
@@ -138,6 +139,23 @@ class PreviewViewportPanel(QWidget):
         self._update_available()
         for widget in (self, *self.findChildren(QWidget)):
             widget.installEventFilter(self)
+
+    def _apply_compact_toolbar_style(self):
+        # 预览操作与 Viewer 使用同一 Fusion 度量；样式只作用于本工具行，
+        # 不把编辑面板的大输入框和平台原生菜单尺寸带进下拉菜单。
+        self._toolbar_style = QStyleFactory.create('Fusion')
+        self._toolbar_style.setParent(self.toolbar)
+        for widget in (self.toolbar, *self.toolbar.findChildren(QWidget)):
+            widget.setStyle(self._toolbar_style)
+        self.scale.view().setStyle(self._toolbar_style)
+        self.scale.view().parentWidget().setStyle(self._toolbar_style)
+        self.toolbar.setStyleSheet("""
+            QLineEdit {
+                min-height: 0;
+                padding: 2px 4px;
+                border-radius: 3px;
+            }
+        """)
 
     def set_path(self, path):
         self._path = path

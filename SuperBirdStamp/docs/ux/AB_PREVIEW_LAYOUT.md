@@ -31,3 +31,5 @@
 A 侧独立鸟体识别通过 `BirdDetectAction` 提交共享预览池的 ANALYSIS 队列（最多 1 个分析任务），QImage 转换与推理都在后台；缩略图和播放期间不启动。结果映射回相机坐标供缓存复用，关闭窗口等待实际 worker 完成。
 
 实现：[PreviewViewportPanel](../../birdstamp/gui/editor_preview_viewport.py)、[ABPreview](../../birdstamp/gui/editor_ab_preview.py)、[ABViewLink](../../birdstamp/gui/editor_ab_view_link.py)。回归：[test_ab_preview_layout.py](../../tests/test_ab_preview_layout.py)、[test_ab_view_link.py](../../tests/test_ab_view_link.py)、[test_editor_ab_preview.py](../../tests/test_editor_ab_preview.py)，覆盖模式组合、激活侧选图、字体/窗口/分栏尺寸变化、双向视野联动、焦点锁定及迟到解码。
+
+预览工具行及其下拉菜单局部采用与 Viewer 一致的 Fusion 度量；菜单输入框使用紧凑留白，避免继承编辑面板的大输入框最小高度。控件随字体与 DPI 缩放，编辑面板保持原样式。
