@@ -40,6 +40,10 @@ HEAD_RADIUS_BEAK_RATIO = 1.2
 HEAD_RADIUS_BOX_RATIO = 0.15
 HEAD_RADIUS_MIN_PX = 40
 HEAD_MASK_DILATE_PX = 9
+# Progress stages reported through ``analyze(..., on_stage=...)``.
+STAGE_DECODE = "decode"
+STAGE_DETECT = "detect"
+STAGE_MEASURE = "measure"
 BODY_MASK_ERODE_PX = 15
 
 
@@ -112,18 +116,20 @@ class BirdSharpnessAnalyzer:
     def release(self) -> None:
         self.models.release()
 
-    def analyze(self, path: str) -> BirdSharpnessResult:
+    def analyze(self, path: str, *, on_stage: Optional[Callable[[str], None]] = None) -> BirdSharpnessResult:
         t0 = time.perf_counter()
         try:
-            result = self._analyze(path)
+            result = self._analyze(path, on_stage or (lambda stage: None))
         except Exception as exc:
             _log.error("[BirdSharpness] analysis failed path=%r: %s", path, traceback.format_exc())
             result = BirdSharpnessResult(path=path, verdict=VERDICT_ERROR, error=f"{type(exc).__name__}: {exc}")
         result.elapsed_s = round(time.perf_counter() - t0, 3)
         return result
 
-    def _analyze(self, path: str) -> BirdSharpnessResult:
+    def _analyze(self, path: str, on_stage: Callable[[str], None]) -> BirdSharpnessResult:
+        on_stage(STAGE_DECODE)
         image = load_analysis_image(path)
+        on_stage(STAGE_DETECT)
         H, W = image.gray.shape[:2]
         small, scale = _resize_long_edge(image.rgb8, DETECT_LONG_EDGE)
         det = self.models.segment(cv2.cvtColor(small, cv2.COLOR_RGB2BGR))
@@ -160,6 +166,7 @@ class BirdSharpnessAnalyzer:
         radius = max(radius, HEAD_RADIUS_MIN_PX)
 
         roi_gray = image.gray[Y1:Y2, X1:X2]
+        on_stage(STAGE_MEASURE)
         field_ = EdgeBlurField(roi_gray)
         yy, xx = np.ogrid[:ch, :cw]
         dilated = cv2.dilate(mask, np.ones((HEAD_MASK_DILATE_PX, HEAD_MASK_DILATE_PX), np.uint8)).astype(bool)

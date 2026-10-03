@@ -11,22 +11,22 @@ and shutdown is latched.
 from __future__ import annotations
 
 import os
-import traceback
 import threading
+import time
+import traceback
 from collections import Counter
 from dataclasses import dataclass, field
 
-from app_common.bird_sharpness_fields import VERDICT_ERROR, VERDICT_STYLES
+from app_common.bird_sharpness_fields import VERDICT_ERROR
 from app_common.log import get_logger
 
-from .qt_compat import QDialog, QHBoxLayout, QLabel, QPushButton, QThread, QVBoxLayout, pyqtSignal
+from .bird_sharpness_progress import BirdSharpnessProgressDialog, WorkerLane, WorkerLoad
+from .qt_compat import QThread, pyqtSignal
 
 try:
     from PyQt6.QtCore import QObject
-    from PyQt6.QtWidgets import QProgressBar
 except ImportError:  # pragma: no cover - PyQt5 fallback
     from PyQt5.QtCore import QObject
-    from PyQt5.QtWidgets import QProgressBar
 
 _log = get_logger("bird_sharpness.viewer")
 
@@ -58,6 +58,7 @@ class BirdSharpnessWorker(QThread):
     result_ready = pyqtSignal(object, object, bool)  # display path, BirdSharpnessResult, written
     item_skipped = pyqtSignal(object)
     failed = pyqtSignal(str)
+    load_changed = pyqtSignal(object)  # WorkerLoad snapshot for the progress window
 
     def __init__(self, job: BirdSharpnessJob, analyzer_holder: "BirdSharpnessController", pool=None) -> None:
         super().__init__()
@@ -114,11 +115,11 @@ class BirdSharpnessWorker(QThread):
             analyzer = self._holder.analyzer()
             analyzer.load()
 
-            def make(item):
+            def make(item, on_stage=None):
                 display_path, source_path = item
                 return BirdSharpnessAction(
                     analyzer, display_path, source_path,
-                    skip_existing=self.job.skip_existing, cancelled=self._cancelled,
+                    skip_existing=self.job.skip_existing, cancelled=self._cancelled, on_stage=on_stage,
                 )
 
             if self._pool is None:
@@ -129,18 +130,27 @@ class BirdSharpnessWorker(QThread):
             _log.error("[BirdSharpness] job failed: %s", traceback.format_exc())
             self.failed.emit(f"{type(exc).__name__}: {exc}")
 
+    @staticmethod
+    def _lane(action) -> WorkerLane:
+        return WorkerLane(os.path.basename(action.display_path), action.stage, action.started_at or time.monotonic())
+
     def _run_sequential(self, items, make) -> None:
         total = len(items)
         self.max_parallel = 1
+
+        def publish(action) -> None:
+            self.load_changed.emit(WorkerLoad(capacity=1, lanes=(self._lane(action),), shared_pool=False))
+
         self.progress_changed.emit(0, total, "")
         for done, item in enumerate(items, start=1):
             if self._cancelled():
                 break
-            outcome = make(item).execute()
+            outcome = make(item, on_stage=publish).execute()
             if outcome.cancelled:
                 break
             self._emit_outcome(outcome)
             self.progress_changed.emit(done, total, os.path.basename(item[0]))
+        self.load_changed.emit(WorkerLoad(capacity=1, lanes=(None,), shared_pool=False))
 
     def _run_on_pool(self, items, make) -> None:
         from concurrent.futures import FIRST_COMPLETED, wait
@@ -161,19 +171,43 @@ class BirdSharpnessWorker(QThread):
         except BrowserPoolClosed:
             self._cancel.set()
             return
-        pending: dict = {}
+        pending: dict = {}  # future -> (item, action)
+        lane_of: dict = {}  # running future -> stable worker slot index
         next_index = 0
         done = 0
         cancel_sent = False
+
+        def publish() -> None:
+            free = [i for i in range(workers) if i not in lane_of.values()]
+            for fut, (_item, _action) in pending.items():
+                if fut not in lane_of and fut.running() and free:
+                    lane_of[fut] = free.pop(0)
+            lanes = [None] * workers
+            for fut, slot in lane_of.items():
+                lanes[slot] = self._lane(pending[fut][1])
+            try:
+                snap = pool.snapshot()
+            except Exception:
+                snap = {}
+            self.load_changed.emit(WorkerLoad(
+                capacity=workers,
+                lanes=tuple(lanes),
+                queued=sum(1 for fut in pending if not fut.running() and not fut.done()),
+                pool_threads=int(snap.get("total", 0)),
+                pool_thumbnail_active=int(snap.get("thumbnail_active", 0)),
+                pool_metadata_active=int(snap.get("metadata_active", 0)),
+            ))
+
         try:
             while pending or (next_index < total and not self._cancelled()):
                 while next_index < total and len(pending) < window and not self._cancelled():
+                    action = make(items[next_index])
                     try:
-                        future = pool.submit_action(make(items[next_index]), kind=WorkKind.ANALYSIS)
+                        future = pool.submit_action(action, kind=WorkKind.ANALYSIS)
                     except BrowserPoolClosed:
                         self._cancel.set()
                         break
-                    pending[future] = items[next_index]
+                    pending[future] = (items[next_index], action)
                     next_index += 1
                 if not pending:
                     break
@@ -184,7 +218,8 @@ class BirdSharpnessWorker(QThread):
                     for future in list(pending):
                         pool.cancel(future)
                 for future in finished:
-                    display_path, source_path = pending.pop(future)
+                    (display_path, source_path), _action = pending.pop(future)
+                    lane_of.pop(future, None)
                     if future.cancelled():
                         continue
                     try:
@@ -203,79 +238,12 @@ class BirdSharpnessWorker(QThread):
                     done += 1
                     self._emit_outcome(outcome)
                     self.progress_changed.emit(done, total, os.path.basename(display_path))
+                publish()
         finally:
             pool.end_producer(WorkKind.ANALYSIS, token)
-
-
-class BirdSharpnessProgressDialog(QDialog):
-    """Non-modal progress window; closing it only requests cancellation."""
-
-    cancel_requested = pyqtSignal()
-
-    def __init__(self, parent, title: str) -> None:
-        super().__init__(parent)
-        self.setWindowTitle(title)
-        self.setModal(False)
-        self.setMinimumWidth(460)
-        self._running = True
-        self.label = QLabel("正在准备…", self)
-        self.label.setWordWrap(True)
-        self.bar = QProgressBar(self)
-        self.bar.setRange(0, 0)
-        self.summary = QLabel("", self)
-        self.summary.setWordWrap(True)
-        self.button = QPushButton("停止", self)
-        self.button.clicked.connect(self._on_button)
-        row = QHBoxLayout()
-        row.addStretch(1)
-        row.addWidget(self.button)
-        layout = QVBoxLayout(self)
-        layout.addWidget(self.label)
-        layout.addWidget(self.bar)
-        layout.addWidget(self.summary)
-        layout.addLayout(row)
-
-    def _on_button(self) -> None:
-        if self._running:
-            self.button.setEnabled(False)
-            self.button.setText("正在停止…")
-            self.cancel_requested.emit()
-        else:
-            self.close()
-
-    def closeEvent(self, event) -> None:  # type: ignore[override]
-        if self._running:
-            self.cancel_requested.emit()
-        super().closeEvent(event)
-
-    def set_status(self, text: str) -> None:
-        self.label.setText(text)
-
-    def set_progress(self, done: int, total: int, name: str) -> None:
-        self.bar.setRange(0, max(1, total))
-        self.bar.setValue(done)
-        self.label.setText(f"已完成 {done}/{total}：{name}" if name else f"已完成 {done}/{total}")
-
-    def set_summary(self, text: str) -> None:
-        self.summary.setText(text)
-
-    def mark_finished(self, text: str) -> None:
-        self._running = False
-        self.label.setText(text)
-        self.button.setEnabled(True)
-        self.button.setText("关闭")
-
-
-def _summary_text(counts: Counter, skipped: int, write_failures: int) -> str:
-    parts = []
-    for verdict, style in VERDICT_STYLES.items():
-        if counts.get(verdict):
-            parts.append(f"{style.label} {counts[verdict]}")
-    if skipped:
-        parts.append(f"已跳过 {skipped}")
-    if write_failures:
-        parts.append(f"XMP 写入失败 {write_failures}")
-    return "，".join(parts)
+            pending.clear()
+            lane_of.clear()
+            publish()
 
 
 class BirdSharpnessController(QObject):
@@ -380,7 +348,7 @@ class BirdSharpnessController(QObject):
         pool = pool_getter() if callable(pool_getter) else None
         worker = BirdSharpnessWorker(job, self, pool)
         self._worker = worker
-        dialog = BirdSharpnessProgressDialog(self._main, job.title)
+        dialog = BirdSharpnessProgressDialog(self._main, job.title, running_text="正在检测鸟清晰度…")
         self._dialog = dialog
         dialog.cancel_requested.connect(lambda w=worker: self._request_stop(w))
         worker.status_changed.connect(lambda text, w=worker: self._on_status(w, text))
@@ -388,6 +356,7 @@ class BirdSharpnessController(QObject):
         worker.result_ready.connect(lambda p, r, ok, w=worker: self._on_result(w, p, r, ok))
         worker.item_skipped.connect(lambda p, w=worker: self._on_skipped(w, p))
         worker.failed.connect(lambda msg, w=worker: self._on_failed(w, msg))
+        worker.load_changed.connect(lambda load, w=worker: self._on_load(w, load))
         worker.finished.connect(lambda w=worker: self._on_thread_finished(w))
         _log.info("[BirdSharpness] start job title=%r dir=%r recursive=%s items=%s skip_existing=%s",
                   job.title, job.directory, job.recursive, len(job.items), job.skip_existing)
@@ -410,6 +379,10 @@ class BirdSharpnessController(QObject):
     def _on_progress(self, worker, done: int, total: int, name: str) -> None:
         if worker is self._worker and self._dialog is not None:
             self._dialog.set_progress(done, total, name)
+
+    def _on_load(self, worker, load) -> None:
+        if worker is self._worker and self._dialog is not None:
+            self._dialog.set_load(load)
 
     def _on_skipped(self, worker, path: str) -> None:
         if worker is not self._worker:
@@ -449,7 +422,7 @@ class BirdSharpnessController(QObject):
 
     def _refresh_summary(self) -> None:
         if self._dialog is not None:
-            self._dialog.set_summary(_summary_text(self._counts, self._skipped, self._write_failures))
+            self._dialog.set_counts(self._counts, self._skipped, self._write_failures)
 
     def _on_thread_finished(self, worker) -> None:
         if worker is not self._worker:
@@ -457,8 +430,8 @@ class BirdSharpnessController(QObject):
         self._worker = None
         cancelled = worker._cancelled()
         dialog = self._dialog
-        summary = _summary_text(self._counts, self._skipped, self._write_failures)
-        _log.info("[BirdSharpness] job finished cancelled=%s summary=%s failure=%r", cancelled, summary, self._failure_message)
+        _log.info("[BirdSharpness] job finished cancelled=%s counts=%s skipped=%s write_failures=%s failure=%r",
+                  cancelled, dict(self._counts), self._skipped, self._write_failures, self._failure_message)
         try:
             worker.deleteLater()
         except Exception:
@@ -477,7 +450,7 @@ class BirdSharpnessController(QObject):
                 dialog.mark_finished("已停止。")
             else:
                 dialog.mark_finished("检测完成。")
-            dialog.set_summary(summary)
+            dialog.set_counts(self._counts, self._skipped, self._write_failures)
 
     # ── shutdown ──────────────────────────────────────────────────────────
     def request_shutdown(self) -> None:

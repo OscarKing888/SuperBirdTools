@@ -292,7 +292,7 @@ class _CountingAnalyzer:
     def load(self):
         pass
 
-    def analyze(self, path):
+    def analyze(self, path, on_stage=None):
         import time
 
         with self.lock:

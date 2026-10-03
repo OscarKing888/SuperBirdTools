@@ -62,4 +62,5 @@
 每张照片是一个 `BirdSharpnessAction`（[actions.py](../bird_sharpness/actions.py)，`app_common` 的 `WorkerAction`）：分析 + 写 sidecar。模型推理在 `BirdSharpnessModels` 的锁内串行（GPU/MPS 不并发），RAW 解码、预处理和模糊半径计算并行，结果与串行逐张一致。实测 4 线程约 3–4 倍吞吐（瓶颈是 LibRaw 解码）。
 
 - SuperViewer：动作提交到文件浏览器共享的 `BrowserWorkPool`，类型 `WorkKind.ANALYSIS`，优先级最低：只用元数据/缩略图此刻用不上的线程，并发上限默认 CPU 核数的一半（最多 6，且总会给元数据保留额度、给缩略图留 1 个线程），可用环境变量 `SuperViewer_ANALYSIS_WORKERS` 覆盖。每个并行任务持有一张全分辨率解码（约 0.3–0.5 GB），内存紧张时调小。协调线程只保留 2× 并发数的在途任务；停止时撤回排队任务，正在分析的照片做完后丢弃结果、不写 sidecar。
+- 进度窗口（[bird_sharpness_progress.py](../SuperViewer/superviewer/bird_sharpness_progress.py)）：总进度、已用时间/速度/剩余时间；「工作线程 x / y 个在工作」及分段负载条；并发数 ≤ 8 时逐线程显示当前文件、阶段（解码 → 识别 → 测量 → 写入，4 格进度点）和已用秒数，空闲线程标“空闲”，超过 8 个只显示汇总负载条；底部注明排队张数与共享线程池里缩略图/元数据的占用（浏览优先时提示“空闲后自动补满”）；结果按判定显示彩色计数。负载快照由协调线程约 5 次/秒发布（`WorkerLoad`），动作阶段来自 `BirdSharpnessAction.stage`；颜色取自窗口调色板，随深浅色主题变化。
 - CLI：`-j/--workers N`（默认同上）。
