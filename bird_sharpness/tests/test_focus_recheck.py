@@ -9,8 +9,9 @@ import pytest
 
 from app_common import bird_sharpness_fields as bsf
 from bird_sharpness.analyzer import (DETECT_IMGSZ, FOCUS_ZOOM_DIVISORS, FOCUS_ZOOM_IMGSZ, RECHECK_IMGSZ,
-                                     BirdSharpnessAnalyzer, box_iou, box_overlap, zoom_window)
-from bird_sharpness.models import FOUND_FOCUS_WEAK, FOUND_FOCUS_ZOOM, FOUND_FULL, FOUND_FULL_FINE, BirdDetection
+                                     BirdSharpnessAnalyzer, box_iou, box_overlap, lift_midtones, zoom_window)
+from bird_sharpness.models import (FOUND_FOCUS_WEAK, FOUND_FOCUS_ZOOM, FOUND_FULL, FOUND_FULL_FINE, FOUND_FULL_LIFTED,
+                                   BirdDetection)
 from bird_sharpness.trace import AnalysisTracer
 
 from test_bird_sharpness import _StubModels, _install_image, _no_focus, _scene
@@ -25,20 +26,26 @@ def _focus(path, w, h):
 
 
 class _CamouflageStub(_StubModels):
-    """``birds`` [(cx, cy, r, conf[, conf_at_recheck_input])] on the whole frame;
-    ``zoom`` [(cx, cy, r, conf)] seen only in zoomed windows around the focus point."""
+    """``birds`` [(cx, cy, r, conf[, conf_at_recheck_input[, conf_lifted]])] on the whole frame;
+    ``zoom`` [(cx, cy, r, conf)] seen only in zoomed windows around the focus point.
+
+    Whole-frame calls in order: first pass, lifted pass (dark frames), recheck input."""
 
     def __init__(self, birds, *, zoom=(), **kw):
         super().__init__([b[:3] for b in birds], full_w=SIZE[1], **kw)
-        self.confs = [(b[3], b[4] if len(b) > 4 else b[3]) for b in birds]
+        self.confs = [(b[3], b[4] if len(b) > 4 else b[3], b[5] if len(b) > 5 else b[3]) for b in birds]
         self.zoom = list(zoom)
         self.calls = []
+        self.seen = []
 
     def detect_birds(self, bgr, *, conf=0.25, imgsz=None):
         self.calls.append((bgr.shape[:2], conf, imgsz))
+        self.seen.append(bgr.copy())
         if bgr.shape[1] == 1024:  # whole frame (the 1024 px detection copy)
             found = super().detect_birds(bgr)
-            confs = [c[1] if imgsz == RECHECK_IMGSZ else c[0] for c in self.confs]
+            first = sum(1 for shape, _, size in self.calls if shape[1] == 1024 and size != RECHECK_IMGSZ) == 1
+            index = 1 if imgsz == RECHECK_IMGSZ else (0 if first else 2)
+            confs = [c[index] for c in self.confs]
             return [replace(d, confidence=c) for d, c in zip(found, confs) if c >= conf]
         h, w = bgr.shape[:2]
         x1, y1, _, _ = zoom_window(FOCUS_PX, (0, 0, SIZE[1], SIZE[0]), w)
@@ -72,9 +79,9 @@ def test_weak_candidate_on_the_focus_box_is_the_bird(monkeypatch) -> None:
     assert result.region == bsf.REGION_BIRD and result.bird_count == 1
     assert result.birds[0]["found_by"] == FOUND_FOCUS_WEAK
     assert result.sigma == pytest.approx(_confident_sigma(monkeypatch), abs=1e-6)
-    assert len(models.calls) == 2  # first pass + recheck input; no zoomed inference needed
-    assert models.calls[0][1:] == (0.25, DETECT_IMGSZ)
-    assert models.calls[1][1] < 0.25 and models.calls[1][2] == RECHECK_IMGSZ
+    assert len(models.calls) == 3  # first pass, lifted pass, recheck input; no zoomed inference needed
+    assert models.calls[0][1:] == (0.25, DETECT_IMGSZ) and models.calls[1][1:] == (0.25, DETECT_IMGSZ)
+    assert models.calls[2][1] < 0.25 and models.calls[2][2] == RECHECK_IMGSZ
     keys = [s.key for s in trace.steps_for()]
     assert keys[:4] == ["decode", "detect", "recheck", "bird"]
     recheck = next(s for s in trace.common if s.key == "recheck")
@@ -87,7 +94,7 @@ def test_weak_candidate_away_from_focus_is_ignored(monkeypatch) -> None:
     result, trace = _analyze(monkeypatch, models, focus=lambda p, w, h: (0.05, 0.05, 0.1, 0.1))
     # flat corner: nothing measurable at the focus point either, so the whole frame decides
     assert result.region == bsf.REGION_FULL and result.bird_count == 0
-    assert len(models.calls) == 2  # no candidate at the focus point: zoom skipped
+    assert len(models.calls) == 3  # no candidate at the focus point: zoom skipped
     recheck = next(s for s in trace.common if s.key == "recheck")
     assert dict(recheck.metrics)["结果"].startswith("仍判为无鸟")
 
@@ -99,8 +106,8 @@ def test_zoomed_bird_confirmed_by_a_weak_candidate(monkeypatch) -> None:
     assert result.birds[0]["found_by"] == FOUND_FOCUS_ZOOM
     assert result.bird_confidence == pytest.approx(0.8)
     # first window (long edge / 6) already confirms it; its mask is mapped back onto the frame
-    assert len(models.calls) == 3
-    assert models.calls[2][0] == (300, 300) and models.calls[2][2] == FOCUS_ZOOM_IMGSZ
+    assert len(models.calls) == 4
+    assert models.calls[3][0] == (300, 300) and models.calls[3][2] == FOCUS_ZOOM_IMGSZ
     assert result.sigma == pytest.approx(_confident_sigma(monkeypatch), abs=0.05)
     recheck = next(s for s in trace.common if s.key == "recheck")
     assert "通过" in dict(recheck.metrics)["放大窗口 300 px"]
@@ -111,14 +118,14 @@ def test_zoomed_detection_alone_is_not_trusted(monkeypatch) -> None:
     models = _CamouflageStub([], zoom=[(900, 600, 150, 0.9)])
     result, _trace = _analyze(monkeypatch, models)
     assert result.region == bsf.REGION_FOCUS and result.bird_count == 0
-    assert len(models.calls) == 2
+    assert len(models.calls) == 3
 
 
 def test_zoomed_detection_elsewhere_than_the_candidate_is_rejected(monkeypatch) -> None:
     models = _CamouflageStub([(900, 600, 150, 0.06)], zoom=[(900, 600, 40, 0.9)])
     result, trace = _analyze(monkeypatch, models)
     assert result.region == bsf.REGION_FOCUS and result.bird_count == 0
-    assert len(models.calls) == 2 + len(FOCUS_ZOOM_DIVISORS)
+    assert len(models.calls) == 3 + len(FOCUS_ZOOM_DIVISORS)
     recheck = next(s for s in trace.common if s.key == "recheck")
     assert "不采信" in dict(recheck.metrics)["放大窗口 300 px"]
 
@@ -144,7 +151,7 @@ def test_without_focus_only_the_finer_input_is_tried(monkeypatch) -> None:
     models = _CamouflageStub([(900, 600, 150, 0.15)])
     result, trace = _analyze(monkeypatch, models, focus=_no_focus)
     assert result.region == bsf.REGION_FULL and result.bird_count == 0
-    assert len(models.calls) == 2
+    assert len(models.calls) == 3
     recheck = next(s for s in trace.common if s.key == "recheck")
     assert dict(recheck.metrics)["焦点处复检"].startswith("跳过")
 
@@ -193,8 +200,62 @@ def test_find_missed_bird_runs_only_the_recheck(monkeypatch) -> None:
     _install_image(monkeypatch, _scene([(900, 600, 150, 0.3)], size=SIZE))
     models = _CamouflageStub([(900, 600, 150, 0.15)])
     missed = BirdSharpnessAnalyzer(models, focus_provider=_focus).find_missed_bird("夜鹰.ARW")
-    assert [c[2] for c in models.calls] == [RECHECK_IMGSZ]
+    assert [c[2] for c in models.calls] == [DETECT_IMGSZ, RECHECK_IMGSZ]  # lifted pass, recheck input
     assert missed.source == FOUND_FOCUS_WEAK and missed.camera_crop is None
     assert missed.box == pytest.approx((750 / SIZE[1], 450 / SIZE[0], 1050 / SIZE[1], 750 / SIZE[0]), abs=0.01)
     nothing = BirdSharpnessAnalyzer(_CamouflageStub([]), focus_provider=_focus).find_missed_bird("夜鹰.ARW")
     assert nothing is None
+
+
+def test_dark_frame_is_detected_again_with_midtones_lifted(monkeypatch) -> None:
+    models = _CamouflageStub([(900, 600, 150, 0.1, 0.1, 0.6)])
+    result, trace = _analyze(monkeypatch, models, focus=_no_focus)
+    assert result.region == bsf.REGION_BIRD and result.birds[0]["found_by"] == FOUND_FULL_LIFTED
+    assert len(models.calls) == 2  # first pass + lifted pass; no recheck input needed
+    lifted_input = models.seen[1]
+    assert lifted_input.mean() > models.seen[0].mean() + 20  # mid-tones lifted for detection only
+    assert result.sigma == pytest.approx(_confident_sigma(monkeypatch), abs=1e-6)  # measured on the original
+    recheck = next(s for s in trace.common if s.key == "recheck")
+    assert "直接采纳" in dict(recheck.metrics)["暗部提亮后再识别"]
+    assert "提亮复检" in " ".join(k for k, _ in trace.final[0].metrics)
+
+
+def test_bright_frame_is_not_lifted(monkeypatch) -> None:
+    _install_image(monkeypatch, np.clip(_scene([(900, 600, 150, 0.3)], size=SIZE) + 0.5, 0, 1))
+    models = _CamouflageStub([(900, 600, 150, 0.1)])
+    BirdSharpnessAnalyzer(models, focus_provider=_no_focus).analyze("bright.jpg")
+    assert [c[2] for c in models.calls] == [DETECT_IMGSZ, RECHECK_IMGSZ]
+
+
+def test_lift_midtones() -> None:
+    dark = np.full((10, 10, 3), 30, np.uint8)
+    lifted, gamma = lift_midtones(dark)
+    assert gamma < 0.9 and lifted.dtype == np.uint8 and int(lifted[0, 0, 0]) > 30
+    bright = np.full((10, 10, 3), 150, np.uint8)
+    same, gamma = lift_midtones(bright)
+    assert gamma == 1.0 and same is bright
+
+
+class _StrayLiftedStub(_CamouflageStub):
+    """Lifted-pass mask with a larger stray patch below the bird."""
+
+    def detect_birds(self, bgr, *, conf=0.25, imgsz=None):
+        found = super().detect_birds(bgr, conf=conf, imgsz=imgsz)
+        if len(self.calls) == 2:  # lifted pass
+            for det in found:
+                s = bgr.shape[1] / SIZE[1]
+                cv2.rectangle(det.mask, (int(700 * s), int(900 * s)), (int(1100 * s), int(1150 * s)), 1, -1)
+                det.box = (det.box[0], det.box[1], det.box[2], 1150 * s)
+        return found
+
+
+@pytest.mark.parametrize(("focus", "on_bird"), [(_focus, True), (_no_focus, False)])
+def test_lifted_mask_keeps_the_piece_on_focus_or_the_largest(monkeypatch, focus, on_bird) -> None:
+    models = _StrayLiftedStub([(900, 600, 150, 0.1, 0.1, 0.6)])
+    result, _trace = _analyze(monkeypatch, models, focus=focus)
+    assert result.birds[0]["found_by"] == FOUND_FULL_LIFTED
+    y1, y2 = result.bird_box[1], result.bird_box[3]
+    if on_bird:
+        assert y2 < 800  # the bird piece, refitted
+    else:
+        assert y1 > 850  # without focus the larger piece wins
