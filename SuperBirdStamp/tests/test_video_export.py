@@ -213,12 +213,88 @@ def test_build_ffmpeg_command_raw_uses_rawvideo_and_avi_suffix(tmp_path) -> None
     )
     command = build_ffmpeg_command(Path("/tmp/ffmpeg"), tmp_path / "frames", options)
     assert "rawvideo" in command
-    assert "rgb24" in command
+    assert command[command.index("-pix_fmt") + 1] == "bgr24"
+    assert "rgb24" not in command
     assert "libx264" not in command
     assert "libx265" not in command
     assert "+faststart" not in command
     assert str((tmp_path / "clip.avi").resolve()) == command[-1]
 
+
+
+def test_partial_raw_video_uses_same_bgr24_codec_args(tmp_path, monkeypatch) -> None:
+    import birdstamp.export_stage as export_stage
+    from birdstamp.export_stage.core import _build_partial_video_from_frames
+
+    frame_path = tmp_path / "frame_000001.png"
+    Image.new("RGB", (8, 8), (255, 0, 0)).save(frame_path)
+    captured: list[list[str]] = []
+    monkeypatch.setattr(
+        export_stage,
+        "_run_ffmpeg_command",
+        lambda cmd, *, cancel_event=None, cancel_message="": captured.append(cmd),
+    )
+    options = VideoExportOptions(output_path=tmp_path / "clip.avi", container="raw", fps=25)
+
+    _build_partial_video_from_frames(Path("/tmp/ffmpeg"), tmp_path, options, frame_paths=[frame_path])
+
+    assert len(captured) == 1
+    command = captured[0]
+    assert command[command.index("-c:v") + 1] == "rawvideo"
+    assert command[command.index("-pix_fmt") + 1] == "bgr24"
+    assert command[-1].endswith(".avi")
+
+
+@pytest.mark.parametrize("frame_width", [64, 65])
+def test_raw_avi_export_round_trips_colors_and_orientation_with_real_ffmpeg(tmp_path, frame_width) -> None:
+    import subprocess
+
+    from birdstamp.export_stage import find_ffmpeg_executable
+
+    ffmpeg_path = find_ffmpeg_executable()
+    if ffmpeg_path is None:
+        pytest.skip("ffmpeg not available")
+
+    frame_height = 48
+    top_color = (252, 0, 0)
+    bottom_color = (0, 0, 252)
+    frames_dir = tmp_path / "frames"
+    frames_dir.mkdir()
+    frame = Image.new("RGB", (frame_width, frame_height), top_color)
+    frame.paste(bottom_color, (0, frame_height // 2, frame_width, frame_height))
+    frame.save(frames_dir / "frame_000001.png")
+
+    options = VideoExportOptions(output_path=tmp_path / "clip.avi", container="raw", fps=25)
+    command = build_ffmpeg_command(ffmpeg_path, frames_dir, options)
+    _run_ffmpeg_command(command, cancel_event=None)
+    output_path = tmp_path / "clip.avi"
+    assert output_path.is_file()
+
+    decoded = subprocess.run(
+        [
+            str(ffmpeg_path),
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-i",
+            str(output_path),
+            "-frames:v",
+            "1",
+            "-f",
+            "rawvideo",
+            "-pix_fmt",
+            "rgb24",
+            "-",
+        ],
+        capture_output=True,
+        check=True,
+    ).stdout
+    assert len(decoded) == frame_width * frame_height * 3
+    image = Image.frombytes("RGB", (frame_width, frame_height), decoded)
+    assert image.getpixel((0, 0)) == top_color
+    assert image.getpixel((frame_width - 1, frame_height // 2 - 1)) == top_color
+    assert image.getpixel((0, frame_height - 1)) == bottom_color
+    assert image.getpixel((frame_width - 1, frame_height // 2)) == bottom_color
 
 def test_resolve_video_render_workers_honors_auto_and_manual_limits() -> None:
     assert resolve_video_render_workers(0, 0) == 1

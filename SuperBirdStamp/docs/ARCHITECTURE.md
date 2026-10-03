@@ -200,6 +200,8 @@ RAW 源图的去抖动分析、成片预览和导出统一优先读取长边至�
 
 `_run_ffmpeg_command` 管理 FFmpeg 子进程，stderr 写临时文件以避免管道填满阻塞，失败时读取有限尾部信息；取消先终止，必要时强制结束并等待退出。窗口、worker、线程池与子进程分别有明确所有者，不能仅停止进度 UI 就视为任务已结束。
 
+「AVI 无压缩」（容器 `raw`）由 `_codec_args_for_options` 输出 `-c:v rawvideo -pix_fmt bgr24`，完整视频和取消后的部分视频共用这组参数。AVI 的未压缩 RGB 是 BGR 字节序的 BI_RGB DIB，使用 `rgb24` 时 FFmpeg 会警告文件不可读，解码后红蓝互换；FFmpeg 写入负高度的自上而下 DIB 并按 4 字节对齐行，因此画面不翻转，奇数宽度也正确。真实 FFmpeg 纯色帧编解码回归见 [test_video_export.py](../tests/test_video_export.py)，找不到 FFmpeg 时跳过。
+
 ### 视频重复播放
 
 `VideoExportOptions.repeat_fps` 在主 FPS 那一遍之后按各自 FPS 追加完整序列。视频以恒定帧率编码，[video_repeat.py](../birdstamp/export_stage/video_repeat.py) 的 `build_video_repeat_timeline` 选取输出帧率：取各遍最高 FPS，若其 2–4 倍（不超过 120 FPS）能让所有遍整除则用该倍数（如 30/24 → 120），否则用最高 FPS 并按累计时间四舍五入，每遍时长误差不超过半个输出帧、每张至少 1 帧。`export_video` 在视频帧缓存就绪后于工作目录生成 `repeat_timeline/frame_%06d.png`（优先硬链接，不支持时复制），以输出帧率编码，编码结束即删除；渲染缓存仍一图一帧，增删重复遍或改 FPS 都可复用。取消时的部分视频仍按主 FPS 从已渲染帧生成。面板「重复播放」与 GIF 共用 [RepeatFpsEditor](../birdstamp/gui/editor_repeat_fps.py)，随视频导出状态的 `repeat_fps` 保存到工作区，旧状态恢复为只播放一遍；进度与完成提示展示各遍 FPS、输出帧率、帧数和时长。回归见 [test_video_repeat.py](../tests/test_video_repeat.py)。
