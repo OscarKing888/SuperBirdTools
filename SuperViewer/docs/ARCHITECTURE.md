@@ -328,3 +328,9 @@ Qt 测试在窗口构造前隔离 `paths_settings` 的应用/用户状态目录�
 [`entry.py`](../entry.py) 在导入业务模块前调用 `SuperBirdUpdater.runtime.admit_startup()`，登记当前安装目录与进程，遇到安装事务则交给独立等待/恢复进程。源码运行默认不登记。
 
 `main()` 在窗口显示后调用 `SuperBirdUpdater.bridge.attach()`，加入手动检查入口并延迟启动后台检查。新增更新 IPC 与照片发送 IPC 分离；退出仍调用原 `MainWindow.closeEvent`，直到所有线程和外部进程实际结束。协议、下载和事务安装均位于 [SuperBirdUpdater](../../SuperBirdUpdater/README.md)，不进入预览、文件浏览或元数据逻辑。
+
+### 视口图标工具栏
+
+[ViewerViewportPanel](../superviewer/viewer_ab_preview.py) 将来源、对焦点、鸟体框、构图线/线宽、焦点居中、适应窗口与缩放放在各自 A/B 视口内；主工具栏只保留 A/B 和视野同步。图标由共享 [preview_toolbar.py](../../app_common/preview_toolbar.py) 绘制，选中态沿用 `ToggleToolButton`。构图菜单与来源菜单使用互斥单选，缩放图标菜单包含原缩放控件；悬停说明当前模式或比例。A 的显示设置独立保留在窗口会话内，B 继续兼容原设置存储，切换激活侧不复制选项。
+
+鸟体控制器 `set_panel_enabled()` 分侧控制绘制与分析需求，共享同源结果；隐藏侧框不取消另一侧仍需要的计算。切目录保留每侧开关，长按只读缓存。改构图线、线宽与工具栏主题不触发解码或元数据读取。回归见 [test_viewer_viewport_toolbar.py](../tests/test_viewer_viewport_toolbar.py) 和 [test_bird_body_controller.py](../tests/test_bird_body_controller.py)。

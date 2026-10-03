@@ -6,6 +6,7 @@ from PyQt6.QtGui import QPixmap
 from PyQt6.QtWidgets import QSplitter
 
 from app_common.toggle_button import ToggleToolButton
+from app_common.preview_toolbar import ViewportOverlayTools, iconize
 from app_common.raw_preview_geometry import RAW_FOCUS_CROP_KEY, map_camera_focus_box
 from app_common.preview_canvas import PreviewWithStatusBar
 from birdstamp.decoders.preview_source import PREVIEW_SOURCE_MODE_KEY, PREVIEW_SOURCE_MESSAGE_KEY
@@ -30,6 +31,9 @@ class ABPreview(QObject):
         self.active_side = 'b'
         self.paths = ()
         self.worker = None
+        self.bird_worker = None
+        self._bird_attempt_signature = None
+        self._image_is_quick = True
         self.token = 0
         self.request = None
         self.pending = False
@@ -56,6 +60,8 @@ class ABPreview(QObject):
         self.linked.setCheckable(True)
         self.linked.setToolTip('开启时锁定两侧当前的缩放比例和相对位置；之后同步缩放和平移变化。\n'
                                '启用联动会关闭自动焦点居中；重新开启焦点居中则退出联动。')
+        iconize(self.enabled, "compare", "A/B 对照")
+        iconize(self.linked, "link", "同步缩放/移动")
         self.splitter = QSplitter(Qt.Orientation.Horizontal)
         self.splitter.setChildrenCollapsible(False)
         self.preview = PreviewWithStatusBar(canvas=EditorPreviewCanvas())
@@ -66,8 +72,13 @@ class ABPreview(QObject):
         self.mode, self.center = self.a_panel.mode, self.a_panel.center
         self.mode.setToolTip('A 独立选择原图或已分析的去抖动成片。')
         self.a_panel.source_mode_changed.connect(self._on_a_source_mode_changed)
+        b_overlays = ViewportOverlayTools(focus=editor.show_focus_box_check, bird=editor.show_bird_box_check,
+            grid=editor.preview_grid_combo, width=editor.preview_grid_line_width_combo,
+            crop=editor.show_crop_effect_check, alpha=editor.crop_effect_alpha_slider, with_crop=True)
+        self.a_panel.overlays.restore(b_overlays.state())
+        self.a_panel.overlays.changed.connect(self._on_a_overlays_changed)
         self.b_panel = PreviewViewportPanel('B', editor.preview_label,
-                                            center=editor.auto_focus_center_check, scale=editor.preview_scale_combo)
+                                            center=editor.auto_focus_center_check, scale=editor.preview_scale_combo, overlays=b_overlays)
         self.b_mode = self.b_panel.mode
         self.b_mode.setToolTip('选择 B 的原图或已分析的去抖动成片。')
         self.b_mode.activated.connect(self._choose_b_mode)
@@ -114,12 +125,16 @@ class ABPreview(QObject):
         crop_tool = editor._edit_mode_buttons.get('crop_adjust')
         if crop_tool is not None:
             crop_tool.setEnabled(not self.enabled.isChecked() and not editor._dejitter_tab_active())
-        # 公共遮罩在两边都是成片时没有可裁切的外圈；禁用但不改变工具栏高度。
-        crop_available = not result or (self.enabled.isChecked() and self.mode.currentIndex() == 0)
-        editor.show_crop_effect_check.setEnabled(crop_available)
-        for widget in (editor.crop_effect_alpha_label, editor.crop_effect_alpha_slider,
-                       editor.crop_effect_alpha_value_label):
-            widget.setEnabled(crop_available and editor.show_crop_effect_check.isChecked())
+        # 每侧成片没有可裁切的外圈；禁用本侧遮罩但保留其设置。
+        for panel, original in ((self.a_panel, self.mode.currentIndex() == 0), (self.b_panel, not result)):
+            panel.overlays.crop.setEnabled(original)
+            panel.overlays.alpha.setEnabled(original and panel.overlays.crop.isChecked())
+
+    def _on_a_overlays_changed(self):
+        self._sync_controls()
+        self._display()
+        self._schedule_bird_overlay()
+        self.editor._schedule_workspace_autosave()
 
     def _choose_b_mode(self, index):
         self.activate('b')
@@ -254,6 +269,7 @@ class ABPreview(QObject):
         self._cancel()
         self.request = request
         self.image = self.frame = self.size = None
+        self._image_is_quick = True
         self.camera_crop_box = None
         self.actual_source_mode = 'default'
         self.source_message = ''
@@ -294,6 +310,9 @@ class ABPreview(QObject):
         self.token += 1
         self.pending = False
         self.upgrade.stop()
+        self._bird_attempt_signature = None
+        if self.bird_worker is not None:
+            self.bird_worker.requestInterruption()
         if self.worker is not None:
             if hasattr(self.worker, 'cancel'):
                 self.worker.cancel()
@@ -321,7 +340,7 @@ class ABPreview(QObject):
                                                source_mode=self.request[4],
                                                pool=self.editor._preview_action_pool, parent=self)
             worker.quick_decoded.connect(self._decoded)
-            worker.decoded.connect(self._decoded)
+            worker.decoded.connect(lambda token, path, image, size: self._decoded(token, path, image, size, full=True))
             worker.failed.connect(lambda token, _path, message: self._failed(token, message))
         self.worker = worker
         worker.finished.connect(self._finished)
@@ -333,10 +352,11 @@ class ABPreview(QObject):
                 and self.request is not None and self.path is not None
                 and self.request[3] == image_file_signature(self.path))
 
-    def _decoded(self, token, path, image, size):
+    def _decoded(self, token, path, image, size, *, full=False):
         try:
             if not self._accept(token) or path_key(Path(path)) != path_key(self.path):
                 return
+            self._image_is_quick = not full
             self.camera_crop_box = image.info.get(RAW_FOCUS_CROP_KEY)
             self.actual_source_mode = image.info.get(PREVIEW_SOURCE_MODE_KEY, 'default')
             self.source_message = image.info.get(PREVIEW_SOURCE_MESSAGE_KEY, '')
@@ -345,8 +365,44 @@ class ABPreview(QObject):
             self.size = tuple(size)
             self.frame = None
             self._display()
+            if full:
+                self._schedule_bird_overlay()
         finally:
             image.close()
+
+    def _schedule_bird_overlay(self):
+        # A 只读本侧像素；转换与检测都在共享池执行，播放和缩略图阶段不提交。
+        if (self.stopping or not self.enabled.isChecked() or self.path is None
+                or self.image is None or self.frame is not None or self._image_is_quick
+                or self.editor._sequence_fast_preview_active()
+                or not self.a_panel.overlays.bird.isChecked() or self.bird_worker is not None):
+            return
+        signature = self.editor._source_signature(self.path)
+        if signature in self.editor._bird_box_cache or signature == self._bird_attempt_signature:
+            return
+        self._bird_attempt_signature = signature
+        from .bird_detect_worker import BirdDetectWorker
+        worker = BirdDetectWorker(signature, self.image.copy(), parent=self,
+            pool=self.editor._preview_action_pool, camera_crop=self.camera_crop_box)
+        self.bird_worker = worker
+        worker.result_ready.connect(self._bird_ready)
+        worker.finished.connect(self._bird_finished)
+        worker.start()
+
+    def _bird_ready(self, signature, box):
+        if self.stopping or self.sender() is not self.bird_worker:
+            return
+        self.editor._bird_box_cache[signature] = box
+        if (self.path is not None and self.editor._source_signature(self.path) == signature
+                and not self.editor._sequence_fast_preview_active()):
+            self._display()
+
+    def _bird_finished(self):
+        worker = self.sender()
+        if worker is self.bird_worker:
+            self.bird_worker = None
+            worker.deleteLater()
+            self._schedule_bird_overlay()
 
     def _aligned(self, token, sequence, frame):
         if not self._accept(token) or sequence is not self.editor._sequence_preview:
@@ -438,7 +494,7 @@ class ABPreview(QObject):
         if not crop and reference:
             state.reference_regions = regions
             state.reference_diagnostics = ()
-        options = editor._build_preview_overlay_options()
+        options = editor._build_preview_overlay_options(self.a_panel.overlays)
         options.show_reference_regions = True
         options.show_crop_effect = False
         if self.frame and sequence and editor.dejitter_show_intersection_check.isChecked():
@@ -448,11 +504,11 @@ class ABPreview(QObject):
         if not self.frame and sequence and key in sequence.pixel_boxes and not editor.dejitter_pad_to_union_check.isChecked():
             state.crop_effect_box = source_normalized_crop(sequence.source_sizes[key], sequence.pixel_boxes[key])
             state.alignment_crop_box = state.crop_effect_box
-            options.show_crop_effect = editor.show_crop_effect_check.isChecked()
+            options.show_crop_effect = self.a_panel.overlays.crop.isChecked()
         elif not self.frame and sequence and not editor.dejitter_pad_to_union_check.isChecked():
             from .editor_tracking_overlay import apply_alignment_crop
             if apply_alignment_crop(state, sequence, key):
-                options.show_crop_effect = editor.show_crop_effect_check.isChecked()
+                options.show_crop_effect = self.a_panel.overlays.crop.isChecked()
         if self.frame is None:
             transform_source_overlays(state, self.camera_crop_box)
         self.preview.apply_overlay_options(options)
@@ -470,4 +526,4 @@ class ABPreview(QObject):
         self.stopping = True
         self.geometry_timer.stop()
         self._cancel()
-        return self.worker is None
+        return self.worker is None and self.bird_worker is None

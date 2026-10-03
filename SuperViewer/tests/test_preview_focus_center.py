@@ -171,7 +171,7 @@ def test_toolbar_persists_option_and_keeps_grid_export(tmp_path, monkeypatch):
         window._update_preview_focus_box(source)
         _assert_center(panel, (0.2, 0.7))
         index = window.combo_preview_grid.findData("thirds")
-        assert index >= 0 and window.combo_preview_grid.isVisible()
+        assert index >= 0 and window.ab_preview.b_panel.overlays.grid_button.isVisible()
         window.combo_preview_grid.setCurrentIndex(index)
         image = panel.canvas.render_source_pixmap_with_overlays().toImage()
         assert image.pixelColor(40, 45).red() > 0

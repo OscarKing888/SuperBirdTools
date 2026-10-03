@@ -145,17 +145,17 @@ class _BirdStampRendererMixin:
             return getter() == EDIT_MODE_REFERENCE_REGION
         return False
 
-    def _build_preview_overlay_options(self) -> EditorPreviewOverlayOptions:
+    def _build_preview_overlay_options(self, controls=None) -> EditorPreviewOverlayOptions:
         """Build editor preview overlay options from the current toolbar UI state."""
-        preview_grid_combo = getattr(self, "preview_grid_combo", None)
-        preview_grid_line_width_combo = getattr(self, "preview_grid_line_width_combo", None)
+        preview_grid_combo = controls.grid if controls is not None else getattr(self, "preview_grid_combo", None)
+        preview_grid_line_width_combo = controls.width if controls is not None else getattr(self, "preview_grid_line_width_combo", None)
         reference_regions = self._visible_dejitter_reference_regions()
         show_reference = self._dejitter_reference_mode_active() or bool(reference_regions)
         return EditorPreviewOverlayOptions(
-            show_focus_box=bool(self.show_focus_box_check.isChecked()),
-            show_bird_box=bool(self.show_bird_box_check.isChecked()),
-            show_crop_effect=bool(self.show_crop_effect_check.isChecked()),
-            crop_effect_alpha=int(self.crop_effect_alpha_slider.value()),
+            show_focus_box=bool((controls.focus if controls is not None else self.show_focus_box_check).isChecked()),
+            show_bird_box=bool((controls.bird if controls is not None else self.show_bird_box_check).isChecked()),
+            show_crop_effect=bool((controls.crop if controls is not None else self.show_crop_effect_check).isChecked()),
+            crop_effect_alpha=int((controls.alpha if controls is not None else self.crop_effect_alpha_slider).value()),
             composition_grid_mode=normalize_preview_composition_grid_mode(
                 preview_grid_combo.currentData() if preview_grid_combo is not None else "none"
             ),

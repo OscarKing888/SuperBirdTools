@@ -34,6 +34,7 @@ class _Viewport:
     path: str = ""
     committed: bool = False
     needs_request: bool = False
+    enabled: bool = False
 
 
 @dataclass(eq=False)
@@ -80,8 +81,10 @@ class BirdBodyController(QObject):
         changed = self._enabled != enabled
         self._enabled = enabled
         for view in self._views.values():
+            view.enabled = enabled
             panel = view.panel()
             if panel is not None:
+                panel._bird_body_enabled = enabled
                 panel.set_show_bird_box(enabled)
                 self._paint(view)
             if changed and enabled and view.committed:
@@ -91,6 +94,17 @@ class BirdBodyController(QObject):
             self._cancel_obsolete()
         else:
             self._schedule()
+
+    def set_panel_enabled(self, panel, enabled: bool) -> None:
+        view = self._views.setdefault(id(panel), _Viewport(weakref.ref(panel)))
+        view.enabled = bool(enabled)
+        panel._bird_body_enabled = view.enabled
+        self._enabled = any(item.enabled for item in self._views.values())
+        panel.set_show_bird_box(view.enabled)
+        self._paint(view)
+        view.needs_request = view.enabled and view.committed
+        self._cancel_obsolete()
+        self._schedule()
 
     def show_source(self, panel, source_path: str, *, committed: bool = True) -> None:
         if self._closed:
@@ -103,15 +117,16 @@ class BirdBodyController(QObject):
         panel._bird_body_source_path = str(source_path)
         view = self._views.get(id(panel))
         if view is None:
-            view = _Viewport(weakref.ref(panel))
+            view = _Viewport(weakref.ref(panel), enabled=getattr(panel, "_bird_body_enabled", self._enabled))
             self._views[id(panel)] = view
+        self._enabled = self._enabled or view.enabled
         changed = view.source != source
         resumed = bool(committed) and not view.committed
         view.source, view.path = source, str(source_path)
         view.committed = bool(committed)
         if changed or resumed:
             view.needs_request = bool(committed)
-        panel.set_show_bird_box(self._enabled)
+        panel.set_show_bird_box(view.enabled)
         self._paint(view)
         # MainWindow 只在最终提交时传 committed=True；完整图的异步升级在
         # 长按期间也必须传 False，避免 A/B 迟到结果重新启动后台检测。
@@ -176,11 +191,11 @@ class BirdBodyController(QObject):
         result = self._cache.get(view.source)
         if result is not None:
             self._cache.move_to_end(view.source)
-        panel.set_bird_box(result.box if self._enabled and result is not None else None)
+        panel.set_bird_box(result.box if view.enabled and result is not None else None)
 
     def _wanted_sources(self):
         return {view.source for view in self._views.values()
-                if view.committed and view.panel() is not None}
+                if view.enabled and view.committed and view.panel() is not None}
 
     def _cancel(self, request: _Request) -> None:
         if request.cancel_event.is_set():
@@ -202,7 +217,7 @@ class BirdBodyController(QObject):
     def _schedule(self, *, restart=False) -> None:
         if self._closed or not self._enabled or self._playback_active:
             return
-        if not any(view.needs_request and view.committed and view.panel() is not None
+        if not any(view.enabled and view.needs_request and view.committed and view.panel() is not None
                    for view in self._views.values()):
             return
         if restart or not self._timer.isActive():
@@ -227,7 +242,7 @@ class BirdBodyController(QObject):
         for view in tuple(self._views.values()):
             if len(self._requests) >= 2:
                 break
-            if not view.committed or not view.needs_request or view.panel() is None:
+            if not view.enabled or not view.committed or not view.needs_request or view.panel() is None:
                 continue
             if view.source in active:
                 continue

@@ -32,6 +32,7 @@ def _ensure_default_log_file_env() -> None:
 _ensure_default_log_file_env()
 
 from app_common.toggle_button import ToggleToolButton
+from app_common.preview_toolbar import ViewportOverlayTools
 from app_common import show_about_dialog, load_about_images, load_about_info
 from app_common.log import get_logger
 from app_common.perf_probe import elapsed_ms, perf_counter, perf_log
@@ -395,13 +396,11 @@ class MainWindow(QMainWindow):
         self.check_show_focus.setChecked(True)
         self.check_show_focus.setToolTip("在预览图上叠加显示相机对焦点（来自原始 RAW/HEIF 元数据）。")
         self.check_show_focus.toggled.connect(self._on_preview_overlay_toggled)
-        overlay_row.addWidget(self.check_show_focus)
         self.check_show_bird = ToggleToolButton("显示鸟体")
         self.check_show_bird.setToolTip(
             "显示检测到的主体鸟框。停留后在后台计算并缓存到 XMP；连续浏览只使用已有缓存。"
         )
         self.check_show_bird.toggled.connect(self._on_bird_body_toggled)
-        overlay_row.addWidget(self.check_show_bird)
         self.check_auto_focus_center = ToggleToolButton("自动焦点居中")
         self.check_auto_focus_center.setChecked(load_auto_focus_center_from_settings())
         self.check_auto_focus_center.setToolTip(
@@ -409,7 +408,6 @@ class MainWindow(QMainWindow):
             "连续浏览使用已缓存焦点，未缓存时暂用图像中心。关闭后可自由拖动。"
         )
         self.check_auto_focus_center.toggled.connect(self._on_auto_focus_center_toggled)
-        overlay_row.addWidget(self.check_auto_focus_center)
         self.combo_preview_grid = QComboBox(self)
         self.combo_preview_grid.setFixedWidth(PREVIEW_GRID_MODE_COMBO_WIDTH)
         valid_preview_grid_modes = set(PREVIEW_COMPOSITION_GRID_MODES)
@@ -426,7 +424,6 @@ class MainWindow(QMainWindow):
             self.combo_preview_grid.setCurrentIndex(current_index)
         self.combo_preview_grid.setToolTip("设置预览图上的构图辅助线，可选均分九宫格、黄金分割、方格、对角线等。")
         self.combo_preview_grid.currentIndexChanged.connect(self._on_preview_grid_mode_changed)
-        overlay_row.addWidget(self.combo_preview_grid)
         self.combo_preview_grid_line_width = QComboBox(self)
         self.combo_preview_grid_line_width.setFixedWidth(PREVIEW_GRID_LINE_WIDTH_COMBO_WIDTH)
         valid_preview_grid_line_widths = set(PREVIEW_COMPOSITION_GRID_LINE_WIDTHS)
@@ -447,7 +444,6 @@ class MainWindow(QMainWindow):
             self.combo_preview_grid_line_width.setCurrentIndex(current_width_index)
         self.combo_preview_grid_line_width.setToolTip("设置构图辅助线线宽，列表图标按 1 到 4 像素直观显示粗细。")
         self.combo_preview_grid_line_width.currentIndexChanged.connect(self._on_preview_grid_line_width_changed)
-        overlay_row.addWidget(self.combo_preview_grid_line_width)
         self.combo_preview_scale = QComboBox(self)
         configure_preview_scale_preset_combo(
             self.combo_preview_scale,
@@ -455,7 +451,6 @@ class MainWindow(QMainWindow):
             fixed_width=PREVIEW_SCALE_COMBO_WIDTH,
         )
         self.combo_preview_scale.activated.connect(self._on_preview_scale_preset_activated)
-        overlay_row.addWidget(self.combo_preview_scale)
         overlay_row.addStretch(1)
         left_layout.addLayout(overlay_row)
         self.preview_panel = PreviewPanel(central)
@@ -481,10 +476,14 @@ class MainWindow(QMainWindow):
         self._file_list.playback_state_changed.connect(self._on_preview_playback_state_changed)
         self._bird_body.status_changed.connect(lambda message: self.statusBar().showMessage(message, 6000))
         self._denoise.output_ready.connect(self._on_denoised_output_ready)
+        b_overlays = ViewportOverlayTools(focus=self.check_show_focus, bird=self.check_show_bird,
+                                           grid=self.combo_preview_grid, width=self.combo_preview_grid_line_width)
         self.ab_preview = ViewerABPreview(
             self, self.preview_panel, self.preview_a,
-            b_center=self.check_auto_focus_center, b_scale=self.combo_preview_scale,
+            b_center=self.check_auto_focus_center, b_scale=self.combo_preview_scale, b_overlays=b_overlays,
         )
+        for viewport in (self.ab_preview.a_panel, self.ab_preview.b_panel):
+            self._bird_body.set_panel_enabled(viewport.preview, viewport.overlays.bird.isChecked())
         self.ab_preview.a_panel.center.toggled.connect(lambda _checked: self._refresh_preview_focus_options())
         overlay_row.insertWidget(0, self.ab_preview.enabled)
         overlay_row.insertWidget(1, self.ab_preview.linked)
@@ -891,8 +890,7 @@ class MainWindow(QMainWindow):
         if mode is None:
             mode = self.combo_preview_grid.currentData()
         normalized = normalize_preview_composition_grid_mode(mode)
-        for panel in (self.preview_panel, self.preview_a):
-            panel.set_composition_grid_mode(normalized)
+        self.preview_panel.set_composition_grid_mode(normalized)
         save_preview_grid_mode_to_settings(normalized)
 
     def _on_preview_grid_line_width_changed(self, index: int) -> None:
@@ -900,8 +898,7 @@ class MainWindow(QMainWindow):
         if width is None:
             width = self.combo_preview_grid_line_width.currentData()
         normalized = normalize_preview_composition_grid_line_width(width)
-        for panel in (self.preview_panel, self.preview_a):
-            panel.set_composition_grid_line_width(normalized)
+        self.preview_panel.set_composition_grid_line_width(normalized)
         save_preview_grid_line_width_to_settings(normalized)
 
     def _on_preview_scale_preset_activated(self, index: int) -> None:
@@ -1185,10 +1182,6 @@ class MainWindow(QMainWindow):
             video = is_video(path)
             self.media_info_stack.setCurrentWidget(self.video_info_panel if video else self.image_info_tabs)
             self.video_info_panel.set_path(path if video else '')
-            other_path = self.preview_a.current_path() if self._active_preview_panel() is self.preview_panel else self.preview_panel.current_path()
-            overlay_available = not video or (self.ab_preview.enabled.isChecked() and bool(other_path) and not is_video(other_path))
-            for control in (self.check_show_focus, self.check_show_bird, self.combo_preview_grid, self.combo_preview_grid_line_width):
-                control.setEnabled(overlay_available)
             self.ab_preview.a_panel._update_available()
             self.ab_preview.b_panel._update_available()
             if video:
@@ -1283,21 +1276,27 @@ class MainWindow(QMainWindow):
         if self.image_info_tabs.currentWidget() is self.image_info_panel:
             self.image_info_panel.refresh_metadata_fields()
 
+    def _on_viewport_overlays_changed(self, viewport) -> None:
+        panel, controls = viewport.preview, viewport.overlays
+        focus_changed = panel._show_focus_enabled != controls.focus.isChecked()
+        bird_changed = getattr(panel, "_bird_body_enabled", False) != controls.bird.isChecked()
+        panel.set_show_focus_enabled(controls.focus.isChecked())
+        panel.set_composition_grid_mode(controls.grid.currentData())
+        panel.set_composition_grid_line_width(controls.width.currentData())
+        if bird_changed:
+            self._bird_body.set_panel_enabled(panel, controls.bird.isChecked())
+        playing = self._file_list._key_navigation_playback_active
+        source = panel.source_identity_path() or panel.current_path()
+        if source and bird_changed:
+            self._bird_body.show_source(panel, source, committed=not playing)
+        if source and focus_changed:
+            self._update_preview_focus_box(source, allow_async_load=not playing, panel=panel)
+
     def _on_preview_overlay_toggled(self, _checked: bool) -> None:
-        """「显示对焦点」开关：同步 canvas 并按需加载/清除当前图的对焦点框。"""
-        enabled = self.check_show_focus.isChecked()
-        for panel in (self.preview_panel, self.preview_a):
-            panel.set_show_focus_enabled(enabled)
-        self._refresh_preview_focus_options()
+        self._on_viewport_overlays_changed(self.ab_preview.b_panel)
 
     def _on_bird_body_toggled(self, enabled: bool) -> None:
-        self._bird_body.set_enabled(enabled)
-        playing = self._file_list._key_navigation_playback_active
-        for panel in (self.preview_panel, self.preview_a):
-            # 已显示帧的身份由控制器保存，不能拿播放中已跳过的下一帧替代。
-            source = getattr(panel, "_bird_body_source_path", "") or panel.current_path()
-            if source:
-                self._bird_body.show_source(panel, source, committed=not playing)
+        self._on_viewport_overlays_changed(self.ab_preview.b_panel)
 
     def _on_preview_playback_state_changed(self, playing: bool) -> None:
         # 首个重复帧可能因缺缓存被跳过；仍须立即抑制活动视口的完整解码。
@@ -1381,11 +1380,13 @@ class MainWindow(QMainWindow):
         auto_center_control = (ab.a_panel.center if ab is not None and panel is ab.a_preview
                                else getattr(self, "check_auto_focus_center", None))
         auto_center = bool(auto_center_control and auto_center_control.isChecked())
+        focus_control = (ab.a_panel.overlays.focus if ab is not None and panel is ab.a_preview
+                         else getattr(self, "check_show_focus", None))
+        show_focus_enabled = bool(focus_control and focus_control.isChecked())
         if not allow_async_load or is_video(path):
             self._stop_focus_loader()
             focus_box = None
-            show_focus = getattr(self, "check_show_focus", None)
-            if (auto_center or bool(show_focus and show_focus.isChecked())) and not is_video(path):
+            if (auto_center or show_focus_enabled) and not is_video(path):
                 # 磁盘缓存帧的 path 是散列 JPEG；选择身份来自列表，不扫描源文件。
                 source_path = self._file_list.get_selected_display_path() or path
                 panel._focus_cache_path = source_path
@@ -1393,7 +1394,7 @@ class MainWindow(QMainWindow):
                     _checked, focus_box = self._get_cached_focus_box_for_preview(source_path)
             panel.set_focus_box(focus_box)
             return
-        if not self.check_show_focus.isChecked() and not auto_center:
+        if not show_focus_enabled and not auto_center:
             self._stop_focus_loader()
             panel.set_focus_box(None)
             return

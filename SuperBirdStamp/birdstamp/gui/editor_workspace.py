@@ -568,6 +568,7 @@ class _BirdStampWorkspaceMixin:
             "composition_grid_mode": self.preview_grid_combo.currentData(),
             "composition_grid_line_width": self.preview_grid_line_width_combo.currentData(),
             "preview_scale_percent": self.preview_label.current_display_scale_percent(),
+            "a_overlays": self.ab_preview.a_panel.overlays.state(),
         }
 
     def _apply_workspace_preview_state(self, state: dict[str, Any]) -> float | None:
@@ -609,6 +610,8 @@ class _BirdStampWorkspaceMixin:
         finally:
             _restore_widget_signals(widgets_state)
 
+        self.ab_preview.b_panel.overlays.sync()
+        self.ab_preview.a_panel.overlays.restore(state.get("a_overlays", state))
         self.crop_effect_alpha_value_label.setText(str(int(self.crop_effect_alpha_slider.value())))
         self.preview_label.canvas.set_auto_focus_center(self.auto_focus_center_check.isChecked())
         self._apply_preview_overlay_options_from_ui()

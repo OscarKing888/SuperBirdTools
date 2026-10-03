@@ -56,7 +56,7 @@ def test_show_focus_alone_draws_cached_fast_frames_without_io(window, monkeypatc
     panel = window.preview_a if side == 'a' else window.preview_panel
     window.ab_preview.a_panel.center.setChecked(False)
     window.check_auto_focus_center.setChecked(False)
-    window.check_show_focus.setChecked(True)
+    (window.ab_preview.a_panel if side == 'a' else window.ab_preview.b_panel).overlays.focus.setChecked(True)
     source = os.path.normpath('photos/鸟.ARW')
     box = (.25, .25, .75, .75)
     window._file_list._selected_display_path = source
@@ -82,11 +82,11 @@ def test_show_focus_alone_draws_cached_fast_frames_without_io(window, monkeypatc
     assert not panel._full_preview_timer.isActive()
     rendered = panel.canvas.render_source_pixmap_with_overlays().toImage()
     assert max(rendered.pixelColor(x, 80).green() for x in range(64, 70)) > 200
-    window.check_show_focus.setChecked(False)
+    (window.ab_preview.a_panel if side == 'a' else window.ab_preview.b_panel).overlays.focus.setChecked(False)
     assert max(panel.canvas.render_source_pixmap_with_overlays().toImage().pixelColor(x, 80).green()
                for x in range(64, 70)) == 0
     # 不将上一张照片的框留给缺少焦点的下一帧。
-    window.check_show_focus.setChecked(True)
+    (window.ab_preview.a_panel if side == 'a' else window.ab_preview.b_panel).overlays.focus.setChecked(True)
     window._file_list._meta_cache.clear()
     window._on_file_fast_preview_pixmap_requested(source, image, 256)
     assert panel.canvas._focus_box is None

@@ -7,12 +7,13 @@ from pathlib import Path
 
 from app_common.toggle_button import ToggleToolButton
 from app_common.preview_source_menu import PreviewSourceMenu
+from app_common.preview_toolbar import ViewportOverlayTools, iconize, zoom_menu
 from app_common.preview_canvas import configure_preview_scale_preset_combo, sync_preview_scale_preset_combo
 from app_common.video import is_video
 from app_common.image_formats import RAW_EXTENSIONS
 
 from .qt_compat import (
-    QComboBox, QFrame, QHBoxLayout, QLabel, QPushButton,
+    QComboBox, QFrame, QHBoxLayout, QLabel,
     QSizePolicy, QSplitter, QVBoxLayout, QWidget, Qt,
     _Horizontal,
 )
@@ -30,7 +31,7 @@ _ELIDE = getattr(Qt, "TextElideMode", Qt)
 class ViewerViewportPanel(QWidget):
     activated = pyqtSignal()
 
-    def __init__(self, name, preview, *, center=None, scale=None):
+    def __init__(self, name, preview, *, center=None, scale=None, overlays=None):
         super().__init__()
         self.name = name
         self.preview = preview
@@ -67,8 +68,13 @@ class ViewerViewportPanel(QWidget):
         self.center = center if center is not None else ToggleToolButton("自动焦点居中")
         if center is None:
             self.center.toggled.connect(preview.set_auto_focus_center)
+        iconize(self.center, "center", "自动焦点居中")
+        self.overlays = overlays if overlays is not None else ViewportOverlayTools()
+        row.addWidget(self.overlays)
         row.addWidget(self.center)
-        self.fit = QPushButton("适应窗口")
+        self.fit = ToggleToolButton("适应窗口")
+        self.fit.setCheckable(False)
+        iconize(self.fit, "fit", "适应窗口")
         self.fit.clicked.connect(preview.canvas.fit_to_window)
         row.addWidget(self.fit)
         self.scale = scale if scale is not None else QComboBox(self)
@@ -77,7 +83,8 @@ class ViewerViewportPanel(QWidget):
             self.scale.activated.connect(self._zoom)
             preview.display_scale_percent_changed.connect(self._sync_scale)
             self._sync_scale(preview.current_display_scale_percent())
-        row.addWidget(self.scale)
+        self.zoom_button = zoom_menu(self.scale)
+        row.addWidget(self.zoom_button)
         layout.addWidget(self.toolbar)
         self.viewport_frame = QFrame(self)
         self.viewport_frame.setObjectName("ViewerABViewportFrame")
@@ -135,11 +142,17 @@ class ViewerViewportPanel(QWidget):
         self.raw_toggle.setText({"default": "默认预览", "raw": "显示 RAW", "denoised": "显示降噪"}[mode])
         if mode == "raw" and Path(path).suffix.lower() not in RAW_EXTENSIONS:
             self.raw_toggle.setText("默认预览")
+        effective = "default" if mode == "raw" and Path(path).suffix.lower() not in RAW_EXTENSIONS else mode
+        iconize(self.raw_toggle, effective, self.raw_toggle.text())
+        self.raw_toggle.setAccessibleName(f"{self.name} 预览来源：{self.raw_toggle.text()}")
+        self.raw_toggle.setToolTip(self.raw_toggle.text() + "：点击循环切换，箭头菜单直接选择；仅影响本侧视口。")
         self.raw_toggle.setChecked(mode == "denoised" or (mode == "raw" and Path(path).suffix.lower() in RAW_EXTENSIONS))
         available = (self.preview.current_display_scale_percent() is not None
                      and not is_video(self.preview.current_path() or ""))
         self.fit.setEnabled(available)
         self.scale.setEnabled(available)
+        self.zoom_button.setEnabled(available)
+        self.overlays.setEnabled(not is_video(path))
         self.center.setEnabled(available)
 
     def _cycle_preview_source(self):
@@ -232,7 +245,7 @@ class ViewerABViewLink(QObject):
 class ViewerABPreview(QObject):
     """Owns the extra viewport; the existing MainWindow preview remains B."""
 
-    def __init__(self, owner, b_preview, a_preview, *, b_center, b_scale):
+    def __init__(self, owner, b_preview, a_preview, *, b_center, b_scale, b_overlays):
         super().__init__(owner)
         self.owner = owner
         self.a_preview = a_preview
@@ -248,11 +261,15 @@ class ViewerABPreview(QObject):
         self.linked.setText("同步缩放/移动")
         self.linked.setCheckable(True)
         self.linked.setToolTip("保留当前相对视野；之后同步缩放和平移变化。")
+        iconize(self.enabled, "compare", "A/B 对照")
+        iconize(self.linked, "link", "同步缩放/移动")
         self.linked.hide()
         self.splitter = QSplitter(_Horizontal)
         self.splitter.setChildrenCollapsible(False)
         self.a_panel = ViewerViewportPanel("A", a_preview)
-        self.b_panel = ViewerViewportPanel("B", b_preview, center=b_center, scale=b_scale)
+        self.b_panel = ViewerViewportPanel("B", b_preview, center=b_center, scale=b_scale, overlays=b_overlays)
+        self.a_panel.overlays.restore(b_overlays.state())
+        self.a_panel.overlays.changed.connect(lambda: owner._on_viewport_overlays_changed(self.a_panel))
         self.splitter.addWidget(self.a_panel)
         self.splitter.addWidget(self.b_panel)
         self.a_panel.hide()

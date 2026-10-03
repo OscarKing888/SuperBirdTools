@@ -30,7 +30,7 @@ Hot-received photos switch the B preview from result view to source/edit view be
 | [_BirdStampRendererMixin](../birdstamp/gui/editor_renderer.py) | 设置快照、原图/预览缓存、鸟检测结果和预览绘制。 |
 | [_BirdStampExporterMixin](../birdstamp/gui/editor_exporter.py) | 图片/GIF 导出的目标分配、作业调度、进度与错误展示。 |
 | [_BirdStampDejitterMixin](../birdstamp/gui/editor_dejitter.py) | 导出组的去抖动标签页、原生编辑/成片 Tab、整组分析签名与快/清晰两级有界成片缓存、共享画布辅助层映射。 |
-| [ABPreview](../birdstamp/gui/editor_ab_preview.py) | 独立 A/B 对照：预览工具栏「显示裁切效果」前的分屏图标开关带悬停提示；点击激活侧接收照片列表选择，原图/成片独立切换及可选视野联动；A 保持单 worker 所有权，B 保留原编辑上下文。 |
+| [ABPreview](../birdstamp/gui/editor_ab_preview.py) | 独立 A/B 对照：主预览工具栏的分屏图标开关带悬停提示；点击激活侧接收照片列表选择，原图/成片独立切换及可选视野联动；A 保持单 worker 所有权，B 保留原编辑上下文。 |
 | [SequenceTransport](../birdstamp/gui/editor_sequence_transport.py) | 原图/成片共用播放条、帧率、循环和缩略图条；A/B 每侧按钮激活本侧。`SourceQuickLoader` 异步准备固定 256 档原图小图，优先读写 Viewer 的逐文件 `.superpicky/thumb_cache/256`，无作用域时回退用户配置目录 `config/cache/source_preview`；内存只保留播放附近的 64 MiB 帧。播放立即开始，缺帧时保持当前画面并优先补读，停播后升级最终帧。普通编辑页方向键首次按下执行正常选图策略，长按由精确定时器驱动，物理松键提交最终清晰预览。 |
 | [_BirdStampReferenceTrackingMixin](../birdstamp/gui/editor_reference_tracking.py) | 多参考区预处理、结果签名与失效、切图跟踪预览及工作线程所有权。 |
 | [_BirdStampDejitterRelayMixin](../birdstamp/gui/editor_dejitter_relay.py) | 去抖动接力追踪：接力参考图状态、按列表位置把每张照片归属原参考图或接力参考图（定义），供选区编辑、手动修正、诊断框与推荐选区共用。 |
@@ -302,3 +302,7 @@ GUI 测试必须在构造窗口前将 `birdstamp.config.get_user_data_dir` patch
 [`entry.py`](../entry.py) 在业务模块导入前进行 `SuperBirdUpdater.runtime.admit_startup()` 登记。`launch_gui()` 在窗口显示后接入更新菜单、后台检查及独立 IPC；图片/GIF、序列和视频导出中的实例拒绝更新退出。通过准备检查后冻结窗口输入，再调用原 `closeEvent`，保留工作区保存及线程/ExifTool 清理语义。
 
 更新源、文件级下载、自更新隔离与失败恢复由 [SuperBirdUpdater](../../SuperBirdUpdater/README.md) 负责。源码启动不会自动更新，不改变照片导入/发送协议。
+
+### 视口显示选项归属
+
+[PreviewViewportPanel](../birdstamp/gui/editor_preview_viewport.py) 复用共享 [ViewportOverlayTools](../../app_common/preview_toolbar.py)，将原主工具栏显示选项移入每侧：裁切遮罩/透明度、焦点框、鸟体框、构图线/线宽均独立，来源、原图/成片、焦点居中、适应、缩放也统一为图标。主工具栏只保留编辑工具、A/B 和视野同步。`_build_preview_overlay_options(controls)` 接受指定侧控件；无参数沿用 B 以兼容编辑与模板管线，A 显式传入自己的选项。工作区通过 `a_overlays` 保存 A，旧字段保持 B，旧工作区初始化两侧相同后各自调整。详细布局见 [AB_PREVIEW_LAYOUT.md](ux/AB_PREVIEW_LAYOUT.md)，回归见 [test_editor_viewport_toolbar.py](../tests/test_editor_viewport_toolbar.py)。纯交互控件无独立 CLI 参数。

@@ -390,7 +390,7 @@ def test_focus_is_painted_on_quick_source_and_result_frames(window, monkeypatch,
     else:
         window._set_dejitter_view('edit' if mode.startswith('source') else 'result')
     ab.activate(side)
-    window.show_focus_box_check.setChecked(True)
+    (ab.a_panel if side == 'a' else ab.b_panel).overlays.focus.setChecked(True)
     ab.a_panel.center.setChecked(False)
     ab.b_panel.center.setChecked(False)
     transport = window.sequence_transport
@@ -400,7 +400,7 @@ def test_focus_is_painted_on_quick_source_and_result_frames(window, monkeypatch,
     canvas = ab.preview.canvas if side == 'a' else window.preview_label.canvas
     assert canvas._focus_box is not None
     with_focus = canvas.render_source_pixmap_with_overlays().toImage()
-    window.show_focus_box_check.setChecked(False)
+    (ab.a_panel if side == 'a' else ab.b_panel).overlays.focus.setChecked(False)
     without_focus = canvas.render_source_pixmap_with_overlays().toImage()
     assert with_focus != without_focus
     assert window._sequence_worker is None

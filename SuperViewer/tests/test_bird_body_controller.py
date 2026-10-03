@@ -249,3 +249,36 @@ def test_shared_pool_executes_analysis_outside_gui_and_queues_display_update():
         assert _wait(controller.is_shutdown_done)
         assert pool.is_finished()
         controller.deleteLater()
+
+
+def test_per_view_toggle_only_schedules_enabled_side_and_reuses_result(env):
+    controller, pool, left, right = env
+    controller.set_panel_enabled(left, False)
+    controller.set_panel_enabled(right, True)
+    controller.show_source(left, 'left.jpg')
+    controller.show_source(right, 'right.jpg')
+    assert _wait(lambda: len(pool.submitted) == 1)
+    assert pool.submitted[0][0].path == 'right.jpg'
+    assert not left.enabled and right.enabled
+    pool.complete(0)
+    assert _wait(lambda: right.box == _BOX)
+    controller.set_panel_enabled(left, True)
+    assert right.box == _BOX
+    assert _wait(lambda: len(pool.submitted) == 2)
+    controller.set_panel_enabled(right, False)
+    assert right.box is None and left.enabled
+    pool.complete(1)
+    assert _wait(lambda: left.box == _BOX)
+
+
+def test_per_view_toggle_survives_directory_clear(env):
+    controller, pool, left, right = env
+    controller.set_panel_enabled(left, False)
+    controller.set_panel_enabled(right, True)
+    controller.clear_panel(left)
+    controller.clear_panel(right)
+    controller.show_source(left, 'next/left.jpg')
+    controller.show_source(right, 'next/right.jpg')
+    assert not left.enabled and right.enabled
+    assert _wait(lambda: len(pool.submitted) == 1)
+    assert pool.submitted[0][0].path == 'next/right.jpg'
