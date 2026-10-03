@@ -260,6 +260,7 @@ Follow [ai_rules/AI_CODING_RULES.md](ai_rules/AI_CODING_RULES.md) as the cross-t
 - BirdStamp workspace restoration is asynchronous: suspend automatic and manual saves until the full restore finishes. Closing midway preserves the last complete autosave and cancels remaining restore/autosave callbacks.
 - Export temporary directories need an owner immediately after creation, including failure/cancel paths before a render plan is returned. Output names are allocated with Unicode normalization and case-insensitive collision detection before parallel writes.
 - GIF timing is quantized on cumulative 10 ms boundaries, not truncated per frame. Input rates above 100 FPS are sampled to the GIF timeline, preserving requested total duration within quantization error; report actual FPS/frame count. A nonempty clip shorter than 10 ms still needs one 10 ms frame. Keep all size variants on the same timeline. Repeat passes (`repeat_fps`) append the complete sequence again at their own FPS; each pass is quantized/sampled independently on that same contract.
+- Video repeat passes encode at one constant output FPS (the fastest pass, or a small exact multiple up to 120 FPS); slower passes repeat rendered frames via a hardlinked `repeat_timeline` sequence that is deleted after encoding. Keep each pass's duration within half an output frame, at least one output frame per input frame, and never duplicate frames inside the render caches.
 
 ## Qt And Failure Regression Tests
 

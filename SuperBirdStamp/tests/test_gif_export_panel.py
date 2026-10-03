@@ -144,20 +144,20 @@ def test_repeat_passes_add_halved_fps_remove_and_restore(monkeypatch, tmp_path) 
     try:
         panel.set_state(fps=20)
         assert panel.current_request().repeat_fps == []
-        panel.add_repeat_button.click()
-        panel.add_repeat_button.click()
+        panel.repeat_editor.add_button.click()
+        panel.repeat_editor.add_button.click()
         assert panel.current_request().repeat_fps == [10.0, 5.0]
-        assert [label.text() for _row, label, _spin in panel._repeat_rows] == ["第 2 遍", "第 3 遍"]
+        assert [label.text() for _row, label, _spin in panel.repeat_editor.rows] == ["第 2 遍", "第 3 遍"]
         assert len(signals) == 2
 
-        panel._repeat_rows[1][2].setValue(3)
+        panel.repeat_editor.rows[1][2].setValue(3)
         assert panel.current_request().repeat_fps == [10.0, 3.0]
         assert len(signals) == 3
 
-        remove_first = panel._repeat_rows[0][0].findChildren(editor_gif_panel.QPushButton)[0]
+        remove_first = panel.repeat_editor.rows[0][0].findChildren(editor_gif_panel.QPushButton)[0]
         remove_first.click()
         assert panel.current_request().repeat_fps == [3.0]
-        assert [label.text() for _row, label, _spin in panel._repeat_rows] == ["第 2 遍"]
+        assert [label.text() for _row, label, _spin in panel.repeat_editor.rows] == ["第 2 遍"]
         assert len(signals) == 4
 
         signals.clear()
@@ -209,6 +209,6 @@ def test_repeat_pass_count_is_limited() -> None:
         limit = editor_gif_panel.GIF_REPEAT_PASS_LIMIT
         panel.set_state(repeat_fps=[10] * (limit + 3))
         assert len(panel.current_request().repeat_fps) == limit
-        assert not panel.add_repeat_button.isEnabled()
+        assert not panel.repeat_editor.add_button.isEnabled()
     finally:
         panel.close()

@@ -68,6 +68,7 @@ from .video_export_cancelled_error import VideoExportCancelledError
 from .video_export_options import VIDEO_CODEC_RAWVIDEO, VideoExportOptions, is_uncompressed_video_container
 from .video_export_progress import VideoExportProgress, VideoExportProgressCallback
 from .video_frame_job import VideoFrameJob
+from .video_repeat import VideoRepeatTimeline, build_video_repeat_timeline, link_timeline_frames, validated_fps
 from .video_render_workers import (
     UNKNOWN_FRAME_PIXELS, VideoStageStats, estimate_normalize_pixels,
     resolve_video_frame_budget, track_video_stage,
@@ -216,12 +217,10 @@ def validate_video_export_options(options: VideoExportOptions) -> VideoExportOpt
     elif codec not in {"h264", "h265"}:
         raise ValueError(f"不支持的视频编码器: {codec}")
 
-    try:
-        fps = float(options.fps)
-    except Exception as exc:
-        raise ValueError("FPS 必须为数字。") from exc
-    if fps <= 0:
-        raise ValueError("FPS 必须大于 0。")
+    fps = validated_fps(options.fps, "FPS")
+    repeat_fps = tuple(
+        validated_fps(value, f"第 {index} 遍 FPS") for index, value in enumerate(options.repeat_fps or (), start=2)
+    )
 
     preset = str(options.preset or "medium").strip().lower() or "medium"
     if not uncompressed and not preset:
@@ -260,6 +259,7 @@ def validate_video_export_options(options: VideoExportOptions) -> VideoExportOpt
         container=container,
         codec=codec,
         fps=fps,
+        repeat_fps=repeat_fps,
         preset=preset,
         crf=crf,
         frame_size_mode=mode,
@@ -2290,9 +2290,11 @@ def build_ffmpeg_command(
     options: VideoExportOptions,
     *,
     output_path: Path | None = None,
+    input_fps: float | None = None,
 ) -> list[str]:
+    """``input_fps`` 覆盖图片序列帧率，供重复播放时间线使用其恒定输出帧率。"""
     validated = validate_video_export_options(options)
-    fps_text = _ffmpeg_fps_text(validated.fps)
+    fps_text = _ffmpeg_fps_text(validated.fps if input_fps is None else float(input_fps))
     input_pattern = str(frames_dir / "frame_%06d.png")
     resolved_output_path = str((output_path or validated.normalized_output_path()).resolve(strict=False))
 
@@ -2586,6 +2588,10 @@ def _build_partial_video_from_frames(
     return partial_output_path if partial_output_path.is_file() else None
 
 
+def _repeat_timeline_dir(work_dir: Path) -> Path:
+    return work_dir / "repeat_timeline"
+
+
 def _ffmpeg_not_found_message() -> str:
     script_path = ffmpeg_install_script_path()
     expected_binary = preferred_ffmpeg_binary_path()
@@ -2674,16 +2680,35 @@ def export_video(
         )
 
         _raise_if_cancel_requested(cancel_event, message="视频导出已中断，正在停止视频编码。")
+        encode_frames_dir = frames_dir
+        encode_fps: float | None = None
+        timeline: VideoRepeatTimeline | None = None
+        if validated.repeat_fps:
+            # 重复播放：硬链接出按时间线排列的序列，渲染缓存本身保持一帧一图。
+            timeline = build_video_repeat_timeline(total, validated.fps, validated.repeat_fps)
+            timeline_dir = _repeat_timeline_dir(work_dir)
+            link_timeline_frames(
+                [frames_dir / f"frame_{index:06d}.png" for index in range(1, total + 1)], timeline, timeline_dir,
+            )
+            encode_frames_dir = timeline_dir
+            encode_fps = timeline.output_fps
+        timeline_text = f" | {timeline.summary()}" if timeline is not None else ""
         _emit_progress(
             progress_callback,
             phase="encode",
             current=total,
             total=total,
-            message=f"正在编码视频: {output_path.name}",
+            message=f"正在编码视频: {output_path.name}{timeline_text}",
         )
-        cmd = build_ffmpeg_command(ffmpeg_path, frames_dir, validated, output_path=temp_output_path)
+        cmd = build_ffmpeg_command(
+            ffmpeg_path, encode_frames_dir, validated, output_path=temp_output_path, input_fps=encode_fps,
+        )
         _log.info("video export ffmpeg command: %s", cmd)
-        _export_stage_callable("_run_ffmpeg_command")(cmd, cancel_event=cancel_event)
+        try:
+            _export_stage_callable("_run_ffmpeg_command")(cmd, cancel_event=cancel_event)
+        finally:
+            if timeline is not None:
+                shutil.rmtree(encode_frames_dir, ignore_errors=True)
 
         if not temp_output_path.is_file():
             raise RuntimeError(f"视频编码完成但输出文件不存在: {temp_output_path}")
@@ -2695,7 +2720,7 @@ def export_video(
             phase="done",
             current=total,
             total=total,
-            message=f"视频导出完成: {output_path}",
+            message=f"视频导出完成: {output_path}{timeline_text}",
         )
         if not validated.preserve_temp_files:
             if work_dir is not None:

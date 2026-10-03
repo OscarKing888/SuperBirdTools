@@ -200,6 +200,10 @@ RAW 源图的去抖动分析、成片预览和导出统一优先读取长边至�
 
 `_run_ffmpeg_command` 管理 FFmpeg 子进程，stderr 写临时文件以避免管道填满阻塞，失败时读取有限尾部信息；取消先终止，必要时强制结束并等待退出。窗口、worker、线程池与子进程分别有明确所有者，不能仅停止进度 UI 就视为任务已结束。
 
+### 视频重复播放
+
+`VideoExportOptions.repeat_fps` 在主 FPS 那一遍之后按各自 FPS 追加完整序列。视频以恒定帧率编码，[video_repeat.py](../birdstamp/export_stage/video_repeat.py) 的 `build_video_repeat_timeline` 选取输出帧率：取各遍最高 FPS，若其 2–4 倍（不超过 120 FPS）能让所有遍整除则用该倍数（如 30/24 → 120），否则用最高 FPS 并按累计时间四舍五入，每遍时长误差不超过半个输出帧、每张至少 1 帧。`export_video` 在视频帧缓存就绪后于工作目录生成 `repeat_timeline/frame_%06d.png`（优先硬链接，不支持时复制），以输出帧率编码，编码结束即删除；渲染缓存仍一图一帧，增删重复遍或改 FPS 都可复用。取消时的部分视频仍按主 FPS 从已渲染帧生成。面板「重复播放」与 GIF 共用 [RepeatFpsEditor](../birdstamp/gui/editor_repeat_fps.py)，随视频导出状态的 `repeat_fps` 保存到工作区，旧状态恢复为只播放一遍；进度与完成提示展示各遍 FPS、输出帧率、帧数和时长。回归见 [test_video_repeat.py](../tests/test_video_repeat.py)。
+
 ### GIF 时长与高 FPS 语义
 
 [gif_export.py](../birdstamp/gif_export.py) 的 `build_gif_frame_timing` 先生成 `GifFrameTiming`，`export_gif` 再按计划采样、统一尺寸并编码主文件及缩放变体。
@@ -263,7 +267,7 @@ RAW 源图的去抖动分析、成片预览和导出统一优先读取长边至�
 | 裁切、阶段顺序、去抖 | [pipeline.py](../birdstamp/export_stage/pipeline.py)、[editor_renderer.py](../birdstamp/gui/editor_renderer.py) | [test_image_pipeline.py](../tests/test_image_pipeline.py)、[test_retired_batch_composition.py](../tests/test_retired_batch_composition.py)、[test_video_export_dejitter.py](../tests/test_video_export_dejitter.py)、[test_editor_preview_grid.py](../tests/test_editor_preview_grid.py) |
 | 图片目标名、并行写出 | [editor_exporter.py](../birdstamp/gui/editor_exporter.py) | [test_image_export_targets.py](../tests/test_image_export_targets.py) |
 | GIF 时长、采样、缩放变体 | [gif_export.py](../birdstamp/gif_export.py)、[editor_gif_panel.py](../birdstamp/gui/editor_gif_panel.py) | [test_gif_export.py](../tests/test_gif_export.py)、[test_gif_timing.py](../tests/test_gif_timing.py) |
-| 视频编码、帧缓存、取消 | [export_stage/core.py](../birdstamp/export_stage/core.py)、[editor_video_panel.py](../birdstamp/gui/editor_video_panel.py) | [test_video_export.py](../tests/test_video_export.py)、[test_video_export_cleanup.py](../tests/test_video_export_cleanup.py)、[test_editor_video_worker.py](../tests/test_editor_video_worker.py) |
+| 视频编码、帧缓存、取消、重复播放 | [export_stage/core.py](../birdstamp/export_stage/core.py)、[video_repeat.py](../birdstamp/export_stage/video_repeat.py)、[editor_video_panel.py](../birdstamp/gui/editor_video_panel.py) | [test_video_export.py](../tests/test_video_export.py)、[test_video_repeat.py](../tests/test_video_repeat.py)、[test_video_export_cleanup.py](../tests/test_video_export_cleanup.py)、[test_editor_video_worker.py](../tests/test_editor_video_worker.py) |
 | 工作区恢复与配置路径 | [editor_workspace.py](../birdstamp/gui/editor_workspace.py)、[workspace.py](../birdstamp/workspace.py) | [test_workspace.py](../tests/test_workspace.py)、[test_workspace_restore_autosave.py](../tests/test_workspace_restore_autosave.py)、[test_config_paths.py](../tests/test_config_paths.py) |
 
 ## 8. 扩展步骤与验证方式

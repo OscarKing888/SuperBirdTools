@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 import threading
 from typing import Any, Callable
@@ -24,6 +24,7 @@ from PyQt6.QtWidgets import (
 
 from birdstamp.gui import editor_options
 from birdstamp.gui import editor_utils
+from birdstamp.gui.editor_repeat_fps import RepeatFpsEditor
 from app_common.exif_io import extract_many_with_xmp_priority
 from birdstamp.export_stage import VideoExportCancelledError, VideoExportOptions, VideoFrameJob, export_video
 from birdstamp.export_stage.render_job_seed import RenderJobSeed as VideoExportJobSeed, prepare_render_jobs
@@ -57,6 +58,7 @@ class VideoExportRequest:
     frame_width: int
     frame_height: int
     preserve_temp_files: bool = True
+    repeat_fps: list[float] = field(default_factory=list)
 
 
 class VideoExportPanel(QGroupBox):
@@ -122,6 +124,12 @@ class VideoExportPanel(QGroupBox):
         fps_layout.addWidget(self.fps_combo, stretch=1)
         fps_layout.addWidget(self.auto_fps_button)
         form.addRow("FPS", fps_widget)
+
+        self.repeat_editor = RepeatFpsEditor(self._current_fps, presets=VIDEO_FPS_OPTIONS)
+        self.repeat_editor.setToolTip(
+            "在完整序列之后按新的 FPS 再播放一遍。视频以恒定帧率编码，慢速遍通过重复帧实现。"
+        )
+        form.addRow("重复播放", self.repeat_editor)
 
         self.frame_size_combo = QComboBox()
         for item in VIDEO_FRAME_SIZE_OPTIONS:
@@ -388,12 +396,15 @@ class VideoExportPanel(QGroupBox):
             return (long_edge, short_edge)
         return (width, height)
 
-    def current_request(self) -> VideoExportRequest:
+    def _current_fps(self) -> float:
         fps_text = str(self.fps_combo.currentText() or "").strip()
         try:
-            fps = float(fps_text or DEFAULT_VIDEO_FPS)
+            return float(fps_text or DEFAULT_VIDEO_FPS)
         except Exception:
-            fps = float(DEFAULT_VIDEO_FPS)
+            return float(DEFAULT_VIDEO_FPS)
+
+    def current_request(self) -> VideoExportRequest:
+        fps = self._current_fps()
         frame_data = self.current_frame_size_data()
         mode = str(frame_data.get("mode") or "auto").strip().lower() or "auto"
         width = self.frame_width_spin.value()
@@ -418,9 +429,10 @@ class VideoExportPanel(QGroupBox):
             frame_width=width,
             frame_height=height,
             preserve_temp_files=bool(self.preserve_temp_files_check.isChecked()),
+            repeat_fps=self.repeat_editor.values(),
         )
 
-    def current_state(self) -> dict[str, int | float | str | bool]:
+    def current_state(self) -> dict[str, object]:
         frame_data = self.current_frame_size_data()
         container = self._radio_group_value(self.container_buttons, DEFAULT_VIDEO_CONTAINER)
         codec = (
@@ -432,6 +444,7 @@ class VideoExportPanel(QGroupBox):
             "container": container,
             "codec": codec,
             "fps_text": str(self.fps_combo.currentText() or "").strip(),
+            "repeat_fps": self.repeat_editor.values(),
             "frame_size_mode": str(frame_data.get("mode") or DEFAULT_VIDEO_FRAME_SIZE_MODE).strip().lower(),
             "frame_size_width": int(frame_data.get("width") or 0),
             "frame_size_height": int(frame_data.get("height") or 0),
@@ -480,6 +493,8 @@ class VideoExportPanel(QGroupBox):
             fps_text = str(state.get("fps_text") or "").strip()
             if fps_text:
                 self.fps_combo.setCurrentText(fps_text)
+            # 旧状态没有重复播放设置，按只播放一遍恢复。
+            self.repeat_editor.set_values(state.get("repeat_fps") or [])
 
             target_mode = str(state.get("frame_size_mode") or "").strip().lower() or DEFAULT_VIDEO_FRAME_SIZE_MODE
             try:
@@ -558,6 +573,7 @@ class VideoExportPanel(QGroupBox):
         self.codec_widget.setEnabled(not busy)
         self.fps_combo.setEnabled(not busy)
         self.auto_fps_button.setEnabled(not busy)
+        self.repeat_editor.setEnabled(not busy)
         self.frame_size_combo.setEnabled(not busy)
         self.orientation_widget.setEnabled(not busy and str(self.current_frame_size_data().get("mode") or "") == "preset")
         self.frame_width_spin.setEnabled(not busy and str(self.current_frame_size_data().get("mode") or "") == "custom")

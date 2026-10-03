@@ -28,6 +28,8 @@ class VideoExportOptions:
     container: str = "mp4"
     codec: str = "h264"
     fps: float = 25.0
+    # 完整序列之后追加的重复播放遍，每遍按各自 FPS 再播放一次。
+    repeat_fps: tuple[float, ...] = ()
     preset: str = "medium"
     crf: int = 20
     frame_size_mode: str = "auto"

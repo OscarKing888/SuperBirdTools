@@ -194,6 +194,7 @@ from birdstamp.export_stage import (
     preferred_ffmpeg_binary_path,
 )
 from birdstamp.export_stage.video_export_options import is_uncompressed_video_container, video_container_file_suffix
+from birdstamp.export_stage.video_repeat import build_video_repeat_timeline
 from app_common.report_db import (
     ReportDB,
     find_superpicky_report_db_paths,
@@ -764,6 +765,7 @@ class BirdStampEditorWindow(
         self._video_export_worker: VideoExportWorker | None = None
         self._video_export_started_at: float | None = None
         self._pending_video_export_dirty_keys: set[str] = set()
+        self._pending_video_export_summary = ""
         self._image_export_progress_token: int = 0
         self._image_export_active_worker_count: int = 0
         self._image_export_last_output_dir: Path | None = self._load_image_export_last_output_dir()
@@ -5682,7 +5684,10 @@ class BirdStampEditorWindow(
             if elapsed is not None
             else ""
         )
-        message = f"视频导出完成: {output_path}{timing_text}"
+        summary = getattr(self, "_pending_video_export_summary", "")
+        summary_text = f" | {summary}" if summary else ""
+        self._pending_video_export_summary = ""
+        message = f"视频导出完成: {output_path}{summary_text}{timing_text}"
         self.video_export_panel.set_busy(False, status_text=message)
         self._set_status(message)
 
@@ -5766,6 +5771,7 @@ class BirdStampEditorWindow(
                 container=request.container,
                 codec=request.codec,
                 fps=request.fps,
+                repeat_fps=tuple(request.repeat_fps),
                 preset=request.preset,
                 crf=request.crf,
                 frame_size_mode=request.frame_size_mode,
@@ -5774,6 +5780,11 @@ class BirdStampEditorWindow(
                 preserve_temp_files=request.preserve_temp_files,
             )
             output_path = options.normalized_output_path()
+            summary = (
+                build_video_repeat_timeline(len(paths), options.fps, options.repeat_fps).summary()
+                if options.repeat_fps
+                else ""
+            )
             if not self._confirm_video_output_overwrite(output_path):
                 self._set_status("已取消视频导出。")
                 return
@@ -5786,6 +5797,7 @@ class BirdStampEditorWindow(
 
         dirty_path_keys = self._dirty_photo_path_keys(paths)
         self._pending_video_export_dirty_keys = set(dirty_path_keys)
+        self._pending_video_export_summary = summary
 
         worker = VideoExportWorker(
             jobs=[],
