@@ -109,9 +109,9 @@ BirdStamp 的 [`editor_shared_thumb_cache.py`](../../SuperBirdStamp/birdstamp/gu
 
 公共“显示鸟体”按钮默认关闭，作用于 A/B 两侧，显示置信度与面积综合评分最高的主体鸟框。[`BirdBodyController`](../superviewer/bird_body_controller.py) 维护最多 2048 项内存 LRU、两个视口请求和 180 ms 停留定时器；普通选中稳定后把 `BirdBodyAction` 交给已有 `BrowserWorkPool` 的低优先级 `ANALYSIS` 配额。同图 A/B 请求去重，离开、关闭或长按时协作取消，完成信号通过 Qt 队列回到 GUI 并核验请求与源身份。创建者保留 Future 到真实完成，不另建线程池。
 
-[`bird_body.py`](../superviewer/bird_body.py) 不依赖 Qt，复用现有模型位置和设备选择，惰性加载本地 YOLO（不自动下载），只识别 bird 类。识别图缩至长边 1280；RAW 优先使用足够大的相机内嵌预览，否则后台显影并将传感器鸟框逆映射到相机坐标。GPU 失败回退 CPU。缺模型、解码或写入失败在状态栏和日志中说明；XMP 写入失败仍可使用本次内存结果。
+[`bird_body.py`](../superviewer/bird_body.py) 不依赖 Qt，复用现有模型位置和设备选择，惰性加载本地 YOLO（不自动下载），只识别 bird 类。识别图缩至长边 1280；RAW 优先使用足够大的相机内嵌预览，否则后台显影并将传感器鸟框逆映射到相机坐标。GPU 失败回退 CPU。首遍没有鸟时，由 `MissedBirdFinder` 调用鸟清晰度的 `find_missed_bird()` 做同一套伪装鸟复检（全分辨率解码、1024 px 输入再识别、焦点处弱候选/放大印证，见[鸟清晰度检测](../../docs/bird_sharpness.md)），只用识别模型、不加载鸟眼模型；复检出错不缓存“无鸟”。缺模型、解码或写入失败在状态栏和日志中说明；XMP 写入失败仍可使用本次内存结果。
 
-`XMP-superpicky:bird_body_cache_<扩展名>` 保存算法版本、源文件大小/纳秒修改时间/扩展名指纹、`camera` 坐标标记及归一化鸟框，`box:null` 明确缓存“无鸟”。同名 RAW/JPEG 共用侧车但分别保存结果；源文件改变或缓存损坏后重新计算。写前再次核验指纹和取消状态，通过共享 `PhotoMetaDataXMP` 完整事务锁防止后台缓存覆盖同时发生的标签、备注等编辑，只写 XMP，不改原图和 report.db。
+`XMP-superpicky:bird_body_cache_<扩展名>` 保存算法版本、源文件大小/纳秒修改时间/扩展名指纹、`camera` 坐标标记及归一化鸟框，`box:null` 明确缓存“无鸟”。当前版本 `bird-body-v2`：v1 中有鸟框的缓存仍然命中（首遍未变），v1 的“无鸟”缓存会重新识别以补做复检。同名 RAW/JPEG 共用侧车但分别保存结果；源文件改变或缓存损坏后重新计算。写前再次核验指纹和取消状态，通过共享 `PhotoMetaDataXMP` 完整事务锁防止后台缓存覆盖同时发生的标签、备注等编辑，只写 XMP，不改原图和 report.db。
 
 快切 handler 只读取已显示源身份对应的内存结果，不读 XMP、不提交检测。Viewer 列表的 `playback_state_changed` 在第一帧之前暂停控制器，即使因缺少缩略图跳过全部帧，也不会启动停留任务。切回普通选中才重新校验缓存。蓝色框由 [`BirdBodyOverlayMixin`](../superviewer/bird_body_overlay.py) 通过共享画布绘制扩展点叠加；`PreviewPanel` 保存相机框，按当前实际 RAW/降噪像素的裁切几何重映射。普通小图、全图升级、A/B 与叠加导出均保留各自坐标。
 

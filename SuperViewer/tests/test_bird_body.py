@@ -218,3 +218,84 @@ def test_source_recheck_after_waiting_for_sidecar_lock(photo, monkeypatch):
             photo.write_bytes(b"replaced while waiting to publish")
         outcome = future.result(timeout=5)
     assert outcome.cancelled and not photo.with_suffix(".xmp").exists()
+
+
+# ── camouflaged-bird recheck (shared with bird sharpness) ─────────────────────
+
+class Finder:
+    def __init__(self, box=(0.3, 0.3, 0.5, 0.5), error=None):
+        self.box, self.error, self.calls = box, error, 0
+
+    def find(self, _path, *, cancelled=lambda: False):
+        self.calls += 1
+        if self.error:
+            raise self.error
+        return self.box
+
+
+def test_recheck_runs_only_when_first_pass_finds_no_bird_and_is_cached(photo):
+    finder = Finder()
+    found = worker.BirdBodyAction(str(photo), detector=Detector(box=None), missed_bird_finder=finder).execute()
+    assert found.result.box == pytest.approx((0.3, 0.3, 0.5, 0.5)) and found.written and finder.calls == 1
+    cached = worker.BirdBodyAction(str(photo), detector=Detector(box=None), missed_bird_finder=finder).execute()
+    assert cached.cache_hit and cached.result.box == found.result.box and finder.calls == 1
+
+    other = Finder()
+    worker.BirdBodyAction(str(photo), detector=Detector(), missed_bird_finder=other, write_xmp=False).execute()
+    assert other.calls == 0
+
+
+def test_failed_recheck_is_reported_and_not_cached_as_no_bird(photo):
+    failed = worker.BirdBodyAction(str(photo), detector=Detector(box=None),
+                                   missed_bird_finder=Finder(error=RuntimeError("坏文件"))).execute()
+    assert failed.result.box is None and not failed.written and "伪装鸟复检失败" in failed.error
+    retry = worker.BirdBodyAction(str(photo), detector=Detector(box=None), missed_bird_finder=Finder()).execute()
+    assert not retry.cache_hit and retry.result.box is not None
+
+
+def test_cancel_during_recheck_never_publishes(photo):
+    stopped = threading.Event()
+
+    class Cancelling(Finder):
+        def find(self, path, *, cancelled=lambda: False):
+            stopped.set()
+            return super().find(path, cancelled=cancelled)
+
+    outcome = worker.BirdBodyAction(str(photo), cancelled=stopped.is_set, detector=Detector(box=None),
+                                    missed_bird_finder=Cancelling()).execute()
+    assert outcome.cancelled and not os.path.exists(os.path.splitext(photo)[0] + ".xmp")
+
+
+def test_v1_cache_keeps_boxes_but_rechecks_old_no_bird_entries(photo):
+    fingerprint = core.source_fingerprint(str(photo))
+    field = core.cache_field(str(photo))
+
+    def v1(box):
+        return {field: json.dumps({"version": "bird-body-v1", "source": fingerprint, "geometry": "camera", "box": box})}
+
+    assert core.result_from_metadata(str(photo), v1([0.1, 0.2, 0.6, 0.8]), fingerprint).box == (0.1, 0.2, 0.6, 0.8)
+    assert core.result_from_metadata(str(photo), v1(None), fingerprint) is None
+
+
+def test_missed_bird_finder_maps_raw_margins_to_the_camera_frame(monkeypatch):
+    from bird_sharpness import analyzer as analyzer_mod
+    from bird_sharpness import models as models_mod
+
+    monkeypatch.setattr(models_mod, "check_runtime", lambda: None)
+    monkeypatch.setattr(models_mod, "resolve_model_paths",
+                        lambda: models_mod.ModelPaths(None, "kp.pth", "yolo11n.pt"))
+    crop = (0.0, 0.0, 0.5, 0.5)
+    monkeypatch.setattr(analyzer_mod.BirdSharpnessAnalyzer, "find_missed_bird",
+                        lambda self, path, cancelled: analyzer_mod.MissedBird((0.1, 0.1, 0.2, 0.3), crop,
+                                                                              "focus_weak", 0.15))
+    finder = core.MissedBirdFinder()
+    assert finder.find("夜鹰.ARW") == pytest.approx((0.2, 0.2, 0.4, 0.6))
+    # the eye model is never loaded for the preview box
+    assert finder._analyzer.models._paths.keypoint is None
+
+
+def test_missed_bird_finder_without_runtime_is_a_quiet_no(monkeypatch):
+    from bird_sharpness import models as models_mod
+
+    monkeypatch.setattr(models_mod, "check_runtime", lambda: "找不到鸟体识别模型")
+    assert core.MissedBirdFinder().find("夜鹰.ARW") is None

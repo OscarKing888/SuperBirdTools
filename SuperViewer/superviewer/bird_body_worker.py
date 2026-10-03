@@ -10,8 +10,8 @@ from app_common.file_browser._work_action import WorkerAction
 from app_common.log import get_logger
 
 from .bird_body import (BirdBodyResult, cache_field, camera_box_from_raw,
-                        default_detector, load_detection_image, result_from_metadata,
-                        source_fingerprint)
+                        default_detector, default_missed_bird_finder, load_detection_image,
+                        result_from_metadata, source_fingerprint)
 
 _log = get_logger("superviewer.bird_body")
 
@@ -28,11 +28,27 @@ class BirdBodyOutcome:
 
 class BirdBodyAction(WorkerAction):
     def __init__(self, source_path: str, *, cancelled=lambda: False,
-                 detector=None, write_xmp=True):
+                 detector=None, write_xmp=True, missed_bird_finder=None):
+        """``missed_bird_finder`` (``.find(path, cancelled=)``) rechecks when no bird is
+        found; it defaults to the shared finder only with the default detector."""
         super().__init__(cancelled=cancelled)
         self.source_path = os.path.normpath(os.fspath(source_path))
         self.detector = detector
         self.write_xmp = bool(write_xmp)
+        if missed_bird_finder is None and detector is None:
+            missed_bird_finder = default_missed_bird_finder()
+        self.missed_bird_finder = missed_bird_finder
+
+    def _find_missed_bird(self, path: str):
+        """``(box, error)``; a failed recheck must not be cached as "no bird"."""
+        # 伪装/遮挡的鸟：与鸟清晰度共用复检规则。
+        try:
+            return self.missed_bird_finder.find(path, cancelled=self.is_cancelled), ""
+        except Exception as exc:
+            if self.is_cancelled():
+                return None, ""
+            _log.warning("[bird.body] camouflaged-bird recheck failed path=%r: %s", path, exc)
+            return None, f"伪装鸟复检失败：{exc}"
 
     def execute(self) -> BirdBodyOutcome:
         path = self.source_path
@@ -57,9 +73,14 @@ class BirdBodyAction(WorkerAction):
                 box = camera_box_from_raw(box, crop)
             finally:
                 image.close()
+            recheck_error = ""
+            if box is None and self.missed_bird_finder is not None and not self.is_cancelled():
+                box, recheck_error = self._find_missed_bird(path)
             if self.is_cancelled() or source_fingerprint(path) != fingerprint:
                 return BirdBodyOutcome(path, cancelled=True)
             result = BirdBodyResult(box, fingerprint)
+            if recheck_error:
+                return BirdBodyOutcome(path, result=result, error=recheck_error)
             if not self.write_xmp:
                 return BirdBodyOutcome(path, result=result)
             # 与用户编辑共用侧车锁；排队等待后重新验证，过期分析不能覆盖新源图缓存。
