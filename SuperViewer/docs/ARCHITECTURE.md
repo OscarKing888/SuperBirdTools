@@ -331,6 +331,6 @@ Qt 测试在窗口构造前隔离 `paths_settings` 的应用/用户状态目录�
 
 ### 视口图标工具栏
 
-[ViewerViewportPanel](../superviewer/viewer_ab_preview.py) 将来源、对焦点、鸟体框、构图线/线宽、焦点居中、适应窗口与缩放放在各自 A/B 视口内；主工具栏只保留 A/B 和视野同步。图标由共享 [preview_toolbar.py](../../app_common/preview_toolbar.py) 绘制，选中态沿用 `ToggleToolButton`。构图菜单与来源菜单使用互斥单选，缩放图标菜单包含原缩放控件；悬停说明当前模式或比例。A 的显示设置独立保留在窗口会话内，B 继续兼容原设置存储，切换激活侧不复制选项。
+[ViewerViewportPanel](../superviewer/viewer_ab_preview.py) 将来源、对焦点、鸟体框、构图线/线宽、焦点居中、适应窗口与缩放放在各自 A/B 视口内；主工具栏只保留 A/B 和视野同步。图标由共享 [preview_toolbar.py](../../app_common/preview_toolbar.py) 绘制，选中态沿用 `ToggleToolButton`。构图菜单直接在一级显示全部类型的互斥单选，下方通过滑动条和右侧输入框同步设置 1–32 px 整数线宽；来源菜单保持互斥单选，缩放图标菜单包含原缩放控件；悬停说明当前模式或比例。A 的显示设置独立保留在窗口会话内，B 继续兼容原设置存储，切换激活侧不复制选项。
 
 鸟体控制器 `set_panel_enabled()` 分侧控制绘制与分析需求，共享同源结果；隐藏侧框不取消另一侧仍需要的计算。切目录保留每侧开关，长按只读缓存。改构图线、线宽与工具栏主题不触发解码或元数据读取。回归见 [test_viewer_viewport_toolbar.py](../tests/test_viewer_viewport_toolbar.py) 和 [test_bird_body_controller.py](../tests/test_bird_body_controller.py)。

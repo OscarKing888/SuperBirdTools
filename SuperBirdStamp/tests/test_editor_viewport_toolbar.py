@@ -71,3 +71,27 @@ def test_a_bird_detection_uses_worker_and_actual_pixel_geometry(window, monkeypa
     monkeypatch.setattr(window, '_sequence_fast_preview_active', lambda: True)
     ab._schedule_bird_overlay()
     assert ab.bird_worker is None and not calls
+
+
+def test_custom_grid_width_roundtrips_both_viewports_and_respects_crop(window):
+    from PyQt6.QtGui import QColor
+    a, b = window.ab_preview.a_panel.overlays, window.ab_preview.b_panel.overlays
+    a.grid_menu.width_slider.setValue(7)
+    b.grid_menu.width_edit.setText('11')
+    b.grid_menu.width_edit.editingFinished.emit()
+    state = window._collect_workspace_preview_state()
+    a.grid_menu.width_slider.setValue(1)
+    b.grid_menu.width_slider.setValue(1)
+    window._apply_workspace_preview_state(state)
+    assert a.width.currentData() == 7 and a.grid_menu.width_edit.text() == '7'
+    assert b.width.currentData() == 11 and b.grid_menu.width_slider.value() == 11
+    canvas = window.preview_label.canvas
+    pixmap = QPixmap(120, 120)
+    pixmap.fill(QColor('black'))
+    canvas.set_source_pixmap(pixmap, log_performance=False)
+    canvas.set_crop_effect_box((.25, .25, .75, .75))
+    canvas.set_show_crop_effect(False)
+    canvas.set_composition_grid_mode('thirds')
+    image = canvas.render_source_pixmap_with_overlays().toImage()
+    assert image.pixelColor(54, 60).red() > 0
+    assert image.pixelColor(20, 60).red() == 0

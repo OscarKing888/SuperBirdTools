@@ -39,9 +39,38 @@ def test_viewport_icons_and_independent_overlay_export(window, tmp_path, monkeyp
     with Image.open(target) as image:
         assert image.getpixel((40, 45))[0] > 0
     # 菜单提供全部模式，点击单选后仍只改变这一侧。
-    menu = a.overlays.grid_button.menu().actions()[0].menu()
+    menu = a.overlays.grid_button.menu()
     menu.aboutToShow.emit()
-    assert len(menu.actions()) == 6
+    assert len([action for action in menu.actions() if action.isCheckable()]) == 6
     next(action for action in menu.actions() if action.data() == 'crosshair').trigger()
     assert a.preview.composition_grid_mode() == 'crosshair'
     assert b.preview.composition_grid_mode() == 'none'
+
+
+def test_custom_width_changes_pixels_and_persists(window, tmp_path, monkeypatch):
+    from SuperViewer.superviewer.exif_helpers import load_preview_grid_line_width_from_settings
+    source = tmp_path / 'custom.jpg'
+    Image.new('RGB', (120, 90)).save(source)
+    window._on_file_selected_from_list(str(source))
+    controls = window.ab_preview.b_panel.overlays
+    controls.grid.setCurrentIndex(controls.grid.findData('thirds'))
+    narrow = window.preview_panel.canvas.render_source_pixmap_with_overlays().toImage()
+    controls.grid_menu.width_edit.setText('9')
+    controls.grid_menu.width_edit.editingFinished.emit()
+    wide = window.preview_panel.canvas.render_source_pixmap_with_overlays().toImage()
+    assert narrow.pixelColor(43, 45).red() == 0
+    assert wide.pixelColor(43, 45).red() > 0
+    assert window.preview_panel.canvas._composition_grid_line_width == 9
+    assert load_preview_grid_line_width_from_settings() == 9
+    assert window.ab_preview.a_panel.overlays.width.currentData() != 9
+
+    from SuperViewer.tests.test_directory_selection_responsiveness import _wait_until
+    restored = type(window)(initial_received_files=['skip-restore'])
+    try:
+        assert restored.combo_preview_grid_line_width.currentData() == 9
+        assert restored.ab_preview.b_panel.overlays.grid_menu.width_slider.value() == 9
+        assert restored.preview_panel.canvas._composition_grid_line_width == 9
+    finally:
+        restored.close()
+        _wait_until(lambda: restored._shutdown_finalized)
+        restored.deleteLater()

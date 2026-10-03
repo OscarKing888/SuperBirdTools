@@ -435,6 +435,8 @@ class MainWindow(QMainWindow):
                     line_width,
                 )
         current_line_width = load_preview_grid_line_width_from_settings()
+        if self.combo_preview_grid_line_width.findData(current_line_width) < 0:
+            self.combo_preview_grid_line_width.addItem(f"{current_line_width} px", current_line_width)
         current_width_index = self.combo_preview_grid_line_width.findData(current_line_width)
         if current_width_index < 0:
             current_width_index = self.combo_preview_grid_line_width.findData(1)
@@ -442,7 +444,7 @@ class MainWindow(QMainWindow):
             current_width_index = 0
         if current_width_index >= 0:
             self.combo_preview_grid_line_width.setCurrentIndex(current_width_index)
-        self.combo_preview_grid_line_width.setToolTip("设置构图辅助线线宽，列表图标按 1 到 4 像素直观显示粗细。")
+        self.combo_preview_grid_line_width.setToolTip("设置构图辅助线线宽，支持 1–32 px。")
         self.combo_preview_grid_line_width.currentIndexChanged.connect(self._on_preview_grid_line_width_changed)
         self.combo_preview_scale = QComboBox(self)
         configure_preview_scale_preset_combo(
