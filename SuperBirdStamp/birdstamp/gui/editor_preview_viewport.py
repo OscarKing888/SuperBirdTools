@@ -1,10 +1,11 @@
 """A/B 共用视口：照片信息及操作工具栏、画布和状态栏。"""
 from PyQt6.QtCore import QEvent, Qt, pyqtSignal
 from PyQt6.QtGui import QPalette
-from PyQt6.QtWidgets import QButtonGroup, QComboBox, QFrame, QHBoxLayout, QLabel, QPushButton, QSizePolicy, QStyle, QToolButton, QVBoxLayout, QWidget
+from PyQt6.QtWidgets import QButtonGroup, QComboBox, QFrame, QHBoxLayout, QLabel, QSizePolicy, QStyle, QToolButton, QVBoxLayout, QWidget
 
 from app_common.toggle_button import ToggleToolButton
 from app_common.preview_source_menu import PreviewSourceMenu
+from app_common.preview_toolbar import ViewportOverlayTools, iconize, zoom_menu
 from app_common.preview_canvas import configure_preview_scale_preset_combo, sync_preview_scale_preset_combo
 from app_common.video import is_video
 from birdstamp.constants import RAW_EXTENSIONS
@@ -25,6 +26,7 @@ class PreviewModeButtons(QWidget):
         for index, text in enumerate(('原图', '去抖动成片')):
             button = ToggleToolButton()
             button.setText(text)
+            iconize(button, "original" if index == 0 else "result", text)
             button.setCheckable(True)
             button.setChecked(index == 0)
             self.group.addButton(button, index)
@@ -47,7 +49,7 @@ class PreviewViewportPanel(QWidget):
     activated = pyqtSignal()
     source_mode_changed = pyqtSignal(str)
 
-    def __init__(self, name, preview, *, center=None, scale=None):
+    def __init__(self, name, preview, *, center=None, scale=None, overlays=None):
         super().__init__()
         self.name = name
         self.preview = preview
@@ -96,8 +98,13 @@ class PreviewViewportPanel(QWidget):
             self.center.setToolTip('仅将本视口的焦点保持在中央；无焦点时使用图像中心。')
             self.center.toggled.connect(preview.canvas.set_auto_focus_center)
             preview.canvas.set_auto_focus_center(self.center.isChecked())
+        self.overlays = overlays if overlays is not None else ViewportOverlayTools(with_crop=True)
+        tools.addWidget(self.overlays)
+        iconize(self.center, "center", "自动焦点居中")
         tools.addWidget(self.center)
-        self.fit = QPushButton('适应窗口')
+        self.fit = ToggleToolButton('适应窗口')
+        self.fit.setCheckable(False)
+        iconize(self.fit, 'fit', '适应窗口')
         self.fit.setToolTip('只重置本视口的缩放与位置，保留焦点居中开关。')
         self.fit.clicked.connect(preview.canvas.fit_to_window)
         tools.addWidget(self.fit)
@@ -108,7 +115,8 @@ class PreviewViewportPanel(QWidget):
             self.scale.activated.connect(self._zoom)
             preview.display_scale_percent_changed.connect(self._sync_scale)
             self._sync_scale(preview.current_display_scale_percent())
-        tools.addWidget(self.scale)
+        self.zoom_button = zoom_menu(self.scale)
+        tools.addWidget(self.zoom_button)
         layout.addWidget(self.toolbar)
         self.viewport_frame = QFrame()
         self.viewport_frame.setObjectName('ABViewportFrame')
@@ -145,6 +153,9 @@ class PreviewViewportPanel(QWidget):
         mode = self.effective_source_mode()
         self.source_menu.sync(mode, raw_available=bool(path and path.suffix.lower() in RAW_EXTENSIONS))
         self.source_button.setText({'default': '默认预览', 'raw': '显示 RAW', 'denoised': '显示降噪'}[mode])
+        iconize(self.source_button, mode, self.source_button.text())
+        self.source_button.setAccessibleName(f"{self.name} 预览来源：{self.source_button.text()}")
+        self.source_button.setToolTip(self.source_button.text() + '：点击循环切换，箭头菜单直接选择；仅影响本侧原图预览。')
         self.source_button.setChecked(mode != 'default')
 
     def source_mode(self):
@@ -210,6 +221,7 @@ class PreviewViewportPanel(QWidget):
         # 空图或等待分析时仍保留整行，只禁用依赖图像的操作。
         self.fit.setEnabled(available)
         self.scale.setEnabled(available)
+        self.zoom_button.setEnabled(available)
 
     def eventFilter(self, watched, event):
         if event.type() in (QEvent.Type.MouseButtonPress, QEvent.Type.FocusIn):

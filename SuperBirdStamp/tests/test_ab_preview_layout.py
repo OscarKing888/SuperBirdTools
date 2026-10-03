@@ -43,7 +43,7 @@ def test_matching_rows_on_empty_loading_single_and_compare_views(window):
     assert ab.b_panel.name_label.parentWidget() is ab.b_panel.toolbar
     assert 'transparent' in ab.b_panel.viewport_frame.styleSheet()
     assert window.auto_focus_center_check.parentWidget() is ab.b_panel.toolbar
-    assert window.preview_scale_combo.parentWidget() is ab.b_panel.toolbar
+    assert window.preview_scale_combo.parentWidget() is ab.b_panel.zoom_button.menu()
     ab.enabled.setChecked(True)
     assert_aligned(window)
     assert not ab.a_panel.name_label.isHidden()
@@ -99,9 +99,10 @@ def test_modes_transport_resize_and_font_changes_keep_canvas_edges_aligned(windo
     assert not window.crop_effect_alpha_slider.isEnabled()
     ab.mode.setCurrentIndex(0)
     finish(ab)
-    assert window.show_crop_effect_check.isEnabled()
-    window.show_crop_effect_check.setChecked(False)
-    assert not window.crop_effect_alpha_slider.isEnabled()
+    assert ab.a_panel.overlays.crop.isEnabled()
+    assert not window.show_crop_effect_check.isEnabled()
+    ab.a_panel.overlays.crop.setChecked(False)
+    assert not ab.a_panel.overlays.alpha.isEnabled()
     assert_aligned(window)
     for size in ((1420, 920), (1900, 1000), (1120, 720)):
         window.resize(*size)

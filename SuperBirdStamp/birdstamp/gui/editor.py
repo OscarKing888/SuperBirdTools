@@ -716,7 +716,7 @@ class BirdStampEditorWindow(
         self._preview_decode_pending: tuple[int, Path] | None = None
         self._preview_decode_token = 0
         self._preview_decode_shutdown = False
-        self._preview_action_pool = BrowserWorkPool(4, metadata_workers=2)
+        self._preview_action_pool = BrowserWorkPool(4, metadata_workers=2, analysis_workers=1)
         self._preview_action_pool.set_thumbnail_mode(False)
         self._init_reference_tracking()
         self._init_dejitter_preview()
@@ -1986,10 +1986,9 @@ class BirdStampEditorWindow(
         self.show_crop_effect_check = ToggleToolButton("显示裁切效果")
         self.show_crop_effect_check.setChecked(True)
         self.show_crop_effect_check.toggled.connect(self._on_preview_toolbar_toggled)
-        preview_toolbar.addWidget(self.show_crop_effect_check)
 
-        self.crop_effect_alpha_label = QLabel("Alpha")
-        preview_toolbar.addWidget(self.crop_effect_alpha_label)
+        self.crop_effect_alpha_label = QLabel("Alpha", self.preview_toolbar_widget)
+        self.crop_effect_alpha_label.hide()
 
         self.crop_effect_alpha_slider = QSlider(Qt.Orientation.Horizontal)
         self.crop_effect_alpha_slider.setRange(0, 255)
@@ -1998,16 +1997,14 @@ class BirdStampEditorWindow(
         self.crop_effect_alpha_slider.setValue(_DEFAULT_CROP_EFFECT_ALPHA)
         self.crop_effect_alpha_slider.setFixedWidth(120)
         self.crop_effect_alpha_slider.valueChanged.connect(self._on_crop_effect_alpha_changed)
-        preview_toolbar.addWidget(self.crop_effect_alpha_slider)
 
-        self.crop_effect_alpha_value_label = QLabel(str(_DEFAULT_CROP_EFFECT_ALPHA))
+        self.crop_effect_alpha_value_label = QLabel(str(_DEFAULT_CROP_EFFECT_ALPHA), self.preview_toolbar_widget)
+        self.crop_effect_alpha_value_label.hide()
         self.crop_effect_alpha_value_label.setMinimumWidth(28)
-        preview_toolbar.addWidget(self.crop_effect_alpha_value_label)
 
         self.show_focus_box_check = ToggleToolButton("显示对焦点")
         self.show_focus_box_check.setChecked(True)
         self.show_focus_box_check.toggled.connect(self._on_preview_toolbar_toggled)
-        preview_toolbar.addWidget(self.show_focus_box_check)
 
         self.auto_focus_center_check = ToggleToolButton()
         self.auto_focus_center_check.setText("自动焦点居中")
@@ -2022,7 +2019,6 @@ class BirdStampEditorWindow(
         self.show_bird_box_check = ToggleToolButton("显示鸟体框")
         self.show_bird_box_check.setChecked(True)
         self.show_bird_box_check.toggled.connect(self._on_preview_toolbar_toggled)
-        preview_toolbar.addWidget(self.show_bird_box_check)
 
         self.preview_grid_combo = QComboBox()
         self.preview_grid_combo.setFixedWidth(_PREVIEW_GRID_MODE_COMBO_WIDTH)
@@ -2037,7 +2033,6 @@ class BirdStampEditorWindow(
             self.preview_grid_combo.setCurrentIndex(current_grid_index)
         self.preview_grid_combo.setToolTip("设置预览图构图辅助线；BirdStamp 中会优先绘制在当前裁切范围内。")
         self.preview_grid_combo.currentIndexChanged.connect(self._on_preview_grid_mode_changed)
-        preview_toolbar.addWidget(self.preview_grid_combo)
 
         self.preview_grid_line_width_combo = QComboBox()
         self.preview_grid_line_width_combo.setFixedWidth(_PREVIEW_GRID_LINE_WIDTH_COMBO_WIDTH)
@@ -2050,7 +2045,6 @@ class BirdStampEditorWindow(
             self.preview_grid_line_width_combo.setCurrentIndex(current_width_index)
         self.preview_grid_line_width_combo.setToolTip("设置构图辅助线线宽。")
         self.preview_grid_line_width_combo.currentIndexChanged.connect(self._on_preview_grid_line_width_changed)
-        preview_toolbar.addWidget(self.preview_grid_line_width_combo)
 
         self.preview_scale_combo = QComboBox()
         configure_preview_scale_preset_combo(
@@ -2090,10 +2084,10 @@ class BirdStampEditorWindow(
         self.ab_preview = ABPreview(self, right_layout)
         self._sync_video_safe_frame(self.video_export_panel.current_safe_frame_size())
         preview_toolbar.insertWidget(
-            preview_toolbar.indexOf(self.show_crop_effect_check), self.ab_preview.enabled,
+            preview_toolbar.count() - 1, self.ab_preview.enabled,
         )
         preview_toolbar.insertWidget(
-            preview_toolbar.indexOf(self.show_crop_effect_check), self.ab_preview.linked,
+            preview_toolbar.count() - 1, self.ab_preview.linked,
         )
         from .editor_sequence_transport import SequenceTransport
         self.sequence_transport = SequenceTransport(self)
