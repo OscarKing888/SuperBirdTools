@@ -5,7 +5,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: "SemVer build version, for example 0.2.0 or 0.2.0-rc.1"
+        description: "MAJOR.MINOR (for example 1.2); HEAD's 8-character commit hash is appended automatically"
         required: true
         type: string
   push:
@@ -37,6 +37,8 @@ jobs:
     steps:
       - name: Check out version helper
         uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
 
       - name: Set up Python for release checks
         uses: actions/setup-python@v7
@@ -52,9 +54,12 @@ jobs:
         id: version
         shell: bash
         env:
-          RAW_VERSION: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || inputs.version }}
+          RAW_VERSION: ${{ github.event_name == 'push' && github.ref_name || inputs.version }}
+          IS_RELEASE_TAG: ${{ github.event_name == 'push' }}
         run: |
-          version="$(python3 build_tools/set_build_version.py "$RAW_VERSION" --check-only)"
+          args=("$RAW_VERSION" --check-only)
+          if [[ "$IS_RELEASE_TAG" == "true" ]]; then args+=(--release-tag); fi
+          version="$(python3 build_tools/set_build_version.py "${args[@]}")"
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "Building SuperBirdTools v$version"
 
@@ -64,7 +69,8 @@ jobs:
     runs-on: windows-2025
     timeout-minutes: 120
     env:
-      BUILD_VERSION: ${{ needs.prepare.outputs.version }}
+      SUPERBIRDTOOLS_BUILD_VERSION: ${{ needs.prepare.outputs.version }}
+      SUPERBIRDTOOLS_BUILD_NUMBER: ${{ github.run_number }}
       PYTHON_VERSION: "3.13"
     steps:
       - name: Check out repository and submodules
@@ -89,12 +95,11 @@ jobs:
         shell: pwsh
         run: python init_dev.py
 
-      - name: Stamp package version and remove runtime state
+      - name: Generate package metadata and remove runtime state
         shell: pwsh
         run: |
-          .\.venv\Scripts\python.exe build_tools\set_build_version.py `
-            $env:BUILD_VERSION `
-            --build-number $env:GITHUB_RUN_NUMBER
+          .\.venv\Scripts\python.exe build_tools\set_build_version.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           Remove-Item -LiteralPath `
             "SuperBirdStamp/config/editor_autosave.birdstamp-workspace.json" `
             -Force -ErrorAction SilentlyContinue
@@ -155,7 +160,8 @@ jobs:
     runs-on: macos-15
     timeout-minutes: 120
     env:
-      BUILD_VERSION: ${{ needs.prepare.outputs.version }}
+      SUPERBIRDTOOLS_BUILD_VERSION: ${{ needs.prepare.outputs.version }}
+      SUPERBIRDTOOLS_BUILD_NUMBER: ${{ github.run_number }}
       PYTHON_VERSION: "3.13"
     steps:
       - name: Check out repository and submodules
@@ -179,11 +185,9 @@ jobs:
       - name: Install build dependencies and assets
         run: python3 init_dev.py
 
-      - name: Stamp package version and remove runtime state
+      - name: Generate package metadata and remove runtime state
         run: |
-          ./.venv/bin/python3 build_tools/set_build_version.py \
-            "$BUILD_VERSION" \
-            --build-number "$GITHUB_RUN_NUMBER"
+          ./.venv/bin/python3 build_tools/set_build_version.py
           rm -f \
             SuperBirdStamp/config/editor_autosave.birdstamp-workspace.json \
             SuperBirdStamp/config/editor_export_state.json
@@ -279,9 +283,6 @@ jobs:
             fi
           else
             release_args=(--draft --verify-tag --generate-notes --title "SuperBirdTools $RELEASE_TAG")
-            if [[ "$RELEASE_TAG" == *-* ]]; then
-              release_args+=(--prerelease)
-            fi
             gh release create "$RELEASE_TAG" "${assets[@]}" "${release_args[@]}"
           fi
           # 所有附件上传成功后才发布；失败保留草稿，客户端看不到半套版本。

@@ -96,3 +96,48 @@ def test_volume_split_still_reads_each_file(versions, tmp_path):
     manifest = generate(root, tmp_path / "volumes", identity(2), "linux", "x86_64", volume_size=4096)
     assert len(manifest["assets"]) > 1
     assert load(tmp_path / "volumes/update-linux-x86_64.json") == manifest
+
+
+@pytest.mark.parametrize("version", ["1.2.deadbeef", "1.2.2222222", "1.2.22222222/unsafe", "1.2.3", None])
+def test_release_version_must_match_the_manifest_commit(versions, version):
+    candidate = {**versions[4], "release_version": version}
+    with pytest.raises(UpdateError, match="发行版本号"):
+        validate(candidate)
+
+
+def test_hash_release_keeps_old_manifest_compatibility_and_names_package(versions, tmp_path):
+    root = versions[1]
+    info = {**identity(2), "release_version": "1.2.22222222"}
+    manifest = generate(root, tmp_path / "release", info, "linux", "x86_64", workers=2)
+    assert manifest["version"] == "22222222"
+    assert manifest["commit"].startswith(manifest["version"])
+    assert newer(versions[3], manifest)
+    (root / CONFIG_NAME).write_text("{}", encoding="utf-8")
+    package = package_suite(root, tmp_path / "package", manifest, tmp_path)
+    assert package.name == "SuperBirdTools-1.2.22222222-linux-x86_64.zip"
+    with zipfile.ZipFile(package) as archive:
+        assert all(name.startswith("SuperBirdTools-1.2.22222222-linux-x86_64/") for name in archive.namelist())
+
+
+def test_release_validation_checks_full_package_names_and_matching_prefixes(tmp_path):
+    from SuperBirdUpdater.common import APPS, atomic_json, executable
+    from build_tools.validate_update_release import validate_release
+
+    release = tmp_path / "publish"
+    release.mkdir()
+    for platform, arch in (("windows", "x86_64"), ("macos", "arm64")):
+        root = tmp_path / platform
+        for app in APPS:
+            entry = executable(root, app, platform)
+            entry.parent.mkdir(parents=True, exist_ok=True)
+            entry.write_bytes(b"test executable")
+        (root / CONFIG_NAME).write_text("{}", encoding="utf-8")
+        info = {**identity(2), "release_version": "1.2.22222222"}
+        manifest = generate(root, release, info, platform, arch, workers=1)
+        package_suite(root, release, manifest, tmp_path)
+    validate_release(release)
+    path = release / "update-macos-arm64.json"
+    wrong = {**load(path), "release_version": "1.3.22222222"}
+    atomic_json(path, wrong)
+    with pytest.raises(UpdateError, match="不是同一源码版本"):
+        validate_release(release)

@@ -30,6 +30,9 @@ for candidate in (REPO_ROOT, APP_ROOT):
 
 
 from build_tools.windows_version import version_resource
+from build_tools.set_build_version import prepare_build_metadata
+
+BUILD_METADATA = prepare_build_metadata(REPO_ROOT)
 
 from SuperBirdUpdater.manifest import excluded_path
 
@@ -64,7 +67,7 @@ ultralytics_datas, ultralytics_binaries, ultralytics_hiddenimports = collect_all
 # Project-specific data files
 # --------------------------------------------------------------------------- #
 project_datas = [
-    *collect_tree(REPO_ROOT / "app_metadata.json", "."),
+    *collect_tree(BUILD_METADATA, "."),
     *collect_tree(APP_ROOT / "about.cfg", "."),
     *collect_tree(APP_ROOT / "models", "models"),
     *collect_tree(APP_ROOT / "icons", "icons"),
@@ -139,7 +142,7 @@ exe = EXE(
     [],
     exclude_binaries=True,
     name="SuperBirdStamp",
-    version=version_resource("SuperBirdStamp", REPO_ROOT / "app_metadata.json"),
+    version=version_resource("SuperBirdStamp", BUILD_METADATA),
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,

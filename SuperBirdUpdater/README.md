@@ -4,7 +4,7 @@
 
 ## 安装与使用
 
-首次手动解压完整 `SuperBirdTools-<commit>-<platform>-<arch>.zip`。三个组件必须同处一个当前用户可写的目录：Windows 是 `SuperViewer/`、`SuperBirdStamp/`、`SuperBirdUpdater/`，macOS 是三个同名 `.app`；目录根还必须包含 `installed-update.json` 和 `update_config.json`。不要只移动一个 app，也不要在挂载的只读镜像内更新。
+首次手动解压完整 `SuperBirdTools-<major>.<minor>.<commit前8位>-<platform>-<arch>.zip`。三个组件必须同处一个当前用户可写的目录：Windows 是 `SuperViewer/`、`SuperBirdStamp/`、`SuperBirdUpdater/`，macOS 是三个同名 `.app`；目录根还必须包含 `installed-update.json` 和 `update_config.json`。不要只移动一个 app，也不要在挂载的只读镜像内更新。
 
 两个主应用出窗后延迟五秒检查；同一安装目录只运行一个更新器，自动检查默认间隔一小时。菜单「更新 → 检查更新」可立即检查。源码启动和独立单应用包默认不会替换代码。更新器下载时不关闭应用；安装前所有实例必须先同意正常退出。图片/GIF/视频导出期间暂停安装，用户完成任务后可在更新器点击重试。
 
@@ -31,11 +31,11 @@
 - `dist/update_config.json`：初始更新来源；已有配置保留。
 - `dist/updates/update-<platform>-<arch>.json`：远程版本清单。
 - `dist/updates/update-<platform>-<arch>-NNN.zip`：确定性 ZIP64 载荷分卷。
-- `dist/updates/SuperBirdTools-<commit>-<platform>-<arch>.zip`：首次安装完整包。
+- `dist/updates/SuperBirdTools-<major>.<minor>.<commit前8位>-<platform>-<arch>.zip`：首次安装完整包。
 
 独立生成入口：`python build_tools/generate_update_manifest.py --dist dist --package --hash-workers 8`。所有 Python 命令使用仓库 `.venv`。默认最多八个线程流式计算 MD5 和 SHA-256；分卷默认 1 GiB，单个不可分文件或完整安装包超出 GitHub 附件限制则明确报错。
 
-更新器显示短 commit，清单保留完整 commit、共享子模块 commit 和主线 first-parent 提交数量。顺序依赖同一条不重写历史的发布主线，浅克隆禁止生成；同序号不同 commit 拒绝自动更新。同 commit 的重新打包不会作为新版本推送；需要发布新 commit。系统 bundle/EXE 所需数字版本仍由 `app_metadata.json` 管理。
+更新器优先显示 `release_version`（`主版本.次版本.HEAD前8位`）；旧清单回退为短 commit。清单保留原来的短 hash `version`，兼容已发布客户端，并保留完整 commit、共享子模块 commit 和主线 first-parent 提交数量。顺序依赖同一条不重写历史的发布主线，浅克隆禁止生成；同序号不同 commit 拒绝自动更新。同 commit 的重新打包不会作为新版本推送；需要发布新 commit。源码 `app_metadata.json` 保存前两段版本；构建配置生成在 `build/version/app_metadata.json`，系统 bundle/EXE 数值版本保留兼容格式。
 
 CI 的两个平台构建保持 `--clean`，上传完整包、清单和所有分卷；发布阶段校验两平台版本、哈希、附件数量及大小，在草稿附件齐全后才发布。已有附件不覆盖，不混合不同构建。手动工作流仅提供 Actions 制品；真正自动更新使用公开 Release 附件，而不是需要登录的 Actions 下载页。
 

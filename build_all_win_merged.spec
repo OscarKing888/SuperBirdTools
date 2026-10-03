@@ -38,6 +38,9 @@ from build_tools.viewer_ffmpeg import collect_viewer_ffmpeg
 video_datas, video_hiddenimports = collect_viewer_ffmpeg()
 
 from build_tools.windows_version import version_resource
+from build_tools.set_build_version import prepare_build_metadata
+
+BUILD_METADATA = prepare_build_metadata(REPO_ROOT)
 
 from SuperBirdUpdater.manifest import excluded_path
 
@@ -113,7 +116,7 @@ superviewer_datas = [
     *video_datas,
     *denoise_datas,
     *bird_datas,
-    *collect_tree(REPO_ROOT / "app_metadata.json", "."),
+    *collect_tree(BUILD_METADATA, "."),
     *collect_tree(SUPERVIEWER_ROOT / "about.cfg", "."),
     *collect_tree(SUPERVIEWER_ROOT / "super_viewer.cfg", "."),
     *collect_tree(SUPERVIEWER_ROOT / "tags.cfg", "."),
@@ -145,7 +148,7 @@ superviewer_pyz = PYZ(superviewer_a.pure)
 # --------------------------------------------------------------------------- #
 use_app_workpath("superbirdstamp")
 superbirdstamp_datas = [
-    *collect_tree(REPO_ROOT / "app_metadata.json", "."),
+    *collect_tree(BUILD_METADATA, "."),
     *collect_tree(SUPERBIRDSTAMP_ROOT / "about.cfg", "."),
     *collect_tree(SUPERBIRDSTAMP_ROOT / "models", "models"),
     *collect_tree(SUPERBIRDSTAMP_ROOT / "icons", "icons"),
@@ -231,7 +234,7 @@ superviewer_exe = EXE(
     [],
     exclude_binaries=True,
     name="SuperViewer",
-    version=version_resource("SuperViewer", REPO_ROOT / "app_metadata.json"),
+    version=version_resource("SuperViewer", BUILD_METADATA),
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
@@ -263,7 +266,7 @@ superbirdstamp_exe = EXE(
     [],
     exclude_binaries=True,
     name="SuperBirdStamp",
-    version=version_resource("SuperBirdStamp", REPO_ROOT / "app_metadata.json"),
+    version=version_resource("SuperBirdStamp", BUILD_METADATA),
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,

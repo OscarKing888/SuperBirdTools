@@ -5,6 +5,7 @@ from dataclasses import dataclass
 import json
 from pathlib import Path
 import re
+import subprocess
 import sys
 
 
@@ -23,17 +24,54 @@ _SEMVER_RE = re.compile(
     """,
     re.VERBOSE,
 )
+_PREFIX_RE = re.compile(r"(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)")
+_COMMIT_VERSION_RE = re.compile(r"(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.[0-9a-f]{8}")
+
+
+def normalize_version_prefix(value: str) -> str:
+    """bump 只接收主、次版本；第三段由实际构建提交生成。"""
+    value = str(value or "").strip().removeprefix("v")
+    if not _PREFIX_RE.fullmatch(value):
+        raise ValueError("version must use MAJOR.MINOR, for example 1.2; the commit hash is automatic")
+    if any(int(part) > 65535 for part in value.split(".")):
+        raise ValueError("Windows version components must not exceed 65535")
+    return value
+
+
+def version_prefix(value: str) -> str:
+    """兼容迁移旧三段配置，但只保留用户维护的前两段。"""
+    value = str(value).strip().removeprefix("v")
+    if not _PREFIX_RE.fullmatch(value):
+        normalize_version(value)
+        value = ".".join(value.split(".")[:2])
+    return normalize_version_prefix(value)
+
+
+def git_version(prefix: str, repo_root: Path) -> str:
+    """固定使用 HEAD 的前 8 位，避免本机 core.abbrev 与 CI 不同。"""
+    prefix = normalize_version_prefix(prefix)
+    try:
+        commit = subprocess.check_output(
+            ["git", "-C", str(repo_root), "rev-parse", "--verify", "HEAD^{commit}"],
+            text=True, encoding="utf-8", stderr=subprocess.PIPE, timeout=10,
+            creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0,
+        ).strip()
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise ValueError(f"Cannot resolve version from Git HEAD in {repo_root}: {exc}") from exc
+    if not re.fullmatch(r"[0-9a-f]{40,64}", commit):
+        raise ValueError(f"Invalid Git commit: {commit}")
+    return f"{prefix}.{commit[:8]}"
 
 
 def normalize_version(value: str) -> str:
-    """Return a validated SemVer value without an optional leading ``v``."""
+    """读取完整 hash 版本；旧 SemVer 配置仍可迁移和加载。"""
 
     normalized = str(value or "").strip()
     if normalized[:1].lower() == "v":
         normalized = normalized[1:]
-    if _SEMVER_RE.fullmatch(normalized) is None:
+    if _COMMIT_VERSION_RE.fullmatch(normalized) is None and _SEMVER_RE.fullmatch(normalized) is None:
         raise ValueError(
-            "version must use SemVer, for example 1.2.3 or 1.2.3-rc.1"
+            "version must use MAJOR.MINOR.HASH, for example 1.2.a1b2c3d4"
         )
     return normalized
 
@@ -62,6 +100,9 @@ class AppIdentity:
 
     @property
     def bundle_version(self) -> str:
+        # Apple/Windows 的数值字段不能包含十六进制字母；完整版本用于应用显示。
+        if _COMMIT_VERSION_RE.fullmatch(self.version):
+            return f"{version_prefix(self.version)}.0"
         return self.version.split("-", 1)[0].split("+", 1)[0]
 
     def about_info(self, info: dict) -> dict:
@@ -98,11 +139,16 @@ def load_app_identity(app_id: str, path: Path | None = None) -> AppIdentity:
                 raise ValueError(f"{key} contains control characters")
             return value.strip()
 
+        version = field(raw, "version")
+        if _PREFIX_RE.fullmatch(version):
+            if getattr(sys, "frozen", False):
+                raise ValueError("Packaged metadata must contain the complete commit version")
+            version = git_version(version, source.parent)
         identity = AppIdentity(
             app_id=app_id,
             product_name=field(app, "product_name"),
             subtitle=field(app, "subtitle", allow_empty=True),
-            version=normalize_version(field(raw, "version")),
+            version=normalize_version(version),
             build_number=normalize_build_number(field(raw, "build_number")),
             title_template=field(app, "window_title") if "window_title" in app else field(raw, "window_title"),
         )
