@@ -197,9 +197,11 @@ def _metadata_burst_int(metadata: dict | None, key: str) -> int | None:
     if not text:
         return None
     try:
-        return int(float(text))
+        value = int(float(text))
     except Exception:
         return None
+    # 0 = 非连拍（SuperPicky 约定）。
+    return value if value > 0 else None
 
 
 def _metadata_burst_text(metadata: dict | None) -> str:

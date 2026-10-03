@@ -133,6 +133,7 @@ try:
     from .superviewer.super_viewer_user_options_dialog import SuperViewerUserOptionsDialog
     from .superviewer.tagged_file_list import SuperViewerTaggedFileListPanel
     from .superviewer.bird_sharpness_controller import BirdSharpnessController
+    from .superviewer.burst_info_controller import BurstInfoController
     from .superviewer.preview_key_router import PreviewKeyRouter
     from .superviewer.viewer_ab_preview import ViewerABPreview
     from .superviewer.tag_history_actions import TagHistoryActions
@@ -215,6 +216,7 @@ except ImportError:
     from superviewer.super_viewer_user_options_dialog import SuperViewerUserOptionsDialog
     from superviewer.tagged_file_list import SuperViewerTaggedFileListPanel
     from superviewer.bird_sharpness_controller import BirdSharpnessController
+    from superviewer.burst_info_controller import BurstInfoController
     from superviewer.preview_key_router import PreviewKeyRouter
     from superviewer.viewer_ab_preview import ViewerABPreview
     from superviewer.tag_history_actions import TagHistoryActions
@@ -362,6 +364,8 @@ class MainWindow(QMainWindow):
         self._dir_browser.directory_selected.connect(self._on_directory_selected)
         # 鸟清晰度检测：目录树 / 文件列表右键菜单 → 后台检测 → 写 XMP → 刷新列表与缩略图
         self._bird_sharpness = BirdSharpnessController(self, self._file_list, self._dir_browser)
+        # 计算连拍信息：目录树右键 → 按拍摄时间分组 → 写 XMP burst_id/burst_position → 刷新连拍显示
+        self._burst_info = BurstInfoController(self, self._file_list, self._dir_browser)
         # 连接文件列表选中 → 预览 + 元信息刷新
         self._file_list.file_fast_preview_requested.connect(self._on_file_fast_preview_requested)
         self._file_list.file_fast_preview_pixmap_requested.connect(
@@ -1545,6 +1549,10 @@ class MainWindow(QMainWindow):
                 self._bird_sharpness.request_shutdown()
             except Exception:
                 pass
+            try:
+                self._burst_info.request_shutdown()
+            except Exception:
+                pass
             # Closing the shared stay-open process interrupts metadata calls
             # before the bounded worker waits below.  Its process teardown is
             # kept off the GUI thread because a wedged child may need a bounded
@@ -1572,19 +1580,22 @@ class MainWindow(QMainWindow):
         pool_pending = getattr(self._file_list, 'has_pending_pool_work', lambda: False)
         directory_scans_done = directory_scans_done and not pool_pending()
         bird_sharpness_done = self._bird_sharpness.is_shutdown_done()
+        burst_info_done = self._burst_info.is_shutdown_done()
         pending_state = (
             focus_done, tabs_done, preview_done, exiftool_done, directory_scans_done, bird_sharpness_done,
+            burst_info_done,
         )
         if not all(pending_state):
             if pending_state != self._shutdown_pending_state:
                 _log.info(
-                    "[shutdown] waiting focus=%s image_info=%s preview=%s exiftool=%s directory_scans_and_pool=%s bird_sharpness=%s",
+                    "[shutdown] waiting focus=%s image_info=%s preview=%s exiftool=%s directory_scans_and_pool=%s bird_sharpness=%s burst_info=%s",
                     focus_done,
                     tabs_done,
                     preview_done,
                     exiftool_done,
                     directory_scans_done,
                     bird_sharpness_done,
+                    burst_info_done,
                 )
                 self._shutdown_pending_state = pending_state
             event.ignore()

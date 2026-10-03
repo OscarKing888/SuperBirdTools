@@ -510,21 +510,23 @@ class SuperViewerTaggedFileListPanel(FileListPanel):
         metadata.update(self.get_photo_metadata_for_path(path, allow_slow_read=False))
         return metadata
 
-    def sync_metadata_edit_for_path(
-        self, path: str, *, report_fields: dict | None = None, meta_updates: dict | None = None,
-    ) -> bool:
-        updated = super().sync_metadata_edit_for_path(
-            path, report_fields=report_fields, meta_updates=meta_updates,
-        )
+    def sync_metadata_edits_for_paths(self, updates_by_path: dict) -> int:
+        """Single and batch metadata syncs both record local overrides here."""
+        updated = super().sync_metadata_edits_for_paths(updates_by_path)
         if updated:
             overrides = getattr(self, "_local_metadata_updates_by_path", None)
             if overrides is None:
                 overrides = self._local_metadata_updates_by_path = {}
-            key = os.path.normcase(os.path.normpath(path))
-            overrides.setdefault(key, {}).update({
-                str(name): value for name, value in (meta_updates or {}).items()
-                if str(name) and value is not None
-            })
+            for path, meta_updates in (updates_by_path or {}).items():
+                if not path:
+                    continue
+                values = {
+                    str(name): value for name, value in (meta_updates or {}).items()
+                    if str(name) and value is not None
+                }
+                if values:
+                    key = os.path.normcase(os.path.normpath(path))
+                    overrides.setdefault(key, {}).update(values)
         return updated
 
     def _start_key_navigation_playback(self, event, *, view_name: str) -> None:
