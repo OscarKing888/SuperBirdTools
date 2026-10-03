@@ -11,6 +11,12 @@
 
 每个预览视口可点击来源按钮循环切换“默认预览 → 显示 RAW → 显示降噪”（非 RAW 跳过 RAW），A/B 两侧独立。降噪模式显示已有成片，未找到时保留原图并提示。“显示鸟体”在后台识别主体鸟并将鸟框缓存到 XMP；长按方向键期间只显示缓存框，松键后再处理最终照片。具体缓存、模型及坐标规则见 [预览架构](docs/ARCHITECTURE.md#显示鸟体)。
 
+## 鸟清晰度检测
+
+目录树右键「鸟清晰度检测」子菜单，或文件右键「检测鸟清晰度（N 张）」：先识别每只鸟，再只用鸟自己的像素（看得到眼时只用眼周头部区域）计算清晰度，写入 XMP，并在文件列表的「鸟清晰」列、缩略图和信息页显示。右键「查看清晰度计算过程…」可以逐步查看一张照片的计算过程。算法见 [鸟清晰度检测](../docs/bird_sharpness.md)。
+
+鸟体分割模型和鸟眼模型使用 [SuperPicky（慧眼选鸟）](https://github.com/jamesphotography/SuperPicky) 的权重，运行时从已安装的 SuperPicky 中读取，不随本程序打包；没有它们时退回到 `yolo11n.pt` 鸟框，准确度明显下降。模型清单与查找顺序见 [根目录 README](../README.md#鸟识别模型与-superpicky)。
+
 ## 代码结构（重构后）
 
 - **main.py**：应用入口 `main()`、主窗口类 `MainWindow`、构图线常量与线宽图标；对脚本兼容的 re-export（`QApplication`、`RAW_EXTENSIONS`、`_load_preview_pixmap_for_canvas`、`_load_exifread_metadata_for_focus`、`_resolve_focus_calc_image_size`、`_load_focus_box_for_preview`）。脚本仍可 `import main` 使用上述符号。

@@ -13,6 +13,35 @@
 - [SuperViewer 架构与功能定位](SuperViewer/docs/ARCHITECTURE.md)
 - [SuperBirdStamp 架构与功能定位](SuperBirdStamp/docs/ARCHITECTURE.md)
 - [SuperViewer 批量 RGB 降噪、模型预下载与离线打包](docs/image_denoise.md)
+- [鸟清晰度检测：算法、阈值、存储与模型](docs/bird_sharpness.md)
+
+## 鸟识别模型与 SuperPicky
+
+SuperViewer 的「鸟清晰度检测」「查看清晰度计算过程」和「显示鸟体」会用到下面的模型。模型权重都不入 git；其中分割模型和鸟眼模型来自 [SuperPicky（慧眼选鸟）](https://github.com/jamesphotography/SuperPicky)，本仓库既不复制也不打包它们，而是在运行时读取已安装的 SuperPicky 里的文件。
+
+| 用途 | 模型文件 | 来源 | 缺失时 |
+| --- | --- | --- | --- |
+| 鸟体识别（首选，给出每只鸟的像素轮廓） | `yolo11l-seg.pt`（或 `yolo11m/s/n-seg.pt`） | SuperPicky 安装包 | 改用下面的检测模型，只有鸟框 |
+| 鸟体识别（备用，只有鸟框） | `yolo11n.pt`（或 `yolo11s.pt`、`yolov8n.pt`） | `python init_dev.py` 下载到 `SuperBirdStamp/models`，打包版 Viewer 自带 | 两种识别模型都没有时无法检测 |
+| 鸟眼、鸟喙定位 | `cub200_keypoint_resnet50_slim.pth` | SuperPicky 安装包 | 按整只鸟测量，准确度明显下降 |
+
+SuperPicky 的鸟眼模型：
+
+- **怎么用**：在 [bird_sharpness/models.py](bird_sharpness/models.py) 中按 SuperPicky 的 `PartLocalizer`（ResNet50 加坐标、可见度输出头）重建网络，再加载同一份权重，输入 416 px。
+- **用途**：得到左眼、右眼、鸟喙的位置与可见度。眼可见（≥ 0.5）时只测眼周头部区域的清晰度；看不到眼判「无鸟眼」，分数上限 299。
+- **兼容性**：只调用模型，不调用 SuperPicky 程序。清晰度分数写入与 SuperPicky 相同的锐度字段 `XMP-photoshop:City`，使用相同的 0–1000 刻度。
+
+模型查找顺序：
+
+1. 环境变量 `SUPERBIRD_SHARPNESS_MODEL_DIR`；
+2. 打包程序自带的 `models` 目录；
+3. 仓库的 `SuperViewer/models`、`SuperBirdStamp/models`；
+4. 已安装的 SuperPicky：
+   - macOS：`/Applications/SuperPicky.app/Contents/Resources/models`、`~/Applications/SuperPicky.app/...`；
+   - Windows：`%ProgramFiles%\SuperPicky`、`%LOCALAPPDATA%\SuperPicky` 下的 `_internal\models` 或 `models`；
+5. 与本仓库同级的 SuperPicky 源码目录 `SuperPicky/models`。
+
+所以要获得完整的鸟清晰度检测，请安装 SuperPicky，或把上面两个文件放进 `SuperViewer/models`。打包版 SuperViewer 目前只带 `yolo11n.pt`，没装 SuperPicky 的电脑只能按鸟框测整只鸟，检测进度窗口会提示。SuperPicky 自带的其他模型（飞行判断 `superFlier_efficientnet.pth`、鸟种识别 `model20240824.pth`、美学评分 `cfanet_iaa_ava_res50`）目前没有使用。细节见 [鸟清晰度检测](docs/bird_sharpness.md#模型)。
 
 ## 目录原则
 
