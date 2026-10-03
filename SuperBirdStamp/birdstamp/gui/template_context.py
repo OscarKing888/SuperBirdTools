@@ -1554,6 +1554,39 @@ def _is_missing_template_text(value: Any) -> bool:
     return not text or text.upper() == MISSING_TEMPLATE_TEXT
 
 
+# SuperPicky 约定连拍值 0 = 非连拍；SuperViewer「计算连拍信息」用 0 覆盖 report.db 旧分组。
+_BURST_FIELD_KEYS = frozenset({"burst_id", "burst_position"})
+
+
+def _is_burst_context_key(key: Any) -> bool:
+    name = str(key or "").strip().lower().rsplit(":", 1)[-1]
+    if name.startswith("report."):
+        name = name[len("report."):]
+    return name in _BURST_FIELD_KEYS
+
+
+def _is_not_burst_text(field: "TemplateContextField | None", text: Any) -> bool:
+    """连拍字段的非正整数值表示「不是连拍」，按缺失处理且不再回退到低优先级来源。"""
+    if field is None or field.key not in _BURST_FIELD_KEYS:
+        return False
+    try:
+        return int(float(_clean_text(text))) <= 0
+    except (TypeError, ValueError):
+        return False
+
+
+def _blank_not_burst_context_values(context: "TemplateContext") -> "TemplateContext":
+    for key, value in list(context.items()):
+        if not _is_burst_context_key(key):
+            continue
+        try:
+            if int(float(_clean_text(value))) <= 0:
+                context[key] = ""
+        except (TypeError, ValueError):
+            continue
+    return context
+
+
 _FALLBACK_AUTO_PROXY_ROUTE_CONFIG: dict[str, list[dict[str, Any]]] = {
     "bird_species_cn": [
         {
@@ -2031,10 +2064,16 @@ class TemplateContextProvider(ABC):
             for field in cls.available_fields()
         ]
 
+    def _raw_text_content(self, photo_info: PhotoInfo) -> str:
+        field = self.resolve_field_definition(self.source_key)
+        return _clean_text(self._read_text_value(photo_info, field))
+
     def get_text_content(self, photo_info: PhotoInfo) -> str:
         info = ensure_photo_info(photo_info)
-        field = self.resolve_field_definition(self.source_key)
-        return _clean_text(self._read_text_value(info, field))
+        text = self._raw_text_content(info)
+        if _is_not_burst_text(self.resolve_field_definition(self.source_key), text):
+            return MISSING_TEMPLATE_TEXT
+        return text
 
     def get_field_text(self, photo_info: PhotoInfo, field_key: str) -> str:
         provider = type(self)(field_key)
@@ -2975,7 +3014,7 @@ class AutoProxyTemplateContextProvider(TemplateContextProvider):
         # 合并上下文时先低优先级、后高优先级，让 Exif/sidecar 字段最终胜出。
         for provider_cls in reversed(cls.delegate_provider_classes()):
             context.update(provider_cls.build_context_entries(photo_info))
-        return context
+        return _blank_not_burst_context_values(context)
 
     @classmethod
     def route_definitions(cls) -> dict[str, tuple[AutoProxyFieldRoute, ...]]:
@@ -3076,7 +3115,10 @@ class AutoProxyTemplateContextProvider(TemplateContextProvider):
         source_key = str(field.key if field is not None else self.source_key or "").strip()
         for provider_cls in self.delegate_provider_classes():
             for candidate_key in self._candidate_keys_for_provider(provider_cls, source_key, field):
-                text = _clean_text(provider_cls(candidate_key).get_text_content(photo_info))
+                text = provider_cls(candidate_key)._raw_text_content(photo_info)
+                if _is_not_burst_text(field, text):
+                    # 高优先级来源（XMP）明确「非连拍」，不回退到 report.db 的旧分组。
+                    return MISSING_TEMPLATE_TEXT
                 if not _is_missing_template_text(text):
                     return text
         return MISSING_TEMPLATE_TEXT
@@ -3158,7 +3200,7 @@ def build_template_context(
     context["filename"] = photo_info.path.name
     for provider_cls in iter_template_context_provider_classes():
         context.update(provider_cls.build_context_entries(photo_info))
-    return context
+    return _blank_not_burst_context_values(context)
 
 
 def build_template_context_provider(

@@ -598,6 +598,45 @@ def test_v10_template_fields_prefer_xmp_including_zero(tmp_path: Path) -> None:
         set_report_db_row_resolver(None)
 
 
+def test_zero_burst_values_mean_not_a_burst_and_do_not_fall_back_to_report(tmp_path: Path) -> None:
+    """SuperViewer 计算连拍后写 0 覆盖 report.db 旧分组：模板不显示 0，也不回退到旧值。"""
+    path = tmp_path / "非连拍.jpg"
+    path.write_bytes(b"not decoded")
+    path.with_suffix(".xmp").write_text(
+        '''<x:xmpmeta xmlns:x="adobe:ns:meta/">
+  <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+    <rdf:Description rdf:about=""
+      xmlns:superpicky="https://superbirdtools.local/xmp/superpicky/1.0/"
+      superpicky:burst_id="0" superpicky:burst_position="0" />
+  </rdf:RDF>
+</x:xmpmeta>''', encoding="utf-8",
+    )
+    burst_path = tmp_path / "连拍.jpg"
+    burst_path.write_bytes(b"not decoded")
+    rows = {path.name: {"burst_id": 5, "burst_position": 2}, burst_path.name: {"burst_id": 0, "burst_position": 0}}
+    set_report_db_row_resolver(lambda current: dict(rows[current.name]) if current.name in rows else None)
+    try:
+        photo = PhotoInfo.from_path(path)
+        context = build_template_context(photo)
+        for key in ("burst_id", "burst_position"):
+            assert context[key] == ""
+            assert build_template_context_provider("auto", key).get_text_content(photo) == "N/A"
+            assert build_template_context_provider("auto", "{%s}" % key).get_text_content(photo) == "N/A"
+            assert build_template_context_provider("exif", f"XMP-superpicky:{key}").get_text_content(photo) == "N/A"
+        assert AutoProxyTemplateContextProvider.build_context_entries(photo)["burst_id"] == ""
+
+        report_only = PhotoInfo.from_path(burst_path)
+        assert build_template_context_provider("report_db", "burst_id").get_text_content(report_only) == "N/A"
+        assert build_template_context_provider("auto", "burst_position").get_text_content(report_only) == "N/A"
+        assert build_template_context(report_only)["burst_id"] == ""
+
+        rows[burst_path.name] = {"burst_id": 7, "burst_position": 3}
+        assert build_template_context_provider("auto", "burst_id").get_text_content(report_only) == "7"
+        assert build_template_context(report_only)["burst_position"] == "3"
+    finally:
+        set_report_db_row_resolver(None)
+
+
 def test_auto_proxy_route_definitions_are_loaded_from_resource_json() -> None:
     routes = AutoProxyTemplateContextProvider.route_definitions()
 
@@ -614,7 +653,7 @@ def test_auto_render_stops_after_first_available_provider(monkeypatch, tmp_path)
     photo = context.preview_photo_info(context.PhotoInfo(
         tmp_path / "photo.jpg", raw_metadata={"XMP-dc:Title": "鸟名优先"},
     ))
-    monkeypatch.setattr(context.FromFileTemplateContextProvider, "get_text_content",
+    monkeypatch.setattr(context.FromFileTemplateContextProvider, "_raw_text_content",
                         lambda *a: (_ for _ in ()).throw(AssertionError("unneeded lower-priority provider")))
     assert context.AutoProxyTemplateContextProvider("bird_species_cn").get_text_content(photo) == "鸟名优先"
 
