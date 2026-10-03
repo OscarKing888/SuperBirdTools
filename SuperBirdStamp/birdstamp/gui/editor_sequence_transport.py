@@ -624,6 +624,11 @@ class SequenceTransport(QObject):
                 self.direction = directions[key]
             self._ordinary_first_step = False
             if not self.timer.isActive():
+                # 第一帧的清晰解码不能在长按期间回填，即便下一张缺缓存而仍保留当前帧。
+                self.editor._cancel_preview_decode()
+                self.editor._cancel_async_bird_detect()
+                self.editor._preview_debounce_timer.stop()
+                self.editor.ab_preview._cancel()
                 self._tick()
                 self.timer.start()
             return True

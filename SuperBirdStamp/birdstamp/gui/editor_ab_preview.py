@@ -6,13 +6,14 @@ from PyQt6.QtGui import QPixmap
 from PyQt6.QtWidgets import QSplitter
 
 from app_common.toggle_button import ToggleToolButton
-from app_common.raw_preview_geometry import RAW_FOCUS_CROP_KEY
+from app_common.raw_preview_geometry import RAW_FOCUS_CROP_KEY, map_camera_focus_box
 from app_common.preview_canvas import PreviewWithStatusBar
-from birdstamp.constants import RAW_EXTENSIONS
+from birdstamp.decoders.preview_source import PREVIEW_SOURCE_MODE_KEY, PREVIEW_SOURCE_MESSAGE_KEY
 from .editor_preview_canvas import EditorPreviewCanvas, EditorPreviewOverlayState
 from .editor_preview_decode_worker import EditorPreviewDecodeWorker
 from .editor_sequence_preview_worker import EditorSequencePreviewWorker, pil_qimage
 from .editor_tracking_overlay import tracking_overlays
+from .preview_source_geometry import preview_to_camera_box, transform_source_overlays
 from .edit_modes import EDIT_MODE_NONE, EDIT_MODE_REFERENCE_REGION
 from .editor_utils import path_key
 from .editor_preview_viewport import PreviewViewportPanel, align_viewport_rows
@@ -37,6 +38,8 @@ class ABPreview(QObject):
         self.image = None
         self.size = None
         self.camera_crop_box = None
+        self.actual_source_mode = 'default'
+        self.source_message = ''
         self.upgrade = QTimer(self)
         self.upgrade.setSingleShot(True)
         self.upgrade.setInterval(120)
@@ -62,13 +65,13 @@ class ABPreview(QObject):
         self.a_panel = PreviewViewportPanel('A', self.preview)
         self.mode, self.center = self.a_panel.mode, self.a_panel.center
         self.mode.setToolTip('A 独立选择原图或已分析的去抖动成片。')
-        self.a_panel.show_raw.toggled.connect(self._on_a_raw_toggled)
+        self.a_panel.source_mode_changed.connect(self._on_a_source_mode_changed)
         self.b_panel = PreviewViewportPanel('B', editor.preview_label,
                                             center=editor.auto_focus_center_check, scale=editor.preview_scale_combo)
         self.b_mode = self.b_panel.mode
         self.b_mode.setToolTip('选择 B 的原图或已分析的去抖动成片。')
         self.b_mode.activated.connect(self._choose_b_mode)
-        self.b_panel.show_raw.toggled.connect(self._on_b_raw_toggled)
+        self.b_panel.source_mode_changed.connect(self._on_b_source_mode_changed)
         self.splitter.addWidget(self.a_panel)
         self.splitter.addWidget(self.b_panel)
         self.geometry_timer = QTimer(self)
@@ -127,14 +130,13 @@ class ABPreview(QObject):
         self.sync(force=True)
         self.editor.sequence_transport.sync()
 
-    def _on_a_raw_toggled(self, _checked):
+    def _on_a_source_mode_changed(self, _mode):
         if self.enabled.isChecked() and self.path is not None and self.mode.currentIndex() == 0:
             self.sync(force=True)
 
-    def _on_b_raw_toggled(self, _checked):
+    def _on_b_source_mode_changed(self, _mode):
         editor = self.editor
-        if (editor.current_path is not None and not editor._sequence_result_mode()
-                and editor.current_path.suffix.lower() in RAW_EXTENSIONS):
+        if editor.current_path is not None and not editor._sequence_result_mode():
             self.activate('b')
             item = editor._find_photo_item_by_path(editor.current_path)
             if item is not None:
@@ -243,11 +245,9 @@ class ABPreview(QObject):
         self._sync_controls()
         sequence = editor._sequence_preview
         result = self.mode.currentIndex() == 1
-        show_raw = bool(self.path and self.path.suffix.lower() in RAW_EXTENSIONS
-                        and self.a_panel.show_raw.isChecked() and not result
-                        and not editor._sequence_fast_preview_active())
+        source_mode = self.a_panel.effective_source_mode() if not result else 'default'
         request = (self.path, result, id(sequence) if result else None,
-                   image_file_signature(self.path) if self.path else None, show_raw)
+                   image_file_signature(self.path) if self.path else None, source_mode)
         if not force and request == self.request:
             self._display()
             return
@@ -255,6 +255,8 @@ class ABPreview(QObject):
         self.request = request
         self.image = self.frame = self.size = None
         self.camera_crop_box = None
+        self.actual_source_mode = 'default'
+        self.source_message = ''
         self.preview.set_source_pixmap(None)
         self.preview.set_original_size(None, None)
         self.preview.set_cropped_size(None, None)
@@ -316,7 +318,7 @@ class ABPreview(QObject):
         else:
             worker = EditorPreviewDecodeWorker(self.token, path,
                                                max_long_edge=self.editor._preview_decode_max_long_edge(),
-                                               show_raw=self.request[4],
+                                               source_mode=self.request[4],
                                                pool=self.editor._preview_action_pool, parent=self)
             worker.quick_decoded.connect(self._decoded)
             worker.decoded.connect(self._decoded)
@@ -327,6 +329,7 @@ class ABPreview(QObject):
 
     def _accept(self, token):
         return (token == self.token and self.enabled.isChecked() and not self.stopping
+                and not self.editor._sequence_fast_preview_active()
                 and self.request is not None and self.path is not None
                 and self.request[3] == image_file_signature(self.path))
 
@@ -335,6 +338,8 @@ class ABPreview(QObject):
             if not self._accept(token) or path_key(Path(path)) != path_key(self.path):
                 return
             self.camera_crop_box = image.info.get(RAW_FOCUS_CROP_KEY)
+            self.actual_source_mode = image.info.get(PREVIEW_SOURCE_MODE_KEY, 'default')
+            self.source_message = image.info.get(PREVIEW_SOURCE_MESSAGE_KEY, '')
             with image.convert('RGB') as rgb:
                 self.image = pil_qimage(rgb)
             self.size = tuple(size)
@@ -372,11 +377,15 @@ class ABPreview(QObject):
 
     def _edit_reference_regions(self, regions):
         if self._can_edit():
-            self.editor._commit_source_reference_regions(self.path, regions)
+            source_regions = tuple(converted for box in regions
+                                   if (converted := preview_to_camera_box(box, self.camera_crop_box)) is not None)
+            self.editor._commit_source_reference_regions(self.path, source_regions)
 
     def _edit_match(self, index, box):
         if self._can_edit():
-            self.editor._commit_manual_region_match(self.path, index, box, original=True)
+            converted = preview_to_camera_box(box, self.camera_crop_box)
+            if box is None or converted is not None:
+                self.editor._commit_manual_region_match(self.path, index, converted, original=True)
 
     def _display(self):
         if self.image is None or self.size is None:
@@ -396,6 +405,7 @@ class ABPreview(QObject):
             camera_type=editor_core.resolve_focus_camera_type_from_metadata(metadata),
             camera_crop_box=self.camera_crop_box)
         bird = editor._bird_box_cache.get(editor._source_signature(self.path))
+        bird = map_camera_focus_box(bird, self.camera_crop_box)
         state.bird_box = editor_core.transform_source_box_after_crop_padding(
             bird, crop_box=crop, source_width=width, source_height=height, pt=pad[0], pb=pad[1], pl=pad[2], pr=pad[3]) if crop else bird
         # 接力段照片按接力参考图的选区编号；参考图与接力参考图都可直接框选。
@@ -443,11 +453,15 @@ class ABPreview(QObject):
             from .editor_tracking_overlay import apply_alignment_crop
             if apply_alignment_crop(state, sequence, key):
                 options.show_crop_effect = editor.show_crop_effect_check.isChecked()
+        if self.frame is None:
+            transform_source_overlays(state, self.camera_crop_box)
         self.preview.apply_overlay_options(options)
         self.preview.apply_overlay_state(state)
         self.preview.set_original_size(width, height)
         self.preview.set_cropped_size(*(self.frame.output_size if self.frame else (None, None)))
-        self.preview.set_source_mode('A · 去抖动成片' if self.frame else 'A · 原图')
+        source_label = {'default': '原图', 'raw': '显示 RAW', 'denoised': '显示降噪'}.get(self.actual_source_mode, '原图')
+        source_status = f'A · {self.source_message or source_label}'
+        self.preview.set_source_mode('A · 去抖动成片' if self.frame else source_status)
         first = self.preview.canvas._source_pixmap is None
         self.preview.set_source_pixmap(QPixmap.fromImage(self.image), reset_view=first, preserve_view=not first,
                                        preserve_scale=not first)

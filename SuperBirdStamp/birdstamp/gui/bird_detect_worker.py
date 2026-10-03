@@ -5,6 +5,8 @@ from PyQt6.QtCore import QThread, pyqtSignal
 
 from PIL import Image
 
+from app_common.raw_preview_geometry import RAW_FOCUS_CROP_KEY
+from birdstamp.gui.preview_source_geometry import preview_to_camera_box
 from birdstamp.gui.editor_core import detect_primary_bird_box
 
 
@@ -28,7 +30,8 @@ class BirdDetectWorker(QThread):
         try:
             if self.isInterruptionRequested():
                 return
-            bird_box = detect_primary_bird_box(self._source_image)
+            bird_box = preview_to_camera_box(detect_primary_bird_box(self._source_image),
+                                            getattr(self._source_image, 'info', {}).get(RAW_FOCUS_CROP_KEY))
             if self.isInterruptionRequested():
                 return
             self.result_ready.emit(self._signature, bird_box)

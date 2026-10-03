@@ -1107,6 +1107,8 @@ class _BirdStampDejitterMixin:
         source_entry = (self.sequence_transport.source_preview(self.current_path)
                         if self.current_path and source is None and quick is None
                         and hasattr(self, 'sequence_transport') else None)
+        camera_crop = (source.info.get(RAW_FOCUS_CROP_KEY)
+                       if source is not None and quick is None and source_entry is None else None)
         raw_metadata = self.current_raw_metadata
         if self._sequence_preview is not None and self.current_path is not None:
             job = self._sequence_preview.jobs.get(path_key(self.current_path))
@@ -1159,13 +1161,19 @@ class _BirdStampDejitterMixin:
                 raw_metadata, source_width=width, source_height=height, crop_box=None,
                 outer_pad=(0, 0, 0, 0), apply_ratio_crop=False,
                 camera_type=editor_core.resolve_focus_camera_type_from_metadata(raw_metadata),
-                camera_crop_box=(source.info.get(RAW_FOCUS_CROP_KEY)
-                                 if source is not None and quick is None and source_entry is None else None))
-            state.bird_box = self._bird_box_cache.get(self._source_signature(self.current_path)) if self.current_path else None
+                camera_crop_box=camera_crop)
+            from app_common.raw_preview_geometry import map_camera_focus_box
+            state.bird_box = map_camera_focus_box(
+                self._bird_box_cache.get(self._source_signature(self.current_path)) if self.current_path else None,
+                camera_crop)
             self.preview_label.set_original_size(width, height)
         self.preview_label.set_cropped_size(None, None)
+        from .preview_source_geometry import transform_source_overlays
+        transform_source_overlays(state, camera_crop)
         self.preview_label.apply_overlay_state(state)
-        self.preview_label.set_source_mode('去抖动原图')
+        self.preview_label.set_source_mode(
+            self._preview_source_label('去抖动原图')
+            if source is not None and quick is None and source_entry is None else '去抖动原图 · 缓存预览')
         if source is not self._dejitter_edit_source:
             self._dejitter_edit_source = source
             self._dejitter_edit_pixmap = pil_to_qpixmap(source) if source is not None else None

@@ -16,13 +16,13 @@ from typing import Any, Iterable
 from PIL import Image
 from PyQt6.QtGui import QPixmap
 
-from app_common.raw_preview_geometry import RAW_FOCUS_CROP_KEY
+from app_common.raw_preview_geometry import RAW_FOCUS_CROP_KEY, map_camera_focus_box
 from app_common.preview_canvas import (
     normalize_preview_composition_grid_line_width,
     normalize_preview_composition_grid_mode,
 )
 from birdstamp.decoders.image_decoder import decode_image, decode_image_for_preview, read_decoded_image_size
-from birdstamp.constants import RAW_EXTENSIONS
+from birdstamp.decoders.preview_source import PREVIEW_SOURCE_MESSAGE_KEY, PREVIEW_SOURCE_MODE_KEY
 from birdstamp.render.text_scale import normalize_text_scale
 from birdstamp import perf as birdstamp_perf
 from birdstamp.crop_resolution import CropPixelContext
@@ -174,6 +174,13 @@ class _BirdStampRendererMixin:
             return
         self.preview_label.apply_overlay_options(self._build_preview_overlay_options())
         canvas = self.preview_label.canvas
+        source_aspect_ratio = None
+        image = self.current_source_image
+        source_size = self._crop_display_source_size()
+        if source_size and image is not None:
+            left, top, right, bottom = map_camera_focus_box(
+                (0, 0, 1, 1), image.info.get(RAW_FOCUS_CROP_KEY))
+            source_aspect_ratio = (source_size[0] * (right - left)) / (source_size[1] * (bottom - top))
         if hasattr(canvas, "set_crop_pixel_context"):
             source_size = getattr(self, "current_source_full_size", None)
             image = self.current_source_image
@@ -182,7 +189,7 @@ class _BirdStampRendererMixin:
                      and not isinstance(selected_ratio, bool) else None)
             if source_size and image is not None and not _is_ratio_no_crop(selected_ratio):
                 if selected_ratio is None:
-                    ratio = source_size[0] / source_size[1]
+                    ratio = source_aspect_ratio or source_size[0] / source_size[1]
                 canvas.set_crop_pixel_context(CropPixelContext(
                     tuple(source_size), image.size, self._current_preview_outer_pad(), ratio,
                     str(self.current_path or ""),
@@ -196,7 +203,7 @@ class _BirdStampRendererMixin:
             preview_source = self.current_source_image
             if source_size and preview_source is not None:
                 if r is None:
-                    ratio_constraint = source_size[0] / source_size[1]
+                    ratio_constraint = source_aspect_ratio or source_size[0] / source_size[1]
                 if ratio_constraint is not None:
                     # 预览缩小后的两个轴可能有不同的像素取整比例。
                     ratio_constraint *= (preview_source.width / source_size[0]) / (preview_source.height / source_size[1])
@@ -242,11 +249,14 @@ class _BirdStampRendererMixin:
 
     def _reference_region_preview_to_source(
         self, box: tuple[float, float, float, float]
-    ) -> tuple[float, float, float, float]:
+    ) -> tuple[float, float, float, float] | None:
+        from .preview_source_geometry import preview_to_camera_box
         source = getattr(self, "current_source_image", None)
-        if self._dejitter_tab_active() or source is None:
+        if source is None:
             return tuple(float(v) for v in box)  # type: ignore[return-value]
-        pt, pb, pl, pr = self._current_preview_outer_pad()
+        ab = getattr(self, 'ab_preview', None)
+        direct_source = self._dejitter_tab_active() or (ab is not None and ab.enabled.isChecked())
+        pt, pb, pl, pr = (0, 0, 0, 0) if direct_source else self._current_preview_outer_pad()
         sw = max(1, int(source.width))
         sh = max(1, int(source.height))
         pw = sw + max(0, pl) + max(0, pr)
@@ -259,13 +269,18 @@ class _BirdStampRendererMixin:
 
         l, t = _convert(box[0], box[1])
         r, b = _convert(box[2], box[3])
-        return (min(l, r), min(t, b), max(l, r), max(t, b))
+        # 先去模板补边，再去 RAW/降噪像素中相机预览之外的边距；存储仍是原图坐标。
+        return preview_to_camera_box((min(l, r), min(t, b), max(l, r), max(t, b)),
+                                     source.info.get(RAW_FOCUS_CROP_KEY))
 
     def _reference_regions_source_to_preview(self, regions) -> tuple[tuple[float, float, float, float], ...]:
+        from .preview_source_geometry import camera_to_preview_box
         source = getattr(self, "current_source_image", None)
-        if self._dejitter_tab_active() or source is None or not regions:
+        if source is None or not regions:
             return tuple(tuple(float(v) for v in box) for box in (regions or ()) if len(box) == 4)
-        pt, pb, pl, pr = self._current_preview_outer_pad()
+        ab = getattr(self, 'ab_preview', None)
+        direct_source = self._dejitter_tab_active() or (ab is not None and ab.enabled.isChecked())
+        pt, pb, pl, pr = (0, 0, 0, 0) if direct_source else self._current_preview_outer_pad()
         sw = max(1, int(source.width))
         sh = max(1, int(source.height))
         pw = sw + max(0, pl) + max(0, pr)
@@ -280,6 +295,7 @@ class _BirdStampRendererMixin:
         for box in regions:
             if len(box) != 4:
                 continue
+            box = camera_to_preview_box(box, source.info.get(RAW_FOCUS_CROP_KEY))
             l, t = _convert(float(box[0]), float(box[1]))
             r, b = _convert(float(box[2]), float(box[3]))
             converted.append((min(l, r), min(t, b), max(l, r), max(t, b)))
@@ -385,18 +401,32 @@ class _BirdStampRendererMixin:
         return image.copy()
 
     def _preview_image_cache_signature(self, path: Path) -> str:
-        mode = 'raw' if self._b_show_raw_for_path(path) else 'embedded'
+        mode = self._b_preview_source_mode(path)
         return f"{self._source_signature(path)}:preview{_PREVIEW_DECODE_MAX_LONG_EDGE}:{mode}"
 
-    def _b_show_raw_for_path(self, path: Path) -> bool:
+    def _b_preview_source_mode(self, path: Path) -> str:
         ab = getattr(self, 'ab_preview', None)
-        return bool(path.suffix.lower() in RAW_EXTENSIONS and ab is not None
-                    and ab.b_panel.show_raw.isChecked() and not self._sequence_result_mode())
+        if ab is None or self._sequence_result_mode():
+            return 'default'
+        return ab.b_panel.effective_source_mode(path)
+
+    def _b_show_raw_for_path(self, path: Path) -> bool:
+        return self._b_preview_source_mode(path) == 'raw'
+
+    def _preview_source_label(self, default_label: str = '原图', *, image=None) -> str:
+        image = self.current_source_image if image is None else image
+        info = image.info if image is not None else {}
+        label = {'raw': '显示 RAW', 'denoised': '显示降噪'}.get(info.get(PREVIEW_SOURCE_MODE_KEY), default_label)
+        message = info.get(PREVIEW_SOURCE_MESSAGE_KEY)
+        return f'{label} · {message}' if message else label
 
     def _preview_decode_max_long_edge(self) -> int:
         return _PREVIEW_DECODE_MAX_LONG_EDGE
 
     def _cached_preview_image(self, path: Path) -> Image.Image | None:
+        # 成片可能在另一个应用刚生成/覆盖。只由 worker 重新验证输出，GUI 不扫描磁盘。
+        if self._b_preview_source_mode(path) == 'denoised':
+            return None
         cache = getattr(self, "_preview_image_cache", None)
         if not isinstance(cache, dict):
             return None
@@ -439,6 +469,8 @@ class _BirdStampRendererMixin:
         cache[signature] = image
 
     def _accept_async_preview_image(self, path: Path, image: Image.Image) -> Image.Image:
+        if self._b_preview_source_mode(path) == 'denoised':
+            return image
         if image.width * image.height * 4 > _PREVIEW_IMAGE_CACHE_MAX_BYTES:
             return image
         signature = self._preview_image_cache_signature(path)
@@ -570,7 +602,8 @@ class _BirdStampRendererMixin:
             self._schedule_async_bird_detect(self.current_path, self.current_source_image)
         pad_top, pad_bottom, pad_left, pad_right = self._current_preview_outer_pad()
         preview_bird_box = _transform_source_box_after_crop_padding(
-            self._bird_box_cache.get(signature),
+            map_camera_focus_box(self._bird_box_cache.get(signature),
+                                 self.current_source_image.info.get(RAW_FOCUS_CROP_KEY)),
             crop_box=None,
             source_width=self.current_source_image.width,
             source_height=self.current_source_image.height,
@@ -791,6 +824,7 @@ class _BirdStampRendererMixin:
             source_width,
             source_height,
             camera_type=focus_camera_type,
+            camera_crop_box=self.current_source_image.info.get(RAW_FOCUS_CROP_KEY),
         )
         if focus_box_source is None:
             return None
@@ -901,7 +935,7 @@ class _BirdStampRendererMixin:
             self.preview_label.canvas.set_crop_pixel_context(None)
             return
         display_pixmap: QPixmap | None = self.preview_pixmap
-        source_mode = "原图"
+        source_mode = self._preview_source_label()
 
         state = self.preview_overlay_state if self.preview_pixmap else EditorPreviewOverlayState()
         state.reference_regions = self._reference_regions_source_to_preview(self._visible_dejitter_reference_regions())
@@ -1497,6 +1531,7 @@ class _BirdStampRendererMixin:
             outer_pad=outer_pad,
             apply_ratio_crop=apply_ratio_crop,
             camera_type=_resolve_focus_camera_type_from_metadata(raw_metadata),
+            camera_crop_box=source_image.info.get(RAW_FOCUS_CROP_KEY),
         )
         if focus_box is None:
             return image
@@ -1709,7 +1744,8 @@ class _BirdStampRendererMixin:
                     signature = self._source_signature(self.current_path)
                     if signature in self._bird_box_cache:
                         preview_bird_box = _transform_source_box_after_crop_padding(
-                            self._bird_box_cache.get(signature),
+                            map_camera_focus_box(self._bird_box_cache.get(signature),
+                                                 self.current_source_image.info.get(RAW_FOCUS_CROP_KEY)),
                             crop_box=None,
                             source_width=self.current_source_image.width,
                             source_height=self.current_source_image.height,

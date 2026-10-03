@@ -5,6 +5,7 @@ from PyQt6.QtWidgets import QButtonGroup, QComboBox, QFrame, QHBoxLayout, QLabel
 
 from app_common.toggle_button import ToggleToolButton
 from app_common.preview_canvas import configure_preview_scale_preset_combo, sync_preview_scale_preset_combo
+from app_common.video import is_video
 from birdstamp.constants import RAW_EXTENSIONS
 from . import editor_options
 from .editor_media_icons import media_icon
@@ -43,11 +44,13 @@ class PreviewModeButtons(QWidget):
 class PreviewViewportPanel(QWidget):
     metrics_changed = pyqtSignal()
     activated = pyqtSignal()
+    source_mode_changed = pyqtSignal(str)
 
     def __init__(self, name, preview, *, center=None, scale=None):
         super().__init__()
         self.name = name
         self.preview = preview
+        self._source_mode = 'default'
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(6)
@@ -69,10 +72,16 @@ class PreviewViewportPanel(QWidget):
         self.mode = PreviewModeButtons()
         tools.addWidget(self.mode)
         self.show_raw = ToggleToolButton()
-        self.show_raw.setText('显示 RAW')
+        self.source_button = self.show_raw  # 保留旧工具栏引用，来源状态由视口显式保存。
+        self.show_raw.setText('默认预览')
         self.show_raw.setCheckable(True)
-        self.show_raw.setToolTip('仅切换本视口原图的像素来源；导出仍优先使用 RAW 内嵌预览图。')
-        self.show_raw.setAccessibleName(f'显示 {name} 侧完整 RAW')
+        self.show_raw.setToolTip(
+            '点击切换：默认预览 → 显示 RAW → 显示降噪（非 RAW 照片跳过 RAW）。\n'
+            '降噪显示已生成的成片，缺失时显示原图并提示。\n'
+            '仅影响本侧原图预览；序列播放期间保留缩略图，停止后加载所选来源。\n'
+            '导出仍使用原有来源设置。')
+        self.show_raw.setAccessibleName(f'{name} 预览来源')
+        self.show_raw.clicked.connect(self._cycle_preview_source)
         tools.addWidget(self.show_raw)
         self.mode.currentIndexChanged.connect(lambda _index: self._update_raw_toggle_visibility())
         self.center = center if center is not None else ToggleToolButton()
@@ -127,8 +136,36 @@ class PreviewViewportPanel(QWidget):
 
     def _update_raw_toggle_visibility(self):
         path = self._path
-        self.show_raw.setVisible(bool(path and path.suffix.lower() in RAW_EXTENSIONS
-                                      and self.mode.currentIndex() == 0))
+        self.source_button.setVisible(bool(path and not is_video(path)))
+        self.source_button.setEnabled(bool(path and self.mode.currentIndex() == 0))
+        mode = self.effective_source_mode()
+        self.source_button.setText({'default': '默认预览', 'raw': '显示 RAW', 'denoised': '显示降噪'}[mode])
+        self.source_button.setChecked(mode != 'default')
+
+    def source_mode(self):
+        return self._source_mode
+
+    def effective_source_mode(self, path=None):
+        path = self._path if path is None else path
+        if self._source_mode == 'raw' and (path is None or path.suffix.lower() not in RAW_EXTENSIONS):
+            return 'default'
+        return self._source_mode
+
+    def set_source_mode(self, mode):
+        if mode not in ('default', 'raw', 'denoised'):
+            raise ValueError(f'未知预览来源：{mode}')
+        changed = mode != self._source_mode
+        self._source_mode = mode
+        self._update_raw_toggle_visibility()
+        if changed:
+            self.source_mode_changed.emit(mode)
+
+    def _cycle_preview_source(self):
+        if self._path is None or self.mode.currentIndex() != 0:
+            self._update_raw_toggle_visibility()
+            return
+        modes = ('default', 'raw', 'denoised') if self._path.suffix.lower() in RAW_EXTENSIONS else ('default', 'denoised')
+        self.set_source_mode(modes[(modes.index(self.effective_source_mode()) + 1) % len(modes)])
 
     def set_active(self, active, *, compare_mode=True):
         highlighted = active and compare_mode

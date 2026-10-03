@@ -78,6 +78,7 @@ from app_common.file_utils import is_apple_double_metadata_file
 from app_common.file_browser._work_pool import BrowserWorkPool
 from app_common.log import get_logger
 from app_common.perf_probe import elapsed_ms, perf_counter
+from app_common.raw_preview_geometry import RAW_FOCUS_CROP_KEY
 from app_common.superviewer_user_options import (
     KEY_PERF_PROBES_ENABLED,
     apply_runtime_user_options,
@@ -95,7 +96,7 @@ from app_common.send_to_app import (
 
 import birdstamp
 from birdstamp.config import get_app_resource_dir, get_config_path, resolve_bundled_path
-from birdstamp.constants import RAW_EXTENSIONS, SEND_TO_APP_ID, SUPPORTED_EXTENSIONS
+from birdstamp.constants import SEND_TO_APP_ID, SUPPORTED_EXTENSIONS
 from birdstamp import perf as birdstamp_perf
 from app_common.exif_io import (
     extract_many,
@@ -2902,10 +2903,18 @@ class BirdStampEditorWindow(
                 box = editor_core.crop_box_to_source(
                     box, self.current_source_image.size, self._current_preview_outer_pad()
                 )
+                source_size = self._crop_display_source_size() or self.current_source_image.size
+                camera_crop = self.current_source_image.info.get(RAW_FOCUS_CROP_KEY)
+                if camera_crop is not None:
+                    from .preview_source_geometry import camera_to_preview_box, preview_to_camera_box
+                    box = preview_to_camera_box(box, camera_crop, clip=False)
+                    if box is None:
+                        return
+                    left, top, right, bottom = camera_to_preview_box((0, 0, 1, 1), camera_crop)
+                    source_size = (max(1, round(source_size[0] * (right - left))),
+                                   max(1, round(source_size[1] * (bottom - top))))
                 self._set_custom_center_from_box(box)
-                self._update_crop_padding_from_box(
-                    box, self._crop_display_source_size() or self.current_source_image.size
-                )
+                self._update_crop_padding_from_box(box, source_size)
 
             self._crop_box_override = box
             self._set_photo_crop_box_for_path(self.current_path, box)
@@ -3040,7 +3049,7 @@ class BirdStampEditorWindow(
             if isinstance(box, (list, tuple)) and len(box) == 4:
                 converted = self._reference_region_preview_to_source(tuple(float(v) for v in box))
                 # 补边内的框选没有源图纹理，不能变成零面积参考区。
-                if converted[2] - converted[0] > 1e-4 and converted[3] - converted[1] > 1e-4:
+                if converted is not None and converted[2] - converted[0] > 1e-4 and converted[3] - converted[1] > 1e-4:
                     source_regions.append(converted)
         self._commit_source_reference_regions(self.current_path, source_regions)
 
@@ -5048,13 +5057,12 @@ class BirdStampEditorWindow(
         if previous_worker is not None:
             previous_worker.requestInterruption()
             self._preview_decode_pending = None
-        show_raw = bool(path.suffix.lower() in RAW_EXTENSIONS and self._b_show_raw_for_path(path)
-                        and not quick_only)
+        source_mode = self._b_preview_source_mode(path)
         self._begin_photo_selection(path, current,
                                     preserve_preview_view=quick_only or path == self.current_path)
         source_entry = transport.source_preview(path) if transport is not None else None
-        cached = None if quick_only or show_raw else self._cached_preview_image(path)
-        if cached is None and not quick_only:
+        cached = None if quick_only or source_mode != 'default' else self._cached_preview_image(path)
+        if cached is None and not quick_only and source_mode == 'default':
             from .editor_preview_policy import load_full_synchronously
             if load_full_synchronously(path):
                 try:
@@ -5106,7 +5114,7 @@ class BirdStampEditorWindow(
             path,
             max_long_edge=self._preview_decode_max_long_edge(),
             quick_only=quick_only,
-            show_raw=not quick_only and self._b_show_raw_for_path(path),
+            source_mode='default' if quick_only else self._b_preview_source_mode(path),
             pool=self._preview_action_pool,
             parent=self,
         )

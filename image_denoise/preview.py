@@ -7,6 +7,7 @@ import json
 import os
 from pathlib import Path
 import re
+import sys
 import threading
 import unicodedata
 import xml.etree.ElementTree as ET
@@ -56,6 +57,38 @@ class DenoisedPreview:
     legacy: bool = False
 
 
+def denoise_preview_history_path() -> Path:
+    """两应用共用 Viewer 已保存的本机索引位置；仅计算路径，不创建目录。"""
+    if sys.platform.startswith("win"):
+        base = Path(os.environ.get("APPDATA") or os.path.expanduser("~"))
+        return base / "SuperViewer" / "denoise_previews.json"
+    if sys.platform == "darwin":
+        return Path.home() / "Library" / "Application Support" / "SuperViewer" / "denoise_previews.json"
+    return Path.home() / ".superviewer" / "denoise_previews.json"
+
+
+def _history_candidates(source: Path, history_path: Path, *, cancelled=None) -> list[Path]:
+    """后台只读有界索引；记录只提供候选，仍须校验每个成片的来源指纹。"""
+    check_cancelled(cancelled)
+    try:
+        if history_path.stat().st_size > 4 * 1024 * 1024:
+            return []
+        payload = json.loads(history_path.read_text(encoding="utf-8"))
+        if not isinstance(payload, list):
+            return []
+        source_key = _key(source)
+        candidates = []
+        for item in payload[-_RECENT_LIMIT:]:
+            check_cancelled(cancelled)
+            if (isinstance(item, list) and len(item) == 2
+                    and all(isinstance(value, str) and value and "\x00" not in value for value in item)
+                    and _key(item[0]) == source_key):
+                candidates.append(Path(item[1]))
+        return candidates
+    except (OSError, ValueError):
+        return []
+
+
 def _output_metadata(path: Path) -> dict[str, str]:
     sidecar = path.with_suffix(".xmp")
     if not sidecar.is_file():
@@ -80,7 +113,8 @@ def _output_metadata(path: Path) -> dict[str, str]:
     return values
 
 
-def find_denoised_preview(source, options: DenoiseOptions | None = None, *, cancelled=None):
+def find_denoised_preview(source, options: DenoiseOptions | None = None, *, cancelled=None,
+                          history_path: Path | None = None):
     """按来源校验成片；旧版无来源记录的成片仅在无同名歧义的源子目录兼容。"""
     source = Path(source)
     options = options or DenoiseOptions()
@@ -91,6 +125,8 @@ def find_denoised_preview(source, options: DenoiseOptions | None = None, *, canc
     if options.output_directory:
         directories.insert(0, Path(options.output_directory).expanduser())
     candidates = [Path(recent)] if recent else []
+    if history_path is not None:
+        candidates.extend(_history_candidates(source, Path(history_path), cancelled=cancelled))
     visited = set()
     stem = re.compile(re.escape(_name_key(source.stem)) + r"_denoised(?:_[0-9]+)?$")
     for directory in directories:
