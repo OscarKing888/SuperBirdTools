@@ -3,19 +3,43 @@ from copy import deepcopy
 from pathlib import Path
 import pytest
 from PIL import Image
-from PyQt6.QtCore import Qt,QPointF,QEvent
+from PyQt6.QtCore import Qt,QPointF,QEvent,QCoreApplication
 from PyQt6.QtGui import QMouseEvent,QKeyEvent
 from PyQt6.QtTest import QTest
-from test_template_text_scale import window,_APP
+from test_template_text_scale import _APP
 from test_overlay_layers import overlay_doc
 from birdstamp.gui.overlay_panel import OverlayPanel
 from birdstamp.gui.overlay_edit import OverlaySession
 from birdstamp.gui.editor_preview_canvas import EditorPreviewCanvas
+from birdstamp.gui.editor import BirdStampEditorWindow
 from birdstamp.gui.editor_template_dialog import TemplateManagerDialog
 from birdstamp.gui.editor_template import save_template_payload,default_template_payload,load_template_payload
 from birdstamp.gui.editor_utils import pil_to_qpixmap,path_key
 from birdstamp.overlays.render import build_scene
 from birdstamp import config
+
+
+@pytest.fixture
+def window(tmp_path,monkeypatch):
+    monkeypatch.setattr(config,'get_user_data_dir',lambda:tmp_path/'user')
+    monkeypatch.setenv('LOCALAPPDATA',str(tmp_path/'cache'))
+    for name in ('_start_bird_detector_preload','_run_deferred_startup_tasks',
+                 '_restart_photo_list_metadata_loader','_schedule_async_bird_detect'):
+        monkeypatch.setattr(BirdStampEditorWindow,name,lambda *args,**kwargs:None)
+    instance=BirdStampEditorWindow()
+    try:
+        yield instance
+    finally:
+        # closeEvent 等后台线程退出后才保存；隔离路径须维持到真正关闭。
+        closed=instance.close()
+        for _ in range(500):
+            if closed: break
+            QTest.qWait(10)
+            closed=instance.close()
+        assert closed, '测试窗口后台任务未能退出'
+        instance.deleteLater()
+        QCoreApplication.sendPostedEvents(None,QEvent.Type.DeferredDelete)
+        _APP.processEvents()
 
 
 def mouse(kind,point,button=Qt.MouseButton.LeftButton,modifiers=Qt.KeyboardModifier.NoModifier):
