@@ -2066,6 +2066,8 @@ class BirdStampEditorWindow(
         self._preview_outer_pad: tuple[int, int, int, int] = (0, 0, 0, 0)
         canvas = self.preview_label.canvas
         canvas.set_auto_focus_center(self.auto_focus_center_check.isChecked())
+        if hasattr(self, "dejitter_hud"):
+            self.dejitter_hud.attach(canvas)
         if hasattr(canvas, "crop_box_changed"):
             canvas.crop_box_changed.connect(self._on_canvas_crop_box_changed)
         if hasattr(canvas, "crop_drag_started"):

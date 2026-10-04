@@ -51,8 +51,9 @@ def test_dejitter_status_uses_color_keys_before_descriptions(window):
     assert tracking.text() == '跟踪成功\n未匹配（预计位置）'
     assert bounds.text() == '整组完整范围（并集）：待分析\n共同无黑边范围（交集）：待分析'
     frames = tracking.findChildren(_ColorFrame) + bounds.findChildren(_ColorFrame)
+    # 图例须与画布一致：并集为橙色实线，交集为青色虚线（见 editor_preview_canvas）。
     assert [(frame.color.name().upper(), frame.dashed) for frame in frames] == [
-        ('#FFB703', False), ('#FF5252', True), ('#23F531', False), ('#45D6E8', False),
+        ('#FFB703', False), ('#FF5252', True), ('#F5A623', False), ('#45D6E8', True),
     ]
     for frame in frames:
         image = QImage(frame.size(), QImage.Format.Format_ARGB32)
