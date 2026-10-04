@@ -56,7 +56,7 @@ def test_weak_eyeless_extra_next_to_a_confident_bird_is_dropped(monkeypatch) -> 
     overview = next(s for s in trace.common if s.key == "birds")
     assert any("已排除" in label and "误识别" in value for label, value in overview.metrics)
     assert [s.bird for s in trace.steps_all() if s.bird is not None].count(1) == len(dropped.steps)
-    assert all(label.startswith("鸟 #1") for label, _ in trace.final[0].metrics if label.startswith("鸟 #"))
+    assert [row.label for row in trace.final[0].bird_rows] == ["鸟 #1（最佳）"]
 
 
 @pytest.mark.parametrize(("confs", "eyes", "stub"), [

@@ -86,7 +86,7 @@ def test_weak_candidate_on_the_focus_box_is_the_bird(monkeypatch) -> None:
     assert keys[:4] == ["decode", "detect", "recheck", "bird"]
     recheck = next(s for s in trace.common if s.key == "recheck")
     assert "通过" in dict(recheck.metrics)["规则一：弱候选压在焦点上"]
-    assert "焦点复检" in " ".join(k for k, _ in trace.final[0].metrics)
+    assert "焦点复检" in " ".join(row.label for row in trace.final[0].bird_rows)
 
 
 def test_weak_candidate_away_from_focus_is_ignored(monkeypatch) -> None:
@@ -217,7 +217,7 @@ def test_dark_frame_is_detected_again_with_midtones_lifted(monkeypatch) -> None:
     assert result.sigma == pytest.approx(_confident_sigma(monkeypatch), abs=1e-6)  # measured on the original
     recheck = next(s for s in trace.common if s.key == "recheck")
     assert "直接采纳" in dict(recheck.metrics)["暗部提亮后再识别"]
-    assert "提亮复检" in " ".join(k for k, _ in trace.final[0].metrics)
+    assert "提亮复检" in " ".join(row.label for row in trace.final[0].bird_rows)
 
 
 def test_bright_frame_is_not_lifted(monkeypatch) -> None:

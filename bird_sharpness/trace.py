@@ -99,6 +99,15 @@ class TraceChart:
 
 
 @dataclass
+class TraceBirdRow:
+    """One bird in a step's bird list: colour swatch, label, details, and its box to highlight."""
+    label: str
+    value: str
+    color: str                                # hex, same colour as the bird's mark in the step image
+    box: Tuple[float, float, float, float]   # x1, y1, x2, y2 in step image coords
+
+
+@dataclass
 class TraceStep:
     key: str
     title: str
@@ -110,8 +119,7 @@ class TraceStep:
     legend: List[Tuple[str, str]] = field(default_factory=list)  # (hex colour, label)
     focus_rect: Optional[Tuple[int, int, int, int]] = None  # region worth zooming to, image coords
     bird: Optional[int] = None  # bird index for per-bird steps
-    # metric label -> box (x1, y1, x2, y2) in image coords, highlighted when the row is hovered
-    highlights: Dict[str, Tuple[float, float, float, float]] = field(default_factory=dict)
+    bird_rows: List[TraceBirdRow] = field(default_factory=list)  # shown as a list after the metrics
 
     def to_json(self) -> dict:
         def clean(value):
@@ -126,8 +134,10 @@ class TraceStep:
             return value
 
         return {"key": self.key, "title": self.title, "description": self.description, "frame": self.frame,
-                "focus_rect": self.focus_rect, "bird": self.bird, "highlights": clean(self.highlights),
+                "focus_rect": self.focus_rect, "bird": self.bird,
                 "metrics": self.metrics, "legend": self.legend,
+                "bird_rows": [{"label": r.label, "value": r.value, "color": r.color, "box": clean(r.box)}
+                              for r in self.bird_rows],
                 "charts": [{"kind": c.kind, "title": c.title, "data": clean(c.data)} for c in self.charts]}
 
 
@@ -371,7 +381,6 @@ class AnalysisTracer:
         H, W = self._image_shape
         sh, sw = img.shape[:2]
         rows = []
-        highlights = {}
         self._bird_boxes = []
         self._det_scale = scale_to_full
         for i, det in enumerate(detections):
@@ -385,13 +394,13 @@ class AnalysisTracer:
             _rect(img, self._display((x1, y1, x2, y2)), color, lw)
             cv2.circle(img, (int(x1 * self._scale) + 6 * lw, int(y1 * self._scale) + 6 * lw), 5 * lw, color, -1,
                        cv2.LINE_AA)
-            rows.append((f"鸟 #{i + 1}", f"置信度 {det.confidence:.2f}，框 {int(x2 - x1)} × {int(y2 - y1)} px"))
-            highlights[rows[-1][0]] = self._display((x1, y1, x2, y2))
+            rows.append(TraceBirdRow(f"鸟 #{i + 1}", f"置信度 {det.confidence:.2f}，框 {int(x2 - x1)} × {int(y2 - y1)} px",
+                                     hex_color(color), self._display((x1, y1, x2, y2))))
         if self._focus_px is not None:
             _rect(img, self._display(self._focus_px), C_FOCUS, lw)
         metrics = [("识别模型", "分割（像素掩膜）" if has_masks else "检测（鸟框）"),
                    ("鸟眼模型", "有" if has_keypoints else "无（按整只鸟计算，准确度低）"),
-                   ("鸟数", str(len(detections))), *rows]
+                   ("鸟数", str(len(detections)))]
         if unmeasured:
             metrics.insert(3, ("未测量", f"另有 {unmeasured} 只（超过上限 {limit} 只；焦点框上的鸟优先测量）"))
         if small_pass is not None:
@@ -401,15 +410,14 @@ class AnalysisTracer:
             metrics.insert(3, ("小鸟高分辨率补检",
                                f"首遍 {first} 只（有鸟框 < {A.FLOCK_BIRD_SIDE} px），{A.SMALL_DETECT_LONG_EDGE} px 再识别"
                                f"找到 {found} 只，合并后新增 {added} 只"))
-        legend = [(hex_color(BIRD_COLORS[i % len(BIRD_COLORS)]), f"鸟 #{i + 1}") for i in range(len(detections))]
-        legend.append((hex_color(C_FOCUS), "相机焦点框"))
+        legend = [(hex_color(C_FOCUS), "相机焦点框")]  # bird colours are in the bird list
         desc = ("在 1024 px 副本上找出全部鸟（置信度 ≥ 0.25）。每只鸟后续只用自己的像素单独计算一组清晰度，"
                 "最后取最好的一只。" + ("鸟很小（鸟群）：首遍在 1024 px 副本上看到的鸟太小、漏得多，"
                                      "又在 2048 px 副本上用 2048 px 输入识别一次并合并。" if small_pass else "")
                 if detections else
                 "全图没有置信度 ≥ 0.25 的鸟：下一步复检伪装或被遮挡的鸟；仍没有时有焦点用焦点区域，没有焦点用全图。")
         self.trace.common.append(TraceStep(STEP_DETECT, "鸟体识别", desc, img, "full", metrics, legend=legend,
-                                           highlights=highlights))
+                                           bird_rows=rows))
 
     def recheck(self, check) -> None:
         """Step for :meth:`BirdSharpnessAnalyzer._recheck` (first pass found no bird)."""
@@ -812,7 +820,6 @@ class AnalysisTracer:
         lw = _line_w(img)
         points = []
         rows = []
-        highlights = {}
         for i, bird in enumerate(result.birds or []):
             i = bird.get("index", i)  # detection number, unchanged when false extras are dropped
             color = _verdict_rgb(bird["verdict"])
@@ -823,9 +830,10 @@ class AnalysisTracer:
                 points.append({"sigma": bird["sigma"], "score": bird["score"], "label": f"#{i + 1}",
                                "color": hex_color(color), "best": best})
             found = FOUND_LABELS.get(bird.get("found_by", ""), "")
-            rows.append((f"鸟 #{i + 1}{'（最佳）' if best else ''}{found}",
-                         f"{verdict_label(bird['verdict'])} · σ {_fmt(bird.get('sigma'))} · 分数 {_fmt(bird.get('score'), '%d')}"))
-            highlights[rows[-1][0]] = box
+            rows.append(TraceBirdRow(
+                f"鸟 #{i + 1}{'（最佳）' if best else ''}{found}",
+                f"{verdict_label(bird['verdict'])} · σ {_fmt(bird.get('sigma'))} · 分数 {_fmt(bird.get('score'), '%d')}",
+                hex_color(color), box))
         if result.region_box is not None and result.region != fields.REGION_BIRD:
             _rect(img, self._display(result.region_box), C_WINDOW, lw + 1)
             if result.sigma is not None:
@@ -840,8 +848,7 @@ class AnalysisTracer:
             fx, fy = (self._focus_px[0] + self._focus_px[2]) / 2, (self._focus_px[1] + self._focus_px[3]) / 2
             on_bird = any(b[0] <= fx <= b[2] and b[1] <= fy <= b[3] for b in self._bird_boxes)
         metrics = [("判定", verdict_label(result.verdict) or result.verdict), ("分数（0–1000）", _fmt(result.score, "%d")),
-                   ("模糊半径", _fmt(result.sigma, "%.3f px")), ("计算区域", region), ("鸟数", str(result.bird_count)),
-                   *rows]
+                   ("模糊半径", _fmt(result.sigma, "%.3f px")), ("计算区域", region), ("鸟数", str(result.bird_count))]
         if on_bird is not None:
             metrics.append(("焦点在鸟上", "是" if on_bird else "否（相机焦点不在任何鸟上）"))
         metrics.append(("边缘统计", {"standard": "标准（最强 30 条边缘的中位数）",
@@ -859,4 +866,4 @@ class AnalysisTracer:
             img, "full", metrics, charts,
             legend=[(hex_color(_verdict_rgb(v)), fields.VERDICT_STYLES[v].label)
                     for v in (fields.VERDICT_SHARP, fields.VERDICT_USABLE, fields.VERDICT_SOFT)],
-            highlights=highlights))
+            bird_rows=rows))

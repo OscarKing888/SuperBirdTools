@@ -390,6 +390,77 @@ class TraceChartWidget(QWidget):
                              f"{p.get('label', '')} σ{float(p['sigma']):.2f} → {int(p['score'])}")
 
 
+class TraceBirdList(QWidget):
+    """A step's birds: colour swatch, label and details per row (``TraceBirdRow``).
+
+    Hovering a row tints it and emits ``hovered(box)`` (step image coords) so the
+    view can highlight that bird; leaving the row or replacing the rows emits ``None``.
+    """
+
+    hovered = pyqtSignal(object)
+
+    def __init__(self, parent=None) -> None:
+        super().__init__(parent)
+        self.grid = QGridLayout(self)
+        self.grid.setContentsMargins(0, 4, 0, 4)
+        # No column/row gaps: the padding lives inside the labels, so the pointer never
+        # falls between two cells of a row and the highlight does not flicker.
+        self.grid.setHorizontalSpacing(0)
+        self.grid.setVerticalSpacing(0)
+        self.rows: List = []
+        self.cells: List[tuple] = []  # per row: (swatch, label, value)
+        self._row_of: dict = {}  # cell widget -> row index (stale widgets of old rows are absent)
+        self.hovered_row: Optional[int] = None
+        self.setVisible(False)
+
+    def set_rows(self, rows) -> None:
+        self._set_hovered(None)
+        _clear_layout(self.grid)
+        self.rows, self.cells, self._row_of = list(rows), [], {}
+        for r, row in enumerate(self.rows):
+            swatch = QLabel(f'<span style="color:{row.color}">■</span>', self)
+            swatch.setTextFormat(_RICH)
+            swatch.setContentsMargins(0, 3, 6, 3)
+            label = QLabel(row.label, self)
+            label.setForegroundRole(_ROLE.PlaceholderText)
+            label.setContentsMargins(0, 3, 12, 3)
+            value = QLabel(row.value, self)
+            value.setWordWrap(True)
+            value.setContentsMargins(0, 3, 0, 3)
+            for c, widget in enumerate((swatch, label, value)):
+                widget.setAlignment(_Qt.AlignLeft | _Qt.AlignTop)  # cells fill the row: the tint covers it whole
+                self.grid.addWidget(widget, r, c)
+                widget.installEventFilter(self)
+                self._row_of[widget] = r
+            self.cells.append((swatch, label, value))
+        self.grid.setColumnStretch(2, 1)
+        self.setVisible(bool(self.rows))
+
+    def _set_hovered(self, r: Optional[int]) -> None:
+        if r == self.hovered_row:
+            return
+        if self.hovered_row is not None and self.hovered_row < len(self.cells):
+            for widget in self.cells[self.hovered_row]:
+                widget.setStyleSheet("")
+        self.hovered_row = r
+        if r is not None:
+            tint = self.palette().color(_ROLE.Highlight)
+            for widget in self.cells[r]:
+                widget.setStyleSheet(f"background: rgba({tint.red()}, {tint.green()}, {tint.blue()}, 90);")
+        self.hovered.emit(None if r is None else self.rows[r].box)
+
+    def eventFilter(self, obj, event) -> bool:  # noqa: N802 - Qt API
+        kind = event.type()
+        if kind in (_EVENT.Enter, _EVENT.Leave):
+            r = self._row_of.get(obj)
+            if r is not None:
+                if kind == _EVENT.Enter:
+                    self._set_hovered(r)
+                elif self.hovered_row == r:
+                    self._set_hovered(None)
+        return super().eventFilter(obj, event)
+
+
 class BirdSharpnessTraceDialog(QDialog):
     """Non-modal window for one photo's trace; ``set_trace`` once the worker delivers it."""
 
@@ -408,8 +479,6 @@ class BirdSharpnessTraceDialog(QDialog):
         self.steps: List = []
         self.index = 0
         self._syncing = False
-        self._row_boxes: dict = {}  # metric row -> (highlight box, key label, value label)
-        self._hovered_row: Optional[int] = None
         self.setWindowTitle(f"清晰度计算过程 - {os.path.basename(path)}")
         self.setModal(False)
         self.resize(1320, 840)
@@ -490,7 +559,9 @@ class BirdSharpnessTraceDialog(QDialog):
         self.metrics_box = QWidget(side)
         self.metrics_grid = QGridLayout(self.metrics_box)
         self.metrics_grid.setContentsMargins(0, 4, 0, 4)
-        self.metrics_grid.setHorizontalSpacing(0)
+        self.metrics_grid.setHorizontalSpacing(12)
+        self.bird_list = TraceBirdList(side)
+        self.bird_list.hovered.connect(self.view_a.set_highlight)
         self.charts_box = QWidget(side)
         self.charts_layout = QVBoxLayout(self.charts_box)
         self.charts_layout.setContentsMargins(0, 0, 0, 0)
@@ -500,6 +571,7 @@ class BirdSharpnessTraceDialog(QDialog):
         side_layout.addWidget(self.step_title)
         side_layout.addWidget(self.step_desc)
         side_layout.addWidget(self.metrics_box)
+        side_layout.addWidget(self.bird_list)
         side_layout.addWidget(self.charts_box)
         side_layout.addWidget(self.legend)
         side_layout.addStretch(1)
@@ -854,59 +926,21 @@ class BirdSharpnessTraceDialog(QDialog):
     def _show_side(self, step) -> None:
         self.step_title.setText(f"步骤 {self.index + 1} / {len(self.steps)} · {self._step_label(step)}")
         self.step_desc.setText(step.description)
-        self._set_hovered_row(None)
-        self._row_boxes = {}
         _clear_layout(self.metrics_grid)
-        highlights = getattr(step, "highlights", None) or {}
         for row, (label, value) in enumerate(step.metrics):
             key = QLabel(label, self.metrics_box)
             key.setForegroundRole(_ROLE.PlaceholderText)
-            key.setContentsMargins(0, 0, 12, 0)  # column gap inside the label: hover has no dead zone
             val = QLabel(str(value), self.metrics_box)
             val.setWordWrap(True)
             self.metrics_grid.addWidget(key, row, 0, _Qt.AlignTop)
             self.metrics_grid.addWidget(val, row, 1)
-            box = highlights.get(label)
-            if box is not None:
-                # Hovering a bird's row highlights its box in the main view.
-                for widget in (key, val):
-                    widget.setProperty("trace_row", row)
-                    widget.installEventFilter(self)
-                self._row_boxes[row] = (box, key, val)
         self.metrics_grid.setColumnStretch(1, 1)
+        self.bird_list.set_rows(getattr(step, "bird_rows", None) or [])
         _clear_layout(self.charts_layout)
         for chart in step.charts:
             self.charts_layout.addWidget(TraceChartWidget(chart, self.charts_box))
         self.legend.setText("<br>".join(
             f'<span style="color:{color}">■</span> {label}' for color, label in step.legend))
-
-    def _set_hovered_row(self, row: Optional[int]) -> None:
-        entry = self._row_boxes.get(row) if row is not None else None
-        previous = self._row_boxes.get(self._hovered_row) if self._hovered_row is not None else None
-        if previous is not None and previous is not entry:
-            for widget in previous[1:]:
-                widget.setStyleSheet("")
-        self._hovered_row = row if entry is not None else None
-        if entry is None:
-            self.view_a.set_highlight(None)
-            return
-        box, key, val = entry
-        tint = self.palette().color(_ROLE.Highlight)
-        for widget in (key, val):
-            widget.setStyleSheet(f"background: rgba({tint.red()}, {tint.green()}, {tint.blue()}, 90);")
-        self.view_a.set_highlight(box)
-
-    def eventFilter(self, obj, event) -> bool:  # noqa: N802 - Qt API
-        kind = event.type()
-        if kind in (_EVENT.Enter, _EVENT.Leave):
-            row = obj.property("trace_row")
-            entry = self._row_boxes.get(int(row)) if row is not None else None
-            if entry is not None and obj in entry[1:]:  # not a label left over from the previous step
-                if kind == _EVENT.Enter:
-                    self._set_hovered_row(int(row))
-                elif self._hovered_row == int(row):
-                    self._set_hovered_row(None)
-        return super().eventFilter(obj, event)
 
     # ── keyboard / lifecycle ──────────────────────────────────────────────
     def keyPressEvent(self, event) -> None:  # noqa: N802 - Qt API
