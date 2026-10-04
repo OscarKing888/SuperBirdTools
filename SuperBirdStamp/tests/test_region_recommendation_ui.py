@@ -58,7 +58,9 @@ def test_group_ownership_and_default_experimental_gate(window):
     panel=window.dejitter_recommendation
     assert window.dejitter_selection_group.isAncestorOf(panel)
     assert not panel.experimental.isChecked()
-    assert window.dejitter_analysis_group.isAncestorOf(window.dejitter_subject_controls)
+    assert window.dejitter_method_group.isAncestorOf(window.dejitter_subject_controls)
+    assert window.dejitter_method_group.isAncestorOf(panel.target_button)
+    assert window.dejitter_analysis_group.isAncestorOf(window.dejitter_preprocess_btn)
     assert window.dejitter_export_group.isAncestorOf(window.dejitter_export_btn)
 
 
@@ -110,6 +112,8 @@ def test_draft_does_not_replace_manual_region_and_disappears_after_source_change
     panel.candidates.apply.click()
     assert window._dejitter_reference_regions==original
     assert '人工区冲突' in panel.status.text()
+    # The panel status label is hidden; the refusal must reach the preview HUD message.
+    assert '人工区冲突' in window._sequence_message
     window.current_path=window.current_path.with_name('other.png')
     panel.sync(True)
     assert panel.candidates.result is None

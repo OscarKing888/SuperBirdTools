@@ -348,17 +348,10 @@ class BirdSharpnessController(QObject):
 
     def extend_file_menu(self, menu, paths: list[str]) -> None:
         if paths:
-            from bird_sharpness.image_source import SOURCE_DENOISED, SOURCE_JPEG, SOURCE_RAW
-
-            sub = menu.addMenu("查看清晰度计算过程")
-            sub.setToolTipsVisible(True)
-            for label, source, tip in (
-                    ("RAW 解码…", SOURCE_RAW, "默认：阈值按 RAW 解码标定"),
-                    ("相机 JPEG…", SOURCE_JPEG, "相机内嵌的全尺寸 JPEG（机内锐化/降噪），仅供对比"),
-                    ("降噪成片…", SOURCE_DENOISED, "降噪后的图；没有时先自动降噪，仅供对比")):
-                act = sub.addAction(label)
-                act.setToolTip(tip)
-                act.triggered.connect(lambda checked=False, p=paths[0], s=source: self.show_trace(p, s))
+            trace_act = menu.addAction("查看清晰度计算过程…")
+            trace_act.setToolTip("逐步显示这张照片的清晰度是如何算出来的（只读，不写入）；"
+                                 "窗口里可切换 RAW 解码 / 相机 JPEG / 降噪成片")
+            trace_act.triggered.connect(lambda checked=False, p=paths[0]: self.show_trace(p))
         if self.busy:
             self._add_stop_action(menu)
             return

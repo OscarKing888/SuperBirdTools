@@ -126,12 +126,31 @@ def resolve_model_paths() -> ModelPaths:
     )
 
 
+RUNTIME_MODULES = ("numpy", "cv2", "torch", "torchvision", "ultralytics", "rawpy", "PIL")
+
+
+def _program_replaced() -> bool:
+    """The working directory is gone: the app (or checkout) was replaced while running.
+
+    Lazily imported modules then fail with a bare ``[Errno 2]`` (seen when
+    dist/SuperViewer.app was re-packaged a minute after launch).
+    """
+    try:
+        os.getcwd()
+    except FileNotFoundError:
+        return True
+    return bool(getattr(sys, "frozen", False)) and not os.path.exists(sys.executable)
+
+
 def check_runtime() -> Optional[str]:
     """Return a user-facing reason why detection cannot run, or ``None`` when ready."""
-    for module in ("numpy", "cv2", "torch", "torchvision", "ultralytics", "rawpy", "PIL"):
+    for module in RUNTIME_MODULES:
         try:
             __import__(module)
         except Exception as exc:  # ImportError or broken native libs
+            if _program_replaced():
+                return (f"程序文件在运行期间被替换或删除（例如重新打包、更新），无法加载 {module}。"
+                        "请退出并重新打开程序。")
             return f"缺少运行依赖 {module}：{exc}"
     paths = resolve_model_paths()
     if not paths.complete:

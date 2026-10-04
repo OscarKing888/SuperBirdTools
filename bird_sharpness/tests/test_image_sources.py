@@ -44,3 +44,13 @@ def test_cli_refuses_to_write_xmp_from_other_sources(capsys) -> None:
     with pytest.raises(SystemExit) as exc:
         cli_main(["--source", "jpeg", "--write-xmp", "a.ARW"])
     assert exc.value.code == 2 and "--write-xmp" in capsys.readouterr().err
+
+
+def test_runtime_check_says_restart_when_the_program_was_replaced(monkeypatch) -> None:
+    from bird_sharpness import models
+
+    monkeypatch.setattr(models, "RUNTIME_MODULES", ("bird_sharpness_no_such_module",))
+    monkeypatch.setattr(models.os, "getcwd", lambda: (_ for _ in ()).throw(FileNotFoundError(2, "gone")))
+    assert "重新打开" in models.check_runtime()
+    monkeypatch.setattr(models.os, "getcwd", lambda: "/tmp")
+    assert models.check_runtime().startswith("缺少运行依赖 bird_sharpness_no_such_module")
