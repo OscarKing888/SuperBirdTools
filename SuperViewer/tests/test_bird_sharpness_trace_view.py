@@ -178,14 +178,14 @@ def test_context_menu_opens_trace_computed_as_worker_action(stub_trace_env, monk
     try:
         menu = QMenu()
         controller.extend_file_menu(menu, ["/photos/a.ARW", "/photos/b.ARW"])
-        trace_menu = next(a for a in menu.actions() if a.text() == "查看清晰度计算过程").menu()
-        action = trace_menu.actions()[0]  # RAW 解码
+        action = next(a for a in menu.actions() if a.text() == "查看清晰度计算过程…")
         opened = []
         original_show = controller.show_trace
-        monkeypatch.setattr(controller, "show_trace", lambda p, s: opened.append(original_show(p, s)))
+        monkeypatch.setattr(controller, "show_trace", lambda p: opened.append(original_show(p)))
         action.trigger()
         dialog = opened[0]
         assert dialog.path == os.path.normpath("/photos/a.ARW") or dialog.path == "/photos/a.ARW"
+        assert dialog.source_combo.currentData() == "raw"  # starts on RAW; switch inside the window
         assert _wait(lambda: dialog.stack.currentWidget() is dialog.content, timeout=20)
         assert [s.key for s in dialog.steps][-1] == "result"
         assert not Path("/photos/a.xmp").exists()  # read-only

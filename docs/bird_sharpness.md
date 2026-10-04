@@ -46,7 +46,7 @@
 
 ## 计算过程查看器
 
-SuperViewer 文件列表/缩略图右键「查看清晰度计算过程」▸「RAW 解码… / 相机 JPEG… / 降噪成片…」（窗口顶部「图像」可随时切换并重新计算）：在共享线程池以 `BirdSharpnessTraceAction`（`WorkKind.ANALYSIS`，只读、不写 XMP）重新计算这张照片，并逐步展示：
+SuperViewer 文件列表/缩略图右键「查看清晰度计算过程…」（默认按 RAW 解码；窗口顶部「图像」可切换为相机 JPEG / 降噪成片并重新计算）：在共享线程池以 `BirdSharpnessTraceAction`（`WorkKind.ANALYSIS`，只读、不写 XMP）重新计算这张照片，并逐步展示：
 
 | 步骤 | 主视图 | 侧栏 |
 | --- | --- | --- |

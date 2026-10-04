@@ -308,7 +308,7 @@ macOS 使用同一根环境的 `.venv/bin/python3`。编译命令中的文件列
 
 Qt 测试在窗口构造前隔离 `paths_settings` 的应用/用户状态目录与共享运行选项，缓存指向临时目录；用临时图片/XMP，不对真实图库做写入 smoke。整个进程保留一个 `QApplication`，不要让 fixture 销毁后再次创建。需要完整窗口和实际事件的范例见 `test_directory_selection_responsiveness.py`、`test_main_window_theme.py`。
 
-卡顿排查先看根 `logs/SuperViewer.log`（可通过 `APP_COMMON_LOG_FILE` 重定向）及 `perf_probe`：区分扫描、列表应用、`set_image`、信息页读取和后台批次等待。必要时使用临时只读探针或线程栈定位阻塞，再修改调度；不要先放宽等待时间或把整图解码藏进缩略图 fallback。
+卡顿排查先看根 `logs/SuperViewer.log`（打包版为 `~/Library/Logs/SuperViewer/app.log`；可通过 `APP_COMMON_LOG_FILE` 重定向；超过 10 MB 滚动，保留 5 份，见 [app_common](../../app_common/README.md)）及 `perf_probe`：区分扫描、列表应用、`set_image`、信息页读取和后台批次等待。必要时使用临时只读探针或线程栈定位阻塞，再修改调度；不要先放宽等待时间或把整图解码藏进缩略图 fallback。
 
 ## 11. 视频浏览、封面与播放
 
