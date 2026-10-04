@@ -92,31 +92,49 @@ class BirdSharpnessTraceOutcome:
     result: Optional[BirdSharpnessResult] = None
     cancelled: bool = False
     error: str = ""
+    image_source: str = "raw"
+    needs_denoise: bool = False  # SOURCE_DENOISED requested but no denoised image exists yet
 
 
 class BirdSharpnessTraceAction(WorkerAction):
     """Analyse one photo with a tracer for the step viewer. Read-only: never writes XMP."""
 
     def __init__(self, analyzer: BirdSharpnessAnalyzer, source_path: str, *,
-                 cancelled: Callable[[], bool] = lambda: False):
+                 cancelled: Callable[[], bool] = lambda: False, image_source: str = "raw",
+                 denoised_lookup: Optional[Callable[[str], object]] = None):
+        """``image_source``: ``image_source.SOURCE_*``; ``denoised_lookup(path)`` finds the
+        denoised rendering (``None`` when there is none) and runs here, on the worker."""
         super().__init__(cancelled=cancelled)
         self.analyzer = analyzer
         self.source_path = os.path.normpath(source_path)
+        self.image_source = image_source
+        self.denoised_lookup = denoised_lookup
 
     def execute(self) -> BirdSharpnessTraceOutcome:
+        path, source = self.source_path, self.image_source
         if self.is_cancelled():
-            return BirdSharpnessTraceOutcome(self.source_path, cancelled=True)
+            return BirdSharpnessTraceOutcome(path, cancelled=True, image_source=source)
+        from .image_source import SOURCE_DENOISED, source_loader
         from .models import check_runtime
         from .trace import AnalysisTracer
 
         reason = check_runtime()
         if reason:
-            return BirdSharpnessTraceOutcome(self.source_path, error=reason)
+            return BirdSharpnessTraceOutcome(path, error=reason, image_source=source)
+        lookup = self.denoised_lookup
+        if source == SOURCE_DENOISED:
+            if lookup is None:
+                return BirdSharpnessTraceOutcome(path, error="降噪功能不可用", image_source=source)
+            found = lookup(path)
+            if found is None:
+                return BirdSharpnessTraceOutcome(path, needs_denoise=True, image_source=source)
+            lookup = lambda _path, found=found: found  # noqa: E731 - resolved once on this worker
+        loader = source_loader(source, denoised_lookup=lookup)
 
         tracer = AnalysisTracer()
-        result = self.analyzer.analyze(self.source_path, tracer=tracer, cancelled=self.is_cancelled)
+        result = self.analyzer.analyze(path, tracer=tracer, cancelled=self.is_cancelled, image_loader=loader)
         if self.is_cancelled():
-            return BirdSharpnessTraceOutcome(self.source_path, cancelled=True)
+            return BirdSharpnessTraceOutcome(path, cancelled=True, image_source=source)
         if not result.ok:
-            return BirdSharpnessTraceOutcome(self.source_path, result=result, error=result.error or "分析失败")
-        return BirdSharpnessTraceOutcome(self.source_path, trace=tracer.trace, result=result)
+            return BirdSharpnessTraceOutcome(path, result=result, error=result.error or "分析失败", image_source=source)
+        return BirdSharpnessTraceOutcome(path, trace=tracer.trace, result=result, image_source=source)
