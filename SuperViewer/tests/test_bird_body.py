@@ -266,15 +266,27 @@ def test_cancel_during_recheck_never_publishes(photo):
     assert outcome.cancelled and not os.path.exists(os.path.splitext(photo)[0] + ".xmp")
 
 
-def test_v1_cache_keeps_boxes_but_rechecks_old_no_bird_entries(photo):
+def test_single_box_caches_from_older_versions_are_detected_again(photo):
+    # v1/v2 stored only the main bird; a flock needs every bird, so they are misses now.
     fingerprint = core.source_fingerprint(str(photo))
     field = core.cache_field(str(photo))
+    for version in ("bird-body-v1", "bird-body-v2"):
+        for box in ([0.1, 0.2, 0.6, 0.8], None):
+            old = {field: json.dumps({"version": version, "source": fingerprint, "geometry": "camera", "box": box})}
+            assert core.result_from_metadata(str(photo), old, fingerprint) is None
 
-    def v1(box):
-        return {field: json.dumps({"version": "bird-body-v1", "source": fingerprint, "geometry": "camera", "box": box})}
 
-    assert core.result_from_metadata(str(photo), v1([0.1, 0.2, 0.6, 0.8]), fingerprint).box == (0.1, 0.2, 0.6, 0.8)
-    assert core.result_from_metadata(str(photo), v1(None), fingerprint) is None
+def test_flock_cache_roundtrips_every_box_main_bird_first(photo):
+    fingerprint = core.source_fingerprint(str(photo))
+    boxes = tuple((0.01 * i, 0.1, 0.01 * i + 0.02, 0.13) for i in range(60))
+    result = core.BirdBodyResult(boxes[0], fingerprint, boxes=boxes)
+    text = result.to_json()
+    assert len(text) < core.MAX_CACHE_CHARS
+    parsed = core.result_from_metadata(str(photo), {core.cache_field(str(photo)): text}, fingerprint)
+    assert parsed.box == boxes[0] and parsed.boxes == tuple(tuple(round(v, 5) for v in b) for b in boxes)
+    assert parsed.overlay == parsed.boxes
+    single = core.BirdBodyResult(boxes[0], fingerprint)
+    assert single.overlay == boxes[0] and "boxes" not in single.to_json()
 
 
 def test_missed_bird_finder_maps_raw_margins_to_the_camera_frame(monkeypatch):
@@ -299,3 +311,34 @@ def test_missed_bird_finder_without_runtime_is_a_quiet_no(monkeypatch):
 
     monkeypatch.setattr(models_mod, "check_runtime", lambda: "找不到鸟体识别模型")
     assert core.MissedBirdFinder().find("夜鹰.ARW") is None
+
+
+class FlockDetector:
+    """First pass: one small bird; the 2048 px pass also sees two more (one a duplicate)."""
+
+    def __init__(self, first=((0.10, 0.10, 0.13, 0.14),), extra=((0.10, 0.10, 0.13, 0.14), (0.5, 0.5, 0.53, 0.54),
+                                                                    (0.7, 0.2, 0.73, 0.24))):
+        self.first, self.extra, self.calls = list(first), list(extra), []
+
+    def detect_all(self, image, *, imgsz=None):
+        self.calls.append((imgsz, max(image.size)))
+        return self.extra if imgsz else self.first
+
+
+def test_small_birds_trigger_the_flock_pass_and_keep_the_main_bird(tmp_path, monkeypatch):
+    monkeypatch.setattr(PhotoMetaDataReportDB, "_row_for", lambda *_args: None)
+    path = tmp_path / "鸻群.jpg"
+    Image.new("RGB", (3000, 2000), "gray").save(path)
+    detector = FlockDetector()
+    outcome = worker.BirdBodyAction(str(path), detector=detector, write_xmp=False).execute()
+    assert [c[0] for c in detector.calls] == [None, 2048] and detector.calls[1][1] == 2048
+    result = outcome.result
+    assert result.box == detector.first[0] and len(result.boxes) == 3  # duplicate dropped
+    assert result.boxes[0] == detector.first[0] and result.overlay == result.boxes
+
+
+def test_ordinary_birds_skip_the_flock_pass(photo):
+    detector = FlockDetector(first=((0.1, 0.1, 0.6, 0.8),))
+    outcome = worker.BirdBodyAction(str(photo), detector=detector, write_xmp=False).execute()
+    assert [c[0] for c in detector.calls] == [None]
+    assert outcome.result.overlay == (0.1, 0.1, 0.6, 0.8) and outcome.result.boxes == ()

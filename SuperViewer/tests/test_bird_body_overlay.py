@@ -94,3 +94,29 @@ def test_raw_overlay_export_maps_default_pixels_and_restores_view_geometry(tmp_p
         assert panel.canvas._bird_box == original
     finally:
         panel.close()
+
+
+def test_flock_draws_every_box_with_the_main_bird_emphasised():
+    from SuperViewer.superviewer.bird_body_overlay import bird_overlay_boxes, map_bird_overlay
+
+    canvas = _Canvas()
+    pixmap = QPixmap(200, 100)
+    pixmap.fill(QColor("black"))
+    canvas.set_source_pixmap(pixmap)
+    canvas.set_show_bird_box(True)
+    main, other = (0.05, 0.1, 0.35, 0.9), (0.6, 0.3, 0.8, 0.7)
+    canvas.set_bird_box((main, other, (0.5, 0.5, 0.1, 0.1)))  # the invalid one is dropped
+    assert canvas._bird_box == (main, other)
+    image = canvas.render_source_pixmap_with_overlays().toImage()
+    inside_main, inside_other = image.pixelColor(40, 50), image.pixelColor(140, 50)
+    assert inside_main.blue() > inside_other.blue() > 20  # both drawn, the main one stronger
+    assert image.pixelColor(100, 50) == QColor("black")
+    # one box behaves exactly as before
+    canvas.set_bird_box((main,))
+    assert canvas._bird_box == main
+    assert bird_overlay_boxes(None) == () and bird_overlay_boxes(main) == (main,)
+    crop = (0.0, 0.0, 0.5, 1.0)
+    assert map_bird_overlay(main, crop, map_camera_focus_box) == map_camera_focus_box(main, crop)
+    assert map_bird_overlay((main, other), crop, map_camera_focus_box) == (
+        map_camera_focus_box(main, crop), map_camera_focus_box(other, crop))
+    canvas.close()

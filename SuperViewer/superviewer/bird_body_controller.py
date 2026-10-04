@@ -191,7 +191,8 @@ class BirdBodyController(QObject):
         result = self._cache.get(view.source)
         if result is not None:
             self._cache.move_to_end(view.source)
-        panel.set_bird_box(result.box if view.enabled and result is not None else None)
+        overlay = getattr(result, "overlay", getattr(result, "box", None)) if result is not None else None
+        panel.set_bird_box(overlay if view.enabled else None)
 
     def _wanted_sources(self):
         return {view.source for view in self._views.values()
@@ -292,5 +293,7 @@ class BirdBodyController(QObject):
                     if view.source == request.source:
                         self._paint(view)
                 if not error:
-                    self.status_changed.emit("鸟体框已显示" if result.box is not None else "未检测到鸟体")
+                    count = len(getattr(result, "boxes", ()) or ())
+                    self.status_changed.emit(("鸟体框已显示" + (f"（{count} 只）" if count > 1 else ""))
+                                             if result.box is not None else "未检测到鸟体")
         self._schedule()

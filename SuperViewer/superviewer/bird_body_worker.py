@@ -10,8 +10,8 @@ from app_common.file_browser._work_action import WorkerAction
 from app_common.log import get_logger
 
 from .bird_body import (BirdBodyResult, cache_field, camera_box_from_raw,
-                        default_detector, default_missed_bird_finder, load_detection_image,
-                        result_from_metadata, source_fingerprint)
+                        default_detector, default_missed_bird_finder, has_small_birds, load_detection_image,
+                        merge_bird_boxes, result_from_metadata, source_fingerprint)
 
 _log = get_logger("superviewer.bird_body")
 
@@ -50,6 +50,29 @@ class BirdBodyAction(WorkerAction):
             _log.warning("[bird.body] camouflaged-bird recheck failed path=%r: %s", path, exc)
             return None, f"伪装鸟复检失败：{exc}"
 
+    def _detect_boxes(self, image, imgsz=None) -> list:
+        """Every bird in ``image`` (normalised, main bird first)."""
+        if self.detector is None:
+            return default_detector().detect_all(image, cancelled=self.is_cancelled, imgsz=imgsz)
+        detect_all = getattr(self.detector, "detect_all", None)
+        if detect_all is not None:
+            return list(detect_all(image, imgsz=imgsz))
+        box = self.detector.detect(image)  # single-box detectors (tests, plugins)
+        return [] if box is None else [box]
+
+    def _flock_boxes(self, path: str) -> list:
+        """Small birds (flocks): detect again at 2048 px, like bird sharpness."""
+        from bird_sharpness.analyzer import SMALL_DETECT_IMGSZ, SMALL_DETECT_LONG_EDGE
+
+        image, crop = load_detection_image(path, SMALL_DETECT_LONG_EDGE)
+        try:
+            if self.is_cancelled():
+                return []
+            found = self._detect_boxes(image, imgsz=SMALL_DETECT_IMGSZ)
+        finally:
+            image.close()
+        return [b for b in (camera_box_from_raw(box, crop) for box in found) if b is not None]
+
     def execute(self) -> BirdBodyOutcome:
         path = self.source_path
         if self.is_cancelled():
@@ -68,17 +91,22 @@ class BirdBodyAction(WorkerAction):
             try:
                 if self.is_cancelled():
                     return BirdBodyOutcome(path, cancelled=True)
-                box = (self.detector.detect(image) if self.detector is not None
-                       else default_detector().detect(image, cancelled=self.is_cancelled))
-                box = camera_box_from_raw(box, crop)
+                found = self._detect_boxes(image)
+                size = image.size
             finally:
                 image.close()
+            boxes = [b for b in (camera_box_from_raw(box, crop) for box in found) if b is not None]
+            if boxes and has_small_birds(found, size) and not self.is_cancelled():
+                # 鸟群小鸟：首遍的框原样保留，高分辨率只补漏掉的鸟（与鸟清晰度同一规则）。
+                boxes = merge_bird_boxes(boxes, self._flock_boxes(path), size[0] / max(1, size[1]))
             recheck_error = ""
-            if box is None and self.missed_bird_finder is not None and not self.is_cancelled():
+            if not boxes and self.missed_bird_finder is not None and not self.is_cancelled():
                 box, recheck_error = self._find_missed_bird(path)
+                boxes = [] if box is None else [box]
             if self.is_cancelled() or source_fingerprint(path) != fingerprint:
                 return BirdBodyOutcome(path, cancelled=True)
-            result = BirdBodyResult(box, fingerprint)
+            result = BirdBodyResult(boxes[0] if boxes else None, fingerprint,
+                                    boxes=tuple(boxes) if len(boxes) > 1 else ())
             if recheck_error:
                 return BirdBodyOutcome(path, result=result, error=recheck_error)
             if not self.write_xmp:
