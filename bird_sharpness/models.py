@@ -37,6 +37,7 @@ BIRD_CONFIDENCE_MIN = 0.25
 # How a bird was found (BirdDetection.source).
 FOUND_FULL = "full"              # whole frame, confidence >= BIRD_CONFIDENCE_MIN
 FOUND_FULL_LIFTED = "full_lifted"  # whole frame with dark mid-tones lifted
+FOUND_FULL_SMALL = "full_small"  # high-resolution pass for small birds (flocks)
 FOUND_FULL_FINE = "full_fine"    # whole frame at the finer recheck input size
 FOUND_FOCUS_WEAK = "focus_weak"  # weak whole-frame candidate lying on the camera focus box
 FOUND_FOCUS_ZOOM = "focus_zoom"  # zoomed window around the focus point, confirmed by a weak candidate
@@ -342,10 +343,13 @@ class BirdSharpnessModels:
         confs = boxes.conf.cpu().numpy()
         xyxy = boxes.xyxy.cpu().numpy()
         masks = getattr(det, "masks", None)
-        mask_data = masks.data.cpu().numpy() if (self._masks and masks is not None) else None
+        # Binarise on the device: a flock at 2048 px has ~60 frame-sized masks, 4x larger as float32.
+        mask_data = ((masks.data > 0.5).to(dtype=self._torch.uint8).cpu().numpy()
+                     if (self._masks and masks is not None and self._torch is not None) else
+                     (masks.data.cpu().numpy() > 0.5).astype(np.uint8) if (self._masks and masks is not None) else None)
         out = []
         for i in range(len(confs)):
-            mask = mask_data[i].astype(np.uint8) if mask_data is not None and i < len(mask_data) else None
+            mask = mask_data[i] if mask_data is not None and i < len(mask_data) else None
             out.append(BirdDetection(float(confs[i]), tuple(float(v) for v in xyxy[i]), mask))
         out.sort(key=lambda d: d.confidence * max(0.0, d.box[2] - d.box[0]) * max(0.0, d.box[3] - d.box[1]),
                  reverse=True)

@@ -35,9 +35,12 @@ from birdstamp.export_frame_cache import (
     load_frame_manifest,
     path_signature,
     reusable_frame_path,
+    set_source_origin,
+    source_origin_matches,
     update_frame_manifest_record,
     write_frame_manifest,
 )
+from birdstamp.exported_image_index import ExportedImageIndex, materialize_exported_image
 from birdstamp.gui import editor_options
 from birdstamp.gif_export import (
     DEFAULT_GIF_BACKGROUND_COLOR,
@@ -69,6 +72,7 @@ class _ImageExportTask:
     # GIF 中间缓存帧只供随后编码读取：用快速 PNG 压缩（无损，像素相同），
     # 避免 optimize=True 在 1920 px 帧上耗时约 9 s。用户可见的 PNG 导出不受影响。
     fast_png: bool = False
+    reuse_source: Path | None = None
 
 
 class _ImageExportAction(WorkerAction):
@@ -333,10 +337,11 @@ class _BirdStampExporterMixin:
         started_at = time.perf_counter()
         jobs = self._build_export_render_jobs([self.current_path], prefer_current_ui_for_current_path=True)
         try:
-            self._export_render_jobs_to_images(jobs, [target], label="导出当前")
+            ok_paths, _failed = self._export_render_jobs_to_images(jobs, [target], label="导出当前")
         except Exception as exc:
             self._show_error("导出失败", str(exc))
             return
+        self._remember_exported_images(jobs, [target], ok_paths)
         self._clear_photo_export_dirty([self.current_path])
 
         remembered_target_dir = target.parent.resolve(strict=False)
@@ -403,6 +408,7 @@ class _BirdStampExporterMixin:
                 progress_callback=_on_prepare_progress,
             )
             ok_paths, failed = self._export_render_jobs_to_images(jobs, targets, label="批量导出")
+            self._remember_exported_images(jobs, targets, ok_paths)
         except Exception:
             self._reset_image_export_progress(expected_token=prepare_token)
             raise
@@ -495,9 +501,12 @@ class _BirdStampExporterMixin:
         missing_jobs: list[VideoFrameJob] = []
         missing_targets: list[Path] = []
         missing_records: list[tuple[int, VideoFrameJob, str, str]] = []
+        reuse_sources: dict[Path, Path] = {}
         reused_count = 0
         template_paths = dict(getattr(self, "template_paths", {}) or {})
         template_signature_state = build_template_signature_state(jobs, template_paths)
+        exported_index = ExportedImageIndex()
+        exported_records = exported_index.load()
         dirty_getter = getattr(self, "_dirty_photo_path_keys", None)
         dirty_keys = (
             set(dirty_getter([job.path for job in jobs]))
@@ -513,7 +522,11 @@ class _BirdStampExporterMixin:
                 template_signature_state=template_signature_state,
             )
             reusable_path = None
+            candidate = None
             if str(job.path.resolve(strict=False)).casefold() not in dirty_keys:
+                candidate = exported_index.find(
+                    exported_records, source=job.path, frame_signature=frame_signature,
+                )
                 reusable_path = reusable_frame_path(
                     cache_plan,
                     manifest,
@@ -522,20 +535,27 @@ class _BirdStampExporterMixin:
                     source_signature=source_signature,
                     frame_signature=frame_signature,
                 )
+                if reusable_path is not None and not source_origin_matches(manifest, index, candidate):
+                    reusable_path = None
             if reusable_path is not None:
                 frame_paths[index - 1] = reusable_path
                 reused_count += 1
                 continue
             missing_jobs.append(job)
-            missing_targets.append(frame_paths[index - 1])
+            target = frame_paths[index - 1]
+            missing_targets.append(target)
             missing_records.append((index, job, source_signature, frame_signature))
+            if candidate is not None:
+                reuse_sources[target] = candidate
 
         if reused_count > 0:
             self._set_status(f"GIF 导出复用缓存帧 {reused_count}/{total}")
 
         if missing_jobs:
+            used_sources: dict[Path, Path] = {}
             ok_paths, failed = self._export_render_jobs_to_images(
-                missing_jobs, missing_targets, label="GIF 帧导出", fast_png=True
+                missing_jobs, missing_targets, label="GIF 帧导出", fast_png=True,
+                **({"reuse_sources": reuse_sources, "used_sources": used_sources} if reuse_sources else {}),
             )
             ok_path_set = {path.resolve(strict=False) for path in ok_paths}
             for index, job, source_signature, frame_signature in missing_records:
@@ -551,6 +571,7 @@ class _BirdStampExporterMixin:
                     frame_signature=frame_signature,
                     frame_path=frame_path,
                 )
+                set_source_origin(manifest, index, used_sources.get(frame_path))
             write_frame_manifest(cache_plan, manifest, metadata={"total": total})
             if failed:
                 raise RuntimeError(self._format_gif_frame_failures(failed))
@@ -729,9 +750,34 @@ class _BirdStampExporterMixin:
         )
 
     def _normalized_image_export_target(self, target: Path, *, default_suffix: str) -> Path:
-        if target.suffix.lower() in {".png", ".jpg", ".jpeg", ".gif"}:
+        if target.suffix.lower() in {".png", ".jpg", ".jpeg"}:
             return target
         return target.with_suffix(f".{default_suffix}")
+
+    def _remember_exported_images(
+        self, jobs: list[VideoFrameJob], targets: list[Path], completed: list[Path],
+    ) -> None:
+        try:
+            completed_set = {path.resolve(strict=False) for path in completed}
+            template_paths = dict(getattr(self, "template_paths", {}) or {})
+            template_state = build_template_signature_state(jobs, template_paths)
+            entries = [
+                (
+                    job.path,
+                    path_signature(job.path),
+                    source_frame_signature_for_job(
+                        job, template_paths=template_paths, template_signature_state=template_state,
+                    ),
+                    target,
+                )
+                for job, target in zip(jobs, targets)
+                if target.resolve(strict=False) in completed_set
+            ]
+            ExportedImageIndex().add_many(entries)
+        except Exception as exc:
+            # An index failure must not turn a completed user image into a
+            # reported export failure; later video/GIF exports can re-render.
+            self._set_status(f"图片已导出，复用索引保存失败: {exc}")
 
     def _build_batch_image_targets(
         self,
@@ -762,6 +808,12 @@ class _BirdStampExporterMixin:
         bird_box_cache: dict[str, tuple[float, float, float, float] | None],
         bird_box_lock: threading.Lock,
     ) -> Path:
+        if task.fast_png and task.reuse_source is not None:
+            if materialize_exported_image(
+                task.reuse_source, task.target_path, original=task.job.path,
+            ):
+                return task.target_path
+            task.reuse_source = None
         rendered = render_video_frame(
             task.job,
             template_paths=template_paths,
@@ -794,13 +846,21 @@ class _BirdStampExporterMixin:
         *,
         label: str,
         fast_png: bool = False,
+        reuse_sources: dict[Path, Path] | None = None,
+        used_sources: dict[Path, Path] | None = None,
     ) -> tuple[list[Path], list[str]]:
         if len(jobs) != len(targets):
             raise ValueError("导出任务与目标路径数量不一致。")
         if not jobs:
             return ([], [])
 
-        tasks = [_ImageExportTask(job=job, target_path=target, fast_png=fast_png) for job, target in zip(jobs, targets)]
+        tasks = [
+            _ImageExportTask(
+                job=job, target_path=target, fast_png=fast_png,
+                reuse_source=(reuse_sources or {}).get(target),
+            )
+            for job, target in zip(jobs, targets)
+        ]
         template_paths = dict(getattr(self, "template_paths", {}) or {})
         bird_box_cache: dict[str, tuple[float, float, float, float] | None] = {}
         bird_box_lock = threading.Lock()
@@ -819,6 +879,7 @@ class _BirdStampExporterMixin:
 
         self._set_status(f"{label}开始: 0/{total}，线程数 {worker_count}")
         try:
+            # 线程池至少 3 个线程；按 worker_count 限制在途 action，实际并发即为内存预算值。
             pool = BrowserWorkPool(worker_count)
             pool.set_thumbnail_mode(False)
             try:
@@ -826,7 +887,7 @@ class _BirdStampExporterMixin:
                 futures: dict[object, _ImageExportTask] = {}
 
                 def _submit_tasks() -> None:
-                    max_in_flight = max(1, worker_count * 2)
+                    max_in_flight = max(1, worker_count)
                     while len(futures) < max_in_flight:
                         try:
                             task = next(task_iterator)
@@ -850,7 +911,10 @@ class _BirdStampExporterMixin:
                     for future in done:
                         task = futures.pop(future)
                         try:
-                            ok_paths.append(future.result())
+                            output = future.result()
+                            ok_paths.append(output)
+                            if used_sources is not None and task.reuse_source is not None:
+                                used_sources[output] = task.reuse_source
                         except Exception as exc:
                             failed.append(f"{task.job.path.name}: {exc}")
                         completed += 1
@@ -883,5 +947,5 @@ class _BirdStampExporterMixin:
             return
 
         if suffix not in {".jpg", ".jpeg"}:
-            path = path.with_suffix(".jpg")
+            raise ValueError(f"不支持的图片导出格式: {path.suffix}")
         save_export_image(image, path, source_path=source_path, format="JPEG", quality=92, optimize=True, progressive=True)

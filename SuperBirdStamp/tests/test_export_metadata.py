@@ -2,6 +2,7 @@
 from pathlib import Path
 import json
 import threading
+from types import SimpleNamespace
 
 import pytest
 from PIL import Image, ImageOps
@@ -120,6 +121,24 @@ def test_all_image_write_routes_keep_original_exif(original, tmp_path, route):
     assert result['ExifIFD:ISO'] == 1600
     assert result['ExifIFD:UserComment'] == '小勺子，原始拍摄信息。'
     assert result['ExifIFD:ExifImageWidth'] == (60 if route == 'video_frame' else 40)
+
+
+def test_matching_video_frame_copies_complete_png_and_chinese_exif(original, tmp_path):
+    from birdstamp.export_stage.core import _normalize_and_cache_video_frame, _save_rendered_source_frame
+
+    source_frame = tmp_path / 'source_frame.png'
+    with Image.new('RGB', (40, 30)) as image:
+        _save_rendered_source_frame(image, source_frame, source_path=original)
+    plan = SimpleNamespace(frames_dir=tmp_path / 'video_frames')
+    _normalize_and_cache_video_frame(
+        index=1, source_frame_path=source_frame, label='中文', video_plan=plan,
+        target_size=(40, 30), background_color='#000000', cancel_event=None,
+    )
+    video_frame = plan.frames_dir / 'frame_000001.png'
+    assert video_frame.read_bytes() == source_frame.read_bytes()
+    result = metadata(video_frame)
+    assert result['ExifIFD:ISO'] == 1600
+    assert result['ExifIFD:UserComment'] == '小勺子，原始拍摄信息。'
 
 
 def test_dejitter_export_renames_uppercase_xmp_and_keeps_exact_bytes(sequence, tmp_path):

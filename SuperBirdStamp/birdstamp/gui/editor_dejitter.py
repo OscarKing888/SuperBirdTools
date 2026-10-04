@@ -6,7 +6,7 @@ from time import monotonic
 
 from app_common.raw_preview_geometry import RAW_FOCUS_CROP_KEY
 from PyQt6.QtGui import QPixmap
-from PyQt6.QtWidgets import QTabBar, QCheckBox, QComboBox, QFileDialog, QListWidget, QGroupBox, QHBoxLayout, QLabel, QProgressBar, QPushButton, QSlider, QSpinBox, QVBoxLayout, QWidget
+from PyQt6.QtWidgets import QTabBar, QCheckBox, QComboBox, QFileDialog, QListWidget, QGroupBox, QHBoxLayout, QLabel, QProgressBar, QPushButton, QSizePolicy, QSlider, QSpinBox, QVBoxLayout, QWidget
 from PyQt6.QtCore import Qt, QTimer
 
 from app_common.toggle_button import ToggleToolButton
@@ -22,8 +22,6 @@ from .editor_sequence_preview_worker import EditorSequencePreviewWorker, EditorS
 from .sequence_preview_cache import SequencePreviewCache
 from .editor_matching_controls import DejitterMatchingControls
 from .editor_subject_controls import SubjectControls
-from .sequence_bounds_overview import SequenceBoundsOverview
-from .color_key_rows import ColorKeyRows
 from birdstamp.export_stage.render_job_seed import RenderJobSeed
 from .editor_utils import pil_to_qpixmap
 from .editor_utils import path_key
@@ -39,6 +37,26 @@ def _add_progress_completion_label(layout, progress_bar, accessible_name):
     label.hide()
     layout.addWidget(label)
     return label
+
+
+_PRIMARY_BUTTON_STYLE = """
+QPushButton { background: #2F80ED; color: white; font-weight: 600; border: none; border-radius: 6px; padding: 6px 12px; }
+QPushButton:hover { background: #3D8BF2; }
+QPushButton:pressed { background: #1F6FD8; }
+QPushButton:disabled { background: rgba(47, 128, 237, 90); color: rgba(255, 255, 255, 150); }
+"""
+
+_EXPORT_NOTE = ('默认保留对齐后整组共同区域；交集太小时可开启补边，导出完整画面后再裁切。'
+                '独立输出原图对齐结果，不叠加模板或文字；参考线、焦点和鸟体框仅用于预览。')
+_REGION_EDIT_HINT = ('框内拖动；手柄缩放（Shift 保持比例，Alt 对称）。'
+                     '参考图／接力参考图：空白处 Shift 追加，右键删除；其它原图：修正匹配位置，右键恢复自动匹配。')
+
+
+def _make_primary_button(button):
+    """每步唯一的主操作按钮：强调色，与次要按钮区分主次。"""
+    button.setProperty('primary', True)
+    button.setStyleSheet(_PRIMARY_BUTTON_STYLE)
+    button.setMinimumHeight(32)
 
 
 def _sequence_failure_photo_label(failure_path, paths):
@@ -86,6 +104,7 @@ class _BirdStampDejitterMixin:
         self._dejitter_view = 'edit'
         self._dejitter_edit_source = None
         self._dejitter_edit_pixmap = None
+        self._tracking_status_text = self._sequence_message
 
     def _collect_sequence_workspace_state(self):
         return dict(input_key=self._sequence_cache_key,
@@ -94,7 +113,9 @@ class _BirdStampDejitterMixin:
                     export_intersection=self.dejitter_export_intersection_check.isChecked(),
                     auto_region_count=self.dejitter_auto_region_count.value(),
                     subject_debug=self.dejitter_debug_check.isChecked(),
-                    open_export_workspace=self.dejitter_export_workspace_check.isChecked())
+                    open_export_workspace=self.dejitter_export_workspace_check.isChecked(),
+                    hud_collapsed=self.dejitter_hud.is_collapsed(),
+                    matching_expanded=self.dejitter_matching_section.is_expanded())
 
     def _restore_sequence_workspace_state(self, state):
         if self._sequence_shutdown:
@@ -115,6 +136,8 @@ class _BirdStampDejitterMixin:
             blocked = checkbox.blockSignals(True)
             checkbox.setChecked(options.get(key, default) is True)
             checkbox.blockSignals(blocked)
+        self.dejitter_hud.set_collapsed(options.get('hud_collapsed') is True)
+        self.dejitter_matching_section.set_expanded(options.get('matching_expanded') is True)
         if not isinstance(state, dict) or not state.get('input_key'):
             return
         self._sequence_restore_state = dict(state)
@@ -145,10 +168,29 @@ class _BirdStampDejitterMixin:
         page = QWidget()
         layout = QVBoxLayout(page)
         layout.setContentsMargins(8, 8, 8, 8)
-        intro = QLabel('只在一张参考图框选 → 自动匹配整组 → 导出全部')
-        intro.setWordWrap(True)
-        layout.addWidget(intro)
-        reference = QGroupBox('1. 选区')
+        layout.setSpacing(10)
+        # 状态、下一步提示、图例和范围示意统一放到预览区 HUD，参数面板只保留可操作项。
+        from .dejitter_hud import DejitterHud
+        preview = getattr(self, 'preview_label', None)
+        self.dejitter_hud = DejitterHud(preview.canvas if preview is not None else None)
+        self.dejitter_tracking_status = self.dejitter_hud.message
+        self.dejitter_tracking_key = self.dejitter_hud.tracking_key
+        self.dejitter_intersection_status = self.dejitter_hud.intersection_status
+        self.dejitter_bounds_overview = self.dejitter_hud.bounds_overview
+        self.dejitter_effective_status = QLabel(page)
+        self.dejitter_effective_status.hide()
+        self.dejitter_hud.toggle.clicked.connect(self._schedule_workspace_autosave)
+
+        # 1. 方式：决定后续该框什么、是否需要目标鸟，必须放在最前。
+        self.dejitter_method_group = QGroupBox('1. 方式')
+        method = QVBoxLayout(self.dejitter_method_group)
+        method.setContentsMargins(10, 24, 10, 12)
+        self.dejitter_subject_controls = SubjectControls(editor_options.DEJITTER_SUBJECT_DEFAULTS)
+        self.dejitter_subject_controls.changed.connect(self._on_dejitter_method_changed)
+        method.addWidget(self.dejitter_subject_controls)
+        layout.addWidget(self.dejitter_method_group)
+
+        reference = QGroupBox('2. 选区')
         self.dejitter_selection_group = reference
         form = QVBoxLayout(reference)
         form.setContentsMargins(10, 24, 10, 12)
@@ -159,45 +201,41 @@ class _BirdStampDejitterMixin:
         self.dejitter_reference_status.setWordWrap(True)
         form.addWidget(self.dejitter_reference_status)
         buttons = QHBoxLayout()
-        self.dejitter_edit_reference_btn = ToggleToolButton('编辑参考图')
+        # “框选参考区”合并原“编辑参考图”与“框选 / 追加选区”：开启即进入参考区编辑。
+        self.dejitter_edit_reference_btn = ToggleToolButton('框选参考区')
         self.dejitter_edit_reference_btn.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextOnly)
-        self.dejitter_edit_reference_btn.setToolTip('切换参考区编辑模式；开启时定位到参考图。')
-        self.dejitter_edit_reference_btn.setAccessibleName('编辑参考图')
+        self.dejitter_edit_reference_btn.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.dejitter_edit_reference_btn.setToolTip('开启后在参考图上框选、追加或调整选区；已有参考图时自动定位到参考图。')
+        self.dejitter_edit_reference_btn.setAccessibleName('框选参考区')
         self.dejitter_edit_reference_btn.clicked.connect(self._on_edit_reference_toggled)
-        self.dejitter_draw_btn = QPushButton('框选 / 追加选区')
-        self.dejitter_draw_btn.clicked.connect(self._on_dejitter_draw)
         self.dejitter_auto_regions_btn = QPushButton('一键推荐选区')
-        self.dejitter_auto_regions_btn.setToolTip('保留已有选区，分格优先补足到右侧目标数量；空白格从其他有纹理的位置补选。\n质量不足时允许少于目标；建议选区仍可手动调整或删除。')
         self.dejitter_auto_regions_btn.clicked.connect(self._on_dejitter_auto_regions)
-        buttons.addWidget(self.dejitter_edit_reference_btn)
-        buttons.addWidget(self.dejitter_draw_btn)
-        form.addLayout(buttons)
-        auto_row = QHBoxLayout()
-        auto_row.addWidget(self.dejitter_auto_regions_btn, 1)
         self.dejitter_auto_region_count = QSpinBox()
         self.dejitter_auto_region_count.setRange(1, 36)
         self.dejitter_auto_region_count.setValue(editor_options.DEJITTER_AUTO_REGION_COUNT)
+        self.dejitter_auto_region_count.setPrefix('目标 ')
         self.dejitter_auto_region_count.setSuffix(' 个')
         self.dejitter_auto_region_count.setKeyboardTracking(False)
         self.dejitter_auto_region_count.setAccessibleName('自动选区目标总数')
-        self.dejitter_auto_region_count.setToolTip('包含已有选区的目标总数；默认 9 按 3×3 分格。\n只改变数量不会修改当前选区；点击按钮后补足，已达到目标时不新增。')
-        count_label = QLabel('目标数量')
-        self.dejitter_auto_count_label = count_label
-        count_label.setBuddy(self.dejitter_auto_region_count)
-        auto_row.addWidget(count_label)
-        auto_row.addWidget(self.dejitter_auto_region_count)
-        form.addLayout(auto_row)
+        self.dejitter_auto_region_count.setToolTip('一键推荐的目标总数（含已有选区）；默认 9 按 3×3 分格。\n只改变数量不会修改当前选区；点击按钮后补足，已达到目标时不新增。')
+        buttons.addWidget(self.dejitter_edit_reference_btn, 1)
+        buttons.addWidget(self.dejitter_auto_regions_btn, 1)
+        buttons.addWidget(self.dejitter_auto_region_count)
+        form.addLayout(buttons)
         from .region_recommendation_panel import RegionRecommendationPanel
         self.dejitter_recommendation = RegionRecommendationPanel(self)
+        self._attach_recommendation_rows()
+        self.dejitter_recommendation.status.message_changed.connect(lambda _text: self._sync_dejitter_hud())
         form.addWidget(self.dejitter_recommendation)
         self.dejitter_auto_region_count.valueChanged.connect(self._schedule_workspace_autosave)
         self.dejitter_region_list = QListWidget()
         self.dejitter_region_list.setMaximumHeight(110)
         self.dejitter_region_list.setSelectionMode(QListWidget.SelectionMode.ExtendedSelection)
+        self.dejitter_region_list.setToolTip(_REGION_EDIT_HINT.replace('。', '。\n', 1))
         form.addWidget(self.dejitter_region_list)
-        self.dejitter_delete_region_btn = QPushButton('删除选中选区')
+        self.dejitter_delete_region_btn = QPushButton('删除选中')
         self.dejitter_delete_region_btn.clicked.connect(self._on_delete_dejitter_regions)
-        self.dejitter_reference_clear_btn = QPushButton('清除所有选中区')
+        self.dejitter_reference_clear_btn = QPushButton('清除全部')
         self.dejitter_reference_clear_btn.clicked.connect(self._on_dejitter_reference_clear)
         delete_row = QHBoxLayout()
         delete_row.addWidget(self.dejitter_delete_region_btn)
@@ -222,20 +260,19 @@ class _BirdStampDejitterMixin:
         self.dejitter_relay_status.hide()
         form.addWidget(self.dejitter_relay_status)
         self.dejitter_region_list.itemSelectionChanged.connect(self._update_dejitter_controls)
-        hint = QLabel('框内拖动；手柄缩放（Shift 保持比例，Alt 对称）。\n'
-                      '参考图／接力参考图：空白处 Shift 追加，右键删除；其它原图：修正匹配位置，右键恢复自动匹配。')
-        hint.setWordWrap(True)
-        form.addWidget(hint)
         layout.addWidget(reference)
 
-        # 按操作顺序分组，参数与进度留在对应步骤内。
-        self.dejitter_analysis_group = QGroupBox('2. 分析')
+        # 按操作顺序分组；不常调的匹配参数折叠，标题显示当前取值摘要。
+        self.dejitter_analysis_group = QGroupBox('3. 分析')
         analysis = QVBoxLayout(self.dejitter_analysis_group)
         analysis.setContentsMargins(10, 24, 10, 12)
         layout.addWidget(self.dejitter_analysis_group)
-        self.dejitter_subject_controls = SubjectControls(editor_options.DEJITTER_SUBJECT_DEFAULTS)
-        self.dejitter_subject_controls.changed.connect(self._on_dejitter_method_changed)
-        analysis.addWidget(self.dejitter_subject_controls)
+        from .editor_collapsible import CollapsibleSection
+        self.dejitter_matching_section = CollapsibleSection('匹配参数', expanded=False)
+        self.dejitter_matching_section.toggled.connect(self._schedule_workspace_autosave)
+        matching = QWidget()
+        matching_layout = QVBoxLayout(matching)
+        matching_layout.setContentsMargins(0, 0, 0, 0)
         strength = QHBoxLayout()
         strength.addWidget(QLabel('补偿强度'))
         self.dejitter_reference_strength_slider = QSlider(Qt.Orientation.Horizontal)
@@ -244,8 +281,7 @@ class _BirdStampDejitterMixin:
         self.dejitter_reference_value_label = QLabel('100%')
         strength.addWidget(self.dejitter_reference_strength_slider, 1)
         strength.addWidget(self.dejitter_reference_value_label)
-        analysis.addLayout(strength)
-
+        matching_layout.addLayout(strength)
         alignment_row = QHBoxLayout()
         self.dejitter_alignment_label = QLabel('对齐方式')
         alignment_row.addWidget(self.dejitter_alignment_label)
@@ -256,23 +292,19 @@ class _BirdStampDejitterMixin:
         self.dejitter_alignment_combo.setToolTip('对齐到参考图的角度和位置；旋转需要重采样。角度证据不足时退回平移并标记，原图不变。')
         self.dejitter_alignment_combo.currentIndexChanged.connect(self._on_dejitter_matching_changed)
         alignment_row.addWidget(self.dejitter_alignment_combo,1)
-        analysis.addLayout(alignment_row)
-
+        matching_layout.addLayout(alignment_row)
         self.dejitter_matching_controls = DejitterMatchingControls(editor_options.DEJITTER_MATCHING_DEFAULTS)
         self.dejitter_matching_controls.changed.connect(self._on_dejitter_matching_changed)
-        analysis.addWidget(self.dejitter_matching_controls)
-
+        matching_layout.addWidget(self.dejitter_matching_controls)
+        self.dejitter_matching_section.set_content_widget(matching)
+        analysis.addWidget(self.dejitter_matching_section)
         self.dejitter_pad_to_union_check = QCheckBox('补边保留完整画面（供二次裁切）')
         self.dejitter_pad_to_union_check.setChecked(editor_options.DEJITTER_PAD_TO_UNION)
         self.dejitter_pad_to_union_check.setToolTip('关闭：裁掉所有空白，取整组交集。开启：保留整组画面并集，统一画幅，缺失区域补黑。')
         self.dejitter_pad_to_union_check.toggled.connect(self._on_dejitter_options_changed)
         analysis.addWidget(self.dejitter_pad_to_union_check)
-        self.dejitter_show_intersection_check = QCheckBox('成片预览显示交集／并集范围框')
-        self.dejitter_show_intersection_check.setChecked(editor_options.DEJITTER_SHOW_INTERSECTION)
-        self.dejitter_show_intersection_check.setToolTip('交集框：所有照片共同覆盖的最大无黑边矩形。并集框：整组完整范围。\n开启补边可在成片中完整查看两框；下方示意图始终显示两个范围。')
-        self.dejitter_show_intersection_check.toggled.connect(self._on_dejitter_intersection_options_changed)
-        analysis.addWidget(self.dejitter_show_intersection_check)
         self.dejitter_preprocess_btn = QPushButton('分析并预览成片')
+        _make_primary_button(self.dejitter_preprocess_btn)
         self.dejitter_preprocess_btn.clicked.connect(self._on_reference_preprocess_clicked)
         analysis.addWidget(self.dejitter_preprocess_btn)
         self.dejitter_analysis_progress = QProgressBar()
@@ -281,31 +313,8 @@ class _BirdStampDejitterMixin:
         analysis.addWidget(self.dejitter_analysis_progress)
         self.dejitter_analysis_complete = _add_progress_completion_label(
             analysis, self.dejitter_analysis_progress, '去抖动分析完成')
-        self.dejitter_effective_status = QLabel()
-        self.dejitter_effective_status.setWordWrap(True)
-        analysis.addWidget(self.dejitter_effective_status)
-        self.dejitter_tracking_status = QLabel()
-        self.dejitter_tracking_status.setWordWrap(True)
-        analysis.addWidget(self.dejitter_tracking_status)
-        self.dejitter_debug_check = QCheckBox('DEBUG：局部对应点')
-        self.dejitter_debug_check.setChecked(editor_options.DEJITTER_SUBJECT_DEBUG)
-        self.dejitter_debug_check.setToolTip('绿点：通过拟合；红点：拒绝。线段连接关键帧点与当前实测点；不表示世界静止，不进入导出。')
-        self.dejitter_debug_check.toggled.connect(self._on_dejitter_debug_changed)
-        analysis.addWidget(self.dejitter_debug_check)
-        self.dejitter_tracking_key = ColorKeyRows((
-            ('#FFB703', False, '跟踪成功'),
-            ('#FF5252', True, '未匹配（预计位置）'),
-        ))
-        analysis.addWidget(self.dejitter_tracking_key)
-        self.dejitter_intersection_status = ColorKeyRows((
-            ("#23F531", False, '整组完整范围（并集）：待分析'),
-            ('#45D6E8', False, '共同无黑边范围（交集）：待分析'),
-        ))
-        analysis.addWidget(self.dejitter_intersection_status)
-        self.dejitter_bounds_overview = SequenceBoundsOverview()
-        analysis.addWidget(self.dejitter_bounds_overview)
 
-        self.dejitter_export_group = QGroupBox('3. 导出')
+        self.dejitter_export_group = QGroupBox('4. 导出')
         export = QVBoxLayout(self.dejitter_export_group)
         export.setContentsMargins(10, 24, 10, 12)
         layout.addWidget(self.dejitter_export_group)
@@ -321,6 +330,7 @@ class _BirdStampDejitterMixin:
         for suffix, label in formats or [('png', 'PNG'), ('jpg', 'JPG')]:
             self.dejitter_output_format.addItem(label, 'jpg' if suffix == 'jpeg' else suffix)
         self.dejitter_export_btn = QPushButton('去抖动导出全部')
+        _make_primary_button(self.dejitter_export_btn)
         self.dejitter_export_btn.clicked.connect(self._on_dejitter_export_all)
         output.addWidget(self.dejitter_output_format)
         output.addWidget(self.dejitter_export_btn, 1)
@@ -338,13 +348,84 @@ class _BirdStampDejitterMixin:
         export.addWidget(self.dejitter_export_progress)
         self.dejitter_export_complete = _add_progress_completion_label(
             export, self.dejitter_export_progress, '去抖动导出完成')
-        note = QLabel('默认保留对齐后整组共同区域；交集太小时可开启补边，导出完整画面后再裁切。独立输出原图对齐结果，不叠加模板或文字；参考线、焦点和鸟体框仅用于预览。')
-        note.setWordWrap(True)
-        export.addWidget(note)
         layout.addStretch(1)
         self.dejitter_reference_check.toggled.connect(self._on_dejitter_options_changed)
         self.dejitter_reference_strength_slider.valueChanged.connect(self._on_dejitter_options_changed)
+        self.dejitter_reference_strength_slider.valueChanged.connect(self._update_matching_summary)
+        self._update_matching_summary()
         return page
+
+    def _attach_recommendation_rows(self):
+        """把推荐面板的部位/目标鸟/模型控件放进“1. 方式”表单的对应位置。"""
+        controls = self.dejitter_subject_controls
+        panel = self.dejitter_recommendation
+        # 顺序：识别方法 → (高级)稳定部位 → (基本)两段式 → 目标鸟 → 跟随窗口/主体稳定模式… → (高级)实验/模型。
+        controls.insert_row(controls.follow, panel.part_label, panel.part)
+        controls.insert_row(controls.follow_window, panel.target_label, panel.target_button)
+        controls.insert_row(None, panel.experimental)
+        controls.insert_row(None, panel.model_label, panel.model_row)
+
+    def _dejitter_next_step(self):
+        """返回 (步骤序号, 下一步提示)；只依据当前状态，不触发任何任务。"""
+        regions = getattr(self, '_dejitter_reference_regions', ())
+        sequence = self._sequence_preview
+        controls = self.dejitter_subject_controls
+        advanced = controls.method.currentData() == 'subject_local'
+        if self._sequence_exporting:
+            return 3, '正在导出；可点击“取消导出”停止。'
+        if self._sequence_worker is not None and sequence is None:
+            return 2, '正在分析整组照片；完成后在“成片预览”检查效果。'
+        if sequence is not None and not sequence.partial:
+            return 3, '下一步：在“成片预览”检查效果，然后点击“去抖动导出全部”。'
+        if sequence is not None:
+            return 2, '部分照片未匹配：切到失败照片拖动选区修正位置，再重新分析。'
+        if self.current_path is None:
+            return 1, '请先导入并选择照片。'
+        if not regions:
+            target_missing = (not advanced and controls.follow.isChecked()
+                              and not self.dejitter_recommendation.metadata.get('target'))
+            step = ('下一步：点击“框选参考区”，在目标鸟上框选有纹理的局部；或先选择目标鸟再“一键推荐选区”。'
+                    if advanced else
+                    '下一步：点击“框选参考区”，在参考图上框选静止背景（树木、建筑等）；或“一键推荐选区”。')
+            if target_missing:
+                step += '\n两段式：建议先“选择目标鸟…”（参考图只有一只鸟时可省略）。'
+            return 1, step
+        return 2, '下一步：点击“分析并预览成片”。'
+
+    def _sync_dejitter_hud(self):
+        hud = getattr(self, 'dejitter_hud', None)
+        if hud is None or not hasattr(self, 'dejitter_recommendation'):
+            return
+        step, next_step = self._dejitter_next_step()
+        hud.set_step(step)
+        panel = self.dejitter_recommendation
+        if panel.worker is not None and panel.status.text():
+            # 推荐/识鸟/模型安装进行中，显示其实时进度。
+            hud.set_message(panel.status.text())
+        else:
+            hud.set_message(self._tracking_status_text, panel.status.toolTip())
+        controls = self.dejitter_subject_controls
+        edit_hint = next_step
+        if not getattr(self, '_dejitter_reference_regions', ()):
+            edit_hint += '\n' + controls.hint.text()
+        elif self._current_edit_mode_id() == EDIT_MODE_REFERENCE_REGION:
+            edit_hint += '\n' + _REGION_EDIT_HINT
+        result_hint = next_step
+        if self.dejitter_effective_status.text():
+            result_hint += '\n' + self.dejitter_effective_status.text()
+        hud.set_hints(edit_hint, result_hint)
+        hud.set_view(self._dejitter_view)
+
+    def _update_matching_summary(self, *_args):
+        section = getattr(self, 'dejitter_matching_section', None)
+        if section is None:
+            return
+        parts = []
+        if self.dejitter_subject_controls.method.currentData() != 'subject_local':
+            parts.append(self.dejitter_alignment_combo.currentText())
+            parts.append('自动' if self.dejitter_matching_controls.mode.currentData() == 'auto' else '自定义')
+        parts.append(f'强度 {self.dejitter_reference_strength_slider.value()}%')
+        section.header_button.setText('匹配参数 · ' + ' · '.join(parts))
 
     def _on_dejitter_debug_changed(self):
         self._refresh_preview_label(preserve_view=True)
@@ -358,13 +439,11 @@ class _BirdStampDejitterMixin:
         self.dejitter_alignment_combo.setVisible(not advanced)
         self.dejitter_alignment_combo.setEnabled(not advanced)
         self.dejitter_matching_controls.setEnabled(not advanced)
+        self.dejitter_matching_controls.setVisible(not advanced)
         self.dejitter_auto_region_count.setEnabled(not advanced)
         self.dejitter_auto_region_count.setVisible(not advanced)
-        self.dejitter_auto_count_label.setVisible(not advanced)
         self.dejitter_recommendation.sync(advanced)
-        self.dejitter_auto_regions_btn.setToolTip(
-            '识别目标鸟及部位，通过抽样预检后推荐局部；需显式开启实验功能。' if advanced else
-            '保留已有选区，按纹理质量分格补足目标数量；建议选区仍可手动调整或删除。')
+        self._update_matching_summary()
 
     def _on_dejitter_method_changed(self):
         self._sync_dejitter_method_controls()
@@ -394,6 +473,17 @@ class _BirdStampDejitterMixin:
             lambda index: self._set_dejitter_view('result' if index else 'edit'))
         row.addWidget(self.dejitter_view_tabs)
         row.addStretch(1)
+        # 纯视图开关放在预览区，不影响分析结果，也不占参数面板。
+        self.dejitter_show_intersection_check = QCheckBox('显示交集／并集框')
+        self.dejitter_show_intersection_check.setChecked(editor_options.DEJITTER_SHOW_INTERSECTION)
+        self.dejitter_show_intersection_check.setToolTip('成片预览显示交集框（所有照片共同覆盖的最大无黑边矩形）和并集框（整组完整范围）。\n开启补边可在成片中完整查看两框；状态面板中的示意图始终显示两个范围。')
+        self.dejitter_show_intersection_check.toggled.connect(self._on_dejitter_intersection_options_changed)
+        row.addWidget(self.dejitter_show_intersection_check)
+        self.dejitter_debug_check = QCheckBox('DEBUG：局部对应点')
+        self.dejitter_debug_check.setChecked(editor_options.DEJITTER_SUBJECT_DEBUG)
+        self.dejitter_debug_check.setToolTip('绿点：通过拟合；红点：拒绝。线段连接关键帧点与当前实测点；不表示世界静止，不进入导出。')
+        self.dejitter_debug_check.toggled.connect(self._on_dejitter_debug_changed)
+        row.addWidget(self.dejitter_debug_check)
         bar.setVisible(False)
         self.dejitter_view_bar = bar
         return bar
@@ -422,6 +512,8 @@ class _BirdStampDejitterMixin:
         self._edit_mode_buttons.get('crop_adjust', self._edit_mode_buttons[EDIT_MODE_NONE]).setEnabled(not active)
         self._last_dejitter_tab = active
         self.dejitter_view_bar.setVisible(active)
+        if hasattr(self, 'dejitter_hud'):
+            self.dejitter_hud.setVisible(active)
         self._update_dejitter_controls()
         self._restore_selected_preview_source()
         self._refresh_preview_label(preserve_view=True)
@@ -443,6 +535,9 @@ class _BirdStampDejitterMixin:
         self.dejitter_view_tabs.blockSignals(True)
         self.dejitter_view_tabs.setCurrentIndex(1 if view == 'result' else 0)
         self.dejitter_view_tabs.blockSignals(False)
+        if hasattr(self, 'dejitter_hud'):
+            self.dejitter_hud.set_view(view)
+            self._sync_dejitter_hud()
         self._restore_selected_preview_source()
         self._refresh_preview_label(reset_view=True)
         if hasattr(self, 'sequence_transport'):
@@ -535,14 +630,22 @@ class _BirdStampDejitterMixin:
 
     def _on_edit_reference_toggled(self, checked):
         if checked:
-            self._on_edit_reference_photo()
+            # 无参考图时在当前照片开始框选；已有参考图时定位到参考图。
+            self._on_dejitter_draw()
         else:
             self._set_edit_mode_button_checked(EDIT_MODE_NONE)
             self._on_edit_mode_changed()
         self._sync_edit_reference_toggle()
 
     def _on_dejitter_auto_regions(self):
-        self.dejitter_recommendation.recommend()
+        panel = self.dejitter_recommendation
+        if panel.worker is not None:
+            # 推荐/识鸟运行中，同一按钮即为取消入口。
+            if panel.task_kind != 'install':
+                panel.cancel()
+                self._update_dejitter_controls()
+            return
+        panel.recommend()
 
     def _invalidate_sequence_preview(self, *, shutdown=False):
         self._sequence_export_open_workspace = False
@@ -603,11 +706,23 @@ class _BirdStampDejitterMixin:
         self.dejitter_relay_status.setText(relay_text)
         self.dejitter_relay_status.setVisible(bool(relay_text))
         self._sync_dejitter_method_controls()
-        self.dejitter_edit_reference_btn.setEnabled(bool(self._dejitter_reference_source))
+        self.dejitter_edit_reference_btn.setEnabled(
+            bool(self._dejitter_reference_source) or self.current_path is not None)
+        panel = self.dejitter_recommendation
+        recommending = panel.worker is not None and panel.task_kind != 'install'
+        cancelling = recommending and panel.worker.isInterruptionRequested()
+        self.dejitter_auto_regions_btn.setText(
+            '正在停止…' if cancelling else
+            ('取消识别' if panel.task_kind == 'detect' else '取消推荐') if recommending else '一键推荐选区')
+        self.dejitter_auto_regions_btn.setToolTip(
+            '停止当前推荐/识别；已有选区保持不变。' if recommending else
+            '识别目标鸟及部位，通过抽样预检后推荐局部；需显式开启实验功能。'
+            if self.dejitter_subject_controls.method.currentData() == 'subject_local' else
+            '保留已有人工选区，按纹理质量分格补足右侧目标数量；会抽样预检，建议选区仍可手动调整或删除。')
         self.dejitter_auto_regions_btn.setEnabled(
             not self._sequence_shutdown and self._sequence_worker is None
-            and self.current_path is not None
-            and self.dejitter_recommendation.worker is None)
+            and self.current_path is not None and not cancelling
+            and (panel.worker is None or recommending))
         detail = ('保留对齐后全部图像范围，缺失区域补黑；可在导出后进行二次裁切。'
                   if self.dejitter_pad_to_union_check.isChecked() else
                   '取对齐后整组画面交集；编辑构图中可查看最终保留范围。')
@@ -663,10 +778,12 @@ class _BirdStampDejitterMixin:
         self.dejitter_export_btn.setEnabled(worker is None and sequence is not None and not partial
                                             and not export_blocked and not self._sequence_shutdown)
         self.dejitter_export_btn.setToolTip('当前仅保留失败前的成片预览，请完成整组分析后导出全部。' if partial
-                                            else detail if export_blocked else '')
+                                            else detail if export_blocked else _EXPORT_NOTE)
         current_tracking = self._tracking_result_for_current()
         diagnostic = current_tracking.observation.summary() if current_tracking and current_tracking.observation else ''
-        self.dejitter_tracking_status.setText(self._sequence_message + ('\n' + diagnostic if diagnostic else ''))
+        self._tracking_status_text = self._sequence_message + ('\n' + diagnostic if diagnostic else '')
+        self.dejitter_tracking_status.setText(self._tracking_status_text)
+        self._sync_dejitter_hud()
         if hasattr(self, 'sequence_transport'):
             self.sequence_transport.sync()
 
@@ -753,6 +870,7 @@ class _BirdStampDejitterMixin:
         bar.setFormat('正在准备…')
         bar.setToolTip('正在准备…')
         bar.show()
+        self.dejitter_hud.set_progress(busy=True)
 
     def _on_sequence_progress_counts(self, token, current, total, stage):
         if not self._accept_sequence_signal(token) or self._sequence_progress_kind is None:
@@ -763,6 +881,10 @@ class _BirdStampDejitterMixin:
         bar.setValue(max(0, min(current, total)))
         bar.setFormat(f'{stage} %v/%m · %p%' if total > 0 else stage)
         bar.setToolTip(stage)
+        if total > 0:
+            self.dejitter_hud.set_progress(max(0, min(current, total)), total)
+        else:
+            self.dejitter_hud.set_progress(busy=True)
         if total <= 0:
             self._sequence_message = f'{stage}…'
             self._update_dejitter_controls()
@@ -792,6 +914,7 @@ class _BirdStampDejitterMixin:
             bar.setFormat(label)
         bar.setToolTip(label)
         self._sequence_progress_kind = None
+        self.dejitter_hud.set_progress()
 
     def _on_sequence_failed(self, token, message):
         if self._accept_sequence_signal(token):

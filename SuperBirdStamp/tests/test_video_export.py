@@ -534,7 +534,7 @@ def test_export_video_reuses_preserved_temp_frames() -> None:
 
             first_output = export_video(jobs, options)
             assert first_output == options.output_path.resolve()
-            assert render_calls == ["source_1.jpg", "source_2.jpg"]
+            assert sorted(render_calls) == ["source_1.jpg", "source_2.jpg"]
 
             render_calls.clear()
             second_output = export_video(jobs, options)
@@ -610,7 +610,7 @@ def test_export_video_uses_new_cache_dir_when_draw_focus_changes() -> None:
                 cache_key=first_cache_key,
             )
             export_video(jobs, options)
-            assert render_calls == ["source_1.jpg", "source_2.jpg"]
+            assert sorted(render_calls) == ["source_1.jpg", "source_2.jpg"]
 
             for job in jobs:
                 job.settings["draw_focus"] = True
@@ -624,7 +624,7 @@ def test_export_video_uses_new_cache_dir_when_draw_focus_changes() -> None:
             )
             export_video(jobs, options)
             assert first_work_dir != second_work_dir
-            assert render_calls == ["source_1.jpg", "source_2.jpg"]
+            assert sorted(render_calls) == ["source_1.jpg", "source_2.jpg"]
         finally:
             export_stage.find_ffmpeg_executable = original_find_ffmpeg
             export_stage._run_ffmpeg_command = original_run_ffmpeg
@@ -684,7 +684,7 @@ def test_export_video_rerenders_only_changed_photo_when_crop_box_changes() -> No
             export_stage.render_video_frame = fake_render_video_frame
 
             export_video(jobs, options)
-            assert render_calls == ["source_1.jpg", "source_2.jpg"]
+            assert sorted(render_calls) == ["source_1.jpg", "source_2.jpg"]
 
             jobs[1].settings["crop_box"] = [0.0, 0.0, 0.8, 1.0]
 
