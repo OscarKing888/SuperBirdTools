@@ -52,6 +52,7 @@ BIRD_COLORS = [(0, 200, 255), (255, 120, 200), (120, 255, 120), (255, 200, 60), 
 STEP_DECODE = "decode"
 STEP_DETECT = "detect"
 STEP_RECHECK = "recheck"
+STEP_BIRDS = "birds"
 STEP_BIRD = "bird"
 STEP_HEAD = "head"
 STEP_EDGES = "edges"
@@ -108,6 +109,7 @@ class TraceStep:
     charts: List[TraceChart] = field(default_factory=list)
     legend: List[Tuple[str, str]] = field(default_factory=list)  # (hex colour, label)
     focus_rect: Optional[Tuple[int, int, int, int]] = None  # region worth zooming to, image coords
+    bird: Optional[int] = None  # bird index for per-bird steps
 
     def to_json(self) -> dict:
         def clean(value):
@@ -122,7 +124,7 @@ class TraceStep:
             return value
 
         return {"key": self.key, "title": self.title, "description": self.description, "frame": self.frame,
-                "focus_rect": self.focus_rect,
+                "focus_rect": self.focus_rect, "bird": self.bird,
                 "metrics": self.metrics, "legend": self.legend,
                 "charts": [{"kind": c.kind, "title": c.title, "data": clean(c.data)} for c in self.charts]}
 
@@ -149,6 +151,11 @@ class AnalysisTrace:
             if bird.best:
                 return i
         return 0
+
+    def steps_all(self) -> List[TraceStep]:
+        """Every bird's steps one after another (bird #1, bird #2, ...)."""
+        middle = [step for bird in self.birds for step in bird.steps] if self.birds else self.region_steps
+        return [*self.common, *middle, *self.final]
 
     def steps_for(self, bird_index: Optional[int] = None) -> List[TraceStep]:
         middle = self.region_steps
@@ -302,6 +309,7 @@ class AnalysisTracer:
         self._image_shape = (0, 0)
         self._bird_boxes: List[Tuple[int, int, int, int]] = []
         self._det_scale = 1.0
+        self._measurements: Dict[int, object] = {}
 
     # ── shared frame ──
     def _display(self, box):
@@ -557,6 +565,9 @@ class AnalysisTracer:
              ("分数", _fmt(measurement.score, "%d"))],
             charts, legend=[(hex_color(C_SHARP), "清晰"), (hex_color(C_USABLE), "可用"), (hex_color(C_SOFT), "模糊")],
             focus_rect=zoom))
+        for step in steps:
+            step.bird = index
+        self._measurements[index] = measurement
         self.trace.birds.append(TraceBird(index, f"鸟 #{index + 1}", False, steps))
 
     def _edge_step(self, base: np.ndarray, s: float, selection, region_full: np.ndarray,
@@ -603,6 +614,52 @@ class AnalysisTracer:
             bird.best = bird.index == best_index
             if bird.best:
                 bird.label = f"鸟 #{bird.index + 1}（最佳）"
+        if len(self.trace.birds) >= 2:
+            self._birds_overview(best_index)
+
+    def _birds_overview(self, best_index: int) -> None:
+        """Side-by-side tiles of every bird's own pixels, coloured by verdict (display only)."""
+        from .models import FOUND_FULL
+
+        tile_w, tile_h, pad = 720, 540, 16
+        n = len(self.trace.birds)
+        cols = min(n, 3 if n != 4 else 2)
+        rows = (n + cols - 1) // cols
+        canvas = np.full((rows * (tile_h + pad) + pad, cols * (tile_w + pad) + pad, 3), 24, np.uint8)
+        metrics = []
+        found_labels = {**FOUND_LABELS, FOUND_FULL: ""}
+        for slot, bird in enumerate(self.trace.birds):
+            m = self._measurements.get(bird.index)
+            src = bird.steps[0].image
+            scale = min((tile_w - 24) / src.shape[1], (tile_h - 64) / src.shape[0])
+            tile = cv2.resize(src, (max(1, int(src.shape[1] * scale)), max(1, int(src.shape[0] * scale))),
+                              interpolation=cv2.INTER_AREA)
+            r, c = divmod(slot, cols)
+            x0, y0 = pad + c * (tile_w + pad), pad + r * (tile_h + pad)
+            color = _verdict_rgb(m.verdict) if m is not None else C_WEAK
+            best = bird.index == best_index
+            cv2.rectangle(canvas, (x0, y0), (x0 + tile_w - 1, y0 + tile_h - 1), color, 10 if best else 3)
+            ty, tx = y0 + 52, x0 + (tile_w - tile.shape[1]) // 2
+            canvas[ty:ty + tile.shape[0], tx:tx + tile.shape[1]] = tile
+            text = f"#{bird.index + 1}"
+            if m is not None:
+                text += f"   sigma {_fmt(m.sigma)}   score {_fmt(m.score, '%d')}"
+            if best:
+                text += "   BEST"
+            cv2.putText(canvas, text, (x0 + 16, y0 + 38), cv2.FONT_HERSHEY_SIMPLEX, 1.0, color, 2, cv2.LINE_AA)
+            if m is not None:
+                metrics.append((f"鸟 #{bird.index + 1}{'（最佳）' if best else ''}"
+                                f"{found_labels.get(getattr(m, 'found_by', ''), '')}",
+                                f"{verdict_label(m.verdict)} · σ {_fmt(m.sigma)} · 分数 {_fmt(m.score, '%d')}"
+                                f" · 置信度 {m.confidence:.2f}"))
+        self.trace.common.append(TraceStep(
+            STEP_BIRDS, "逐只鸟",
+            f"识别到 {n} 只鸟。每只鸟只用自己的像素单独计算一遍（鸟体 → 头部 → 边缘 → 分布）；整张照片取分数最高"
+            "（其次模糊半径最小、置信度最高）的一只，粗框为最佳。下一步起依次是每只鸟的计算过程；"
+            "右上角「鸟」可只看其中一只。",
+            canvas, "birds", metrics,
+            legend=[(hex_color(_verdict_rgb(v)), fields.VERDICT_STYLES[v].label)
+                    for v in (fields.VERDICT_SHARP, fields.VERDICT_USABLE, fields.VERDICT_SOFT)]))
 
     # ── no-bird paths ──
     def focus_window(self, image, window, selection, stats) -> None:

@@ -49,12 +49,14 @@ _FMT_RGB888 = getattr(getattr(QImage, "Format", QImage), "Format_RGB888")
 _ROLE = getattr(QPalette, "ColorRole", QPalette)
 _RICH = getattr(getattr(Qt, "TextFormat", Qt), "RichText")
 _FRAME_NONE = getattr(getattr(QFrame, "Shape", QFrame), "NoFrame")
+_SCROLL_OFF = getattr(getattr(Qt, "ScrollBarPolicy", Qt), "ScrollBarAlwaysOff")
 
 STEP_ICONS = {
-    "decode": "解码", "detect": "识别", "recheck": "复检", "bird": "鸟体", "head": "头部", "edges": "边缘",
+    "decode": "解码", "detect": "识别", "recheck": "复检", "birds": "逐只鸟", "bird": "鸟体", "head": "头部", "edges": "边缘",
     "distribution": "分布", "focus": "焦点", "tiles": "分块", "result": "结论",
 }
-_CIRCLED = "①②③④⑤⑥⑦⑧⑨⑩⑪⑫"
+_CIRCLED = "①②③④⑤⑥⑦⑧⑨⑩⑪⑫⑬⑭⑮⑯⑰⑱⑲⑳"
+ALL_BIRDS = -1  # bird selector item: every bird's steps in turn
 
 
 def _clear_layout(layout) -> None:
@@ -459,13 +461,19 @@ class BirdSharpnessTraceDialog(QDialog):
         self.chips_layout = QHBoxLayout(self.chips_box)
         self.chips_layout.setContentsMargins(0, 0, 0, 0)
         self.chips_layout.setSpacing(4)
+        # Several birds add a run of steps each: scroll instead of squeezing the chips.
+        self.chips_scroll = QScrollArea(self.content)
+        self.chips_scroll.setWidget(self.chips_box)
+        self.chips_scroll.setWidgetResizable(True)
+        self.chips_scroll.setFrameShape(_FRAME_NONE)
+        self.chips_scroll.setVerticalScrollBarPolicy(_SCROLL_OFF)
         self.chip_group = QButtonGroup(self)
         self.chip_group.setExclusive(True)
         bar.addWidget(self.prev_btn)
         bar.addWidget(self.slider)
         bar.addWidget(self.next_btn)
         bar.addSpacing(8)
-        bar.addWidget(self.chips_box, 1)
+        bar.addWidget(self.chips_scroll, 1)
         layout.addLayout(bar)
 
         tools = QHBoxLayout()
@@ -517,31 +525,46 @@ class BirdSharpnessTraceDialog(QDialog):
             parts.append(f"鸟 {result.bird_count} 只")
             parts.append(f"耗时 {result.elapsed_s:.1f} s")
         self.summary.setText("　·　".join(parts))
+        multi = len(trace.birds) > 1
         self.bird_combo.blockSignals(True)
         self.bird_combo.clear()
+        if multi:
+            self.bird_combo.addItem("全部鸟（逐只）", ALL_BIRDS)
         for bird in trace.birds:
             self.bird_combo.addItem(bird.label, bird.index)
-        self.bird_combo.setCurrentIndex(trace.best_bird_index() if trace.birds else -1)
+        self.bird_combo.setCurrentIndex(0 if trace.birds else -1)
         self.bird_combo.blockSignals(False)
-        self.bird_combo.setVisible(len(trace.birds) > 1)
-        self.bird_label.setVisible(len(trace.birds) > 1)
-        self._load_steps(trace.steps_for(None), keep_key=None)
+        self.bird_combo.setVisible(multi)
+        self.bird_label.setVisible(multi)
+        self._load_steps(trace.steps_all() if multi else trace.steps_for(None), keep_key=None)
         self.stack.setCurrentWidget(self.content)
         QTimer.singleShot(0, lambda: self.go(0, force=True))
 
-    def _load_steps(self, steps, keep_key: Optional[str]) -> None:
+    def _step_label(self, step) -> str:
+        """Title with the bird number when several birds are traced."""
+        if step.bird is None or len(getattr(self.trace, "birds", ())) < 2 or step.title.startswith("鸟 #"):
+            return step.title
+        return f"鸟 #{step.bird + 1} · {step.title}"
+
+    def _load_steps(self, steps, keep_key: Optional[str], keep_bird: Optional[int] = None) -> None:
         self.steps = list(steps)
+        multi = len(getattr(self.trace, "birds", ())) > 1
         for button in list(self.chip_group.buttons()):
             self.chip_group.removeButton(button)
         _clear_layout(self.chips_layout)
         for i, step in enumerate(self.steps):
-            chip = ToggleToolButton(f"{_CIRCLED[i] if i < len(_CIRCLED) else i + 1} {STEP_ICONS.get(step.key, step.title)}",
-                                    self.chips_box)
-            chip.setToolTip(step.title)
+            number = _CIRCLED[i] if i < len(_CIRCLED) else str(i + 1)
+            icon = STEP_ICONS.get(step.key, step.title)
+            if multi and step.bird is not None:
+                icon = f"#{step.bird + 1}{icon}"
+            chip = ToggleToolButton(f"{number} {icon}", self.chips_box)
+            chip.setToolTip(self._step_label(step))
             chip.clicked.connect(lambda _c=False, k=i: self.go(k))
             self.chip_group.addButton(chip, i)
             self.chips_layout.addWidget(chip)
         self.chips_layout.addStretch(1)
+        bar_h = self.chips_scroll.horizontalScrollBar().sizeHint().height()
+        self.chips_scroll.setFixedHeight(self.chips_box.sizeHint().height() + bar_h + 2)
         self.slider.blockSignals(True)
         self.slider.setRange(0, max(0, len(self.steps) - 1))
         self.slider.blockSignals(False)
@@ -549,20 +572,25 @@ class BirdSharpnessTraceDialog(QDialog):
         self.compare_combo.clear()
         self.compare_combo.addItem("上一步", -1)
         for i, step in enumerate(self.steps):
-            self.compare_combo.addItem(f"{i + 1}. {step.title}", i)
+            self.compare_combo.addItem(f"{i + 1}. {self._step_label(step)}", i)
         self.compare_combo.blockSignals(False)
         if keep_key is not None:
-            for i, step in enumerate(self.steps):
-                if step.key == keep_key:
-                    self.index = i
-                    break
+            matches = [i for i, step in enumerate(self.steps) if step.key == keep_key]
+            same_bird = [i for i in matches if keep_bird is None or self.steps[i].bird in (None, keep_bird)]
+            if same_bird or matches:
+                self.index = (same_bird or matches)[0]
 
     def _on_bird_changed(self, combo_index: int) -> None:
         if self.trace is None or combo_index < 0:
             return
-        key = self.steps[self.index].key if self.steps else None
+        current = self.steps[self.index] if self.steps else None
         bird_index = self.bird_combo.itemData(combo_index)
-        self._load_steps(self.trace.steps_for(bird_index), keep_key=key)
+        if bird_index == ALL_BIRDS:
+            # Land on the bird that was being viewed, at the same step.
+            self._load_steps(self.trace.steps_all(), keep_key=getattr(current, "key", None),
+                             keep_bird=getattr(current, "bird", None))
+        else:
+            self._load_steps(self.trace.steps_for(bird_index), keep_key=getattr(current, "key", None))
         self.go(self.index, force=True)
 
     # ── navigation ────────────────────────────────────────────────────────
@@ -578,7 +606,7 @@ class BirdSharpnessTraceDialog(QDialog):
         same_frame = previous is not None and previous.frame == step.frame and not force
         state = self.view_a.view_state() if same_frame else None
         self.view_a.set_image(step.image)
-        self.view_a.set_caption(f"{index + 1}. {step.title}")
+        self.view_a.set_caption(f"{index + 1}. {self._step_label(step)}")
         if state is not None:
             self.view_a.apply_view_state(state)  # continuity: same pixels, same place
         elif step.focus_rect:
@@ -592,6 +620,7 @@ class BirdSharpnessTraceDialog(QDialog):
         button = self.chip_group.button(index)
         if button is not None:
             button.setChecked(True)
+            self.chips_scroll.ensureWidgetVisible(button, 24, 0)
         self.prev_btn.setEnabled(index > 0)
         self.next_btn.setEnabled(index < len(self.steps) - 1)
         self.zoom_region_btn.setEnabled(bool(step.focus_rect))
@@ -609,7 +638,7 @@ class BirdSharpnessTraceDialog(QDialog):
         i = self._compare_index()
         step = self.steps[i]
         self.view_b.set_image(step.image)
-        self.view_b.set_caption(f"对照 {i + 1}. {step.title}")
+        self.view_b.set_caption(f"对照 {i + 1}. {self._step_label(step)}")
         if self.sync_btn.isChecked() and step.frame == self.steps[self.index].frame:
             self._syncing = True
             try:
@@ -653,7 +682,7 @@ class BirdSharpnessTraceDialog(QDialog):
 
     # ── side panel ────────────────────────────────────────────────────────
     def _show_side(self, step) -> None:
-        self.step_title.setText(f"步骤 {self.index + 1} / {len(self.steps)} · {step.title}")
+        self.step_title.setText(f"步骤 {self.index + 1} / {len(self.steps)} · {self._step_label(step)}")
         self.step_desc.setText(step.description)
         _clear_layout(self.metrics_grid)
         for row, (label, value) in enumerate(step.metrics):

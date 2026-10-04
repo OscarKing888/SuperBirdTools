@@ -59,12 +59,27 @@ def test_dialog_steps_navigation_compare_and_bird_switch(monkeypatch) -> None:
         assert dialog.stack.currentWidget() is dialog.loading
         dialog.set_trace(trace)
         assert _wait(lambda: dialog.stack.currentWidget() is dialog.content and dialog.steps)
+        # several birds: every bird's steps in turn, after an overview of all birds
+        per_bird = ["bird", "head", "edges", "distribution"]
+        assert dialog.bird_combo.isVisible() and dialog.bird_combo.count() == 3
+        assert dialog.bird_combo.currentText() == "全部鸟（逐只）"
+        assert [s.key for s in dialog.steps] == ["decode", "detect", "birds", *per_bird, *per_bird, "result"]
+        assert [s.bird for s in dialog.steps[3:11]] == [0] * 4 + [1] * 4
+        assert len(dialog.chip_group.buttons()) == 12 and "#2" in dialog.chip_group.button(8).text()
+        overview = dialog.steps[2]
+        assert overview.image.ndim == 3 and len(overview.metrics) == 2
+        assert sum("最佳" in label for label, _ in overview.metrics) == 1
+        dialog.go(9, force=True)
+        assert "鸟 #2 · 边缘筛选" in dialog.step_title.text()
+
+        # one bird only: its own steps
+        best = next(i for i in range(dialog.bird_combo.count()) if "最佳" in dialog.bird_combo.itemText(i))
+        dialog.bird_combo.setCurrentIndex(best)
         keys = [s.key for s in dialog.steps]
-        assert keys == ["decode", "detect", "bird", "head", "edges", "distribution", "result"]
-        assert len(dialog.chip_group.buttons()) == 7
+        assert keys == ["decode", "detect", "birds", *per_bird, "result"]
+        assert len(dialog.chip_group.buttons()) == 8
+        assert dialog.steps[dialog.index].key == "edges"  # kept the step
         assert dialog.verdict_chip.text().strip() == "清晰"
-        assert dialog.bird_combo.isVisible() and dialog.bird_combo.count() == 2
-        assert "最佳" in dialog.bird_combo.currentText()
 
         dialog.go(0, force=True)
         assert not dialog.prev_btn.isEnabled()
@@ -73,9 +88,9 @@ def test_dialog_steps_navigation_compare_and_bird_switch(monkeypatch) -> None:
         dialog.next_btn.click()
         assert dialog.index == 2
         _key(dialog, Qt.Key.Key_End)
-        assert dialog.index == 6 and not dialog.next_btn.isEnabled()
-        dialog.slider.setValue(4)
-        assert dialog.index == 4 and dialog.step_title.text().startswith("步骤 5 / 7")
+        assert dialog.index == 7 and not dialog.next_btn.isEnabled()
+        dialog.slider.setValue(5)
+        assert dialog.index == 5 and dialog.step_title.text().startswith("步骤 6 / 8")
         assert dialog.metrics_grid.count() > 0 and dialog.zoom_region_btn.isEnabled()
 
         # compare: previous step, same coordinate frame -> zoom/pan follow
@@ -90,10 +105,14 @@ def test_dialog_steps_navigation_compare_and_bird_switch(monkeypatch) -> None:
         assert dialog.view_b.zoom_factor() != pytest.approx(dialog.view_a.zoom_factor(), rel=1e-6)
 
         # switching bird keeps the same step and shows that bird's frame
-        other = 1 - dialog.bird_combo.currentIndex()
+        other = 1 if best == 2 else 2
         dialog.bird_combo.setCurrentIndex(other)
         assert dialog.steps[dialog.index].key == "edges"
         assert dialog.steps[dialog.index].frame == f"bird{dialog.bird_combo.currentData()}"
+        # back to all birds: lands on that bird's same step
+        viewed = dialog.bird_combo.currentData()
+        dialog.bird_combo.setCurrentIndex(0)
+        assert dialog.steps[dialog.index].key == "edges" and dialog.steps[dialog.index].bird == viewed
     finally:
         dialog.close()
         _APP.processEvents()

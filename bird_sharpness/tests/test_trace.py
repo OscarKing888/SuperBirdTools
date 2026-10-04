@@ -46,13 +46,20 @@ def test_bird_trace_steps_match_the_computation(monkeypatch) -> None:
 
 def test_multi_bird_trace_marks_best_and_switches_steps(monkeypatch) -> None:
     scene = _scene([(450, 600, 260, 1.8), (1350, 600, 260, 0.3)])
-    result, _plain, trace = _run(monkeypatch, scene, [(450, 600, 260), (1350, 600, 260)])
+    result, plain, trace = _run(monkeypatch, scene, [(450, 600, 260), (1350, 600, 260)])
+    assert result.to_xmp_fields() == plain.to_xmp_fields()  # the overview is display only
     assert len(trace.birds) == 2
     best = trace.birds[trace.best_bird_index()]
     assert best.best and "最佳" in best.label
     assert result.bird_box[0] > 900 and best.index == 1
     other = 1 - trace.best_bird_index()
-    assert trace.steps_for(other)[2].frame == f"bird{other}"
+    assert trace.steps_for(other)[3].frame == f"bird{other}"
+    # overview of all birds, then every bird's steps in turn
+    overview = next(s for s in trace.common if s.key == "birds")
+    assert overview.frame == "birds" and len(overview.metrics) == 2
+    every = trace.steps_all()
+    assert [s.key for s in every[:3]] == ["decode", "detect", "birds"] and every[-1].key == "result"
+    assert [s.bird for s in every[3:-1]] == [0] * len(trace.birds[0].steps) + [1] * len(trace.birds[1].steps)
     final = trace.final[0]
     points = final.charts[0].data["points"]
     assert len(points) == 2 and sum(p["best"] for p in points) == 1
