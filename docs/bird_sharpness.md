@@ -7,7 +7,7 @@
 代码：[analyzer.py](../bird_sharpness/analyzer.py)、[metrics.py](../bird_sharpness/metrics.py)、[focus.py](../bird_sharpness/focus.py)、[scoring.py](../bird_sharpness/scoring.py)。整套流程在一个 `BirdSharpnessAction`（WorkerAction）里执行。
 
 1. **解码全分辨率**：RAW 用 LibRaw（LINEAR 去马赛克，绿色通道），不用内嵌预览：内嵌预览是相机处理过的 JPEG，机内锐化会让糊掉的边缘重新变“锐”，降噪和 8 位压缩也会改变边缘宽度；有的预览还很小（如 Sony ARW 的 PreviewImage 只有 1616 px，100% 下 1 px 的软看不出）。并非所有内嵌预览都小——2026-10-02 这批 ARW 内嵌的就是 5616×3744 全尺寸 JPEG，但同样经过了机内处理。同时记录相机 JPEG 画幅在 RAW 输出中的位置（`camera_crop`），焦点框按它映射。见 [image_source.py](../bird_sharpness/image_source.py)。
-2. **鸟体识别（全部鸟）**：在 1024 px 副本上（网络输入 640 px，即模型训练尺寸）找出所有 bird（置信度 ≥ 0.25，最多 8 只）；两个检测框中任一个有 ≥ 70% 面积落在另一个里（整只鸟 + 鸟的一部分，不论哪个置信度高）视为同一只鸟，只保留更强的一个；2026-10-02 一组里 28 张“多只鸟”中有 24 张是这种重复。有分割模型（`yolo11l-seg.pt` 等）时用每只鸟的像素掩膜；只有检测模型（`yolo11n.pt`，打包版 Viewer 自带）时用鸟框内核（四边各内缩 8%）。
+2. **鸟体识别（全部鸟）**：在 1024 px 副本上（网络输入 640 px，即模型训练尺寸）找出所有 bird（置信度 ≥ 0.25，最多测量 16 只；超过时压在相机焦点框上的鸟优先，其余按置信度 × 面积，DSC00859 的 9 只鹬中被对焦的那只最小，曾因上限 8 只被截掉）；两个检测框中任一个有 ≥ 70% 面积落在另一个里（整只鸟 + 鸟的一部分，不论哪个置信度高）视为同一只鸟，只保留更强的一个；2026-10-02 一组里 28 张“多只鸟”中有 24 张是这种重复。有分割模型（`yolo11l-seg.pt` 等）时用每只鸟的像素掩膜；只有检测模型（`yolo11n.pt`，打包版 Viewer 自带）时用鸟框内核（四边各内缩 8%）。
 3. **逐只鸟只算自己的像素**：每只鸟单独得到一组清晰度。
    - 有 CUB-200 关键点模型（与 SuperPicky 同一权重）且看得到眼：头部区域 = 以眼为圆心、半径 1.2×眼喙距的圆 ∩ 该鸟像素，取头部模糊半径；看不到眼：用身体 σ，分数封顶 299（`no_eye`）。
    - 看得到眼、但头部没有任何高于噪声的边缘：说明头部严重模糊（有羽毛和眼的头部不清晰时才会没有边缘），判为失焦/运动模糊，σ 取 max(身体 σ, 1.55)。例：DSC04757（ISO 6400，焦点在旁边树叶上），旧版把仅剩的几条贴着噪声的弱边缘测成 0.72“清晰”。
@@ -84,7 +84,7 @@ CLI 导出同样的过程：
 | `XMP-superpicky:bird_sharpness_bird_count` | 识别到的鸟数 |
 | `XMP-superpicky:bird_sharpness_head_sigma` / `_body_sigma` | 模糊半径（px） |
 | `XMP-superpicky:bird_sharpness_motion_ratio` / `_eye_visibility` | 方向比、鸟眼可见度 |
-| `XMP-superpicky:bird_sharpness_version` | 算法版本（当前 `sbt-blur-v8`），目录检测“跳过已检测”按版本判断 |
+| `XMP-superpicky:bird_sharpness_version` | 算法版本（当前 `sbt-blur-v9`），目录检测“跳过已检测”按版本判断 |
 
 `XMP-superpicky:*` 由 `PhotoMetaDataXMP.write()` 直接编辑 XML（ExifTool 不认识该私有命名空间）；与 `XMP-photoshop:City` 等 ExifTool 字段同一次提交。空字符串删除旧值。
 

@@ -43,7 +43,7 @@ _log = get_logger("bird_sharpness")
 DETECT_LONG_EDGE = 1024  # detection copy
 DETECT_IMGSZ = 640  # first-pass network input (the size the YOLO models are trained at)
 RECHECK_IMGSZ = 1024  # second pass when the first finds no bird: small, dark birds score higher
-MAX_BIRDS = 8
+MAX_BIRDS = 16  # birds measured per photo; shorebird flocks often hold a dozen
 CROP_PAD_RATIO = 0.15
 EYE_VISIBLE_MIN = 0.5
 BEAK_VISIBLE_MIN = 0.3
@@ -327,6 +327,20 @@ class MissedBird:
     confidence: float
 
 
+def prefer_focus_birds(detections: List[BirdDetection], focus_px: Optional[Box], scale: float) -> List[BirdDetection]:
+    """Birds touching the camera focus box first, the rest in their original order.
+
+    Used before the MAX_BIRDS cut: detections are ranked by confidence x area,
+    so the small bird the photographer focused on would otherwise be the one
+    dropped from a flock (DSC00859: 9 birds, the focused one ranked last).
+    """
+    if focus_px is None:
+        return list(detections)
+    on_focus = [_intersection(tuple(v / scale for v in d.box), focus_px) > 0 for d in detections]
+    return ([d for d, hit in zip(detections, on_focus) if hit]
+            + [d for d, hit in zip(detections, on_focus) if not hit])
+
+
 def valid_bounds(image: AnalysisImage) -> Tuple[int, int, int, int]:
     """Pixel bounds of real picture content: the camera frame inside RAW output.
 
@@ -440,10 +454,15 @@ class BirdSharpnessAnalyzer:
         H, W = image.gray.shape[:2]
         small, scale = _resize_long_edge(image.rgb8, DETECT_LONG_EDGE)
         small_bgr = cv2.cvtColor(small, cv2.COLOR_RGB2BGR)
-        detections = dedupe_detections(self.models.detect_birds(small_bgr, imgsz=DETECT_IMGSZ))[:MAX_BIRDS]
+        detections = dedupe_detections(self.models.detect_birds(small_bgr, imgsz=DETECT_IMGSZ))
+        unmeasured = max(0, len(detections) - MAX_BIRDS)
+        if unmeasured:
+            if focus_px is _UNSET:
+                focus_px = self._focus_box_px(path, image)
+            detections = prefer_focus_birds(detections, focus_px, scale)[:MAX_BIRDS]
         if tracer is not None:
             tracer.detect(detections, scale, has_masks=bool(getattr(self.models, "has_masks", True)),
-                          has_keypoints=bool(getattr(self.models, "has_keypoints", True)))
+                          has_keypoints=bool(getattr(self.models, "has_keypoints", True)), unmeasured=unmeasured)
         if not detections and not cancelled():
             if focus_px is _UNSET:
                 focus_px = self._focus_box_px(path, image)

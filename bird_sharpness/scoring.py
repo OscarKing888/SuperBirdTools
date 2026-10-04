@@ -35,7 +35,7 @@ from app_common.bird_sharpness_fields import (
     VERDICT_USABLE,
 )
 
-ALGORITHM_VERSION = "sbt-blur-v8"
+ALGORITHM_VERSION = "sbt-blur-v9"
 
 # (sigma_px, score) anchors, sigma ascending / score descending.
 SCORE_ANCHORS: Tuple[Tuple[float, float], ...] = (
