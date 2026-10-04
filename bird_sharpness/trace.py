@@ -610,18 +610,22 @@ class AnalysisTracer:
              ("实测点", f"{counts['measured']:,}")],
             legend=EDGE_LEGEND)
 
-    def mark_best(self, best_index: int, excluded: Sequence[int] = ()) -> None:
+    def mark_best(self, best_index: int, excluded=None) -> None:
+        """``excluded``: {bird index: analyzer.Exclusion} of measured birds that do not count."""
+        excluded = dict(excluded or {})
         for bird in self.trace.birds:
             bird.best = bird.index == best_index
             bird.excluded = bird.index in excluded
             if bird.best:
                 bird.label = f"鸟 #{bird.index + 1}（最佳）"
             elif bird.excluded:
-                bird.label = f"鸟 #{bird.index + 1}（已排除）"
+                part = excluded[bird.index].reason == "part"
+                bird.label = f"鸟 #{bird.index + 1}（{'并入 #%d' % (excluded[bird.index].other + 1) if part else '已排除'}）"
         if len(self.trace.birds) >= 2:
-            self._birds_overview(best_index, set(excluded))
+            self._birds_overview(best_index, excluded)
 
-    def _birds_overview(self, best_index: int, excluded=frozenset()) -> None:
+    def _birds_overview(self, best_index: int, excluded=None) -> None:
+        excluded = excluded or {}
         """Side-by-side tiles of every bird's own pixels, coloured by verdict (display only)."""
         from . import analyzer as A
         from .models import FOUND_FULL
@@ -653,17 +657,26 @@ class AnalysisTracer:
             if best:
                 text += "   BEST"
             elif dropped:
-                text += "   EXCLUDED"
+                text += "   PART OF #%d" % (excluded[bird.index].other + 1) if excluded[bird.index].reason == "part" \
+                    else "   EXCLUDED"
             cv2.putText(canvas, text, (x0 + 16, y0 + 38), cv2.FONT_HERSHEY_SIMPLEX, 1.0, color, 2, cv2.LINE_AA)
             if dropped:
                 cv2.line(canvas, (x0, y0), (x0 + tile_w - 1, y0 + tile_h - 1), C_WEAK, 3, cv2.LINE_AA)
                 cv2.line(canvas, (x0 + tile_w - 1, y0), (x0, y0 + tile_h - 1), C_WEAK, 3, cv2.LINE_AA)
             if m is not None and dropped:
                 eye = _fmt(m.eye_visibility)
-                metrics.append((f"鸟 #{bird.index + 1}（已排除）",
-                                f"置信度 {m.confidence:.2f} < {A.EXTRA_BIRD_CONFIDENCE_MAX:.2f}、看不到鸟眼（{eye}），"
-                                f"旁边有置信度 ≥ {A.EXTRA_BIRD_ANCHOR_MIN:.2f} 的鸟：按误识别（树叶、树干等）排除，"
-                                f"不参与取最好（本应 {verdict_label(m.verdict)} · σ {_fmt(m.sigma)} · 分数 {_fmt(m.score, '%d')}）"))
+                ex = excluded[bird.index]
+                would_be = f"本应 {verdict_label(m.verdict)} · σ {_fmt(m.sigma)} · 分数 {_fmt(m.score, '%d')}"
+                if ex.reason == A.EXCLUDED_PART:
+                    metrics.append((f"鸟 #{bird.index + 1}（并入 #{ex.other + 1}）",
+                                    f"看不到鸟眼（{eye}），鸟框 {ex.overlap:.0%} 落在鸟 #{ex.other + 1} 的框内，"
+                                    f"而鸟 #{ex.other + 1} 看得到鸟眼：是同一只鸟的局部（翅膀、尾羽），"
+                                    f"不单独计数、不参与取最好（{would_be}）"))
+                else:
+                    metrics.append((f"鸟 #{bird.index + 1}（已排除）",
+                                    f"置信度 {m.confidence:.2f} < {A.EXTRA_BIRD_CONFIDENCE_MAX:.2f}、看不到鸟眼（{eye}），"
+                                    f"旁边有置信度 ≥ {A.EXTRA_BIRD_ANCHOR_MIN:.2f} 的鸟：按误识别（树叶、树干等）排除，"
+                                    f"不参与取最好（{would_be}）"))
             elif m is not None:
                 metrics.append((f"鸟 #{bird.index + 1}{'（最佳）' if best else ''}"
                                 f"{found_labels.get(getattr(m, 'found_by', ''), '')}",
@@ -673,7 +686,8 @@ class AnalysisTracer:
             STEP_BIRDS, "逐只鸟",
             f"识别到 {n} 只鸟。每只鸟只用自己的像素单独计算一遍（鸟体 → 头部 → 边缘 → 分布）；整张照片取分数最高"
             "（其次模糊半径最小、置信度最高）的一只，粗框为最佳。置信度低、看不到鸟眼、又紧挨着一只可信的鸟的“鸟”"
-            "按误识别排除（灰色打叉），仍可查看它的计算过程。下一步起依次是每只鸟的计算过程；"
+            "按误识别排除；看不到鸟眼、框大半落在另一只看得到眼的鸟里的，是那只鸟的局部（翅膀、尾羽），并入它。"
+            "两者都灰色打叉，仍可查看计算过程。下一步起依次是每只鸟的计算过程；"
             "右上角「鸟」可只看其中一只。",
             canvas, "birds", metrics,
             legend=[(hex_color(_verdict_rgb(v)), fields.VERDICT_STYLES[v].label)
