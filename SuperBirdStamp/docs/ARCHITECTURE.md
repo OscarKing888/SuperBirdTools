@@ -125,7 +125,7 @@ flowchart LR
 
 [export_stage/core.py](../birdstamp/export_stage/core.py) 的 `render_video_frame_context` 构造上下文并运行阶段管线，返回实际图像及裁切几何；`render_video_frame` 包装它返回导出位图。旧“批量构图 / 构图平滑”的 UI、统一尺寸和中位中心算法已移除，旧字段不参与设置或缓存签名。`prepare_uniform_auto_crop_plans` 仅保留显式参考区策略的非 GUI 兼容入口；[resolve_dejitter_strategy](../birdstamp/image_dejitter/strategy_registry.py) 默认关闭，只有显式 `reference_region` 能启用旧入口。
 
-普通图片导出的每张解码、阶段处理和写入由 [editor_exporter.py](../birdstamp/gui/editor_exporter.py) 的 `_ImageExportAction` 提交到 `BrowserWorkPool`，单张导出也在后台执行。视频导出的源帧渲染和目标尺寸规格化分别由 [core.py](../birdstamp/export_stage/core.py) 的 `_SourceFrameRenderAction`、`_VideoFrameNormalizeAction` 执行；协调线程在完成后更新缓存清单和进度。GIF 中间图片复用普通图片 action。显式参考区去抖动的旧兼容预计算仍按帧顺序汇总结果。
+普通图片导出的每张解码、阶段处理和写入由 [editor_exporter.py](../birdstamp/gui/editor_exporter.py) 的 `_ImageExportAction` 提交到 `BrowserWorkPool`，在途 action 数等于预算线程数，单张导出也在后台执行。视频导出的源帧渲染和目标尺寸规格化分别由 [core.py](../birdstamp/export_stage/core.py) 的 `_SourceFrameRenderAction`、`_VideoFrameNormalizeAction` 执行；协调线程在完成后更新缓存清单和进度。GIF 中间图片复用普通图片 action。显式参考区去抖动的旧兼容预计算仍按帧顺序汇总结果。
 
 视频两个帧阶段使用 [video_render_workers.py](../birdstamp/export_stage/video_render_workers.py) 的独立预算：自动并发取进程可用逻辑核心、当前可用内存 50% 可容纳的任务数和待处理帧数的最小值，不再封顶 8 线程 / 4 GiB。每任务按最大处理画幅每像素 24 字节估算；内存探测失败使用 2 GiB，未知原图尺寸按 2400 万像素兜底。源帧计入已知补边/外扩裁切，规格化读取 PNG 尺寸头并同时考虑源帧与目标尺寸。在途任务不超过预算并发数，完成一张立即补交一张；显式 `render_workers` 保留覆盖与超预算警告。普通图片及去抖动分析仍使用原策略。日志记录预算限制原因、实际并发、缓存复用、阶段耗时与处理/写入累计耗时（写入含 PNG 和 EXIF），取消和失败也汇总；回归见 [test_video_render_workers.py](../tests/test_video_render_workers.py)。
 
@@ -181,11 +181,11 @@ RAW 源图的去抖动分析、成片预览和导出统一优先读取长边至�
 
 [editor_exporter.py](../birdstamp/gui/editor_exporter.py) 的 `export_current` / `export_all` 根据终端选择调度图片或 GIF；图片进入 `_export_render_jobs_to_images`。单图和批量导出由 GUI 编排，批量图像任务使用线程池并限制在途任务；GUI 在进度更新处处理事件，因此不能把整个图片/GIF 流程描述成独立的后台 QThread。GIF 编码由 `_run_gif_export_off_gui_thread` 放到单个后台线程执行（Pillow 编码期间释放 GIL），GUI 线程轮询完成并按序应用进度，所有控件更新仍在 GUI 线程；导出期间依旧排除用户输入。GIF 中间缓存帧以 `compress_level=1` 快速写 PNG（无损），用户直接导出的 PNG 仍用 `optimize=True`。
 
-所有 PNG/JPG 写入（普通单图/批量、CLI、独立去抖动、GIF 和视频保存的 PNG 帧）统一经过 [export_metadata.py](../birdstamp/export_metadata.py) 的 `save_export_image`，必须传入实际 `source_path`。ExifTool 从原文件复制 EXIF 块及可写元数据，包含 MakerNotes/未知 EXIF 标签；随后单独校正成片方向与尺寸并生成成片缩略图。不能用模板筛选后的元数据字典重建 EXIF。临时文件完成图片和 EXIF 后才替换目标，元数据失败不冒充成功、不覆盖已有完整目标，也禁止覆盖原图。使用共享 ExifTool runner（超时、Windows 隐藏窗口、应用关闭/atexit 清理）；中文内容通过文件复制保留，不拼入命令行。原图没有 EXIF 时可正常导出。源帧和视频帧缓存版本同步更新，避免复用旧的无 EXIF 缓存。
+所有新渲染的 PNG/JPG 写入（普通单图/批量、CLI、独立去抖动、GIF 和视频帧）统一经过 [export_metadata.py](../birdstamp/export_metadata.py) 的 `save_export_image`，必须传入实际 `source_path`；有效 PNG 成品或同尺寸源帧可原子复制完整字节和已有 EXIF。ExifTool 从原文件复制 EXIF 块及可写元数据，包含 MakerNotes/未知 EXIF 标签；随后单独校正成片方向与尺寸并生成成片缩略图。不能用模板筛选后的元数据字典重建 EXIF。临时文件完成图片和 EXIF 后才替换目标，元数据失败不冒充成功、不覆盖已有完整目标，也禁止覆盖原图。使用共享 ExifTool runner（超时、Windows 隐藏窗口、应用关闭/atexit 清理）；中文内容通过文件复制保留，不拼入命令行。原图没有 EXIF 时可正常导出。源帧缓存版本更新后不会复用旧的无 EXIF 缓存。
 
 独立去抖动另外使用 `copy_export_sidecar`，通过共享严格同目录/同名查找器定位 `.xmp`（扩展名不区分大小写），原样复制到导出图的新同名 `.xmp`；缺少时不生成空文件，失败/取消随本次目录一起回滚。分析签名记录实际 sidecar 路径，之后增加、删除或修改 `.XMP` 同样使结果失效。GIF/视频成品不作为逐张原始 EXIF 容器，其保留的 PNG 帧各自携带元数据。回归见 [test_export_metadata.py](../tests/test_export_metadata.py)。
 
-`_build_batch_image_targets` 在启动并行写入前分配所有文件名：使用 NFC 规范化加 `casefold` 判断本批同名目标，依次追加 `_2`、`_3`。这避免不同目录的 `a.jpg`、`A.jpg` 或 Unicode 等价名称写到同一目标；它解决本批目标互撞，不提供跨进程文件锁。普通图片并行度沿用视频导出的 CPU/图像像素内存预算；GIF 中间 PNG 帧使用整组图片导出的可用逻辑核心及内存预算，实际线程数仍受待导出帧数限制。
+`_build_batch_image_targets` 在启动并行写入前分配所有文件名：使用 NFC 规范化加 `casefold` 判断本批同名目标，依次追加 `_2`、`_3`。这避免不同目录的 `a.jpg`、`A.jpg` 或 Unicode 等价名称写到同一目标；它解决本批目标互撞，不提供跨进程文件锁。普通图片并行度沿用视频导出的 CPU/图像像素内存预算；GIF 中间 PNG 帧使用整组图片导出的可用逻辑核心及内存预算，实际线程数仍受待导出帧数限制。成功的普通 PNG/JPG 导出由 [exported_image_index.py](../birdstamp/exported_image_index.py) 记录到用户配置缓存目录，索引上限 50,000 个签名；视频/GIF 可跨输出目录按 PNG 优先、JPG 补帧的顺序复用，文件状态或处理输入变化时退回原图渲染。旧导出图和独立去抖动序列没有可验证的普通管线签名，不进入索引。
 
 ### 两级帧缓存和视频生命周期
 
@@ -196,7 +196,7 @@ RAW 源图的去抖动分析、成片预览和导出统一优先读取长边至�
 | `rendered_source_frames` | 完成裁切、模板和焦点处理的 RGB 源帧。桶由全局导出设置与版本区分；逐帧记录源文件签名、渲染设置、元数据/模板上下文、照片信息和模板内容签名。 |
 | `video_frames` | 按视频目标尺寸和背景归一化后的 PNG 帧，宽高满足编码的偶数要求。桶关联源帧桶、目标尺寸和背景；只改 FPS 或编码器通常可复用已渲染帧。 |
 
-保留模式使用输出目录下的 `birdstamp_export_cache/<类型>/<桶>/frames` 与 manifest；临时模式在输出目录创建独立临时目录。`dirty_path_keys` 强制相关源图重渲染，manifest 验证命中条件。视频两级缓存用 `ThrottledFrameManifestWriter` 节流写 manifest（每 32 帧或 1 秒一次），并在 `finally` 中 flush，完成、取消与失败时已完成的帧都会记录。GIF 的 `_ensure_gif_frame_cache` 也使用渲染源帧缓存；视频由 `_ensure_source_frame_cache`、`_ensure_video_frame_cache` 分两步准备。
+保留模式使用输出目录下的 `birdstamp_export_cache/<类型>/<桶>/frames` 与 manifest；临时模式在输出目录创建独立临时目录。`dirty_path_keys` 强制相关源图重渲染，manifest 验证命中条件。终端导出类型不进入源帧签名。视频两级缓存用 `ThrottledFrameManifestWriter` 节流写 manifest（每 32 帧或 1 秒一次），并在 `finally` 中 flush，完成、取消与失败时已完成的帧都会记录。GIF 的 `_ensure_gif_frame_cache` 也使用渲染源帧缓存；视频由 `_ensure_source_frame_cache`、`_ensure_video_frame_cache` 分两步准备。缓存帧 manifest 记录其来源导出图；当前最佳导出图（PNG 优先）变化或消失时重建该帧。源 PNG 已符合视频尺寸时原子复制完整文件，保持像素和 EXIF，免去第二次编码。
 
 [export_video](../birdstamp/export_stage/core.py) 在每个缓存目录创建后立即接管所有权，不能等准备函数成功返回后才记录目录。成功时先在工作目录编码，再用 `os.replace` 放到最终目标；普通异常清理未完成视频，并按 `preserve_temp_files` 决定是否保留帧缓存。即使异常发生在首帧或 manifest 准备期间，临时目录也有清理责任方。
 

@@ -45,6 +45,8 @@ from birdstamp.export_frame_cache import (
     load_frame_manifest,
     path_signature,
     reusable_frame_path,
+    set_source_origin,
+    source_origin_matches,
     ThrottledFrameManifestWriter,
     SOURCE_FRAME_CACHE_VERSION,
     hash_payload as _hash_payload,
@@ -52,6 +54,7 @@ from birdstamp.export_frame_cache import (
     update_frame_manifest_record,
     write_frame_manifest,
 )
+from birdstamp.exported_image_index import ExportedImageIndex, materialize_exported_image
 from birdstamp.gui import editor_core, editor_template, editor_utils, template_context as _template_context
 from birdstamp.image_pipeline import (
     ImageProcContext,
@@ -542,6 +545,9 @@ def source_frame_signature_for_job(
     template_signature_state: Mapping[str, Mapping[str, Any]] | None = None,
 ) -> str:
     render_settings = _clone_render_settings(job.settings)
+    # The terminal exporter never changes source pixels.  Omitting it lets an
+    # image, GIF and video share the same rendered-frame identity.
+    render_settings.pop(EXPORT_STAGE_ID_KEY, None)
     if dejitter_reference_active(render_settings):
         source = render_settings.get(DEJITTER_REFERENCE_SOURCE_KEY)
         if source:
@@ -1652,8 +1658,19 @@ def _render_and_cache_source_frame(
     bird_box_lock: threading.Lock | None,
     cancel_event: threading.Event | None,
     stats: VideoStageStats | None = None,
-) -> tuple[int, str, Path, str, str]:
+    exported_image: Path | None = None,
+) -> tuple[int, str, Path, str, str, Path | None]:
+    """返回值末项为实际复用的用户导出图；为 None 表示本帧由原图渲染。"""
     _raise_if_cancel_requested(cancel_event, message="视频导出已中断，正在保留已完成源帧。")
+    frame_path = _cache_frame_output_path(source_plan, index, suffix="png")
+    source_signature = _source_signature(job.path)
+    if exported_image is not None:
+        with stats.measure("writing") if stats else nullcontext():
+            materialized = materialize_exported_image(exported_image, frame_path, original=job.path)
+        if materialized:
+            if stats:
+                stats.frame_completed()
+            return (index, job.path.name, frame_path, source_signature, frame_signature, exported_image)
     with stats.measure("processing") if stats else nullcontext():
         rendered = _export_stage_callable("render_video_frame")(
             job,
@@ -1661,8 +1678,6 @@ def _render_and_cache_source_frame(
             bird_box_cache=bird_box_cache,
             bird_box_lock=bird_box_lock,
         )
-    frame_path = _cache_frame_output_path(source_plan, index, suffix="png")
-    source_signature = _source_signature(job.path)
     try:
         _raise_if_cancel_requested(cancel_event, message="视频导出已中断，正在保留已完成源帧。")
         with stats.measure("writing") if stats else nullcontext():
@@ -1674,7 +1689,7 @@ def _render_and_cache_source_frame(
             rendered.close()
         except Exception:
             pass
-    return (index, job.path.name, frame_path, source_signature, frame_signature)
+    return (index, job.path.name, frame_path, source_signature, frame_signature, None)
 
 
 def _normalize_and_cache_video_frame(
@@ -1698,17 +1713,33 @@ def _normalize_and_cache_video_frame(
     )
     with Image.open(source_frame_path) as source_image:
         _raise_if_cancel_requested(cancel_event, message="视频导出已中断，正在保留已完成视频帧。")
-        _save_normalized_temp_frame(
-            source_image,
-            frame_path,
-            target_size,
-            background_color=background_color,
-            source_path=source_frame_path,
-            stats=stats,
-        )
+        if source_image.format == "PNG" and source_image.mode == "RGB" and source_image.size == tuple(target_size):
+            # 完整源 PNG 已含成片像素与 EXIF；直接原子复制，免去二次解码、编码和元数据复制。
+            with stats.measure("writing") if stats else nullcontext():
+                _copy_complete_frame(source_frame_path, frame_path)
+        else:
+            _save_normalized_temp_frame(
+                source_image,
+                frame_path,
+                target_size,
+                background_color=background_color,
+                source_path=source_frame_path,
+                stats=stats,
+            )
     if stats:
         stats.frame_completed()
     return (index, label, frame_path, source_signature, frame_signature)
+
+
+def _copy_complete_frame(source: Path, target: Path) -> None:
+    target.parent.mkdir(parents=True, exist_ok=True)
+    descriptor, temp_name = tempfile.mkstemp(prefix=".birdstamp-frame-", suffix=target.suffix, dir=target.parent)
+    os.close(descriptor)
+    try:
+        shutil.copyfile(source, temp_name)
+        os.replace(temp_name, target)
+    finally:
+        Path(temp_name).unlink(missing_ok=True)
 
 
 class _SourceFrameRenderAction(WorkerAction):
@@ -1851,6 +1882,9 @@ def _ensure_source_frame_cache(
     source_frame_paths = [_cache_frame_output_path(source_plan, index, suffix="png") for index in range(1, total + 1)]
     pending_jobs: list[tuple[int, VideoFrameJob, str, str]] = []
     reused_count = 0
+    exported_index = ExportedImageIndex()
+    exported_records = exported_index.load()
+    exported_images: dict[int, Path] = {}
     template_signature_state = build_template_signature_state(jobs, template_paths)
     for index, job in enumerate(jobs, start=1):
         source_signature = _source_signature(job.path)
@@ -1862,6 +1896,12 @@ def _ensure_source_frame_cache(
         dirty_key = _path_key(job.path)
         reusable_path = None
         if dirty_key not in dirty_path_keys:
+            # 用户导出的 PNG/JPG 签名一致时可代替渲染；缓存帧来源与当前最佳导出图不同则重建。
+            candidate = exported_index.find(
+                exported_records, source=job.path, frame_signature=frame_signature,
+            )
+            if candidate is not None:
+                exported_images[index] = candidate
             reusable_path = reusable_frame_path(
                 source_plan,
                 manifest,
@@ -1870,6 +1910,8 @@ def _ensure_source_frame_cache(
                 source_signature=source_signature,
                 frame_signature=frame_signature,
             )
+            if reusable_path is not None and not source_origin_matches(manifest, index, candidate):
+                reusable_path = None
         if reusable_path is not None:
             source_frame_paths[index - 1] = reusable_path
             reused_count += 1
@@ -1915,7 +1957,7 @@ def _ensure_source_frame_cache(
     completed = reused_count
     if len(pending_jobs) == 1:
         index, job, source_signature, frame_signature = pending_jobs[0]
-        rendered_index, frame_name, frame_path, _, _ = _render_and_cache_source_frame(
+        rendered_index, frame_name, frame_path, _, _, exported_used = _render_and_cache_source_frame(
             job=job,
             index=index,
             source_plan=source_plan,
@@ -1925,6 +1967,7 @@ def _ensure_source_frame_cache(
             bird_box_lock=bird_box_lock,
             cancel_event=cancel_event,
             stats=stats,
+            exported_image=exported_images.get(index),
         )
         source_frame_paths[rendered_index - 1] = frame_path
         update_frame_manifest_record(
@@ -1936,6 +1979,7 @@ def _ensure_source_frame_cache(
             frame_signature=frame_signature,
             frame_path=frame_path,
         )
+        set_source_origin(manifest, rendered_index, exported_used)
         completed += 1
         write_frame_manifest(source_plan, manifest, metadata=_source_frame_cache_metadata(total=total))
         _emit_progress(
@@ -1971,6 +2015,7 @@ def _ensure_source_frame_cache(
                     bird_box_lock=bird_box_lock,
                     cancel_event=cancel_event,
                     stats=stats,
+                    exported_image=exported_images.get(index),
                 ),
                 kind=WorkKind.METADATA,
             )
@@ -1987,7 +2032,7 @@ def _ensure_source_frame_cache(
             future = next(as_completed(tuple(futures)))
             index, job, source_signature, frame_signature = futures.pop(future)
             try:
-                rendered_index, frame_name, frame_path, _, _ = future.result()
+                rendered_index, frame_name, frame_path, _, _, exported_used = future.result()
             except VideoExportCancelledError:
                 if cancel_event is not None:
                     cancel_event.set()
@@ -2004,6 +2049,7 @@ def _ensure_source_frame_cache(
                 frame_signature=frame_signature,
                 frame_path=frame_path,
             )
+            set_source_origin(manifest, rendered_index, exported_used)
             completed += 1
             manifest_writer.record_written()
             _emit_progress(
