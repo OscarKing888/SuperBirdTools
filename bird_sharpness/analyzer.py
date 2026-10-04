@@ -50,6 +50,16 @@ BEAK_VISIBLE_MIN = 0.3
 HEAD_RADIUS_BEAK_RATIO = 1.2
 HEAD_RADIUS_BOX_RATIO = 0.15
 HEAD_RADIUS_MIN_PX = 40
+# Mirror check for the eye/beak model. The bird is located again in the mirrored
+# crop; where both runs put the eye within EYE_MIRROR_MAX of the bird's size the
+# two are averaged, otherwise the head position is not trusted and the whole bird
+# is measured. Of 484 birds (2026-10 shorebirds, Century Park cuckoo-hawks) about
+# 20% disagreed, half of those with the eye on the body or another bird
+# (flight, head down, crowds); all checked agreeing ones were on the head, down
+# to ~200 px birds. Small size alone is not the cause: well-placed eyes stay
+# within ~2% of the bird when it is shrunk to 150 px.
+EYE_MIRROR_MAX = 0.10
+BEAK_MIRROR_MAX = 0.15
 HEAD_MASK_DILATE_PX = 9
 BODY_MASK_ERODE_PX = 15
 BOX_INSET_RATIO = 0.08  # detection boxes include background; measure their core
@@ -81,6 +91,8 @@ class BirdMeasurement:
     head_edges: int = 0
     masked: bool = False
     found_by: str = FOUND_FULL
+    eye_mirror_gap: Optional[float] = None  # eye distance between crop and mirrored crop / bird size
+    eye_reliable: Optional[bool] = None
     index: int = 0  # detection number (trace "鸟 #index+1"), kept when false extras are dropped
 
     def rank(self) -> tuple:
@@ -408,6 +420,65 @@ def _focus_part(det: BirdDetection, focus_px: Optional[Box], scale: float) -> Bi
     return replace(det, mask=(labels == best).astype(np.uint8), box=box)
 
 
+@dataclass
+class HeadKeypoints:
+    """Eye/beak model output for one bird crop, checked against its mirror image."""
+
+    pts: np.ndarray  # (3, 2) left eye, right eye, beak in crop pixels (the used eye/beak averaged)
+    vis: np.ndarray  # (3,) visibility
+    eye_index: int
+    mirror_pts: Optional[np.ndarray] = None  # same, from the mirrored crop mapped back
+    eye_gap: Optional[float] = None  # / bird size
+    beak_gap: Optional[float] = None
+
+    @property
+    def eye(self) -> np.ndarray:
+        return self.pts[self.eye_index]
+
+    @property
+    def eye_visibility(self) -> float:
+        return float(self.vis[self.eye_index])
+
+    @property
+    def eye_reliable(self) -> bool:
+        return self.eye_gap is None or self.eye_gap <= EYE_MIRROR_MAX
+
+    @property
+    def beak_usable(self) -> bool:
+        return self.vis[2] >= BEAK_VISIBLE_MIN and (self.beak_gap is None or self.beak_gap <= BEAK_MIRROR_MAX)
+
+
+def locate_head(models, crop: np.ndarray, bird_size: float) -> Optional[HeadKeypoints]:
+    """Eye and beak in ``crop``, located on the crop and on its mirror image (see EYE_MIRROR_MAX)."""
+    found = models.keypoints(np.ascontiguousarray(crop))
+    if found is None:
+        return None
+    h, w = crop.shape[:2]
+    coords, vis = found
+    pts = np.asarray(coords, np.float32) * np.array([w, h], np.float32)
+    vis = np.asarray(vis, np.float32).copy()
+    eye_index = 0 if vis[0] >= vis[1] else 1
+    mirrored = models.keypoints(np.ascontiguousarray(crop[:, ::-1]))
+    if mirrored is None:
+        return HeadKeypoints(pts, vis, eye_index)
+    mcoords, mvis = mirrored
+    mpts = np.asarray(mcoords, np.float32) * np.array([w, h], np.float32)
+    mpts[:, 0] = w - mpts[:, 0]
+    mpts, mvis = mpts[[1, 0, 2]], np.asarray(mvis, np.float32)[[1, 0, 2]]  # the bird's left eye is now on the right
+    meye = 0 if mvis[0] >= mvis[1] else 1
+    size = max(1.0, float(bird_size))
+    eye_gap = float(np.linalg.norm(pts[eye_index] - mpts[meye])) / size
+    beak_gap = float(np.linalg.norm(pts[2] - mpts[2])) / size
+    head = HeadKeypoints(pts.copy(), vis.copy(), eye_index, mpts, round(eye_gap, 3), round(beak_gap, 3))
+    if head.eye_reliable:
+        head.pts[eye_index] = (pts[eye_index] + mpts[meye]) / 2.0
+        head.vis[eye_index] = (vis[eye_index] + mvis[meye]) / 2.0
+    if beak_gap <= BEAK_MIRROR_MAX:
+        head.pts[2] = (pts[2] + mpts[2]) / 2.0
+        head.vis[2] = (vis[2] + mvis[2]) / 2.0
+    return head
+
+
 class BirdSharpnessAnalyzer:
     """Reusable analyzer; keep one instance per worker so models load once.
 
@@ -624,7 +695,7 @@ class BirdSharpnessAnalyzer:
             body = bird_px
         body_stats, motion_ratio, body_detail = field_.body_blur_detail(body)
 
-        keypoints = self.models.keypoints(np.ascontiguousarray(image.rgb8[Y1:Y2, X1:X2]))
+        keypoints = locate_head(self.models, image.rgb8[Y1:Y2, X1:X2], max(bw, bh))
         eye_vis = None
         eye_abs = None
         radius = None
@@ -632,18 +703,29 @@ class BirdSharpnessAnalyzer:
         head = None
         selection = None
         trace_keypoints = None
-        if keypoints is not None:
-            coords, vis = keypoints
-            pts = coords * np.array([cw, ch], np.float32)  # left eye, right eye, beak
-            eye_idx = 0 if vis[0] >= vis[1] else 1
-            eye_vis = float(vis[eye_idx])
-            eye = pts[eye_idx]
-            if vis[2] >= BEAK_VISIBLE_MIN:
+        if keypoints is not None and keypoints.eye_visibility >= EYE_VISIBLE_MIN and not keypoints.eye_reliable:
+            # The eye model and its mirror run disagree: the head position is a guess, so
+            # measure the whole bird as without an eye model (eye visible, no score cap).
+            eye_vis = keypoints.eye_visibility
+            trace_keypoints = (keypoints, None)
+            selection = field_.select_strongest_edges(bird_px)
+            head_stats = edge_stats(selection.sigma)
+            head_sigma = None
+            sigma = head_stats.sigma
+            verdict, score = classify(sigma, body_stats.sigma, motion_ratio, eye_visible=True,
+                                      head_blank=sigma is None)
+            if sigma is None:
+                sigma = blank_head_sigma(body_stats.sigma)
+        elif keypoints is not None:
+            pts, vis = keypoints.pts, keypoints.vis  # left eye, right eye, beak
+            eye_vis = keypoints.eye_visibility
+            eye = keypoints.eye
+            if keypoints.beak_usable:
                 radius = HEAD_RADIUS_BEAK_RATIO * float(np.linalg.norm(eye - pts[2]))
             else:
                 radius = HEAD_RADIUS_BOX_RATIO * max(bw, bh)
             radius = max(radius, HEAD_RADIUS_MIN_PX)
-            trace_keypoints = (pts, vis, radius)
+            trace_keypoints = (keypoints, radius)
             if eye_vis >= EYE_VISIBLE_MIN:
                 yy, xx = np.ogrid[:ch, :cw]
                 dilated = cv2.dilate(mask, np.ones((HEAD_MASK_DILATE_PX, HEAD_MASK_DILATE_PX), np.uint8)).astype(bool)
@@ -684,6 +766,8 @@ class BirdSharpnessAnalyzer:
             head_edges=head_stats.edge_count if head_stats is not None else 0,
             masked=det.mask is not None,
             found_by=getattr(det, "source", FOUND_FULL),
+            eye_mirror_gap=None if keypoints is None else keypoints.eye_gap,
+            eye_reliable=None if keypoints is None else keypoints.eye_reliable,
             index=index,
         )
         if tracer is not None:

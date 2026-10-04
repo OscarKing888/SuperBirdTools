@@ -31,7 +31,8 @@ class _Stub(_StubModels):
             return None
         coords, vis = result
         vis = vis.copy()
-        vis[0] = self.eyes[self._k]  # birds are measured in detection order
+        # Birds are measured in detection order, each located on its crop and its mirror image.
+        vis[0] = self.eyes[self._k // 2]
         self._k += 1
         return coords, vis
 

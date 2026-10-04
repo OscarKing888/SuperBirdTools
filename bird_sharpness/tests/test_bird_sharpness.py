@@ -318,7 +318,7 @@ def test_result_xmp_fields_use_superpicky_formats() -> None:
     assert out["XMP-superpicky:bird_sharpness_bird_count"] == "2"
     assert out["XMP-superpicky:bird_sharpness_head_sigma"] == "1.269"
     assert out["XMP-superpicky:bird_sharpness_motion_ratio"] == "1.23"
-    assert out["XMP-superpicky:bird_sharpness_version"] == "sbt-blur-v9"
+    assert out["XMP-superpicky:bird_sharpness_version"] == "sbt-blur-v10"
     # No bird: the focus/whole-image value still fills the sharpness slot.
     focus = BirdSharpnessResult(path="x", verdict="no_bird", score=420, sigma=0.9, region="focus").to_xmp_fields()
     assert focus[bsf.SHARPNESS_XMP_KEY] == "420.00"
@@ -474,3 +474,46 @@ def test_classify_blank_head() -> None:
     verdict, score = classify(None, 2.0, 1.8, eye_visible=True, head_blank=True)
     assert verdict == bsf.VERDICT_MOTION and score == sigma_to_score(2.0)
     assert blank_head_sigma(None) == 1.55
+
+
+class _OffCentreEyeStub(_StubModels):
+    """The eye model puts the eye at a fixed crop position, mirror image or not.
+
+    At the crop centre the mirror run agrees; off centre it lands on the other
+    side (the model guessing, as on flying or head-down birds).
+    """
+
+    def __init__(self, *args, eye_x=0.5, **kw):
+        super().__init__(*args, **kw)
+        self.eye_x = eye_x
+
+    def keypoints(self, rgb_crop):
+        coords, vis = super().keypoints(rgb_crop)
+        coords = coords.copy()
+        coords[:2, 0] = self.eye_x
+        coords[2, 0] = self.eye_x + 60.0 / rgb_crop.shape[1]
+        return coords, vis
+
+
+def test_mirror_disagreement_measures_the_whole_bird(monkeypatch) -> None:
+    _install_image(monkeypatch, _scene([(900, 600, 300, 0.3)]))
+    models = _OffCentreEyeStub([(900, 600, 300)], full_w=1800, eye_x=0.25)
+    from bird_sharpness.trace import AnalysisTracer
+
+    tracer = AnalysisTracer()
+    result = BirdSharpnessAnalyzer(models, focus_provider=_no_focus).analyze("bird.jpg", tracer=tracer)
+    bird = result.birds[0]
+    assert bird["eye_reliable"] is False and bird["eye_mirror_gap"] > 0.1
+    assert result.head_sigma is None and result.eye_xy is None
+    assert result.verdict == bsf.VERDICT_SHARP and result.score > 299  # eye visible: no "no eye" cap
+    head = next(s for s in tracer.trace.steps_for() if s.key == "head")
+    assert "不一致" in dict(head.metrics)["镜像复核"]
+
+
+def test_mirror_agreement_keeps_the_head_measurement(monkeypatch) -> None:
+    _install_image(monkeypatch, _scene([(900, 600, 300, 0.3)]))
+    models = _OffCentreEyeStub([(900, 600, 300)], full_w=1800, eye_x=0.5)
+    result = BirdSharpnessAnalyzer(models, focus_provider=_no_focus).analyze("bird.jpg")
+    assert result.birds[0]["eye_reliable"] is True and result.birds[0]["eye_mirror_gap"] == pytest.approx(0, abs=1e-3)
+    assert result.sigma == result.head_sigma
+    assert result.eye_xy == pytest.approx((900, 600), abs=3)

@@ -525,8 +525,14 @@ class AnalysisTracer:
                 h_small = small(head)
                 img[h_small] = np.clip(img[h_small].astype(np.float32) * 0.6 + np.array(C_HEAD) * 0.4, 0, 255)
                 _contour(img, h_small, C_HEAD, lw)
-            pts, vis, radius = keypoints
+            from .analyzer import EYE_MIRROR_MAX
+
+            head_kp, radius = keypoints
+            pts, vis = head_kp.pts, head_kp.vis
             r = max(3, 4 * lw)
+            if head_kp.mirror_pts is not None:  # mirror run: hollow rings, so disagreement is visible
+                for (px, py), color in ((head_kp.mirror_pts[head_kp.eye_index], C_EYE), (head_kp.mirror_pts[2], C_BEAK)):
+                    cv2.circle(img, (int(px * s), int(py * s)), r + 2 * lw, color, max(1, lw // 2), cv2.LINE_AA)
             for (px, py), color, v in ((pts[0], C_EYE, vis[0]), (pts[1], C_EYE, vis[1]), (pts[2], C_BEAK, vis[2])):
                 c = (int(px * s), int(py * s))
                 if v >= 0.3:
@@ -534,15 +540,25 @@ class AnalysisTracer:
                 else:
                     cv2.circle(img, c, r, color, lw, cv2.LINE_AA)
             eye_ok = measurement.eye_visibility is not None and measurement.eye_visibility >= 0.5
-            desc = ("关键点模型定位眼和喙；头部区域 = 以眼为圆心、半径 1.2×眼喙距的圆 ∩ 鸟体（青色）。"
-                    "头部清晰才算鸟清晰，翅膀/尾羽运动和遮挡不计入。" if eye_ok else
-                    "眼睛不可见（可见度 < 0.5）：无法确认头部，改用身体模糊，分数封顶 299。")
+            if eye_ok and not head_kp.eye_reliable:
+                desc = (f"原图与镜像图定位的眼相距 {head_kp.eye_gap:.0%} 鸟身长（> {EYE_MIRROR_MAX:.0%}）："
+                        "飞行、低头、与别的鸟重叠时眼常被定到身体或别的鸟上，头部位置不可信，改按整只鸟计算（不封顶）。")
+            elif eye_ok:
+                desc = ("关键点模型定位眼和喙（原图与镜像图各定位一次取平均，空心圈为镜像结果）；"
+                        "头部区域 = 以眼为圆心、半径 1.2×眼喙距的圆 ∩ 鸟体（青色）。"
+                        "头部清晰才算鸟清晰，翅膀/尾羽运动和遮挡不计入。")
+            else:
+                desc = "眼睛不可见（可见度 < 0.5）：无法确认头部，改用身体模糊，分数封顶 299。"
+            mirror = ("—" if head_kp.eye_gap is None else
+                      f"眼差 {head_kp.eye_gap:.0%}，喙差 {head_kp.beak_gap:.0%} 鸟身长："
+                      + ("一致" if head_kp.eye_reliable else "不一致"))
             steps.append(TraceStep(
                 STEP_HEAD, "头部定位", desc, img, frame,
                 [("眼可见度", _fmt(float(max(vis[0], vis[1])))), ("喙可见度", _fmt(float(vis[2]))),
+                 ("镜像复核", mirror),
                  ("头部半径", _fmt(radius, "%.0f px")),
                  ("头部像素", "—" if head is None else f"{int(head.sum()):,}")],
-                legend=[(hex_color(C_EYE), "眼（实心 = 可见）"), (hex_color(C_BEAK), "喙"),
+                legend=[(hex_color(C_EYE), "眼（实心 = 可见，空心圈 = 镜像结果）"), (hex_color(C_BEAK), "喙"),
                         (hex_color(C_HEAD), "头部测量区域")]))
 
         # ⑤ edges
@@ -579,7 +595,8 @@ class AnalysisTracer:
              (f"{'头部' if head is not None else '鸟体'}实测点",
               (f"{selection.sigma.size}" if selection is not None and selection.sigma.size >= 8 else
                f"{0 if selection is None else selection.sigma.size}（不足 8 点：严重模糊，按 ≥1.55 px 计）")
-              if (head is not None or keypoints is None) else "—（眼不可见，用身体）"),
+              if (head is not None or keypoints is None or measurement.eye_reliable is False)
+              else "—（眼不可见，用身体）"),
              ("头部 σ", _fmt(measurement.head_sigma, "%.3f")), ("身体 σ", _fmt(measurement.body_sigma, "%.3f")),
              ("方向比", _fmt(measurement.motion_ratio)), ("判定", verdict_label(measurement.verdict)),
              ("分数", _fmt(measurement.score, "%d"))],
