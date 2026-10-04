@@ -318,7 +318,7 @@ def test_result_xmp_fields_use_superpicky_formats() -> None:
     assert out["XMP-superpicky:bird_sharpness_bird_count"] == "2"
     assert out["XMP-superpicky:bird_sharpness_head_sigma"] == "1.269"
     assert out["XMP-superpicky:bird_sharpness_motion_ratio"] == "1.23"
-    assert out["XMP-superpicky:bird_sharpness_version"] == "sbt-blur-v6"
+    assert out["XMP-superpicky:bird_sharpness_version"] == "sbt-blur-v7"
     # No bird: the focus/whole-image value still fills the sharpness slot.
     focus = BirdSharpnessResult(path="x", verdict="no_bird", score=420, sigma=0.9, region="focus").to_xmp_fields()
     assert focus[bsf.SHARPNESS_XMP_KEY] == "420.00"

@@ -135,6 +135,7 @@ class TraceBird:
     label: str
     best: bool
     steps: List[TraceStep] = field(default_factory=list)
+    excluded: bool = False  # dropped as a false extra bird; measured but not used
 
 
 @dataclass
@@ -609,16 +610,20 @@ class AnalysisTracer:
              ("实测点", f"{counts['measured']:,}")],
             legend=EDGE_LEGEND)
 
-    def mark_best(self, best_index: int) -> None:
+    def mark_best(self, best_index: int, excluded: Sequence[int] = ()) -> None:
         for bird in self.trace.birds:
             bird.best = bird.index == best_index
+            bird.excluded = bird.index in excluded
             if bird.best:
                 bird.label = f"鸟 #{bird.index + 1}（最佳）"
+            elif bird.excluded:
+                bird.label = f"鸟 #{bird.index + 1}（已排除）"
         if len(self.trace.birds) >= 2:
-            self._birds_overview(best_index)
+            self._birds_overview(best_index, set(excluded))
 
-    def _birds_overview(self, best_index: int) -> None:
+    def _birds_overview(self, best_index: int, excluded=frozenset()) -> None:
         """Side-by-side tiles of every bird's own pixels, coloured by verdict (display only)."""
+        from . import analyzer as A
         from .models import FOUND_FULL
 
         tile_w, tile_h, pad = 720, 540, 16
@@ -636,18 +641,30 @@ class AnalysisTracer:
                               interpolation=cv2.INTER_AREA)
             r, c = divmod(slot, cols)
             x0, y0 = pad + c * (tile_w + pad), pad + r * (tile_h + pad)
-            color = _verdict_rgb(m.verdict) if m is not None else C_WEAK
+            dropped = bird.index in excluded
+            color = C_WEAK if dropped or m is None else _verdict_rgb(m.verdict)
             best = bird.index == best_index
             cv2.rectangle(canvas, (x0, y0), (x0 + tile_w - 1, y0 + tile_h - 1), color, 10 if best else 3)
             ty, tx = y0 + 52, x0 + (tile_w - tile.shape[1]) // 2
-            canvas[ty:ty + tile.shape[0], tx:tx + tile.shape[1]] = tile
+            canvas[ty:ty + tile.shape[0], tx:tx + tile.shape[1]] = (tile // 3 if dropped else tile)
             text = f"#{bird.index + 1}"
             if m is not None:
                 text += f"   sigma {_fmt(m.sigma)}   score {_fmt(m.score, '%d')}"
             if best:
                 text += "   BEST"
+            elif dropped:
+                text += "   EXCLUDED"
             cv2.putText(canvas, text, (x0 + 16, y0 + 38), cv2.FONT_HERSHEY_SIMPLEX, 1.0, color, 2, cv2.LINE_AA)
-            if m is not None:
+            if dropped:
+                cv2.line(canvas, (x0, y0), (x0 + tile_w - 1, y0 + tile_h - 1), C_WEAK, 3, cv2.LINE_AA)
+                cv2.line(canvas, (x0 + tile_w - 1, y0), (x0, y0 + tile_h - 1), C_WEAK, 3, cv2.LINE_AA)
+            if m is not None and dropped:
+                eye = _fmt(m.eye_visibility)
+                metrics.append((f"鸟 #{bird.index + 1}（已排除）",
+                                f"置信度 {m.confidence:.2f} < {A.EXTRA_BIRD_CONFIDENCE_MAX:.2f}、看不到鸟眼（{eye}），"
+                                f"旁边有置信度 ≥ {A.EXTRA_BIRD_ANCHOR_MIN:.2f} 的鸟：按误识别（树叶、树干等）排除，"
+                                f"不参与取最好（本应 {verdict_label(m.verdict)} · σ {_fmt(m.sigma)} · 分数 {_fmt(m.score, '%d')}）"))
+            elif m is not None:
                 metrics.append((f"鸟 #{bird.index + 1}{'（最佳）' if best else ''}"
                                 f"{found_labels.get(getattr(m, 'found_by', ''), '')}",
                                 f"{verdict_label(m.verdict)} · σ {_fmt(m.sigma)} · 分数 {_fmt(m.score, '%d')}"
@@ -655,7 +672,8 @@ class AnalysisTracer:
         self.trace.common.append(TraceStep(
             STEP_BIRDS, "逐只鸟",
             f"识别到 {n} 只鸟。每只鸟只用自己的像素单独计算一遍（鸟体 → 头部 → 边缘 → 分布）；整张照片取分数最高"
-            "（其次模糊半径最小、置信度最高）的一只，粗框为最佳。下一步起依次是每只鸟的计算过程；"
+            "（其次模糊半径最小、置信度最高）的一只，粗框为最佳。置信度低、看不到鸟眼、又紧挨着一只可信的鸟的“鸟”"
+            "按误识别排除（灰色打叉），仍可查看它的计算过程。下一步起依次是每只鸟的计算过程；"
             "右上角「鸟」可只看其中一只。",
             canvas, "birds", metrics,
             legend=[(hex_color(_verdict_rgb(v)), fields.VERDICT_STYLES[v].label)
@@ -726,6 +744,7 @@ class AnalysisTracer:
         points = []
         rows = []
         for i, bird in enumerate(result.birds or []):
+            i = bird.get("index", i)  # detection number, unchanged when false extras are dropped
             color = _verdict_rgb(bird["verdict"])
             box = self._display(bird["box"])
             best = tuple(bird["box"]) == tuple(result.bird_box or ())

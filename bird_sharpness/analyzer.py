@@ -81,6 +81,7 @@ class BirdMeasurement:
     head_edges: int = 0
     masked: bool = False
     found_by: str = FOUND_FULL
+    index: int = 0  # detection number (trace "鸟 #index+1"), kept when false extras are dropped
 
     def rank(self) -> tuple:
         # Best bird: highest score, then smallest blur radius, then detector confidence.
@@ -149,26 +150,39 @@ DUPLICATE_CONTAINMENT = 0.7
 
 
 def dedupe_detections(detections: List[BirdDetection]) -> List[BirdDetection]:
-    """Drop detections lying mostly inside a stronger one.
+    """Drop a detection when one of the two boxes lies mostly inside the other.
 
-    Segmentation sometimes splits one bird at an occluding branch into two
-    instances (DSC04512: whole bird + upper half); both would measure the same head
-    and inflate the bird count. ``detections`` must be strongest first.
+    Segmentation often returns one bird twice: the whole bird and a part of it
+    (DSC04512: whole bird + upper half), in either confidence order; both would
+    measure the same head and inflate the bird count. In the 2026-10-02 set this
+    was 24 of 28 "multi-bird" frames. ``detections`` must be strongest first.
     """
     kept: List[BirdDetection] = []
     for det in detections:
-        x1, y1, x2, y2 = det.box
-        area = max(1e-6, (x2 - x1) * (y2 - y1))
-        duplicate = False
-        for other in kept:
-            ox1, oy1, ox2, oy2 = other.box
-            inter = max(0.0, min(x2, ox2) - max(x1, ox1)) * max(0.0, min(y2, oy2) - max(y1, oy1))
-            if inter / area >= DUPLICATE_CONTAINMENT:
-                duplicate = True
-                break
-        if not duplicate:
+        if not any(box_overlap(det.box, other.box) >= DUPLICATE_CONTAINMENT for other in kept):
             kept.append(det)
     return kept
+
+
+# An extra bird is a false detection (a leaf, a pale trunk) when it is weak, shows
+# no eye and sits next to a confident bird: DSC04392/04395 leaf at 0.26-0.27 next
+# to a 0.94 bird, DSC05567 trunk at 0.36 next to 0.68. Such an extra only matters
+# when it outranks the real bird, which is exactly the failure. Without the eye
+# model nothing is dropped.
+EXTRA_BIRD_CONFIDENCE_MAX = 0.4
+EXTRA_BIRD_ANCHOR_MIN = 0.5
+
+
+def false_extra_birds(birds: List["BirdMeasurement"]) -> List[int]:
+    """Indices of extra birds treated as false detections (never the most confident one)."""
+    if len(birds) < 2:
+        return []
+    anchor = max(range(len(birds)), key=lambda i: birds[i].confidence)
+    if birds[anchor].confidence < EXTRA_BIRD_ANCHOR_MIN:
+        return []
+    return [i for i, b in enumerate(birds)
+            if i != anchor and b.confidence < EXTRA_BIRD_CONFIDENCE_MAX
+            and b.eye_visibility is not None and b.eye_visibility < EYE_VISIBLE_MIN]
 
 
 # Recheck for camouflaged birds (DSC05167: a nightjar on a branch at dusk). The
@@ -409,9 +423,11 @@ class BirdSharpnessAnalyzer:
         on_stage(STAGE_MEASURE)
         if detections:
             birds = [self._measure_bird(image, det, scale, index=i, tracer=tracer) for i, det in enumerate(detections)]
+            excluded = false_extra_birds(birds)
+            kept = [b for i, b in enumerate(birds) if i not in excluded]
             if tracer is not None:
-                tracer.mark_best(birds.index(max(birds, key=BirdMeasurement.rank)))
-            return self._bird_result(path, birds, max(H, W))
+                tracer.mark_best(birds.index(max(kept, key=BirdMeasurement.rank)), excluded=excluded)
+            return self._bird_result(path, kept, max(H, W))
         return self._no_bird_result(path, image, cancelled, tracer,
                                     focus_px=None if focus_px is _UNSET else focus_px,
                                     focus_known=focus_px is not _UNSET)
@@ -614,6 +630,7 @@ class BirdSharpnessAnalyzer:
             head_edges=head_stats.edge_count if head_stats is not None else 0,
             masked=det.mask is not None,
             found_by=getattr(det, "source", FOUND_FULL),
+            index=index,
         )
         if tracer is not None:
             tracer.bird(index, image, (X1, Y1, X2, Y2), bird_px, body, head, trace_keypoints, selection,
