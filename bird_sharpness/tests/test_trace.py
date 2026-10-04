@@ -13,7 +13,8 @@ from bird_sharpness import analyzer as analyzer_mod
 from bird_sharpness.analyzer import BirdSharpnessAnalyzer, dedupe_detections, valid_bounds
 from bird_sharpness.image_source import AnalysisImage
 from bird_sharpness.models import BirdDetection
-from bird_sharpness.trace import AnalysisTracer, sigma_color, C_SHARP, C_SOFT
+from bird_sharpness.metrics import edge_sigma_map
+from bird_sharpness.trace import AnalysisTracer, C_PEAKING, C_SHARP, C_SOFT, peaking_overlay, sigma_color
 
 from test_bird_sharpness import _StubModels, _install_image, _no_focus, _scene
 
@@ -156,3 +157,58 @@ def test_export_writes_step_pngs_and_manifest(monkeypatch, tmp_path) -> None:
 def test_sigma_colours_follow_verdict_thresholds() -> None:
     assert sigma_color(0.6) == C_SHARP
     assert sigma_color(1.55) == C_SOFT
+
+
+def test_edge_sigma_map_marks_focused_edges_only() -> None:
+    # Left: sharp squares; right: the same squares blurred; bottom/right: black RAW padding.
+    gray = np.full((600, 1200), 0.2, np.float32)
+    for x in range(40, 1100, 120):
+        cv2.rectangle(gray, (x, 60), (x + 60, 420), 0.8, -1)
+    gray[:, 600:] = cv2.GaussianBlur(gray, (0, 0), 2.5)[:, 600:]
+    gray += np.random.default_rng(3).normal(0, 0.004, gray.shape).astype(np.float32)
+    gray[500:, :] = 0.0
+    sigma = edge_sigma_map(gray, (0, 0, 1200, 600), (600, 300), bounds=(0, 0, 1200, 500), tile=256)
+    assert sigma.shape == (300, 600) and sigma.dtype == np.float16
+    left, right = sigma[:, :280], sigma[:, 320:]
+    assert np.nanmedian(left) < 0.85 < np.nanmedian(right)
+    assert int((left <= 0.85).sum()) > 50 and int((right <= 0.85).sum()) < 5
+    assert np.isnan(sigma[245:]).all()  # the padding border is never read as an edge
+    # a box maps onto its own output; cancelling stops
+    crop = edge_sigma_map(gray, (0, 0, 300, 300), (300, 300))
+    assert crop.shape == (300, 300) and int((crop <= 0.85).sum()) > 100
+    assert edge_sigma_map(gray, (0, 0, 1200, 600), (600, 300), cancelled=lambda: True) is None
+
+
+def test_peaking_overlay_tints_focused_edges_red() -> None:
+    image = np.full((40, 40, 3), 100, np.uint8)
+    sigma = np.full((40, 40), np.nan, np.float16)
+    sigma[10, 5:30] = 0.6    # a sharp edge line
+    sigma[20, 5:30] = 1.6    # a blurred one
+    sigma[30, 20] = 0.5      # an isolated grain pixel
+    out = peaking_overlay(image, sigma, 0.85)
+    red = (out[..., 0] > 200) & (out[..., 1] < 100)
+    assert red[10, 6:29].all() and not red[20].any() and not red[29:32, 19:22].any()
+    assert peaking_overlay(image, sigma, 2.0)[20, 10, 0] > 200  # threshold is the viewer's spin box
+    assert peaking_overlay(image, None, 0.85) is image
+    assert peaking_overlay(image, sigma[:20], 0.85) is image  # wrong frame: untouched
+
+
+def test_trace_keeps_a_sigma_map_per_frame(monkeypatch) -> None:
+    scene = _scene([(450, 600, 260, 1.8), (1350, 600, 260, 0.3)])
+    _result, _p, trace = _run(monkeypatch, scene, [(450, 600, 260), (1350, 600, 260)])
+    assert set(trace.sigma_maps) == {"full", "bird0", "bird1"}
+    for step in trace.steps_all():
+        sigma = trace.sigma_map(step)
+        assert (sigma is None) == (step.frame == "birds")
+        assert sigma is None or sigma.shape == step.image.shape[:2]
+
+    def focused(index):
+        return int((trace.sigma_maps[f"bird{index}"] <= 0.85).sum())
+
+    assert focused(1) > 200 and focused(0) < focused(1) / 10  # the sharp bird is on the focal plane
+    full = trace.sigma_maps["full"]
+    assert int((full[:, 700:] <= 0.85).sum()) > 10 * int((full[:, :500] <= 0.85).sum())
+    tracer = AnalysisTracer(focus_peaking=False)
+    BirdSharpnessAnalyzer(_StubModels([(900, 600, 300)], full_w=1800), focus_provider=_no_focus).analyze(
+        "bird.ARW", tracer=tracer)
+    assert tracer.trace.sigma_maps == {}

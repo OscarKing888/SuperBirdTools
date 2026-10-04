@@ -395,3 +395,46 @@ def sharpest_tiles_blur(gray: np.ndarray, *, tile: int, sharpest_percent: float,
     chosen = ranked[:count]
     samples = np.concatenate([part for _m, _box, part in chosen]) if chosen else np.empty(0, np.float32)
     return SharpestTiles(_stats(samples), [box for _m, box, _part in chosen], [box for _m, box, _part in ranked])
+
+
+def edge_sigma_map(gray: np.ndarray, box, out_size, *, bounds=None, tile: int = FULL_IMAGE_TILE,
+                   cancelled=lambda: False) -> Optional[np.ndarray]:
+    """Blur radius of the above-noise step edges inside ``box`` (x1, y1, x2, y2), reduced to
+    ``out_size`` (w, h) over that box: each output pixel holds the mean radius of the edge
+    pixels it covers, NaN where there are none (float16). ``None`` once cancelled.
+
+    Display-only "focus peaking" (trace viewer 焦平面): every edge that clears the
+    measurement's 4x-noise gate, not only the strongest 5%, measured at full
+    resolution tile by tile (bounded memory) with :data:`TILE_MARGIN` px of real
+    neighbours. ``bounds`` (default: the whole image) is the real picture content;
+    nothing outside it is read, so RAW padding never borders a "sharp" edge.
+    """
+    h, w = gray.shape[:2]
+    bx1, by1, bx2, by2 = (0, 0, w, h) if bounds is None else (int(v) for v in bounds)
+    x1, y1, x2, y2 = (int(v) for v in box)
+    out_w, out_h = max(1, int(out_size[0])), max(1, int(out_size[1]))
+    sx, sy = out_w / max(1, x2 - x1), out_h / max(1, y2 - y1)
+    total = np.zeros(out_h * out_w, np.float64)
+    count = np.zeros(out_h * out_w, np.float64)
+    for ty in range(max(y1, by1), min(y2, by2), tile):
+        for tx in range(max(x1, bx1), min(x2, bx2), tile):
+            if cancelled():
+                return None
+            bw, bh = min(tile, x2 - tx, bx2 - tx), min(tile, y2 - ty, by2 - ty)
+            if min(bw, bh) < 8:
+                continue
+            x0, y0 = max(bx1, tx - TILE_MARGIN), max(by1, ty - TILE_MARGIN)
+            padded = gray[y0:min(by2, ty + bh + TILE_MARGIN), x0:min(bx2, tx + bw + TILE_MARGIN)]
+            blur_field = EdgeBlurField(padded)
+            inside = np.zeros(padded.shape[:2], bool)
+            inside[ty - y0:ty - y0 + bh, tx - x0:tx - x0 + bw] = True
+            edges = inside & blur_field._edges(30, 90) & (blur_field.mag0 > NOISE_EDGE_FACTOR * blur_field.noise_sigma)
+            sigma, valid = blur_field._sigma_and_valid(edges)
+            ys, xs = np.nonzero(edges)
+            ys, xs, sigma = ys[valid] + (y0 - y1), xs[valid] + (x0 - x1), sigma[valid]
+            index = (np.minimum((ys * sy).astype(np.int64), out_h - 1) * out_w
+                     + np.minimum((xs * sx).astype(np.int64), out_w - 1))
+            total += np.bincount(index, sigma, out_h * out_w)
+            count += np.bincount(index, None, out_h * out_w)
+    with np.errstate(invalid="ignore", divide="ignore"):
+        return (total / count).reshape(out_h, out_w).astype(np.float16)

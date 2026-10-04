@@ -19,6 +19,8 @@ import numpy as np
 
 from app_common import bird_sharpness_fields as fields
 
+from .metrics import edge_sigma_map
+
 from .scoring import (
     SCORE_ANCHORS,
     SIGMA_BLURRED_MIN,
@@ -47,6 +49,7 @@ C_BEAK = (255, 140, 0)
 C_REJECT_NOISE = (90, 104, 130)
 C_REJECT_LINE = (220, 80, 220)
 C_WEAK = (175, 175, 175)
+C_PEAKING = (255, 36, 36)
 BIRD_COLORS = [(0, 200, 255), (255, 120, 200), (120, 255, 120), (255, 200, 60), (160, 140, 255),
                (255, 255, 120), (80, 255, 220), (255, 160, 120)]
 
@@ -91,6 +94,25 @@ def _verdict_rgb(verdict: str) -> Tuple[int, int, int]:
 
 def _fmt(value, fmt: str = "%.2f", none: str = "—") -> str:
     return none if value is None else fmt % value
+
+
+def peaking_overlay(image: np.ndarray, sigma_map: Optional[np.ndarray], threshold: float) -> np.ndarray:
+    """Focus peaking: pixels on edges with blur radius ≤ ``threshold`` px tinted red.
+
+    Isolated pixels (fewer than two in-focus neighbours) are dropped: on dark, noisy
+    frames single grain pixels pass the noise gate. The rest is thickened by one
+    pixel so the edges stay visible when the view is zoomed out.
+    """
+    if sigma_map is None or sigma_map.shape != image.shape[:2]:
+        return image
+    with np.errstate(invalid="ignore"):
+        mask = (sigma_map <= threshold).astype(np.uint8)
+    neighbours = cv2.boxFilter(mask, cv2.CV_16U, (3, 3), normalize=False)
+    mask = ((mask > 0) & (neighbours >= 3)).astype(np.uint8)
+    mask = cv2.dilate(mask, np.ones((2, 2), np.uint8)).astype(bool)
+    out = image.copy()
+    out[mask] = (out[mask] * 0.2 + np.array(C_PEAKING, np.float32) * 0.8).astype(np.uint8)
+    return out
 
 
 @dataclass
@@ -161,6 +183,14 @@ class AnalysisTrace:
     region_steps: List[TraceStep] = field(default_factory=list)  # no-bird path
     final: List[TraceStep] = field(default_factory=list)
     result: Optional[object] = None  # BirdSharpnessResult
+    # Per coordinate frame: edge blur radius at step-image resolution (float16, NaN = no edge),
+    # for the viewer's 焦平面 overlay (see :func:`peaking_overlay`). Not exported.
+    sigma_maps: Dict[str, np.ndarray] = field(default_factory=dict)
+
+    def sigma_map(self, step: TraceStep) -> Optional[np.ndarray]:
+        """The step's σ map when it matches the step image (``None`` for e.g. the bird overview)."""
+        sigma = self.sigma_maps.get(step.frame)
+        return sigma if sigma is not None and sigma.shape == step.image.shape[:2] else None
 
     def best_bird_index(self) -> int:
         for i, bird in enumerate(self.birds):
@@ -315,9 +345,12 @@ EDGE_LEGEND = [
 class AnalysisTracer:
     """Collects :class:`TraceStep` objects while the analyzer runs."""
 
-    def __init__(self, *, display_long_edge: int = DISPLAY_LONG_EDGE, roi_long_edge: int = ROI_LONG_EDGE):
+    def __init__(self, *, display_long_edge: int = DISPLAY_LONG_EDGE, roi_long_edge: int = ROI_LONG_EDGE,
+                 focus_peaking: bool = True):
         self.display_long_edge = display_long_edge
         self.roi_long_edge = roi_long_edge
+        self.focus_peaking = focus_peaking  # σ maps for the viewer's 焦平面 overlay (~1 s per 25 MP)
+        self._bounds = None  # real picture content (camera frame inside RAW output)
         self.trace: Optional[AnalysisTrace] = None
         self._overview: Optional[np.ndarray] = None
         self._scale = 1.0
@@ -331,6 +364,11 @@ class AnalysisTracer:
     def _display(self, box):
         return tuple(v * self._scale for v in box)
 
+    def _peaking(self, frame: str, image, box, shape) -> None:
+        """σ map of ``box`` (full-resolution pixels) at the frame's step-image ``shape``."""
+        if self.focus_peaking:
+            self.trace.sigma_maps[frame] = edge_sigma_map(image.gray, box, (shape[1], shape[0]), bounds=self._bounds)
+
     def decode(self, path: str, image, focus_px, *, decode_s: float) -> None:
         self.trace = AnalysisTrace(path=path)
         H, W = image.gray.shape[:2]
@@ -339,6 +377,10 @@ class AnalysisTracer:
         overview, self._scale = _downscale(image.rgb8, self.display_long_edge)
         overview = _auto_exposure(overview)
         self._overview = overview
+        from .analyzer import valid_bounds
+
+        self._bounds = valid_bounds(image)
+        self._peaking("full", image, (0, 0, W, H), overview.shape)
         img = overview.copy()
         lw = _line_w(img)
         if image.camera_crop:
@@ -520,6 +562,7 @@ class AnalysisTracer:
         crop_small = _auto_exposure(crop_small)
         frame = f"bird{index}"
         sh, sw = crop_small.shape[:2]
+        self._peaking(frame, image, roi, crop_small.shape)
 
         def small(mask_full):
             return cv2.resize(mask_full.astype(np.uint8), (sw, sh), interpolation=cv2.INTER_NEAREST).astype(bool)
@@ -788,6 +831,7 @@ class AnalysisTracer:
              ("测量窗口", f"{x2 - x1} × {y2 - y1} px")],
             legend=[(hex_color(C_FOCUS), "相机焦点框"), (hex_color(C_WINDOW), "测量窗口")]))
         crop = image.gray[y1:y2, x1:x2]
+        self._peaking("focus", image, window, crop.shape)
         base = _dim(_auto_exposure(_to_rgb8(crop)), None, 0.7)
         full = np.ones(crop.shape[:2], bool)
         self.trace.region_steps.append(self._edge_step(base, 1.0, selection, full, full, "focus", "焦点窗口"))

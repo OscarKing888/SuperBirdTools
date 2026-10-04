@@ -486,3 +486,57 @@ def test_trace_parameters_stay_in_their_window(monkeypatch, tmp_path) -> None:
         controller.request_shutdown()
         _wait(controller.is_shutdown_done)
         dialog.deleteLater()
+
+
+def _shown_pixels(view) -> np.ndarray:
+    image = view._item.pixmap().toImage().convertToFormat(view._item.pixmap().toImage().Format.Format_RGB888)
+    ptr = image.constBits()
+    ptr.setsize(image.sizeInBytes())
+    return np.frombuffer(ptr, np.uint8).reshape(image.height(), image.bytesPerLine())[:, :image.width() * 3] \
+        .reshape(image.height(), image.width(), 3).copy()
+
+
+def test_focal_plane_toggle_tints_focused_pixels_red(monkeypatch) -> None:
+    trace = _trace(monkeypatch)
+    dialog = BirdSharpnessTraceDialog(None, "x.ARW")
+    try:
+        dialog.show()
+        dialog.set_trace(trace)
+        assert _wait(lambda: dialog.stack.currentWidget() is dialog.content and dialog.steps)
+
+        def red():
+            shown = _shown_pixels(dialog.view_a)
+            return int(((shown[..., 0] > 200) & (shown[..., 1] < 90) & (shown[..., 2] < 90)).sum())
+
+        sharp = next(i for i, s in enumerate(dialog.steps) if s.key == "bird" and trace.birds[s.bird].best)
+        dialog.go(sharp, force=True)
+        plain = red()
+        assert not dialog.peaking_spin.isEnabled()
+        dialog.view_a.scale(3.0, 3.0)
+        zoom = dialog.view_a.zoom_factor()
+        dialog.peaking_btn.setChecked(True)
+        assert dialog.peaking_spin.isEnabled() and red() > plain + 200
+        assert dialog.view_a.zoom_factor() == pytest.approx(zoom)  # toggling keeps the view
+        assert "焦平面" in dialog.legend.text()
+        loose = red()
+        dialog.peaking_spin.setValue(0.5)
+        assert red() < loose
+        # follows navigation and the compare view
+        dialog.peaking_spin.setValue(0.85)
+        dialog.compare_btn.setChecked(True)
+        assert _wait(lambda: dialog.view_b.isVisible())
+        dialog.go(sharp + 1, force=True)
+        assert red() > plain + 200
+        compare = dialog.steps[dialog._compare_index()]  # 上一步 = the sharp bird's pixels
+        assert np.array_equal(_shown_pixels(dialog.view_b), dialog._step_image(compare))
+        assert not np.array_equal(dialog._step_image(compare), compare.image)
+        # the bird overview has no per-pixel map: unchanged, legend says so
+        dialog.go(next(i for i, s in enumerate(dialog.steps) if s.key == "birds"), force=True)
+        assert np.array_equal(_shown_pixels(dialog.view_a), dialog.steps[dialog.index].image)
+        assert "没有逐像素图" in dialog.legend.text()
+        dialog.peaking_btn.setChecked(False)
+        dialog.go(sharp, force=True)
+        assert red() == plain
+    finally:
+        dialog.close()
+        _APP.processEvents()

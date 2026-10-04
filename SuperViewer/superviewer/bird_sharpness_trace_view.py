@@ -19,6 +19,8 @@ from app_common.bird_sharpness_fields import VERDICT_STYLES
 from app_common.toggle_button import ToggleToolButton
 from bird_sharpness.image_source import SOURCE_DENOISED, SOURCE_JPEG, SOURCE_LABELS, SOURCE_RAW
 from bird_sharpness.metrics import MF_MIN_TILES, TileOptions
+from bird_sharpness.scoring import SIGMA_SHARP_MAX
+from bird_sharpness.trace import C_PEAKING, hex_color, peaking_overlay
 
 from .qt_compat import (
     QCheckBox, QComboBox, QDialog, QHBoxLayout, QLabel, QPushButton, QScrollArea, QSplitter, QStackedWidget,
@@ -29,12 +31,14 @@ try:
     from PyQt6.QtCore import QEvent, QPointF, QRectF, Qt, QTimer
     from PyQt6.QtGui import QBrush, QColor, QFont, QImage, QPainter, QPainterPath, QPalette, QPen, QPixmap
     from PyQt6.QtWidgets import (QButtonGroup, QFrame, QGraphicsPathItem, QGraphicsPixmapItem, QGraphicsRectItem,
-                                 QGraphicsScene, QGraphicsView, QGridLayout, QSizePolicy, QSlider, QSpinBox, QTabWidget)
+                                 QDoubleSpinBox, QGraphicsScene, QGraphicsView, QGridLayout, QSizePolicy, QSlider,
+                                 QSpinBox, QTabWidget)
 except ImportError:  # pragma: no cover - PyQt5 fallback
     from PyQt5.QtCore import QEvent, QPointF, QRectF, Qt, QTimer
     from PyQt5.QtGui import QBrush, QColor, QFont, QImage, QPainter, QPainterPath, QPalette, QPen, QPixmap
     from PyQt5.QtWidgets import (QButtonGroup, QFrame, QGraphicsPathItem, QGraphicsPixmapItem, QGraphicsRectItem,
-                                 QGraphicsScene, QGraphicsView, QGridLayout, QSizePolicy, QSlider, QSpinBox, QTabWidget)
+                                 QDoubleSpinBox, QGraphicsScene, QGraphicsView, QGridLayout, QSizePolicy, QSlider,
+                                 QSpinBox, QTabWidget)
 
 _Qt = getattr(Qt, "AlignmentFlag", Qt)
 _KEEP_ASPECT = getattr(getattr(Qt, "AspectRatioMode", Qt), "KeepAspectRatio")
@@ -705,9 +709,28 @@ class BirdSharpnessTraceDialog(QDialog):
         self.one_btn.clicked.connect(lambda: (self.view_a.one_to_one(), self.view_b.isVisible() and self.view_b.one_to_one()))
         self.zoom_region_btn = QPushButton("放大到测量区域", self.content)
         self.zoom_region_btn.clicked.connect(self._zoom_to_region)
+        # Focus peaking: edges whose own blur radius is within the threshold, tinted red.
+        self.peaking_btn = ToggleToolButton("焦平面", self.content)
+        self.peaking_btn.setToolTip(
+            "像对焦时的峰值显示一样，把焦平面上的像素标红：全分辨率下逐个边缘测模糊半径（与清晰度同一算法，"
+            "不受对比度影响），σ 不超过右侧阈值的边缘标红。逐只鸟总览没有此图。")
+        self.peaking_btn.toggled.connect(self._on_peaking_changed)
+        self.peaking_spin = QDoubleSpinBox(self.content)
+        self.peaking_spin.setRange(0.4, 2.5)
+        self.peaking_spin.setSingleStep(0.05)
+        self.peaking_spin.setDecimals(2)
+        self.peaking_spin.setPrefix("σ ≤ ")
+        self.peaking_spin.setSuffix(" px")
+        self.peaking_spin.setValue(SIGMA_SHARP_MAX)
+        self.peaking_spin.setToolTip(f"边缘模糊半径不超过此值即视为在焦平面上（默认 {SIGMA_SHARP_MAX:.2f} = 清晰门槛）")
+        self.peaking_spin.setEnabled(False)
+        self.peaking_spin.valueChanged.connect(self._on_peaking_changed)
         tools.addWidget(self.compare_btn)
         tools.addWidget(self.compare_combo)
         tools.addWidget(self.sync_btn)
+        tools.addSpacing(12)
+        tools.addWidget(self.peaking_btn)
+        tools.addWidget(self.peaking_spin)
         tools.addStretch(1)
         tools.addWidget(self.zoom_region_btn)
         tools.addWidget(self.fit_btn)
@@ -921,7 +944,7 @@ class BirdSharpnessTraceDialog(QDialog):
         step = self.steps[index]
         same_frame = previous is not None and previous.frame == step.frame and not force
         state = self.view_a.view_state() if same_frame else None
-        self.view_a.set_image(step.image)
+        self.view_a.set_image(self._step_image(step))
         self.view_a.set_caption(f"{index + 1}. {self._step_label(step)}")
         if state is not None:
             self.view_a.apply_view_state(state)  # continuity: same pixels, same place
@@ -953,7 +976,7 @@ class BirdSharpnessTraceDialog(QDialog):
             return
         i = self._compare_index()
         step = self.steps[i]
-        self.view_b.set_image(step.image)
+        self.view_b.set_image(self._step_image(step))
         self.view_b.set_caption(f"对照 {i + 1}. {self._step_label(step)}")
         if self.sync_btn.isChecked() and step.frame == self.steps[self.index].frame:
             self._syncing = True
@@ -966,6 +989,24 @@ class BirdSharpnessTraceDialog(QDialog):
         else:
             self.view_b.fit()
         self.view_b.set_highlight(self._compare_highlight_box())
+
+    def _step_image(self, step) -> np.ndarray:
+        """The step image, with the focal plane tinted red while 焦平面 is on."""
+        if not self.peaking_btn.isChecked() or self.trace is None:
+            return step.image
+        return peaking_overlay(step.image, self.trace.sigma_map(step), float(self.peaking_spin.value()))
+
+    def _on_peaking_changed(self, *_args) -> None:
+        self.peaking_spin.setEnabled(self.peaking_btn.isChecked())
+        if not self.steps:
+            return
+        step = self.steps[self.index]
+        state = self.view_a.view_state()
+        self.view_a.set_image(self._step_image(step))
+        self.view_a.apply_view_state(state)
+        self.view_a.set_highlight(None if self._hovered_bird is None else self._hovered_bird.box)
+        self._show_compare()
+        self._show_legend(step)
 
     def _on_bird_hovered(self, row) -> None:
         self._hovered_bird = row
@@ -1032,8 +1073,16 @@ class BirdSharpnessTraceDialog(QDialog):
         _clear_layout(self.charts_layout)
         for chart in step.charts:
             self.charts_layout.addWidget(TraceChartWidget(chart, self.charts_box))
+        self._show_legend(step)
+
+    def _show_legend(self, step) -> None:
+        legend = list(step.legend)
+        if self.peaking_btn.isChecked():
+            legend.append((hex_color(C_PEAKING), f"焦平面：边缘 σ ≤ {self.peaking_spin.value():.2f} px"
+                           if self.trace is not None and self.trace.sigma_map(step) is not None
+                           else "焦平面：本步骤没有逐像素图"))
         self.legend.setText("<br>".join(
-            f'<span style="color:{color}">■</span> {label}' for color, label in step.legend))
+            f'<span style="color:{color}">■</span> {label}' for color, label in legend))
 
     # ── keyboard / lifecycle ──────────────────────────────────────────────
     def keyPressEvent(self, event) -> None:  # noqa: N802 - Qt API
