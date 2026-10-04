@@ -54,7 +54,8 @@ def test_weak_eyeless_extra_next_to_a_confident_bird_is_dropped(monkeypatch) -> 
     dropped = trace.birds[1]
     assert dropped.excluded and "已排除" in dropped.label and not dropped.best
     overview = next(s for s in trace.common if s.key == "birds")
-    assert any("已排除" in r.label and "误识别" in r.value and r.color == hex_color(C_WEAK) for r in overview.bird_rows)
+    last = overview.bird_rows[-1]  # not a candidate for best: listed after the measured birds
+    assert "已排除" in last.label and "误识别" in last.value and last.color == hex_color(C_WEAK)
     assert [s.bird for s in trace.steps_all() if s.bird is not None].count(1) == len(dropped.steps)
     assert [row.label for row in trace.final[0].bird_rows] == ["鸟 #1（最佳）"]
 

@@ -702,7 +702,13 @@ class AnalysisTracer:
         canvas = np.full((rows * (tile_h + pad) + pad, cols * (tile_w + pad) + pad, 3), 24, np.uint8)
         bird_rows = []
         found_labels = {**FOUND_LABELS, FOUND_FULL: ""}
-        for slot, bird in enumerate(self.trace.birds):
+
+        def sharpest_first(bird):
+            # Same rank that picks the best bird; excluded/merged birds (not candidates) come last.
+            m = self._measurements.get(bird.index)
+            return bird.index not in excluded and m is not None, m.rank() if m is not None else ()
+
+        for slot, bird in enumerate(sorted(self.trace.birds, key=sharpest_first, reverse=True)):
             m = self._measurements.get(bird.index)
             src = bird.steps[0].image
             scale = min((tile_w - 24) / src.shape[1], (tile_h - 64) / src.shape[0])
@@ -753,7 +759,7 @@ class AnalysisTracer:
         self.trace.common.append(TraceStep(
             STEP_BIRDS, "逐只鸟",
             f"识别到 {n} 只鸟。每只鸟只用自己的像素单独计算一遍（鸟体 → 头部 → 边缘 → 分布）；整张照片取分数最高"
-            "（其次模糊半径最小、置信度最高）的一只，粗框为最佳。置信度低、看不到鸟眼、又紧挨着一只可信的鸟的“鸟”"
+            "（其次模糊半径最小、置信度最高）的一只；按清晰度从高到低排列，第一只（粗框）为最佳。置信度低、看不到鸟眼、又紧挨着一只可信的鸟的“鸟”"
             "按误识别排除；看不到鸟眼、框大半落在另一只看得到眼的鸟里的，是那只鸟的局部（翅膀、尾羽），并入它。"
             "两者都灰色打叉，仍可查看计算过程。下一步起依次是每只鸟的计算过程；"
             "右上角「鸟」可只看其中一只。",

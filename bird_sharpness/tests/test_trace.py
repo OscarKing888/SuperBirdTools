@@ -61,7 +61,8 @@ def test_multi_bird_trace_marks_best_and_switches_steps(monkeypatch) -> None:
     for row in overview.bird_rows:  # box = that bird's tile in the overview canvas
         x1, y1, x2, y2 = row.box
         assert 0 <= x1 < x2 <= ow and 0 <= y1 < y2 <= oh
-    assert overview.bird_rows[0].box[0] < overview.bird_rows[1].box[0]
+    assert overview.bird_rows[0].box[0] < overview.bird_rows[1].box[0]  # list order = tile order
+    assert "最佳" in overview.bird_rows[0].label  # sharpest first
     assert next(r for r in overview.bird_rows if "最佳" in r.label).color == \
         bsf.VERDICT_STYLES[result.verdict].color.lower()
     every = trace.steps_all()
@@ -82,9 +83,9 @@ def test_multi_bird_trace_marks_best_and_switches_steps(monkeypatch) -> None:
             x1, y1, x2, y2 = row.box
             assert 0 <= x1 < x2 <= w and 0 <= y1 < y2 <= h and row.color.startswith("#")
     assert detect.bird_rows[0].color != detect.bird_rows[1].color  # detection colours, one per bird
-    for step in (detect, overview):  # the same bird keeps its detection number across steps
-        assert [r.bird for r in step.bird_rows] == [0, 1]
-    assert [r.bird for r in final.bird_rows] == [1, 0]
+    assert [r.bird for r in detect.bird_rows] == [0, 1]  # the same bird keeps its detection number
+    for step in (overview, final):  # sharpest first
+        assert [r.bird for r in step.bird_rows] == [1, 0]
     best = next(r for r in final.bird_rows if "最佳" in r.label)
     assert best.box[0] > detect.image.shape[1] / 2  # best bird is the right-hand one
     assert best.color == bsf.VERDICT_STYLES[result.verdict].color.lower()
@@ -98,7 +99,10 @@ def test_result_lists_birds_sharpest_first(monkeypatch) -> None:
     assert [r.bird for r in rows] == [1, 2, 0] and "最佳" in rows[0].label
     scores = [next(b["score"] for b in result.birds if b["index"] == r.bird) for r in rows]
     assert scores == sorted(scores, reverse=True)
-    # the other bird lists keep detection order
+    # 逐只鸟: same order, tiles laid out in it too; 识别 keeps detection order
+    overview = next(s for s in trace.common if s.key == "birds").bird_rows
+    assert [r.bird for r in overview] == [1, 2, 0]
+    assert [r.box[0] for r in overview] == sorted(r.box[0] for r in overview)
     assert [r.bird for r in next(s for s in trace.common if s.key == "detect").bird_rows] == [0, 1, 2]
 
 
