@@ -81,6 +81,8 @@ def test_multi_bird_trace_marks_best_and_switches_steps(monkeypatch) -> None:
             x1, y1, x2, y2 = row.box
             assert 0 <= x1 < x2 <= w and 0 <= y1 < y2 <= h and row.color.startswith("#")
     assert detect.bird_rows[0].color != detect.bird_rows[1].color  # detection colours, one per bird
+    for step in (detect, overview, final):  # the same bird keeps its detection number across steps
+        assert [r.bird for r in step.bird_rows] == [0, 1]
     best = next(r for r in final.bird_rows if "最佳" in r.label)
     assert best.box[0] > detect.image.shape[1] / 2  # best bird is the right-hand one
     assert best.color == bsf.VERDICT_STYLES[result.verdict].color.lower()

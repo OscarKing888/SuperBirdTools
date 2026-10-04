@@ -105,6 +105,7 @@ class TraceBirdRow:
     value: str
     color: str                                # hex, same colour as the bird's mark in the step image
     box: Tuple[float, float, float, float]   # x1, y1, x2, y2 in step image coords
+    bird: Optional[int] = None                # detection number: the same bird across steps
 
 
 @dataclass
@@ -136,8 +137,8 @@ class TraceStep:
         return {"key": self.key, "title": self.title, "description": self.description, "frame": self.frame,
                 "focus_rect": self.focus_rect, "bird": self.bird,
                 "metrics": self.metrics, "legend": self.legend,
-                "bird_rows": [{"label": r.label, "value": r.value, "color": r.color, "box": clean(r.box)}
-                              for r in self.bird_rows],
+                "bird_rows": [{"label": r.label, "value": r.value, "color": r.color, "box": clean(r.box),
+                               "bird": r.bird} for r in self.bird_rows],
                 "charts": [{"kind": c.kind, "title": c.title, "data": clean(c.data)} for c in self.charts]}
 
 
@@ -395,7 +396,7 @@ class AnalysisTracer:
             cv2.circle(img, (int(x1 * self._scale) + 6 * lw, int(y1 * self._scale) + 6 * lw), 5 * lw, color, -1,
                        cv2.LINE_AA)
             rows.append(TraceBirdRow(f"鸟 #{i + 1}", f"置信度 {det.confidence:.2f}，框 {int(x2 - x1)} × {int(y2 - y1)} px",
-                                     hex_color(color), self._display((x1, y1, x2, y2))))
+                                     hex_color(color), self._display((x1, y1, x2, y2)), i))
         if self._focus_px is not None:
             _rect(img, self._display(self._focus_px), C_FOCUS, lw)
         metrics = [("识别模型", "分割（像素掩膜）" if has_masks else "检测（鸟框）"),
@@ -736,18 +737,18 @@ class AnalysisTracer:
                         f"鸟 #{bird.index + 1}（并入 #{ex.other + 1}）",
                         f"看不到鸟眼（{eye}），鸟框 {ex.overlap:.0%} 落在鸟 #{ex.other + 1} 的框内，"
                         f"而鸟 #{ex.other + 1} 看得到鸟眼：是同一只鸟的局部（翅膀、尾羽），"
-                        f"不单独计数、不参与取最好（{would_be}）", hex_color(color), tile_box))
+                        f"不单独计数、不参与取最好（{would_be}）", hex_color(color), tile_box, bird.index))
                 else:
                     bird_rows.append(TraceBirdRow(
                         f"鸟 #{bird.index + 1}（已排除）",
                         f"置信度 {m.confidence:.2f} < {A.EXTRA_BIRD_CONFIDENCE_MAX:.2f}、看不到鸟眼（{eye}），"
                         f"旁边有置信度 ≥ {A.EXTRA_BIRD_ANCHOR_MIN:.2f} 的鸟：按误识别（树叶、树干等）排除，"
-                        f"不参与取最好（{would_be}）", hex_color(color), tile_box))
+                        f"不参与取最好（{would_be}）", hex_color(color), tile_box, bird.index))
             elif m is not None:
                 bird_rows.append(TraceBirdRow(
                     f"鸟 #{bird.index + 1}{'（最佳）' if best else ''}{found_labels.get(getattr(m, 'found_by', ''), '')}",
                     f"{verdict_label(m.verdict)} · σ {_fmt(m.sigma)} · 分数 {_fmt(m.score, '%d')}"
-                    f" · 置信度 {m.confidence:.2f}", hex_color(color), tile_box))
+                    f" · 置信度 {m.confidence:.2f}", hex_color(color), tile_box, bird.index))
         self.trace.common.append(TraceStep(
             STEP_BIRDS, "逐只鸟",
             f"识别到 {n} 只鸟。每只鸟只用自己的像素单独计算一遍（鸟体 → 头部 → 边缘 → 分布）；整张照片取分数最高"
@@ -837,7 +838,7 @@ class AnalysisTracer:
             rows.append(TraceBirdRow(
                 f"鸟 #{i + 1}{'（最佳）' if best else ''}{found}",
                 f"{verdict_label(bird['verdict'])} · σ {_fmt(bird.get('sigma'))} · 分数 {_fmt(bird.get('score'), '%d')}",
-                hex_color(color), box))
+                hex_color(color), box, i))
         if result.region_box is not None and result.region != fields.REGION_BIRD:
             _rect(img, self._display(result.region_box), C_WINDOW, lw + 1)
             if result.sigma is not None:

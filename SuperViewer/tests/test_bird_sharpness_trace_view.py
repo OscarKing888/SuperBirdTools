@@ -152,6 +152,60 @@ def test_bird_list_shows_swatches_and_hover_highlights_the_box(monkeypatch) -> N
         _APP.processEvents()
 
 
+def test_compare_view_highlights_the_hovered_bird(monkeypatch) -> None:
+    trace = _trace(monkeypatch)
+    dialog = BirdSharpnessTraceDialog(None, "x.ARW")
+    try:
+        dialog.show()
+        dialog.set_trace(trace)
+        assert _wait(lambda: dialog.stack.currentWidget() is dialog.content and dialog.steps)
+        index = {s.key: i for i, s in reversed(list(enumerate(dialog.steps)))}  # first step of each key
+        dialog.compare_btn.setChecked(True)
+        assert _wait(lambda: dialog.view_b.isVisible())
+        dialog.go(len(dialog.steps) - 1, force=True)  # 结论
+        result = dialog.steps[dialog.index]
+
+        def compare_with(key):
+            dialog.compare_combo.setCurrentIndex(dialog.compare_combo.findData(index[key]))
+            return dialog.steps[index[key]]
+
+        def hover(r):
+            QApplication.sendEvent(dialog.bird_list.cells[r][2], QEvent(QEvent.Type.Enter))
+
+        def leave(r):
+            QApplication.sendEvent(dialog.bird_list.cells[r][2], QEvent(QEvent.Type.Leave))
+
+        # other frame, same bird listed there: its tile in the 逐只鸟 overview
+        overview = compare_with("birds")
+        assert dialog.view_b.highlight_rect() is None
+        hover(1)
+        rect = dialog.view_b.highlight_rect()
+        tile = next(r for r in overview.bird_rows if r.bird == result.bird_rows[1].bird)
+        assert rect is not None and (rect.left(), rect.top()) == pytest.approx(tile.box[:2])
+        # switching the compare step while hovering follows the bird
+        detect = compare_with("detect")
+        box = next(r for r in detect.bird_rows if r.bird == result.bird_rows[1].bird).box
+        assert (dialog.view_b.highlight_rect().left(), dialog.view_b.highlight_rect().top()) == \
+            pytest.approx(box[:2], abs=1.0)
+        # same frame without a bird list: the main view's box
+        compare_with("decode")
+        assert dialog.view_b.highlight_rect() == dialog.view_a.highlight_rect()
+        # a bird's own crop cannot place the box
+        compare_with("bird")
+        assert dialog.view_b.highlight_rect() is None and dialog.view_a.highlight_rect() is not None
+        compare_with("decode")
+        leave(1)
+        assert dialog.view_b.highlight_rect() is None and dialog.view_a.highlight_rect() is None
+        # changing the main step drops both highlights
+        hover(0)
+        assert dialog.view_b.highlight_rect() is not None
+        dialog.go(0, force=True)
+        assert dialog.view_b.highlight_rect() is None and dialog.view_a.highlight_rect() is None
+    finally:
+        dialog.close()
+        _APP.processEvents()
+
+
 def test_single_bird_hides_selector_and_errors_are_shown(monkeypatch) -> None:
     trace = _trace(monkeypatch, birds=((900, 600, 300, 0.3),))
     dialog = BirdSharpnessTraceDialog(None, "y.ARW")

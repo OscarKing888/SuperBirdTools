@@ -393,8 +393,8 @@ class TraceChartWidget(QWidget):
 class TraceBirdList(QWidget):
     """A step's birds: colour swatch, label and details per row (``TraceBirdRow``).
 
-    Hovering a row tints it and emits ``hovered(box)`` (step image coords) so the
-    view can highlight that bird; leaving the row or replacing the rows emits ``None``.
+    Hovering a row tints it and emits ``hovered(row)`` so the views can highlight
+    that bird; leaving the row or replacing the rows emits ``None``.
     """
 
     hovered = pyqtSignal(object)
@@ -447,7 +447,7 @@ class TraceBirdList(QWidget):
             tint = self.palette().color(_ROLE.Highlight)
             for widget in self.cells[r]:
                 widget.setStyleSheet(f"background: rgba({tint.red()}, {tint.green()}, {tint.blue()}, 90);")
-        self.hovered.emit(None if r is None else self.rows[r].box)
+        self.hovered.emit(None if r is None else self.rows[r])
 
     def eventFilter(self, obj, event) -> bool:  # noqa: N802 - Qt API
         kind = event.type()
@@ -479,6 +479,7 @@ class BirdSharpnessTraceDialog(QDialog):
         self.steps: List = []
         self.index = 0
         self._syncing = False
+        self._hovered_bird = None  # TraceBirdRow under the pointer in the bird list
         self.setWindowTitle(f"清晰度计算过程 - {os.path.basename(path)}")
         self.setModal(False)
         self.resize(1320, 840)
@@ -561,7 +562,7 @@ class BirdSharpnessTraceDialog(QDialog):
         self.metrics_grid.setContentsMargins(0, 4, 0, 4)
         self.metrics_grid.setHorizontalSpacing(12)
         self.bird_list = TraceBirdList(side)
-        self.bird_list.hovered.connect(self.view_a.set_highlight)
+        self.bird_list.hovered.connect(self._on_bird_hovered)
         self.charts_box = QWidget(side)
         self.charts_layout = QVBoxLayout(self.charts_box)
         self.charts_layout.setContentsMargins(0, 0, 0, 0)
@@ -891,6 +892,25 @@ class BirdSharpnessTraceDialog(QDialog):
             self.view_b.zoom_to(step.focus_rect)
         else:
             self.view_b.fit()
+        self.view_b.set_highlight(self._compare_highlight_box())
+
+    def _on_bird_hovered(self, row) -> None:
+        self._hovered_bird = row
+        self.view_a.set_highlight(None if row is None else row.box)
+        if self.view_b.isVisible():
+            self.view_b.set_highlight(self._compare_highlight_box())
+
+    def _compare_highlight_box(self):
+        """The hovered bird in the compare step: its own row there (any frame), else the same box
+        when both steps share a coordinate frame; ``None`` when it cannot be placed (bird crops)."""
+        row = self._hovered_bird
+        if row is None or not self.steps:
+            return None
+        step = self.steps[self._compare_index()]
+        same = next((r for r in step.bird_rows if row.bird is not None and r.bird == row.bird), None)
+        if same is not None:
+            return same.box
+        return row.box if step.frame == self.steps[self.index].frame else None
 
     def _on_compare_toggled(self, checked: bool) -> None:
         self.view_b.setVisible(checked)
