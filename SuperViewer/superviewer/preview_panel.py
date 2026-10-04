@@ -29,7 +29,7 @@ from app_common.preview_canvas import (
     normalize_preview_composition_grid_mode,
 )
 from app_common.superviewer_user_options import get_keep_view_on_switch
-from .bird_body_overlay import BirdBodyOverlayMixin
+from .bird_body_overlay import BirdBodyOverlayMixin, map_bird_overlay
 
 from .focus_preview_loader import _load_preview_pixmap_for_canvas
 from .qt_compat import (
@@ -1110,7 +1110,7 @@ class PreviewPanel(QWidget):
             try:
                 export_crop = json.loads(image.text(RAW_FOCUS_CROP_KEY) or "null")
                 self._canvas._focus_box = map_camera_focus_box(self._source_focus_box, export_crop)
-                self._canvas._bird_box = map_camera_focus_box(self._source_bird_box, export_crop)
+                self._canvas._bird_box = map_bird_overlay(self._source_bird_box, export_crop, map_camera_focus_box)
                 self._canvas._source_pixmap = QPixmap.fromImage(image)
                 return self._canvas.render_source_pixmap_with_overlays()
             finally:
@@ -1142,8 +1142,9 @@ class PreviewPanel(QWidget):
         self._canvas.set_auto_focus_center(enabled)
 
     def set_bird_box(self, bird_box) -> None:
+        """One camera-frame box, or several (flock, main bird first)."""
         self._source_bird_box = bird_box
-        self._canvas.set_bird_box(map_camera_focus_box(bird_box, self._raw_focus_crop_box))
+        self._canvas.set_bird_box(map_bird_overlay(bird_box, self._raw_focus_crop_box, map_camera_focus_box))
 
     def set_show_bird_box(self, enabled: bool) -> None:
         self._canvas.set_show_bird_box(enabled)

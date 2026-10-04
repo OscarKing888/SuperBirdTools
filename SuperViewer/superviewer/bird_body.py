@@ -21,9 +21,12 @@ from app_common.image_formats import HEIF_EXTENSIONS, PHOTOSHOP_EXTENSIONS, RAW_
 from app_common.log import get_logger
 
 _log = get_logger("superviewer.bird_body")
-ALGORITHM_VERSION = "bird-body-v2"  # v2: camouflaged-bird recheck when the first pass finds none
-# v1 boxes stay valid (the first pass is unchanged); only v1 "no bird" entries are re-detected.
-_COMPATIBLE_BOX_VERSIONS = ("bird-body-v1",)
+# v2: camouflaged-bird recheck when the first pass finds none.
+# v3: every bird's box (main bird first), small-bird pass for flocks; older
+#     single-box caches are re-detected.
+ALGORITHM_VERSION = "bird-body-v3"
+_COMPATIBLE_BOX_VERSIONS = ()
+MAX_CACHE_CHARS = 65536  # a flock of ~60 boxes is ~3 KB
 FIELD_CACHE = "bird_body_cache"
 MAX_DETECT_LONG_EDGE = 1280
 _MODEL_NAMES = ("yolo11n.pt", "yolo11s.pt", "yolov8n.pt")
@@ -31,15 +34,23 @@ _MODEL_NAMES = ("yolo11n.pt", "yolo11s.pt", "yolov8n.pt")
 
 @dataclass(frozen=True)
 class BirdBodyResult:
-    box: tuple[float, float, float, float] | None
+    box: tuple[float, float, float, float] | None  # main bird (largest confidence x area)
     source_fingerprint: str
     version: str = ALGORITHM_VERSION
     geometry: str = "camera"
+    boxes: tuple = ()  # every bird, main bird first; empty for caches with one box only
+
+    @property
+    def overlay(self):
+        """What the preview draws: the single box, or every box when there are several."""
+        return self.boxes if len(self.boxes) > 1 else self.box
 
     def to_json(self) -> str:
-        return json.dumps({"version": self.version, "source": self.source_fingerprint,
-                           "geometry": self.geometry, "box": self.box},
-                          ensure_ascii=False, separators=(",", ":"), allow_nan=False)
+        data = {"version": self.version, "source": self.source_fingerprint,
+                "geometry": self.geometry, "box": self.box}
+        if len(self.boxes) > 1:
+            data["boxes"] = [[round(v, 5) for v in b] for b in self.boxes]
+        return json.dumps(data, ensure_ascii=False, separators=(",", ":"), allow_nan=False)
 
 
 def source_fingerprint(path: str) -> str:
@@ -74,7 +85,7 @@ def result_from_metadata(path: str, metadata: dict, fingerprint: str | None = No
     key = cache_field(path)
     name = key.partition(":")[2]
     value = metadata.get(key, metadata.get(name, metadata.get(f"report.{name}")))
-    if not isinstance(value, str) or not value or len(value) > 4096:
+    if not isinstance(value, str) or not value or len(value) > MAX_CACHE_CHARS:
         return None
     try:
         data = json.loads(value)
@@ -93,21 +104,27 @@ def result_from_metadata(path: str, metadata: dict, fingerprint: str | None = No
         # Do not quietly repair corrupt/out-of-frame saved coordinates into a hit.
         if raw_box is not None and tuple(raw_box) != box:
             return None
-        return BirdBodyResult(box, source, version)
+        raw_boxes = data.get("boxes", [])
+        if not isinstance(raw_boxes, list):
+            return None
+        boxes = tuple(normalize_box(b) for b in raw_boxes)
+        if any(b is None or tuple(r) != b for r, b in zip(raw_boxes, boxes)):
+            return None
+        return BirdBodyResult(box, source, version, boxes=boxes)
     except (ValueError, TypeError, OverflowError):
         return None
 
 
-def _small_rgb(image):
+def _small_rgb(image, long_edge: int = MAX_DETECT_LONG_EDGE):
     from PIL import Image, ImageOps
 
     # 先缩小再旋转/转 RGB，普通大图不额外复制多份原生尺寸像素。
-    image.thumbnail((MAX_DETECT_LONG_EDGE, MAX_DETECT_LONG_EDGE), Image.Resampling.LANCZOS)
+    image.thumbnail((long_edge, long_edge), Image.Resampling.LANCZOS)
     ImageOps.exif_transpose(image, in_place=True)
     return image.convert("RGB")
 
 
-def load_detection_image(path: str):
+def load_detection_image(path: str, long_edge: int = MAX_DETECT_LONG_EDGE):
     """Return a small owned PIL RGB image and optional camera crop in RAW pixels."""
     from PIL import Image
 
@@ -121,7 +138,7 @@ def load_detection_image(path: str):
             if jpeg:
                 with Image.open(io.BytesIO(jpeg)) as image:
                     if max(image.size) >= thumb_stream.RAW_INPROCESS_PREVIEW_MIN_LONG_EDGE:
-                        return _small_rgb(image), None
+                        return _small_rgb(image, long_edge), None
         except Exception as exc:
             _log.debug("[bird.body] embedded RAW preview unavailable path=%r: %s", path, exc)
         import rawpy
@@ -132,18 +149,18 @@ def load_detection_image(path: str):
             pixels = raw.postprocess(use_camera_wb=True, no_auto_bright=False, output_bps=8)
         # LibRaw 输出已经旋转；这里没有源文件 EXIF，因此不会二次旋转。
         with Image.fromarray(pixels) as image:
-            return _small_rgb(image), crop
+            return _small_rgb(image, long_edge), crop
     if suffix in HEIF_EXTENSIONS:
         from pillow_heif import register_heif_opener
         register_heif_opener()
     try:
         with Image.open(path) as image:
-            return _small_rgb(image), None
+            return _small_rgb(image, long_edge), None
     except Exception:
         if suffix not in PHOTOSHOP_EXTENSIONS:
             raise
         from app_common.psd_composite import load_psd_composite_rgb
-        rgb = load_psd_composite_rgb(path, MAX_DETECT_LONG_EDGE)
+        rgb = load_psd_composite_rgb(path, long_edge)
         if not rgb:
             raise ValueError(f"无法解码鸟体识别图像：{path}")
         data, width, height = rgb
@@ -198,6 +215,11 @@ class BirdBodyDetector:
 
     def detect(self, image, *, cancelled=lambda: False):
         """Choose the largest confidence-weighted bird, matching BirdStamp's UX."""
+        boxes = self.detect_all(image, cancelled=cancelled)
+        return boxes[0] if boxes else None
+
+    def detect_all(self, image, *, cancelled=lambda: False, imgsz=None):
+        """Every bird as a normalised box, largest confidence x area first."""
         with self._lock:
             # A/B 两侧可能在此等待同一模型，快切取消后不能再补做旧帧推理。
             if cancelled():
@@ -206,6 +228,8 @@ class BirdBodyDetector:
             if cancelled():
                 raise InterruptedError("鸟体识别已取消")
             kwargs = dict(source=image, classes=list(self._classes), conf=0.2, verbose=False)
+            if imgsz:
+                kwargs["imgsz"] = int(imgsz)
             try:
                 results = self._model.predict(device=self._device, **kwargs)
             except Exception as exc:
@@ -216,7 +240,7 @@ class BirdBodyDetector:
                 _log.warning("[bird.body] YOLO device=%s failed; retrying CPU: %s", self._device, exc)
                 self._device = "cpu"
                 results = self._model.predict(device="cpu", **kwargs)
-            best, best_score = None, -1.0
+            found = []
             for result in results or ():
                 boxes = getattr(result, "boxes", None)
                 if boxes is None:
@@ -229,15 +253,42 @@ class BirdBodyDetector:
                     if not math.isfinite(confidence) or confidence <= 0:
                         continue
                     score = max(0.0, x1 - x0) * max(0.0, y1 - y0) * confidence
-                    if score <= best_score:
-                        continue
                     try:
                         box = normalize_box((x0 / image.width, y0 / image.height,
                                              x1 / image.width, y1 / image.height))
                     except ValueError:
                         continue
-                    best, best_score = box, score
-            return best
+                    found.append((score, box))
+            found.sort(key=lambda item: item[0], reverse=True)
+            return [box for _score, box in found]
+
+
+def merge_bird_boxes(first, added, image_aspect: float = 1.0):
+    """First-pass boxes unchanged, then the added boxes that are not one of them.
+
+    Same duplicate rule as bird sharpness: one box mostly (>= 70 %) inside the
+    other is the same bird. Boxes are normalised; ``image_aspect`` (w / h) makes
+    the overlap areas true pixel areas.
+    """
+    from bird_sharpness.analyzer import DUPLICATE_CONTAINMENT, box_overlap
+
+    def px(b):
+        return (b[0] * image_aspect, b[1], b[2] * image_aspect, b[3])
+
+    merged = list(first)
+    for box in added:
+        if not any(box_overlap(px(box), px(kept)) >= DUPLICATE_CONTAINMENT for kept in merged):
+            merged.append(box)
+    return merged
+
+
+def has_small_birds(boxes, image_size) -> bool:
+    """Same trigger as bird sharpness: a bird shorter than 1/16 of the image long edge."""
+    from bird_sharpness.analyzer import DETECT_LONG_EDGE, FLOCK_BIRD_SIDE
+
+    width, height = image_size
+    limit = FLOCK_BIRD_SIDE / float(DETECT_LONG_EDGE) * max(width, height)
+    return any(max((b[2] - b[0]) * width, (b[3] - b[1]) * height) < limit for b in boxes)
 
 
 @lru_cache(maxsize=1)
