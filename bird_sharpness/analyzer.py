@@ -33,7 +33,8 @@ from app_common.log import get_logger
 
 from .focus import FocusProvider, default_focus_box, focus_window
 from .image_source import AnalysisImage, load_analysis_image
-from .metrics import EdgeBlurField, edge_stats, full_image_blur
+from .metrics import (ESTIMATOR_STANDARD, EdgeBlurField, EdgeEstimator, edge_estimator as get_edge_estimator,
+                      edge_stats, full_image_blur)
 from .models import (BIRD_CONFIDENCE_MIN, FOUND_FOCUS_WEAK, FOUND_FOCUS_ZOOM, FOUND_FULL, FOUND_FULL_FINE,
                      FOUND_FULL_LIFTED, BirdDetection, BirdSharpnessModels)
 from .scoring import ALGORITHM_VERSION, VERDICT_ERROR, VERDICT_NO_BIRD, blank_head_sigma, classify, sigma_to_score
@@ -137,6 +138,7 @@ class BirdSharpnessResult:
     elapsed_s: float = 0.0
     error: str = ""
     version: str = ALGORITHM_VERSION
+    edge_estimator: str = ESTIMATOR_STANDARD.key
 
     @property
     def ok(self) -> bool:
@@ -500,10 +502,38 @@ class BirdSharpnessAnalyzer:
     """
 
     def __init__(self, models: Optional[BirdSharpnessModels] = None, *,
-                 focus_provider: Optional[FocusProvider] = None, max_birds: int = DEFAULT_MAX_BIRDS):
+                 focus_provider: Optional[FocusProvider] = None, max_birds: int = DEFAULT_MAX_BIRDS,
+                 edge_estimator: str = ESTIMATOR_STANDARD.key):
         self.models = models or BirdSharpnessModels()
         self.focus_provider = focus_provider or default_focus_box
-        self.max_birds = max_birds  # 0 = measure every bird; read per photo, so it may change between jobs
+        # Both are read per photo, so apps may change them between jobs.
+        self.max_birds = max_birds  # 0 = measure every bird
+        self.edge_estimator = edge_estimator  # metrics.EDGE_ESTIMATORS key; unknown = standard
+
+    def with_options(self, *, max_birds: Optional[int] = None,
+                     edge_estimator: Optional[str] = None) -> "BirdSharpnessAnalyzer":
+        """A sibling sharing the loaded models and focus provider, with its own options
+        (e.g. one trace window), leaving this analyzer's options untouched."""
+        return BirdSharpnessAnalyzer(
+            self.models, focus_provider=self.focus_provider,
+            max_birds=self.max_birds if max_birds is None else max_birds,
+            edge_estimator=self.edge_estimator if edge_estimator is None else edge_estimator)
+
+    @property
+    def estimator(self) -> EdgeEstimator:
+        return get_edge_estimator(self.edge_estimator)
+
+    @property
+    def version(self) -> str:
+        """Algorithm version written to XMP; the dense estimator is tagged so it is never mixed up."""
+        key = self.estimator.key
+        return ALGORITHM_VERSION if key == ESTIMATOR_STANDARD.key else f"{ALGORITHM_VERSION}-{key}"
+
+    def _select(self, field_: EdgeBlurField, region):
+        return field_.select_strongest_edges(region, min_kept=self.estimator.min_kept)
+
+    def _edge_stats(self, samples):
+        return edge_stats(samples, self.estimator.quantile)
 
     def _limit(self, detections: List[BirdDetection]) -> List[BirdDetection]:
         limit = int(self.max_birds or 0)
@@ -679,6 +709,8 @@ class BirdSharpnessAnalyzer:
             region_box=best.box,
             birds=[asdict(b) for b in birds],
             image_long_edge=long_edge,
+            version=self.version,
+            edge_estimator=self.estimator.key,
         )
 
     def _measure_bird(self, image: AnalysisImage, det: BirdDetection, scale: float, *, index: int = 0,
@@ -729,8 +761,8 @@ class BirdSharpnessAnalyzer:
             # measure the whole bird as without an eye model (eye visible, no score cap).
             eye_vis = keypoints.eye_visibility
             trace_keypoints = (keypoints, None)
-            selection = field_.select_strongest_edges(bird_px)
-            head_stats = edge_stats(selection.sigma)
+            selection = self._select(field_, bird_px)
+            head_stats = self._edge_stats(selection.sigma)
             head_sigma = None
             sigma = head_stats.sigma
             verdict, score = classify(sigma, body_stats.sigma, motion_ratio, eye_visible=True,
@@ -751,15 +783,15 @@ class BirdSharpnessAnalyzer:
                 yy, xx = np.ogrid[:ch, :cw]
                 dilated = cv2.dilate(mask, np.ones((HEAD_MASK_DILATE_PX, HEAD_MASK_DILATE_PX), np.uint8)).astype(bool)
                 head = ((xx - eye[0]) ** 2 + (yy - eye[1]) ** 2 <= radius ** 2) & dilated
-                selection = field_.select_strongest_edges(head)
-                head_stats = edge_stats(selection.sigma)
+                selection = self._select(field_, head)
+                head_stats = self._edge_stats(selection.sigma)
                 if head_stats.sigma is not None and max(bw, bh) < SMALL_BIRD_SIDE:
                     head_samples = [float(head_stats.sigma)]
                     for dx, dy, scale_r in HEAD_SAMPLE_VARIANTS[1:]:
                         cx = eye[0] + dx * HEAD_SAMPLE_SHIFT * radius
                         cy = eye[1] + dy * HEAD_SAMPLE_SHIFT * radius
                         variant = ((xx - cx) ** 2 + (yy - cy) ** 2 <= (radius * scale_r) ** 2) & dilated
-                        value = edge_stats(field_.select_strongest_edges(variant).sigma).sigma
+                        value = self._edge_stats(self._select(field_, variant).sigma).sigma
                         if value is not None:
                             head_samples.append(float(value))
             eye_abs = (round(float(eye[0] + X1), 1), round(float(eye[1] + Y1), 1))
@@ -775,8 +807,8 @@ class BirdSharpnessAnalyzer:
                 sigma = head_sigma if head_sigma is not None else body_stats.sigma
         else:
             # No eye model: the whole bird's strongest edges stand in for the head.
-            selection = field_.select_strongest_edges(bird_px)
-            head_stats = edge_stats(selection.sigma)
+            selection = self._select(field_, bird_px)
+            head_stats = self._edge_stats(selection.sigma)
             head_sigma = None
             sigma = head_stats.sigma
             verdict, score = classify(sigma, body_stats.sigma, motion_ratio, eye_visible=True,
@@ -844,8 +876,8 @@ class BirdSharpnessAnalyzer:
             wx1, wy1, wx2, wy2 = focus_window(
                 (focus_px[0] - vx1, focus_px[1] - vy1, focus_px[2] - vx1, focus_px[3] - vy1), vx2 - vx1, vy2 - vy1)
             fx1, fy1, fx2, fy2 = wx1 + vx1, wy1 + vy1, wx2 + vx1, wy2 + vy1
-            selection = EdgeBlurField(image.gray[fy1:fy2, fx1:fx2]).select_strongest_edges(None)
-            stats = edge_stats(selection.sigma)
+            selection = self._select(EdgeBlurField(image.gray[fy1:fy2, fx1:fx2]), None)
+            stats = self._edge_stats(selection.sigma)
             region, region_box = fields.REGION_FOCUS, (fx1, fy1, fx2, fy2)
             if tracer is not None:
                 tracer.focus_window(image, region_box, selection, stats)
@@ -869,6 +901,8 @@ class BirdSharpnessAnalyzer:
             head_edges=stats.edge_count,
             region_box=region_box,
             image_long_edge=max(H, W),
+            version=self.version,
+            edge_estimator=self.estimator.key,
         )
 
 

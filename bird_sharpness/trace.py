@@ -826,6 +826,9 @@ class AnalysisTracer:
                    *rows]
         if on_bird is not None:
             metrics.append(("焦点在鸟上", "是" if on_bird else "否（相机焦点不在任何鸟上）"))
+        metrics.append(("边缘统计", {"standard": "标准（最强 30 条边缘的中位数）",
+                                 "dense": "密集（≥ 60 条边缘的第 40 百分位，实验性）"}.get(
+                                     getattr(result, "edge_estimator", ""), "—")))
         metrics.append(("算法版本", result.version))
         charts = [TraceChart("score_curve", "模糊半径 → 分数（SuperPicky 0–1000 刻度）", {
             "anchors": [list(a) for a in SCORE_ANCHORS], "points": points,

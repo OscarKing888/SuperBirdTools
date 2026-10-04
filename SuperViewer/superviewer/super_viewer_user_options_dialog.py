@@ -7,6 +7,7 @@ import os
 
 from app_common.superviewer_user_options import (
     BIRD_SHARPNESS_MAX_BIRDS_LIMIT,
+    KEY_BIRD_SHARPNESS_EDGE_ESTIMATOR,
     KEY_BIRD_SHARPNESS_MAX_BIRDS,
     KEY_NAVIGATION_FPS_OPTIONS,
     KEY_PERF_PROBES_ENABLED,
@@ -34,6 +35,14 @@ from .qt_compat import (
     QWidget,
     QVBoxLayout,
 )
+
+
+try:
+    from PyQt6.QtCore import Qt
+except ImportError:  # pragma: no cover - PyQt5 fallback
+    from PyQt5.QtCore import Qt
+
+_TOOLTIP_ROLE = getattr(getattr(Qt, "ItemDataRole", Qt), "ToolTipRole")
 
 
 class SuperViewerUserOptionsDialog(QDialog):
@@ -211,11 +220,24 @@ class SuperViewerUserOptionsDialog(QDialog):
         self._spin_bird_sharpness_max_birds.setToolTip("0 = 不限制。鸟群照片里每只鸟都要单独定位和测量，限制数量可缩短耗时。")
         sharpness_grid.addWidget(QLabel("每张最多测量鸟数"), 0, 0)
         sharpness_grid.addWidget(self._spin_bird_sharpness_max_birds, 0, 1)
+        from .bird_sharpness_trace_view import ESTIMATOR_CHOICES
+
+        self._combo_bird_sharpness_estimator = QComboBox(sharpness)
+        for key, label, tip in ESTIMATOR_CHOICES:
+            self._combo_bird_sharpness_estimator.addItem(label, key)
+            self._combo_bird_sharpness_estimator.setItemData(
+                self._combo_bird_sharpness_estimator.count() - 1, tip, _TOOLTIP_ROLE)
+        self._combo_bird_sharpness_estimator.setCurrentIndex(
+            max(0, self._combo_bird_sharpness_estimator.findData(opts[KEY_BIRD_SHARPNESS_EDGE_ESTIMATOR])))
+        sharpness_grid.addWidget(QLabel("边缘统计方式"), 1, 0)
+        sharpness_grid.addWidget(self._combo_bird_sharpness_estimator, 1, 1)
         sharpness_grid.setColumnStretch(2, 1)
         sharpness_layout.addLayout(sharpness_grid)
         sharpness_note = QLabel("默认测量照片中的全部鸟，取最清晰的一只作为整张照片的清晰度。\n"
                                 "设了上限时，压在相机焦点框上的鸟优先测量，其余按识别置信度 × 鸟框面积排序。\n"
-                                "新的设置用于下一次检测和计算过程查看。", sharpness)
+                                "边缘统计方式：「标准」是门槛标定所用的方式；「密集」让小鸟的结果更稳，但仍属实验性，"
+                                "结果以单独的算法版本记录，「跳过已检测」不会把两种方式的结果混用。\n"
+                                "新的设置用于下一次检测和计算过程查看；计算过程窗口的「参数」页可临时改用其他参数对比。", sharpness)
         sharpness_note.setWordWrap(True)
         sharpness_layout.addWidget(sharpness_note)
         sharpness_layout.addStretch(1)
@@ -272,4 +294,5 @@ class SuperViewerUserOptionsDialog(QDialog):
             "denoise_device": str(self._combo_denoise_device.currentData()),
             "denoise_workers": self._spin_denoise_workers.value(),
             KEY_BIRD_SHARPNESS_MAX_BIRDS: int(self._spin_bird_sharpness_max_birds.value()),
+            KEY_BIRD_SHARPNESS_EDGE_ESTIMATOR: str(self._combo_bird_sharpness_estimator.currentData()),
         }

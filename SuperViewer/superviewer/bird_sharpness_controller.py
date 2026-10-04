@@ -263,13 +263,16 @@ class _TraceBridge(QObject):
     done = pyqtSignal(object, object)  # request, BirdSharpnessTraceOutcome or Exception
 
 
-def _max_birds_option() -> int:
+def _analysis_options() -> dict:
+    """Bird sharpness options from the SuperViewer user options (defaults when unavailable)."""
     try:
-        from app_common.superviewer_user_options import get_bird_sharpness_max_birds
+        from app_common.superviewer_user_options import (get_bird_sharpness_edge_estimator,
+                                                         get_bird_sharpness_max_birds)
 
-        return max(0, int(get_bird_sharpness_max_birds()))
+        return {"max_birds": max(0, int(get_bird_sharpness_max_birds())),
+                "edge_estimator": str(get_bird_sharpness_edge_estimator())}
     except Exception:
-        return 0
+        return {"max_birds": 0, "edge_estimator": "standard"}
 
 
 class BirdSharpnessController(QObject):
@@ -309,7 +312,9 @@ class BirdSharpnessController(QObject):
                 # Same focus-box loader as the preview overlay, so the measured window is what users see.
                 self._analyzer = BirdSharpnessAnalyzer(focus_provider=_viewer_focus_box)
             # Read at every job start: a changed user option applies to the next detection or trace.
-            self._analyzer.max_birds = _max_birds_option()
+            params = _analysis_options()
+            self._analyzer.max_birds = params["max_birds"]
+            self._analyzer.edge_estimator = params["edge_estimator"]
             return self._analyzer
 
     @property
@@ -391,9 +396,11 @@ class BirdSharpnessController(QObject):
                 source = resolve(path) or path
             except Exception:
                 source = path
-        dialog = BirdSharpnessTraceDialog(self._main, source, image_source)
+        dialog = BirdSharpnessTraceDialog(self._main, source, image_source, params=_analysis_options())
         dialog.closed.connect(self._on_trace_dialog_closed)
         dialog.source_changed.connect(lambda d, s: self._run_trace(d, s))
+        dialog.params_changed.connect(lambda d: self._run_trace(d, d.image_source))
+        dialog.save_defaults_requested.connect(self._save_trace_params)
         self._run_trace(dialog, image_source)
         dialog.show()
         return dialog
@@ -407,7 +414,10 @@ class BirdSharpnessController(QObject):
         dialog.set_loading()
         cancel = threading.Event()
         request = [dialog, None, cancel]
-        action = BirdSharpnessTraceAction(self.analyzer(), dialog.path, cancelled=cancel.is_set,
+        params = getattr(dialog, "params", None) or {}
+        analyzer = self.analyzer().with_options(max_birds=params.get("max_birds"),
+                                                edge_estimator=params.get("edge_estimator"))
+        action = BirdSharpnessTraceAction(analyzer, dialog.path, cancelled=cancel.is_set,
                                           image_source=image_source,
                                           denoised_lookup=self._denoised_lookup if self._denoise is not None else None)
         pool_getter = getattr(self._file_list, "background_work_pool", None)
@@ -431,6 +441,25 @@ class BirdSharpnessController(QObject):
         self._trace_requests.append(request)
         bridge = self._trace_bridge
         future.add_done_callback(lambda f, r=request: bridge.done.emit(r, f))
+
+    def _save_trace_params(self, dialog) -> None:
+        """「保存为默认设置」in a trace window: store its parameters as user options."""
+        from app_common.superviewer_user_options import (KEY_BIRD_SHARPNESS_EDGE_ESTIMATOR,
+                                                         KEY_BIRD_SHARPNESS_MAX_BIRDS, apply_runtime_user_options,
+                                                         get_runtime_user_options, save_user_options)
+
+        params = dialog.selected_params()
+        options = get_runtime_user_options()
+        options[KEY_BIRD_SHARPNESS_MAX_BIRDS] = params["max_birds"]
+        options[KEY_BIRD_SHARPNESS_EDGE_ESTIMATOR] = params["edge_estimator"]
+        try:
+            normalized = save_user_options(options)
+        except Exception as exc:
+            _log.error("[BirdSharpness] saving trace parameters failed: %r", exc)
+            self._show_message(f"无法保存鸟清晰度参数：\n{exc}")
+            return
+        apply_runtime_user_options(normalized)
+        self._show_message("已保存为默认设置，之后的鸟清晰度检测将使用这些参数。")
 
     def _on_trace_dialog_closed(self, dialog) -> None:
         for request in [r for r in self._trace_requests if r[0] is dialog]:

@@ -313,3 +313,71 @@ def test_denoised_source_denoises_first_when_missing(stub_trace_env, monkeypatch
         controller.request_shutdown()
         window.deleteLater()
         _APP.processEvents()
+
+
+def test_params_tab_reruns_this_window_and_saves_defaults(monkeypatch) -> None:
+    from app_common import superviewer_user_options as opts
+
+    trace = _trace(monkeypatch)
+    dialog = BirdSharpnessTraceDialog(None, "x.ARW", params={"max_birds": 4, "edge_estimator": "standard"})
+    rerun, saved = [], []
+    dialog.params_changed.connect(lambda d: rerun.append(dict(d.params)))
+    dialog.save_defaults_requested.connect(lambda d: saved.append(d.selected_params()))
+    try:
+        assert [dialog.side_tabs.tabText(i) for i in range(dialog.side_tabs.count())] == ["步骤", "参数"]
+        assert dialog.max_birds_spin.value() == 4 and dialog.estimator_combo.currentData() == "standard"
+        dialog.set_trace(trace)
+        assert "标准" in dialog.params_status.text() and "上限 4 只" in dialog.params_status.text()
+        dialog.max_birds_spin.setValue(0)
+        dialog.estimator_combo.setCurrentIndex(dialog.estimator_combo.findData("dense"))
+        assert "第 40 百分位" in dialog.estimator_note.text()
+        dialog.rerun_btn.click()
+        assert rerun == [{"max_birds": 0, "edge_estimator": "dense"}]
+        assert dialog.stack.currentWidget() is dialog.loading
+        dialog.save_defaults_btn.click()
+        assert saved == [{"max_birds": 0, "edge_estimator": "dense"}]
+    finally:
+        dialog.deleteLater()
+        opts.apply_runtime_user_options(None)
+
+
+def test_trace_parameters_stay_in_their_window(monkeypatch, tmp_path) -> None:
+    """A trace window's parameters never change the shared analyzer used for batch detection."""
+    from app_common import superviewer_user_options as opts
+
+    controller = BirdSharpnessController(QWidget(), _FakeFileList(None))
+    shared = controller.analyzer()
+    dialog = BirdSharpnessTraceDialog(None, "x.ARW", params={"max_birds": 2, "edge_estimator": "dense"})
+    seen = []
+
+    class _Action:
+        def __init__(self, analyzer, *a, **k):
+            seen.append((analyzer.max_birds, analyzer.edge_estimator, analyzer is shared))
+
+        def execute(self):
+            from types import SimpleNamespace
+
+            return SimpleNamespace(needs_denoise=False, trace=None, cancelled=True, error="")
+
+    import bird_sharpness.actions as actions_mod
+
+    monkeypatch.setattr(actions_mod, "BirdSharpnessTraceAction", _Action)
+    stored = []
+    monkeypatch.setattr(opts, "save_user_options", lambda data, path=None: stored.append(dict(data)) or opts.normalize_user_options(data))
+    monkeypatch.setattr(controller, "_show_message", lambda text: None)
+    try:
+        controller._run_trace(dialog, "raw")
+        assert seen == [(2, "dense", False)]
+        assert (shared.max_birds, shared.edge_estimator) == (0, "standard")
+        dialog.max_birds_spin.setValue(5)
+        controller._save_trace_params(dialog)
+        assert stored and stored[-1][opts.KEY_BIRD_SHARPNESS_MAX_BIRDS] == 5
+        assert stored[-1][opts.KEY_BIRD_SHARPNESS_EDGE_ESTIMATOR] == "dense"
+        assert controller.analyzer().max_birds == 5 and controller.analyzer().edge_estimator == "dense"
+    finally:
+        opts.apply_runtime_user_options(None)
+        for request in list(controller._trace_requests):
+            controller._cancel_trace(request)
+        controller.request_shutdown()
+        _wait(controller.is_shutdown_done)
+        dialog.deleteLater()

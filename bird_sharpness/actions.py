@@ -71,7 +71,8 @@ class BirdSharpnessAction(WorkerAction):
         from .xmp_store import already_analyzed, write_result
 
         self._set_stage(STAGE_CHECK)
-        if self.skip_existing and already_analyzed(self.source_path, ALGORITHM_VERSION):
+        version = getattr(self.analyzer, "version", ALGORITHM_VERSION)
+        if self.skip_existing and already_analyzed(self.source_path, version):
             outcome.skipped = True
             return outcome
         outcome.result = self.analyzer.analyze(self.source_path, on_stage=self._set_stage, cancelled=self.is_cancelled)

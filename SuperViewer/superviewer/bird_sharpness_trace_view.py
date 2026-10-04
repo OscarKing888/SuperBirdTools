@@ -28,12 +28,12 @@ try:
     from PyQt6.QtCore import QPointF, QRectF, Qt, QTimer
     from PyQt6.QtGui import QBrush, QColor, QFont, QImage, QPainter, QPainterPath, QPalette, QPen, QPixmap
     from PyQt6.QtWidgets import (QButtonGroup, QFrame, QGraphicsPixmapItem, QGraphicsScene, QGraphicsView,
-                                 QGridLayout, QSizePolicy, QSlider)
+                                 QGridLayout, QSizePolicy, QSlider, QSpinBox, QTabWidget)
 except ImportError:  # pragma: no cover - PyQt5 fallback
     from PyQt5.QtCore import QPointF, QRectF, Qt, QTimer
     from PyQt5.QtGui import QBrush, QColor, QFont, QImage, QPainter, QPainterPath, QPalette, QPen, QPixmap
     from PyQt5.QtWidgets import (QButtonGroup, QFrame, QGraphicsPixmapItem, QGraphicsScene, QGraphicsView,
-                                 QGridLayout, QSizePolicy, QSlider)
+                                 QGridLayout, QSizePolicy, QSlider, QSpinBox, QTabWidget)
 
 _Qt = getattr(Qt, "AlignmentFlag", Qt)
 _KEEP_ASPECT = getattr(getattr(Qt, "AspectRatioMode", Qt), "KeepAspectRatio")
@@ -58,6 +58,16 @@ STEP_ICONS = {
 }
 _CIRCLED = "①②③④⑤⑥⑦⑧⑨⑩⑪⑫⑬⑭⑮⑯⑰⑱⑲⑳"
 _TOOLTIP_ROLE = getattr(getattr(Qt, "ItemDataRole", Qt), "ToolTipRole")
+# Edge estimator choices for the 参数 tab (bird_sharpness.metrics.EDGE_ESTIMATORS keys).
+ESTIMATOR_CHOICES = (
+    ("standard", "标准（默认）",
+     "最强 30 条边缘（或前 5%）的模糊半径中位数。清晰/可用/失焦门槛按它与人工判断标定。"),
+    ("dense", "密集（实验性）",
+     "至少 60 条最强边缘，取第 40 百分位。小鸟头部边缘少时判定更稳，整体不偏移；"
+     "但在已标注照片上有 2/15 张在清晰与可用之间对调，结果仅供对比。"),
+)
+DEFAULT_TRACE_PARAMS = {"max_birds": 0, "edge_estimator": "standard"}
+
 SOURCE_CHOICES = (
     (SOURCE_RAW, "RAW 解码", "LibRaw 全分辨率解码；阈值按它标定（默认，最可靠）"),
     (SOURCE_JPEG, "相机 JPEG", "相机内嵌的全尺寸 JPEG：机内锐化/降噪/压缩，仅供对比"),
@@ -351,11 +361,15 @@ class BirdSharpnessTraceDialog(QDialog):
 
     closed = pyqtSignal(object)
     source_changed = pyqtSignal(object, str)  # (dialog, image source) — recompute requested
+    params_changed = pyqtSignal(object)  # dialog — recompute with ``dialog.params``
+    save_defaults_requested = pyqtSignal(object)  # dialog — store ``dialog.params`` as user options
 
-    def __init__(self, parent, path: str, image_source: str = SOURCE_RAW) -> None:
+    def __init__(self, parent, path: str, image_source: str = SOURCE_RAW, params: Optional[dict] = None) -> None:
         super().__init__(parent)
         self.path = path
         self.image_source = image_source
+        # Analysis options for this window only; "保存为默认设置" makes them the user's defaults.
+        self.params = {**DEFAULT_TRACE_PARAMS, **(params or {})}
         self.trace = None
         self.steps: List = []
         self.index = 0
@@ -458,10 +472,13 @@ class BirdSharpnessTraceDialog(QDialog):
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(_FRAME_NONE)
         scroll.setMinimumWidth(360)
+        self.side_tabs = QTabWidget(self.content)
+        self.side_tabs.addTab(scroll, "步骤")
+        self.side_tabs.addTab(self._build_params_tab(), "参数")
 
         body = QSplitter(_HORIZONTAL, self.content)
         body.addWidget(self.views)
-        body.addWidget(scroll)
+        body.addWidget(self.side_tabs)
         body.setStretchFactor(0, 1)
         body.setSizes([940, 380])
         layout.addWidget(body, 1)
@@ -524,6 +541,85 @@ class BirdSharpnessTraceDialog(QDialog):
         tools.addWidget(self.one_btn)
         layout.addLayout(tools)
 
+    def _build_params_tab(self) -> QWidget:
+        page = QWidget(self.content)
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(10, 8, 6, 8)
+        heading = QLabel("清晰度计算参数", page)
+        font = QFont(heading.font())
+        font.setBold(True)
+        heading.setFont(font)
+        layout.addWidget(heading)
+        grid = QGridLayout()
+        grid.setVerticalSpacing(10)
+        self.max_birds_spin = QSpinBox(page)
+        self.max_birds_spin.setRange(0, 999)
+        self.max_birds_spin.setSpecialValueText("不限制")
+        self.max_birds_spin.setSuffix(" 只")
+        self.max_birds_spin.setToolTip("0 = 不限制。设了上限时，压在相机焦点框上的鸟优先测量。")
+        self.estimator_combo = QComboBox(page)
+        for key, label, tip in ESTIMATOR_CHOICES:
+            self.estimator_combo.addItem(label, key)
+            self.estimator_combo.setItemData(self.estimator_combo.count() - 1, tip, _TOOLTIP_ROLE)
+        self.estimator_note = QLabel("", page)
+        self.estimator_note.setWordWrap(True)
+        self.estimator_note.setForegroundRole(_ROLE.PlaceholderText)
+        self.estimator_combo.currentIndexChanged.connect(self._update_estimator_note)
+        grid.addWidget(QLabel("每张最多测量鸟数", page), 0, 0)
+        grid.addWidget(self.max_birds_spin, 0, 1)
+        grid.addWidget(QLabel("边缘统计方式", page), 1, 0)
+        grid.addWidget(self.estimator_combo, 1, 1)
+        grid.setColumnStretch(1, 1)
+        layout.addLayout(grid)
+        layout.addWidget(self.estimator_note)
+        self.params_status = QLabel("", page)
+        self.params_status.setWordWrap(True)
+        layout.addWidget(self.params_status)
+        buttons = QHBoxLayout()
+        self.rerun_btn = QPushButton("按此参数重新计算", page)
+        self.rerun_btn.clicked.connect(self._rerun_with_params)
+        self.save_defaults_btn = QPushButton("保存为默认设置", page)
+        self.save_defaults_btn.setToolTip("写入用户选项（设置 → 用户选项 → 鸟清晰度），用于之后的检测和查看")
+        self.save_defaults_btn.clicked.connect(lambda: self.save_defaults_requested.emit(self))
+        buttons.addWidget(self.rerun_btn)
+        buttons.addWidget(self.save_defaults_btn)
+        buttons.addStretch(1)
+        layout.addLayout(buttons)
+        note = QLabel("重新计算只影响本窗口，不写入 XMP；「保存为默认设置」后，目录/文件检测也按此参数计算。", page)
+        note.setWordWrap(True)
+        note.setForegroundRole(_ROLE.PlaceholderText)
+        layout.addWidget(note)
+        layout.addStretch(1)
+        self._show_params(self.params)
+        return page
+
+    def _show_params(self, params: dict) -> None:
+        self.max_birds_spin.setValue(int(params.get("max_birds", 0) or 0))
+        self.estimator_combo.setCurrentIndex(max(0, self.estimator_combo.findData(params.get("edge_estimator"))))
+        self._update_estimator_note()
+
+    def _update_estimator_note(self, *_args) -> None:
+        index = self.estimator_combo.currentIndex()
+        self.estimator_note.setText(ESTIMATOR_CHOICES[index][2] if 0 <= index < len(ESTIMATOR_CHOICES) else "")
+
+    def selected_params(self) -> dict:
+        return {"max_birds": int(self.max_birds_spin.value()),
+                "edge_estimator": str(self.estimator_combo.currentData() or "standard")}
+
+    def _rerun_with_params(self) -> None:
+        self.params = self.selected_params()
+        self.set_loading()
+        self.params_changed.emit(self)
+
+    def _params_status_text(self, result) -> str:
+        labels = {key: label for key, label, _tip in ESTIMATOR_CHOICES}
+        limit = int(self.params.get("max_birds", 0) or 0)
+        parts = [f"当前结果：{labels.get(getattr(result, 'edge_estimator', ''), '—')}",
+                 f"上限 {'不限制' if limit <= 0 else f'{limit} 只'}",
+                 f"测量 {getattr(result, 'bird_count', 0)} 只鸟",
+                 f"算法版本 {getattr(result, 'version', '—')}"]
+        return "，".join(parts) + "。"
+
     # ── data ──────────────────────────────────────────────────────────────
     def set_loading(self, message: str = "") -> None:
         label = SOURCE_LABELS.get(self.image_source, self.image_source)
@@ -545,6 +641,7 @@ class BirdSharpnessTraceDialog(QDialog):
     def set_trace(self, trace) -> None:
         self.trace = trace
         result = trace.result
+        self.params_status.setText(self._params_status_text(result))
         style = VERDICT_STYLES.get(getattr(result, "verdict", ""))
         if style is not None:
             self.verdict_chip.setText(f"  {style.label}  ")

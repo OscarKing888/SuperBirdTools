@@ -530,3 +530,25 @@ def test_small_birds_use_the_median_of_several_head_circles(monkeypatch) -> None
     assert len(small["head_samples"]) == len(HEAD_SAMPLE_VARIANTS)
     assert small["head_sigma"] == pytest.approx(float(np.median(small["head_samples"])), abs=1e-3)
     assert large["head_samples"] is None
+
+
+def test_edge_estimators_and_their_version_tags(monkeypatch) -> None:
+    from bird_sharpness.metrics import ESTIMATOR_DENSE, ESTIMATOR_STANDARD, edge_estimator, edge_stats
+    from bird_sharpness.scoring import ALGORITHM_VERSION
+
+    samples = np.arange(1, 101, dtype=np.float32) / 100.0
+    assert edge_stats(samples).sigma == pytest.approx(float(np.median(samples)))
+    assert edge_stats(samples, 0.4).sigma == pytest.approx(float(np.quantile(samples, 0.4)))
+    assert edge_estimator("dense") is ESTIMATOR_DENSE and edge_estimator("bogus") is ESTIMATOR_STANDARD
+
+    _install_image(monkeypatch, _scene([(900, 600, 300, 0.3)]))
+    base = BirdSharpnessAnalyzer(_StubModels([(900, 600, 300)], full_w=1800), focus_provider=_no_focus)
+    standard = base.analyze("bird.jpg")
+    dense_analyzer = base.with_options(edge_estimator="dense", max_birds=3)
+    dense = dense_analyzer.analyze("bird.jpg")
+    assert (base.edge_estimator, base.max_birds) == ("standard", 0)  # sibling options stay separate
+    assert dense_analyzer.models is base.models
+    assert standard.version == ALGORITHM_VERSION and standard.edge_estimator == "standard"
+    assert dense.version == f"{ALGORITHM_VERSION}-dense" and dense.edge_estimator == "dense"
+    assert dense.to_xmp_fields()["XMP-superpicky:bird_sharpness_version"] == dense.version
+    assert dense.verdict == standard.verdict == bsf.VERDICT_SHARP

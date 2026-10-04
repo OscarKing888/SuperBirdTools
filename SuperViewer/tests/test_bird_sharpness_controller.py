@@ -289,15 +289,21 @@ def test_bird_limit_option_reaches_the_analyzer_and_the_options_dialog():
     window = QWidget()
     controller = BirdSharpnessController(window, _FakeFileList())
     try:
+        est = opts.KEY_BIRD_SHARPNESS_EDGE_ESTIMATOR
         assert controller.analyzer().max_birds == 0  # default: every bird
-        opts.apply_runtime_user_options({key: 6})
+        assert controller.analyzer().edge_estimator == "standard"
+        opts.apply_runtime_user_options({key: 6, est: "dense"})
         assert controller.analyzer().max_birds == 6  # picked up at the next job start
-        dialog = SuperViewerUserOptionsDialog(options={key: 6})
+        assert controller.analyzer().edge_estimator == "dense"
+        dialog = SuperViewerUserOptionsDialog(options={key: 6, est: "dense"})
         try:
             assert dialog._spin_bird_sharpness_max_birds.value() == 6
+            assert dialog._combo_bird_sharpness_estimator.currentData() == "dense"
             dialog._spin_bird_sharpness_max_birds.setValue(0)
             assert dialog._spin_bird_sharpness_max_birds.text() == "不限制"
+            dialog._combo_bird_sharpness_estimator.setCurrentIndex(0)
             assert dialog.selected_options()[key] == 0
+            assert dialog.selected_options()[est] == "standard"
         finally:
             dialog.deleteLater()
     finally:

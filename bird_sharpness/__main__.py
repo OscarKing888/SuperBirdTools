@@ -57,6 +57,9 @@ def main(argv: List[str] | None = None) -> int:
                         help="导出每张照片的计算过程（各步骤 PNG + trace.json）到 DIR/<文件名>/")
     parser.add_argument("--max-birds", type=int, default=0, metavar="N",
                         help="每张最多测量的鸟数（0 = 不限制；限制时压在相机焦点框上的鸟优先）")
+    parser.add_argument("--edge-estimator", choices=("standard", "dense"), default="standard",
+                        help="边缘统计方式：standard = 最强 30 条边缘的中位数（默认）；"
+                             "dense = 至少 60 条边缘的第 40 百分位（小鸟更稳）")
     parser.add_argument(
         "-j", "--workers", type=int, default=min(6, max(1, (os.cpu_count() or 2) // 2)),
         help="并行检测的照片数（模型推理串行，解码与计算并行；默认 CPU 核数的一半，最多 6）",
@@ -114,7 +117,7 @@ def main(argv: List[str] | None = None) -> int:
         options = DenoiseOptions(output_directory=args.denoised_dir)
         lookup = lambda path: find_denoised_preview(path, options)  # noqa: E731
     loader = source_loader(args.source, denoised_lookup=lookup)
-    analyzer = BirdSharpnessAnalyzer(max_birds=max(0, args.max_birds))
+    analyzer = BirdSharpnessAnalyzer(max_birds=max(0, args.max_birds), edge_estimator=args.edge_estimator)
     try:
         if args.trace:
             from .trace import AnalysisTracer
