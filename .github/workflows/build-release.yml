@@ -1,16 +1,33 @@
 name: Build packages and release
-run-name: Build ${{ github.event_name == 'push' && github.ref_name || inputs.version }} (${{ github.event_name }})
+run-name: Build ${{ inputs.version || github.head_ref || github.ref_name }} (${{ github.event_name }})
 
 on:
   workflow_dispatch:
     inputs:
       version:
-        description: "MAJOR.MINOR (for example 1.2); HEAD's 8-character commit hash is appended automatically"
-        required: true
+        description: "MAJOR.MINOR (for example 1.2); empty = app_metadata.json. HEAD's 8-character commit hash is appended automatically"
+        required: false
+        default: ""
         type: string
   push:
+    branches:
+      - main
     tags:
       - "v*"
+    # Path filters never apply to tag pushes, so releases always build.
+    paths-ignore:
+      - "**/*.md"
+      - "**/docs/**"
+      - "ai_rules/**"
+      - ".cursor/**"
+  pull_request:
+    branches:
+      - main
+    paths-ignore:
+      - "**/*.md"
+      - "**/docs/**"
+      - "ai_rules/**"
+      - ".cursor/**"
 
 permissions:
   contents: read
@@ -24,8 +41,9 @@ env:
   SUPERBIRDSTAMP_YOLO_RELEASE: v8.4.0
 
 concurrency:
-  group: build-release-${{ github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'workflow_dispatch' }}
+  group: build-release-${{ github.event.pull_request.number || github.ref }}
+  # A newer commit supersedes branch/PR builds; tag builds publish Releases and must finish.
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
 
 jobs:
   prepare:
@@ -34,6 +52,7 @@ jobs:
     timeout-minutes: 5
     outputs:
       version: ${{ steps.version.outputs.version }}
+      skip: ${{ steps.version.outputs.skip }}
     steps:
       - name: Check out version helper
         uses: actions/checkout@v7
@@ -54,18 +73,28 @@ jobs:
         id: version
         shell: bash
         env:
-          RAW_VERSION: ${{ github.event_name == 'push' && github.ref_name || inputs.version }}
-          IS_RELEASE_TAG: ${{ github.event_name == 'push' }}
+          IS_RELEASE_TAG: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/') }}
+          IS_BRANCH_PUSH: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/heads/') }}
+          # Branch pushes and PRs pass nothing: the prefix comes from app_metadata.json.
+          RAW_VERSION: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/') && github.ref_name || inputs.version }}
         run: |
-          args=("$RAW_VERSION" --check-only)
+          args=(--check-only)
+          if [[ -n "$RAW_VERSION" ]]; then args=("$RAW_VERSION" "${args[@]}"); fi
           if [[ "$IS_RELEASE_TAG" == "true" ]]; then args+=(--release-tag); fi
           version="$(python3 build_tools/set_build_version.py "${args[@]}")"
           echo "version=$version" >> "$GITHUB_OUTPUT"
-          echo "Building SuperBirdTools v$version"
+          # bump-version pushes main and its release tag together; the tag run builds that commit.
+          if [[ "$IS_BRANCH_PUSH" == "true" ]] && [[ -n "$(git tag --points-at HEAD 'v*')" ]]; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "HEAD carries a release tag; the tag build covers v$version."
+          else
+            echo "Building SuperBirdTools v$version"
+          fi
 
   build-windows:
     name: Windows x86_64
     needs: prepare
+    if: needs.prepare.outputs.skip != 'true'
     runs-on: windows-2025
     timeout-minutes: 120
     env:
@@ -157,6 +186,7 @@ jobs:
   build-macos:
     name: macOS arm64
     needs: prepare
+    if: needs.prepare.outputs.skip != 'true'
     runs-on: macos-15
     timeout-minutes: 120
     env:

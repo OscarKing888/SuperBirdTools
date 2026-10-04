@@ -219,11 +219,11 @@ Windows 使用 `.venv\Scripts\python.exe` 执行同一脚本。macOS `CFBundleSh
 
 ## GitHub Actions 自动构建
 
-`.github/workflows/build-release.yml` 提供两种入口：
+`.github/workflows/build-release.yml` 每次都以 `--clean` 构建 Windows x86_64 和 macOS arm64 三应用套件，入口如下：
 
-- 在 GitHub Actions 页面手动运行时，输入前两段版本号（例如 `1.2`），第三段取所选 ref 的实际 HEAD 前 8 位，构建结果保留为 14 天的 Actions artifacts。
-- 推送 `v*` tag（例如 `v1.2.a1b2c3d4`）时，先测试并校验版本规则，再以 `--clean` 构建 Windows x86_64 和 macOS arm64 三应用套件，生成更新清单、增量分卷、完整安装包和 `SHA256SUMS.txt`；附件校验及上传全部成功后发布 GitHub Release。
-- 普通 commit 或只推送 `main` 不触发此发布工作流。手动运行即使选择 Tag，也只生成 Actions artifacts，不发布 Release。
+- push 到 `main` 或向 `main` 提交 Pull Request 时自动构建（只改 Markdown、`docs/`、`ai_rules/`、`.cursor/` 时跳过）。版本前两段取 `app_metadata.json`，第三段取实际 HEAD 前 8 位（PR 为 GitHub 生成的合并提交），结果保留为 14 天的 Actions artifacts，不发布 Release。同一分支或 PR 的新提交会取消尚未完成的旧构建。
+- 在 GitHub Actions 页面手动运行时，可输入前两段版本号（例如 `1.2`），留空则取 `app_metadata.json`；第三段取所选 ref 的实际 HEAD 前 8 位，同样只生成 Actions artifacts。手动运行即使选择 Tag，也不发布 Release。
+- 推送 `v*` tag（例如 `v1.2.a1b2c3d4`）时，先测试并校验版本规则，再构建并生成更新清单、增量分卷、完整安装包和 `SHA256SUMS.txt`；附件校验及上传全部成功后发布 GitHub Release。Tag 构建不会被取消。`bump-version` 同时推送 `main` 和 Tag 时，`main` 那次运行发现 HEAD 已有 `v*` Tag 会跳过构建，只由 Tag 构建产出该提交。
 
 完成本轮提交并合入 `main` 后，在检出 `main` 的仓库根运行版本工具：
 
@@ -246,7 +246,7 @@ bump-version.bat 1.2
 推送要求当前 checkout 在 `main`，`app_common` 的 gitlink 提交必须已在子模块的 `main` 上。源码版本配置有未提交修改或前两段低于已提交版本时，修改文件前停止。提交失败保留文件修改；Tag 失败保留版本提交，修复后用相同前两段重跑即可补建。已有 Tag 不覆盖；在同一个 HEAD 重跑会复用相同的附注 Tag，不重复提交。如果已有新代码提交（包括合入 `origin/main` 后产生的合并提交），同一个 `1.2` 会生成新的 hash Tag，旧 Tag 保留但不批量推送。
 
 - `--no-push`：只在本地提交和打 Tag，之后不带该参数重跑即可推送；也可在功能分支上使用。
-- `--no-tag`：提交并推送 `main`，不创建或推送 Tag（不会触发发布）。
+- `--no-tag`：提交并推送 `main`，不创建或推送 Tag（只触发 `main` 的 CI 构建，不发布 Release）。
 - `--no-commit`：只更新 `app_metadata.json` 的版本前缀。直接运行 `build_tools/bump_version.py` 也只支持此模式。
 
 Tag 必须是 `v主版本.次版本.8位小写hash`，hash 必须等于 Tag 所指 commit 的前 8 位，前两段也必须与该提交的源码配置一致。旧数字三段版本、预发布后缀、错误 hash 都会在 CI 校验时被拒绝。更新器用 `release_version` 显示完整版本，同时保留旧清单的短 commit `version` 字段，兼容已发布更新器；更新顺序仍按主线 first-parent 提交数判断，不能对 hash 排大小。
