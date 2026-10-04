@@ -133,6 +133,21 @@ Windows：
 build_all.bat
 ```
 
+本地只需验证应用时，可跳过更新清单、更新分卷和完整安装 ZIP：
+
+```bash
+bash build_all.sh --apps-only
+```
+
+```bat
+build_all.bat --apps-only
+```
+
+`--apps-only` 仍构建 Viewer、BirdStamp 和更新器，macOS 默认仍做 hardlink 去重；
+可与 `--clean` 组合。macOS 此模式也会关闭 `BIRDSTAMP_CREATE_ZIP` 的单应用 ZIP。
+已有发布制品和安装清单不会刷新，不能把它们当作本次应用构建的发布包。
+不加此参数时仍生成完整发布制品，CI 保持 `--clean` 全量发布流程。
+
 macOS 全量构建统一选择并向两个子脚本传递 Python 解释器；默认优先根目录 `.venv`，
 可通过 `PYTHON_BIN` 显式覆盖。BirdStamp 单独构建也优先根目录 `.venv`，仅在其不存在时
 回退到 app 自己的 `.venv`，避免分析依赖和自动安装依赖时使用不同环境。
@@ -157,7 +172,8 @@ Python 标准库或 Torch/Qt 的 C/C++ 代码。PyInstaller 会分析导入关�
 
 增量缓存以整个 PyInstaller 构建阶段为单位；修改任一已收集的 Python 文件后，
 所属 app 的 Analysis 仍可能完整重跑，不能保证只处理改动的业务代码。
-`dist/` 的 COLLECT 阶段及 macOS BUNDLE 阶段每次都会重新收集，
+Windows 的 COLLECT 阶段及 macOS BUNDLE 阶段每次都会重新收集；
+macOS 三个应用直接由 EXE 和资源生成 BUNDLE，不再创建随后删除的中间 COLLECT 目录，
 所以增量模式主要节省模块图分析、动态库扫描及未变更原生库的处理时间。
 命中缓存时日志仍有 `checking Analysis/PYZ/PKG/EXE`，但不应再次出现相应的
 `Building ...`；如失效，前面的 `Building because ...` 会说明原因。
@@ -185,9 +201,11 @@ SuperBirdStamp\\build_win.bat
 ## 输出布局
 
 - 单独 build 和全量 build 都默认输出到仓库根 `dist/`
-- macOS 全量 build 后，`dist/` 顶层只保留：
+- macOS 应用构建结果位于 `dist/`：
   - `SuperViewer.app`
   - `SuperBirdStamp.app`
+  - `SuperBirdUpdater.app`
+- 默认全量 build 另生成 `dist/updates/` 发布制品及安装清单；`--apps-only` 跳过此步骤
 - Windows 单独 build 仍输出 `dist/SuperViewer/`、`dist/SuperBirdStamp/`
 - Windows `build_all.bat` 默认走根级 merged spec，目标是让两个 app 在同一个 `dist/` 下共享尽可能多的运行库
 

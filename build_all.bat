@@ -14,10 +14,16 @@ if defined SUPERBIRDTOOLS_BUILD_ROOT (
 )
 
 set "CLEAN=0"
+set "APPS_ONLY=0"
 :parse_args
 if "%~1"=="" goto args_done
 if /I "%~1"=="--clean" (
   set "CLEAN=1"
+  shift
+  goto parse_args
+)
+if /I "%~1"=="--apps-only" (
+  set "APPS_ONLY=1"
   shift
   goto parse_args
 )
@@ -98,6 +104,10 @@ if defined PYTHON_EXE (
   %PYTHON_LAUNCHER% -m PyInstaller --noconfirm --distpath "%DIST_ROOT%" --workpath "%BUILD_ROOT%\SuperBirdUpdater" "%ROOT_DIR%SuperBirdUpdater\SuperBirdUpdater.spec"
 )
 if errorlevel 1 exit /b 1
+if "%APPS_ONLY%"=="1" (
+  echo [INFO] Apps only: skipping update manifests and release ZIPs; existing release artifacts are not refreshed.
+  goto outputs
+)
 if defined PYTHON_EXE (
   "%PYTHON_EXE%" "%ROOT_DIR%build_tools\generate_update_manifest.py" --dist "%DIST_ROOT%" --platform windows --arch x86_64 --package
 ) else (
@@ -105,10 +115,11 @@ if defined PYTHON_EXE (
 )
 if errorlevel 1 exit /b 1
 
+:outputs
 echo [OK] outputs:
 echo   %DIST_ROOT%\SuperViewer\SuperViewer.exe
 echo   %DIST_ROOT%\SuperBirdStamp\SuperBirdStamp.exe
 echo   %DIST_ROOT%\SuperBirdUpdater\SuperBirdUpdater.exe
-echo   %DIST_ROOT%\updates
+if "%APPS_ONLY%"=="0" echo   %DIST_ROOT%\updates
 
 endlocal

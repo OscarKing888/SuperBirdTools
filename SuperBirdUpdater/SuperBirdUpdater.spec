@@ -24,9 +24,11 @@ a = Analysis(
 pyz = PYZ(a.pure)
 exe = EXE(pyz, a.scripts, [], exclude_binaries=True, name="SuperBirdUpdater", console=False,
           debug=False, strip=False, upx=False, target_arch=target_arch, codesign_identity=None)
-coll = COLLECT(exe, a.binaries, a.datas, strip=False, upx=False, name="SuperBirdUpdater")
 if sys.platform == "darwin":
-    app = BUNDLE(coll, name="SuperBirdUpdater.app", bundle_identifier="local.superbirdtools.updater",
+    # macOS 无需中间 onedir；Windows 保留独立更新器的 COLLECT 布局。
+    app = BUNDLE(exe, a.binaries, a.datas, name="SuperBirdUpdater.app", bundle_identifier="local.superbirdtools.updater",
                  info_plist={"CFBundleShortVersionString": identity.bundle_version,
                              "CFBundleVersion": identity.build_number,
                              "CFBundleDisplayName": "SuperBirdTools 更新器"})
+else:
+    coll = COLLECT(exe, a.binaries, a.datas, strip=False, upx=False, name="SuperBirdUpdater")

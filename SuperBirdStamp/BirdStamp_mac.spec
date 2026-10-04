@@ -160,19 +160,12 @@ exe = EXE(
     icon=str(ICON_PATH) if ICON_PATH.exists() else None,
 )
 
-coll = COLLECT(
+# 直接生成 .app，避免先收集完整 onedir 再重复拷贝进 BUNDLE。
+app = BUNDLE(
     exe,
     a.binaries,
     a.zipfiles,
     a.datas,
-    strip=False,
-    upx=False,
-    upx_exclude=[],
-    name="SuperBirdStamp",
-)
-
-app = BUNDLE(
-    coll,
     name="SuperBirdStamp.app",
     icon=str(ICON_PATH) if ICON_PATH.exists() else None,
     bundle_identifier="com.birdstamp.app",

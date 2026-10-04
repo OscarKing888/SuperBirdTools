@@ -5,6 +5,7 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DIST_ROOT="${SUPERBIRDTOOLS_DIST_ROOT:-${ROOT_DIR}/dist}"
 BUILD_ROOT="${SUPERBIRDTOOLS_BUILD_ROOT:-${ROOT_DIR}/build}"
 CLEAN=0
+APPS_ONLY=0
 SKIP_DEDUPE=0
 TARGET_ARCH=""
 CONSOLE=0
@@ -12,6 +13,7 @@ CONSOLE=0
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --clean) CLEAN=1; shift ;;
+    --apps-only) APPS_ONLY=1; shift ;;
     --skip-dedupe) SKIP_DEDUPE=1; shift ;;
     --arch) TARGET_ARCH="${2:-}"; shift 2 ;;
     --console) CONSOLE=1; shift ;;
@@ -29,6 +31,10 @@ mkdir -p "$DIST_ROOT" "$BUILD_ROOT"
 
 export SUPERBIRDTOOLS_DIST_ROOT="$DIST_ROOT"
 export SUPERBIRDTOOLS_BUILD_ROOT="$BUILD_ROOT"
+if [[ $APPS_ONLY -eq 1 ]]; then
+  # 本地应用验证不生成任何 ZIP，包括子脚本的可选单应用包。
+  export BIRDSTAMP_CREATE_ZIP=0
+fi
 
 resolve_python() {
   if [[ -n "${PYTHON_BIN:-}" ]]; then
@@ -83,7 +89,7 @@ fi
 "$BUILD_PYTHON" -m PyInstaller --noconfirm \
   --distpath "$DIST_ROOT" --workpath "$BUILD_ROOT/SuperBirdUpdater" \
   "$ROOT_DIR/SuperBirdUpdater/SuperBirdUpdater.spec"
-# BUNDLE 已包含独立运行库，移除其重复 COLLECT 目录。
+# 兼容旧构建留下的 COLLECT 目录；macOS spec 现在直接生成 BUNDLE。
 if [[ -d "$DIST_ROOT/SuperBirdUpdater.app" && -d "$DIST_ROOT/SuperBirdUpdater" ]]; then
   rm -rf "$DIST_ROOT/SuperBirdUpdater"
 fi
@@ -94,14 +100,20 @@ if [[ $SKIP_DEDUPE -eq 0 ]]; then
     "${DIST_ROOT}/SuperBirdStamp.app"
 fi
 
-MANIFEST_ARGS=(--dist "$DIST_ROOT" --package)
-if [[ -n "$TARGET_ARCH" ]]; then
-  MANIFEST_ARGS+=(--arch "$TARGET_ARCH")
+if [[ $APPS_ONLY -eq 0 ]]; then
+  MANIFEST_ARGS=(--dist "$DIST_ROOT" --package)
+  if [[ -n "$TARGET_ARCH" ]]; then
+    MANIFEST_ARGS+=(--arch "$TARGET_ARCH")
+  fi
+  "$BUILD_PYTHON" "$ROOT_DIR/build_tools/generate_update_manifest.py" "${MANIFEST_ARGS[@]}"
+else
+  echo "[build_all] Apps only: skipping update manifests and release ZIPs; existing release artifacts are not refreshed."
 fi
-"$BUILD_PYTHON" "$ROOT_DIR/build_tools/generate_update_manifest.py" "${MANIFEST_ARGS[@]}"
 
 echo "[OK] outputs:"
 echo "  ${DIST_ROOT}/SuperViewer.app"
 echo "  ${DIST_ROOT}/SuperBirdStamp.app"
 echo "  ${DIST_ROOT}/SuperBirdUpdater.app"
-echo "  ${DIST_ROOT}/updates/"
+if [[ $APPS_ONLY -eq 0 ]]; then
+  echo "  ${DIST_ROOT}/updates/"
+fi

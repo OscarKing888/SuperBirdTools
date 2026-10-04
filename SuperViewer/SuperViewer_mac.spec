@@ -105,17 +105,11 @@ exe = EXE(
     entitlements_file=None,
     icon=[str(ICON_PATH)] if ICON_PATH.exists() else None,
 )
-coll = COLLECT(
+# 直接生成 .app，避免先收集完整 onedir 再重复拷贝进 BUNDLE。
+app = BUNDLE(
     exe,
     a.binaries,
     a.datas,
-    strip=False,
-    upx=False,
-    upx_exclude=[],
-    name="SuperViewer",
-)
-app = BUNDLE(
-    coll,
     name="SuperViewer.app",
     icon=str(ICON_PATH) if ICON_PATH.exists() else None,
     bundle_identifier=None,
