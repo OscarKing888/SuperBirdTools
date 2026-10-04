@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import os
 from dataclasses import dataclass, field
+from types import SimpleNamespace
 from typing import Dict, List, Optional, Sequence, Tuple
 
 import cv2
@@ -825,8 +826,12 @@ class AnalysisTracer:
         lw = _line_w(img)
         points = []
         rows = []
-        for i, bird in enumerate(result.birds or []):
-            i = bird.get("index", i)  # detection number, unchanged when false extras are dropped
+        from .analyzer import BirdMeasurement
+
+        # Sharpest first, by the same rank that picks the best bird (score, then blur radius, then confidence).
+        numbered = [(bird.get("index", i), bird) for i, bird in enumerate(result.birds or [])]
+        numbered.sort(key=lambda nb: BirdMeasurement.rank(SimpleNamespace(**nb[1])), reverse=True)
+        for i, bird in numbered:  # i: detection number, unchanged when false extras are dropped
             color = _verdict_rgb(bird["verdict"])
             box = self._display(bird["box"])
             best = tuple(bird["box"]) == tuple(result.bird_box or ())

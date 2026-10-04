@@ -72,8 +72,9 @@ def test_multi_bird_trace_marks_best_and_switches_steps(monkeypatch) -> None:
     assert len(points) == 2 and sum(p["best"] for p in points) == 1
     # 识别 / 结论 list their birds (swatch colour + box to highlight) instead of metric rows / legend entries
     detect = next(s for s in trace.common if s.key == "detect")
+    assert [r.label for r in final.bird_rows] == ["鸟 #2（最佳）", "鸟 #1"]  # 结论: sharpest first
     for step in (detect, final):
-        assert [r.label[:4] for r in step.bird_rows] == ["鸟 #1", "鸟 #2"]
+        assert sorted(r.label[:4] for r in step.bird_rows) == ["鸟 #1", "鸟 #2"]
         assert not any(label.startswith("鸟 #") for label, _ in step.metrics)
         assert not any(label.startswith("鸟 #") for _c, label in step.legend)
         h, w = step.image.shape[:2]
@@ -81,12 +82,24 @@ def test_multi_bird_trace_marks_best_and_switches_steps(monkeypatch) -> None:
             x1, y1, x2, y2 = row.box
             assert 0 <= x1 < x2 <= w and 0 <= y1 < y2 <= h and row.color.startswith("#")
     assert detect.bird_rows[0].color != detect.bird_rows[1].color  # detection colours, one per bird
-    for step in (detect, overview, final):  # the same bird keeps its detection number across steps
+    for step in (detect, overview):  # the same bird keeps its detection number across steps
         assert [r.bird for r in step.bird_rows] == [0, 1]
+    assert [r.bird for r in final.bird_rows] == [1, 0]
     best = next(r for r in final.bird_rows if "最佳" in r.label)
     assert best.box[0] > detect.image.shape[1] / 2  # best bird is the right-hand one
     assert best.color == bsf.VERDICT_STYLES[result.verdict].color.lower()
-    assert json.loads(json.dumps(final.to_json(), default=str))["bird_rows"][1]["label"] == best.label
+    assert json.loads(json.dumps(final.to_json(), default=str))["bird_rows"][0]["label"] == best.label
+
+
+def test_result_lists_birds_sharpest_first(monkeypatch) -> None:
+    birds = [(300, 600, 220, 1.6), (900, 600, 220, 0.3), (1500, 600, 220, 1.0)]
+    result, _plain, trace = _run(monkeypatch, _scene(birds), [b[:3] for b in birds])
+    rows = trace.final[0].bird_rows
+    assert [r.bird for r in rows] == [1, 2, 0] and "最佳" in rows[0].label
+    scores = [next(b["score"] for b in result.birds if b["index"] == r.bird) for r in rows]
+    assert scores == sorted(scores, reverse=True)
+    # the other bird lists keep detection order
+    assert [r.bird for r in next(s for s in trace.common if s.key == "detect").bird_rows] == [0, 1, 2]
 
 
 def test_focus_and_full_image_traces(monkeypatch) -> None:
