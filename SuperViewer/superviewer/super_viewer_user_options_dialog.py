@@ -6,6 +6,8 @@ from __future__ import annotations
 import os
 
 from app_common.superviewer_user_options import (
+    BIRD_SHARPNESS_MAX_BIRDS_LIMIT,
+    KEY_BIRD_SHARPNESS_MAX_BIRDS,
     KEY_NAVIGATION_FPS_OPTIONS,
     KEY_PERF_PROBES_ENABLED,
     PERSISTENT_THUMB_SIZE_LEVELS,
@@ -196,6 +198,28 @@ class SuperViewerUserOptionsDialog(QDialog):
         denoise_layout.addWidget(denoise_note)
         denoise_layout.addStretch(1)
         tabs.addTab(denoise, "批量降噪")
+
+        sharpness = QWidget(tabs)
+        sharpness_layout = QVBoxLayout(sharpness)
+        sharpness_grid = QGridLayout()
+        sharpness_grid.setVerticalSpacing(10)
+        self._spin_bird_sharpness_max_birds = QSpinBox(sharpness)
+        self._spin_bird_sharpness_max_birds.setRange(0, BIRD_SHARPNESS_MAX_BIRDS_LIMIT)
+        self._spin_bird_sharpness_max_birds.setSpecialValueText("不限制")
+        self._spin_bird_sharpness_max_birds.setSuffix(" 只")
+        self._spin_bird_sharpness_max_birds.setValue(int(opts[KEY_BIRD_SHARPNESS_MAX_BIRDS]))
+        self._spin_bird_sharpness_max_birds.setToolTip("0 = 不限制。鸟群照片里每只鸟都要单独定位和测量，限制数量可缩短耗时。")
+        sharpness_grid.addWidget(QLabel("每张最多测量鸟数"), 0, 0)
+        sharpness_grid.addWidget(self._spin_bird_sharpness_max_birds, 0, 1)
+        sharpness_grid.setColumnStretch(2, 1)
+        sharpness_layout.addLayout(sharpness_grid)
+        sharpness_note = QLabel("默认测量照片中的全部鸟，取最清晰的一只作为整张照片的清晰度。\n"
+                                "设了上限时，压在相机焦点框上的鸟优先测量，其余按识别置信度 × 鸟框面积排序。\n"
+                                "新的设置用于下一次检测和计算过程查看。", sharpness)
+        sharpness_note.setWordWrap(True)
+        sharpness_layout.addWidget(sharpness_note)
+        sharpness_layout.addStretch(1)
+        tabs.addTab(sharpness, "鸟清晰度")
         self._combo_denoise_mode.currentIndexChanged.connect(self._update_denoise_mode)
         self._update_denoise_mode()
 
@@ -247,4 +271,5 @@ class SuperViewerUserOptionsDialog(QDialog):
             "denoise_strength": self._spin_denoise_strength.value(),
             "denoise_device": str(self._combo_denoise_device.currentData()),
             "denoise_workers": self._spin_denoise_workers.value(),
+            KEY_BIRD_SHARPNESS_MAX_BIRDS: int(self._spin_bird_sharpness_max_birds.value()),
         }

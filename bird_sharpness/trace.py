@@ -361,7 +361,7 @@ class AnalysisTracer:
             metrics.append(("图像文件", os.path.basename(source_path)))
 
     def detect(self, detections, scale_to_full: float, *, has_masks: bool, has_keypoints: bool,
-               unmeasured: int = 0) -> None:
+               unmeasured: int = 0, limit: int = 0) -> None:
         img = _dim(self._overview, None, 0.55)
         lw = _line_w(img)
         H, W = self._image_shape
@@ -387,8 +387,7 @@ class AnalysisTracer:
                    ("鸟眼模型", "有" if has_keypoints else "无（按整只鸟计算，准确度低）"),
                    ("鸟数", str(len(detections))), *rows]
         if unmeasured:
-            from .analyzer import MAX_BIRDS
-            metrics.insert(3, ("未测量", f"另有 {unmeasured} 只（超过上限 {MAX_BIRDS} 只；焦点框上的鸟优先测量）"))
+            metrics.insert(3, ("未测量", f"另有 {unmeasured} 只（超过上限 {limit} 只；焦点框上的鸟优先测量）"))
         legend = [(hex_color(BIRD_COLORS[i % len(BIRD_COLORS)]), f"鸟 #{i + 1}") for i in range(len(detections))]
         legend.append((hex_color(C_FOCUS), "相机焦点框"))
         desc = ("在 1024 px 副本上找出全部鸟（置信度 ≥ 0.25）。每只鸟后续只用自己的像素单独计算一组清晰度，"

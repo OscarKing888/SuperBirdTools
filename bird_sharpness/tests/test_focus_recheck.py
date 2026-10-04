@@ -261,20 +261,29 @@ def test_lifted_mask_keeps_the_piece_on_focus_or_the_largest(monkeypatch, focus,
         assert y1 > 850  # without focus the larger piece wins
 
 
-def test_the_focused_bird_is_measured_even_beyond_the_bird_cap(monkeypatch) -> None:
-    # A flock larger than MAX_BIRDS: detections are ranked by confidence x area, so the
-    # small bird under the focus box comes last and used to be cut off (DSC00859).
-    from bird_sharpness.analyzer import MAX_BIRDS
-
-    flock = [(150 + 100 * (i % 16), 200 + 800 * (i // 16), 40) for i in range(MAX_BIRDS + 1)]
-    birds = [(cx, cy, r, 0.9) for cx, cy, r in flock] + [(900, 600, 30, 0.9)]
-    models = _CamouflageStub(birds)
-    scene = _scene([(cx, cy, r, 1.6) for cx, cy, r in flock] + [(900, 600, 30, 0.3)], size=SIZE)
-    _install_image(monkeypatch, scene)
+def _flock(monkeypatch, max_birds):
+    # Seven birds plus a small one under the focus box; detections are ranked by
+    # confidence x area, so the focused bird comes last (DSC00859).
+    flock = [(150 + 200 * i, 200, 40) for i in range(7)]
+    models = _CamouflageStub([(cx, cy, r, 0.9) for cx, cy, r in flock] + [(900, 600, 30, 0.9)])
+    _install_image(monkeypatch, _scene([(cx, cy, r, 1.6) for cx, cy, r in flock] + [(900, 600, 30, 0.3)], size=SIZE))
     tracer = AnalysisTracer()
-    result = BirdSharpnessAnalyzer(models, focus_provider=_focus).analyze("flock.ARW", tracer=tracer)
-    assert result.bird_count == MAX_BIRDS
-    boxes = [b["box"] for b in result.birds]
-    assert any(x1 <= 900 <= x2 and y1 <= 600 <= y2 for x1, y1, x2, y2 in boxes)
-    detect = next(s for s in tracer.trace.common if s.key == "detect")
-    assert dict(detect.metrics)["未测量"].startswith("另有 2 只")
+    analyzer = BirdSharpnessAnalyzer(models, focus_provider=_focus, max_birds=max_birds)
+    return analyzer.analyze("flock.ARW", tracer=tracer), tracer.trace
+
+
+def _has_focused_bird(result) -> bool:
+    return any(x1 <= 900 <= x2 and y1 <= 600 <= y2 for x1, y1, x2, y2 in (b["box"] for b in result.birds))
+
+
+def test_every_bird_is_measured_by_default(monkeypatch) -> None:
+    result, trace = _flock(monkeypatch, 0)
+    assert result.bird_count == 8 and _has_focused_bird(result)
+    assert "未测量" not in dict(next(s for s in trace.common if s.key == "detect").metrics)
+
+
+def test_a_bird_limit_keeps_the_focused_bird(monkeypatch) -> None:
+    result, trace = _flock(monkeypatch, 3)
+    assert result.bird_count == 3 and _has_focused_bird(result)
+    detect = next(s for s in trace.common if s.key == "detect")
+    assert dict(detect.metrics)["未测量"] == "另有 5 只（超过上限 3 只；焦点框上的鸟优先测量）"

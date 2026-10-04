@@ -263,6 +263,15 @@ class _TraceBridge(QObject):
     done = pyqtSignal(object, object)  # request, BirdSharpnessTraceOutcome or Exception
 
 
+def _max_birds_option() -> int:
+    try:
+        from app_common.superviewer_user_options import get_bird_sharpness_max_birds
+
+        return max(0, int(get_bird_sharpness_max_birds()))
+    except Exception:
+        return 0
+
+
 class BirdSharpnessController(QObject):
     """Owns the analyzer (models load once per session) and the single running job."""
 
@@ -299,6 +308,8 @@ class BirdSharpnessController(QObject):
 
                 # Same focus-box loader as the preview overlay, so the measured window is what users see.
                 self._analyzer = BirdSharpnessAnalyzer(focus_provider=_viewer_focus_box)
+            # Read at every job start: a changed user option applies to the next detection or trace.
+            self._analyzer.max_birds = _max_birds_option()
             return self._analyzer
 
     @property

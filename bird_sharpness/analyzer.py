@@ -43,7 +43,9 @@ _log = get_logger("bird_sharpness")
 DETECT_LONG_EDGE = 1024  # detection copy
 DETECT_IMGSZ = 640  # first-pass network input (the size the YOLO models are trained at)
 RECHECK_IMGSZ = 1024  # second pass when the first finds no bird: small, dark birds score higher
-MAX_BIRDS = 16  # birds measured per photo; shorebird flocks often hold a dozen
+# Birds measured per photo; 0 = no limit. Apps may set a limit (SuperViewer user option);
+# birds touching the camera focus box are measured first when the limit cuts.
+DEFAULT_MAX_BIRDS = 0
 CROP_PAD_RATIO = 0.15
 EYE_VISIBLE_MIN = 0.5
 BEAK_VISIBLE_MIN = 0.3
@@ -342,7 +344,7 @@ class MissedBird:
 def prefer_focus_birds(detections: List[BirdDetection], focus_px: Optional[Box], scale: float) -> List[BirdDetection]:
     """Birds touching the camera focus box first, the rest in their original order.
 
-    Used before the MAX_BIRDS cut: detections are ranked by confidence x area,
+    Used before the max_birds cut: detections are ranked by confidence x area,
     so the small bird the photographer focused on would otherwise be the one
     dropped from a flock (DSC00859: 9 birds, the focused one ranked last).
     """
@@ -487,9 +489,14 @@ class BirdSharpnessAnalyzer:
     """
 
     def __init__(self, models: Optional[BirdSharpnessModels] = None, *,
-                 focus_provider: Optional[FocusProvider] = None):
+                 focus_provider: Optional[FocusProvider] = None, max_birds: int = DEFAULT_MAX_BIRDS):
         self.models = models or BirdSharpnessModels()
         self.focus_provider = focus_provider or default_focus_box
+        self.max_birds = max_birds  # 0 = measure every bird; read per photo, so it may change between jobs
+
+    def _limit(self, detections: List[BirdDetection]) -> List[BirdDetection]:
+        limit = int(self.max_birds or 0)
+        return detections[:limit] if limit > 0 else detections
 
     def load(self) -> None:
         self.models.load()
@@ -530,14 +537,16 @@ class BirdSharpnessAnalyzer:
         small, scale = _resize_long_edge(image.rgb8, DETECT_LONG_EDGE)
         small_bgr = cv2.cvtColor(small, cv2.COLOR_RGB2BGR)
         detections = dedupe_detections(self.models.detect_birds(small_bgr, imgsz=DETECT_IMGSZ))
-        unmeasured = max(0, len(detections) - MAX_BIRDS)
+        limit = int(self.max_birds or 0)
+        unmeasured = max(0, len(detections) - limit) if limit > 0 else 0
         if unmeasured:
             if focus_px is _UNSET:
                 focus_px = self._focus_box_px(path, image)
-            detections = prefer_focus_birds(detections, focus_px, scale)[:MAX_BIRDS]
+            detections = self._limit(prefer_focus_birds(detections, focus_px, scale))
         if tracer is not None:
             tracer.detect(detections, scale, has_masks=bool(getattr(self.models, "has_masks", True)),
-                          has_keypoints=bool(getattr(self.models, "has_keypoints", True)), unmeasured=unmeasured)
+                          has_keypoints=bool(getattr(self.models, "has_keypoints", True)), unmeasured=unmeasured,
+                          limit=limit)
         if not detections and not cancelled():
             if focus_px is _UNSET:
                 focus_px = self._focus_box_px(path, image)
@@ -568,14 +577,14 @@ class BirdSharpnessAnalyzer:
             found = self.models.detect_birds(lifted, imgsz=DETECT_IMGSZ)
             if found:
                 check.accepted = [_focus_part(replace(d, source=FOUND_FULL_LIFTED), focus_px, scale)
-                                  for d in dedupe_detections(found)[:MAX_BIRDS]]
+                                  for d in self._limit(dedupe_detections(found))]
                 return check
             if cancelled():
                 return check
         candidates = self.models.detect_birds(small_bgr, conf=FOCUS_CANDIDATE_CONFIDENCE, imgsz=RECHECK_IMGSZ)
         confident = [replace(d, source=FOUND_FULL_FINE) for d in candidates if d.confidence >= BIRD_CONFIDENCE_MIN]
         if confident:
-            check.accepted = dedupe_detections(confident)[:MAX_BIRDS]
+            check.accepted = self._limit(dedupe_detections(confident))
             return check
         if focus_px is None:
             return check

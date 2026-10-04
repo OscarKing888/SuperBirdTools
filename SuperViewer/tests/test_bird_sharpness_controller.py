@@ -279,3 +279,29 @@ def test_missing_eye_model_is_reported_in_progress_window(env) -> None:
     assert _wait(lambda: not controller.busy)
     assert "未找到鸟眼关键点模型" in controller._dialog.warning.text()
     assert not controller._dialog.warning.isHidden()
+
+
+def test_bird_limit_option_reaches_the_analyzer_and_the_options_dialog():
+    from app_common import superviewer_user_options as opts
+    from SuperViewer.superviewer.super_viewer_user_options_dialog import SuperViewerUserOptionsDialog
+
+    key = opts.KEY_BIRD_SHARPNESS_MAX_BIRDS
+    window = QWidget()
+    controller = BirdSharpnessController(window, _FakeFileList())
+    try:
+        assert controller.analyzer().max_birds == 0  # default: every bird
+        opts.apply_runtime_user_options({key: 6})
+        assert controller.analyzer().max_birds == 6  # picked up at the next job start
+        dialog = SuperViewerUserOptionsDialog(options={key: 6})
+        try:
+            assert dialog._spin_bird_sharpness_max_birds.value() == 6
+            dialog._spin_bird_sharpness_max_birds.setValue(0)
+            assert dialog._spin_bird_sharpness_max_birds.text() == "不限制"
+            assert dialog.selected_options()[key] == 0
+        finally:
+            dialog.deleteLater()
+    finally:
+        opts.apply_runtime_user_options(None)
+        controller.request_shutdown()
+        _wait(controller.is_shutdown_done)
+        window.deleteLater()
