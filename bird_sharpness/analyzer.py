@@ -164,25 +164,56 @@ def dedupe_detections(detections: List[BirdDetection]) -> List[BirdDetection]:
     return kept
 
 
-# An extra bird is a false detection (a leaf, a pale trunk) when it is weak, shows
-# no eye and sits next to a confident bird: DSC04392/04395 leaf at 0.26-0.27 next
-# to a 0.94 bird, DSC05567 trunk at 0.36 next to 0.68. Such an extra only matters
-# when it outranks the real bird, which is exactly the failure. Without the eye
-# model nothing is dropped.
+# Extra birds that are not separate birds, decided after measuring (eye
+# visibility comes from the keypoint model; without it nothing is excluded):
+# * a false detection (a leaf, a pale trunk): weak, shows no eye and sits next to
+#   a confident bird. DSC04392/04395 leaf at 0.26-0.27 next to a 0.94 bird,
+#   DSC05567 trunk at 0.36 next to 0.68. It only matters when it outranks the
+#   real bird, which is exactly the failure;
+# * a part of another bird (a raised wing, a tail): its box lies mostly inside a
+#   bird whose eye is visible while it shows none. DSC05008: wing box 0.55, 65 %
+#   inside the 0.43 whole-bird box. Masks cannot tell: segmentation splits such a
+#   bird into body and wing with ~2 % mask overlap. Across the set, overlapping
+#   boxes were either >= 95 % (duplicates, merged above) or <= 11 % apart from it.
 EXTRA_BIRD_CONFIDENCE_MAX = 0.4
 EXTRA_BIRD_ANCHOR_MIN = 0.5
+PART_OF_BIRD_OVERLAP = 0.5
+EXCLUDED_FALSE = "false"
+EXCLUDED_PART = "part"
 
 
-def false_extra_birds(birds: List["BirdMeasurement"]) -> List[int]:
-    """Indices of extra birds treated as false detections (never the most confident one)."""
+@dataclass(frozen=True)
+class Exclusion:
+    """Why a measured bird does not count: ``reason`` relative to bird ``other``."""
+
+    reason: str  # EXCLUDED_FALSE | EXCLUDED_PART
+    other: int
+    overlap: float = 0.0
+
+
+def excluded_birds(birds: List["BirdMeasurement"]) -> Dict[int, Exclusion]:
+    """Extra birds that do not count; the remaining set is never empty."""
     if len(birds) < 2:
-        return []
+        return {}
+
+    def eyeless(b) -> bool:
+        return b.eye_visibility is not None and b.eye_visibility < EYE_VISIBLE_MIN
+
+    out: Dict[int, Exclusion] = {}
+    for i, part in enumerate(birds):
+        if not eyeless(part):
+            continue
+        owners = [(box_overlap(part.box, b.box), j) for j, b in enumerate(birds)
+                  if j != i and b.eye_visibility is not None and b.eye_visibility >= EYE_VISIBLE_MIN]
+        overlap, owner = max(owners, default=(0.0, -1))
+        if overlap >= PART_OF_BIRD_OVERLAP:
+            out[i] = Exclusion(EXCLUDED_PART, owner, round(overlap, 2))
     anchor = max(range(len(birds)), key=lambda i: birds[i].confidence)
-    if birds[anchor].confidence < EXTRA_BIRD_ANCHOR_MIN:
-        return []
-    return [i for i, b in enumerate(birds)
-            if i != anchor and b.confidence < EXTRA_BIRD_CONFIDENCE_MAX
-            and b.eye_visibility is not None and b.eye_visibility < EYE_VISIBLE_MIN]
+    if birds[anchor].confidence >= EXTRA_BIRD_ANCHOR_MIN:
+        for i, b in enumerate(birds):
+            if i != anchor and i not in out and b.confidence < EXTRA_BIRD_CONFIDENCE_MAX and eyeless(b):
+                out[i] = Exclusion(EXCLUDED_FALSE, anchor)
+    return out
 
 
 # Recheck for camouflaged birds (DSC05167: a nightjar on a branch at dusk). The
@@ -423,7 +454,7 @@ class BirdSharpnessAnalyzer:
         on_stage(STAGE_MEASURE)
         if detections:
             birds = [self._measure_bird(image, det, scale, index=i, tracer=tracer) for i, det in enumerate(detections)]
-            excluded = false_extra_birds(birds)
+            excluded = excluded_birds(birds)
             kept = [b for i, b in enumerate(birds) if i not in excluded]
             if tracer is not None:
                 tracer.mark_best(birds.index(max(kept, key=BirdMeasurement.rank)), excluded=excluded)
