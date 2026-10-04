@@ -427,12 +427,15 @@ class BirdSharpnessAnalyzer:
         self.models.release()
 
     def analyze(self, path: str, *, on_stage: Optional[Callable[[str], None]] = None,
-                cancelled: Callable[[], bool] = lambda: False, tracer=None) -> BirdSharpnessResult:
+                cancelled: Callable[[], bool] = lambda: False, tracer=None,
+                image_loader: Optional[Callable[[str], AnalysisImage]] = None) -> BirdSharpnessResult:
         """Analyse one photo. ``tracer`` (:class:`~bird_sharpness.trace.AnalysisTracer`)
-        records every key step with the exact data used; ``None`` costs nothing."""
+        records every key step with the exact data used; ``None`` costs nothing.
+        ``image_loader(path)`` replaces the RAW decode (embedded JPEG, denoised image;
+        see :mod:`bird_sharpness.image_source`); focus metadata still comes from ``path``."""
         t0 = time.perf_counter()
         try:
-            result = self._analyze(path, on_stage or (lambda stage: None), cancelled, tracer)
+            result = self._analyze(path, on_stage or (lambda stage: None), cancelled, tracer, image_loader)
         except Exception as exc:
             _log.error("[BirdSharpness] analysis failed path=%r: %s", path, traceback.format_exc())
             result = BirdSharpnessResult(path=path, verdict=VERDICT_ERROR, error=f"{type(exc).__name__}: {exc}")
@@ -442,10 +445,11 @@ class BirdSharpnessAnalyzer:
         return result
 
     # ── pipeline ──────────────────────────────────────────────────────────
-    def _analyze(self, path: str, on_stage: Callable[[str], None], cancelled, tracer=None) -> BirdSharpnessResult:
+    def _analyze(self, path: str, on_stage: Callable[[str], None], cancelled, tracer=None,
+                 image_loader=None) -> BirdSharpnessResult:
         on_stage(STAGE_DECODE)
         t_decode = time.perf_counter()
-        image = load_analysis_image(path)
+        image = (image_loader or load_analysis_image)(path)
         focus_px = _UNSET = object()
         if tracer is not None:
             focus_px = self._focus_box_px(path, image)
@@ -761,6 +765,7 @@ def analyze_paths(
     cancel_event: Optional[threading.Event] = None,
     on_result: Optional[ProgressCallback] = None,
     workers: int = 1,
+    image_loader: Optional[Callable[[str], AnalysisImage]] = None,
 ) -> List[BirdSharpnessResult]:
     """Analyze files, ``workers`` at a time; results are returned in input order.
 
@@ -768,6 +773,7 @@ def analyze_paths(
     new files once ``cancel_event`` is set and waits for the ones in flight.
     """
     items = [os.path.normpath(p) for p in paths]
+    extra = {} if image_loader is None else {"image_loader": image_loader}
     analyzer = analyzer or BirdSharpnessAnalyzer()
     total = len(items)
     by_index: Dict[int, BirdSharpnessResult] = {}
@@ -783,7 +789,7 @@ def analyze_paths(
         for index, path in enumerate(items):
             if cancelled():
                 break
-            by_index[index] = analyzer.analyze(path)
+            by_index[index] = analyzer.analyze(path, **extra)
             report(by_index[index])
     else:
         from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
@@ -794,7 +800,7 @@ def analyze_paths(
         with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="bird-sharpness") as executor:
             while pending or (next_index < total and not cancelled()):
                 while next_index < total and len(pending) < workers * 2 and not cancelled():
-                    pending[executor.submit(analyzer.analyze, items[next_index])] = next_index
+                    pending[executor.submit(analyzer.analyze, items[next_index], **extra)] = next_index
                     next_index += 1
                 done, _ = wait(pending, return_when=FIRST_COMPLETED)
                 for future in done:

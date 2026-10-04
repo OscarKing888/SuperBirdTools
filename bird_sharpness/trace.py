@@ -335,15 +335,30 @@ class AnalysisTracer:
         legend = [(hex_color(C_FOCUS), "相机焦点框")]
         if image.camera_crop:
             legend.insert(0, (hex_color(C_CROP), "相机 JPEG 画幅（RAW 输出含传感器边缘）"))
-        metrics = [("分辨率", f"{W} × {H}"), ("格式", "RAW（LibRaw 全分辨率解码）" if image.is_raw else "位图"),
+        from .image_source import SOURCE_DENOISED, SOURCE_JPEG
+
+        source = getattr(image, "source", "")
+        if source == SOURCE_JPEG:
+            kind = "相机内嵌 JPEG（机内锐化、降噪、8 位压缩）"
+            desc = ("本次按「相机 JPEG」计算：测的是相机内嵌的全尺寸 JPEG。机内锐化会让边缘看起来更锐、降噪会抹掉细节，"
+                    "阈值是按 RAW 解码标定的，结果仅供对比。JPEG 已是相机画幅，焦点框直接对应。")
+        elif source == SOURCE_DENOISED:
+            kind = "降噪成片（NAFNet，RAW 渲染后降噪）"
+            desc = ("本次按「降噪成片」计算：测的是降噪后的图像。降噪会改变噪声和细小边缘，阈值是按 RAW 解码标定的，"
+                    "结果仅供对比。")
+        else:
+            kind = "RAW（LibRaw 全分辨率解码）" if image.is_raw else "位图"
+            desc = ("清晰度以全分辨率像素计（100% 观看）。RAW 不用内嵌预览（相机 JPEG 经过机内锐化、降噪，有的还很小），"
+                    "而用 LibRaw 解码；焦点框按相机画幅映射到解码像素上。")
+        metrics = [("图像来源", kind), ("分辨率", f"{W} × {H}"),
                    ("解码耗时", f"{decode_s:.2f} s"),
                    ("焦点", "无" if focus_px is None else
                     f"{int(focus_px[2] - focus_px[0])} × {int(focus_px[3] - focus_px[1])} px")]
         self.trace.common.append(TraceStep(
-            STEP_DECODE, "解码全分辨率",
-            "清晰度以全分辨率像素计（100% 观看）。RAW 不用内嵌预览（相机 JPEG 经过机内锐化、降噪，有的还很小），而用 LibRaw 解码；"
-            "焦点框按相机画幅映射到解码像素上。",
-            img, "full", metrics, legend=legend))
+            STEP_DECODE, "解码全分辨率", desc, img, "full", metrics, legend=legend))
+        source_path = getattr(image, "source_path", "")
+        if source_path and os.path.normcase(source_path) != os.path.normcase(path):
+            metrics.append(("图像文件", os.path.basename(source_path)))
 
     def detect(self, detections, scale_to_full: float, *, has_masks: bool, has_keypoints: bool,
                unmeasured: int = 0) -> None:
