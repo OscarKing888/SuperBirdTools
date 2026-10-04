@@ -161,7 +161,8 @@ def read_workspace_json(path: Path | str) -> dict[str, Any]:
         raise WorkspaceFormatError(
             f"不支持的工作区版本: {version}，当前仅支持 {WORKSPACE_SCHEMA_VERSION}。"
         )
-    return raw
+    from birdstamp.overlays.model import unpack_assets
+    return unpack_assets(raw)
 
 
 def write_workspace_json(path: Path | str, payload: dict[str, Any]) -> Path:
@@ -175,7 +176,12 @@ def write_workspace_json(path: Path | str, payload: dict[str, Any]) -> Path:
     document["app"] = WORKSPACE_APP_NAME
     document["workspace_version"] = WORKSPACE_SCHEMA_VERSION
     document["saved_at"] = datetime.now().astimezone().isoformat()
-    text = json.dumps(document, ensure_ascii=False, indent=2) + "\n"
+    from birdstamp.overlays.model import pack_assets
+    return atomic_write_json(workspace_path, pack_assets(document))
+
+
+def atomic_write_json(workspace_path: Path, document: dict) -> Path:
+    text = json.dumps(document, ensure_ascii=False, indent=2, allow_nan=False) + "\n"
 
     tmp_path: Path | None = None
     try:

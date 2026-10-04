@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+from copy import deepcopy
 import shutil
 import sys
 from collections import defaultdict
@@ -198,7 +199,7 @@ def _load_builtin_default_template_raw() -> dict[str, Any]:
 
 
 def _deep_copy_payload(payload: dict[str, Any]) -> dict[str, Any]:
-    return json.loads(json.dumps(payload, ensure_ascii=False))
+    return deepcopy(payload)
 
 
 def _normalize_template_text_source(data: dict[str, Any]) -> dict[str, str]:
@@ -355,7 +356,7 @@ def _normalize_template_payload(payload: dict[str, Any], fallback_name: str) -> 
     crop_padding_fill = _normalize_banner_gradient_color(
         payload.get("crop_padding_fill"), _DEFAULT_TEMPLATE_CROP_PADDING_FILL
     )
-    return {
+    result = {
         "name": str(payload.get("name") or fallback_name),
         "ratio": ratio,
         "banner_color": banner_color,
@@ -380,6 +381,11 @@ def _normalize_template_payload(payload: dict[str, Any], fallback_name: str) -> 
         "fields": fields,
     }
 
+    if "overlays" in payload:
+        from birdstamp.overlays.model import with_document
+        return with_document(result, payload)
+    return result
+
 
 def _default_template_payload(name: str = "default") -> dict[str, Any]:
     raw = _deep_copy_payload(_load_builtin_default_template_raw())
@@ -397,8 +403,8 @@ def load_template_payload(path: Path) -> dict[str, Any]:
 
 def save_template_payload(path: Path, payload: dict[str, Any]) -> None:
     normalized = _normalize_template_payload(payload, fallback_name=path.stem)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(normalized, ensure_ascii=False, indent=2), encoding="utf-8")
+    from birdstamp.workspace import atomic_write_json
+    atomic_write_json(path, normalized)
 
 
 def ensure_template_repository(template_dir: Path) -> None:
@@ -765,7 +771,7 @@ def _banner_fill_is_opaque(template_payload: dict[str, Any]) -> bool:
         return False
 
 
-def render_template_overlay(
+def _render_legacy_template_overlay(
     image: Image.Image,
     *,
     raw_metadata: dict[str, Any],
@@ -777,6 +783,7 @@ def render_template_overlay(
     draw_text: bool = True,
     text_scale: float = 1.0,
     layout_size: tuple[int, int] | None = None,
+    _capture=None,
 ) -> Image.Image:
     # 不透明 RGB 输入直接在 RGB 副本上绘制，省去整幅 RGBA 往返；半透明 Banner 色会把 alpha
     # 写进 RGBA 画布并影响其上文字的合成结果，这种情况保留原 RGBA 路径以保证输出一致。
@@ -808,7 +815,7 @@ def render_template_overlay(
             str(text_source.get("key") or ""),
             display_label=str(field.get("name") or ""),
         )
-        text = _resolve_template_field_text(provider, render_photo_info)
+        text = str(raw_field.get("text", "")) if raw_field.get("text_mode") == "literal" else _resolve_template_field_text(provider, render_photo_info)
         if not text:
             continue
         font_size_base = max(8, int(field.get("font_size") or 24))
@@ -877,6 +884,11 @@ def render_template_overlay(
             )
         )
         occupied_boxes.append(chosen_rect)
+        if _capture is not None:
+            _capture.append((raw_field, draw_commands[-1]))
+    if _capture is not None:
+        canvas.close()
+        return image
     banner_fill = template_banner_fill_color(template_payload.get("banner_color"))
     draw_banner_background = _parse_bool_value(template_payload.get("draw_banner_background"), True)
     banner_background_style = _normalize_banner_background_style(template_payload.get("banner_background_style"))
@@ -938,6 +950,30 @@ def render_template_overlay(
     return canvas if canvas.mode == "RGB" else canvas.convert("RGB")
 
 
+def render_template_overlay(image, *, raw_metadata, metadata_context, photo_info=None,
+                            template_payload, auto_scale_font=True, draw_banner=True,
+                            draw_text=True, draw_images=True, text_scale=1.0, layout_size=None,
+                            scene_callback=None):
+    if 'overlays' not in template_payload and scene_callback is None:
+        return _render_legacy_template_overlay(image, raw_metadata=raw_metadata,
+            metadata_context=metadata_context, photo_info=photo_info, template_payload=template_payload,
+            auto_scale_font=auto_scale_font, draw_banner=draw_banner, draw_text=draw_text,
+            text_scale=text_scale, layout_size=layout_size)
+    from birdstamp.overlays.render import build_scene, compose_scene
+    scene = build_scene(template_payload, layout_size or image.size, raw_metadata=raw_metadata,
+                        metadata_context=metadata_context, photo_info=photo_info, text_scale=text_scale,
+                        draw_text=draw_text, draw_images=draw_images, draw_banner=draw_banner)
+    try:
+        result = compose_scene(image, scene)
+        if scene_callback is not None:
+            scene_callback(image, scene)
+            scene = None  # 场景所有权交给交互会话。
+        return result
+    finally:
+        if scene is not None:
+            scene.close()
+
+
 def default_template_payload(name: str = "default") -> dict[str, Any]:
     """Public wrapper for _default_template_payload."""
     return _default_template_payload(name=name)
@@ -968,6 +1004,8 @@ def render_template_overlay_in_crop_region(
     crop_box: tuple[float, float, float, float] | None,
     draw_banner: bool = True,
     draw_text: bool = True,
+    draw_images: bool = True,
+    scene_callback=None,
     text_scale: float = 1.0,
     layout_size: tuple[int, int] | None = None,
 ) -> Image.Image:
@@ -978,6 +1016,8 @@ def render_template_overlay_in_crop_region(
         template_payload=template_payload,
         draw_banner=draw_banner,
         draw_text=draw_text,
+        draw_images=draw_images,
+        scene_callback=scene_callback,
         text_scale=text_scale,
         layout_size=layout_size,
     )

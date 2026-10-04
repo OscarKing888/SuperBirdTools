@@ -56,6 +56,9 @@ from app_common.preview_canvas import (
 )
 from birdstamp.gui import editor_core, editor_options, editor_template, editor_utils, template_context as _template_context
 from birdstamp.gui.color_editor import ColorEditor
+from birdstamp.gui.overlay_panel import OverlayPanel
+from birdstamp.gui.overlay_edit import OverlaySession, EDIT_MODE_OVERLAY
+from birdstamp.overlays.model import with_document
 from birdstamp.render.text_effects import normalize_text_effects, TEXT_EFFECT_RANGES
 from birdstamp.gui.editor_crop_padding_widget import _CropPaddingEditorWidget
 from birdstamp.gui.editor_preview_canvas import (
@@ -629,6 +632,12 @@ class TemplateManagerDialog(QDialog):
         with stat_span("tmpl_refresh_preview_label"):
             self._refresh_preview_label()
 
+    def closeEvent(self, event):
+        self.overlay_panel.flush_text()
+        self.overlay_session.cancel()
+        self.overlay_session.clear()
+        super().closeEvent(event)
+
     def _load_preview_source(self) -> None:
         """加载 images/default.jpg 原图及完整 EXIF 作为预览图源，与主界面保持一致。
         优先使用 ExifTool（extract_many）获取完整字段（含 LensModel 等），
@@ -690,7 +699,8 @@ class TemplateManagerDialog(QDialog):
         splitter.setStretchFactor(0, 1)
         splitter.setStretchFactor(1, 3)
         splitter.setStretchFactor(2, 6)
-        splitter.setSizes([220, 300, 640])
+        left_panel.setMaximumWidth(200)
+        splitter.setSizes([160, 420, 640])
         splitter.setChildrenCollapsible(False)
 
     def _build_template_list_panel(self) -> QWidget:
@@ -722,6 +732,9 @@ class TemplateManagerDialog(QDialog):
         buttons.addWidget(btn_delete)
 
         layout.addLayout(buttons)
+        for button in panel.findChildren(QPushButton):
+            button.setMinimumWidth(0)
+            button.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
         return panel
 
     def _build_editor_panel(self) -> QWidget:
@@ -743,12 +756,17 @@ class TemplateManagerDialog(QDialog):
         self._editor_group_splitter = QSplitter(Qt.Orientation.Vertical)
         self._editor_group_splitter.setChildrenCollapsible(False)
         self._editor_group_splitter.addWidget(header_group)
-        self._editor_group_splitter.addWidget(fields_group)
-        self._editor_group_splitter.addWidget(field_edit_group)
+        # 保留旧属性适配入口，界面统一使用模板/实例共用的叠加层编辑器。
+        fields_group.setParent(panel); fields_group.hide()
+        field_edit_group.setParent(panel); field_edit_group.hide()
+        self.overlay_panel = OverlayPanel(panel)
+        self.overlay_panel.changed.connect(self._on_overlay_document_changed)
+        self.overlay_panel.activateRequested.connect(self._activate_overlay_edit)
+        self._editor_group_splitter.addWidget(self.overlay_panel)
         self._editor_group_splitter.setStretchFactor(0, 2)
         self._editor_group_splitter.setStretchFactor(1, 2)
-        self._editor_group_splitter.setStretchFactor(2, 4)
-        self._editor_group_splitter.setSizes([280, 220, 520])
+        self._editor_group_splitter.setStretchFactor(1, 4)
+        self._editor_group_splitter.setSizes([240, 620])
         layout.addWidget(self._editor_group_splitter, stretch=1)
         return panel
 
@@ -774,6 +792,10 @@ class TemplateManagerDialog(QDialog):
         self.crop_edit_mode_check.setToolTip("拖动手柄即可显示分辨率参考线，靠近虚线框时吸附至配置的档位。")
         self.crop_edit_mode_check.toggled.connect(self._on_preview_overlay_toggled)
         preview_toolbar.addWidget(self.crop_edit_mode_check)
+        self.overlay_edit_check = ToggleToolButton("编辑叠加层")
+        self.overlay_edit_check.setToolTip("拖动移动，角手柄缩放，顶部手柄旋转；Esc 退出")
+        self.overlay_edit_check.toggled.connect(self._toggle_overlay_edit)
+        preview_toolbar.addWidget(self.overlay_edit_check)
 
         self.crop_effect_alpha_label = QLabel("Alpha")
         preview_toolbar.addWidget(self.crop_effect_alpha_label)
@@ -838,6 +860,13 @@ class TemplateManagerDialog(QDialog):
         self.preview_scale_combo.activated.connect(self._on_preview_scale_preset_activated)
         preview_toolbar.addWidget(self.preview_scale_combo)
 
+        mode_toolbar = QHBoxLayout()
+        for widget in (self.crop_edit_mode_check, self.overlay_edit_check):
+            preview_toolbar.removeWidget(widget)
+            widget.setMinimumWidth(widget.sizeHint().width())
+            mode_toolbar.addWidget(widget)
+        mode_toolbar.addStretch(1)
+        layout.addLayout(mode_toolbar)
         preview_toolbar.addStretch(1)
         layout.addLayout(preview_toolbar)
 
@@ -847,6 +876,8 @@ class TemplateManagerDialog(QDialog):
             canvas=EditorPreviewCanvas(placeholder_text="暂无预览"),
         )
         canvas = self.preview_label.canvas
+        self.overlay_session = OverlaySession(canvas, self.overlay_panel, committed=self._refresh_preview)
+        canvas.overlay_exit_requested.connect(lambda: self.overlay_edit_check.setChecked(False))
         if hasattr(canvas, "crop_box_changed"):
             canvas.crop_box_changed.connect(self._on_tmpl_canvas_crop_box_changed)
         self._crop_drag_active = False
@@ -958,7 +989,7 @@ class TemplateManagerDialog(QDialog):
         layout.addWidget(self.field_list)
 
         buttons = QHBoxLayout()
-        btn_add = QPushButton("新增文本项")
+        btn_add = QPushButton("新增叠加层")
         btn_add.clicked.connect(self._add_field)
         buttons.addWidget(btn_add)
 
@@ -1185,6 +1216,7 @@ class TemplateManagerDialog(QDialog):
     ) -> None:
         if not current:
             return
+        self.overlay_panel.flush_text()
         name = current.text()
         path = self.template_paths.get(name)
         if not path:
@@ -1238,6 +1270,10 @@ class TemplateManagerDialog(QDialog):
         finally:
             self._updating = False
         self._populate_field_list(payload.get("fields") or [])
+        self.overlay_panel.set_document(payload, "template:"+str(path))
+        for row in range(5, self._header_form.rowCount()):
+            self._header_form.setRowVisible(row, False)
+        self._header_form.parentWidget().setMaximumHeight(self._header_form.sizeHint().height()+40)
         self._refresh_preview()
 
     # ------------------------------------------------------------------
@@ -1843,6 +1879,27 @@ class TemplateManagerDialog(QDialog):
         self.current_payload = payload
         _save_template_payload(path, payload)
 
+    def _on_overlay_document_changed(self, doc):
+        if self.current_payload is None:
+            return
+        self.current_payload = with_document(self.current_payload, doc)
+        try:
+            self._save_current_template()
+        except Exception as exc:
+            QMessageBox.warning(self, "模板保存失败", str(exc))
+        self._refresh_preview()
+
+    def _activate_overlay_edit(self):
+        self.overlay_edit_check.setChecked(True)
+        self._refresh_preview()
+        self.preview_label.canvas.setFocus()
+
+    def _toggle_overlay_edit(self, checked):
+        if checked:
+            self.crop_edit_mode_check.setChecked(False)
+        self._apply_preview_overlay_options()
+        self._refresh_preview()
+
     def _build_preview_overlay_options(self) -> EditorPreviewOverlayOptions:
         return EditorPreviewOverlayOptions(
             show_focus_box=bool(self.show_focus_box_check.isChecked()),
@@ -1874,6 +1931,7 @@ class TemplateManagerDialog(QDialog):
             source.size, display_size, getattr(self, "_preview_outer_pad", (0, 0, 0, 0)),
             ratio, str(self._preview_source_path),
         ))
+        canvas.set_edit_mode(EDIT_MODE_OVERLAY if self.overlay_edit_check.isChecked() else "none")
         if hasattr(canvas, "set_crop_edit_mode"):
             canvas.set_crop_edit_mode(
                 self.crop_edit_mode_check.isChecked()
@@ -1923,6 +1981,8 @@ class TemplateManagerDialog(QDialog):
         self._crop_drag_active = False
 
     def _on_preview_overlay_toggled(self, _checked: bool) -> None:
+        if self.crop_edit_mode_check.isChecked():
+            self.overlay_edit_check.setChecked(False)
         self._apply_preview_overlay_options()
 
     def _on_preview_grid_mode_changed(self, _index: int) -> None:
@@ -1989,6 +2049,8 @@ class TemplateManagerDialog(QDialog):
         return display
 
     def _refresh_preview(self) -> None:
+        if hasattr(self,"overlay_session") and self.overlay_session.drag:
+            return
         pending_timer = getattr(self, "_preview_refresh_timer", None)
         if pending_timer is not None:
             pending_timer.stop()
@@ -2062,6 +2124,8 @@ class TemplateManagerDialog(QDialog):
                 template_payload=self.current_payload,
                 crop_box=display_crop_box,
                 layout_size=layout_size,
+                scene_callback=(lambda _region, scene: self.overlay_session.capture(source, scene, display_crop_box))
+                    if self.overlay_edit_check.isChecked() else None,
             )
         else:
             display_crop_box, display_outer_pad = crop_box, outer_pad

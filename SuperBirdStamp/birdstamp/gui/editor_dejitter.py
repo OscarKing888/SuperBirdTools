@@ -521,6 +521,9 @@ class _BirdStampDejitterMixin:
             self.sequence_transport.sync()
 
     def _set_dejitter_view(self, view):
+        if view == 'result' and self._current_edit_mode_id() == 'overlay':
+            self._set_edit_mode_button_checked('none')
+            self.preview_label.canvas.set_edit_mode('none')
         if hasattr(self, 'sequence_transport'):
             self.sequence_transport.stop(commit=False)
         self._dejitter_view = view
@@ -1219,6 +1222,8 @@ class _BirdStampDejitterMixin:
             self._update_dejitter_controls()
 
     def _show_dejitter_edit_preview(self, *, reset_view=False, preserve_view=False, **_kwargs):
+        if self._current_edit_mode_id() == "overlay":
+            return False
         ab = getattr(self, 'ab_preview', None)
         if not (self._dejitter_tab_active() or (ab is not None and ab.enabled.isChecked())) or self._sequence_result_mode():
             return False

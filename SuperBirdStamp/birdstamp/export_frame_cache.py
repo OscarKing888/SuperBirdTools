@@ -16,7 +16,7 @@ FRAME_CACHE_ROOT_NAME = "birdstamp_export_cache"
 SOURCE_FRAME_BUCKET_KIND = "rendered_source_frames"
 VIDEO_FRAME_BUCKET_KIND = "video_frames"
 # 图片帧开始完整保留 EXIF，避免复用旧的无元数据缓存。
-SOURCE_FRAME_CACHE_VERSION = 9
+SOURCE_FRAME_CACHE_VERSION = 10
 VIDEO_FRAME_CACHE_VERSION = 2
 _DEFAULT_PIPELINE_STAGE_ORDER = (
     "template_crop",
@@ -160,6 +160,7 @@ def global_export_settings_from_settings(settings: dict[str, Any] | None) -> dic
     return {
         "draw_banner": _parse_bool_value(raw.get("draw_banner"), True),
         "draw_text": _parse_bool_value(raw.get("draw_text"), True),
+        "draw_images": _parse_bool_value(raw.get("draw_images"), True),
         "draw_focus": _parse_bool_value(raw.get("draw_focus"), False),
         "pipeline_stage_order": stage_order,
         **stage_enabled,

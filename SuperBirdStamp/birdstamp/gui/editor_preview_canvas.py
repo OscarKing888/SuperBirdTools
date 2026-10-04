@@ -81,6 +81,7 @@ class EditorPreviewCanvas(CropResolutionOverlayMixin, FocusCenteredPreviewCanvas
     and allows drag-to-adjust with optional ratio lock.
     """
 
+    overlay_exit_requested = pyqtSignal()
     crop_box_changed = pyqtSignal(tuple)  # (l, t, r, b) normalized
     reference_region_changed = pyqtSignal(tuple)  # tuple of (l, t, r, b) normalized boxes
     reference_match_edited = pyqtSignal(int, object)  # 原编号、源图框；None 撤销该编号的手动修正。
@@ -151,6 +152,9 @@ class EditorPreviewCanvas(CropResolutionOverlayMixin, FocusCenteredPreviewCanvas
         self._emit_display_scale_percent_changed()
 
     def set_source_pixmap(self, pixmap, **kwargs):
+        session = getattr(self, "overlay_session", None)
+        if session and session.drag and not session._drawing:
+            session.cancel()
         self._finish_crop_resolution_drag(commit=False)
         super().set_source_pixmap(pixmap, **kwargs)
         self.viewport_content_changed.emit()

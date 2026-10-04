@@ -630,6 +630,7 @@ class _BirdStampWorkspaceMixin:
         mode = state.get("edit_mode")
         if not isinstance(mode, str) or mode not in (
             EDIT_MODE_NONE,
+            "overlay",
             EDIT_MODE_REFERENCE_REGION,
             EDIT_MODE_CROP_ADJUST,
         ):
@@ -709,12 +710,14 @@ class _BirdStampWorkspaceMixin:
         widgets_state = _block_widget_signals(
             self.draw_banner_check,
             self.draw_text_check,
+            self.draw_images_check,
             self.draw_focus_check,
             self.max_edge_combo,
         )
         try:
             self.draw_banner_check.setChecked(bool(state.get("draw_banner", True)))
             self.draw_text_check.setChecked(bool(state.get("draw_text", True)))
+            self.draw_images_check.setChecked(bool(state.get("draw_images", True)))
             self.draw_focus_check.setChecked(bool(state.get("draw_focus", False)))
             if "max_long_edge" in state:
                 try:
@@ -994,6 +997,7 @@ class _BirdStampWorkspaceMixin:
                 global_export_state = {
                     "draw_banner": current_render_settings.get("draw_banner"),
                     "draw_text": current_render_settings.get("draw_text"),
+                    "draw_images": current_render_settings.get("draw_images"),
                     "draw_focus": current_render_settings.get("draw_focus"),
                     PIPELINE_STAGE_ORDER_KEY: current_render_settings.get(PIPELINE_STAGE_ORDER_KEY),
                     PIPELINE_STAGE_ENABLED_KEY: current_render_settings,

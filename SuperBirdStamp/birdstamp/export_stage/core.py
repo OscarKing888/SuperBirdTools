@@ -1,4 +1,5 @@
 from __future__ import annotations
+from birdstamp.overlays.model import clone_override, effective_payload
 from birdstamp.image_dejitter.region_recommendation import normalize_recommendation
 from birdstamp.image_dejitter.recognition import SubjectSettings
 from birdstamp.image_dejitter.matching_options import normalize_matching_settings
@@ -495,6 +496,8 @@ def _template_signature_payload(
     template_paths: Mapping[str, Path] | None,
     template_signature_state: Mapping[str, Mapping[str, Any]] | None = None,
 ) -> dict[str, Any]:
+    if isinstance(job.settings.get("overlay_override"), dict):
+        return {"overlay_snapshot": True}
     template_name = str(job.settings.get("template_name") or "default").strip() or "default"
     if isinstance(template_signature_state, Mapping):
         precomputed = template_signature_state.get(template_name)
@@ -725,8 +728,10 @@ def _clone_render_settings(settings: dict[str, Any]) -> dict[str, Any]:
     return {
         "template_name": template_name,
         "template_payload": _deep_copy_payload(template_payload),
+        "overlay_override": clone_override(settings.get("overlay_override")),
         "draw_banner": _parse_bool_value(settings.get("draw_banner"), True),
         "draw_text": _parse_bool_value(settings.get("draw_text"), True),
+        "draw_images": _parse_bool_value(settings.get("draw_images"), True),
         "text_scale": normalize_text_scale(settings.get("text_scale")),
         "draw_focus": _parse_bool_value(settings.get("draw_focus"), False),
         STAGE_TEMPLATE_CROP_ENABLED_KEY: _resolve_stage_enabled(
@@ -803,7 +808,7 @@ def _should_draw_template_overlay(settings: dict[str, Any]) -> bool:
         enabled_key=STAGE_TEMPLATE_OVERLAY_ENABLED_KEY,
     ):
         return False
-    return _parse_bool_value(settings.get("draw_banner"), True) or _parse_bool_value(settings.get("draw_text"), True)
+    return any(_parse_bool_value(settings.get(key), True) for key in ("draw_banner", "draw_text", "draw_images"))
 
 
 def _resolve_template_payload_for_render(
@@ -818,14 +823,14 @@ def _resolve_template_payload_for_render(
         payload = _default_template_payload(name=template_name)
 
     if not isinstance(template_paths, dict):
-        return payload
+        return effective_payload(payload, settings.get("overlay_override"))
     template_path = template_paths.get(template_name)
     if template_path and template_path.is_file():
         try:
-            return _load_template_payload(template_path)
+            return effective_payload(_load_template_payload(template_path), settings.get("overlay_override"))
         except Exception as exc:
             _log.warning("template reload failed: name=%s path=%s err=%s", template_name, template_path, exc)
-    return payload
+    return effective_payload(payload, settings.get("overlay_override"))
 
 
 

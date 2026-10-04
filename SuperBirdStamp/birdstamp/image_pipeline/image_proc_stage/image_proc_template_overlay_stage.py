@@ -18,7 +18,7 @@ from .image_proc_stage import ImageProcStage
 class ImageProcTemplateOverlayStage(ImageProcStage):
     stage_id = STAGE_TEMPLATE_OVERLAY_ID
     label = "模板叠加"
-    description = "绘制 Banner 背景和模板文字字段。"
+    description = "绘制背景、文本和图像叠加层。"
     enabled_option_key = STAGE_TEMPLATE_OVERLAY_ENABLED_KEY
     enabled_by_default = True
 
@@ -26,6 +26,7 @@ class ImageProcTemplateOverlayStage(ImageProcStage):
         return (
             ImageProcOptionSpec(key="draw_banner", label="Banner 底", value_type="bool", default=True),
             ImageProcOptionSpec(key="draw_text", label="文本", value_type="bool", default=True),
+            ImageProcOptionSpec(key="draw_images", label="图像", value_type="bool", default=True),
             ImageProcOptionSpec(
                 key="text_scale", label="文本缩放", value_type="float", default=TEXT_SCALE_DEFAULT,
                 minimum=TEXT_SCALE_MIN, maximum=TEXT_SCALE_MAX, step=0.01,
@@ -62,6 +63,7 @@ class ImageProcTemplateOverlayStage(ImageProcStage):
             template_payload=template_payload,
             draw_banner=core._parse_bool_value(settings.get("draw_banner"), True),
             draw_text=core._parse_bool_value(settings.get("draw_text"), True),
+            draw_images=core._parse_bool_value(settings.get("draw_images"), True),
             text_scale=normalize_text_scale(settings.get("text_scale")),
         )
         context.photo_info = photo_info

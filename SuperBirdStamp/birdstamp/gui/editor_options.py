@@ -472,3 +472,10 @@ SAMPLE_RAW_METADATA: dict[str, Any] = _EDITOR_OPTIONS["sample_raw_metadata"]
 
 # 新建文本项的效果默认值，旧模板缺省时仍保持关闭。
 TEXT_EFFECT_DEFAULTS = normalize_text_effects(_load_builtin_editor_options_raw().get("text_effects", {}))
+
+# 叠加层交互默认值统一从内置 editor_options.json 读取。
+OVERLAY_NEW_TEXT_SIZE = _bounded_preview_option("overlay_new_text_size", 48, 8, 300)
+OVERLAY_IMAGE_WIDTH_PCT = _bounded_preview_option("overlay_image_width_pct", 30, 1, 100)
+OVERLAY_SNAP_DISTANCE = _bounded_preview_option("overlay_snap_distance", 6, 0, 30)
+OVERLAY_ROTATION_STEP = _bounded_preview_option("overlay_rotation_step", 15, 1, 90)
+OVERLAY_PREVIEW_MAX_EDGE = _bounded_preview_option("overlay_preview_max_edge", 1600, 400, 4096)

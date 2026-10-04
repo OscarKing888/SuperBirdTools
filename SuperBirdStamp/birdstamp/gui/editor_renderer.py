@@ -24,6 +24,7 @@ from app_common.preview_canvas import (
 from birdstamp.decoders.image_decoder import decode_image, decode_image_for_preview, read_decoded_image_size
 from birdstamp.decoders.preview_source import PREVIEW_SOURCE_MESSAGE_KEY, PREVIEW_SOURCE_MODE_KEY
 from birdstamp.render.text_scale import normalize_text_scale
+from birdstamp.overlays.model import clone_override, effective_payload
 from birdstamp import perf as birdstamp_perf
 from birdstamp.crop_resolution import CropPixelContext
 from birdstamp.gui import editor_core, editor_options, editor_template, editor_utils, template_context as _template_context
@@ -978,7 +979,7 @@ class _BirdStampRendererMixin:
             return False
         draw_banner = _parse_bool_value(settings.get("draw_banner"), True)
         draw_text = _parse_bool_value(settings.get("draw_text"), True)
-        return draw_banner or draw_text
+        return draw_banner or draw_text or _parse_bool_value(settings.get("draw_images"), True)
 
     def _selected_text_scale(self) -> float:
         slider = getattr(self, "text_scale_slider", None)
@@ -1010,8 +1011,10 @@ class _BirdStampRendererMixin:
         return {
             "template_name": template_name,
             "template_payload": _deep_copy_payload(template_payload),
+            "overlay_override": clone_override(getattr(self, "_overlay_override", None)),
             "draw_banner": bool(self.draw_banner_check.isChecked()),
             "draw_text": bool(self.draw_text_check.isChecked()),
+            "draw_images": bool(self.draw_images_check.isChecked()) if hasattr(self,"draw_images_check") else True,
             "text_scale": self._selected_text_scale(),
             "draw_focus": bool(self.draw_focus_check.isChecked()),
             STAGE_TEMPLATE_CROP_ENABLED_KEY: _stage_enabled(STAGE_TEMPLATE_CROP_ID),
@@ -1066,6 +1069,7 @@ class _BirdStampRendererMixin:
         normalized = self._clone_render_settings(settings)
         normalized.pop("draw_banner", None)
         normalized.pop("draw_text", None)
+        normalized.pop("draw_images", None)
         normalized.pop("draw_focus", None)
         normalized.pop(STAGE_TEMPLATE_CROP_ENABLED_KEY, None)
         normalized.pop(STAGE_RESIZE_LIMIT_ENABLED_KEY, None)
@@ -1116,8 +1120,10 @@ class _BirdStampRendererMixin:
         return {
             "template_name": template_name,
             "template_payload": _deep_copy_payload(template_payload),
+            "overlay_override": clone_override(settings.get("overlay_override")),
             "draw_banner": _parse_bool_value(settings.get("draw_banner"), True),
             "draw_text": _parse_bool_value(settings.get("draw_text"), True),
+            "draw_images": _parse_bool_value(settings.get("draw_images"), True),
             "text_scale": normalize_text_scale(settings.get("text_scale")),
             "draw_focus": _parse_bool_value(settings.get("draw_focus"), False),
             STAGE_TEMPLATE_CROP_ENABLED_KEY: _parse_bool_value(settings.get(STAGE_TEMPLATE_CROP_ENABLED_KEY), True),
@@ -1155,6 +1161,7 @@ class _BirdStampRendererMixin:
 
     def _normalize_render_settings(self, raw: Any, fallback: dict[str, Any]) -> dict[str, Any]:
         settings = self._clone_render_settings(fallback)
+        settings["overlay_override"] = clone_override(raw.get("overlay_override") if isinstance(raw, dict) else None)
         # 旧照片未记录倍率时使用 100%，避免继承上一张照片的倍率。
         settings["text_scale"] = normalize_text_scale(raw.get("text_scale") if isinstance(raw, dict) else None)
         if not isinstance(raw, dict):
@@ -1279,6 +1286,7 @@ class _BirdStampRendererMixin:
     def _apply_render_settings_to_ui(self, settings: dict[str, Any]) -> None:
         normalized = self._clone_render_settings(settings)
         template_name = str(normalized["template_name"])
+        self._overlay_override = clone_override(normalized.get("overlay_override"))
 
         widgets_to_block = [
             self.template_combo,
@@ -1436,7 +1444,7 @@ class _BirdStampRendererMixin:
                 payload = _load_template_payload(template_path)
             except Exception:
                 pass
-        return payload
+        return effective_payload(payload, settings.get("overlay_override"))
 
     def _render_overlay_for_preview_frame(
         self,
@@ -1472,8 +1480,13 @@ class _BirdStampRendererMixin:
             crop_box=crop_box,
             draw_banner=_parse_bool_value(settings.get("draw_banner"), True),
             draw_text=_parse_bool_value(settings.get("draw_text"), True),
+            draw_images=_parse_bool_value(settings.get("draw_images"), True),
             text_scale=normalize_text_scale(settings.get("text_scale")),
             layout_size=layout_size,
+            scene_callback=(lambda _region, scene: self._capture_overlay_scene(
+                preview_base, scene, crop_box, settings, raw_metadata,
+                getattr(self, '_overlay_render_pad', (0,0,0,0))))
+                if getattr(self, '_current_edit_mode_id', lambda: 'none')() == 'overlay' else None,
         )
 
     def _build_processed_image(
@@ -1571,6 +1584,7 @@ class _BirdStampRendererMixin:
                 continue
 
             if stage_id == STAGE_TEMPLATE_OVERLAY_ID:
+                self._overlay_render_pad = outer_pad
                 image = self._render_overlay_for_preview_frame(
                     preview_base=image,
                     raw_metadata=raw_metadata,
@@ -1640,6 +1654,7 @@ class _BirdStampRendererMixin:
                 template_payload=template_payload,
                 draw_banner=_parse_bool_value(settings.get("draw_banner"), True),
                 draw_text=_parse_bool_value(settings.get("draw_text"), True),
+                draw_images=_parse_bool_value(settings.get("draw_images"), True),
                 text_scale=normalize_text_scale(settings.get("text_scale")),
             )
 
@@ -1654,6 +1669,9 @@ class _BirdStampRendererMixin:
         )
 
     def render_preview(self, *_args: Any) -> None:
+        session = getattr(getattr(getattr(self, "preview_label", None), "canvas", None), "overlay_session", None)
+        if session is not None and session.drag:
+            return
         if getattr(self, "_crop_drag_active", False):
             # 元数据/鸟体检测的异步完成也不能在拖动中重建坐标系。
             return
@@ -1671,6 +1689,8 @@ class _BirdStampRendererMixin:
                 if self.current_source_image is None:
                     raise RuntimeError("缺少当前原图数据")
                 settings = self._render_settings_for_path(self.current_path, prefer_current_ui=True)
+                if hasattr(self, "_sync_overlay_panel"):
+                    self._sync_overlay_panel(settings)
                 preview_settings = self._preview_render_settings(settings)
                 with birdstamp_perf.span("render_preview.copy_source"):
                     source_image = self.current_source_image.copy()

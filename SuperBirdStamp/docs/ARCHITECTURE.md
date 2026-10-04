@@ -90,6 +90,10 @@ A/B 的布局与显隐约定见 [A/B 预览工具栏布局](ux/AB_PREVIEW_LAYOUT
 
 [editor_template.py](../birdstamp/gui/editor_template.py) 负责模板目录、默认模板初始化、JSON 规范化和 `render_template_overlay` 绘制；[editor_template_dialog.py](../birdstamp/gui/editor_template_dialog.py) 负责编辑 UI。字体与中文回退绘制见 [render/typography.py](../birdstamp/render/typography.py)。CLI 的标准化元数据模型则位于 [models.py](../birdstamp/models.py) 与 [meta/normalize.py](../birdstamp/meta/normalize.py)。
 
+模板与照片实例的可视化叠加层由 [overlays/model.py](../birdstamp/overlays/model.py)、[overlays/render.py](../birdstamp/overlays/render.py) 和 [overlays/assets.py](../birdstamp/overlays/assets.py) 提供无窗口的数据、布局与合成核心。新模板使用有序 `overlays`（文字/图像/背景）及按 SHA-256 引用的内嵌 PNG；旧 `fields`/Banner 只在读取时适配，未编辑的旧模板继续沿用原绘制路径。逐照片 `overlay_override=None` 表示跟随模板，首次编辑记录整套图层快照，预览和导出重读模板后均由该快照覆盖；元数据取值优先级不变。工作区写入时将素材提升至文件级去重表，读回恢复自包含快照。实例的恢复/批量复制/另存模板见 [叠加层编辑](OVERLAY_EDITOR.md)。
+
+[overlay_panel.py](../birdstamp/gui/overlay_panel.py) 的共用列表、内容/位置/效果属性页及有界撤销历史同时用于模板管理和主窗口；[overlay_edit.py](../birdstamp/gui/overlay_edit.py) 通过既有 `EditModeController` 注册 `overlay` 模式，处理旋转几何命中、吸附和一次性手势提交。拖动使用缓存底图和局部图层，不读取元数据、解码源照片或写配置；切图清理场景，关闭/失焦取消未提交手势。A/B 编辑目标为 B，独立去抖动结果保持原行为。预览按叠加阶段逻辑成片尺寸映射，手柄仅为 UI；导出和 CLI 使用同一合成函数。`draw_images` 与已有 `draw_text` / `draw_banner` 分别控制输出类别，参与工作区和源帧缓存签名。回归见 [test_overlay_layers.py](../tests/test_overlay_layers.py) 与 [test_overlay_editor.py](../tests/test_overlay_editor.py)。
+
 模板文本的描边和阴影由 [render/text_effects.py](../birdstamp/render/text_effects.py) 的 `normalize_text_effects` / `styled_text_layer` 规范化及绘制。每项保存独立开关、颜色、描边宽度、阴影不透明度/偏移/柔化；旧模板缺省关闭，新增文本项的默认值读取 `editor_options.json` 的 `text_effects`。效果尺寸随实际字号缩放，排版避让包含效果边界；预览按导出逻辑画幅绘制后缩放，图片/GIF/视频和 CLI `render --template` 沿用同一模板渲染入口，源帧缓存版本随渲染变化更新。回归见 [test_overlay_text_effects.py](../tests/test_overlay_text_effects.py)。
 
 [color_editor.py](../birdstamp/gui/color_editor.py) 的 `ColorEditor` 统一文本、描边、阴影、Banner、渐变端点及外圈填充的预设/色值/可点击色块；调色板和屏幕吸色使用图标按钮。`AdvancedColorDialog` 提供高级选色和命名调色板，`PaletteStore` 原子保存到用户配置目录的 `color_palettes.json`，所有入口跨会话复用（最多 32 个色板，每板 16 色）。文本和 Banner 支持透明度；渐变和阴影的不透明度仍由各自参数管理。回归见 [test_color_editor.py](../tests/test_color_editor.py)。

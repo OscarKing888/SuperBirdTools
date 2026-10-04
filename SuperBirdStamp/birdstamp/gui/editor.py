@@ -163,6 +163,7 @@ from birdstamp.gui.editor_video_panel import (
 from birdstamp.gui.editor_workspace import _BirdStampWorkspaceMixin
 from birdstamp.gui.editor_crop_calculator import _BirdStampCropMixin
 from birdstamp.gui.editor_renderer import _BirdStampRendererMixin
+from birdstamp.gui.editor_overlays import _BirdStampOverlaysMixin
 from birdstamp.gui.editor_reference_tracking import _BirdStampReferenceTrackingMixin
 from birdstamp.gui.editor_dejitter import _BirdStampDejitterMixin
 from birdstamp.gui.editor_dejitter_relay import _BirdStampDejitterRelayMixin
@@ -470,6 +471,13 @@ def _make_preview_tool_icon(kind: str, *, size: int = 18, color: "QColor | None"
             painter.setBrush(Qt.BrushStyle.NoBrush)
             painter.drawRoundedRect(frame, 1.5, 1.5)
             painter.drawLine(QPointF(size * 0.5, frame.top()), QPointF(size * 0.5, frame.bottom()))
+        elif kind == "overlay":
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.drawRect(QRectF(size*.18,size*.26,size*.64,size*.55))
+            painter.drawLine(QPointF(size*.5,size*.26),QPointF(size*.5,size*.1))
+            painter.drawEllipse(QPointF(size*.5,size*.1),2,2)
+            for x,y in ((.18,.26),(.82,.26),(.18,.81),(.82,.81)):
+                painter.drawRect(QRectF(size*x-2,size*y-2,4,4))
         else:  # crop
             # 四角裁切框（两个 L 形角标）
             painter.setPen(pen)
@@ -654,6 +662,7 @@ class BirdStampEditorWindow(
     QMainWindow,
     _BirdStampCropMixin,
     _BirdStampRendererMixin,
+    _BirdStampOverlaysMixin,
     _BirdStampReferenceTrackingMixin,
     _BirdStampDejitterMixin,
     _BirdStampDejitterRelayMixin,
@@ -1284,6 +1293,9 @@ class BirdStampEditorWindow(
         self.draw_banner_check = QCheckBox("Banner 底")
         self.draw_banner_check.setChecked(True)
         self.draw_banner_check.toggled.connect(self._on_output_settings_changed)
+        self.draw_images_check = QCheckBox("图像")
+        self.draw_images_check.setChecked(True)
+        self.draw_images_check.toggled.connect(self._on_output_settings_changed)
         self.draw_text_check = QCheckBox("文本")
         self.draw_text_check.setChecked(True)
         self.draw_text_check.toggled.connect(self._on_output_settings_changed)
@@ -1626,6 +1638,7 @@ class BirdStampEditorWindow(
         overlay_row_layout.setSpacing(10)
         overlay_row_layout.addWidget(self.draw_banner_check)
         overlay_row_layout.addWidget(self.draw_text_check)
+        overlay_row_layout.addWidget(self.draw_images_check)
         overlay_row_layout.addStretch()
         overlay_form.addRow("叠加信息", overlay_row_widget)
         scale_widget = QWidget()
@@ -1635,6 +1648,7 @@ class BirdStampEditorWindow(
         scale_layout.addWidget(self.text_scale_value_label)
         scale_layout.addWidget(self.text_scale_reset_btn)
         overlay_form.addRow("文本缩放", scale_widget)
+        self._build_overlay_panel(overlay_form)
         self._pipeline_stage_option_groups["template_overlay"] = overlay_group
 
         focus_group = QGroupBox()
@@ -2792,11 +2806,19 @@ class BirdStampEditorWindow(
         self._exiftool_shutdown_thread.start()
 
     def closeEvent(self, event) -> None:  # type: ignore[override]
+        if hasattr(self, "overlay_panel"):
+            self.overlay_panel.flush_text()
         active_worker = self._video_export_worker
         if active_worker is not None and active_worker.isRunning():
             QMessageBox.information(self, "视频导出进行中", "请先中断当前视频导出，或等待导出完成后再关闭窗口。")
             event.ignore()
             return
+        if hasattr(self, "overlay_panel"):
+            self.overlay_panel._context_generation += 1
+        session = getattr(self.preview_label.canvas, "overlay_session", None)
+        if session is not None:
+            session.cancel()
+            session.clear()
         recommendation_stopped = self.dejitter_recommendation.shutdown()
         ab_stopped = self.ab_preview.shutdown()
         source_preview_stopped = self.sequence_transport.shutdown()
@@ -2926,7 +2948,7 @@ class BirdStampEditorWindow(
                 drag_probe.add_callback(elapsed_ms(start))
 
     def _setup_edit_mode_buttons(self, toolbar) -> None:
-        """创建三个互斥的编辑模式图标按钮（选择 / 去抖动参考区 / 调整裁剪框）。"""
+        """创建互斥的预览编辑模式图标按钮。"""
         try:
             icon_color = self.palette().color(self.palette().ColorRole.WindowText)
         except Exception:
@@ -2936,6 +2958,7 @@ class BirdStampEditorWindow(
         self.edit_mode_group.setExclusive(True)
 
         specs = (
+            ("overlay", "overlay", "编辑叠加层", "编辑叠加层：拖动移动，角手柄缩放，顶部手柄旋转。"),
             (
                 EDIT_MODE_NONE,
                 "selection",
@@ -3005,6 +3028,9 @@ class BirdStampEditorWindow(
 
     def _on_edit_mode_changed(self, *args) -> None:
         """编辑模式按钮切换：刷新预览叠加并自动保存工作区。"""
+        if self._current_edit_mode_id() == "overlay":
+            self._activate_overlay_edit()
+            return
         if self._sequence_result_mode():
             self._set_dejitter_view('edit')
         self._refresh_preview_label(preserve_view=True)
@@ -3214,6 +3240,7 @@ class BirdStampEditorWindow(
         return {
             "draw_banner": bool(self.draw_banner_check.isChecked()),
             "draw_text": bool(self.draw_text_check.isChecked()),
+            "draw_images": bool(self.draw_images_check.isChecked()),
             "draw_focus": bool(self.draw_focus_check.isChecked()),
             PIPELINE_STAGE_ORDER_KEY: list(self._current_pipeline_stage_order()),
             PIPELINE_STAGE_ENABLED_KEY: dict(stage_enabled),
@@ -3393,6 +3420,9 @@ class BirdStampEditorWindow(
                 self.max_edge_combo.blockSignals(False)
 
     def _on_template_changed(self, name: str) -> None:
+        if hasattr(self, 'overlay_panel'):
+            self.overlay_panel.flush_text()
+        self._overlay_override = None
         if not name:
             return
         self._load_selected_template(name)
@@ -5024,6 +5054,8 @@ class BirdStampEditorWindow(
         self._clear_photos_state(status_message="已清空照片列表。")
 
     def _on_photo_selected(self, current: QTreeWidgetItem | None, _previous: QTreeWidgetItem | None, *, target_view=None) -> None:
+        if hasattr(self, "overlay_panel"):
+            self.overlay_panel.flush_text()
         if not current or getattr(self, "_preview_decode_shutdown", False):
             return
         raw = current.data(PHOTO_COL_ROW, PHOTO_LIST_PATH_ROLE)
@@ -5253,6 +5285,12 @@ class BirdStampEditorWindow(
 
     def _begin_photo_selection(self, path: Path, current: QTreeWidgetItem, *, preserve_preview_view: bool = False) -> None:
         """选中即切换编辑目标，异步像素未到达时不会继续修改上一张照片。"""
+        session = getattr(self.preview_label.canvas, "overlay_session", None)
+        if session is not None:
+            session.cancel()
+            session.clear()
+        if hasattr(self, "overlay_panel"):
+            self.overlay_panel.setEnabled(False)
         with birdstamp_perf.span("select.activate", path=str(path)):
             self.placeholder_path = None
             self.current_path = path
@@ -5521,6 +5559,7 @@ class BirdStampEditorWindow(
         settings.pop('auto_crop_stabilization', None)
         settings["draw_banner"] = bool(global_export.get("draw_banner", True))
         settings["draw_text"] = bool(global_export.get("draw_text", True))
+        settings["draw_images"] = bool(global_export.get("draw_images", True))
         settings["draw_focus"] = bool(global_export.get("draw_focus", False))
         settings["max_long_edge"] = max(0, int(global_export.get("max_long_edge") or 0))
         settings[PIPELINE_STAGE_ORDER_KEY] = list(
@@ -5878,7 +5917,7 @@ class BirdStampEditorWindow(
                 self.render_preview()
 
         self._schedule_workspace_autosave()
-        self._set_status(f"已将当前裁切和文本缩放设置应用到 {len(targets)} 张照片。")
+        self._set_status(f"已将当前裁切、文本缩放和叠加层设置应用到 {len(targets)} 张照片。")
 
     def _apply_current_settings_to_all_photos(self) -> None:
         targets = self._list_photo_paths()
@@ -5899,7 +5938,7 @@ class BirdStampEditorWindow(
         if self.current_path is not None:
             self.render_preview()
         self._schedule_workspace_autosave()
-        self._set_status(f"已将当前裁切和文本缩放设置应用到全部 {len(targets)} 张照片。")
+        self._set_status(f"已将当前裁切、文本缩放和叠加层设置应用到全部 {len(targets)} 张照片。")
 
 
 def _ensure_positive_qt_application_font(app: Any) -> None:

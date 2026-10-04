@@ -1,4 +1,9 @@
 {
+  "overlay_new_text_size": 48,
+  "overlay_image_width_pct": 30,
+  "overlay_snap_distance": 6,
+  "overlay_rotation_step": 15,
+  "overlay_preview_max_edge": 1600,
   "crop_resolution_snap": {
     "tiers": [
       {"label": "480p", "short_edge": 480},

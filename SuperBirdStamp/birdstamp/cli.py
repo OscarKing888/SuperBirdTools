@@ -195,6 +195,7 @@ def render(
     skip_existing: bool = typer.Option(True, "--skip-existing/--no-skip-existing"),
     draw_banner: bool = typer.Option(True, "--draw-banner/--no-draw-banner", help="Draw banner background."),
     draw_text: bool = typer.Option(True, "--draw-text/--no-draw-text", help="Draw text fields."),
+    draw_images: bool = typer.Option(True, "--draw-images/--no-draw-images", help="Draw image overlays."),
     text_scale: float = typer.Option(1.0, "--text-scale", min=0.25, max=3.0, help="Text scale multiplier after automatic canvas scaling."),
     log_level: str = typer.Option("info", "--log-level"),
 ) -> None:
@@ -320,6 +321,7 @@ def render(
                 template_payload=template_payload,
                 draw_banner=draw_banner,
                 draw_text=draw_text,
+                draw_images=draw_images,
                 text_scale=text_scale,
             )
             rendered = rendered.convert("RGB")
