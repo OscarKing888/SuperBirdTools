@@ -8,7 +8,7 @@ import pytest
 from app_common import bird_sharpness_fields as bsf
 from bird_sharpness.analyzer import BirdSharpnessAnalyzer, dedupe_detections
 from bird_sharpness.models import BirdDetection
-from bird_sharpness.trace import AnalysisTracer
+from bird_sharpness.trace import C_WEAK, AnalysisTracer, hex_color
 
 from test_bird_sharpness import _StubModels, _install_image, _no_focus, _scene
 
@@ -54,7 +54,7 @@ def test_weak_eyeless_extra_next_to_a_confident_bird_is_dropped(monkeypatch) -> 
     dropped = trace.birds[1]
     assert dropped.excluded and "已排除" in dropped.label and not dropped.best
     overview = next(s for s in trace.common if s.key == "birds")
-    assert any("已排除" in label and "误识别" in value for label, value in overview.metrics)
+    assert any("已排除" in r.label and "误识别" in r.value and r.color == hex_color(C_WEAK) for r in overview.bird_rows)
     assert [s.bird for s in trace.steps_all() if s.bird is not None].count(1) == len(dropped.steps)
     assert [row.label for row in trace.final[0].bird_rows] == ["鸟 #1（最佳）"]
 
@@ -91,7 +91,7 @@ def test_eyeless_box_mostly_inside_a_bird_with_an_eye_is_its_wing(monkeypatch) -
     wing = trace.birds[1]
     assert wing.excluded and "并入 #1" in wing.label
     overview = next(s for s in trace.common if s.key == "birds")
-    assert any("并入 #1" in label and "局部" in value for label, value in overview.metrics)
+    assert any("并入 #1" in r.label and "局部" in r.value for r in overview.bird_rows)
 
 
 @pytest.mark.parametrize("eyes", [[0.87, 0.9], [0.2, 0.07]])

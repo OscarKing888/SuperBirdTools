@@ -56,7 +56,14 @@ def test_multi_bird_trace_marks_best_and_switches_steps(monkeypatch) -> None:
     assert trace.steps_for(other)[3].frame == f"bird{other}"
     # overview of all birds, then every bird's steps in turn
     overview = next(s for s in trace.common if s.key == "birds")
-    assert overview.frame == "birds" and len(overview.metrics) == 2
+    assert overview.frame == "birds" and not overview.metrics and len(overview.bird_rows) == 2
+    oh, ow = overview.image.shape[:2]
+    for row in overview.bird_rows:  # box = that bird's tile in the overview canvas
+        x1, y1, x2, y2 = row.box
+        assert 0 <= x1 < x2 <= ow and 0 <= y1 < y2 <= oh
+    assert overview.bird_rows[0].box[0] < overview.bird_rows[1].box[0]
+    assert next(r for r in overview.bird_rows if "最佳" in r.label).color == \
+        bsf.VERDICT_STYLES[result.verdict].color.lower()
     every = trace.steps_all()
     assert [s.key for s in every[:3]] == ["decode", "detect", "birds"] and every[-1].key == "result"
     assert [s.bird for s in every[3:-1]] == [0] * len(trace.birds[0].steps) + [1] * len(trace.birds[1].steps)

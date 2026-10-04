@@ -67,8 +67,8 @@ def test_dialog_steps_navigation_compare_and_bird_switch(monkeypatch) -> None:
         assert [s.bird for s in dialog.steps[3:11]] == [0] * 4 + [1] * 4
         assert len(dialog.chip_group.buttons()) == 12 and "#2" in dialog.chip_group.button(8).text()
         overview = dialog.steps[2]
-        assert overview.image.ndim == 3 and len(overview.metrics) == 2
-        assert sum("最佳" in label for label, _ in overview.metrics) == 1
+        assert overview.image.ndim == 3 and len(overview.bird_rows) == 2
+        assert sum("最佳" in row.label for row in overview.bird_rows) == 1
         dialog.go(9, force=True)
         assert "鸟 #2 · 边缘筛选" in dialog.step_title.text()
 
@@ -126,7 +126,7 @@ def test_bird_list_shows_swatches_and_hover_highlights_the_box(monkeypatch) -> N
         dialog.set_trace(trace)
         assert _wait(lambda: dialog.stack.currentWidget() is dialog.content and dialog.steps)
         birds = dialog.bird_list
-        for key in ("detect", "result"):  # both steps use the same list widget
+        for key in ("detect", "birds", "result"):  # every bird list uses the same widget
             dialog.go(next(i for i, s in enumerate(dialog.steps) if s.key == key), force=True)
             step = dialog.steps[dialog.index]
             assert birds.isVisibleTo(dialog) and birds.rows == step.bird_rows and len(birds.cells) == 2
