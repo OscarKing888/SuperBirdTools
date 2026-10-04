@@ -318,7 +318,7 @@ def test_result_xmp_fields_use_superpicky_formats() -> None:
     assert out["XMP-superpicky:bird_sharpness_bird_count"] == "2"
     assert out["XMP-superpicky:bird_sharpness_head_sigma"] == "1.269"
     assert out["XMP-superpicky:bird_sharpness_motion_ratio"] == "1.23"
-    assert out["XMP-superpicky:bird_sharpness_version"] == "sbt-blur-v10"
+    assert out["XMP-superpicky:bird_sharpness_version"] == "sbt-blur-v11"
     # No bird: the focus/whole-image value still fills the sharpness slot.
     focus = BirdSharpnessResult(path="x", verdict="no_bird", score=420, sigma=0.9, region="focus").to_xmp_fields()
     assert focus[bsf.SHARPNESS_XMP_KEY] == "420.00"
@@ -517,3 +517,16 @@ def test_mirror_agreement_keeps_the_head_measurement(monkeypatch) -> None:
     assert result.birds[0]["eye_reliable"] is True and result.birds[0]["eye_mirror_gap"] == pytest.approx(0, abs=1e-3)
     assert result.sigma == result.head_sigma
     assert result.eye_xy == pytest.approx((900, 600), abs=3)
+
+
+def test_small_birds_use_the_median_of_several_head_circles(monkeypatch) -> None:
+    from bird_sharpness.analyzer import HEAD_SAMPLE_VARIANTS, SMALL_BIRD_SIDE
+
+    _install_image(monkeypatch, _scene([(500, 600, 150, 0.3), (1300, 600, 300, 0.3)]))
+    models = _StubModels([(500, 600, 150), (1300, 600, 300)], full_w=1800)
+    result = BirdSharpnessAnalyzer(models, focus_provider=_no_focus).analyze("birds.jpg")
+    small, large = sorted(result.birds, key=lambda b: b["box"][0])
+    assert small["box"][2] - small["box"][0] < SMALL_BIRD_SIDE <= large["box"][2] - large["box"][0]
+    assert len(small["head_samples"]) == len(HEAD_SAMPLE_VARIANTS)
+    assert small["head_sigma"] == pytest.approx(float(np.median(small["head_samples"])), abs=1e-3)
+    assert large["head_samples"] is None

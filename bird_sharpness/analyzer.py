@@ -62,6 +62,16 @@ HEAD_RADIUS_MIN_PX = 40
 # within ~2% of the bird when it is shrunk to 150 px.
 EYE_MIRROR_MAX = 0.10
 BEAK_MIRROR_MAX = 0.15
+# Small birds: the head σ is the median over the head circle and six variants
+# (centre shifted ±20% of the radius each way, radius ×0.8 and ×1.25), so a few
+# pixels of eye error move it less. On 116 shorebird heads (two plausible eye
+# positions each: the crop's and its mirror's) this cut the typical σ difference
+# by ~20–50% without shifting σ, but did not reduce verdict flips below 300 px:
+# the remaining spread comes from the few (~30) edges a small head has.
+SMALL_BIRD_SIDE = 450  # bird box long side, px
+HEAD_SAMPLE_SHIFT = 0.2
+HEAD_SAMPLE_VARIANTS = ((0.0, 0.0, 1.0), (1.0, 0.0, 1.0), (-1.0, 0.0, 1.0), (0.0, 1.0, 1.0), (0.0, -1.0, 1.0),
+                        (0.0, 0.0, 0.8), (0.0, 0.0, 1.25))
 HEAD_MASK_DILATE_PX = 9
 BODY_MASK_ERODE_PX = 15
 BOX_INSET_RATIO = 0.08  # detection boxes include background; measure their core
@@ -93,6 +103,7 @@ class BirdMeasurement:
     head_edges: int = 0
     masked: bool = False
     found_by: str = FOUND_FULL
+    head_samples: Optional[List[float]] = None  # small birds: head σ of each circle variant (median used)
     eye_mirror_gap: Optional[float] = None  # eye distance between crop and mirrored crop / bird size
     eye_reliable: Optional[bool] = None
     index: int = 0  # detection number (trace "鸟 #index+1"), kept when false extras are dropped
@@ -705,6 +716,7 @@ class BirdSharpnessAnalyzer:
         body_stats, motion_ratio, body_detail = field_.body_blur_detail(body)
 
         keypoints = locate_head(self.models, image.rgb8[Y1:Y2, X1:X2], max(bw, bh))
+        head_samples = None
         eye_vis = None
         eye_abs = None
         radius = None
@@ -741,8 +753,19 @@ class BirdSharpnessAnalyzer:
                 head = ((xx - eye[0]) ** 2 + (yy - eye[1]) ** 2 <= radius ** 2) & dilated
                 selection = field_.select_strongest_edges(head)
                 head_stats = edge_stats(selection.sigma)
+                if head_stats.sigma is not None and max(bw, bh) < SMALL_BIRD_SIDE:
+                    head_samples = [float(head_stats.sigma)]
+                    for dx, dy, scale_r in HEAD_SAMPLE_VARIANTS[1:]:
+                        cx = eye[0] + dx * HEAD_SAMPLE_SHIFT * radius
+                        cy = eye[1] + dy * HEAD_SAMPLE_SHIFT * radius
+                        variant = ((xx - cx) ** 2 + (yy - cy) ** 2 <= (radius * scale_r) ** 2) & dilated
+                        value = edge_stats(field_.select_strongest_edges(variant).sigma).sigma
+                        if value is not None:
+                            head_samples.append(float(value))
             eye_abs = (round(float(eye[0] + X1), 1), round(float(eye[1] + Y1), 1))
             head_sigma = head_stats.sigma if head_stats is not None else None
+            if head_samples:
+                head_sigma = float(np.median(head_samples))
             head_blank = head_stats is not None and head_sigma is None
             verdict, score = classify(head_sigma, body_stats.sigma, motion_ratio,
                                       eye_visible=eye_vis >= EYE_VISIBLE_MIN, head_blank=head_blank)
@@ -775,6 +798,7 @@ class BirdSharpnessAnalyzer:
             head_edges=head_stats.edge_count if head_stats is not None else 0,
             masked=det.mask is not None,
             found_by=getattr(det, "source", FOUND_FULL),
+            head_samples=None if not head_samples else [round(v, 3) for v in head_samples],
             eye_mirror_gap=None if keypoints is None else keypoints.eye_gap,
             eye_reliable=None if keypoints is None else keypoints.eye_reliable,
             index=index,

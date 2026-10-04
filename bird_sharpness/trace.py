@@ -596,7 +596,11 @@ class AnalysisTracer:
                f"{0 if selection is None else selection.sigma.size}（不足 8 点：严重模糊，按 ≥1.55 px 计）")
               if (head is not None or keypoints is None or measurement.eye_reliable is False)
               else "—（眼不可见，用身体）"),
-             ("头部 σ", _fmt(measurement.head_sigma, "%.3f")), ("身体 σ", _fmt(measurement.body_sigma, "%.3f")),
+             ("头部 σ", _fmt(measurement.head_sigma, "%.3f")
+              + (f"（小鸟：{len(measurement.head_samples)} 个头部圆取中位数："
+                 + " / ".join("%.2f" % v for v in measurement.head_samples) + "）"
+                 if measurement.head_samples else "")),
+             ("身体 σ", _fmt(measurement.body_sigma, "%.3f")),
              ("方向比", _fmt(measurement.motion_ratio)), ("判定", verdict_label(measurement.verdict)),
              ("分数", _fmt(measurement.score, "%d"))],
             charts, legend=[(hex_color(C_SHARP), "清晰"), (hex_color(C_USABLE), "可用"), (hex_color(C_SOFT), "模糊")],
