@@ -62,11 +62,9 @@ class CurrentPageTabWidget(QTabWidget):
         return QSize(full.width(), self._current_page_height(full.height(), lambda w: w.sizeHint().height()))
 
     def minimumSizeHint(self) -> QSize:  # type: ignore[override]
-        full = super().minimumSizeHint()
-        return QSize(
-            full.width(),
-            self._current_page_height(full.height(), lambda w: w.minimumSizeHint().height()),
-        )
+        # 原生最小尺寸已通过 QStackedLayout 忽略非当前页（Ignored policy）。
+        # 不能像 sizeHint 一样再次扣除隐藏页高度，否则会得到负值，展开内容被压扁/裁掉。
+        return super().minimumSizeHint()
 
     def heightForWidth(self, width: int) -> int:  # type: ignore[override]
         # 含自动换行内容时父布局走 heightForWidth，QStackedLayout 同样取所有页最大值。

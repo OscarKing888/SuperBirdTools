@@ -280,6 +280,8 @@ class BirdSharpnessController(QObject):
         self._write_failures = 0
         self._failure_message = ""
         self._trace_requests: list = []  # [dialog, future, cancel_event]
+        self._denoise = None  # DenoiseController, for "降噪成片" traces
+        self._denoise_waits: dict = {}  # normcase(source) -> dialogs waiting for its denoised image
         self._trace_executor = None  # fallback when the browser pool is unavailable
         self._trace_bridge = _TraceBridge(self)
         self._trace_bridge.done.connect(self._on_trace_done)
@@ -330,9 +332,17 @@ class BirdSharpnessController(QObject):
 
     def extend_file_menu(self, menu, paths: list[str]) -> None:
         if paths:
-            trace_act = menu.addAction("查看清晰度计算过程…")
-            trace_act.setToolTip("逐步显示这张照片的清晰度是如何算出来的（只读，不写入）")
-            trace_act.triggered.connect(lambda checked=False, p=paths[0]: self.show_trace(p))
+            from bird_sharpness.image_source import SOURCE_DENOISED, SOURCE_JPEG, SOURCE_RAW
+
+            sub = menu.addMenu("查看清晰度计算过程")
+            sub.setToolTipsVisible(True)
+            for label, source, tip in (
+                    ("RAW 解码…", SOURCE_RAW, "默认：阈值按 RAW 解码标定"),
+                    ("相机 JPEG…", SOURCE_JPEG, "相机内嵌的全尺寸 JPEG（机内锐化/降噪），仅供对比"),
+                    ("降噪成片…", SOURCE_DENOISED, "降噪后的图；没有时先自动降噪，仅供对比")):
+                act = sub.addAction(label)
+                act.setToolTip(tip)
+                act.triggered.connect(lambda checked=False, p=paths[0], s=source: self.show_trace(p, s))
         if self.busy:
             self._add_stop_action(menu)
             return
@@ -343,12 +353,24 @@ class BirdSharpnessController(QObject):
         act.triggered.connect(lambda checked=False, p=list(paths): self.start_for_paths(p))
 
     # ── per-photo computation trace ───────────────────────────────────────
-    def show_trace(self, path: str):
+    def set_denoise_controller(self, controller) -> None:
+        """Lets the trace viewer measure denoised images, denoising first when there is none."""
+        self._denoise = controller
+        controller.output_ready.connect(self._on_denoised_output)
+        controller.batch_finished.connect(self._on_denoise_finished)
+
+    def _denoised_lookup(self, path: str):
+        """Worker-thread lookup with the user's current denoise output settings."""
+        from image_denoise.preview import find_denoised_preview
+
+        from .denoise_controller import current_denoise_options
+
+        return find_denoised_preview(path, current_denoise_options())
+
+    def show_trace(self, path: str, image_source: str = "raw"):
         """Open a step viewer for one photo; the trace runs as a pool ANALYSIS action."""
         if self._shutdown_requested:
             return None
-        from bird_sharpness.actions import BirdSharpnessTraceAction
-
         from .bird_sharpness_trace_view import BirdSharpnessTraceDialog
 
         resolve = getattr(self._file_list, "_resolve_source_path_for_action", None)
@@ -358,10 +380,25 @@ class BirdSharpnessController(QObject):
                 source = resolve(path) or path
             except Exception:
                 source = path
-        dialog = BirdSharpnessTraceDialog(self._main, source)
+        dialog = BirdSharpnessTraceDialog(self._main, source, image_source)
+        dialog.closed.connect(self._on_trace_dialog_closed)
+        dialog.source_changed.connect(lambda d, s: self._run_trace(d, s))
+        self._run_trace(dialog, image_source)
+        dialog.show()
+        return dialog
+
+    def _run_trace(self, dialog, image_source: str) -> None:
+        from bird_sharpness.actions import BirdSharpnessTraceAction
+
+        for request in [r for r in self._trace_requests if r[0] is dialog]:
+            self._cancel_trace(request)  # a newer source replaces the running one
+        self._forget_denoise_wait(dialog)
+        dialog.set_loading()
         cancel = threading.Event()
         request = [dialog, None, cancel]
-        action = BirdSharpnessTraceAction(self.analyzer(), source, cancelled=cancel.is_set)
+        action = BirdSharpnessTraceAction(self.analyzer(), dialog.path, cancelled=cancel.is_set,
+                                          image_source=image_source,
+                                          denoised_lookup=self._denoised_lookup if self._denoise is not None else None)
         pool_getter = getattr(self._file_list, "background_work_pool", None)
         pool = pool_getter() if callable(pool_getter) else None
         future = None
@@ -383,9 +420,11 @@ class BirdSharpnessController(QObject):
         self._trace_requests.append(request)
         bridge = self._trace_bridge
         future.add_done_callback(lambda f, r=request: bridge.done.emit(r, f))
-        dialog.closed.connect(lambda _d, r=request: self._cancel_trace(r))
-        dialog.show()
-        return dialog
+
+    def _on_trace_dialog_closed(self, dialog) -> None:
+        for request in [r for r in self._trace_requests if r[0] is dialog]:
+            self._cancel_trace(request)
+        self._forget_denoise_wait(dialog)
 
     def _cancel_trace(self, request) -> None:
         request[2].set()
@@ -405,10 +444,52 @@ class BirdSharpnessController(QObject):
             _log.error("[BirdSharpness] trace failed path=%r: %r", dialog.path, exc)
             dialog.set_error(f"{type(exc).__name__}: {exc}")
             return
-        if outcome.trace is not None:
+        if outcome.needs_denoise:
+            self._denoise_then_trace(dialog)
+        elif outcome.trace is not None:
             dialog.set_trace(outcome.trace)
         elif not outcome.cancelled:
             dialog.set_error(outcome.error or "分析失败")
+
+    # ── denoise on demand ──
+    def _denoise_then_trace(self, dialog) -> None:
+        denoise = self._denoise
+        if denoise is None:
+            dialog.set_error("降噪功能不可用。")
+            return
+        key = os.path.normcase(os.path.normpath(dialog.path))
+        if key not in self._denoise_waits:
+            if denoise.busy:
+                dialog.set_error("降噪正在处理其它照片，完成后再选「降噪成片」；也可在降噪进度窗口里停止它。")
+                return
+            if not denoise.start_for_paths([dialog.path]):
+                dialog.set_error("降噪没有开始（已取消选择输出目录，或降噪设置无效）。")
+                return
+        self._denoise_waits.setdefault(key, []).append(dialog)
+        dialog.set_loading(f"{os.path.basename(dialog.path)} 还没有降噪成片，正在降噪…\n"
+                           "（进度见降噪窗口，约 1–2 分钟；完成后自动按降噪成片计算）")
+
+    def _forget_denoise_wait(self, dialog) -> None:
+        for key, dialogs in list(self._denoise_waits.items()):
+            if dialog in dialogs:
+                dialogs.remove(dialog)
+            if not dialogs:
+                del self._denoise_waits[key]
+
+    def _on_denoised_output(self, source: str, _destination: str) -> None:
+        if self._shutdown_requested:
+            return
+        from bird_sharpness.image_source import SOURCE_DENOISED
+
+        for dialog in self._denoise_waits.pop(os.path.normcase(os.path.normpath(source)), []):
+            if dialog.image_source == SOURCE_DENOISED:
+                self._run_trace(dialog, SOURCE_DENOISED)
+
+    def _on_denoise_finished(self) -> None:
+        waits, self._denoise_waits = self._denoise_waits, {}
+        for dialogs in waits.values():
+            for dialog in dialogs:
+                dialog.set_error("降噪没有生成成片（已停止或失败，详见降噪窗口）。")
 
     def start_for_paths(self, paths: list[str]) -> None:
         resolve = getattr(self._file_list, "_resolve_source_path_for_action", None)

@@ -17,6 +17,7 @@ import numpy as np
 
 from app_common.bird_sharpness_fields import VERDICT_STYLES
 from app_common.toggle_button import ToggleToolButton
+from bird_sharpness.image_source import SOURCE_DENOISED, SOURCE_JPEG, SOURCE_LABELS, SOURCE_RAW
 
 from .qt_compat import (
     QComboBox, QDialog, QHBoxLayout, QLabel, QPushButton, QScrollArea, QSplitter, QStackedWidget,
@@ -56,6 +57,12 @@ STEP_ICONS = {
     "distribution": "分布", "focus": "焦点", "tiles": "分块", "result": "结论",
 }
 _CIRCLED = "①②③④⑤⑥⑦⑧⑨⑩⑪⑫⑬⑭⑮⑯⑰⑱⑲⑳"
+_TOOLTIP_ROLE = getattr(getattr(Qt, "ItemDataRole", Qt), "ToolTipRole")
+SOURCE_CHOICES = (
+    (SOURCE_RAW, "RAW 解码", "LibRaw 全分辨率解码；阈值按它标定（默认，最可靠）"),
+    (SOURCE_JPEG, "相机 JPEG", "相机内嵌的全尺寸 JPEG：机内锐化/降噪/压缩，仅供对比"),
+    (SOURCE_DENOISED, "降噪成片", "NAFNet 降噪后的图；没有时先自动降噪，仅供对比"),
+)
 ALL_BIRDS = -1  # bird selector item: every bird's steps in turn
 
 
@@ -343,10 +350,12 @@ class BirdSharpnessTraceDialog(QDialog):
     """Non-modal window for one photo's trace; ``set_trace`` once the worker delivers it."""
 
     closed = pyqtSignal(object)
+    source_changed = pyqtSignal(object, str)  # (dialog, image source) — recompute requested
 
-    def __init__(self, parent, path: str) -> None:
+    def __init__(self, parent, path: str, image_source: str = SOURCE_RAW) -> None:
         super().__init__(parent)
         self.path = path
+        self.image_source = image_source
         self.trace = None
         self.steps: List = []
         self.index = 0
@@ -358,13 +367,27 @@ class BirdSharpnessTraceDialog(QDialog):
         self.setAttribute(getattr(getattr(Qt, "WidgetAttribute", Qt), "WA_DeleteOnClose"), True)
 
         self.stack = QStackedWidget(self)
-        self.loading = QLabel(f"正在计算 {os.path.basename(path)} 的清晰度过程…\n（全分辨率解码与识别，约 2–5 秒）", self)
+        self.loading = QLabel("", self)
         self.loading.setAlignment(_Qt.AlignCenter)
+        self.loading.setWordWrap(True)
+        # Which pixels are measured; switching recomputes (always visible, also while loading).
+        self.source_combo = QComboBox(self)
+        for key, label, tip in SOURCE_CHOICES:
+            self.source_combo.addItem(label, key)
+            self.source_combo.setItemData(self.source_combo.count() - 1, tip, _TOOLTIP_ROLE)
+        self.source_combo.setCurrentIndex(max(0, self.source_combo.findData(image_source)))
+        self.source_combo.currentIndexChanged.connect(self._on_source_changed)
+        top = QHBoxLayout()
+        top.addStretch(1)
+        top.addWidget(QLabel("图像：", self))
+        top.addWidget(self.source_combo)
+        self.set_loading()
         self.stack.addWidget(self.loading)
         self.content = QWidget(self)
         self.stack.addWidget(self.content)
         root = QVBoxLayout(self)
         root.setContentsMargins(10, 10, 10, 10)
+        root.addLayout(top)
         root.addWidget(self.stack)
         self._build_content()
 
@@ -502,8 +525,22 @@ class BirdSharpnessTraceDialog(QDialog):
         layout.addLayout(tools)
 
     # ── data ──────────────────────────────────────────────────────────────
+    def set_loading(self, message: str = "") -> None:
+        label = SOURCE_LABELS.get(self.image_source, self.image_source)
+        self.loading.setText(message or f"正在按「{label}」计算 {os.path.basename(self.path)} 的清晰度过程…\n"
+                                        "（全分辨率解码与识别，约 2–5 秒）")
+        self.stack.setCurrentWidget(self.loading)
+
     def set_error(self, message: str) -> None:
         self.loading.setText(f"无法生成清晰度计算过程：\n{message}")
+        self.stack.setCurrentWidget(self.loading)
+
+    def _on_source_changed(self, index: int) -> None:
+        source = self.source_combo.itemData(index)
+        if source and source != self.image_source:
+            self.image_source = source
+            self.set_loading()
+            self.source_changed.emit(self, source)
 
     def set_trace(self, trace) -> None:
         self.trace = trace

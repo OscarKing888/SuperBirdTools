@@ -12,7 +12,7 @@ import numpy as np
 import pytest
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QKeyEvent
-from PyQt6.QtCore import QEvent
+from PyQt6.QtCore import QEvent, QObject, pyqtSignal
 from PyQt6.QtWidgets import QApplication, QMenu, QWidget
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "bird_sharpness" / "tests"))
@@ -178,10 +178,11 @@ def test_context_menu_opens_trace_computed_as_worker_action(stub_trace_env, monk
     try:
         menu = QMenu()
         controller.extend_file_menu(menu, ["/photos/a.ARW", "/photos/b.ARW"])
-        action = next(a for a in menu.actions() if a.text() == "查看清晰度计算过程…")
+        trace_menu = next(a for a in menu.actions() if a.text() == "查看清晰度计算过程").menu()
+        action = trace_menu.actions()[0]  # RAW 解码
         opened = []
         original_show = controller.show_trace
-        monkeypatch.setattr(controller, "show_trace", lambda p: opened.append(original_show(p)))
+        monkeypatch.setattr(controller, "show_trace", lambda p, s: opened.append(original_show(p, s)))
         action.trigger()
         dialog = opened[0]
         assert dialog.path == os.path.normpath("/photos/a.ARW") or dialog.path == "/photos/a.ARW"
@@ -222,5 +223,93 @@ def test_closing_window_cancels_pending_trace_and_shutdown_waits(stub_trace_env,
     finally:
         gate.set()
         pool.shutdown(timeout=5)
+        window.deleteLater()
+        _APP.processEvents()
+
+
+def _source_metric(dialog) -> str:
+    return dict(dialog.steps[0].metrics)["图像来源"]
+
+
+def test_switching_image_source_recomputes_from_those_pixels(stub_trace_env, monkeypatch) -> None:
+    from bird_sharpness import image_source as image_source_mod
+    from bird_sharpness.image_source import AnalysisImage, SOURCE_JPEG
+
+    analyzer, _gate = stub_trace_env
+    stub = analyzer_mod.load_analysis_image("x")
+    jpeg_calls = []
+
+    def fake_jpeg(path):
+        jpeg_calls.append(path)
+        return AnalysisImage(stub.rgb8, stub.gray, False, None, SOURCE_JPEG, path)
+
+    monkeypatch.setattr(image_source_mod, "load_embedded_jpeg", fake_jpeg)
+    window = QWidget()
+    controller = BirdSharpnessController(window, _FakeFileList(None))
+    monkeypatch.setattr(controller, "analyzer", lambda: analyzer)
+    try:
+        dialog = controller.show_trace("/photos/a.ARW", "raw")
+        assert _wait(lambda: dialog.stack.currentWidget() is dialog.content, timeout=20)
+        assert "RAW" in _source_metric(dialog) or "位图" in _source_metric(dialog)
+        dialog.source_combo.setCurrentIndex(dialog.source_combo.findData(SOURCE_JPEG))
+        assert dialog.stack.currentWidget() is dialog.loading  # recomputing
+        assert _wait(lambda: dialog.stack.currentWidget() is dialog.content, timeout=20)
+        assert "相机内嵌 JPEG" in _source_metric(dialog) and jpeg_calls
+        dialog.close()
+        assert _wait(controller.is_shutdown_done)
+    finally:
+        controller.request_shutdown()
+        window.deleteLater()
+        _APP.processEvents()
+
+
+class _FakeDenoise(QObject):
+    output_ready = pyqtSignal(str, str)
+    batch_finished = pyqtSignal()
+
+    def __init__(self):
+        super().__init__()
+        self.busy = False
+        self.started = []
+
+    def start_for_paths(self, paths):
+        self.started.append(list(paths))
+        return True
+
+
+@pytest.mark.parametrize("succeeds", [True, False])
+def test_denoised_source_denoises_first_when_missing(stub_trace_env, monkeypatch, succeeds) -> None:
+    from bird_sharpness import image_source as image_source_mod
+    from bird_sharpness.image_source import AnalysisImage, SOURCE_DENOISED
+
+    analyzer, _gate = stub_trace_env
+    stub = analyzer_mod.load_analysis_image("x")
+    found = {}
+    monkeypatch.setattr(image_source_mod, "load_image_file",
+                        lambda p, *, source, camera_crop=None: AnalysisImage(stub.rgb8, stub.gray, False, camera_crop,
+                                                                             source, p))
+    window = QWidget()
+    controller = BirdSharpnessController(window, _FakeFileList(None))
+    monkeypatch.setattr(controller, "analyzer", lambda: analyzer)
+    monkeypatch.setattr(controller, "_denoised_lookup", lambda path: found.get(os.path.normpath(path)))
+    denoise = _FakeDenoise()
+    controller.set_denoise_controller(denoise)
+    try:
+        dialog = controller.show_trace("/photos/a.ARW", SOURCE_DENOISED)
+        assert _wait(lambda: denoise.started, timeout=20)
+        assert denoise.started == [[dialog.path]] and "正在降噪" in dialog.loading.text()
+        if succeeds:
+            found[os.path.normpath(dialog.path)] = type("Found", (), {"path": "/out/a_denoised.tif", "camera_crop": None})
+            denoise.output_ready.emit(dialog.path, "/out/a_denoised.tif")
+            assert _wait(lambda: dialog.stack.currentWidget() is dialog.content, timeout=20)
+            assert "降噪成片" in _source_metric(dialog)
+            assert dict(dialog.steps[0].metrics)["图像文件"] == "a_denoised.tif"
+        else:
+            denoise.batch_finished.emit()
+            assert "没有生成成片" in dialog.loading.text()
+        dialog.close()
+        assert _wait(controller.is_shutdown_done)
+    finally:
+        controller.request_shutdown()
         window.deleteLater()
         _APP.processEvents()

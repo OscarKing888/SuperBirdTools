@@ -48,6 +48,11 @@ def main(argv: List[str] | None = None) -> int:
     parser.add_argument("-r", "--recursive", action="store_true", help="递归子目录")
     parser.add_argument("--write-xmp", action="store_true", help="把结果写入同名 XMP sidecar")
     parser.add_argument("--json", action="store_true", help="逐行输出 JSON")
+    parser.add_argument("--source", choices=("raw", "jpeg", "denoised"), default="raw",
+                        help="测量哪种图像：raw = RAW 解码（默认，阈值按它标定）；jpeg = 相机内嵌 JPEG；"
+                             "denoised = 降噪成片（image_denoise 生成的）。后两者仅供对比，不能与 --write-xmp 同用")
+    parser.add_argument("--denoised-dir", default="",
+                        help="--source denoised 时降噪成片所在的固定目录；默认找照片旁的 denoised 子目录")
     parser.add_argument("--trace", metavar="DIR",
                         help="导出每张照片的计算过程（各步骤 PNG + trace.json）到 DIR/<文件名>/")
     parser.add_argument(
@@ -55,6 +60,8 @@ def main(argv: List[str] | None = None) -> int:
         help="并行检测的照片数（模型推理串行，解码与计算并行；默认 CPU 核数的一半，最多 6）",
     )
     args = parser.parse_args(argv)
+    if args.write_xmp and args.source != "raw":
+        parser.error("--write-xmp 只能与 --source raw 一起使用（XMP 里的清晰度按 RAW 解码标定）")
 
     from .models import check_runtime
 
@@ -95,6 +102,16 @@ def main(argv: List[str] | None = None) -> int:
             flush=True,
         )
 
+    from .image_source import source_loader
+
+    lookup = None
+    if args.source == "denoised":
+        from image_denoise.preview import find_denoised_preview
+        from image_denoise.types import DenoiseOptions
+
+        options = DenoiseOptions(output_directory=args.denoised_dir)
+        lookup = lambda path: find_denoised_preview(path, options)  # noqa: E731
+    loader = source_loader(args.source, denoised_lookup=lookup)
     analyzer = BirdSharpnessAnalyzer()
     try:
         if args.trace:
@@ -103,14 +120,15 @@ def main(argv: List[str] | None = None) -> int:
             results = []
             for index, path in enumerate(paths, start=1):
                 tracer = AnalysisTracer()
-                result = analyzer.analyze(path, tracer=tracer)
+                result = analyzer.analyze(path, tracer=tracer, image_loader=loader)
                 results.append(result)
                 if tracer.trace is not None:
                     out_dir = os.path.join(args.trace, os.path.splitext(os.path.basename(path))[0])
                     tracer.trace.export(out_dir)
                 report(index, len(paths), result)
         else:
-            results = analyze_paths(paths, analyzer=analyzer, on_result=report, workers=max(1, args.workers))
+            results = analyze_paths(paths, analyzer=analyzer, on_result=report, workers=max(1, args.workers),
+                                    image_loader=loader)
     finally:
         analyzer.release()
     return 0 if all(r.ok for r in results) else 3

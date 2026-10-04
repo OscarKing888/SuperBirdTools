@@ -11,13 +11,23 @@ from __future__ import annotations
 
 import os
 from contextlib import nullcontext
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Optional, Tuple
 
 import numpy as np
 
 from app_common.image_formats import HEIF_IMAGE_EXTENSIONS, RAW_IMAGE_EXTENSIONS
+
+
+# Which pixels are measured. RAW decode is the calibrated default; the camera's
+# embedded JPEG and a denoised rendering are offered for comparison (trace viewer,
+# CLI ``--source``). Their noise, sharpening and tone differ, so thresholds
+# calibrated on RAW decodes are not re-tuned for them.
+SOURCE_RAW = "raw"
+SOURCE_JPEG = "jpeg"
+SOURCE_DENOISED = "denoised"
+SOURCE_LABELS = {SOURCE_RAW: "RAW 解码", SOURCE_JPEG: "相机 JPEG", SOURCE_DENOISED: "降噪成片"}
 
 
 @dataclass
@@ -28,6 +38,8 @@ class AnalysisImage:
     # Normalised (left, top, right, bottom) of the camera JPEG frame inside these
     # pixels; RAW output keeps sensor margins that camera/focus coordinates exclude.
     camera_crop: Optional[Tuple[float, float, float, float]] = None
+    source: str = SOURCE_RAW
+    source_path: str = ""  # file actually decoded (embedded JPEG: the RAW itself)
 
     @property
     def long_edge(self) -> int:
@@ -88,3 +100,77 @@ def load_analysis_image(path: str) -> AnalysisImage:
     if Path(path).suffix.lower() in RAW_IMAGE_EXTENSIONS:
         return _load_raw(path)
     return _load_pillow(path)
+
+
+def _from_rgb8(rgb8: np.ndarray, *, source: str, source_path: str, camera_crop=None) -> AnalysisImage:
+    rgb8 = np.ascontiguousarray(rgb8[..., :3])
+    return AnalysisImage(rgb8=rgb8, gray=rgb8[..., 1].astype(np.float32) / 255.0, is_raw=False,
+                         camera_crop=camera_crop, source=source, source_path=source_path)
+
+
+def load_embedded_jpeg(path: str) -> AnalysisImage:
+    """The camera's embedded full-size JPEG of a RAW (camera frame, no sensor margins).
+
+    Non-RAW files are their own JPEG. The camera has sharpened, noise-reduced and
+    compressed these pixels.
+    """
+    if Path(path).suffix.lower() not in RAW_IMAGE_EXTENSIONS:
+        return replace(_load_pillow(path), source=SOURCE_JPEG, source_path=path)
+    import io
+
+    from PIL import Image, ImageOps
+
+    from app_common import thumb_stream
+
+    data = thumb_stream.get_raw_preview_jpeg(path)
+    if not data:
+        raise ValueError("RAW 文件里没有内嵌 JPEG")
+    with Image.open(io.BytesIO(data)) as img:
+        img = ImageOps.exif_transpose(img)  # same orientation rule as the Viewer preview
+        rgb8 = np.asarray(img.convert("RGB"), dtype=np.uint8)
+    return _from_rgb8(rgb8, source=SOURCE_JPEG, source_path=path)
+
+
+class DenoisedImageMissing(LookupError):
+    """No denoised rendering exists for this photo yet."""
+
+
+def source_loader(source: str, *, denoised_lookup=None):
+    """``image_loader`` for :meth:`BirdSharpnessAnalyzer.analyze`; ``None`` = RAW decode.
+
+    ``denoised_lookup(path)`` returns an object with ``path`` and ``camera_crop``
+    (``image_denoise.preview.DenoisedPreview``) or ``None``.
+    """
+    if source == SOURCE_RAW:
+        return None
+    if source == SOURCE_JPEG:
+        return load_embedded_jpeg
+    if source == SOURCE_DENOISED:
+        if denoised_lookup is None:
+            raise ValueError("降噪成片需要 denoised_lookup")
+
+        def load(path: str) -> AnalysisImage:
+            found = denoised_lookup(path)
+            if found is None:
+                raise DenoisedImageMissing(f"没有降噪成片：{path}")
+            return load_image_file(found.path, source=SOURCE_DENOISED, camera_crop=found.camera_crop)
+
+        return load
+    raise ValueError(f"未知图像来源：{source}")
+
+
+def load_image_file(file_path: str, *, source: str, camera_crop=None) -> AnalysisImage:
+    """A rendered image (e.g. a denoised 16-bit TIFF) measured in place of the original."""
+    if Path(file_path).suffix.lower() in (".tif", ".tiff"):
+        import tifffile
+
+        pixels = np.asarray(tifffile.imread(file_path))
+        if pixels.ndim == 2:
+            pixels = np.repeat(pixels[..., None], 3, axis=2)
+        pixels = pixels[..., :3]
+        if pixels.dtype == np.uint16:
+            return AnalysisImage(rgb8=np.ascontiguousarray((pixels >> 8).astype(np.uint8)),
+                                 gray=pixels[..., 1].astype(np.float32) / 65535.0, is_raw=False,
+                                 camera_crop=camera_crop, source=source, source_path=file_path)
+        return _from_rgb8(pixels.astype(np.uint8), source=source, source_path=file_path, camera_crop=camera_crop)
+    return replace(_load_pillow(file_path), camera_crop=camera_crop, source=source, source_path=file_path)

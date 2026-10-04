@@ -43,7 +43,7 @@ _log = get_logger("bird_sharpness")
 DETECT_LONG_EDGE = 1024  # detection copy
 DETECT_IMGSZ = 640  # first-pass network input (the size the YOLO models are trained at)
 RECHECK_IMGSZ = 1024  # second pass when the first finds no bird: small, dark birds score higher
-MAX_BIRDS = 8
+MAX_BIRDS = 16  # birds measured per photo; shorebird flocks often hold a dozen
 CROP_PAD_RATIO = 0.15
 EYE_VISIBLE_MIN = 0.5
 BEAK_VISIBLE_MIN = 0.3
@@ -164,25 +164,56 @@ def dedupe_detections(detections: List[BirdDetection]) -> List[BirdDetection]:
     return kept
 
 
-# An extra bird is a false detection (a leaf, a pale trunk) when it is weak, shows
-# no eye and sits next to a confident bird: DSC04392/04395 leaf at 0.26-0.27 next
-# to a 0.94 bird, DSC05567 trunk at 0.36 next to 0.68. Such an extra only matters
-# when it outranks the real bird, which is exactly the failure. Without the eye
-# model nothing is dropped.
+# Extra birds that are not separate birds, decided after measuring (eye
+# visibility comes from the keypoint model; without it nothing is excluded):
+# * a false detection (a leaf, a pale trunk): weak, shows no eye and sits next to
+#   a confident bird. DSC04392/04395 leaf at 0.26-0.27 next to a 0.94 bird,
+#   DSC05567 trunk at 0.36 next to 0.68. It only matters when it outranks the
+#   real bird, which is exactly the failure;
+# * a part of another bird (a raised wing, a tail): its box lies mostly inside a
+#   bird whose eye is visible while it shows none. DSC05008: wing box 0.55, 65 %
+#   inside the 0.43 whole-bird box. Masks cannot tell: segmentation splits such a
+#   bird into body and wing with ~2 % mask overlap. Across the set, overlapping
+#   boxes were either >= 95 % (duplicates, merged above) or <= 11 % apart from it.
 EXTRA_BIRD_CONFIDENCE_MAX = 0.4
 EXTRA_BIRD_ANCHOR_MIN = 0.5
+PART_OF_BIRD_OVERLAP = 0.5
+EXCLUDED_FALSE = "false"
+EXCLUDED_PART = "part"
 
 
-def false_extra_birds(birds: List["BirdMeasurement"]) -> List[int]:
-    """Indices of extra birds treated as false detections (never the most confident one)."""
+@dataclass(frozen=True)
+class Exclusion:
+    """Why a measured bird does not count: ``reason`` relative to bird ``other``."""
+
+    reason: str  # EXCLUDED_FALSE | EXCLUDED_PART
+    other: int
+    overlap: float = 0.0
+
+
+def excluded_birds(birds: List["BirdMeasurement"]) -> Dict[int, Exclusion]:
+    """Extra birds that do not count; the remaining set is never empty."""
     if len(birds) < 2:
-        return []
+        return {}
+
+    def eyeless(b) -> bool:
+        return b.eye_visibility is not None and b.eye_visibility < EYE_VISIBLE_MIN
+
+    out: Dict[int, Exclusion] = {}
+    for i, part in enumerate(birds):
+        if not eyeless(part):
+            continue
+        owners = [(box_overlap(part.box, b.box), j) for j, b in enumerate(birds)
+                  if j != i and b.eye_visibility is not None and b.eye_visibility >= EYE_VISIBLE_MIN]
+        overlap, owner = max(owners, default=(0.0, -1))
+        if overlap >= PART_OF_BIRD_OVERLAP:
+            out[i] = Exclusion(EXCLUDED_PART, owner, round(overlap, 2))
     anchor = max(range(len(birds)), key=lambda i: birds[i].confidence)
-    if birds[anchor].confidence < EXTRA_BIRD_ANCHOR_MIN:
-        return []
-    return [i for i, b in enumerate(birds)
-            if i != anchor and b.confidence < EXTRA_BIRD_CONFIDENCE_MAX
-            and b.eye_visibility is not None and b.eye_visibility < EYE_VISIBLE_MIN]
+    if birds[anchor].confidence >= EXTRA_BIRD_ANCHOR_MIN:
+        for i, b in enumerate(birds):
+            if i != anchor and i not in out and b.confidence < EXTRA_BIRD_CONFIDENCE_MAX and eyeless(b):
+                out[i] = Exclusion(EXCLUDED_FALSE, anchor)
+    return out
 
 
 # Recheck for camouflaged birds (DSC05167: a nightjar on a branch at dusk). The
@@ -296,6 +327,20 @@ class MissedBird:
     confidence: float
 
 
+def prefer_focus_birds(detections: List[BirdDetection], focus_px: Optional[Box], scale: float) -> List[BirdDetection]:
+    """Birds touching the camera focus box first, the rest in their original order.
+
+    Used before the MAX_BIRDS cut: detections are ranked by confidence x area,
+    so the small bird the photographer focused on would otherwise be the one
+    dropped from a flock (DSC00859: 9 birds, the focused one ranked last).
+    """
+    if focus_px is None:
+        return list(detections)
+    on_focus = [_intersection(tuple(v / scale for v in d.box), focus_px) > 0 for d in detections]
+    return ([d for d, hit in zip(detections, on_focus) if hit]
+            + [d for d, hit in zip(detections, on_focus) if not hit])
+
+
 def valid_bounds(image: AnalysisImage) -> Tuple[int, int, int, int]:
     """Pixel bounds of real picture content: the camera frame inside RAW output.
 
@@ -382,12 +427,15 @@ class BirdSharpnessAnalyzer:
         self.models.release()
 
     def analyze(self, path: str, *, on_stage: Optional[Callable[[str], None]] = None,
-                cancelled: Callable[[], bool] = lambda: False, tracer=None) -> BirdSharpnessResult:
+                cancelled: Callable[[], bool] = lambda: False, tracer=None,
+                image_loader: Optional[Callable[[str], AnalysisImage]] = None) -> BirdSharpnessResult:
         """Analyse one photo. ``tracer`` (:class:`~bird_sharpness.trace.AnalysisTracer`)
-        records every key step with the exact data used; ``None`` costs nothing."""
+        records every key step with the exact data used; ``None`` costs nothing.
+        ``image_loader(path)`` replaces the RAW decode (embedded JPEG, denoised image;
+        see :mod:`bird_sharpness.image_source`); focus metadata still comes from ``path``."""
         t0 = time.perf_counter()
         try:
-            result = self._analyze(path, on_stage or (lambda stage: None), cancelled, tracer)
+            result = self._analyze(path, on_stage or (lambda stage: None), cancelled, tracer, image_loader)
         except Exception as exc:
             _log.error("[BirdSharpness] analysis failed path=%r: %s", path, traceback.format_exc())
             result = BirdSharpnessResult(path=path, verdict=VERDICT_ERROR, error=f"{type(exc).__name__}: {exc}")
@@ -397,10 +445,11 @@ class BirdSharpnessAnalyzer:
         return result
 
     # ── pipeline ──────────────────────────────────────────────────────────
-    def _analyze(self, path: str, on_stage: Callable[[str], None], cancelled, tracer=None) -> BirdSharpnessResult:
+    def _analyze(self, path: str, on_stage: Callable[[str], None], cancelled, tracer=None,
+                 image_loader=None) -> BirdSharpnessResult:
         on_stage(STAGE_DECODE)
         t_decode = time.perf_counter()
-        image = load_analysis_image(path)
+        image = (image_loader or load_analysis_image)(path)
         focus_px = _UNSET = object()
         if tracer is not None:
             focus_px = self._focus_box_px(path, image)
@@ -409,10 +458,15 @@ class BirdSharpnessAnalyzer:
         H, W = image.gray.shape[:2]
         small, scale = _resize_long_edge(image.rgb8, DETECT_LONG_EDGE)
         small_bgr = cv2.cvtColor(small, cv2.COLOR_RGB2BGR)
-        detections = dedupe_detections(self.models.detect_birds(small_bgr, imgsz=DETECT_IMGSZ))[:MAX_BIRDS]
+        detections = dedupe_detections(self.models.detect_birds(small_bgr, imgsz=DETECT_IMGSZ))
+        unmeasured = max(0, len(detections) - MAX_BIRDS)
+        if unmeasured:
+            if focus_px is _UNSET:
+                focus_px = self._focus_box_px(path, image)
+            detections = prefer_focus_birds(detections, focus_px, scale)[:MAX_BIRDS]
         if tracer is not None:
             tracer.detect(detections, scale, has_masks=bool(getattr(self.models, "has_masks", True)),
-                          has_keypoints=bool(getattr(self.models, "has_keypoints", True)))
+                          has_keypoints=bool(getattr(self.models, "has_keypoints", True)), unmeasured=unmeasured)
         if not detections and not cancelled():
             if focus_px is _UNSET:
                 focus_px = self._focus_box_px(path, image)
@@ -423,7 +477,7 @@ class BirdSharpnessAnalyzer:
         on_stage(STAGE_MEASURE)
         if detections:
             birds = [self._measure_bird(image, det, scale, index=i, tracer=tracer) for i, det in enumerate(detections)]
-            excluded = false_extra_birds(birds)
+            excluded = excluded_birds(birds)
             kept = [b for i, b in enumerate(birds) if i not in excluded]
             if tracer is not None:
                 tracer.mark_best(birds.index(max(kept, key=BirdMeasurement.rank)), excluded=excluded)
@@ -711,6 +765,7 @@ def analyze_paths(
     cancel_event: Optional[threading.Event] = None,
     on_result: Optional[ProgressCallback] = None,
     workers: int = 1,
+    image_loader: Optional[Callable[[str], AnalysisImage]] = None,
 ) -> List[BirdSharpnessResult]:
     """Analyze files, ``workers`` at a time; results are returned in input order.
 
@@ -718,6 +773,7 @@ def analyze_paths(
     new files once ``cancel_event`` is set and waits for the ones in flight.
     """
     items = [os.path.normpath(p) for p in paths]
+    extra = {} if image_loader is None else {"image_loader": image_loader}
     analyzer = analyzer or BirdSharpnessAnalyzer()
     total = len(items)
     by_index: Dict[int, BirdSharpnessResult] = {}
@@ -733,7 +789,7 @@ def analyze_paths(
         for index, path in enumerate(items):
             if cancelled():
                 break
-            by_index[index] = analyzer.analyze(path)
+            by_index[index] = analyzer.analyze(path, **extra)
             report(by_index[index])
     else:
         from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
@@ -744,7 +800,7 @@ def analyze_paths(
         with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="bird-sharpness") as executor:
             while pending or (next_index < total and not cancelled()):
                 while next_index < total and len(pending) < workers * 2 and not cancelled():
-                    pending[executor.submit(analyzer.analyze, items[next_index])] = next_index
+                    pending[executor.submit(analyzer.analyze, items[next_index], **extra)] = next_index
                     next_index += 1
                 done, _ = wait(pending, return_when=FIRST_COMPLETED)
                 for future in done:

@@ -371,6 +371,7 @@ class MainWindow(QMainWindow):
         # 鸟清晰度检测：目录树 / 文件列表右键菜单 → 后台检测 → 写 XMP → 刷新列表与缩略图
         self._bird_sharpness = BirdSharpnessController(self, self._file_list, self._dir_browser)
         self._denoise = DenoiseController(self, self._file_list, self._dir_browser)
+        self._bird_sharpness.set_denoise_controller(self._denoise)
         # 计算连拍信息：目录树右键 → 按拍摄时间分组 → 写 XMP burst_id/burst_position → 刷新连拍显示
         self._burst_info = BurstInfoController(self, self._file_list, self._dir_browser)
         # 连接文件列表选中 → 预览 + 元信息刷新

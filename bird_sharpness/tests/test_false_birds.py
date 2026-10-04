@@ -1,4 +1,4 @@
-"""False extra birds (leaves, trunks) and duplicate detections of one bird."""
+"""False extra birds (leaves, trunks), parts of a bird (wings) and duplicate detections of one bird."""
 from __future__ import annotations
 
 from dataclasses import replace
@@ -17,8 +17,8 @@ SCENE = [(450, 600, 260, 1.8), (1350, 600, 260, 0.3)]
 
 
 class _Stub(_StubModels):
-    def __init__(self, confs, eyes, **kw):
-        super().__init__([b[:3] for b in SCENE], full_w=1800, **kw)
+    def __init__(self, confs, eyes, scene=SCENE, **kw):
+        super().__init__([b[:3] for b in scene], full_w=1800, **kw)
         self.confs, self.eyes, self._k = confs, list(eyes), 0
 
     def detect_birds(self, bgr, *, conf=0.25, imgsz=None):
@@ -36,10 +36,11 @@ class _Stub(_StubModels):
         return coords, vis
 
 
-def _analyze(monkeypatch, confs, eyes, **kw):
-    _install_image(monkeypatch, _scene(SCENE))
+def _analyze(monkeypatch, confs, eyes, scene=SCENE, **kw):
+    _install_image(monkeypatch, _scene(scene))
     tracer = AnalysisTracer()
-    result = BirdSharpnessAnalyzer(_Stub(confs, eyes, **kw), focus_provider=_no_focus).analyze("x.ARW", tracer=tracer)
+    result = BirdSharpnessAnalyzer(_Stub(confs, eyes, scene, **kw),
+                                   focus_provider=_no_focus).analyze("x.ARW", tracer=tracer)
     return result, tracer.trace
 
 
@@ -75,3 +76,24 @@ def test_whole_bird_and_its_part_are_one_bird_in_either_order() -> None:
         assert [d.box for d in kept] == [first]
     apart = dedupe_detections([BirdDetection(0.7, whole), BirdDetection(0.4, (390, 100, 700, 400))])
     assert len(apart) == 2  # two birds touching are still two birds
+
+
+# A whole bird and a raised "wing" whose box is about half inside it (DSC05008: 65 %).
+WING_SCENE = [(900, 600, 260, 1.8), (1150, 450, 120, 0.3)]
+
+
+def test_eyeless_box_mostly_inside_a_bird_with_an_eye_is_its_wing(monkeypatch) -> None:
+    # The wing is confident (0.55 > 0.43) and sharp; it must neither count nor decide.
+    result, trace = _analyze(monkeypatch, [0.43, 0.55], [0.87, 0.07], WING_SCENE)
+    assert result.bird_count == 1 and result.birds[0]["index"] == 0
+    assert result.verdict != bsf.VERDICT_SHARP
+    wing = trace.birds[1]
+    assert wing.excluded and "并入 #1" in wing.label
+    overview = next(s for s in trace.common if s.key == "birds")
+    assert any("并入 #1" in label and "局部" in value for label, value in overview.metrics)
+
+
+@pytest.mark.parametrize("eyes", [[0.87, 0.9], [0.2, 0.07]])
+def test_overlapping_birds_stay_separate_unless_only_one_shows_an_eye(monkeypatch, eyes) -> None:
+    result, trace = _analyze(monkeypatch, [0.43, 0.55], eyes, WING_SCENE)
+    assert result.bird_count == 2 and not any(b.excluded for b in trace.birds)
