@@ -110,6 +110,8 @@ class TraceStep:
     legend: List[Tuple[str, str]] = field(default_factory=list)  # (hex colour, label)
     focus_rect: Optional[Tuple[int, int, int, int]] = None  # region worth zooming to, image coords
     bird: Optional[int] = None  # bird index for per-bird steps
+    # metric label -> box (x1, y1, x2, y2) in image coords, highlighted when the row is hovered
+    highlights: Dict[str, Tuple[float, float, float, float]] = field(default_factory=dict)
 
     def to_json(self) -> dict:
         def clean(value):
@@ -124,7 +126,7 @@ class TraceStep:
             return value
 
         return {"key": self.key, "title": self.title, "description": self.description, "frame": self.frame,
-                "focus_rect": self.focus_rect, "bird": self.bird,
+                "focus_rect": self.focus_rect, "bird": self.bird, "highlights": clean(self.highlights),
                 "metrics": self.metrics, "legend": self.legend,
                 "charts": [{"kind": c.kind, "title": c.title, "data": clean(c.data)} for c in self.charts]}
 
@@ -369,6 +371,7 @@ class AnalysisTracer:
         H, W = self._image_shape
         sh, sw = img.shape[:2]
         rows = []
+        highlights = {}
         self._bird_boxes = []
         self._det_scale = scale_to_full
         for i, det in enumerate(detections):
@@ -383,6 +386,7 @@ class AnalysisTracer:
             cv2.circle(img, (int(x1 * self._scale) + 6 * lw, int(y1 * self._scale) + 6 * lw), 5 * lw, color, -1,
                        cv2.LINE_AA)
             rows.append((f"鸟 #{i + 1}", f"置信度 {det.confidence:.2f}，框 {int(x2 - x1)} × {int(y2 - y1)} px"))
+            highlights[rows[-1][0]] = self._display((x1, y1, x2, y2))
         if self._focus_px is not None:
             _rect(img, self._display(self._focus_px), C_FOCUS, lw)
         metrics = [("识别模型", "分割（像素掩膜）" if has_masks else "检测（鸟框）"),
@@ -404,7 +408,8 @@ class AnalysisTracer:
                                      "又在 2048 px 副本上用 2048 px 输入识别一次并合并。" if small_pass else "")
                 if detections else
                 "全图没有置信度 ≥ 0.25 的鸟：下一步复检伪装或被遮挡的鸟；仍没有时有焦点用焦点区域，没有焦点用全图。")
-        self.trace.common.append(TraceStep(STEP_DETECT, "鸟体识别", desc, img, "full", metrics, legend=legend))
+        self.trace.common.append(TraceStep(STEP_DETECT, "鸟体识别", desc, img, "full", metrics, legend=legend,
+                                           highlights=highlights))
 
     def recheck(self, check) -> None:
         """Step for :meth:`BirdSharpnessAnalyzer._recheck` (first pass found no bird)."""
@@ -807,6 +812,7 @@ class AnalysisTracer:
         lw = _line_w(img)
         points = []
         rows = []
+        highlights = {}
         for i, bird in enumerate(result.birds or []):
             i = bird.get("index", i)  # detection number, unchanged when false extras are dropped
             color = _verdict_rgb(bird["verdict"])
@@ -819,6 +825,7 @@ class AnalysisTracer:
             found = FOUND_LABELS.get(bird.get("found_by", ""), "")
             rows.append((f"鸟 #{i + 1}{'（最佳）' if best else ''}{found}",
                          f"{verdict_label(bird['verdict'])} · σ {_fmt(bird.get('sigma'))} · 分数 {_fmt(bird.get('score'), '%d')}"))
+            highlights[rows[-1][0]] = box
         if result.region_box is not None and result.region != fields.REGION_BIRD:
             _rect(img, self._display(result.region_box), C_WINDOW, lw + 1)
             if result.sigma is not None:
@@ -851,4 +858,5 @@ class AnalysisTracer:
             "细节写入 XMP-superpicky:bird_sharpness_*。",
             img, "full", metrics, charts,
             legend=[(hex_color(_verdict_rgb(v)), fields.VERDICT_STYLES[v].label)
-                    for v in (fields.VERDICT_SHARP, fields.VERDICT_USABLE, fields.VERDICT_SOFT)]))
+                    for v in (fields.VERDICT_SHARP, fields.VERDICT_USABLE, fields.VERDICT_SOFT)],
+            highlights=highlights))

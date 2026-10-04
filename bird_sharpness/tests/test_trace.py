@@ -63,6 +63,17 @@ def test_multi_bird_trace_marks_best_and_switches_steps(monkeypatch) -> None:
     final = trace.final[0]
     points = final.charts[0].data["points"]
     assert len(points) == 2 and sum(p["best"] for p in points) == 1
+    # bird rows of 识别 / 结论 map to their boxes in the step image (hover highlight in the viewer)
+    detect = next(s for s in trace.common if s.key == "detect")
+    for step in (detect, final):
+        assert sorted(step.highlights) == sorted(label for label, _ in step.metrics if label.startswith("鸟 #"))
+        assert len(step.highlights) == 2
+        h, w = step.image.shape[:2]
+        for x1, y1, x2, y2 in step.highlights.values():
+            assert 0 <= x1 < x2 <= w and 0 <= y1 < y2 <= h
+    best_label = next(label for label in final.highlights if "最佳" in label)
+    assert final.highlights[best_label][0] > detect.image.shape[1] / 2  # best bird is the right-hand one
+    assert json.loads(json.dumps(final.to_json(), default=str))["highlights"]
 
 
 def test_focus_and_full_image_traces(monkeypatch) -> None:

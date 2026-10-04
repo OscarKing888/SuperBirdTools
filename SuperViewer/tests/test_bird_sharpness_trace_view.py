@@ -118,6 +118,35 @@ def test_dialog_steps_navigation_compare_and_bird_switch(monkeypatch) -> None:
         _APP.processEvents()
 
 
+def test_hovering_a_bird_row_highlights_its_box(monkeypatch) -> None:
+    trace = _trace(monkeypatch)
+    dialog = BirdSharpnessTraceDialog(None, "x.ARW")
+    try:
+        dialog.show()
+        dialog.set_trace(trace)
+        assert _wait(lambda: dialog.stack.currentWidget() is dialog.content and dialog.steps)
+        for key in ("detect", "result"):
+            dialog.go(next(i for i, s in enumerate(dialog.steps) if s.key == key), force=True)
+            step = dialog.steps[dialog.index]
+            assert len(dialog._row_boxes) == 2 and dialog.view_a.highlight_rect() is None
+            row, (box, label, value) = sorted(dialog._row_boxes.items())[1]
+            assert step.highlights[label.text()] == box
+            QApplication.sendEvent(value, QEvent(QEvent.Type.Enter))
+            rect = dialog.view_a.highlight_rect()
+            assert rect is not None and (rect.left(), rect.top()) == pytest.approx(box[:2])
+            assert label.styleSheet() and value.styleSheet()
+            QApplication.sendEvent(value, QEvent(QEvent.Type.Leave))
+            assert dialog.view_a.highlight_rect() is None and not label.styleSheet()
+            QApplication.sendEvent(label, QEvent(QEvent.Type.Enter))
+            assert dialog.view_a.highlight_rect() is not None
+        # changing step drops the highlight; rows without a box never highlight
+        dialog.go(0, force=True)
+        assert dialog.view_a.highlight_rect() is None and not dialog._row_boxes
+    finally:
+        dialog.close()
+        _APP.processEvents()
+
+
 def test_single_bird_hides_selector_and_errors_are_shown(monkeypatch) -> None:
     trace = _trace(monkeypatch, birds=((900, 600, 300, 0.3),))
     dialog = BirdSharpnessTraceDialog(None, "y.ARW")

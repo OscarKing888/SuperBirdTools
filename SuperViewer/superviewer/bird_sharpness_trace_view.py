@@ -25,15 +25,15 @@ from .qt_compat import (
 )
 
 try:
-    from PyQt6.QtCore import QPointF, QRectF, Qt, QTimer
+    from PyQt6.QtCore import QEvent, QPointF, QRectF, Qt, QTimer
     from PyQt6.QtGui import QBrush, QColor, QFont, QImage, QPainter, QPainterPath, QPalette, QPen, QPixmap
-    from PyQt6.QtWidgets import (QButtonGroup, QFrame, QGraphicsPixmapItem, QGraphicsScene, QGraphicsView,
-                                 QGridLayout, QSizePolicy, QSlider, QSpinBox, QTabWidget)
+    from PyQt6.QtWidgets import (QButtonGroup, QFrame, QGraphicsPathItem, QGraphicsPixmapItem, QGraphicsRectItem,
+                                 QGraphicsScene, QGraphicsView, QGridLayout, QSizePolicy, QSlider, QSpinBox, QTabWidget)
 except ImportError:  # pragma: no cover - PyQt5 fallback
-    from PyQt5.QtCore import QPointF, QRectF, Qt, QTimer
+    from PyQt5.QtCore import QEvent, QPointF, QRectF, Qt, QTimer
     from PyQt5.QtGui import QBrush, QColor, QFont, QImage, QPainter, QPainterPath, QPalette, QPen, QPixmap
-    from PyQt5.QtWidgets import (QButtonGroup, QFrame, QGraphicsPixmapItem, QGraphicsScene, QGraphicsView,
-                                 QGridLayout, QSizePolicy, QSlider, QSpinBox, QTabWidget)
+    from PyQt5.QtWidgets import (QButtonGroup, QFrame, QGraphicsPathItem, QGraphicsPixmapItem, QGraphicsRectItem,
+                                 QGraphicsScene, QGraphicsView, QGridLayout, QSizePolicy, QSlider, QSpinBox, QTabWidget)
 
 _Qt = getattr(Qt, "AlignmentFlag", Qt)
 _KEEP_ASPECT = getattr(getattr(Qt, "AspectRatioMode", Qt), "KeepAspectRatio")
@@ -51,6 +51,7 @@ _ROLE = getattr(QPalette, "ColorRole", QPalette)
 _RICH = getattr(getattr(Qt, "TextFormat", Qt), "RichText")
 _FRAME_NONE = getattr(getattr(QFrame, "Shape", QFrame), "NoFrame")
 _SCROLL_OFF = getattr(getattr(Qt, "ScrollBarPolicy", Qt), "ScrollBarAlwaysOff")
+_EVENT = getattr(QEvent, "Type", QEvent)
 
 STEP_ICONS = {
     "decode": "解码", "detect": "识别", "recheck": "复检", "birds": "逐只鸟", "bird": "鸟体", "head": "头部", "edges": "边缘",
@@ -106,6 +107,18 @@ class TraceImageView(QGraphicsView):
         self._item = QGraphicsPixmapItem()
         self._item.setTransformationMode(_SMOOTH)
         self._scene.addItem(self._item)
+        # Hover highlight: everything outside the box dimmed, the box outlined (screen-width pen).
+        self._shade = QGraphicsPathItem()
+        self._shade.setPen(QPen(_NO_PEN))
+        self._shade.setBrush(QColor(0, 0, 0, 130))
+        self._outline = QGraphicsRectItem()
+        pen = QPen(QColor(255, 255, 255), 3)
+        pen.setCosmetic(True)
+        self._outline.setPen(pen)
+        for z, item in enumerate((self._shade, self._outline), start=1):
+            item.setZValue(z)
+            item.setVisible(False)
+            self._scene.addItem(item)
         self.setDragMode(_SCROLL_DRAG)
         self.setTransformationAnchor(_ANCHOR_MOUSE)
         self.setRenderHints(_ANTIALIAS | _SMOOTH_PIXMAP)
@@ -121,6 +134,7 @@ class TraceImageView(QGraphicsView):
         self.viewport().update()
 
     def set_image(self, image: Optional[np.ndarray]) -> None:
+        self.set_highlight(None)
         if image is None:
             self._item.setPixmap(QPixmap())
             self._has_image = False
@@ -129,6 +143,26 @@ class TraceImageView(QGraphicsView):
         self._item.setPixmap(pixmap)
         self._scene.setSceneRect(QRectF(pixmap.rect()))
         self._has_image = True
+
+    def set_highlight(self, box) -> None:
+        """Outline ``box`` (x1, y1, x2, y2, image coords) and dim the rest; ``None`` clears."""
+        if box is None or not self._has_image:
+            self._shade.setVisible(False)
+            self._outline.setVisible(False)
+            return
+        x1, y1, x2, y2 = box
+        rect = QRectF(x1, y1, max(1.0, x2 - x1), max(1.0, y2 - y1))
+        path = QPainterPath()
+        path.addRect(self._item.boundingRect())
+        path.addRect(rect)  # odd-even fill: the box stays undimmed
+        self._shade.setPath(path)
+        self._outline.setRect(rect)
+        self._shade.setVisible(True)
+        self._outline.setVisible(True)
+        self.ensureVisible(rect, 24, 24)  # zoomed in: bring the bird into view (no-op when already shown)
+
+    def highlight_rect(self) -> Optional[QRectF]:
+        return self._outline.rect() if self._outline.isVisible() else None
 
     def zoom_factor(self) -> float:
         return float(self.transform().m11())
@@ -374,6 +408,8 @@ class BirdSharpnessTraceDialog(QDialog):
         self.steps: List = []
         self.index = 0
         self._syncing = False
+        self._row_boxes: dict = {}  # metric row -> (highlight box, key label, value label)
+        self._hovered_row: Optional[int] = None
         self.setWindowTitle(f"清晰度计算过程 - {os.path.basename(path)}")
         self.setModal(False)
         self.resize(1320, 840)
@@ -454,7 +490,7 @@ class BirdSharpnessTraceDialog(QDialog):
         self.metrics_box = QWidget(side)
         self.metrics_grid = QGridLayout(self.metrics_box)
         self.metrics_grid.setContentsMargins(0, 4, 0, 4)
-        self.metrics_grid.setHorizontalSpacing(12)
+        self.metrics_grid.setHorizontalSpacing(0)
         self.charts_box = QWidget(side)
         self.charts_layout = QVBoxLayout(self.charts_box)
         self.charts_layout.setContentsMargins(0, 0, 0, 0)
@@ -818,20 +854,59 @@ class BirdSharpnessTraceDialog(QDialog):
     def _show_side(self, step) -> None:
         self.step_title.setText(f"步骤 {self.index + 1} / {len(self.steps)} · {self._step_label(step)}")
         self.step_desc.setText(step.description)
+        self._set_hovered_row(None)
+        self._row_boxes = {}
         _clear_layout(self.metrics_grid)
+        highlights = getattr(step, "highlights", None) or {}
         for row, (label, value) in enumerate(step.metrics):
             key = QLabel(label, self.metrics_box)
             key.setForegroundRole(_ROLE.PlaceholderText)
+            key.setContentsMargins(0, 0, 12, 0)  # column gap inside the label: hover has no dead zone
             val = QLabel(str(value), self.metrics_box)
             val.setWordWrap(True)
             self.metrics_grid.addWidget(key, row, 0, _Qt.AlignTop)
             self.metrics_grid.addWidget(val, row, 1)
+            box = highlights.get(label)
+            if box is not None:
+                # Hovering a bird's row highlights its box in the main view.
+                for widget in (key, val):
+                    widget.setProperty("trace_row", row)
+                    widget.installEventFilter(self)
+                self._row_boxes[row] = (box, key, val)
         self.metrics_grid.setColumnStretch(1, 1)
         _clear_layout(self.charts_layout)
         for chart in step.charts:
             self.charts_layout.addWidget(TraceChartWidget(chart, self.charts_box))
         self.legend.setText("<br>".join(
             f'<span style="color:{color}">■</span> {label}' for color, label in step.legend))
+
+    def _set_hovered_row(self, row: Optional[int]) -> None:
+        entry = self._row_boxes.get(row) if row is not None else None
+        previous = self._row_boxes.get(self._hovered_row) if self._hovered_row is not None else None
+        if previous is not None and previous is not entry:
+            for widget in previous[1:]:
+                widget.setStyleSheet("")
+        self._hovered_row = row if entry is not None else None
+        if entry is None:
+            self.view_a.set_highlight(None)
+            return
+        box, key, val = entry
+        tint = self.palette().color(_ROLE.Highlight)
+        for widget in (key, val):
+            widget.setStyleSheet(f"background: rgba({tint.red()}, {tint.green()}, {tint.blue()}, 90);")
+        self.view_a.set_highlight(box)
+
+    def eventFilter(self, obj, event) -> bool:  # noqa: N802 - Qt API
+        kind = event.type()
+        if kind in (_EVENT.Enter, _EVENT.Leave):
+            row = obj.property("trace_row")
+            entry = self._row_boxes.get(int(row)) if row is not None else None
+            if entry is not None and obj in entry[1:]:  # not a label left over from the previous step
+                if kind == _EVENT.Enter:
+                    self._set_hovered_row(int(row))
+                elif self._hovered_row == int(row):
+                    self._set_hovered_row(None)
+        return super().eventFilter(obj, event)
 
     # ── keyboard / lifecycle ──────────────────────────────────────────────
     def keyPressEvent(self, event) -> None:  # noqa: N802 - Qt API
