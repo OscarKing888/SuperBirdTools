@@ -36,7 +36,7 @@ from .image_source import AnalysisImage, load_analysis_image
 from .metrics import (ESTIMATOR_STANDARD, EdgeBlurField, EdgeEstimator, edge_estimator as get_edge_estimator,
                       edge_stats, full_image_blur)
 from .models import (BIRD_CONFIDENCE_MIN, FOUND_FOCUS_WEAK, FOUND_FOCUS_ZOOM, FOUND_FULL, FOUND_FULL_FINE,
-                     FOUND_FULL_LIFTED, BirdDetection, BirdSharpnessModels)
+                     FOUND_FULL_LIFTED, FOUND_FULL_SMALL, BirdDetection, BirdSharpnessModels)
 from .scoring import ALGORITHM_VERSION, VERDICT_ERROR, VERDICT_NO_BIRD, blank_head_sigma, classify, sigma_to_score
 
 _log = get_logger("bird_sharpness")
@@ -354,6 +354,31 @@ class MissedBird:
     confidence: float
 
 
+# Small birds (flocks): the first pass sees the 1024 px copy through a 640 px
+# network input, so a shorebird 20-50 px long there is ~15-30 px to the network
+# and most of a flock is missed (DSC00925: 13 of ~60 found; 59 at 2048 px).
+# When any first-pass bird is shorter than FLOCK_BIRD_SIDE (in the 1024 px copy),
+# a 2048 px copy is detected at 2048 px input and merged with the first pass.
+# Calibration: never triggered on 326 bird frames of the 2026-10-02 set (perched
+# hawks, median 232 px); triggered on 173 of 195 shorebird-flock frames.
+FLOCK_BIRD_SIDE = 64  # px in the 1024 px detection copy (not SMALL_BIRD_SIDE, full-res px)
+SMALL_DETECT_LONG_EDGE = 2048
+SMALL_DETECT_IMGSZ = 2048
+
+
+def _scaled_detection(det: BirdDetection, factor: float) -> BirdDetection:
+    """A first-pass detection with its box in the high-resolution copy's pixels.
+
+    The mask keeps its own resolution: measurement maps masks by their shape, so
+    first-pass birds measure exactly as without the high-resolution pass.
+    """
+    return replace(det, box=tuple(v * factor for v in det.box))
+
+
+def has_small_birds(detections: List[BirdDetection]) -> bool:
+    return any(max(d.box[2] - d.box[0], d.box[3] - d.box[1]) < FLOCK_BIRD_SIDE for d in detections)
+
+
 def prefer_focus_birds(detections: List[BirdDetection], focus_px: Optional[Box], scale: float) -> List[BirdDetection]:
     """Birds touching the camera focus box first, the rest in their original order.
 
@@ -578,6 +603,9 @@ class BirdSharpnessAnalyzer:
         small, scale = _resize_long_edge(image.rgb8, DETECT_LONG_EDGE)
         small_bgr = cv2.cvtColor(small, cv2.COLOR_RGB2BGR)
         detections = dedupe_detections(self.models.detect_birds(small_bgr, imgsz=DETECT_IMGSZ))
+        small_pass = None
+        if detections and has_small_birds(detections) and not cancelled():
+            detections, scale, small_pass = self._small_bird_pass(image, detections, scale)
         limit = int(self.max_birds or 0)
         unmeasured = max(0, len(detections) - limit) if limit > 0 else 0
         if unmeasured:
@@ -587,7 +615,7 @@ class BirdSharpnessAnalyzer:
         if tracer is not None:
             tracer.detect(detections, scale, has_masks=bool(getattr(self.models, "has_masks", True)),
                           has_keypoints=bool(getattr(self.models, "has_keypoints", True)), unmeasured=unmeasured,
-                          limit=limit)
+                          limit=limit, small_pass=small_pass)
         if not detections and not cancelled():
             if focus_px is _UNSET:
                 focus_px = self._focus_box_px(path, image)
@@ -606,6 +634,23 @@ class BirdSharpnessAnalyzer:
         return self._no_bird_result(path, image, cancelled, tracer,
                                     focus_px=None if focus_px is _UNSET else focus_px,
                                     focus_known=focus_px is not _UNSET)
+
+    def _small_bird_pass(self, image: AnalysisImage, first: List[BirdDetection], scale: float):
+        """Detect again on a 2048 px copy and merge (see FLOCK_BIRD_SIDE).
+
+        Returns ``(detections, scale of the 2048 px copy, (first, found, added))``.
+        First-pass birds stay exactly as they were (so their measurements do not
+        change); the high-resolution pass only adds the birds it missed.
+        """
+        fine, fine_scale = _resize_long_edge(image.rgb8, SMALL_DETECT_LONG_EDGE)
+        if fine_scale <= scale:
+            return first, scale, None
+        found = [replace(d, source=FOUND_FULL_SMALL) for d in
+                 self.models.detect_birds(cv2.cvtColor(fine, cv2.COLOR_RGB2BGR), imgsz=SMALL_DETECT_IMGSZ)]
+        factor = fine_scale / scale
+        kept = [_scaled_detection(d, factor) for d in first]
+        merged = dedupe_detections([*kept, *found])
+        return merged, fine_scale, (len(first), len(found), len(merged) - len(first))
 
     def _recheck(self, image: AnalysisImage, small_bgr, scale: float, focus_px: Optional[Box],
                  cancelled) -> Recheck:

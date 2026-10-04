@@ -361,7 +361,9 @@ class AnalysisTracer:
             metrics.append(("图像文件", os.path.basename(source_path)))
 
     def detect(self, detections, scale_to_full: float, *, has_masks: bool, has_keypoints: bool,
-               unmeasured: int = 0, limit: int = 0) -> None:
+               unmeasured: int = 0, limit: int = 0, small_pass=None) -> None:
+        """``small_pass``: ``(first-pass birds, high-resolution birds, added)`` when the
+        small-bird pass ran (see ``analyzer.FLOCK_BIRD_SIDE``)."""
         img = _dim(self._overview, None, 0.55)
         lw = _line_w(img)
         H, W = self._image_shape
@@ -388,10 +390,19 @@ class AnalysisTracer:
                    ("鸟数", str(len(detections))), *rows]
         if unmeasured:
             metrics.insert(3, ("未测量", f"另有 {unmeasured} 只（超过上限 {limit} 只；焦点框上的鸟优先测量）"))
+        if small_pass is not None:
+            from . import analyzer as A
+
+            first, found, added = small_pass
+            metrics.insert(3, ("小鸟高分辨率补检",
+                               f"首遍 {first} 只（有鸟框 < {A.FLOCK_BIRD_SIDE} px），{A.SMALL_DETECT_LONG_EDGE} px 再识别"
+                               f"找到 {found} 只，合并后新增 {added} 只"))
         legend = [(hex_color(BIRD_COLORS[i % len(BIRD_COLORS)]), f"鸟 #{i + 1}") for i in range(len(detections))]
         legend.append((hex_color(C_FOCUS), "相机焦点框"))
         desc = ("在 1024 px 副本上找出全部鸟（置信度 ≥ 0.25）。每只鸟后续只用自己的像素单独计算一组清晰度，"
-                "最后取最好的一只。" if detections else
+                "最后取最好的一只。" + ("鸟很小（鸟群）：首遍在 1024 px 副本上看到的鸟太小、漏得多，"
+                                     "又在 2048 px 副本上用 2048 px 输入识别一次并合并。" if small_pass else "")
+                if detections else
                 "全图没有置信度 ≥ 0.25 的鸟：下一步复检伪装或被遮挡的鸟；仍没有时有焦点用焦点区域，没有焦点用全图。")
         self.trace.common.append(TraceStep(STEP_DETECT, "鸟体识别", desc, img, "full", metrics, legend=legend))
 
