@@ -12,7 +12,9 @@ Pipeline (see ``docs/bird_sharpness.md``):
    otherwise, plus body median/directional blur for motion; the bird with the
    best score decides the photo;
 4. no bird: the camera focus box, at least 128 x 128 px;
-5. no bird and no focus point: the whole image (tiled);
+5. no bird, no focus point, manual focus: the sharpest small tiles of the frame
+   centre (the plane the photographer focused on; see ``metrics.TileOptions``);
+   otherwise the whole image (tiled);
 6. map the blur radius to a SuperPicky-compatible 0..1000 score and a verdict.
 """
 
@@ -31,10 +33,10 @@ import numpy as np
 from app_common import bird_sharpness_fields as fields
 from app_common.log import get_logger
 
-from .focus import FocusProvider, default_focus_box, focus_window
+from .focus import FocusProvider, ManualFocusProvider, default_focus_box, default_manual_focus, focus_window
 from .image_source import AnalysisImage, load_analysis_image
-from .metrics import (ESTIMATOR_STANDARD, EdgeBlurField, EdgeEstimator, edge_estimator as get_edge_estimator,
-                      edge_stats, full_image_blur)
+from .metrics import (ESTIMATOR_STANDARD, EdgeBlurField, EdgeEstimator, TileOptions,
+                      edge_estimator as get_edge_estimator, edge_stats, full_image_blur, sharpest_tiles_blur)
 from .models import (BIRD_CONFIDENCE_MIN, FOUND_FOCUS_WEAK, FOUND_FOCUS_ZOOM, FOUND_FULL, FOUND_FULL_FINE,
                      FOUND_FULL_LIFTED, FOUND_FULL_SMALL, BirdDetection, BirdSharpnessModels)
 from .scoring import ALGORITHM_VERSION, VERDICT_ERROR, VERDICT_NO_BIRD, blank_head_sigma, classify, sigma_to_score
@@ -528,21 +530,25 @@ class BirdSharpnessAnalyzer:
 
     def __init__(self, models: Optional[BirdSharpnessModels] = None, *,
                  focus_provider: Optional[FocusProvider] = None, max_birds: int = DEFAULT_MAX_BIRDS,
-                 edge_estimator: str = ESTIMATOR_STANDARD.key):
+                 edge_estimator: str = ESTIMATOR_STANDARD.key, tile_options: Optional[TileOptions] = None,
+                 manual_focus_provider: Optional[ManualFocusProvider] = None):
         self.models = models or BirdSharpnessModels()
         self.focus_provider = focus_provider or default_focus_box
-        # Both are read per photo, so apps may change them between jobs.
+        self.manual_focus_provider = manual_focus_provider or default_manual_focus
+        # Read per photo, so apps may change them between jobs.
         self.max_birds = max_birds  # 0 = measure every bird
         self.edge_estimator = edge_estimator  # metrics.EDGE_ESTIMATORS key; unknown = standard
+        self.tile_options = tile_options or TileOptions()  # no-bird tiling
 
-    def with_options(self, *, max_birds: Optional[int] = None,
-                     edge_estimator: Optional[str] = None) -> "BirdSharpnessAnalyzer":
-        """A sibling sharing the loaded models and focus provider, with its own options
+    def with_options(self, *, max_birds: Optional[int] = None, edge_estimator: Optional[str] = None,
+                     tile_options: Optional[TileOptions] = None) -> "BirdSharpnessAnalyzer":
+        """A sibling sharing the loaded models and focus providers, with its own options
         (e.g. one trace window), leaving this analyzer's options untouched."""
         return BirdSharpnessAnalyzer(
-            self.models, focus_provider=self.focus_provider,
+            self.models, focus_provider=self.focus_provider, manual_focus_provider=self.manual_focus_provider,
             max_birds=self.max_birds if max_birds is None else max_birds,
-            edge_estimator=self.edge_estimator if edge_estimator is None else edge_estimator)
+            edge_estimator=self.edge_estimator if edge_estimator is None else edge_estimator,
+            tile_options=self.tile_options if tile_options is None else tile_options)
 
     @property
     def estimator(self) -> EdgeEstimator:
@@ -550,9 +556,12 @@ class BirdSharpnessAnalyzer:
 
     @property
     def version(self) -> str:
-        """Algorithm version written to XMP; the dense estimator is tagged so it is never mixed up."""
+        """Algorithm version written to XMP; non-default options (dense estimator, tiling) are
+        tagged so "skip analysed" never mixes their results with the defaults."""
         key = self.estimator.key
-        return ALGORITHM_VERSION if key == ESTIMATOR_STANDARD.key else f"{ALGORITHM_VERSION}-{key}"
+        tags = [] if key == ESTIMATOR_STANDARD.key else [key]
+        tiles = self.tile_options.version_tag()
+        return "-".join([ALGORITHM_VERSION, *tags, *([tiles] if tiles else [])])
 
     def _select(self, field_: EdgeBlurField, region):
         return field_.select_strongest_edges(region, min_kept=self.estimator.min_kept)
@@ -909,6 +918,13 @@ class BirdSharpnessAnalyzer:
             return None
         return (l * W, t * H, r * W, b * H)
 
+    def _manual_focus(self, path: str) -> bool:
+        try:
+            return bool(self.manual_focus_provider(path))
+        except Exception as exc:
+            _log.debug("[BirdSharpness] manual focus provider failed path=%r: %s", path, exc)
+            return False
+
     def _no_bird_result(self, path: str, image: AnalysisImage, cancelled, tracer=None, *,
                         focus_px=None, focus_known: bool = False) -> BirdSharpnessResult:
         H, W = image.gray.shape[:2]
@@ -926,16 +942,36 @@ class BirdSharpnessAnalyzer:
             region, region_box = fields.REGION_FOCUS, (fx1, fy1, fx2, fy2)
             if tracer is not None:
                 tracer.focus_window(image, region_box, selection, stats)
+        options = self.tile_options.normalized()
+        if (stats is None or stats.sigma is None) and options.mf_center and self._manual_focus(path):
+            # Manual focus: the sharpest part of the frame centre is the focused plane.
+            cw = max(32, int(round((vx2 - vx1) * options.mf_center_percent / 100.0)))
+            ch = max(32, int(round((vy2 - vy1) * options.mf_center_percent / 100.0)))
+            cx1, cy1 = vx1 + (vx2 - vx1 - cw) // 2, vy1 + (vy2 - vy1 - ch) // 2
+            center = (cx1, cy1, cx1 + cw, cy1 + ch)
+            tiles = [] if tracer is not None else None
+            sharpest = sharpest_tiles_blur(
+                image.gray[center[1]:center[3], center[0]:center[2]], tile=options.mf_tile,
+                sharpest_percent=options.mf_sharpest_percent, cancelled=cancelled,
+                tile_report=None if tiles is None else
+                (lambda x, y, w, h, part: tiles.append((x + cx1, y + cy1, w, h, part))))
+            mf_stats = sharpest.stats
+            if tracer is not None:
+                shift = lambda boxes: [(x + cx1, y + cy1, w, h) for x, y, w, h in boxes]  # noqa: E731
+                tracer.manual_center(center, tiles, shift(sharpest.chosen), shift(sharpest.candidates), mf_stats,
+                                     options)
+            if mf_stats.sigma is not None:
+                stats, region, region_box = mf_stats, fields.REGION_MANUAL, center
         if stats is None or stats.sigma is None:
             # No focus point (or nothing measurable there): default whole-image measurement.
             tiles = [] if tracer is not None else None
             stats = full_image_blur(
-                image.gray[vy1:vy2, vx1:vx2], cancelled=cancelled,
+                image.gray[vy1:vy2, vx1:vx2], tile=options.full_tile, cancelled=cancelled,
                 tile_report=None if tiles is None else
                 (lambda x, y, w, h, part: tiles.append((x + vx1, y + vy1, w, h, part))))
             region, region_box = fields.REGION_FULL, (vx1, vy1, vx2, vy2)
             if tracer is not None:
-                tracer.full_image(tiles, stats)
+                tracer.full_image(tiles, stats, tile=options.full_tile)
         return BirdSharpnessResult(
             path=path,
             verdict=VERDICT_NO_BIRD,

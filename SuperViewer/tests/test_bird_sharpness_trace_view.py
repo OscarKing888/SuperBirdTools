@@ -419,11 +419,22 @@ def test_params_tab_reruns_this_window_and_saves_defaults(monkeypatch) -> None:
         dialog.max_birds_spin.setValue(0)
         dialog.estimator_combo.setCurrentIndex(dialog.estimator_combo.findData("dense"))
         assert "第 40 百分位" in dialog.estimator_note.text()
+        # no-bird tiling: defaults shown, centre controls follow the manual-focus switch
+        form = dialog.tile_form
+        assert (form.full_tile.value(), form.mf_tile.value(), form.mf_center_percent.value()) == (1024, 256, 50)
+        assert "全图 1024 px" in dialog.params_status.text()
+        form.mf_tile.setValue(128)
+        form.mf_sharpest.setValue(20)
+        form.mf_center.setChecked(False)
+        assert not form.mf_tile.isEnabled() and form.full_tile.isEnabled()
+        form.mf_center.setChecked(True)
+        tiles = {"full_tile": 1024, "mf_center": True, "mf_center_percent": 50, "mf_tile": 128,
+                 "mf_sharpest_percent": 20}
         dialog.rerun_btn.click()
-        assert rerun == [{"max_birds": 0, "edge_estimator": "dense"}]
+        assert rerun == [{"max_birds": 0, "edge_estimator": "dense", **tiles}]
         assert dialog.stack.currentWidget() is dialog.loading
         dialog.save_defaults_btn.click()
-        assert saved == [{"max_birds": 0, "edge_estimator": "dense"}]
+        assert saved == [{"max_birds": 0, "edge_estimator": "dense", **tiles}]
     finally:
         dialog.deleteLater()
         opts.apply_runtime_user_options(None)
@@ -436,11 +447,14 @@ def test_trace_parameters_stay_in_their_window(monkeypatch, tmp_path) -> None:
     controller = BirdSharpnessController(QWidget(), _FakeFileList(None))
     shared = controller.analyzer()
     dialog = BirdSharpnessTraceDialog(None, "x.ARW", params={"max_birds": 2, "edge_estimator": "dense"})
-    seen = []
+    seen, tiles = [], []
+    dialog.tile_form.mf_tile.setValue(64)
+    dialog.params = dialog.selected_params()
 
     class _Action:
         def __init__(self, analyzer, *a, **k):
             seen.append((analyzer.max_birds, analyzer.edge_estimator, analyzer is shared))
+            tiles.append(analyzer.tile_options)
 
         def execute(self):
             from types import SimpleNamespace
@@ -456,12 +470,15 @@ def test_trace_parameters_stay_in_their_window(monkeypatch, tmp_path) -> None:
     try:
         controller._run_trace(dialog, "raw")
         assert seen == [(2, "dense", False)]
+        assert tiles[0].mf_tile == 64 and shared.tile_options.mf_tile == 256
         assert (shared.max_birds, shared.edge_estimator) == (0, "standard")
         dialog.max_birds_spin.setValue(5)
         controller._save_trace_params(dialog)
         assert stored and stored[-1][opts.KEY_BIRD_SHARPNESS_MAX_BIRDS] == 5
         assert stored[-1][opts.KEY_BIRD_SHARPNESS_EDGE_ESTIMATOR] == "dense"
+        assert stored[-1][opts.KEY_BIRD_SHARPNESS_MF_TILE] == 64 and stored[-1][opts.KEY_BIRD_SHARPNESS_MF_CENTER] == 1
         assert controller.analyzer().max_birds == 5 and controller.analyzer().edge_estimator == "dense"
+        assert controller.analyzer().tile_options.mf_tile == 64
     finally:
         opts.apply_runtime_user_options(None)
         for request in list(controller._trace_requests):

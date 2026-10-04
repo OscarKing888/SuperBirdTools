@@ -292,9 +292,12 @@ def test_bird_limit_option_reaches_the_analyzer_and_the_options_dialog():
         est = opts.KEY_BIRD_SHARPNESS_EDGE_ESTIMATOR
         assert controller.analyzer().max_birds == 0  # default: every bird
         assert controller.analyzer().edge_estimator == "standard"
-        opts.apply_runtime_user_options({key: 6, est: "dense"})
+        assert controller.analyzer().tile_options.mf_center and controller.analyzer().version.endswith("v13")
+        opts.apply_runtime_user_options({key: 6, est: "dense", opts.KEY_BIRD_SHARPNESS_MF_TILE: 128})
         assert controller.analyzer().max_birds == 6  # picked up at the next job start
         assert controller.analyzer().edge_estimator == "dense"
+        assert controller.analyzer().tile_options.mf_tile == 128
+        assert controller.analyzer().version.endswith("-dense-mf50-128-10")
         dialog = SuperViewerUserOptionsDialog(options={key: 6, est: "dense"})
         try:
             assert dialog._spin_bird_sharpness_max_birds.value() == 6
@@ -304,6 +307,13 @@ def test_bird_limit_option_reaches_the_analyzer_and_the_options_dialog():
             dialog._combo_bird_sharpness_estimator.setCurrentIndex(0)
             assert dialog.selected_options()[key] == 0
             assert dialog.selected_options()[est] == "standard"
+            tiles = dialog._bird_sharpness_tiles
+            assert (tiles.full_tile.value(), tiles.mf_center.isChecked(), tiles.mf_tile.value()) == (1024, True, 256)
+            tiles.full_tile.setValue(512)
+            tiles.mf_center.setChecked(False)
+            chosen = dialog.selected_options()
+            assert chosen[opts.KEY_BIRD_SHARPNESS_FULL_TILE] == 512 and chosen[opts.KEY_BIRD_SHARPNESS_MF_CENTER] == 0
+            assert chosen[opts.KEY_BIRD_SHARPNESS_MF_TILE] == 256
         finally:
             dialog.deleteLater()
     finally:

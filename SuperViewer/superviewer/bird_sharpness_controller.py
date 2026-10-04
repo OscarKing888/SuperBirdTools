@@ -264,15 +264,29 @@ class _TraceBridge(QObject):
 
 
 def _analysis_options() -> dict:
-    """Bird sharpness options from the SuperViewer user options (defaults when unavailable)."""
+    """Bird sharpness options from the SuperViewer user options (defaults when unavailable):
+    ``max_birds``, ``edge_estimator`` and the no-bird tiling (``TileOptions.as_params`` keys)."""
+    from bird_sharpness.metrics import TileOptions
+
     try:
         from app_common.superviewer_user_options import (get_bird_sharpness_edge_estimator,
-                                                         get_bird_sharpness_max_birds)
+                                                         get_bird_sharpness_max_birds,
+                                                         get_bird_sharpness_tile_options)
 
         return {"max_birds": max(0, int(get_bird_sharpness_max_birds())),
-                "edge_estimator": str(get_bird_sharpness_edge_estimator())}
+                "edge_estimator": str(get_bird_sharpness_edge_estimator()),
+                **TileOptions.from_params(get_bird_sharpness_tile_options()).as_params()}
     except Exception:
-        return {"max_birds": 0, "edge_estimator": "standard"}
+        return {"max_birds": 0, "edge_estimator": "standard", **TileOptions().as_params()}
+
+
+def _tile_option_keys() -> dict:
+    """Trace/analyzer tiling parameter -> SuperViewer user option key."""
+    from app_common import superviewer_user_options as opts
+
+    return {"full_tile": opts.KEY_BIRD_SHARPNESS_FULL_TILE, "mf_center": opts.KEY_BIRD_SHARPNESS_MF_CENTER,
+            "mf_center_percent": opts.KEY_BIRD_SHARPNESS_MF_CENTER_PERCENT, "mf_tile": opts.KEY_BIRD_SHARPNESS_MF_TILE,
+            "mf_sharpest_percent": opts.KEY_BIRD_SHARPNESS_MF_SHARPEST_PERCENT}
 
 
 class BirdSharpnessController(QObject):
@@ -315,6 +329,9 @@ class BirdSharpnessController(QObject):
             params = _analysis_options()
             self._analyzer.max_birds = params["max_birds"]
             self._analyzer.edge_estimator = params["edge_estimator"]
+            from bird_sharpness.metrics import TileOptions
+
+            self._analyzer.tile_options = TileOptions.from_params(params)
             return self._analyzer
 
     @property
@@ -408,8 +425,11 @@ class BirdSharpnessController(QObject):
         cancel = threading.Event()
         request = [dialog, None, cancel]
         params = getattr(dialog, "params", None) or {}
-        analyzer = self.analyzer().with_options(max_birds=params.get("max_birds"),
-                                                edge_estimator=params.get("edge_estimator"))
+        from bird_sharpness.metrics import TileOptions
+
+        base = self.analyzer()
+        analyzer = base.with_options(max_birds=params.get("max_birds"), edge_estimator=params.get("edge_estimator"),
+                                     tile_options=TileOptions.from_params({**base.tile_options.as_params(), **params}))
         action = BirdSharpnessTraceAction(analyzer, dialog.path, cancelled=cancel.is_set,
                                           image_source=image_source,
                                           denoised_lookup=self._denoised_lookup if self._denoise is not None else None)
@@ -445,6 +465,9 @@ class BirdSharpnessController(QObject):
         options = get_runtime_user_options()
         options[KEY_BIRD_SHARPNESS_MAX_BIRDS] = params["max_birds"]
         options[KEY_BIRD_SHARPNESS_EDGE_ESTIMATOR] = params["edge_estimator"]
+        for name, key in _tile_option_keys().items():
+            if name in params:
+                options[key] = int(params[name])
         try:
             normalized = save_user_options(options)
         except Exception as exc:

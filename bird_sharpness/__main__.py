@@ -60,6 +60,15 @@ def main(argv: List[str] | None = None) -> int:
     parser.add_argument("--edge-estimator", choices=("standard", "dense"), default="standard",
                         help="边缘统计方式：standard = 最强 30 条边缘的中位数（默认）；"
                              "dense = 至少 60 条边缘的第 40 百分位（小鸟更稳）")
+    parser.add_argument("--full-tile", type=int, default=1024,
+                        help="无鸟、无焦点时全图的分块边长（px，默认 1024）")
+    parser.add_argument("--no-mf-center", action="store_true",
+                        help="手动对焦、无鸟、无焦点时也用全图分块（默认只测画面中心的最清晰分块）")
+    parser.add_argument("--mf-center-percent", type=int, default=50,
+                        help="手动对焦：中心区域每边占画幅的百分比（默认 50）")
+    parser.add_argument("--mf-tile", type=int, default=256, help="手动对焦：中心分块边长（px，默认 256）")
+    parser.add_argument("--mf-sharpest-percent", type=int, default=10,
+                        help="手动对焦：取最清晰的分块占有效分块的百分比（默认 10，至少 3 块）")
     parser.add_argument(
         "-j", "--workers", type=int, default=min(6, max(1, (os.cpu_count() or 2) // 2)),
         help="并行检测的照片数（模型推理串行，解码与计算并行；默认 CPU 核数的一半，最多 6）",
@@ -117,7 +126,12 @@ def main(argv: List[str] | None = None) -> int:
         options = DenoiseOptions(output_directory=args.denoised_dir)
         lookup = lambda path: find_denoised_preview(path, options)  # noqa: E731
     loader = source_loader(args.source, denoised_lookup=lookup)
-    analyzer = BirdSharpnessAnalyzer(max_birds=max(0, args.max_birds), edge_estimator=args.edge_estimator)
+    from .metrics import TileOptions
+
+    tiles = TileOptions(args.full_tile, not args.no_mf_center, args.mf_center_percent, args.mf_tile,
+                        args.mf_sharpest_percent).normalized()
+    analyzer = BirdSharpnessAnalyzer(max_birds=max(0, args.max_birds), edge_estimator=args.edge_estimator,
+                                     tile_options=tiles)
     try:
         if args.trace:
             from .trace import AnalysisTracer

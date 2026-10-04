@@ -253,6 +253,95 @@ class EdgeBlurField:
 
 
 FULL_IMAGE_TILE = 1024
+MIN_TILE_SAMPLES = 8  # a tile with fewer measured edges has no blur value of its own
+MF_MIN_TILES = 3  # manual focus: never decide on fewer of the sharpest tiles than this
+# A tile competes for "sharpest" only on real detail: enough measured step edges, and most of its
+# strongest edges are steps. On dark, noisy frames (night, 4 s) near-black tiles pass the 4x-noise
+# gate on grain, most of which is then rejected as dot/line-like, and the rest reads σ ~0.4.
+MF_TILE_MIN_EDGES = 15
+MF_TILE_MIN_STEP_FRACTION = 0.5
+
+
+@dataclass(frozen=True)
+class TileOptions:
+    """No-bird tiling (SuperViewer 设置 → 鸟清晰度, trace 参数 tab, CLI).
+
+    ``full_tile``: tile side for the whole image (no focus point). Manual-focus photos
+    (``mf_center``) measure the frame centre instead (``mf_center_percent`` of each
+    side) in ``mf_tile`` tiles, and the sharpest ``mf_sharpest_percent`` of the
+    measurable tiles (at least :data:`MF_MIN_TILES`) decide: with manual focus the
+    sharpest part of the centre is the plane the photographer focused on.
+    Limits match ``app_common.superviewer_user_options.BIRD_SHARPNESS_TILE_LIMITS``.
+    """
+
+    full_tile: int = FULL_IMAGE_TILE
+    mf_center: bool = True
+    mf_center_percent: int = 50
+    mf_tile: int = 256
+    mf_sharpest_percent: int = 10
+
+    @classmethod
+    def from_params(cls, params: Optional[dict]) -> "TileOptions":
+        """From a flat options dict (other keys ignored, missing ones default)."""
+        params = params or {}
+        names = ("full_tile", "mf_center", "mf_center_percent", "mf_tile", "mf_sharpest_percent")
+        return cls(**{name: params[name] for name in names if params.get(name) is not None}).normalized()
+
+    def as_params(self) -> dict:
+        o = self.normalized()
+        return {"full_tile": o.full_tile, "mf_center": o.mf_center, "mf_center_percent": o.mf_center_percent,
+                "mf_tile": o.mf_tile, "mf_sharpest_percent": o.mf_sharpest_percent}
+
+    def normalized(self) -> "TileOptions":
+        def clamp(value, low, high, default):
+            try:
+                return max(low, min(high, int(value)))
+            except (TypeError, ValueError, OverflowError):
+                return default
+
+        return TileOptions(clamp(self.full_tile, 128, 4096, FULL_IMAGE_TILE), bool(self.mf_center),
+                           clamp(self.mf_center_percent, 10, 100, 50), clamp(self.mf_tile, 32, 2048, 256),
+                           clamp(self.mf_sharpest_percent, 1, 100, 10))
+
+    def version_tag(self) -> str:
+        """Suffix for the algorithm version; empty for the defaults, so results never mix."""
+        o, d = self.normalized(), TileOptions()
+        parts = [] if o.full_tile == d.full_tile else [f"t{o.full_tile}"]
+        if not o.mf_center:
+            parts.append("mf-off")
+        elif (o.mf_center_percent, o.mf_tile, o.mf_sharpest_percent) != \
+                (d.mf_center_percent, d.mf_tile, d.mf_sharpest_percent):
+            parts.append(f"mf{o.mf_center_percent}-{o.mf_tile}-{o.mf_sharpest_percent}")
+        return "-".join(parts)
+
+
+TILE_MARGIN = 16  # px of real neighbours measured around a tile (blur/gradient support is ~6 px)
+
+
+def _tile_samples(gray: np.ndarray, tile: int, top_fraction: float, cancelled):
+    """``(x, y, w, h, samples, strongest)`` per tile: radii at its strongest edges and how many
+    strongest edges were looked at (``samples`` are the step edges among them); ``None`` once cancelled.
+
+    Each tile is measured with :data:`TILE_MARGIN` px of its real neighbours and keeps
+    only the edges inside it: an edge cut by the tile border would otherwise be
+    mirrored into a thin line and read as sharp, which small tiles (and "sharpest
+    tiles") would pick up.
+    """
+    h, w = gray.shape[:2]
+    for y in range(0, h, tile):
+        for x in range(0, w, tile):
+            if cancelled():
+                yield None
+                return
+            bw, bh = min(tile, w - x), min(tile, h - y)
+            if min(bw, bh) < 32:
+                continue
+            x0, y0 = max(0, x - TILE_MARGIN), max(0, y - TILE_MARGIN)
+            padded = gray[y0:min(h, y + tile + TILE_MARGIN), x0:min(w, x + tile + TILE_MARGIN)]
+            inside = np.zeros(padded.shape[:2], bool)
+            inside[y - y0:y - y0 + bh, x - x0:x - x0 + bw] = True
+            selection = EdgeBlurField(padded).select_strongest_edges(inside, top_fraction=top_fraction)
+            yield x, y, bw, bh, selection.sigma, int(selection.selected.sum())
 
 
 def full_image_blur(gray: np.ndarray, *, tile: int = FULL_IMAGE_TILE, top_fraction: float = 0.05,
@@ -262,18 +351,47 @@ def full_image_blur(gray: np.ndarray, *, tile: int = FULL_IMAGE_TILE, top_fracti
     Each tile contributes the radii at its own strongest edges; the result is the
     median over all tiles' samples.
     """
-    h, w = gray.shape[:2]
     samples = []
-    for y in range(0, h, tile):
-        for x in range(0, w, tile):
-            if cancelled():
-                return EdgeBlurStats(None, None, None, 0)
-            block = gray[y:y + tile, x:x + tile]
-            if min(block.shape[:2]) < 32:
-                continue
-            part = EdgeBlurField(block).strongest_edge_samples(None, top_fraction=top_fraction)
-            if part.size:
-                samples.append(part)
-            if tile_report is not None:
-                tile_report(x, y, block.shape[1], block.shape[0], part)
+    for item in _tile_samples(gray, tile, top_fraction, cancelled):
+        if item is None:
+            return EdgeBlurStats(None, None, None, 0)
+        x, y, w, h, part, _strongest = item
+        if part.size:
+            samples.append(part)
+        if tile_report is not None:
+            tile_report(x, y, w, h, part)
     return _stats(np.concatenate(samples) if samples else np.empty(0, np.float32))
+
+
+@dataclass(frozen=True)
+class SharpestTiles:
+    stats: EdgeBlurStats
+    chosen: list       # (x, y, w, h) of the sharpest tiles, sharpest first
+    candidates: list   # (x, y, w, h) of every tile on real detail (see MF_TILE_MIN_EDGES)
+
+
+def tile_on_detail(samples: np.ndarray, strongest: int) -> bool:
+    return samples.size >= MF_TILE_MIN_EDGES and samples.size >= MF_TILE_MIN_STEP_FRACTION * strongest
+
+
+def sharpest_tiles_blur(gray: np.ndarray, *, tile: int, sharpest_percent: float, min_tiles: int = MF_MIN_TILES,
+                        top_fraction: float = 0.05, cancelled=lambda: False, tile_report=None) -> SharpestTiles:
+    """Blur radius of the sharpest tiles (manual focus, see :class:`TileOptions`).
+
+    Tiles on real detail (:func:`tile_on_detail`) are ranked by their median radius;
+    the sharpest ``sharpest_percent`` of them (at least ``min_tiles``) are pooled.
+    """
+    ranked = []
+    for item in _tile_samples(gray, tile, top_fraction, cancelled):
+        if item is None:
+            return SharpestTiles(EdgeBlurStats(None, None, None, 0), [], [])
+        x, y, w, h, part, strongest = item
+        if tile_on_detail(part, strongest):
+            ranked.append((float(np.median(part)), (x, y, w, h), part))
+        if tile_report is not None:
+            tile_report(x, y, w, h, part)
+    ranked.sort(key=lambda r: r[0])
+    count = min(len(ranked), max(min_tiles, int(np.ceil(len(ranked) * sharpest_percent / 100.0))))
+    chosen = ranked[:count]
+    samples = np.concatenate([part for _m, _box, part in chosen]) if chosen else np.empty(0, np.float32)
+    return SharpestTiles(_stats(samples), [box for _m, box, _part in chosen], [box for _m, box, _part in ranked])

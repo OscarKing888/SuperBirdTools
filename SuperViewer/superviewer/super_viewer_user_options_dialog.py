@@ -8,7 +8,12 @@ import os
 from app_common.superviewer_user_options import (
     BIRD_SHARPNESS_MAX_BIRDS_LIMIT,
     KEY_BIRD_SHARPNESS_EDGE_ESTIMATOR,
+    KEY_BIRD_SHARPNESS_FULL_TILE,
     KEY_BIRD_SHARPNESS_MAX_BIRDS,
+    KEY_BIRD_SHARPNESS_MF_CENTER,
+    KEY_BIRD_SHARPNESS_MF_CENTER_PERCENT,
+    KEY_BIRD_SHARPNESS_MF_SHARPEST_PERCENT,
+    KEY_BIRD_SHARPNESS_MF_TILE,
     KEY_NAVIGATION_FPS_OPTIONS,
     KEY_PERF_PROBES_ENABLED,
     PERSISTENT_THUMB_SIZE_LEVELS,
@@ -50,7 +55,7 @@ class SuperViewerUserOptionsDialog(QDialog):
         super().__init__(parent)
         self.setWindowTitle("用户选项")
         self.setModal(True)
-        self.resize(650, 470)
+        self.resize(650, 600)
 
         opts = normalize_user_options(options or get_runtime_user_options())
         cpu_count = max(1, os.cpu_count() or 1)
@@ -233,10 +238,26 @@ class SuperViewerUserOptionsDialog(QDialog):
         sharpness_grid.addWidget(self._combo_bird_sharpness_estimator, 1, 1)
         sharpness_grid.setColumnStretch(2, 1)
         sharpness_layout.addLayout(sharpness_grid)
+        from .bird_sharpness_trace_view import TileParamsForm
+
+        tiles_heading = QLabel("无鸟时的分块", sharpness)
+        tiles_font = tiles_heading.font()
+        tiles_font.setBold(True)
+        tiles_heading.setFont(tiles_font)
+        sharpness_layout.addSpacing(6)
+        sharpness_layout.addWidget(tiles_heading)
+        self._bird_sharpness_tiles = TileParamsForm(sharpness, expand_fields=False)
+        self._bird_sharpness_tiles.set_params({
+            "full_tile": opts[KEY_BIRD_SHARPNESS_FULL_TILE], "mf_center": opts[KEY_BIRD_SHARPNESS_MF_CENTER],
+            "mf_center_percent": opts[KEY_BIRD_SHARPNESS_MF_CENTER_PERCENT], "mf_tile": opts[KEY_BIRD_SHARPNESS_MF_TILE],
+            "mf_sharpest_percent": opts[KEY_BIRD_SHARPNESS_MF_SHARPEST_PERCENT]})
+        sharpness_layout.addWidget(self._bird_sharpness_tiles)
         sharpness_note = QLabel("默认测量照片中的全部鸟，取最清晰的一只作为整张照片的清晰度。\n"
                                 "设了上限时，压在相机焦点框上的鸟优先测量，其余按识别置信度 × 鸟框面积排序。\n"
                                 "边缘统计方式：「标准」是门槛标定所用的方式；「密集」让小鸟的结果更稳，但仍属实验性，"
                                 "结果以单独的算法版本记录，「跳过已检测」不会把两种方式的结果混用。\n"
+                                "无鸟时的分块：没有鸟、没有焦点框时测全图；相机记录为手动对焦时只测画面中心，"
+                                "取最清晰的分块（焦平面）。非默认的分块参数同样以单独的算法版本记录。\n"
                                 "新的设置用于下一次检测和计算过程查看；计算过程窗口的「参数」页可临时改用其他参数对比。", sharpness)
         sharpness_note.setWordWrap(True)
         sharpness_layout.addWidget(sharpness_note)
@@ -295,4 +316,12 @@ class SuperViewerUserOptionsDialog(QDialog):
             "denoise_workers": self._spin_denoise_workers.value(),
             KEY_BIRD_SHARPNESS_MAX_BIRDS: int(self._spin_bird_sharpness_max_birds.value()),
             KEY_BIRD_SHARPNESS_EDGE_ESTIMATOR: str(self._combo_bird_sharpness_estimator.currentData()),
+            **self._bird_sharpness_tile_options(),
         }
+
+    def _bird_sharpness_tile_options(self) -> dict[str, int]:
+        tiles = self._bird_sharpness_tiles.params()
+        return {KEY_BIRD_SHARPNESS_FULL_TILE: tiles["full_tile"], KEY_BIRD_SHARPNESS_MF_CENTER: int(tiles["mf_center"]),
+                KEY_BIRD_SHARPNESS_MF_CENTER_PERCENT: tiles["mf_center_percent"],
+                KEY_BIRD_SHARPNESS_MF_TILE: tiles["mf_tile"],
+                KEY_BIRD_SHARPNESS_MF_SHARPEST_PERCENT: tiles["mf_sharpest_percent"]}

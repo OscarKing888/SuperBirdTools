@@ -60,6 +60,7 @@ STEP_EDGES = "edges"
 STEP_DISTRIBUTION = "distribution"
 STEP_FOCUS = "focus"
 STEP_TILES = "tiles"
+STEP_MANUAL = "manual"
 STEP_RESULT = "result"
 
 
@@ -801,29 +802,86 @@ class AnalysisTracer:
                           "values": selection.sigma if selection is not None else np.empty(0)}],
                         stats.sigma if stats else None, "模糊半径分布（px）")]))
 
-    def full_image(self, tiles, stats) -> None:
-        img = _dim(self._overview, None, 0.5)
+    def _tile_heat(self, img: np.ndarray, tiles, counted=None) -> Tuple[np.ndarray, List[np.ndarray]]:
+        """Tiles tinted by their median blur (one blend, so thousands of small tiles stay fast);
+        grid lines only while tiles are big enough on screen. ``counted``: the tile boxes that
+        count (default: ≥ 8 measured edges). Returns (image, counted tiles' samples)."""
         lw = _line_w(img)
-        all_samples = []
+        overlay, tinted, measured = img.copy(), np.zeros(img.shape[:2], bool), []
+        boxes = []
         for x, y, w, h, part in tiles:
-            box = self._display((x, y, x + w, y + h))
-            if part.size >= 8:
-                med = float(np.median(part))
-                overlay = img.copy()
-                cv2.rectangle(overlay, (int(box[0]), int(box[1])), (int(box[2]), int(box[3])), sigma_color(med), -1)
-                img = cv2.addWeighted(overlay, 0.35, img, 0.65, 0)
-                all_samples.append(part)
-            _rect(img, box, (90, 90, 90), max(1, lw // 2))
-        samples = np.concatenate(all_samples) if all_samples else np.empty(0, np.float32)
+            x1, y1, x2, y2 = (int(round(v)) for v in self._display((x, y, x + w, y + h)))
+            boxes.append((x1, y1, x2, y2))
+            if (part.size >= 8) if counted is None else ((x, y, w, h) in counted):
+                cv2.rectangle(overlay, (x1, y1), (x2, y2), sigma_color(float(np.median(part))), -1)
+                tinted[y1:y2 + 1, x1:x2 + 1] = True
+                measured.append(part)
+        img = img.copy()
+        img[tinted] = cv2.addWeighted(overlay, 0.35, img, 0.65, 0)[tinted]
+        if boxes and min(x2 - x1 for x1, _y1, x2, _y2 in boxes) >= 12:
+            for box in boxes:
+                _rect(img, box, (90, 90, 90), max(1, lw // 2))
+        return img, measured
+
+    def full_image(self, tiles, stats, *, tile: int = 1024) -> None:
+        img, measured = self._tile_heat(_dim(self._overview, None, 0.5), tiles)
+        samples = np.concatenate(measured) if measured else np.empty(0, np.float32)
         self.trace.region_steps.append(TraceStep(
             STEP_TILES, "全图分块",
-            "没有鸟、也没有可用焦点：全图（仅相机画幅内，不含 RAW 黑边）按 1024 px 分块，每块取最强边缘的模糊半径（色块 = 该块中位数），"
-            "汇总取中位数。分块使 25–60 MP 图像内存可控。",
+            f"没有鸟、也没有可用焦点：全图（仅相机画幅内，不含 RAW 黑边）按 {tile} px 分块，每块取最强边缘的模糊半径"
+            "（色块 = 该块中位数），汇总取中位数。分块使 25–60 MP 图像内存可控；分块大小见「设置 → 用户选项 → 鸟清晰度」。",
             img, "full",
-            [("分块数", str(len(tiles))), ("有效块", str(len(all_samples))),
+            [("分块", f"{tile} px"), ("分块数", str(len(tiles))), ("有效块", str(len(measured))),
              ("测量值（中位数）", _fmt(stats.sigma, "%.3f px"))],
             [_histogram([{"name": "全图", "color": "#9aa0a6", "values": samples}], stats.sigma, "模糊半径分布（px）")],
             legend=[(hex_color(C_SHARP), "清晰块"), (hex_color(C_USABLE), "可用块"), (hex_color(C_SOFT), "模糊块")]))
+
+    def manual_center(self, center, tiles, chosen, candidates, stats, options) -> None:
+        """Step for the manual-focus centre: tiles on real detail tinted, the sharpest ones outlined."""
+        from .metrics import MF_MIN_TILES, MF_TILE_MIN_EDGES, MF_TILE_MIN_STEP_FRACTION
+
+        x1, y1, x2, y2 = (int(round(v)) for v in self._display(center))
+        keep = np.zeros(self._overview.shape[:2], bool)
+        keep[y1:y2, x1:x2] = True
+        base = _dim(_dim(self._overview, None, 0.8), keep, 0.4)  # centre slightly, outside strongly dimmed
+        img, measured = self._tile_heat(base, tiles, set(candidates))
+        lw = _line_w(img)
+        picked = set(chosen)
+        chosen_samples = [part for x, y, w, h, part in tiles if (x, y, w, h) in picked]
+        for x, y, w, h in chosen:
+            _rect(img, self._display((x, y, x + w, y + h)), C_MASK, max(1, lw))
+        _rect(img, (x1, y1, x2, y2), C_WINDOW, lw + 1)
+        everything = np.concatenate(measured) if measured else np.empty(0, np.float32)
+        best = np.concatenate(chosen_samples) if chosen_samples else np.empty(0, np.float32)
+        tile_sigmas = sorted(float(np.median(p)) for p in chosen_samples)
+        overall = float(np.median(everything)) if everything.size >= 8 else None
+        from .scoring import sigma_to_score
+
+        metrics = [("对焦方式", "手动对焦（相机记录）"),
+                   ("中心区域", f"{center[2] - center[0]} × {center[3] - center[1]} px（画幅每边 {options.mf_center_percent}%）"),
+                   ("分块", f"{options.mf_tile} px"), ("分块数", str(len(tiles))),
+                   (f"有效块（≥ {MF_TILE_MIN_EDGES} 条实测边缘且过半为真实边缘）", str(len(measured))),
+                   ("取最清晰", f"{len(chosen)} 块（有效块的 {options.mf_sharpest_percent}%，至少 {MF_MIN_TILES} 块）"),
+                   ("这些块的 σ", "—" if not tile_sigmas else f"{tile_sigmas[0]:.2f} – {tile_sigmas[-1]:.2f}"),
+                   ("测量值（中位数）", _fmt(stats.sigma, "%.3f px")),
+                   ("对比：全部有效块", "—" if overall is None else
+                    f"σ {overall:.3f} → 分数 {sigma_to_score(overall)}（不挑块时的结果）")]
+        desc = ("没有鸟、也没有焦点框，而相机记录为手动对焦：手动对焦时被摄体通常在画面中部，而焦平面就是画面里最清晰的部分。"
+                "于是只看画幅中心，按小分块各取最强边缘的模糊半径，取最清晰的一部分分块（白框）汇总取中位数，"
+                f"不让前景、背景的虚化拉低结果。只有落在真实细节上的分块参与（着色）：至少 {MF_TILE_MIN_EDGES} 条实测边缘，"
+                f"且最强边缘中至少 {MF_TILE_MIN_STEP_FRACTION:.0%} 是真实的阶跃边缘——夜景长曝光时近乎全黑的分块里，"
+                "噪点会冒充“很清晰”的边缘。中心区域、分块大小和取块比例见「设置 → 用户选项 → 鸟清晰度」，"
+                "计算过程窗口「参数」页可临时改用其他分块对比。")
+        if stats.sigma is None:
+            desc += "\n\n中心没有足够的可测分块：改用全图分块。"
+        self.trace.region_steps.append(TraceStep(
+            STEP_MANUAL, "手动对焦中心", desc, img, "full", metrics,
+            [_histogram([{"name": "最清晰块", "color": hex_color(C_MASK), "values": best},
+                         {"name": "中心全部块", "color": "#9aa0a6", "values": everything}],
+                        stats.sigma, "模糊半径分布（px）")],
+            legend=[(hex_color(C_WINDOW), "中心区域"), (hex_color(C_MASK), "参与计算的最清晰分块"),
+                    (hex_color(C_SHARP), "清晰块"), (hex_color(C_USABLE), "可用块"), (hex_color(C_SOFT), "模糊块")],
+            focus_rect=tuple(int(v) for v in _expand((x1, y1, x2, y2), 1.15, img.shape))))
 
     # ── conclusion ──
     def result(self, result) -> None:
