@@ -66,7 +66,7 @@ USE_CROP, USE_MASK = "crop", "mask"
 _CIRCLED = "①②③④⑤⑥⑦⑧⑨⑩⑪⑫⑬⑭⑮⑯⑰⑱⑲⑳"
 _LOG = logging.getLogger(__name__)
 STAGE_MIN_WIDTH = 320
-STAGE_WIDTH = 360  # the trace window makes this much room per chain window
+STAGE_WIDTH = 360  # the trace window makes this much room per new chain window
 C_PROMPT, C_KEEP, C_EXCLUDE = QColor(255, 214, 10), QColor(60, 220, 90), QColor(240, 70, 70)
 
 
@@ -218,6 +218,7 @@ class ChainStage(QWidget):
         self.generation = 0
         self.input_picked = False  # the user chose the input; else it follows the chain position
         self.preset_input: Optional[str] = None  # a restored window's saved input, applied when placed
+        self.width_hint: Optional[int] = None    # docked width to keep (saved, or as last laid out)
         self.boxes: list = []      # manual SAM prompts, image px
         self.points: list = []     # (x, y, keep), image px
 
@@ -416,6 +417,8 @@ class ChainStage(QWidget):
         self.lift.setChecked(bool(config.get("lift", True)))
         if config.get("input"):
             self.preset_input, self.input_picked = config["input"], True
+        if isinstance(config.get("width"), int):
+            self.width_hint = config["width"]
 
     def _on_model_changed(self, _index: int) -> None:
         model = self.model_combo.currentData()
@@ -593,7 +596,7 @@ class _ChainDock(QDockWidget):
     """A chain window's dock (scrolls when short); closing it removes the window from the chain."""
 
     closed = pyqtSignal(object)  # the stage
-    geometry_changed = pyqtSignal()  # moved / resized while floating
+    geometry_changed = pyqtSignal()  # resized, or moved while floating
 
     def __init__(self, stage: ChainStage, parent) -> None:
         super().__init__("", parent)
@@ -618,8 +621,7 @@ class _ChainDock(QDockWidget):
 
     def resizeEvent(self, event) -> None:  # noqa: N802 - Qt API
         super().resizeEvent(event)
-        if self.isFloating():
-            self.geometry_changed.emit()
+        self.geometry_changed.emit()  # docked: its width is saved too
 
 
 class ModelChainHost(QMainWindow):
@@ -658,6 +660,9 @@ class ModelChainHost(QMainWindow):
         self._save_timer = QTimer(self)
         self._save_timer.setSingleShot(True)
         self._save_timer.timeout.connect(self.save_now)
+        self._layout_timer = QTimer(self)  # widths are applied once the docks' layout has settled
+        self._layout_timer.setSingleShot(True)
+        self._layout_timer.timeout.connect(self.lay_out)
 
         bar = QToolBar("模型链", self)
         bar.setMovable(False)
@@ -698,6 +703,8 @@ class ModelChainHost(QMainWindow):
         model = model or self.default_model()
         if not self.ensure_model(model):
             return None
+        if not self._restoring:
+            self._capture_widths()  # the windows already open keep their widths
         stage = ChainStage(model, self)
         if config:
             stage.apply_config(config)
@@ -719,7 +726,8 @@ class ModelChainHost(QMainWindow):
         if config and config.get("floating"):
             self._float(dock, config.get("geometry"))
         self._renumber()
-        self.equalize()
+        self.lay_out()
+        self.lay_out_soon()
         self.stage_added.emit()
         self.save_soon()
         if self.display is not None:
@@ -737,6 +745,7 @@ class ModelChainHost(QMainWindow):
         if not 0 <= j < len(self.stages):
             return
         self.stages[i], self.stages[j] = self.stages[j], self.stages[i]
+        self._capture_widths()  # widths travel with their windows
         for s in self.stages:
             dock = self._docks[s]
             if not dock.isFloating():
@@ -753,7 +762,8 @@ class ModelChainHost(QMainWindow):
             dock.show()
             previous = dock
         self._renumber()
-        self.equalize()
+        self.lay_out()
+        self.lay_out_soon()
         self._rewired()
         self.save_soon()
 
@@ -767,12 +777,32 @@ class ModelChainHost(QMainWindow):
     def docked_count(self) -> int:
         return sum(1 for s in self.stages if not self._docks[s].isFloating())
 
-    def equalize(self) -> None:
-        """Share the width evenly between the docked windows."""
-        docked = [self._docks[s] for s in self.stages if not self._docks[s].isFloating()]
+    def _docked(self) -> List[ChainStage]:
+        return [s for s in self.stages if not self._docks[s].isFloating()]
+
+    def _laid_out_width(self, stage: ChainStage) -> Optional[int]:
+        """The docked window's real width, once it has been laid out (None before)."""
+        dock = self._docks[stage]
+        return dock.width() if dock.isVisible() and dock.width() >= STAGE_MIN_WIDTH else None
+
+    def _capture_widths(self) -> None:
+        for stage in self._docked():
+            stage.width_hint = self._laid_out_width(stage) or stage.width_hint
+
+    def wanted_width(self) -> int:
+        """Room the docked windows want: their kept widths, ``STAGE_WIDTH`` for new ones."""
+        return max(STAGE_WIDTH, sum(s.width_hint or STAGE_WIDTH for s in self._docked()))
+
+    def lay_out_soon(self) -> None:
+        """``lay_out`` after pending layout changes (new docks, the area resized) have settled."""
+        self._layout_timer.start(0)
+
+    def lay_out(self) -> None:
+        """Give each docked window its kept width (``STAGE_WIDTH`` when it has none)."""
+        docked = self._docked()
         if docked:
-            width = max(STAGE_MIN_WIDTH, self.width() // len(docked))
-            self.resizeDocks(docked, [width] * len(docked), _HORIZONTAL)
+            self.resizeDocks([self._docks[s] for s in docked], [s.width_hint or STAGE_WIDTH for s in docked],
+                             _HORIZONTAL)
 
     def _on_dock_closed(self, stage: ChainStage) -> None:
         if stage not in self.stages:
@@ -806,6 +836,8 @@ class ModelChainHost(QMainWindow):
             if dock.isFloating():
                 g = dock.geometry()
                 config.update(floating=True, geometry=[g.x(), g.y(), g.width(), g.height()])
+            else:
+                config["width"] = self._laid_out_width(stage) or stage.width_hint
             stages.append(config)
         return {"auto": self.auto_check.isChecked(), "stages": stages}
 

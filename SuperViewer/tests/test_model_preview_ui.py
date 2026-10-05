@@ -253,7 +253,7 @@ def test_closing_the_window_drops_late_results(dialog) -> None:
 
 
 # ── saved chain ──
-def _new_dialog(tmp_path, store, birds=((50, 60, 250, 260),)):
+def _new_dialog(tmp_path, store, birds=((50, 60, 250, 260),), width=None):
     from bird_sharpness.image_source import AnalysisImage, DecodedImageCache
 
     rgb = np.full((1200, 1800, 3), 90, np.uint8)
@@ -263,6 +263,8 @@ def _new_dialog(tmp_path, store, birds=((50, 60, 250, 260),)):
     d = BirdSharpnessTraceDialog(None, str(tmp_path / "x.ARW"))
     d.image_cache, d.chain_store = cache, store
     d.trace = SimpleNamespace(result=SimpleNamespace(birds=[{"box": b} for b in birds]))
+    if width:
+        d.resize(width, d.height())
     d.show()
     d.stack.setCurrentWidget(d.content)
     _APP.processEvents()
@@ -407,3 +409,56 @@ def test_floating_windows_come_back_where_they_were(dialog, tmp_path) -> None:
     area = _APP.primaryScreen().availableGeometry()
     moved = on_screen(QRect(area.right() + 3000, area.bottom() + 3000, 400, 99999))
     assert area.contains(moved) and moved.height() == area.height()
+
+
+def test_docked_windows_keep_their_widths(dialog, tmp_path) -> None:
+    from PyQt6.QtCore import Qt
+    from SuperViewer.superviewer.model_chain_state import ModelChainStore
+    from SuperViewer.superviewer.model_preview import STAGE_WIDTH
+
+    d, _calls, _fail = dialog
+    d.resize(2400, d.height())
+    _APP.processEvents()
+    store = ModelChainStore(tmp_path / "model_chain.json")
+    d.chain_store = store
+    d._update_chain()
+    host = d.preview_host
+    d.open_model_preview("detector", "auto")
+    d.open_model_preview("sam", "sam2.1_t.pt")
+    assert _idle(host)
+    a, b = host.stages
+    sizes = d._body.sizes()
+    d._body.setSizes([sizes[0] - 400, sizes[1], sizes[2] + 400])  # the user widens the chain area…
+    _APP.processEvents()
+    host.resizeDocks([host._docks[a], host._docks[b]], [700, 400], Qt.Orientation.Horizontal)  # …and drags
+    _APP.processEvents()
+
+    def widths():
+        return [host._docks[s].width() for s in host.stages]
+
+    w_a, w_b = widths()
+    assert w_a > w_b + 200
+    host.add_action.trigger()  # the open windows keep their widths, the new one gets STAGE_WIDTH
+    assert _idle(host) and _wait(lambda: abs(widths()[2] - STAGE_WIDTH) <= 12)
+    assert abs(widths()[0] - w_a) <= 12 and abs(widths()[1] - w_b) <= 12 and abs(widths()[2] - STAGE_WIDTH) <= 12
+    host.stages[0].right_btn.click()  # moving: the width goes with the window
+    assert _idle(host) and host.stages[1] is a and _wait(lambda: abs(widths()[1] - w_a) <= 12)
+    saved_widths = widths()
+    assert _wait(lambda: [s.get("width") for s in store.load()["stages"]] == saved_widths)
+    d.close()
+    _APP.processEvents()
+
+    d2 = _new_dialog(tmp_path, store, width=2400)
+    try:
+        d2._update_chain()
+        host2 = d2.preview_host
+        assert _idle(host2)
+
+        def restored():
+            return [host2._docks[s].width() for s in host2.stages]
+
+        assert _wait(lambda: all(abs(g - w) <= 12 for g, w in zip(restored(), saved_widths))), \
+            (restored(), saved_widths)
+    finally:
+        d2.close()
+        _APP.processEvents()

@@ -1068,13 +1068,12 @@ class BirdSharpnessTraceDialog(QDialog):
         return self.preview_host.add_stage(model)
 
     def _make_room_for_chain(self) -> None:
-        """Show the chain and give each of its windows ``STAGE_WIDTH``: widen this window up to
-        the screen, then take the rest from the image views."""
-        from .model_preview import STAGE_WIDTH
-
+        """Show the chain and make room for its docked windows (kept widths, ``STAGE_WIDTH`` for new
+        ones; floating windows need none): widen this window up to the screen, then take the
+        rest from the image views."""
         self.preview_host.setVisible(True)
         sizes = self._body.sizes()
-        want = STAGE_WIDTH * max(1, self.preview_host.docked_count())  # floating windows need no room
+        want = self.preview_host.wanted_width()
         extra = want - sizes[2]
         if extra <= 0:
             return
@@ -1086,7 +1085,7 @@ class BirdSharpnessTraceDialog(QDialog):
         total = sum(sizes) + grow
         views = max(400, total - sizes[1] - want)
         self._body.setSizes([views, sizes[1], max(0, total - views - sizes[1])])
-        self.preview_host.equalize()
+        self.preview_host.lay_out_soon()  # once the area has its new width
 
     def _preview_image(self):
         """Worker thread: this window's decode when there is one."""

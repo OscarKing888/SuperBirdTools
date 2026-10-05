@@ -3,8 +3,8 @@
 
 One small JSON file per user, next to the downloaded models
 (``…/SuperBirdTools/model_chain.json``): the toolbar's 「自动传给下一窗口」 and, per
-window, its model, its input when the user picked one, the detector parameters and,
-for a floating window, its place on screen (``geometry`` = x, y, width, height).
+window, its model, its input when the user picked one, the detector parameters and its
+size: ``width`` when docked, ``geometry`` (x, y, width, height) when floating.
 SAM's drawn boxes / points are not saved (they belong to one photo). Everything read
 back is validated; a missing or broken file is an empty chain. Qt-free.
 """
@@ -26,6 +26,7 @@ _CHOICES = {"scope": ("full", "view"), "use": ("crop", "mask")}
 _INTS = {"margin": (30, 0, 200), "imgsz": (640, 320, 2048), "min_conf": (10, 1, 95)}
 _BOOLS = {"birds_only": True, "lift": True, "floating": False}
 _POS, _SIZE = (-50000, 50000), (100, 20000)  # sane screen coordinates / window sizes
+_WIDTH = (200, 20000)                          # a docked window's width
 
 
 def default_path() -> Path:
@@ -50,6 +51,9 @@ def _stage(data) -> Optional[dict]:
         value = data.get(key, default)
         stage[key] = value if isinstance(value, bool) else default
     stage["geometry"] = _geometry(data.get("geometry")) if stage["floating"] else None
+    width = data.get("width")
+    ok = isinstance(width, int) and not isinstance(width, bool) and _WIDTH[0] <= width <= _WIDTH[1]
+    stage["width"] = width if ok and not stage["floating"] else None
     return stage
 
 
