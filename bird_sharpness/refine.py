@@ -75,6 +75,48 @@ class SamRefiner:
                               interpolation=cv2.INTER_NEAREST).astype(bool)
         return mask
 
+    def segment(self, rgb: np.ndarray, *, boxes=None, points=None, labels=None) -> list:
+        """``(mask, score)`` per object for the model preview (masks at ``rgb``'s size).
+
+        Without points every box is its own object; with points (``labels`` 1 = keep,
+        0 = exclude) the box (at most one) and the points describe one object.
+        """
+        import cv2
+
+        self.load()
+        kwargs = {}
+        if points:
+            kwargs["points"] = [[list(map(float, p)) for p in points]]
+            kwargs["labels"] = [[int(v) for v in labels]]
+            if boxes:
+                kwargs["bboxes"] = [list(map(float, boxes[0]))]
+        elif boxes:
+            kwargs["bboxes"] = [list(map(float, b)) for b in boxes]
+        else:
+            return []
+        bgr = cv2.cvtColor(np.ascontiguousarray(rgb), cv2.COLOR_RGB2BGR)
+        with self._lock:
+            try:
+                result = self._model.predict(bgr, device=self.device, verbose=False, **kwargs)[0]
+            except Exception as exc:
+                if self.device == "cpu":
+                    raise
+                _log.warning("[BirdSharpness] SAM failed on device=%s, retrying on CPU: %s", self.device, exc)
+                self.device = "cpu"
+                result = self._model.predict(bgr, device="cpu", verbose=False, **kwargs)[0]
+        masks = getattr(result, "masks", None)
+        if masks is None or len(masks.data) == 0:
+            return []
+        scores = (result.boxes.conf.cpu().numpy().tolist()
+                  if getattr(result, "boxes", None) is not None else [None] * len(masks.data))
+        out = []
+        for mask, score in zip(masks.data.cpu().numpy() > 0.5, scores):
+            if mask.shape != rgb.shape[:2]:
+                mask = cv2.resize(mask.astype(np.uint8), (rgb.shape[1], rgb.shape[0]),
+                                  interpolation=cv2.INTER_NEAREST).astype(bool)
+            out.append((mask, None if score is None else float(score)))
+        return out
+
     def release(self) -> None:
         with self._lock:
             self._model = None

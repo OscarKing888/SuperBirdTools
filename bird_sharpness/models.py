@@ -335,6 +335,36 @@ class BirdSharpnessModels:
                 except Exception:
                     pass
 
+    def _predict(self, bgr, *, conf: float, imgsz: Optional[int], classes):
+        """``(confs, xyxy, class ids, masks or None)`` of one YOLO run (masks binarised uint8)."""
+        self.load()
+        with self._lock:
+            kwargs = dict(conf=conf, verbose=False)
+            if classes is not None:
+                kwargs["classes"] = list(classes)
+            if imgsz:
+                kwargs["imgsz"] = int(imgsz)
+            if self._masks:
+                kwargs["retina_masks"] = True
+            try:
+                det = self._seg.predict(bgr, device=self.device, **kwargs)[0]
+            except Exception as exc:
+                if self.device == "cpu":
+                    raise
+                _log.warning("[BirdSharpness] YOLO failed on device=%s, retrying on CPU: %s", self.device, exc)
+                det = self._seg.predict(bgr, device="cpu", **kwargs)[0]
+        boxes = getattr(det, "boxes", None)
+        if boxes is None or len(boxes) == 0:
+            return None
+        import numpy as np
+
+        masks = getattr(det, "masks", None)
+        # Binarise on the device: a flock at 2048 px has ~60 frame-sized masks, 4x larger as float32.
+        mask_data = ((masks.data > 0.5).to(dtype=self._torch.uint8).cpu().numpy()
+                     if (self._masks and masks is not None and self._torch is not None) else
+                     (masks.data.cpu().numpy() > 0.5).astype(np.uint8) if (self._masks and masks is not None) else None)
+        return boxes.conf.cpu().numpy(), boxes.xyxy.cpu().numpy(), boxes.cls.cpu().numpy(), mask_data
+
     def detect_birds(self, bgr_small, *, conf: float = BIRD_CONFIDENCE_MIN, imgsz: Optional[int] = None) -> list:
         """Every bird in a small BGR image as :class:`BirdDetection`, strongest first.
 
@@ -342,38 +372,29 @@ class BirdSharpnessModels:
         analyzer only uses them next to the camera focus point); ``imgsz`` is the
         network input size (Ultralytics default when ``None``).
         """
-        self.load()
-        with self._lock:
-            kwargs = dict(classes=[BIRD_CLASS_ID], conf=conf, verbose=False)
-            if imgsz:
-                kwargs["imgsz"] = int(imgsz)
-            if self._masks:
-                kwargs["retina_masks"] = True
-            try:
-                det = self._seg.predict(bgr_small, device=self.device, **kwargs)[0]
-            except Exception as exc:
-                if self.device == "cpu":
-                    raise
-                _log.warning("[BirdSharpness] YOLO failed on device=%s, retrying on CPU: %s", self.device, exc)
-                det = self._seg.predict(bgr_small, device="cpu", **kwargs)[0]
-        boxes = getattr(det, "boxes", None)
-        if boxes is None or len(boxes) == 0:
+        found = self._predict(bgr_small, conf=conf, imgsz=imgsz, classes=[BIRD_CLASS_ID])
+        if found is None:
             return []
-        import numpy as np
-
-        confs = boxes.conf.cpu().numpy()
-        xyxy = boxes.xyxy.cpu().numpy()
-        masks = getattr(det, "masks", None)
-        # Binarise on the device: a flock at 2048 px has ~60 frame-sized masks, 4x larger as float32.
-        mask_data = ((masks.data > 0.5).to(dtype=self._torch.uint8).cpu().numpy()
-                     if (self._masks and masks is not None and self._torch is not None) else
-                     (masks.data.cpu().numpy() > 0.5).astype(np.uint8) if (self._masks and masks is not None) else None)
+        confs, xyxy, _cls, mask_data = found
         out = []
         for i in range(len(confs)):
             mask = mask_data[i] if mask_data is not None and i < len(mask_data) else None
             out.append(BirdDetection(float(confs[i]), tuple(float(v) for v in xyxy[i]), mask))
         out.sort(key=lambda d: d.confidence * max(0.0, d.box[2] - d.box[0]) * max(0.0, d.box[3] - d.box[1]),
                  reverse=True)
+        return out
+
+    def detect_objects(self, bgr, *, conf: float, imgsz: Optional[int] = None, birds_only: bool = True) -> list:
+        """Raw detector output for the model preview: ``(class name, confidence, box, mask)``
+        per object, strongest first; every COCO class unless ``birds_only``."""
+        found = self._predict(bgr, conf=conf, imgsz=imgsz, classes=[BIRD_CLASS_ID] if birds_only else None)
+        if found is None:
+            return []
+        confs, xyxy, cls, mask_data = found
+        names = getattr(self._seg, "names", {}) or {}
+        out = [(str(names.get(int(cls[i]), int(cls[i]))), float(confs[i]), tuple(float(v) for v in xyxy[i]),
+                mask_data[i] if mask_data is not None and i < len(mask_data) else None) for i in range(len(confs))]
+        out.sort(key=lambda o: -o[1])
         return out
 
     @property

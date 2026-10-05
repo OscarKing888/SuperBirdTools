@@ -229,6 +229,14 @@ class DecodedImageCache:
                 self._key_locks.pop(key, None)
         return image, False
 
+    def latest(self, source: Optional[str] = None) -> Optional[AnalysisImage]:
+        """The most recently used image (of ``source`` when given), else ``None``."""
+        with self._lock:
+            for key in reversed(self._items):
+                if source is None or key[1] == source:
+                    return self._items[key]
+        return None
+
     def __len__(self) -> int:
         with self._lock:
             return len(self._items)

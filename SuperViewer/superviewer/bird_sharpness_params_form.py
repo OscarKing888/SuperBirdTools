@@ -213,10 +213,18 @@ def download_models(parent, names: Iterable[str]) -> bool:
 
 
 class AnalysisParamsForm(QWidget):
-    """Every bird sharpness analysis option (``AnalysisParams``) in one form."""
+    """Every bird sharpness analysis option (``AnalysisParams``) in one form.
 
-    def __init__(self, parent=None, *, expand_fields: bool = True) -> None:
+    ``preview``: the 「预览」 buttons next to the model lists are live (the trace window,
+    which has a photo) and emit ``preview_requested(kind, model)``; elsewhere they are
+    shown disabled with a hint.
+    """
+
+    preview_requested = pyqtSignal(str, str)  # "detector" | "sam", model file name
+
+    def __init__(self, parent=None, *, expand_fields: bool = True, preview: bool = False) -> None:
         super().__init__(parent)
+        self._preview = bool(preview)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
 
@@ -253,12 +261,16 @@ class AnalysisParamsForm(QWidget):
         status_row = QHBoxLayout()
         status_row.addWidget(self.models_status, 1)
         status_row.addWidget(self.download_btn)
-        layout.addLayout(_grid(self, (("检测模型", self.detector), ("SAM 精修", self.sam_model),
+        self.detector_preview_btn = self._preview_button("detector", self.detector)
+        self.sam_preview_btn = self._preview_button("sam", self.sam_model)
+        layout.addLayout(_grid(self, (("检测模型", self._with_button(self.detector, self.detector_preview_btn)),
+                                      ("SAM 精修", self._with_button(self.sam_model, self.sam_preview_btn)),
                                       ("SAM 精修范围", self.sam_scope)), expand_fields))
         layout.addLayout(status_row)
         self._fill_model_combos()
         for combo in (self.detector, self.sam_model):
             combo.currentIndexChanged.connect(self._update_models_status)
+            combo.currentIndexChanged.connect(lambda _i: self._update_preview_buttons())
         self.sam_model.currentIndexChanged.connect(lambda _i: self.sam_scope.setEnabled(bool(self.sam_model.currentData())))
 
         layout.addSpacing(6)
@@ -285,6 +297,28 @@ class AnalysisParamsForm(QWidget):
         self.tiles = TileParamsForm(self, expand_fields=expand_fields)
         layout.addWidget(self.tiles)
         self.set_params(AnalysisParams().as_params())
+
+    # ── model preview ──
+    def _preview_button(self, kind: str, combo: QComboBox) -> QPushButton:
+        button = QPushButton("预览", self)
+        if self._preview:
+            button.setToolTip("单独运行所选模型，查看它在这张照片上的原始结果")
+            button.clicked.connect(lambda: self.preview_requested.emit(kind, combo.currentData() or ""))
+        else:
+            button.setToolTip("在计算过程窗口中可用（需要一张照片）")
+        return button
+
+    def _with_button(self, combo: QComboBox, button: QPushButton) -> QWidget:
+        box = QWidget(self)
+        row = QHBoxLayout(box)
+        row.setContentsMargins(0, 0, 0, 0)
+        row.addWidget(combo, 1)
+        row.addWidget(button)
+        return box
+
+    def _update_preview_buttons(self) -> None:
+        self.detector_preview_btn.setEnabled(self._preview)
+        self.sam_preview_btn.setEnabled(self._preview and bool(self.sam_model.currentData()))
 
     # ── models ──
     def _fill_model_combos(self) -> None:
@@ -357,6 +391,7 @@ class AnalysisParamsForm(QWidget):
         self._update_estimator_note()
         self._update_enabled()
         self._update_models_status()
+        self._update_preview_buttons()
 
     def params(self) -> dict:
         return AnalysisParams.from_params({
