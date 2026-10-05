@@ -511,16 +511,20 @@ def test_focal_plane_toggle_tints_focused_pixels_red(monkeypatch) -> None:
         sharp = next(i for i, s in enumerate(dialog.steps) if s.key == "bird" and trace.birds[s.bird].best)
         dialog.go(sharp, force=True)
         plain = red()
-        assert not dialog.peaking_spin.isEnabled()
+        assert not dialog.peaking_spin.isEnabled() and not dialog.peaking_slider.isEnabled()
         dialog.view_a.scale(3.0, 3.0)
         zoom = dialog.view_a.zoom_factor()
         dialog.peaking_btn.setChecked(True)
         assert dialog.peaking_spin.isEnabled() and red() > plain + 200
         assert dialog.view_a.zoom_factor() == pytest.approx(zoom)  # toggling keeps the view
         assert "焦平面" in dialog.legend.text()
+        assert dialog.peaking_slider.isEnabled() and dialog.peaking_slider.value() == 85
         loose = red()
-        dialog.peaking_spin.setValue(0.5)
-        assert red() < loose
+        dialog.peaking_slider.setValue(50)  # dragging the slider sets the typed value too
+        assert dialog.peaking_spin.value() == pytest.approx(0.5) and red() < loose
+        dialog.peaking_spin.setValue(1.23)  # typing moves the slider
+        assert dialog.peaking_slider.value() == 123 and red() > loose
+        assert "1.23" in dialog.legend.text()
         # follows navigation and the compare view
         dialog.peaking_spin.setValue(0.85)
         dialog.compare_btn.setChecked(True)

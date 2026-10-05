@@ -80,6 +80,8 @@ SOURCE_CHOICES = (
     (SOURCE_DENOISED, "降噪成片", "NAFNet 降噪后的图；没有时先自动降噪，仅供对比"),
 )
 ALL_BIRDS = -1  # bird selector item: every bird's steps in turn
+PEAKING_MIN, PEAKING_MAX = 0.4, 2.5  # 焦平面 threshold range (px)
+PEAKING_SLIDER_SCALE = 100  # slider ticks per px: 0.01 px steps
 
 
 def _clear_layout(layout) -> None:
@@ -715,21 +717,36 @@ class BirdSharpnessTraceDialog(QDialog):
             "像对焦时的峰值显示一样，把焦平面上的像素标红：全分辨率下逐个边缘测模糊半径（与清晰度同一算法，"
             "不受对比度影响），σ 不超过右侧阈值的边缘标红。逐只鸟总览没有此图。")
         self.peaking_btn.toggled.connect(self._on_peaking_changed)
+        # Threshold: slider for dragging, spin box for typing an exact value; kept in step.
+        threshold_tip = f"边缘模糊半径不超过此值即视为在焦平面上（默认 {SIGMA_SHARP_MAX:.2f} = 清晰门槛）"
+        self.peaking_slider = QSlider(_HORIZONTAL, self.content)
+        self.peaking_slider.setRange(int(round(PEAKING_MIN * PEAKING_SLIDER_SCALE)),
+                                     int(round(PEAKING_MAX * PEAKING_SLIDER_SCALE)))
+        self.peaking_slider.setSingleStep(1)
+        self.peaking_slider.setPageStep(10)
+        self.peaking_slider.setFixedWidth(180)
+        self.peaking_slider.setToolTip(threshold_tip)
         self.peaking_spin = QDoubleSpinBox(self.content)
-        self.peaking_spin.setRange(0.4, 2.5)
+        self.peaking_spin.setRange(PEAKING_MIN, PEAKING_MAX)
         self.peaking_spin.setSingleStep(0.05)
         self.peaking_spin.setDecimals(2)
         self.peaking_spin.setPrefix("σ ≤ ")
         self.peaking_spin.setSuffix(" px")
+        self.peaking_spin.setKeyboardTracking(False)  # typing: apply on Enter / focus out, not per digit
+        self.peaking_spin.setToolTip(threshold_tip)
         self.peaking_spin.setValue(SIGMA_SHARP_MAX)
-        self.peaking_spin.setToolTip(f"边缘模糊半径不超过此值即视为在焦平面上（默认 {SIGMA_SHARP_MAX:.2f} = 清晰门槛）")
-        self.peaking_spin.setEnabled(False)
-        self.peaking_spin.valueChanged.connect(self._on_peaking_changed)
+        self.peaking_slider.setValue(int(round(SIGMA_SHARP_MAX * PEAKING_SLIDER_SCALE)))
+        for widget in (self.peaking_slider, self.peaking_spin):
+            widget.setEnabled(False)
+        self.peaking_slider.valueChanged.connect(
+            lambda v: self.peaking_spin.setValue(v / PEAKING_SLIDER_SCALE))
+        self.peaking_spin.valueChanged.connect(self._on_peaking_threshold)
         tools.addWidget(self.compare_btn)
         tools.addWidget(self.compare_combo)
         tools.addWidget(self.sync_btn)
         tools.addSpacing(12)
         tools.addWidget(self.peaking_btn)
+        tools.addWidget(self.peaking_slider)
         tools.addWidget(self.peaking_spin)
         tools.addStretch(1)
         tools.addWidget(self.zoom_region_btn)
@@ -996,8 +1013,15 @@ class BirdSharpnessTraceDialog(QDialog):
             return step.image
         return peaking_overlay(step.image, self.trace.sigma_map(step), float(self.peaking_spin.value()))
 
+    def _on_peaking_threshold(self, value: float) -> None:
+        self.peaking_slider.blockSignals(True)
+        self.peaking_slider.setValue(int(round(value * PEAKING_SLIDER_SCALE)))
+        self.peaking_slider.blockSignals(False)
+        self._on_peaking_changed()
+
     def _on_peaking_changed(self, *_args) -> None:
-        self.peaking_spin.setEnabled(self.peaking_btn.isChecked())
+        for widget in (self.peaking_slider, self.peaking_spin):
+            widget.setEnabled(self.peaking_btn.isChecked())
         if not self.steps:
             return
         step = self.steps[self.index]
