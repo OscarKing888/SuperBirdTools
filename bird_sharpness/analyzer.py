@@ -38,7 +38,8 @@ from app_common.log import get_logger
 from .focus import FocusProvider, ManualFocusProvider, default_focus_box, default_manual_focus, focus_window
 from .image_source import AnalysisImage, load_analysis_image
 from .metrics import (ESTIMATOR_STANDARD, EdgeBlurField, EdgeEstimator, TileOptions,
-                      edge_estimator as get_edge_estimator, edge_stats, full_image_blur, sharpest_tiles_blur)
+                      edge_estimator as get_edge_estimator, edge_stats, full_image_blur, sharpest_tiles_blur,
+                      specular_highlights)
 from .models import (BIRD_CONFIDENCE_MIN, FOUND_ENHANCED, FOUND_FOCUS_WEAK, FOUND_FOCUS_ZOOM, FOUND_FULL, FOUND_GIVEN,
                      FOUND_FULL_FINE, FOUND_FULL_LIFTED, FOUND_FULL_SMALL, BirdDetection, BirdSharpnessModels,
                      shared_models)
@@ -79,7 +80,13 @@ SMALL_BIRD_SIDE = 450  # bird box long side, px
 HEAD_SAMPLE_SHIFT = 0.2
 HEAD_SAMPLE_VARIANTS = ((0.0, 0.0, 1.0), (1.0, 0.0, 1.0), (-1.0, 0.0, 1.0), (0.0, 1.0, 1.0), (0.0, -1.0, 1.0),
                         (0.0, 0.0, 0.8), (0.0, 0.0, 1.25))
-HEAD_MASK_DILATE_PX = 9
+# Head and whole-bird measurements use the mask shrunk by about one detection-mask
+# pixel (masks come from the 1024 px detection copy, so their outline is that
+# coarse): a dilated mask let background bark cracks at the outline supply the
+# head's sharpest edges (DSC06285: 13 of 38). Silhouette edges are lost with it;
+# the feathers, eye and beak inside remain.
+HEAD_MASK_ERODE_MIN_PX = 4
+HEAD_MASK_ERODE_MAX_PX = 12
 BODY_MASK_ERODE_PX = 15
 BOX_INSET_RATIO = 0.08  # detection boxes include background; measure their core
 # Progress stages reported through ``analyze(..., on_stage=...)``.
@@ -1003,6 +1010,14 @@ class BirdSharpnessAnalyzer:
                 detector_px, refined_by = mask.astype(bool), self._params.sam_model
                 mask = refined.astype(np.uint8)
         bird_px = mask.astype(bool)
+        # Head / whole-bird edges come from the mask core with specular highlights cut out.
+        mask_px = max(1.0, W / float(det.mask.shape[1])) if det.mask is not None else 1.0
+        erode_px = int(min(HEAD_MASK_ERODE_MAX_PX, max(HEAD_MASK_ERODE_MIN_PX, round(mask_px))))
+        head_scale = max(HEAD_RADIUS_MIN_PX, HEAD_RADIUS_BOX_RATIO * max(bw, bh))
+        glare = specular_highlights(image.gray[Y1:Y2, X1:X2], head_scale)
+        core = cv2.erode(mask, np.ones((2 * erode_px + 1, 2 * erode_px + 1), np.uint8)).astype(bool) & ~glare
+        if not core.any():
+            core = bird_px & ~glare
 
         field_ = EdgeBlurField(image.gray[Y1:Y2, X1:X2])
         body = cv2.erode(mask, np.ones((BODY_MASK_ERODE_PX, BODY_MASK_ERODE_PX), np.uint8)).astype(bool)
@@ -1024,7 +1039,7 @@ class BirdSharpnessAnalyzer:
             # measure the whole bird as without an eye model (eye visible, no score cap).
             eye_vis = keypoints.eye_visibility
             trace_keypoints = (keypoints, None)
-            selection = self._select(field_, bird_px)
+            selection = self._select(field_, core)
             head_stats = self._edge_stats(selection.sigma)
             head_sigma = None
             sigma = head_stats.sigma
@@ -1044,8 +1059,7 @@ class BirdSharpnessAnalyzer:
             trace_keypoints = (keypoints, radius)
             if eye_vis >= EYE_VISIBLE_MIN:
                 yy, xx = np.ogrid[:ch, :cw]
-                dilated = cv2.dilate(mask, np.ones((HEAD_MASK_DILATE_PX, HEAD_MASK_DILATE_PX), np.uint8)).astype(bool)
-                head = ((xx - eye[0]) ** 2 + (yy - eye[1]) ** 2 <= radius ** 2) & dilated
+                head = ((xx - eye[0]) ** 2 + (yy - eye[1]) ** 2 <= radius ** 2) & core
                 selection = self._select(field_, head)
                 head_stats = self._edge_stats(selection.sigma)
                 if head_stats.sigma is not None and max(bw, bh) < SMALL_BIRD_SIDE:
@@ -1053,7 +1067,7 @@ class BirdSharpnessAnalyzer:
                     for dx, dy, scale_r in HEAD_SAMPLE_VARIANTS[1:]:
                         cx = eye[0] + dx * HEAD_SAMPLE_SHIFT * radius
                         cy = eye[1] + dy * HEAD_SAMPLE_SHIFT * radius
-                        variant = ((xx - cx) ** 2 + (yy - cy) ** 2 <= (radius * scale_r) ** 2) & dilated
+                        variant = ((xx - cx) ** 2 + (yy - cy) ** 2 <= (radius * scale_r) ** 2) & core
                         value = self._edge_stats(self._select(field_, variant).sigma).sigma
                         if value is not None:
                             head_samples.append(float(value))
@@ -1070,7 +1084,7 @@ class BirdSharpnessAnalyzer:
                 sigma = head_sigma if head_sigma is not None else body_stats.sigma
         else:
             # No eye model: the whole bird's strongest edges stand in for the head.
-            selection = self._select(field_, bird_px)
+            selection = self._select(field_, core)
             head_stats = self._edge_stats(selection.sigma)
             head_sigma = None
             sigma = head_stats.sigma

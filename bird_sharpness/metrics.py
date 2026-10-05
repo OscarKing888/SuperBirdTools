@@ -58,6 +58,20 @@ def edge_estimator(key: Optional[str]) -> EdgeEstimator:
     return EDGE_ESTIMATORS.get(key or "", ESTIMATOR_STANDARD)
 MIN_BODY_EDGES = 60
 DIRECTION_BINS = 8
+# Specular highlights (eye catchlights, glints on wet feathers). A defocused point
+# light is a bokeh disc with a hard rim, which a step-edge estimator reads as sharp:
+# on DSC06285 (whole bird out of focus, feathers 2.2–2.7 px) the 7 px catchlight
+# measured 0.3–0.9 px and supplied 16 of the 38 strongest head edges, so the head
+# came out "sharp" at 0.70. A highlight is a small blob standing far above its
+# surroundings (white top-hat), and edges within HIGHLIGHT_MARGIN_PX of one are
+# not measured.
+HIGHLIGHT_MIN_RISE = 0.10          # blob − surroundings, linear gray (0–1)
+HIGHLIGHT_CONTRAST = 3.0           # blob − surroundings ≥ this × surroundings
+HIGHLIGHT_KERNEL_RATIO = 0.2       # top-hat kernel ≈ this × head radius
+HIGHLIGHT_KERNEL_MIN_PX = 15
+HIGHLIGHT_MAX_RADIUS_RATIO = 0.15  # larger blobs (breast, sky patches) are not highlights
+HIGHLIGHT_MIN_AREA_PX = 100        # ... but never below a disc of this area
+HIGHLIGHT_MARGIN_PX = 8            # exclusion ring around a highlight
 MIN_EDGES_PER_DIRECTION = 15
 # Edges must rise this far above the estimated sensor noise (edge SNR). Pure noise
 # peaks at ~0.6 x sigma_noise in mag0, and noise inflates the pre-reblur gradient
@@ -126,6 +140,30 @@ def _stats(samples: np.ndarray, quantile: float = 0.5) -> EdgeBlurStats:
 
 
 edge_stats = _stats  # public alias: stats of a sample array (median / quartiles / count)
+
+
+def specular_highlights(gray: np.ndarray, head_radius: float, *,
+                        margin: int = HIGHLIGHT_MARGIN_PX) -> np.ndarray:
+    """Pixels within ``margin`` of a specular highlight in ``gray`` (linear, 0–1).
+
+    A highlight is a connected blob that rises ≥ HIGHLIGHT_MIN_RISE and
+    ≥ HIGHLIGHT_CONTRAST × its surroundings above them (white top-hat with a kernel
+    of ~HIGHLIGHT_KERNEL_RATIO × ``head_radius``) and is no larger than a disc of
+    HIGHLIGHT_MAX_RADIUS_RATIO × ``head_radius``. Returns a boolean mask.
+    """
+    gray = np.ascontiguousarray(gray, dtype=np.float32)
+    k = max(HIGHLIGHT_KERNEL_MIN_PX, int(HIGHLIGHT_KERNEL_RATIO * float(head_radius))) | 1
+    opened = cv2.morphologyEx(gray, cv2.MORPH_OPEN, np.ones((k, k), np.uint8))
+    rise = gray - opened
+    blobs = ((rise >= HIGHLIGHT_MIN_RISE) & (rise >= HIGHLIGHT_CONTRAST * opened)).astype(np.uint8)
+    count, labels, stats, _ = cv2.connectedComponentsWithStats(blobs, connectivity=8)
+    max_area = max(HIGHLIGHT_MIN_AREA_PX, int(np.pi * (HIGHLIGHT_MAX_RADIUS_RATIO * float(head_radius)) ** 2))
+    small = np.zeros(count, bool)
+    small[1:] = stats[1:, cv2.CC_STAT_AREA] <= max_area
+    highlights = small[labels].astype(np.uint8)
+    if margin > 0 and highlights.any():
+        highlights = cv2.dilate(highlights, np.ones((2 * margin + 1, 2 * margin + 1), np.uint8))
+    return highlights.astype(bool)
 
 
 class EdgeBlurField:

@@ -2,7 +2,7 @@
 
 本文按代码的实际执行顺序，用流程图说明一张照片从入队到写入 XMP 的每个环节。算法的背景、标定数据和取舍理由见 [bird_sharpness.md](bird_sharpness.md)；本文只讲“先做什么、再做什么、什么条件走哪条分支”。所有阈值都标注了代码位置，以代码为准。
 
-版本：`sbt-blur-v13`（[scoring.py](../bird_sharpness/scoring.py) `ALGORITHM_VERSION`），非默认参数会追加后缀（见文末）。
+版本：`sbt-blur-v14`（[scoring.py](../bird_sharpness/scoring.py) `ALGORITHM_VERSION`），非默认参数会追加后缀（见文末）。
 
 ## 目录
 
@@ -214,8 +214,14 @@ flowchart TD
     H --> J["bird_px = 该鸟像素"]
     I --> J
     J --> K["body = bird_px 腐蚀 15 px（BODY_MASK_ERODE_PX）<br/>腐蚀后为空则用 bird_px"]
+    J --> K2["core = bird_px 内缩约一个识别掩膜像素<br/>（W / 掩膜宽，限 4–12 px；无掩膜 4 px）− 高光排除区<br/>为空则用 bird_px − 高光排除区"]
+    K2 --> K3["高光排除区 specular_highlights：<br/>白顶帽（核 ≈ 0.2×头部尺度，≥ 15 px）比周围高 ≥ 0.10 且 ≥ 3× 周围的小亮斑<br/>面积 ≤ π(0.15×头部尺度)²，外扩 8 px"]
     K --> L["EdgeBlurField(ROI 的 gray)：预计算梯度场（见第 10 节）"]
 ```
+
+- 头部尺度 = max(40 px, 15% × 鸟框长边)，与关键点无关，先于头部定位算出。
+- 为什么内缩而不是外扩：掩膜来自 1024 px 识别副本，轮廓有约一个掩膜像素的误差；原来外扩 9 px 时，轮廓上的背景树皮裂缝会成为头部“最强边缘”（DSC06285：38 个头部测点里 13 个在树皮上）。内缩会丢掉鸟的轮廓边缘，头内的羽毛、眼、喙仍在。
+- 为什么排除高光：脱焦的点光源不是高斯模糊，而是硬边的光斑（bokeh 圆），阶跃边缘估计会把它的边缘测成 0.3–0.9 px。DSC06285 整只鸟脱焦（羽毛 2.2–2.7 px），眼睛里 7 px 的高光提供了 38 个头部测点中的 16 个，头部中位数 0.70 判成“清晰”；排除后头部 2.75，判“模糊”。
 
 ### 7.2 身体 σ 与运动模糊方向比
 
@@ -253,8 +259,8 @@ flowchart TD
 
 ```mermaid
 flowchart TD
-    A{"keypoints 情况"} -->|无关键点模型| B["整只鸟 bird_px 的最强边缘 σ 当头部 σ<br/>eye_visible = True，不封顶（准确度下降）"]
-    A -->|眼可见 ≥ 0.5 但 eye_reliable = False| B2["同上：整只鸟最强边缘，不封顶<br/>head_sigma 留空"]
+    A{"keypoints 情况"} -->|无关键点模型| B["整只鸟 core 的最强边缘 σ 当头部 σ<br/>eye_visible = True，不封顶（准确度下降）"]
+    A -->|眼可见 ≥ 0.5 但 eye_reliable = False| B2["同上：整只鸟 core 最强边缘，不封顶<br/>head_sigma 留空"]
     A -->|有关键点| C["头部半径 radius"]
     C --> C1{"喙可用？"}
     C1 -->|是| C2["radius = 1.2 × 眼喙距"]
@@ -263,10 +269,10 @@ flowchart TD
     C3 --> C4
     C4 --> D{"眼可见度 ≥ 0.5？（EYE_VISIBLE_MIN）"}
     D -->|否| E["head_sigma = None → 判定走 no_eye 分支<br/>用 body_sigma，分数封顶 299"]
-    D -->|是| F["head = 以眼为圆心 radius 的圆 ∩ (掩膜膨胀 9 px)"]
+    D -->|是| F["head = 以眼为圆心 radius 的圆 ∩ core（第 7.1 节：内缩掩膜 − 高光）"]
     F --> G["head_stats = head 内最强边缘 σ 的统计（第 10 节）"]
     G --> H{"测到 σ 且鸟框长边 < 450 px？（SMALL_BIRD_SIDE）"}
-    H -->|是| I["再算 6 个变体圆：圆心沿上下左右各移 20% 半径，半径 ×0.8、×1.25<br/>head_sigma = 7 个值的中位数"]
+    H -->|是| I["再算 6 个变体圆（同样 ∩ core）：圆心沿上下左右各移 20% 半径，半径 ×0.8、×1.25<br/>head_sigma = 7 个值的中位数"]
     H -->|否| J["head_sigma = head_stats.sigma"]
     I --> K
     J --> K{"head_blank？<br/>（眼可见，但头部没有任何高于噪声的边缘）"}
@@ -479,7 +485,8 @@ flowchart TD
 | `EYE_MIRROR_MAX` / `BEAK_MIRROR_MAX` | 0.10 / 0.15 | analyzer.py | 镜像复核 |
 | `HEAD_RADIUS_BEAK_RATIO` / `HEAD_RADIUS_BOX_RATIO` / `HEAD_RADIUS_MIN_PX` | 1.2 / 0.15 / 40 | analyzer.py | 头部半径 |
 | `SMALL_BIRD_SIDE` / `HEAD_SAMPLE_SHIFT` | 450 / 0.2 | analyzer.py | 小鸟 7 圆中位数 |
-| `HEAD_MASK_DILATE_PX` / `BODY_MASK_ERODE_PX` | 9 / 15 | analyzer.py | 头部 / 身体掩膜 |
+| `HEAD_MASK_ERODE_MIN_PX` / `HEAD_MASK_ERODE_MAX_PX` / `BODY_MASK_ERODE_PX` | 4 / 12 / 15 | analyzer.py | 头部掩膜内缩（约一个识别掩膜像素）/ 身体掩膜 |
+| `HIGHLIGHT_MIN_RISE` / `HIGHLIGHT_CONTRAST` / `HIGHLIGHT_KERNEL_RATIO` / `HIGHLIGHT_MAX_RADIUS_RATIO` / `HIGHLIGHT_MARGIN_PX` | 0.10 / 3.0 / 0.2 / 0.15 / 8 | metrics.py | 高光（眼睛反光）排除 |
 | `EXTRA_BIRD_CONFIDENCE_MAX` / `EXTRA_BIRD_ANCHOR_MIN` / `PART_OF_BIRD_OVERLAP` | 0.4 / 0.5 / 0.5 | analyzer.py | 排除假鸟 / 局部 |
 | `PRE_SIGMA` / `REBLUR_SIGMA` | 1.0 / 1.5 | metrics.py | 再模糊比值法 |
 | `NOISE_EDGE_FACTOR` | 4.0 | metrics.py | 边缘信噪门槛 |
