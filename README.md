@@ -157,7 +157,7 @@ macOS 也可直接使用免 ZIP 入口，支持传入 `--clean` 等原有参数�
 bash build_all_no_zip.sh
 ```
 
-任何 `build_all.sh` 都可以用 `--bundle-all-models` 打包全部模型（Windows 可在构建前设置环境变量 `SUPERBIRDTOOLS_BUNDLE_MODELS=all`）；发布构建不带此参数，安装包和更新分卷保持只有 `yolo11n.pt` 与降噪模型。
+`build_all.sh` 和 Windows 的 `build_all.bat` 都可以用 `--bundle-all-models` 打包全部模型（如 `download_models.bat` 后 `build_all.bat --apps-only --bundle-all-models`）；发布构建不带此参数，安装包和更新分卷保持只有 `yolo11n.pt` 与降噪模型。
 
 ```bat
 build_all.bat --apps-only

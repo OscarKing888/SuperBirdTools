@@ -83,10 +83,10 @@ def build_entry(tmp_path):
     )
     env.pop("SBT_FAIL_STAGE", None)
 
-    def run(*args, fail=""):
+    def run(*args, fail="", extra_env=None):
         env["SBT_FAIL_STAGE"] = fail
         command = (["cmd", "/d", "/c", script.name] if os.name == "nt" else ["bash", str(script)])
-        result = subprocess.run(command + list(args), cwd=repo, env=env,
+        result = subprocess.run(command + list(args), cwd=repo, env={**env, **(extra_env or {})},
                                 capture_output=True, text=True, timeout=30)
         probe = repo / "calls.jsonl"
         calls = [json.loads(line) for line in probe.read_text(encoding="utf-8").splitlines()] if probe.exists() else []
@@ -146,31 +146,29 @@ def test_release_generation_failure_is_not_reported_as_success(build_entry):
     assert "[OK] outputs:" not in result.stdout
 
 
-posix_only = pytest.mark.skipif(os.name == "nt", reason="build_all.sh / build_all_no_zip.sh are the macOS entries")
+posix_only = pytest.mark.skipif(os.name == "nt", reason="build_all_no_zip.sh is the macOS entry")
+# The SuperViewer PyInstaller run: its own script on macOS, the merged spec on Windows.
+VIEWER_STAGE = "merged" if os.name == "nt" else "SuperViewer"
 
 
-@posix_only
 def test_bundle_all_models_verifies_first_and_reaches_the_viewer_build(build_entry):
     repo, run = build_entry
     result, calls = run("--apps-only", "--bundle-all-models")
     assert result.returncode == 0, result.stdout + result.stderr
     stages = [c["stage"] for c in calls]
     check = stages.index("download_models")
-    assert calls[check]["args"] == ["--check-only", "--no-denoise"] and check < stages.index("SuperViewer")
-    assert next(c for c in calls if c["stage"] == "SuperViewer")["bundle"] == "all"
+    assert calls[check]["args"] == ["--check-only", "--no-denoise"] and check < stages.index(VIEWER_STAGE)
+    assert next(c for c in calls if c["stage"] == VIEWER_STAGE)["bundle"] == "all"
 
 
-@posix_only
-def test_release_builds_never_bundle_all_models(build_entry, monkeypatch):
+def test_release_builds_never_bundle_all_models(build_entry):
     repo, run = build_entry
-    monkeypatch.setenv("SUPERBIRDTOOLS_BUNDLE_MODELS", "all")  # inherited from the shell: ignored
-    result, calls = run()
+    result, calls = run(extra_env={"SUPERBIRDTOOLS_BUNDLE_MODELS": "all"})  # inherited from the shell: ignored
     assert result.returncode == 0, result.stdout + result.stderr
     assert "download_models" not in [c["stage"] for c in calls]
-    assert next(c for c in calls if c["stage"] == "SuperViewer")["bundle"] is None
+    assert next(c for c in calls if c["stage"] == VIEWER_STAGE)["bundle"] is None
 
 
-@posix_only
 def test_missing_models_stop_the_build_before_any_app(build_entry):
     _, run = build_entry
     result, calls = run("--apps-only", "--bundle-all-models", fail="download_models")

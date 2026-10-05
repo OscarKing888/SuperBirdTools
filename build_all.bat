@@ -15,6 +15,7 @@ if defined SUPERBIRDTOOLS_BUILD_ROOT (
 
 set "CLEAN=0"
 set "APPS_ONLY=0"
+set "BUNDLE_ALL_MODELS=0"
 :parse_args
 if "%~1"=="" goto args_done
 if /I "%~1"=="--clean" (
@@ -27,10 +28,23 @@ if /I "%~1"=="--apps-only" (
   shift
   goto parse_args
 )
+if /I "%~1"=="--bundle-all-models" (
+  set "BUNDLE_ALL_MODELS=1"
+  shift
+  goto parse_args
+)
 echo Unknown option: %~1
 exit /b 1
 
 :args_done
+rem --bundle-all-models: also bundle every bird sharpness model (~3.45 GB) from the workspace
+rem SuperViewer\models into SuperViewer (build_tools\viewer_bird_body.py). Verified before
+rem PyInstaller; never downloaded during a build. Release builds always clear the variable.
+if "%BUNDLE_ALL_MODELS%"=="1" (
+  set "SUPERBIRDTOOLS_BUNDLE_MODELS=all"
+) else (
+  set "SUPERBIRDTOOLS_BUNDLE_MODELS="
+)
 set "PYINSTALLER_ARGS=--noconfirm"
 if "%CLEAN%"=="1" (
   set "PYINSTALLER_ARGS=--noconfirm --clean"
@@ -77,6 +91,11 @@ echo [INFO] Using Python: %PYTHON_EXE%
 if errorlevel 1 exit /b 1
 "%PYTHON_EXE%" "%ROOT_DIR%build_tools\download_denoise_model.py"
 if errorlevel 1 exit /b 1
+if "%BUNDLE_ALL_MODELS%"=="1" (
+  echo [INFO] Bundling all models from SuperViewer\models; verifying...
+  "%PYTHON_EXE%" "%ROOT_DIR%build_tools\download_models.py" --check-only --no-denoise
+  if errorlevel 1 goto models_missing
+)
 "%PYTHON_EXE%" -m PyInstaller %PYINSTALLER_ARGS% ^
   --distpath "%DIST_ROOT%" ^
   --workpath "%BUILD_ROOT%\merged_win" ^
@@ -90,6 +109,11 @@ echo [INFO] Using Python launcher: %PYTHON_LAUNCHER%
 if errorlevel 1 exit /b 1
 %PYTHON_LAUNCHER% "%ROOT_DIR%build_tools\download_denoise_model.py"
 if errorlevel 1 exit /b 1
+if "%BUNDLE_ALL_MODELS%"=="1" (
+  echo [INFO] Bundling all models from SuperViewer\models; verifying...
+  %PYTHON_LAUNCHER% "%ROOT_DIR%build_tools\download_models.py" --check-only --no-denoise
+  if errorlevel 1 goto models_missing
+)
 %PYTHON_LAUNCHER% -m PyInstaller %PYINSTALLER_ARGS% ^
   --distpath "%DIST_ROOT%" ^
   --workpath "%BUILD_ROOT%\merged_win" ^
@@ -123,3 +147,8 @@ echo   %DIST_ROOT%\SuperBirdUpdater\SuperBirdUpdater.exe
 if "%APPS_ONLY%"=="0" echo   %DIST_ROOT%\updates
 
 endlocal
+exit /b 0
+
+:models_missing
+echo [ERROR] Models missing or incomplete; run download_models.bat first. 1>&2
+exit /b 1
