@@ -280,6 +280,16 @@ Qt 进度回调只更新界面/初始需求提示，实际任务完成和需求�
 
 重命名会先检查源图和同目录同名 XMP 的目标冲突，支持大小写改名并在失败时回滚。剪切/覆盖使用共享文件事务；源数据或目标原文件无法完整恢复时必须保留恢复文件并报告位置。新增文件动作应复用这些路径，不能只移动图片而遗漏侧车。
 
+## 珍禽入册（鸟名归档）
+
+[`BirdArchiveController`](../superviewer/bird_archive_ui.py) 通过文件菜单 extender 在列表和缩略图右键菜单顶部插入加粗、金色鸟章的“珍禽入册”，主菜单“文件”和“设置”提供入册与归档设置入口。`ArchiveDialog` 明确显示移动/复制方式、目标目录及拍摄时间前缀；配置原子写入用户状态目录 `bird_archive.json`，不写仓库内的运行配置。控制器只在 GUI 线程快照实际源路径和报告行，`ArchiveWorker` 承担元数据读取与磁盘操作，持有至真正 `QThread.finished`；停止/关闭完成当前照片组后不再开启下一组。成功移动清除对应 A/B 旧路径预览和编辑目标，批次结束按实际源路径建立只读报告 tombstone、清除路径绑定的标签历史，并刷新当前目录。
+
+无 Qt 核心 [`bird_archive.py`](../superviewer/bird_archive.py) 的 `archive_photos()` / `ArchiveSession` 按源目录和同 stem 分组：鸟名以 XMP 为先、报告次之、内嵌元数据保底；缺鸟名跳过，损坏 XMP 报错。默认文件名 `YYYYMMDD_HHMMSS_原文件名`，缺拍摄时间明确标记“日期未知”，可关闭前缀。鸟名和文件名经过 Windows 非法字符/设备名处理，目录与冲突索引使用 Unicode NFC 与大小写无关比较，照片及 XMP/其他扩展名占用同一 stem 时整组追加 `_002` 等序号。同组 RAW/JPEG 共用一次命名分配，未选择的兄弟照片不移动，并保留它需要的源 XMP。
+
+归档前由 `PhotoMetaDataXMP` 把缺少的报告字段保存到源侧车（保留标准 XMP 用户值），对指向源照片的显式 RDF 文件引用规范化为可迁移主资源。照片本身和 `report.db` 不写元数据。文件转移复用共享 [`transfer_file_pairs()`](../../app_common/file_transactions.py)：原剪贴板事务提取到无 Qt 模块，浏览器兼容入口保留；归档使用独占发布，避免覆盖并发出现的目标，跨卷/不支持硬链接时有复制回退，失败恢复照片和侧车；恢复不完整保留完整副本并在结果中报告路径。
+
+CLI 与 GUI 共用核心：在仓库根使用共享 `.venv` 执行 `python -m SuperViewer.superviewer.bird_archive --directory <归档目录> --mode move <照片...>`；`--mode copy` 保留源图，`--no-date-prefix` 保留原名（冲突仍加序号）。CLI 显式关闭 ExifTool。模块由入口静态导入且已包含在现有 `collect_submodules("superviewer")` 打包收集中，鸟章由 QPainter 绘制，无新增资源依赖。回归：[归档规则与真实 XMP](../tests/test_bird_archive.py)、[菜单/配置/线程/真实列表和缩略图窗口](../tests/test_bird_archive_ui.py)、[共享文件事务](../../app_common/tests/test_file_transactions.py)、[现有剪贴板回滚](../../app_common/tests/test_file_browser_clipboard_sidecars.py)。
+
 ## 批量 RGB 降噪
 
 [`DenoiseController`](../superviewer/denoise_controller.py) 通过现有目录/文件菜单 extender 接入窗口，沿用真实源路径解析，保有 `DenoiseWorker` 至实际 `QThread.finished`。窗口关闭请求取消并等待所有降噪动作结束。用户选项对话框的降噪页通过共享 `superviewer_user_options` 保存规范化配置，设置不触发图片解码或模型载入。
