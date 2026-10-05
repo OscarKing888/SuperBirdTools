@@ -42,6 +42,7 @@ FOUND_FULL_FINE = "full_fine"    # whole frame at the finer recheck input size
 FOUND_FOCUS_WEAK = "focus_weak"  # weak whole-frame candidate lying on the camera focus box
 FOUND_FOCUS_ZOOM = "focus_zoom"  # zoomed window around the focus point, confirmed by a weak candidate
 FOUND_ENHANCED = "enhanced"      # enhanced search: zoomed windows over the centre region (optional)
+FOUND_GIVEN = "given"            # handed in by the caller (the trace window's model chain); no detection ran
 KEYPOINT_MODEL_NAME = "cub200_keypoint_resnet50_slim.pth"
 BIRD_CLASS_ID = 14
 KEYPOINT_INPUT_SIZE = 416

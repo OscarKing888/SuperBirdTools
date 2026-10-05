@@ -469,6 +469,8 @@ class BirdSharpnessTraceDialog(QDialog):
     source_changed = pyqtSignal(object, str)  # (dialog, image source) — recompute requested
     params_changed = pyqtSignal(object)  # dialog — recompute with ``dialog.params``
     save_defaults_requested = pyqtSignal(object)  # dialog — store ``dialog.params`` as user options
+    # dialog, temporary AnalysisImage, analyzer.GivenBirds, title — a model chain window's 测清晰度
+    analyze_pixels_requested = pyqtSignal(object, object, object, str)
 
     def __init__(self, parent, path: str, image_source: str = SOURCE_RAW, params: Optional[dict] = None) -> None:
         super().__init__(parent)
@@ -477,6 +479,7 @@ class BirdSharpnessTraceDialog(QDialog):
         # Analysis options for this window only; "保存为默认设置" makes them the user's defaults.
         self.params = {**DEFAULT_TRACE_PARAMS, **(params or {})}
         self.trace = None
+        self.given_input = None  # (temporary image, GivenBirds): measures a model chain window's results
         self.steps: List = []
         self.index = 0
         self._syncing = False
@@ -597,6 +600,7 @@ class BirdSharpnessTraceDialog(QDialog):
         self.preview_host.setVisible(False)
         self.preview_host.emptied.connect(lambda: self.preview_host.setVisible(False))
         self.preview_host.stage_added.connect(self._make_room_for_chain)
+        self.preview_host.analyze_requested.connect(self._analyze_stage)
         self._chain_source: Optional[str] = None  # image source the chain was opened on (None = no trace yet)
         body.addWidget(self.preview_host)
         self._body = body
@@ -1087,8 +1091,35 @@ class BirdSharpnessTraceDialog(QDialog):
         self._body.setSizes([views, sizes[1], max(0, total - views - sizes[1])])
         self.preview_host.lay_out_soon()  # once the area has its new width
 
+    def _analyze_stage(self, stage) -> None:
+        """「测清晰度」 in a chain window: its results as birds on a temporary image (new window)."""
+        from bird_sharpness.preview import analysis_input
+
+        from .model_preview import circled
+
+        host = self.preview_host
+        if host.image is None or stage.result is None or not stage.result.items:
+            return
+        title = f"模型链 {circled(stage.index + 1)} {stage.model} 的 {len(stage.result.items)} 个结果"
+        try:
+            image, given, _region = analysis_input(host.image, stage.result.items, title)
+        except ValueError as exc:
+            stage.show_message(str(exc))
+            return
+        self.analyze_pixels_requested.emit(self, image, given, title)
+
+    def set_given_input(self, image, given, title: str) -> None:
+        """This window measures ``given`` on the temporary ``image`` (no decode, no detection)."""
+        self.given_input = (image, given)
+        self.setWindowTitle(f"清晰度计算过程 - {os.path.basename(self.path)} · {title}（临时图）")
+        self.title.setText(f"{os.path.basename(self.path)} · {title}（临时图）")
+        self.source_combo.setEnabled(False)
+        self.source_combo.setToolTip("临时图来自模型链窗口的结果，不能切换图像来源")
+
     def _preview_image(self):
         """Worker thread: this window's decode when there is one."""
+        if self.given_input is not None:
+            return self.given_input[0]
         found = self.image_cache.latest(self.image_source) if getattr(self, "image_cache", None) is not None else None
         if found is not None:
             return found

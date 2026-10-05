@@ -208,6 +208,7 @@ class ChainStage(QWidget):
     run_requested = pyqtSignal(object)  # self
     move_requested = pyqtSignal(object, int)  # self, -1 / +1
     config_changed = pyqtSignal()       # a parameter changed (the chain is saved)
+    analyze_requested = pyqtSignal(object)  # self: measure sharpness on this window's result pixels
 
     def __init__(self, model: str, parent=None) -> None:
         super().__init__(parent)
@@ -290,7 +291,13 @@ class ChainStage(QWidget):
         self.run_btn.clicked.connect(lambda: self.run_requested.emit(self))
         self.status = QLabel("正在载入图像…", self)
         self.status.setWordWrap(True)
+        self.analyze_btn = QPushButton("测清晰度", self)
+        self.analyze_btn.setToolTip("把这个窗口的结果当作鸟送去清晰度检测：从原图裁出它们周围的一块像素作为临时图，"
+                                    "只测结果像素（轮廓，没有轮廓按框），不重新识别；在新的「清晰度计算过程」窗口里显示。")
+        self.analyze_btn.setEnabled(False)
+        self.analyze_btn.clicked.connect(lambda: self.analyze_requested.emit(self))
         row.addWidget(self.run_btn)
+        row.addWidget(self.analyze_btn)
         row.addWidget(self.status, 1)
         layout.addLayout(row)
         self.results = TraceBirdList(self)
@@ -563,9 +570,13 @@ class ChainStage(QWidget):
         if not self.auto_runs():
             self.status.setText("画框或点选后点「运行」。")
 
+    def _update_analyze(self) -> None:
+        self.analyze_btn.setEnabled(not self.busy and bool(self.result is not None and self.result.items))
+
     def set_busy(self, busy: bool, inputs=None, fed_by=None) -> None:
         self.busy = busy
         self.run_btn.setEnabled(not busy)
+        self._update_analyze()
         if busy:
             self.inputs, self.fed_by = list(inputs or []), fed_by
             self.status.setText("正在运行…")
@@ -575,6 +586,7 @@ class ChainStage(QWidget):
         from bird_sharpness.preview import cutout_display, render
 
         self.result, self.error = result, None
+        self._update_analyze()
         if self.display is None:
             return
         cut = getattr(result, "cutout", None)
@@ -594,6 +606,7 @@ class ChainStage(QWidget):
 
     def show_error(self, message: str) -> None:
         self.error, self.result = message, None
+        self._update_analyze()
         self.results.set_rows([])
         if self.display is not None:
             self.view.set_image(self._base())
@@ -606,6 +619,7 @@ class ChainStage(QWidget):
     def _reset(self, why: str) -> None:
         self.generation += 1  # a run still in flight is dropped
         self.result, self.error, self.inputs = None, None, []
+        self._update_analyze()
         self.cut_base = self.cut_region = None
         self.results.set_rows([])
         if self.display is not None:
@@ -703,6 +717,7 @@ class ModelChainHost(QMainWindow):
 
     emptied = pyqtSignal()
     stage_added = pyqtSignal()
+    analyze_requested = pyqtSignal(object)  # stage: 测清晰度 on its result pixels
     SAVE_DELAY_MS = 300
 
     def __init__(self, image_provider: Callable, boxes_provider: Callable[[], list],
@@ -739,7 +754,8 @@ class ModelChainHost(QMainWindow):
         self.run_all_action = bar.addAction("运行整条链")
         self.run_all_action.setToolTip("从第一个窗口起依次运行，每个窗口的结果交给下一个窗口")
         self.run_all_action.triggered.connect(self.run_all)
-        self.auto_check = QCheckBox("自动传给下一窗口", bar)
+        self.auto_check = ToggleToolButton("自动传给下一窗口", bar)
+        self.auto_check.setFocusPolicy(getattr(getattr(Qt, "FocusPolicy", Qt), "NoFocus"))  # like the toolbar's buttons
         self.auto_check.setChecked(True)
         self.auto_check.setToolTip("一个窗口有了新结果，就让后面输入为「上一窗口的结果」的窗口接着运行")
         self.auto_check.toggled.connect(lambda _c: self.save_soon())
@@ -752,6 +768,10 @@ class ModelChainHost(QMainWindow):
         bar.addWidget(self.note)
         self.addToolBar(bar)
         self.toolbar = bar
+        # Widgets added to a toolbar keep the default font; on macOS the action buttons are smaller.
+        font = bar.widgetForAction(self.add_action).font()
+        for widget in (self.auto_check, self.note):
+            widget.setFont(font)
 
     # ── windows ──
     def ensure_model(self, model: str) -> bool:
@@ -777,6 +797,7 @@ class ModelChainHost(QMainWindow):
             stage.apply_config(config)
         stage.changed.connect(self._on_stage_changed)
         stage.config_changed.connect(self.save_soon)
+        stage.analyze_requested.connect(self.analyze_requested)
         stage.run_requested.connect(self.request_run)
         stage.move_requested.connect(self.move_stage)
         dock = _ChainDock(stage, self)

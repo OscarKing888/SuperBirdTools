@@ -102,22 +102,28 @@ class BirdSharpnessTraceAction(WorkerAction):
 
     def __init__(self, analyzer: BirdSharpnessAnalyzer, source_path: str, *,
                  cancelled: Callable[[], bool] = lambda: False, image_source: str = "raw",
-                 denoised_lookup: Optional[Callable[[str], object]] = None, image_cache=None):
+                 denoised_lookup: Optional[Callable[[str], object]] = None, image_cache=None,
+                 given_input=None):
         """``image_source``: ``image_source.SOURCE_*``; ``denoised_lookup(path)`` finds the
         denoised rendering (``None`` when there is none) and runs here, on the worker.
         ``image_cache`` (``image_source.DecodedImageCache``, one per trace window) reuses
-        the decoded image when the same window recomputes with other parameters."""
+        the decoded image when the same window recomputes with other parameters.
+        ``given_input``: ``(AnalysisImage, analyzer.GivenBirds)`` — measure these birds on this
+        image (the model chain's 测清晰度) instead of decoding and detecting."""
         super().__init__(cancelled=cancelled)
         self.analyzer = analyzer
         self.source_path = os.path.normpath(source_path)
         self.image_source = image_source
         self.denoised_lookup = denoised_lookup
         self.image_cache = image_cache
+        self.given_input = given_input
 
     def execute(self) -> BirdSharpnessTraceOutcome:
         path, source = self.source_path, self.image_source
         if self.is_cancelled():
             return BirdSharpnessTraceOutcome(path, cancelled=True, image_source=source)
+        if self.given_input is not None:
+            return self._execute_given()
         from .image_source import SOURCE_DENOISED, source_loader
         from .models import check_runtime
         from .trace import AnalysisTracer
@@ -150,6 +156,25 @@ class BirdSharpnessTraceAction(WorkerAction):
                 return image
 
         result = self.analyzer.analyze(path, tracer=tracer, cancelled=self.is_cancelled, image_loader=loader)
+        if self.is_cancelled():
+            return BirdSharpnessTraceOutcome(path, cancelled=True, image_source=source)
+        if not result.ok:
+            return BirdSharpnessTraceOutcome(path, result=result, error=result.error or "分析失败", image_source=source)
+        return BirdSharpnessTraceOutcome(path, trace=tracer.trace, result=result, image_source=source)
+
+    def _execute_given(self) -> BirdSharpnessTraceOutcome:
+        from .models import check_runtime
+        from .trace import AnalysisTracer
+
+        path, source = self.source_path, self.image_source
+        reason = check_runtime()
+        if reason:
+            return BirdSharpnessTraceOutcome(path, error=reason, image_source=source)
+        image, given = self.given_input
+        tracer = AnalysisTracer()
+        tracer.decode_note = f"临时图：{given.label}" if given.label else "临时图"
+        result = self.analyzer.analyze(path, tracer=tracer, cancelled=self.is_cancelled,
+                                       image_loader=lambda _p: image, given=given)
         if self.is_cancelled():
             return BirdSharpnessTraceOutcome(path, cancelled=True, image_source=source)
         if not result.ok:
