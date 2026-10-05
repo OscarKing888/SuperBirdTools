@@ -34,13 +34,13 @@ try:
     from PyQt6.QtGui import QBrush, QColor, QFont, QImage, QPainter, QPainterPath, QPalette, QPen, QPixmap
     from PyQt6.QtWidgets import (QButtonGroup, QFrame, QGraphicsPathItem, QGraphicsPixmapItem, QGraphicsRectItem,
                                  QDoubleSpinBox, QGraphicsScene, QGraphicsView, QGridLayout, QSizePolicy, QSlider,
-                                 QSpinBox, QTabWidget, QDockWidget, QMainWindow)
+                                 QSpinBox, QTabWidget)
 except ImportError:  # pragma: no cover - PyQt5 fallback
     from PyQt5.QtCore import QEvent, QPointF, QRectF, Qt, QTimer
     from PyQt5.QtGui import QBrush, QColor, QFont, QImage, QPainter, QPainterPath, QPalette, QPen, QPixmap
     from PyQt5.QtWidgets import (QButtonGroup, QFrame, QGraphicsPathItem, QGraphicsPixmapItem, QGraphicsRectItem,
                                  QDoubleSpinBox, QGraphicsScene, QGraphicsView, QGridLayout, QSizePolicy, QSlider,
-                                 QSpinBox, QTabWidget, QDockWidget, QMainWindow)
+                                 QSpinBox, QTabWidget)
 
 _Qt = getattr(Qt, "AlignmentFlag", Qt)
 _KEEP_ASPECT = getattr(getattr(Qt, "AspectRatioMode", Qt), "KeepAspectRatio")
@@ -589,12 +589,14 @@ class BirdSharpnessTraceDialog(QDialog):
         body = QSplitter(_HORIZONTAL, self.content)
         body.addWidget(self.views)
         body.addWidget(self.side_tabs)
-        # Model preview docks (参数 tab 「预览」): side by side at the right edge, each can float.
-        self.preview_host = QMainWindow(self.content)
-        self.preview_host.setWindowFlags(getattr(getattr(Qt, "WindowType", Qt), "Widget"))
-        self.preview_host.setDockNestingEnabled(True)
+        # Model chain (参数 tab 「预览」 / 「＋ 添加窗口」): windows side by side at the right edge.
+        from .model_preview import ModelChainHost
+
+        self.preview_host = ModelChainHost(self._preview_image, self._preview_boxes,
+                                           lambda parent, names: download_models(parent, names), self.content)
         self.preview_host.setVisible(False)
-        self._preview_docks: list = []
+        self.preview_host.emptied.connect(lambda: self.preview_host.setVisible(False))
+        self.preview_host.stage_added.connect(self._make_room_for_chain)
         body.addWidget(self.preview_host)
         self._body = body
         body.setStretchFactor(0, 1)
@@ -1043,72 +1045,49 @@ class BirdSharpnessTraceDialog(QDialog):
         else:
             super().keyPressEvent(event)
 
-    # ── model preview docks ───────────────────────────────────────────────
+    # ── model chain ───────────────────────────────────────────────────────
     def open_model_preview(self, kind: str, model: str):
-        """A dock previewing one model on this window's photo (see ``model_preview``)."""
-        from bird_sharpness import model_catalog
-        from .model_preview import DETECTOR, ModelPreviewPanel
-
-        model = model or ("auto" if kind == DETECTOR else "")
+        """Append a model chain window running ``model`` (see ``model_preview``)."""
+        model = model or ("auto" if kind == "detector" else "")
         if not model:
             return None
-        if model != "auto" and model_catalog.locate(model) is None and not download_models(self, [model]):
-            return None
-        cache, source, path = getattr(self, "image_cache", None), self.image_source, self.path
+        return self.preview_host.add_stage(model)
 
-        def image():  # worker thread: this window's decode when there is one
-            found = cache.latest(source) if cache is not None else None
-            if found is not None:
-                return found
-            from bird_sharpness import analyzer as analyzer_mod
+    def _make_room_for_chain(self) -> None:
+        """Show the chain and give each of its windows ``STAGE_WIDTH``: widen this window up to
+        the screen, then take the rest from the image views."""
+        from .model_preview import STAGE_WIDTH
 
-            return analyzer_mod.load_analysis_image(path)
+        self.preview_host.setVisible(True)
+        sizes = self._body.sizes()
+        want = STAGE_WIDTH * len(self.preview_host.stages)
+        extra = want - sizes[2]
+        if extra <= 0:
+            return
+        screen = self.screen()
+        room = screen.availableGeometry().width() - self.frameGeometry().width() if screen else extra
+        grow = max(0, min(extra, room))
+        if grow:
+            self.resize(self.width() + grow, self.height())
+        total = sum(sizes) + grow
+        views = max(400, total - sizes[1] - want)
+        self._body.setSizes([views, sizes[1], max(0, total - views - sizes[1])])
+        self.preview_host.equalize()
 
-        panel = ModelPreviewPanel(kind, model, image, boxes_provider=self._preview_boxes)
-        title = f"{'检测模型' if kind == DETECTOR else 'SAM'} 预览 · {model}"
-        dock = _PreviewDock(title, panel, self.preview_host)
-        dock.closed.connect(self._on_preview_closed)
-        if self._preview_docks:
-            self.preview_host.splitDockWidget(self._preview_docks[-1], dock, _HORIZONTAL)
-        else:
-            self.preview_host.addDockWidget(getattr(getattr(Qt, "DockWidgetArea", Qt), "RightDockWidgetArea"), dock)
-        self._preview_docks.append(dock)
-        if self.preview_host.isHidden():
-            self.preview_host.setVisible(True)
-            sizes = self._body.sizes()
-            self.resize(self.width() + 560, self.height())
-            self._body.setSizes([max(400, sizes[0]), sizes[1], 560])
-        return panel
+    def _preview_image(self):
+        """Worker thread: this window's decode when there is one."""
+        found = self.image_cache.latest(self.image_source) if getattr(self, "image_cache", None) is not None else None
+        if found is not None:
+            return found
+        from bird_sharpness import analyzer as analyzer_mod
+
+        return analyzer_mod.load_analysis_image(self.path)
 
     def _preview_boxes(self) -> list:
-        result = getattr(self.trace, "result", None)
+        result = getattr(getattr(self, "trace", None), "result", None)
         return [tuple(b["box"]) for b in (getattr(result, "birds", None) or []) if b.get("box")]
 
-    def _on_preview_closed(self, dock) -> None:
-        if dock in self._preview_docks:
-            self._preview_docks.remove(dock)
-        if not self._preview_docks:
-            self.preview_host.setVisible(False)
-
     def closeEvent(self, event) -> None:  # type: ignore[override]
-        for dock in list(self._preview_docks):
-            dock.close()
-        self.closed.emit(self)
-        super().closeEvent(event)
-
-
-class _PreviewDock(QDockWidget):
-    """A model preview dock; closing it stops its panel and frees it."""
-
-    closed = pyqtSignal(object)
-
-    def __init__(self, title: str, panel, parent) -> None:
-        super().__init__(title, parent)
-        self.panel = panel
-        self.setWidget(panel)
-        self.setAttribute(getattr(getattr(Qt, "WidgetAttribute", Qt), "WA_DeleteOnClose"), True)
-
-    def closeEvent(self, event) -> None:  # noqa: N802 - Qt API
-        self.panel.shutdown()
+        self.preview_host.shutdown()
         self.closed.emit(self)
         super().closeEvent(event)

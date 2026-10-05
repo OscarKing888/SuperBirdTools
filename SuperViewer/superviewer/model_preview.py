@@ -1,33 +1,48 @@
 # -*- coding: utf-8 -*-
-"""Model preview panels: one model's raw output on the trace window's photo.
+"""Model chain: models' raw output on the trace window's photo, one window per model.
 
-Opened from the 「预览」 buttons next to the model lists in the trace window's 参数
-tab, docked side by side at the window's right edge (each can float as its own
-window). A detector panel runs the YOLO model with its own input size, confidence
-floor, classes and input region; a SAM panel segments what the user points at
-(drawn box, keep/exclude points, or the trace's detected birds). No sharpness is
-measured here: the panels show only what the model outputs.
+The trace window's right edge hosts a :class:`ModelChainHost`: any number of
+:class:`ChainStage` windows, docked side by side left to right (each can float).
+Every window picks a model (any YOLO detector or SAM model; its parameters switch
+with it) and an input:
+
+- 上一窗口的结果: the previous window's results. A detector zooms into each one
+  (optionally only the pixels inside its mask, e.g. SAM's cut-out); SAM takes each
+  box as its own object.
+- 计算过程识别到的鸟: the trace's detected birds, used the same way.
+- 原图: a detector sees the whole frame or the current view; SAM takes drawn boxes
+  and keep/exclude points.
+
+When a window finishes, the next one that takes 上一窗口的结果 runs on the new
+results (toolbar 「自动传给下一窗口」), so YOLO → SAM → YOLO combinations can be
+compared. The 「预览」 buttons next to the model lists in the 参数 tab append a window
+running that model. No sharpness is measured here: only what the models output.
 """
 from __future__ import annotations
 
 import threading
-from typing import Callable, List, Optional
+from typing import Callable, Dict, List, Optional
 
+from bird_sharpness import model_catalog
+
+from .bird_sharpness_params_form import AnalysisParamsForm
 from .bird_sharpness_trace_view import TraceBirdList, TraceImageView
 from .qt_compat import (
-    QCheckBox, QComboBox, QGridLayout, QHBoxLayout, QLabel, QPushButton, QSpinBox, QVBoxLayout, QWidget,
-    pyqtSignal,
+    QCheckBox, QComboBox, QGridLayout, QHBoxLayout, QLabel, QMainWindow, QPushButton, QScrollArea, QSpinBox,
+    QStackedWidget, QVBoxLayout, QWidget, pyqtSignal,
 )
 from app_common.toggle_button import ToggleToolButton
 
 try:
     from PyQt6.QtCore import QObject, QPointF, QRectF, Qt
     from PyQt6.QtGui import QBrush, QColor, QPen
-    from PyQt6.QtWidgets import QButtonGroup, QGraphicsEllipseItem, QGraphicsRectItem, QGraphicsView
+    from PyQt6.QtWidgets import (QButtonGroup, QDockWidget, QGraphicsEllipseItem, QGraphicsRectItem,
+                                 QGraphicsView, QToolBar, QToolButton)
 except ImportError:  # pragma: no cover - PyQt5 fallback
     from PyQt5.QtCore import QObject, QPointF, QRectF, Qt
     from PyQt5.QtGui import QBrush, QColor, QPen
-    from PyQt5.QtWidgets import QButtonGroup, QGraphicsEllipseItem, QGraphicsRectItem, QGraphicsView
+    from PyQt5.QtWidgets import (QButtonGroup, QDockWidget, QGraphicsEllipseItem, QGraphicsRectItem,
+                                 QGraphicsView, QToolBar, QToolButton)
 
 _BUTTON = getattr(Qt, "MouseButton", Qt)
 _LEFT, _RIGHT = _BUTTON.LeftButton, _BUTTON.RightButton
@@ -35,10 +50,31 @@ _DASH = getattr(getattr(Qt, "PenStyle", Qt), "DashLine")
 _NO_DRAG = getattr(getattr(QGraphicsView, "DragMode", QGraphicsView), "NoDrag")
 _SCROLL_DRAG = getattr(getattr(QGraphicsView, "DragMode", QGraphicsView), "ScrollHandDrag")
 _CROSS = getattr(getattr(Qt, "CursorShape", Qt), "CrossCursor")
+_HORIZONTAL = getattr(getattr(Qt, "Orientation", Qt), "Horizontal")
+_RIGHT_AREA = getattr(getattr(Qt, "DockWidgetArea", Qt), "RightDockWidgetArea")
+_DELETE_ON_CLOSE = getattr(getattr(Qt, "WidgetAttribute", Qt), "WA_DeleteOnClose")
+_SCROLL_OFF = getattr(getattr(Qt, "ScrollBarPolicy", Qt), "ScrollBarAlwaysOff")
 
 DETECTOR, SAM = "detector", "sam"
 PAN, BOX, POINTS = "pan", "box", "points"
+INPUT_PREVIOUS, INPUT_TRACE, INPUT_IMAGE = "previous", "trace", "image"
+USE_CROP, USE_MASK = "crop", "mask"
+_CIRCLED = "①②③④⑤⑥⑦⑧⑨⑩⑪⑫⑬⑭⑮⑯⑰⑱⑲⑳"
+STAGE_MIN_WIDTH = 320
+STAGE_WIDTH = 360  # the trace window makes this much room per chain window
 C_PROMPT, C_KEEP, C_EXCLUDE = QColor(255, 214, 10), QColor(60, 220, 90), QColor(240, 70, 70)
+
+
+def model_kind(name: str) -> str:
+    """``SAM`` for a SAM model (catalog, else by file name), else ``DETECTOR``."""
+    if any(m.name == name for m in model_catalog.SAM_MODELS):
+        return SAM
+    return SAM if (name or "").lower().startswith(("sam", "mobile_sam")) else DETECTOR
+
+
+def circled(n: int) -> str:
+    """1-based window number as ①②…, plain digits past 20."""
+    return _CIRCLED[n - 1] if 1 <= n <= len(_CIRCLED) else f"({n})"
 
 
 def _pos(event) -> "QPointF":
@@ -63,6 +99,7 @@ class PromptImageView(TraceImageView):
         self._rubber.setVisible(False)
         self.scene().addItem(self._rubber)
         self._prompt_items: list = []
+        self._auto_fit = False  # fitted and not zoomed since: refit when the window resizes
 
     def set_mode(self, mode: str) -> None:
         self.mode = mode
@@ -127,103 +164,114 @@ class PromptImageView(TraceImageView):
         if self.mode != POINTS:
             super().contextMenuEvent(event)
 
+    def fit(self) -> None:
+        super().fit()
+        self._auto_fit = True
+
+    def zoom_to(self, rect) -> None:
+        self._auto_fit = False
+        super().zoom_to(rect)
+
+    def wheelEvent(self, event) -> None:  # noqa: N802 - Qt API
+        self._auto_fit = False
+        super().wheelEvent(event)
+
+    def resizeEvent(self, event) -> None:  # noqa: N802 - a dock fitted while still tiny refits once laid out
+        super().resizeEvent(event)
+        if self._auto_fit:
+            super().fit()
+
     def visible_scene_rect(self):
         rect = self.mapToScene(self.viewport().rect()).boundingRect()
         return rect.left(), rect.top(), rect.right(), rect.bottom()
 
 
 class _Bridge(QObject):
-    done = pyqtSignal(object, object)  # job name, result or Exception
+    done = pyqtSignal(object, object, object)  # stage (None = image load), generation, result or Exception
 
 
-class ModelPreviewPanel(QWidget):
-    """One model's preview: parameters, run, the result drawn on the photo and listed."""
+class ChainStage(QWidget):
+    """One window of the chain: a model, its input, its parameters, the result on the photo."""
 
-    def __init__(self, kind: str, model: str, image_provider: Callable, *,
-                 boxes_provider: Optional[Callable[[], list]] = None, parent=None) -> None:
+    changed = pyqtSignal(object)        # self: model / input switched (title, chain wiring)
+    run_requested = pyqtSignal(object)  # self
+    move_requested = pyqtSignal(object, int)  # self, -1 / +1
+
+    def __init__(self, model: str, parent=None) -> None:
         super().__init__(parent)
-        self.kind, self.model = kind, model
-        self._image_provider = image_provider      # worker thread: -> AnalysisImage
-        self._boxes_provider = boxes_provider or (lambda: [])  # GUI thread: detected birds, image px
-        self._image = None
-        self._display = None  # (rgb, scale)
-        self._alive = True
-        self._busy = False
-        self._threads: List[threading.Thread] = []
-        self.boxes: list = []   # SAM prompts, image px
-        self.points: list = []  # (x, y, keep), image px
-        self.result = None
-        self._bridge = _Bridge()
-        self._bridge.done.connect(self._on_done)
+        self.model = model
+        self.kind = model_kind(model)
+        self.index = 0             # 0-based position in the chain (set by the host)
+        self.display = None        # (rgb, scale) shared by the chain
+        self.result = None         # PreviewResult of the last run
+        self.error: Optional[str] = None
+        self.inputs: list = []     # PreviewItems the last run was fed
+        self.fed_by = None         # upstream stage of the last run (to notice reordering)
+        self.busy = False
+        self.pending = False       # run again once the current run / the upstream finishes
+        self.generation = 0
+        self.input_picked = False  # the user chose the input; else it follows the chain position
+        self.boxes: list = []      # manual SAM prompts, image px
+        self.points: list = []     # (x, y, keep), image px
 
+        self.setMinimumWidth(STAGE_MIN_WIDTH)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(4, 4, 4, 4)
+        top = QHBoxLayout()
+        self.model_combo = QComboBox(self)
+        self.model_combo.setMinimumContentsLength(14)
+        self._fill_models(model)
+        self.model_combo.currentIndexChanged.connect(self._on_model_changed)
+        self.left_btn, self.right_btn = QToolButton(self), QToolButton(self)
+        for button, text, tip, delta in ((self.left_btn, "◀", "前移（在链中更早运行）", -1),
+                                         (self.right_btn, "▶", "后移（在链中更晚运行）", 1)):
+            button.setText(text)
+            button.setToolTip(tip)
+            button.clicked.connect(lambda _c=False, d=delta: self.move_requested.emit(self, d))
+        top.addWidget(QLabel("模型", self))
+        top.addWidget(self.model_combo, 1)
+        top.addWidget(self.left_btn)
+        top.addWidget(self.right_btn)
+        layout.addLayout(top)
+        source_row = QHBoxLayout()
+        self.input_combo = QComboBox(self)
+        self.input_combo.currentIndexChanged.connect(self._on_input_changed)
+        source_row.addWidget(QLabel("输入", self))
+        source_row.addWidget(self.input_combo, 1)
+        layout.addLayout(source_row)
+
+        self.tools_box = QWidget(self)
+        tools = QHBoxLayout(self.tools_box)
+        tools.setContentsMargins(0, 0, 0, 0)
+        self.tool_group = QButtonGroup(self)
+        self.tool_buttons = {}
+        for mode, label, tip in ((PAN, "平移", "拖动平移、滚轮缩放"), (BOX, "画框", "拖出一个框：框里的物体"),
+                                 (POINTS, "点选", "左键：要的部分；右键：不要的部分")):
+            button = ToggleToolButton(label, self.tools_box)
+            button.setToolTip(tip)
+            button.clicked.connect(lambda _c=False, m=mode: self.view.set_mode(m))
+            self.tool_group.addButton(button)
+            self.tool_buttons[mode] = button
+            tools.addWidget(button)
+        self.clear_btn = QPushButton("清除提示", self.tools_box)
+        self.clear_btn.clicked.connect(self.clear_prompts)
+        tools.addStretch(1)
+        tools.addWidget(self.clear_btn)
+        layout.addWidget(self.tools_box)
         self.view = PromptImageView(self)
-        self.view.setMinimumSize(280, 220)
-        if kind == SAM:
-            tools = QHBoxLayout()
-            self.tool_group = QButtonGroup(self)
-            self.tool_buttons = {}
-            for mode, label, tip in ((PAN, "平移", "拖动平移、滚轮缩放"), (BOX, "画框", "拖出一个框：框里的物体"),
-                                     (POINTS, "点选", "左键：要的部分；右键：不要的部分")):
-                button = ToggleToolButton(label, self)
-                button.setToolTip(tip)
-                button.clicked.connect(lambda _c=False, m=mode: self.view.set_mode(m))
-                self.tool_group.addButton(button)
-                self.tool_buttons[mode] = button
-                tools.addWidget(button)
-            self.tool_buttons[BOX].setChecked(True)
-            self.view.set_mode(BOX)
-            self.clear_btn = QPushButton("清除提示", self)
-            self.clear_btn.clicked.connect(self.clear_prompts)
-            self.use_boxes_btn = QPushButton("用检测框", self)
-            self.use_boxes_btn.setToolTip("把计算过程中识别到的鸟框作为提示（每个框一个对象）")
-            self.use_boxes_btn.clicked.connect(self.use_detected_boxes)
-            tools.addStretch(1)
-            tools.addWidget(self.clear_btn)
-            tools.addWidget(self.use_boxes_btn)
-            layout.addLayout(tools)
-            self.view.box_drawn.connect(self._on_box)
-            self.view.point_added.connect(self._on_point)
+        self.view.setMinimumSize(280, 260)
+        self.view.box_drawn.connect(self._on_box)
+        self.view.point_added.connect(self._on_point)
         layout.addWidget(self.view, 1)
 
-        grid = QGridLayout()
-        grid.setVerticalSpacing(6)
-        if kind == DETECTOR:
-            self.scope = QComboBox(self)
-            self.scope.addItem("全图", "full")
-            self.scope.addItem("当前视图区域", "view")
-            self.scope.setToolTip("当前视图区域：先在图上放大到鸟附近再运行，相当于手动做一次放大检测")
-            self.imgsz = QSpinBox(self)
-            self.imgsz.setRange(320, 2048)
-            self.imgsz.setSingleStep(32)
-            self.imgsz.setValue(640)
-            self.imgsz.setSuffix(" px")
-            self.min_conf = QSpinBox(self)
-            self.min_conf.setRange(1, 95)
-            self.min_conf.setValue(10)
-            self.min_conf.setSuffix(" %")
-            self.min_conf.setToolTip("低于它的结果不显示（10% = 0.10，可看到弱候选）")
-            self.classes = QComboBox(self)
-            self.classes.addItem("只看鸟", True)
-            self.classes.addItem("全部类别", False)
-            self.classes.setToolTip("全部类别：可看到被认成了什么（如 potted plant）")
-            self.lift = QCheckBox("画面暗时先提亮", self)
-            self.lift.setChecked(True)
-            for row, (label, widget) in enumerate((("输入范围", self.scope), ("网络输入", self.imgsz),
-                                                    ("置信度下限", self.min_conf), ("类别", self.classes))):
-                grid.addWidget(QLabel(label, self), row, 0)
-                grid.addWidget(widget, row, 1)
-            grid.addWidget(self.lift, 4, 0, 1, 2)
-        else:
-            self.prompt_label = QLabel("", self)
-            self.prompt_label.setWordWrap(True)
-            grid.addWidget(self.prompt_label, 0, 0, 1, 2)
-        grid.setColumnStretch(1, 1)
-        layout.addLayout(grid)
+        self.params_stack = QStackedWidget(self)
+        self.params_stack.addWidget(self._build_detector_page())
+        self.params_stack.addWidget(self._build_sam_page())
+        layout.addWidget(self.params_stack)
         row = QHBoxLayout()
         self.run_btn = QPushButton("运行", self)
-        self.run_btn.clicked.connect(self.run)
+        self.run_btn.setToolTip("运行这个窗口；开着「自动传给下一窗口」时，后面的窗口接着用新结果运行")
+        self.run_btn.clicked.connect(lambda: self.run_requested.emit(self))
         self.status = QLabel("正在载入图像…", self)
         self.status.setWordWrap(True)
         row.addWidget(self.run_btn)
@@ -232,128 +280,613 @@ class ModelPreviewPanel(QWidget):
         self.results = TraceBirdList(self)
         self.results.hovered.connect(lambda r: self.view.set_highlight(None if r is None else r.box))
         layout.addWidget(self.results)
-        self._update_prompt_label()
-        self._start("load", self._load)
+        # the host places it next (``set_position``): the input defaults depend on the chain
 
-    # ── background work ──
-    def _start(self, name: str, work: Callable) -> None:
-        self._busy = True
-        self.run_btn.setEnabled(False)
-        bridge = self._bridge
+    # ── parameter pages ──
+    def _build_detector_page(self) -> QWidget:
+        page = QWidget(self)
+        grid = QGridLayout(page)
+        grid.setContentsMargins(0, 0, 0, 0)
+        grid.setVerticalSpacing(6)
+        self.scope = QComboBox(page)
+        self.scope.addItem("全图", "full")
+        self.scope.addItem("当前视图区域", "view")
+        self.scope.setToolTip("当前视图区域：先在图上放大到鸟附近再运行，相当于手动做一次放大检测")
+        self.use = QComboBox(page)
+        self.use.addItem("放大到每个输入框", USE_CROP)
+        self.use.addItem("只留输入轮廓内像素", USE_MASK)
+        self.use.setToolTip("放大到每个输入框：在框（外扩后）里重新检测。\n"
+                            "只留输入轮廓内像素：轮廓外涂成灰色，看模型能否只凭抠出的部分认出鸟（输入需带轮廓，如 SAM）。")
+        self.margin = QSpinBox(page)
+        self.margin.setRange(0, 200)
+        self.margin.setSingleStep(10)
+        self.margin.setValue(30)
+        self.margin.setSuffix(" %")
+        self.margin.setToolTip("输入框每边向外扩它边长的这个比例，给模型留一点背景")
+        self.imgsz = QSpinBox(page)
+        self.imgsz.setRange(320, 2048)
+        self.imgsz.setSingleStep(32)
+        self.imgsz.setValue(640)
+        self.imgsz.setSuffix(" px")
+        self.min_conf = QSpinBox(page)
+        self.min_conf.setRange(1, 95)
+        self.min_conf.setValue(10)
+        self.min_conf.setSuffix(" %")
+        self.min_conf.setToolTip("低于它的结果不显示，也不传给下一窗口（10% = 0.10，可看到弱候选）")
+        self.classes = QComboBox(page)
+        self.classes.addItem("只看鸟", True)
+        self.classes.addItem("全部类别", False)
+        self.classes.setToolTip("全部类别：可看到被认成了什么（如 potted plant）")
+        self.lift = QCheckBox("画面暗时先提亮", page)
+        self.lift.setChecked(True)
+        self._detector_rows = {}
+        for row, (key, label, widget) in enumerate((
+                ("scope", "输入范围", self.scope), ("use", "输入用法", self.use), ("margin", "框外扩", self.margin),
+                ("imgsz", "网络输入", self.imgsz), ("min_conf", "置信度下限", self.min_conf),
+                ("classes", "类别", self.classes))):
+            caption = QLabel(label, page)
+            grid.addWidget(caption, row, 0)
+            grid.addWidget(widget, row, 1)
+            self._detector_rows[key] = (caption, widget)
+        grid.addWidget(self.lift, 6, 0, 1, 2)
+        grid.setColumnStretch(1, 1)
+        return page
 
-        def run():
-            try:
-                result = work()
-            except Exception as exc:  # shown in the status line
-                result = exc
-            bridge.done.emit(name, result)
+    def _build_sam_page(self) -> QWidget:
+        page = QWidget(self)
+        box = QVBoxLayout(page)
+        box.setContentsMargins(0, 0, 0, 0)
+        self.prompt_label = QLabel("", page)
+        self.prompt_label.setWordWrap(True)
+        box.addWidget(self.prompt_label)
+        return page
 
-        thread = threading.Thread(target=run, name=f"model-preview-{self.kind}", daemon=True)
-        self._threads = [t for t in self._threads if t.is_alive()] + [thread]
-        thread.start()
+    def _fill_models(self, keep: str) -> None:
+        combo = self.model_combo
+        combo.blockSignals(True)
+        combo.clear()
+        combo.addItem("YOLO 内置（自动：yolo11l-seg 等）", model_catalog.AUTO_DETECTOR)
+        for model in model_catalog.DETECTORS:
+            combo.addItem("YOLO · " + AnalysisParamsForm._model_text(model), model.name)
+        combo.insertSeparator(combo.count())
+        for model in model_catalog.SAM_MODELS:
+            combo.addItem(AnalysisParamsForm._model_text(model), model.name)
+        index = combo.findData(keep)
+        if index < 0:  # a model file outside the catalog (e.g. a fine-tuned one)
+            combo.addItem(keep + ("" if model_catalog.locate(keep) else "（未找到）"), keep)
+            index = combo.count() - 1
+        combo.setCurrentIndex(index)
+        combo.blockSignals(False)
 
-    def _load(self):
-        from bird_sharpness.preview import display_image
+    # ── chain position / switching ──
+    @property
+    def input(self) -> str:
+        return self.input_combo.currentData() or INPUT_IMAGE
 
-        image = self._image_provider()
-        return image, display_image(image)
+    def set_position(self, index: int, *, has_previous: bool, has_trace: bool) -> None:
+        """Called by the host after adding / moving / removing windows."""
+        self.index = index
+        keep = self.input_combo.currentData() if self.input_picked else None
+        self.input_combo.blockSignals(True)
+        self.input_combo.clear()
+        if has_previous:
+            self.input_combo.addItem(f"上一窗口 {circled(index)} 的结果", INPUT_PREVIOUS)
+        self.input_combo.addItem("计算过程识别到的鸟" + ("" if has_trace else "（没有）"), INPUT_TRACE)
+        self.input_combo.addItem("原图" + ("（手动提示）" if self.kind == SAM else ""), INPUT_IMAGE)
+        if keep is None:  # chain onto the previous window, else the trace's birds for SAM, else the photo
+            keep = INPUT_PREVIOUS if has_previous else (INPUT_TRACE if self.kind == SAM and has_trace else INPUT_IMAGE)
+        elif keep == INPUT_PREVIOUS and not has_previous:
+            keep = INPUT_TRACE if self.kind == SAM and has_trace else INPUT_IMAGE
+        self.input_combo.setCurrentIndex(max(0, self.input_combo.findData(keep)))
+        self.input_combo.blockSignals(False)
+        self._update_controls()
 
-    def _on_done(self, name: str, result) -> None:
-        if not self._alive:
+    def _on_model_changed(self, _index: int) -> None:
+        model = self.model_combo.currentData()
+        if not model or model == self.model:
             return
-        self._busy = False
-        self.run_btn.setEnabled(True)
-        if isinstance(result, Exception):
-            self.status.setText(f"失败：{result}")
+        previous, self.model = self.model, model
+        if not self.window_host().ensure_model(model):
+            self.model = previous
+            self._fill_models(previous)
             return
-        if name == "load":
-            self._image, self._display = result
-            self.view.set_image(self._display[0])
-            self.view.fit()
-            self._draw_prompts()
-            if self.kind == DETECTOR:
-                self.run()
-            else:
-                self.status.setText("画框或点选后点「运行」，或用检测框。")
-            return
-        from bird_sharpness.preview import render
+        self._fill_models(model)  # drop 「未下载」 after a download
+        kind = model_kind(model)
+        if kind != self.kind:
+            self.kind = kind
+            text = "原图" + ("（手动提示）" if kind == SAM else "")
+            self.input_combo.setItemText(self.input_combo.findData(INPUT_IMAGE), text)
+        self._reset("模型已切换。")
+        self._update_controls()
+        self.changed.emit(self)
 
-        self.result = result
-        img, rows = render(self._display[0], self._display[1], result.items)
-        self.view.set_image(img)
-        self._draw_prompts()
-        self.results.set_rows(rows)
-        lift = "" if result.gamma is None else f"，提亮 γ {result.gamma:.2f}"
-        self.status.setText(f"{result.model} · {result.device or '—'} · {result.elapsed_s:.2f} s · "
-                            f"{result.input_desc}{lift} · {len(result.items)} 个结果")
+    def _on_input_changed(self, _index: int) -> None:
+        self.input_picked = True
+        self._reset("输入已切换。")
+        self._update_controls()
+        self.changed.emit(self)
 
-    def run(self) -> None:
-        if self._busy or self._image is None:
-            return
+    def window_host(self) -> "ModelChainHost":
+        widget = self.parent()
+        while widget is not None and not isinstance(widget, ModelChainHost):
+            widget = widget.parent()
+        return widget
+
+    def _update_controls(self) -> None:
+        detector, from_image = self.kind == DETECTOR, self.input == INPUT_IMAGE
+        self.params_stack.setCurrentIndex(0 if detector else 1)
+        for key, (caption, widget) in self._detector_rows.items():
+            show = (key != "scope" or from_image) and (key not in ("use", "margin") or not from_image)
+            caption.setVisible(show)
+            widget.setVisible(show)
+        manual = not detector and from_image
+        self.tools_box.setVisible(manual)
+        if manual:
+            if self.view.mode == PAN and not self.boxes and not self.points:
+                self.tool_buttons[BOX].setChecked(True)
+                self.view.set_mode(BOX)
+        else:
+            self.view.set_mode(PAN)
+        self._draw_inputs()
+
+    def auto_runs(self) -> bool:
+        """Runs by itself when opened / switched (manual SAM waits for prompts)."""
+        return self.kind == DETECTOR or self.input != INPUT_IMAGE or bool(self.boxes or self.points)
+
+    # ── runs (driven by the host) ──
+    def make_job(self, image, inputs) -> Callable:
+        """The worker-thread callable for this window's run; ValueError when it cannot run."""
         from bird_sharpness import preview
 
-        image = self._image
-        if self.kind == DETECTOR:
-            scale = self._display[1]
-            region = None
-            if self.scope.currentData() == "view":
-                x1, y1, x2, y2 = self.view.visible_scene_rect()
-                region = (max(0.0, x1 / scale), max(0.0, y1 / scale), x2 / scale, y2 / scale)
-            params = preview.DetectorPreview(self.model, region, int(self.imgsz.value()),
-                                             self.min_conf.value() / 100.0, bool(self.classes.currentData()),
-                                             self.lift.isChecked())
-            self.status.setText("正在运行…")
-            self._start("run", lambda: preview.run_detector(image, params))
-        else:
-            params = preview.SamPreview(self.model, tuple(self.boxes), tuple(self.points))
-            if not self.boxes and not self.points:
-                self.status.setText("请先画框、点选，或用检测框。")
-                return
-            self.status.setText("正在运行…")
-            self._start("run", lambda: preview.run_sam(image, params))
+        if self.kind == SAM:
+            if self.input == INPUT_IMAGE:
+                if not self.boxes and not self.points:
+                    raise ValueError("请先画框或点选。")
+                params = preview.SamPreview(self.model, tuple(self.boxes), tuple(self.points))
+                return lambda: preview.run_sam(image, params)
+            model = self.model
+            return lambda: preview.run_sam_on(image, model, inputs)
+        region = None
+        if self.input == INPUT_IMAGE and self.scope.currentData() == "view" and self.display is not None:
+            scale = self.display[1]
+            x1, y1, x2, y2 = self.view.visible_scene_rect()
+            region = (max(0.0, x1 / scale), max(0.0, y1 / scale), x2 / scale, y2 / scale)
+        params = preview.DetectorPreview(self.model, region, int(self.imgsz.value()), self.min_conf.value() / 100.0,
+                                         bool(self.classes.currentData()), self.lift.isChecked())
+        if self.input == INPUT_IMAGE:
+            return lambda: preview.run_detector(image, params)
+        margin, mask_only = self.margin.value() / 100.0, self.use.currentData() == USE_MASK
+        return lambda: preview.run_detector_on(image, params, inputs, margin=margin, mask_only=mask_only)
 
-    # ── SAM prompts ──
+    def set_display(self, display) -> None:
+        self.display = display
+        self.view.set_image(display[0])
+        self.view.fit()
+        self._draw_inputs()
+        if not self.auto_runs():
+            self.status.setText("画框或点选后点「运行」。")
+
+    def set_busy(self, busy: bool, inputs=None, fed_by=None) -> None:
+        self.busy = busy
+        self.run_btn.setEnabled(not busy)
+        if busy:
+            self.inputs, self.fed_by = list(inputs or []), fed_by
+            self.status.setText("正在运行…")
+            self._draw_inputs()
+
+    def show_result(self, result) -> None:
+        from bird_sharpness.preview import render
+
+        self.result, self.error = result, None
+        if self.display is None:
+            return
+        img, rows = render(self.display[0], self.display[1], result.items)
+        self.view.set_image(img)
+        self._draw_inputs()
+        self.results.set_rows(rows)
+        lift = "" if result.gamma is None else f"，提亮 γ {result.gamma:.2f}"
+        device = f"{result.device or '—'} · {result.elapsed_s:.2f} s · " if result.model else ""
+        self.status.setText(f"{result.model + ' · ' if result.model else ''}{device}"
+                            f"{result.input_desc}{lift} · {len(result.items)} 个结果")
+
+    def show_error(self, message: str) -> None:
+        self.error, self.result = message, None
+        self.results.set_rows([])
+        if self.display is not None:
+            self.view.set_image(self.display[0])
+            self._draw_inputs()
+        self.status.setText(f"失败：{message}")
+
+    def show_message(self, message: str) -> None:
+        self.status.setText(message)
+
+    def _reset(self, why: str) -> None:
+        self.generation += 1  # a run still in flight is dropped
+        self.result, self.error, self.inputs = None, None, []
+        self.results.set_rows([])
+        if self.display is not None:
+            self.view.set_image(self.display[0])
+        self.status.setText(why)
+
+    # ── prompts / inputs drawn on the view ──
     def _scale(self) -> float:
-        return self._display[1] if self._display else 1.0
+        return self.display[1] if self.display else 1.0
 
     def _on_box(self, box) -> None:
         s = self._scale()
         self.boxes = [tuple(v / s for v in box)]  # a drawn box is one object (replaces earlier boxes)
-        self._draw_prompts()
+        self._draw_inputs()
 
     def _on_point(self, x: float, y: float, keep: bool) -> None:
         s = self._scale()
         self.points.append((x / s, y / s, keep))
-        self._draw_prompts()
-
-    def use_detected_boxes(self) -> None:
-        boxes = [tuple(map(float, b)) for b in self._boxes_provider()]
-        if not boxes:
-            self.status.setText("当前计算过程中没有识别到鸟。")
-            return
-        self.boxes, self.points = boxes, []
-        self._draw_prompts()
-        self.run()
+        self._draw_inputs()
 
     def clear_prompts(self) -> None:
         self.boxes, self.points = [], []
-        self._draw_prompts()
+        self._draw_inputs()
 
-    def _draw_prompts(self) -> None:
-        if self.kind != SAM:
-            return
+    def _draw_inputs(self) -> None:
+        """Dashed yellow: what this window is fed (manual prompts, or the input results' boxes)."""
         s = self._scale()
-        self.view.set_prompts([tuple(v * s for v in b) for b in self.boxes],
-                              [(x * s, y * s, keep) for x, y, keep in self.points])
-        self._update_prompt_label()
+        if self.kind == SAM and self.input == INPUT_IMAGE:
+            boxes, points = self.boxes, self.points
+            keep = sum(1 for p in points if p[2])
+            self.prompt_label.setText(f"提示：{len(boxes)} 个框，{keep} 个保留点，{len(points) - keep} 个排除点。"
+                                      "画框：拖动；点选：左键保留、右键排除；点选时最多配合一个框。")
+        else:
+            boxes, points = [item.box for item in self.inputs], []
+            self.prompt_label.setText("每个输入框单独作为一个对象（虚线框为本窗口收到的输入）。")
+        self.view.set_prompts([tuple(v * s for v in b) for b in boxes], [(x * s, y * s, k) for x, y, k in points])
 
-    def _update_prompt_label(self) -> None:
-        if self.kind != SAM:
+
+class _ChainDock(QDockWidget):
+    """A chain window's dock (scrolls when short); closing it removes the window from the chain."""
+
+    closed = pyqtSignal(object)  # the stage
+
+    def __init__(self, stage: ChainStage, parent) -> None:
+        super().__init__("", parent)
+        self.stage = stage
+        scroll = QScrollArea(self)
+        scroll.setWidget(stage)
+        scroll.setWidgetResizable(True)
+        scroll.setHorizontalScrollBarPolicy(_SCROLL_OFF)
+        scroll.setFrameShape(getattr(getattr(QScrollArea, "Shape", QScrollArea), "NoFrame"))
+        scroll.setMinimumWidth(STAGE_MIN_WIDTH + scroll.verticalScrollBar().sizeHint().width())
+        self.setWidget(scroll)
+        self.setAttribute(_DELETE_ON_CLOSE, True)
+
+    def closeEvent(self, event) -> None:  # noqa: N802 - Qt API
+        self.closed.emit(self.stage)
+        super().closeEvent(event)
+
+
+class ModelChainHost(QMainWindow):
+    """The chain's windows (docks, left to right = run order), the shared photo, the runs.
+
+    ``image_provider`` (worker thread) returns the trace window's ``AnalysisImage``;
+    ``boxes_provider`` (GUI thread) the trace's detected birds in image px;
+    ``download(parent, names)`` offers missing models. Model runs are serialized on one
+    lock (one model on the GPU at a time); results of a window that was closed,
+    switched or rerun meanwhile are dropped.
+    """
+
+    emptied = pyqtSignal()
+    stage_added = pyqtSignal()
+
+    def __init__(self, image_provider: Callable, boxes_provider: Callable[[], list],
+                 download: Callable[..., bool], parent=None) -> None:
+        super().__init__(parent)
+        self.setWindowFlags(getattr(getattr(Qt, "WindowType", Qt), "Widget"))
+        self.setDockNestingEnabled(True)
+        self._image_provider, self._boxes_provider, self._download = image_provider, boxes_provider, download
+        self.stages: List[ChainStage] = []
+        self._docks: Dict[ChainStage, _ChainDock] = {}
+        self.image = None
+        self.display = None
+        self._loading = False
+        self._alive = True
+        self._lock = threading.Lock()
+        self._threads: List[threading.Thread] = []
+        self._bridge = _Bridge()
+        self._bridge.done.connect(self._on_done)
+
+        bar = QToolBar("模型链", self)
+        bar.setMovable(False)
+        self.add_action = bar.addAction("＋ 添加窗口")
+        self.add_action.setToolTip("在链末尾加一个窗口（默认与上一窗口换一类模型：YOLO 后接 SAM，SAM 后接 YOLO）")
+        self.add_action.triggered.connect(lambda: self.add_stage())
+        self.run_all_action = bar.addAction("运行整条链")
+        self.run_all_action.setToolTip("从第一个窗口起依次运行，每个窗口的结果交给下一个窗口")
+        self.run_all_action.triggered.connect(self.run_all)
+        self.auto_check = QCheckBox("自动传给下一窗口", bar)
+        self.auto_check.setChecked(True)
+        self.auto_check.setToolTip("一个窗口有了新结果，就让后面输入为「上一窗口的结果」的窗口接着运行")
+        bar.addWidget(self.auto_check)
+        bar.addSeparator()
+        self.close_all_action = bar.addAction("全部关闭")
+        self.close_all_action.triggered.connect(self.close_all)
+        self.addToolBar(bar)
+        self.toolbar = bar
+
+    # ── windows ──
+    def ensure_model(self, model: str) -> bool:
+        return model == model_catalog.AUTO_DETECTOR or model_catalog.locate(model) is not None \
+            or bool(self._download(self, [model]))
+
+    def default_model(self) -> str:
+        """For 「＋ 添加窗口」: the other kind than the last window, an installed model first."""
+        want = SAM if self.stages and self.stages[-1].kind == DETECTOR else DETECTOR
+        if want == DETECTOR:
+            return model_catalog.AUTO_DETECTOR
+        installed = [m.name for m in model_catalog.SAM_MODELS if model_catalog.locate(m.name)]
+        return installed[0] if installed else "sam2.1_t.pt"
+
+    def add_stage(self, model: Optional[str] = None) -> Optional[ChainStage]:
+        model = model or self.default_model()
+        if not self.ensure_model(model):
+            return None
+        stage = ChainStage(model, self)
+        stage.changed.connect(self._on_stage_changed)
+        stage.run_requested.connect(self.request_run)
+        stage.move_requested.connect(self.move_stage)
+        dock = _ChainDock(stage, self)
+        dock.closed.connect(self._on_dock_closed)
+        docked = [self._docks[s] for s in self.stages if not self._docks[s].isFloating()]
+        if docked:
+            self.splitDockWidget(docked[-1], dock, _HORIZONTAL)
+        else:
+            self.addDockWidget(_RIGHT_AREA, dock)
+        self.stages.append(stage)
+        self._docks[stage] = dock
+        self._renumber()
+        self.equalize()
+        self.stage_added.emit()
+        if self.display is not None:
+            stage.set_display(self.display)
+            if stage.auto_runs():
+                self.request_run(stage)
+        else:
+            stage.pending = stage.auto_runs()
+            self._load_image()
+        return stage
+
+    def move_stage(self, stage: ChainStage, delta: int) -> None:
+        i = self.stages.index(stage)
+        j = i + delta
+        if not 0 <= j < len(self.stages):
             return
-        keep = sum(1 for p in self.points if p[2])
-        self.prompt_label.setText(f"提示：{len(self.boxes)} 个框，{keep} 个保留点，{len(self.points) - keep} 个排除点。"
-                                  "画框：拖动；点选：左键保留、右键排除；点选时最多配合一个框。")
+        self.stages[i], self.stages[j] = self.stages[j], self.stages[i]
+        for s in self.stages:
+            dock = self._docks[s]
+            if not dock.isFloating():
+                self.removeDockWidget(dock)
+        previous = None
+        for s in self.stages:
+            dock = self._docks[s]
+            if dock.isFloating():
+                continue
+            if previous is None:
+                self.addDockWidget(_RIGHT_AREA, dock)
+            else:
+                self.splitDockWidget(previous, dock, _HORIZONTAL)
+            dock.show()
+            previous = dock
+        self._renumber()
+        self.equalize()
+        self._rewired()
+
+    def equalize(self) -> None:
+        """Share the width evenly between the docked windows."""
+        docked = [self._docks[s] for s in self.stages if not self._docks[s].isFloating()]
+        if docked:
+            width = max(STAGE_MIN_WIDTH, self.width() // len(docked))
+            self.resizeDocks(docked, [width] * len(docked), _HORIZONTAL)
+
+    def _on_dock_closed(self, stage: ChainStage) -> None:
+        if stage not in self.stages:
+            return
+        stage.generation += 1
+        self.stages.remove(stage)
+        self._docks.pop(stage, None)
+        self._renumber()
+        self._rewired()
+        if not self.stages:
+            self.emptied.emit()
+
+    def close_all(self) -> None:
+        for stage in list(self.stages):
+            self._docks[stage].close()
 
     def shutdown(self) -> None:
-        """The panel is closing: late results are dropped (threads finish on their own)."""
+        """The trace window is closing: close every window, drop late results."""
         self._alive = False
+        self.close_all()
+
+    def _renumber(self) -> None:
+        has_trace = bool(self._boxes_provider())
+        for i, stage in enumerate(self.stages):
+            stage.set_position(i, has_previous=i > 0, has_trace=has_trace)
+            stage.left_btn.setEnabled(i > 0)
+            stage.right_btn.setEnabled(i < len(self.stages) - 1)
+            self._docks[stage].setWindowTitle(f"{circled(i + 1)} {stage.model}")
+
+    def _on_stage_changed(self, stage: ChainStage) -> None:
+        self._renumber()
+        self._mark_downstream_stale(stage)
+        if stage.auto_runs():
+            self.request_run(stage)
+
+    def _rewired(self) -> None:
+        """After a move / close: rerun windows whose previous window changed (once per chain)."""
+        changed = [s for s in self.stages if s.input == INPUT_PREVIOUS and s.fed_by is not self.upstream_of(s)
+                   and (s.result is not None or s.error is not None or s.busy)]
+        for stage in changed:
+            if self.upstream_of(stage) in changed:
+                continue
+            if self.auto_check.isChecked():
+                self.request_run(stage)
+            else:
+                stage.show_message("上一窗口已变化，点「运行」更新。")
+
+    def _mark_downstream_stale(self, stage: ChainStage) -> None:
+        if self.auto_check.isChecked() and stage.auto_runs():
+            return  # they rerun once this window has its new results
+        for down in self.stages[self.stages.index(stage) + 1:]:
+            if down.input != INPUT_PREVIOUS:
+                break
+            if down.result is not None:
+                down.show_message("上一窗口已变化，点「运行」更新。")
+
+    def upstream_of(self, stage: ChainStage) -> Optional[ChainStage]:
+        i = self.stages.index(stage)
+        return self.stages[i - 1] if i > 0 else None
+
+    def downstream_of(self, stage: ChainStage) -> Optional[ChainStage]:
+        i = self.stages.index(stage)
+        return self.stages[i + 1] if i + 1 < len(self.stages) else None
+
+    # ── image ──
+    def _load_image(self) -> None:
+        if self._loading or self.display is not None:
+            return
+        self._loading = True
+        provider = self._image_provider
+
+        def load():
+            from bird_sharpness.preview import display_image
+
+            image = provider()
+            return image, display_image(image)
+
+        self._spawn(None, 0, load)
+
+    # ── runs ──
+    def run_all(self) -> None:
+        """Run the first window; each finished window hands its results on (also when auto is off)."""
+        for stage in self.stages:
+            stage.pending = stage.input == INPUT_PREVIOUS
+        if self.stages:
+            self.stages[0].pending = False
+            for stage in self.stages[1:]:
+                if stage.input != INPUT_PREVIOUS:
+                    self.request_run(stage)  # does not depend on the chain: run on its own
+            self.request_run(self.stages[0])
+
+    def request_run(self, stage: ChainStage) -> None:
+        if not self._alive or stage not in self.stages:
+            return
+        if self.display is None:
+            stage.pending = True
+            self._load_image()
+            return
+        if stage.busy:
+            stage.pending = True
+            return
+        inputs, fed_by = [], None
+        if stage.input == INPUT_PREVIOUS:
+            up = fed_by = self.upstream_of(stage)
+            if up is None:
+                return
+            if up.busy or (up.result is None and up.error is None and up.auto_runs()):
+                stage.pending = True
+                stage.show_message(f"等待上一窗口 {circled(up.index + 1)}…")
+                if not up.busy:
+                    self.request_run(up)
+                return
+            if up.error is not None:
+                stage.show_error(f"上一窗口 {circled(up.index + 1)} 运行失败")
+                return
+            if up.result is None:
+                stage.show_message(f"上一窗口 {circled(up.index + 1)} 还没有结果。")
+                return
+            inputs = list(up.result.items)
+            if not inputs:
+                self._finish(stage, self._empty_result("上一窗口没有结果"), fed_by)
+                return
+        elif stage.input == INPUT_TRACE:
+            from bird_sharpness.preview import items_from_boxes
+
+            inputs = items_from_boxes(self._boxes_provider())
+            if not inputs:
+                self._finish(stage, self._empty_result("计算过程没有识别到鸟"), None)
+                return
+        try:
+            job = stage.make_job(self.image, inputs)
+        except ValueError as exc:
+            stage.pending = False
+            stage.show_message(str(exc))
+            return
+        stage.pending = False
+        stage.generation += 1
+        stage.set_busy(True, inputs, fed_by)
+        self._spawn(stage, stage.generation, job)
+
+    @staticmethod
+    def _empty_result(why: str):
+        from bird_sharpness.preview import PreviewResult
+
+        return PreviewResult("", "", 0.0, why, [])
+
+    def _spawn(self, stage: Optional[ChainStage], generation: int, work: Callable) -> None:
+        bridge, lock = self._bridge, self._lock
+
+        def run():
+            try:
+                with lock:  # one model at a time
+                    result = work()
+            except Exception as exc:  # shown in the window's status line
+                result = exc
+            bridge.done.emit(stage, generation, result)
+
+        thread = threading.Thread(target=run, name="model-chain", daemon=True)
+        self._threads = [t for t in self._threads if t.is_alive()] + [thread]
+        thread.start()
+
+    def _on_done(self, stage, generation, result) -> None:
+        if not self._alive:
+            return
+        if stage is None:  # the photo
+            self._loading = False
+            if isinstance(result, Exception):
+                for s in self.stages:
+                    s.show_error(f"载入图像失败：{result}")
+                return
+            self.image, self.display = result
+            waiting = [s for s in self.stages if s.pending]
+            for s in self.stages:
+                s.set_display(self.display)
+            for s in waiting:  # a window chained onto a waiting one runs when that one finishes
+                if s.input != INPUT_PREVIOUS or self.upstream_of(s) not in waiting:
+                    s.pending = False
+                    self.request_run(s)
+            return
+        if stage not in self.stages or generation != stage.generation:
+            return
+        stage.set_busy(False)
+        if isinstance(result, Exception):
+            stage.show_error(str(result))
+            for down in self.stages[self.stages.index(stage) + 1:]:
+                if down.input != INPUT_PREVIOUS:
+                    break
+                down.pending = False
+                down.show_error(f"上一窗口 {circled(stage.index + 1)} 运行失败")
+            return
+        self._finish(stage, result, stage.fed_by)
+
+    def _finish(self, stage: ChainStage, result, fed_by) -> None:
+        stage.fed_by = fed_by
+        stage.show_result(result)
+        if stage.pending:  # its input changed while it ran
+            stage.pending = False
+            self.request_run(stage)
+            return
+        down = self.downstream_of(stage)
+        if down is None or down.input != INPUT_PREVIOUS:
+            return
+        if down.pending or self.auto_check.isChecked():
+            down.pending = False
+            self.request_run(down)
+        elif down.result is not None or down.error is not None:
+            down.show_message("上一窗口已更新，点「运行」用新结果。")

@@ -149,3 +149,76 @@ def test_cache_latest_follows_use_and_source(tmp_path) -> None:
     cache.get_or_load(DecodedImageCache.key(str(tmp_path / "a.ARW"), "raw"), lambda: raw)
     cache.get_or_load(DecodedImageCache.key(str(tmp_path / "a.ARW"), "jpeg"), lambda: jpeg)
     assert cache.latest() is jpeg and cache.latest("raw") is raw and cache.latest("denoised") is None
+
+
+# ── model chain: one window's results fed to the next ──
+class _GreyAwareDetector(_Detector):
+    """Records each crop; finds a bird only where the crop is not the mask fill."""
+
+    def __init__(self):
+        super().__init__()
+        self.crops = []
+
+    def detect_objects(self, bgr, *, conf, imgsz=None, birds_only=True):
+        self.crops.append(bgr.copy())
+        return super().detect_objects(bgr, conf=conf, imgsz=imgsz, birds_only=birds_only)
+
+
+def test_expand_box_grows_by_margin_with_a_floor_inside_the_image() -> None:
+    assert pv.expand_box((100, 100, 200, 300), 0.5, (1000, 1000)) == pytest.approx((50, 0, 250, 400))
+    assert pv.expand_box((10, 10, 20, 20), 0.3, (1000, 1000)) == pytest.approx((0, 0, 47, 47))  # 64 px floor, clipped
+    assert pv.expand_box((900, 900, 990, 990), 1.0, (1000, 1000))[2:] == (1000.0, 1000.0)
+
+
+def test_mask_in_resamples_a_mask_onto_another_region() -> None:
+    mask = np.zeros((10, 20), bool)
+    mask[:, :10] = True  # left half of mask_box (100..300 × 0..100 image px)
+    item = pv.PreviewItem("对象 1", 0.9, (100, 0, 200, 100), mask, (100, 0, 300, 100))
+    m = pv.mask_in(item, (0, 0, 400, 100), (50, 200))  # 0.5 px per image px
+    assert m.shape == (50, 200)
+    assert m[:, 50:100].all() and not m[:, :50].any() and not m[:, 100:].any()
+    assert pv.mask_in(pv.PreviewItem("x", None, (0, 0, 1, 1)), (0, 0, 10, 10), (5, 5)) is None
+
+
+def test_detector_on_inputs_zooms_into_each_box_and_tags_its_source() -> None:
+    image, det = _image(), _GreyAwareDetector()
+    inputs = [pv.PreviewItem("对象 1", 0.8, (1000, 1000, 1200, 1100)), pv.PreviewItem("对象 2", 0.7, (3000, 2000, 3400, 2400))]
+    out = pv.run_detector_on(image, pv.DetectorPreview(lift=False, imgsz=800), inputs, margin=0.5, models=det)
+    assert [c.shape[:2] for c in det.crops] == [(200, 400), (800, 800)]  # box + 50% per side, full resolution
+    assert [i.source for i in out.items] == [1, 2]
+    assert out.items[0].box == pytest.approx((1000, 1000, 1100, 1050))  # crop (900, 950)-(1300, 1150), quarter → half
+    assert out.items[0].mask_box == (900, 950, 1300, 1150)
+    assert "2 个输入各自放大（框外扩 50%）" in out.input_desc and "网络输入 800 px" in out.input_desc
+    with pytest.raises(ValueError):
+        pv.run_detector_on(image, pv.DetectorPreview(), [], models=det)
+
+
+def test_detector_on_inputs_can_see_only_the_pixels_inside_the_input_mask() -> None:
+    image, det = _image(), _GreyAwareDetector()
+    image.rgb8[:] = 200
+    mask = np.zeros((100, 100), bool)
+    mask[25:75, 25:75] = True  # the middle of the input box
+    inputs = [pv.PreviewItem("对象 1", 0.8, (1000, 1000, 1100, 1100), mask, (1000, 1000, 1100, 1100)),
+              pv.PreviewItem("检测框", 0.5, (2000, 2000, 2100, 2100))]  # no mask: fed whole
+    out = pv.run_detector_on(image, pv.DetectorPreview(lift=False), inputs, margin=0.0, mask_only=True, models=det)
+    first, second = det.crops
+    assert (first[:25] == pv.MASK_FILL).all() and (first[25:75, 25:75] == 200).all()
+    assert (second == 200).all()
+    assert "1 个只留轮廓内像素" in out.input_desc
+
+
+def test_sam_on_inputs_segments_each_box_in_its_own_crop() -> None:
+    image, ref = _image(), _Refiner()
+    inputs = [pv.PreviewItem("bird", 0.6, (500, 500, 700, 650)), pv.PreviewItem("bird", 0.3, (3000, 2000, 3300, 2300))]
+    out = pv.run_sam_on(image, "sam2.1_t.pt", inputs, refiner=ref)
+    assert len(ref.calls) == 2 and all(len(c[1]) == 1 and c[2] is None for c in ref.calls)
+    assert [(i.label, i.source) for i in out.items] == [("对象 1", 1), ("对象 2", 2)]
+    assert out.input_desc.startswith("2 个输入框")
+    _img, rows = pv.render(np.zeros((400, 600, 3), np.uint8), 0.1, out.items)
+    assert "来自输入 #2" in rows[1].value
+
+
+def test_items_from_boxes_turns_trace_birds_into_chain_inputs() -> None:
+    items = pv.items_from_boxes([(1, 2, 3, 4), np.array([5, 6, 7, 8])])
+    assert [i.box for i in items] == [(1.0, 2.0, 3.0, 4.0), (5.0, 6.0, 7.0, 8.0)]
+    assert items[0].confidence is None and items[1].label.endswith("2")

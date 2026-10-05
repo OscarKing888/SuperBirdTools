@@ -1,8 +1,14 @@
 """Model preview: one model's raw output on a photo, with its own parameters (no sharpness).
 
-Used by the trace window's model preview docks. Qt-free: runs on a worker thread
-and returns boxes / masks in full-resolution image pixels; :func:`render` draws them
-on a display copy (the same 2400 px frame the trace uses, so trace boxes line up).
+Used by the trace window's model chain (``SuperViewer/superviewer/model_preview.py``).
+Qt-free: runs on a worker thread and returns boxes / masks in full-resolution image
+pixels; :func:`render` draws them on a display copy (the same 2400 px frame the trace
+uses, so trace boxes line up).
+
+A chain feeds one window's results to the next: :func:`run_detector_on` zooms the
+detector into each input result (optionally keeping only the pixels inside its mask,
+so SAM's cut-out can be checked by YOLO), and :func:`run_sam_on` segments each input
+box as its own object.
 """
 
 from __future__ import annotations
@@ -20,6 +26,9 @@ Box = Tuple[float, float, float, float]
 PREVIEW_INPUT_MAX = 2048  # long edge fed to a model: dozens of low-confidence masks stay bounded
 SAM_CROP_MARGIN = 0.5     # SAM sees the prompts' region plus this share on every side
 SAM_CROP_MIN = 256
+CHAIN_MARGIN = 0.3        # a detector zooming into an input result sees its box plus this share per side
+CHAIN_MIN_SIDE = 64
+MASK_FILL = 114           # outside-the-mask fill: YOLO's own letterbox grey
 PALETTE = [(0, 200, 255), (255, 120, 200), (120, 255, 120), (255, 200, 60), (160, 140, 255),
            (255, 255, 120), (80, 255, 220), (255, 160, 120)]
 
@@ -48,6 +57,7 @@ class PreviewItem:
     box: Box                       # image px
     mask: Optional[np.ndarray] = None
     mask_box: Optional[Box] = None  # image px the mask covers (mask is resized onto it)
+    source: Optional[int] = None    # chain: 1-based number of the input result it came from
 
 
 @dataclass
@@ -86,13 +96,10 @@ def _crop(image: AnalysisImage, region: Optional[Box]) -> Tuple[np.ndarray, Box,
     return np.ascontiguousarray(crop), (float(x1), float(y1), float(x2), float(y2)), scale
 
 
-def run_detector(image: AnalysisImage, params: DetectorPreview, *, models=None) -> PreviewResult:
+def _detect_crop(models, crop: np.ndarray, crop_box: Box, s: float, params: DetectorPreview,
+                 source: Optional[int] = None) -> Tuple[List[PreviewItem], Optional[float]]:
     from .analyzer import LIFT_DARK_GAMMA, lift_midtones
-    from .models import shared_models
 
-    models = models or shared_models(params.model)
-    t0 = time.perf_counter()
-    crop, (cx1, cy1, cx2, cy2), s = _crop(image, params.region)
     bgr = cv2.cvtColor(crop, cv2.COLOR_RGB2BGR)
     gamma = None
     if params.lift:
@@ -100,14 +107,90 @@ def run_detector(image: AnalysisImage, params: DetectorPreview, *, models=None) 
         if g < LIFT_DARK_GAMMA:
             bgr, gamma = lifted, g
     found = models.detect_objects(bgr, conf=params.min_conf, imgsz=params.imgsz, birds_only=params.birds_only)
+    cx1, cy1 = crop_box[0], crop_box[1]
     items = []
     for name, conf, box, mask in found:
         full = (box[0] / s + cx1, box[1] / s + cy1, box[2] / s + cx1, box[3] / s + cy1)
         items.append(PreviewItem(name, conf, full, None if mask is None else mask.astype(bool),
-                                 None if mask is None else (cx1, cy1, cx2, cy2)))
+                                 None if mask is None else crop_box, source))
+    return items, gamma
+
+
+def _model_name(models, params: DetectorPreview) -> str:
+    return str(getattr(models, "detector_name", params.model))
+
+
+def run_detector(image: AnalysisImage, params: DetectorPreview, *, models=None) -> PreviewResult:
+    from .models import shared_models
+
+    models = models or shared_models(params.model)
+    t0 = time.perf_counter()
+    crop, crop_box, s = _crop(image, params.region)
+    items, gamma = _detect_crop(models, crop, crop_box, s, params)
+    cx1, cy1, cx2, cy2 = crop_box
     where = "全图" if params.region is None else f"区域 {int(cx2 - cx1)} × {int(cy2 - cy1)} px"
-    return PreviewResult(str(getattr(models, "detector_name", params.model)), str(getattr(models, "device", "")),
+    return PreviewResult(_model_name(models, params), str(getattr(models, "device", "")),
                          time.perf_counter() - t0, f"{where}，网络输入 {params.imgsz} px", items, gamma)
+
+
+def expand_box(box: Box, margin: float, shape, min_side: float = CHAIN_MIN_SIDE) -> Box:
+    """``box`` grown by ``margin`` of its size on every side (at least ``min_side``), inside the image."""
+    H, W = shape[:2]
+    w, h = max(box[2] - box[0], 1.0), max(box[3] - box[1], 1.0)
+    w, h = max(w * (1 + 2 * margin), min_side), max(h * (1 + 2 * margin), min_side)
+    cx, cy = (box[0] + box[2]) / 2.0, (box[1] + box[3]) / 2.0
+    return (max(0.0, cx - w / 2), max(0.0, cy - h / 2), min(float(W), cx + w / 2), min(float(H), cy + h / 2))
+
+
+def mask_in(item: PreviewItem, region: Box, shape) -> Optional[np.ndarray]:
+    """``item``'s mask resampled onto ``region`` (image px) at ``shape`` (h, w); None without a mask."""
+    if item.mask is None or item.mask_box is None:
+        return None
+    mh, mw = item.mask.shape[:2]
+    h, w = shape[:2]
+    sx, sy = w / max(region[2] - region[0], 1e-6), h / max(region[3] - region[1], 1e-6)
+    mx1, my1, mx2, my2 = item.mask_box
+    ax, ay = (mx2 - mx1) / mw * sx, (my2 - my1) / mh * sy  # region px per mask px
+    # pixel centres: mask pixel j spans [j, j+1) and lands on [j*a + b, (j+1)*a + b)
+    affine = np.float32([[ax, 0, (mx1 - region[0]) * sx + 0.5 * ax - 0.5],
+                         [0, ay, (my1 - region[1]) * sy + 0.5 * ay - 0.5]])
+    return cv2.warpAffine(item.mask.astype(np.uint8), affine, (w, h), flags=cv2.INTER_NEAREST).astype(bool)
+
+
+def run_detector_on(image: AnalysisImage, params: DetectorPreview, inputs: Sequence[PreviewItem], *,
+                    margin: float = CHAIN_MARGIN, mask_only: bool = False, models=None) -> PreviewResult:
+    """The detector zoomed into each input result (its box plus ``margin``).
+
+    ``mask_only``: pixels outside the input's mask become :data:`MASK_FILL` grey, so the
+    detector sees only what SAM (or a segmenting detector) cut out. Inputs without a
+    mask are fed whole. Every output keeps ``source`` = the input's number.
+    """
+    from .models import shared_models
+
+    if not inputs:
+        raise ValueError("没有输入结果")
+    models = models or shared_models(params.model)
+    t0 = time.perf_counter()
+    items: List[PreviewItem] = []
+    gammas, masked = [], 0
+    for k, item in enumerate(inputs, 1):
+        crop, crop_box, s = _crop(image, expand_box(item.box, margin, image.rgb8.shape))
+        if mask_only:
+            keep = mask_in(item, crop_box, crop.shape)
+            if keep is not None:
+                crop = crop.copy()
+                crop[~keep] = MASK_FILL
+                masked += 1
+        found, gamma = _detect_crop(models, crop, crop_box, s, params, source=k)
+        items.extend(found)
+        if gamma is not None:
+            gammas.append(gamma)
+    how = f"{len(inputs)} 个输入各自放大（框外扩 {round(margin * 100)}%）"
+    if mask_only:
+        how += f"，{masked} 个只留轮廓内像素" if masked else "，输入没有轮廓，按整框送入"
+    return PreviewResult(_model_name(models, params), str(getattr(models, "device", "")),
+                         time.perf_counter() - t0, f"{how}，网络输入 {params.imgsz} px", items,
+                         min(gammas) if gammas else None)
 
 
 def sam_region(image: AnalysisImage, params: SamPreview) -> Box:
@@ -154,6 +237,29 @@ def run_sam(image: AnalysisImage, params: SamPreview, *, refiner=None) -> Previe
                          f"提示：{prompts}；区域 {int(cx2 - cx1)} × {int(cy2 - cy1)} px", items)
 
 
+def run_sam_on(image: AnalysisImage, model: str, inputs: Sequence[PreviewItem], *, refiner=None) -> PreviewResult:
+    """SAM with each input result's box as its own prompt (each in its own crop, so small
+    birds keep their resolution). Every output keeps ``source`` = the input's number."""
+    from .refine import shared_refiner
+
+    if not inputs:
+        raise ValueError("没有输入结果")
+    refiner = refiner or shared_refiner(model)
+    t0 = time.perf_counter()
+    items: List[PreviewItem] = []
+    for k, item in enumerate(inputs, 1):
+        for found in run_sam(image, SamPreview(model, (tuple(item.box),)), refiner=refiner).items:
+            found.label, found.source = f"对象 {len(items) + 1}", k
+            items.append(found)
+    return PreviewResult(model, str(getattr(refiner, "device", "")), time.perf_counter() - t0,
+                         f"{len(inputs)} 个输入框，每个单独作为一个对象", items)
+
+
+def items_from_boxes(boxes: Sequence[Box], label: str = "计算过程识别的鸟") -> List[PreviewItem]:
+    """Plain boxes (e.g. the trace's detected birds, image px) as chain inputs."""
+    return [PreviewItem(f"{label} {n}", None, tuple(float(v) for v in box)) for n, box in enumerate(boxes, 1)]
+
+
 def render(display: np.ndarray, scale: float, items: Sequence[PreviewItem]):
     """``(image, rows)``: masks tinted and boxes drawn on a copy of ``display``; rows are
     ``trace.TraceBirdRow`` (display coords) for the hover list."""
@@ -185,6 +291,8 @@ def render(display: np.ndarray, scale: float, items: Sequence[PreviewItem]):
         value = (("" if item.confidence is None else f"置信度 {item.confidence:.2f} · ")
                  + f"框 {int(bw)} × {int(bh)} px"
                  + ("" if item.mask is None else f" · 轮廓 {mask_area(item):,} px"))
+        if item.source is not None:
+            value += f" · 来自输入 #{item.source}"
         rows.append(TraceBirdRow(f"#{n + 1} {item.label}", value, hex_color(color), box))
     blended = cv2.addWeighted(overlay, 0.45, img, 0.55, 0)
     img[tinted] = blended[tinted]
