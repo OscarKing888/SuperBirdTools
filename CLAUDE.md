@@ -12,6 +12,7 @@ Read [ai_rules/AI_CODING_RULES.md](ai_rules/AI_CODING_RULES.md) for the cross-to
 - Packaged CUDA failures: prioritize packaging/runtime diagnosis before algorithm refactors.
 - Keep Windows Torch/CUDA packaging with `upx=False` unless explicitly requested and validated.
 - `app_common` is a git submodule with its own repository: commit changes under `app_common/` inside the submodule first, then commit the updated gitlink in this repo.
+- Any change to the clarity (bird sharpness) processing workflow must update [docs/bird_sharpness_flowchart.md](docs/bird_sharpness_flowchart.md) in the same commit; see AGENTS.md "Clarity workflow documentation sync". Strictly enforced.
 - Each round of feature work gets its own branch in its own worktree; merge to `main` and commit when done, then always delete the temporary branch and worktree, resolving conflicts feature-by-feature (see AGENTS.md "Feature Branch And Worktree Workflow").
 
 ## Minimum Verification
