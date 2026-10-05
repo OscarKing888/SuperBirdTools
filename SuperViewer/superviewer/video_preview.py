@@ -12,8 +12,9 @@ from app_common.audio_waveform import audio_waveform
 from app_common.log import get_logger
 from .preview_panel import PreviewPanel, _qimage_rgb888_format
 from .waveform_slider import WaveformSlider
+from .filmstrip_slider import FilmstripSlider
 from .qt_compat import (
-    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QSlider, QComboBox,
+    QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel, QPushButton, QSlider, QComboBox,
     QStackedWidget, QTableWidget, QTableWidgetItem, QThread, QImage, QPixmap,
     pyqtSignal, Qt, _Horizontal, _AlignCenter, _KeepAspectRatio, _SmoothTransformation,
     _NoEditTriggers,
@@ -122,6 +123,34 @@ class _VideoProbe(QThread):
             self.waveform_ready.emit(self.token, self.path, peaks, status)
 
 
+class _FilmstripProbe(QThread):
+    result = pyqtSignal(int, str, object, str)
+
+    def __init__(self, token, path, duration, fps, parent):
+        super().__init__(parent)
+        self.token, self.path = token, path
+        self.duration, self.fps = duration, fps
+
+    def run(self):
+        from .video_frames import video_frames
+
+        frames = ()
+
+        def progress(samples):
+            nonlocal frames
+            frames = samples
+            if not self.isInterruptionRequested():
+                self.result.emit(self.token, self.path, samples, '')
+
+        try:
+            video_frames(self.path, self.duration, fps=self.fps,
+                         cancelled=self.isInterruptionRequested, on_progress=progress)
+        except Exception as exc:
+            if not self.isInterruptionRequested():
+                _log.warning('Video filmstrip failed path=%r: %s', self.path, exc)
+                self.result.emit(self.token, self.path, frames, '序列帧不可用')
+
+
 class VideoPlayerView(QWidget):
     """Paused poster until explicit play. Qt owns A/V decoding and synchronization."""
     activated = pyqtSignal()
@@ -148,15 +177,22 @@ class VideoPlayerView(QWidget):
         self.message = QLabel('点击播放视频')
         self.message.setWordWrap(True)
         layout.addWidget(self.message)
-        timeline = QHBoxLayout()
+        timeline = QGridLayout()
+        timeline.setVerticalSpacing(2)
+        timeline.setColumnStretch(0, 1)
+        self.filmstrip = FilmstripSlider()
+        self.filmstrip.setEnabled(False)
+        self.filmstrip.position_selected.connect(self._filmstrip_seek)
+        self.filmstrip.sliderMoved.connect(self._scrub_time)
+        timeline.addWidget(self.filmstrip, 0, 0)
         self.seek = WaveformSlider()
         self.seek.setEnabled(False)
         self.seek.position_selected.connect(self._seek)
         self.seek.sliderMoved.connect(self._scrub_time)
         self.time_label = QLabel('00:00 / —')
         self.time_label.setMinimumWidth(125)
-        timeline.addWidget(self.seek, 1)
-        timeline.addWidget(self.time_label)
+        timeline.addWidget(self.seek, 1, 0)
+        timeline.addWidget(self.time_label, 1, 1)
         layout.addLayout(timeline)
         controls = QHBoxLayout()
         self.play = QPushButton('▶ 播放')
@@ -198,6 +234,8 @@ class VideoPlayerView(QWidget):
         self._duration = self._position = 0
         self.seek.setValue(0)
         self.seek.set_waveform(status='正在生成音频波形…')
+        self.filmstrip.setValue(0)
+        self.filmstrip.set_frames(status='正在生成序列帧…')
         self._update_time()
 
     def set_poster(self, pixmap):
@@ -269,6 +307,7 @@ class VideoPlayerView(QWidget):
         self._pending_seek = None
         self._position = 0
         self.seek.setValue(0)
+        self.filmstrip.setValue(0)
         self._update_time()
         if self.player is not None and self._source_set:
             self.player.setPosition(0)
@@ -317,12 +356,20 @@ class VideoPlayerView(QWidget):
         if not self._duration:
             return
         self._position = round(self.seek.value() / 10000 * self._duration)
+        self.filmstrip.setValue(self.seek.value())
         self._pending_seek = self._position
         self._update_time()
         self._apply_pending_seek()
 
+    def _filmstrip_seek(self, value):
+        self.seek.setValue(value)
+        self._seek()
+
     def _scrub_time(self, value):
         position = round(value / 10000 * self._duration)
+        # 两条时间轴共用位置；拖动时播放器回调不能覆盖鼠标位置。
+        self.seek.setValue(value)
+        self.filmstrip.setValue(value)
         self._update_time(position)
 
     def set_duration_hint(self, milliseconds):
@@ -330,11 +377,14 @@ class VideoPlayerView(QWidget):
             self._duration = max(0, milliseconds)
             self.seek.set_duration(self._duration)
             self.seek.setEnabled(self._duration > 0)
+            self.filmstrip.set_duration(self._duration)
+            self.filmstrip.setEnabled(self._duration > 0)
             self._update_time()
 
     def _seekable_changed(self, enabled):
         if self._source_set:
             self.seek.setEnabled(enabled and self._duration > 0)
+            self.filmstrip.setEnabled(enabled and self._duration > 0)
             self._apply_pending_seek()
 
     def _apply_pending_seek(self):
@@ -346,8 +396,9 @@ class VideoPlayerView(QWidget):
     def _position_changed(self, value):
         if self._source_set and self._pending_seek is None:
             self._position = value
-            if not self.seek.isSliderDown():
+            if not self.seek.isSliderDown() and not self.filmstrip.isSliderDown():
                 self.seek.setValue(round(value / max(1, self._duration) * 10000))
+                self.filmstrip.setValue(self.seek.value())
                 self._update_time()
 
     def _duration_changed(self, value):
@@ -355,6 +406,8 @@ class VideoPlayerView(QWidget):
             self._duration = value
             self.seek.set_duration(value)
             self.seek.setEnabled(self.player.isSeekable())
+            self.filmstrip.set_duration(value)
+            self.filmstrip.setEnabled(self.player.isSeekable())
             self._update_time()
 
     def _update_time(self, position=None):
@@ -366,6 +419,7 @@ class VideoPlayerView(QWidget):
         self._source_set = False
         self._pending_seek = None
         self.seek.cancel_drag()
+        self.filmstrip.cancel_drag()
         if self.player is not None and had_source:
             # 通过 Qt 元调用释放 Python GIL；FFmpeg 音频线程销毁连接时
             # 会回调 sipQAudioOutput，直接持有 GIL 调用 stop 可导致互等。
@@ -375,6 +429,9 @@ class VideoPlayerView(QWidget):
         self.seek.setEnabled(False)
         self.seek.set_duration(0)
         self.seek.set_waveform()
+        self.filmstrip.setEnabled(False)
+        self.filmstrip.set_duration(0)
+        self.filmstrip.set_frames()
         self.play.setText('▶ 播放')
         self.stack.setCurrentWidget(self.poster)
 
@@ -392,6 +449,8 @@ class MediaPreviewPanel(PreviewPanel):
         self._video_worker = None
         self._video_pending = None
         self._video_path = ''
+        self._filmstrip_worker = None
+        self._filmstrip_pending = None
 
     def stop_video_playback(self):
         # 进入按键连续浏览时，即使下一个封面未命中也必须停止音视频和探测。
@@ -404,6 +463,9 @@ class MediaPreviewPanel(PreviewPanel):
         self._video_pending = None
         if self._video_worker is not None:
             self._video_worker.requestInterruption()
+        self._filmstrip_pending = None
+        if self._filmstrip_worker is not None:
+            self._filmstrip_worker.requestInterruption()
         self.video_view.stop()
         self._video_path = ''
 
@@ -431,6 +493,7 @@ class MediaPreviewPanel(PreviewPanel):
         if not load_full:
             self.video_view.message.setText('快速浏览 · 松开方向键后可播放')
             self.video_view.seek.set_waveform(status='松开方向键后显示音频波形')
+            self.video_view.filmstrip.set_frames(status='松开方向键后显示序列帧')
             self.video_view.play.setEnabled(False)
             self.video_view.restart.setEnabled(False)
             return
@@ -466,7 +529,36 @@ class MediaPreviewPanel(PreviewPanel):
             if self.video_view._poster is None:
                 self.video_view.poster.setText('▶ 视频封面不可用')
         self.video_view.set_duration_hint(round(float(info.get('duration') or 0) * 1000))
+        if info.get('duration', 0) > 0:
+            request = (token, path, info['duration'], info.get('fps', 0))
+            if self._filmstrip_worker is not None:
+                self._filmstrip_pending = request
+            else:
+                self._start_filmstrip_probe(request)
+        else:
+            self.video_view.filmstrip.set_frames(status='序列帧不可用')
         self.video_info_ready.emit(path, info, error)
+
+    def _start_filmstrip_probe(self, request):
+        worker = _FilmstripProbe(*request, self)
+        self._filmstrip_worker = worker
+        worker.result.connect(self._filmstrip_result)
+        worker.finished.connect(lambda: self._filmstrip_finished(worker))
+        worker.start()
+
+    def _filmstrip_result(self, token, path, frames, status):
+        if self._shutdown_requested or token != self._video_token or path != self._video_path:
+            return
+        self.video_view.filmstrip.set_frames(frames, status)
+
+    def _filmstrip_finished(self, worker):
+        if self._filmstrip_worker is not worker:
+            return
+        self._filmstrip_worker = None
+        worker.deleteLater()
+        request, self._filmstrip_pending = self._filmstrip_pending, None
+        if request and not self._shutdown_requested:
+            self._start_filmstrip_probe(request)
 
     def _waveform_result(self, token, path, peaks, status):
         if self._shutdown_requested or token != self._video_token or path != self._video_path:
@@ -498,4 +590,8 @@ class MediaPreviewPanel(PreviewPanel):
         if worker is not None:
             worker.requestInterruption()
             worker.wait(25 if wait_timeout_ms is None else max(0, wait_timeout_ms))
-        return done and self._video_worker is None
+        worker = self._filmstrip_worker
+        if worker is not None:
+            worker.requestInterruption()
+            worker.wait(25 if wait_timeout_ms is None else max(0, wait_timeout_ms))
+        return done and self._video_worker is None and self._filmstrip_worker is None
