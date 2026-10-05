@@ -120,6 +120,28 @@ def test_preview_buttons_live_only_where_there_is_a_photo(dialog) -> None:
     settings.deleteLater()
 
 
+def test_measured_pixels_and_grey_fill_are_form_options(dialog) -> None:
+    from SuperViewer.superviewer.bird_sharpness_params_form import params_summary
+
+    d, _calls, _fail = dialog
+    form = d.params_form
+    form.sam_model.setCurrentIndex(form.sam_model.findData("sam2.1_t.pt"))
+    assert form.params()["bird_pixels"] == "outline" and form.params()["grey_fill"] is False
+    form.grey_fill.setChecked(True)
+    form.pixels.setCurrentIndex(form.pixels.findData("box"))
+    p = form.params()
+    assert (p["bird_pixels"], p["grey_fill"], p["sam_model"]) == ("box", True, "sam2.1_t.pt")
+    assert not form.sam_model.isEnabled() and not form.sam_scope.isEnabled() and not form.sam_preview_btn.isEnabled()
+    assert "整个鸟框，鸟以外涂灰" in params_summary(p)
+    assert form.min_bird_side.value() == 0 and form.min_bird_side.text() == "不忽略"
+    form.min_bird_side.setValue(64)
+    assert form.params()["min_bird_side"] == 64 and "忽略长边 < 64 px" in params_summary(form.params())
+    form.set_params({"bird_pixels": "outline", "grey_fill": 0, "sam_model": "sam2.1_t.pt"})
+    assert form.min_bird_side.value() == 0
+    assert form.pixels.currentData() == "outline" and not form.grey_fill.isChecked()
+    assert form.sam_model.isEnabled() and form.sam_preview_btn.isEnabled() and "轮廓内；" in params_summary(form.params())
+
+
 def test_preview_appends_a_detector_window_that_runs_on_the_photo(dialog) -> None:
     d, calls, _fail = dialog
     host = d.preview_host

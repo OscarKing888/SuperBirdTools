@@ -66,6 +66,12 @@ def main(argv: List[str] | None = None) -> int:
                         help="用 SAM 模型精修鸟体像素（如 sam2.1_t.pt；默认不精修）")
     parser.add_argument("--sam-scope", choices=("rechecked", "all"), default="rechecked",
                         help="SAM 精修范围：rechecked = 复检/增强找到的鸟（默认），all = 全部鸟")
+    parser.add_argument("--min-bird-side", type=int, default=0, metavar="PX",
+                        help="忽略鸟框长边小于 PX（全分辨率像素）的鸟，如 64；默认 0 = 不忽略")
+    parser.add_argument("--pixels", choices=("outline", "box"), default="outline",
+                        help="测哪些像素：outline = 分割/SAM 轮廓内（默认，无轮廓时为鸟框内核）；box = 整个鸟框内核，忽略轮廓，不做 SAM 精修")
+    parser.add_argument("--grey-fill", action="store_true",
+                        help="先把每只鸟裁切里鸟以外的像素涂成灰色 114（与模型链抠图一致）再定位鸟眼、测边缘")
     parser.add_argument("--enhanced", choices=("off", "manual", "nobird"), default="off",
                         help="增强找鸟（没找到鸟时放大窗口再找）：off（默认）/ manual 仅手动对焦 / nobird 所有无鸟照片")
     parser.add_argument("--enh-region-percent", type=int, default=70, help="增强找鸟：中心区域每边占画幅百分比（默认 70）")
@@ -165,7 +171,7 @@ def main(argv: List[str] | None = None) -> int:
     params = AnalysisParams(max(0, args.max_birds), args.edge_estimator, args.detector, args.sam, args.sam_scope,
                             EnhancedSearch(args.enhanced, args.enh_region_percent, args.enh_grid, args.enh_imgsz,
                                            int(round(args.enh_min_conf * 100)), not args.no_enh_lift),
-                            tiles).normalized()
+                            tiles, args.pixels, bool(args.grey_fill), max(0, args.min_bird_side)).normalized()
     from .models import BirdSharpnessModelError, find_model
 
     for name in (params.detector if params.detector != "auto" else "", params.sam_model):

@@ -37,8 +37,9 @@ flowchart TD
     D --> D1["去重：一框 ≥ 70% 落在另一框内视为同一只"]
     D1 --> D2{"有鸟框短边 < 64 px？"}
     D2 -->|是| D3["鸟群补检：2048 px 副本 / 2048 px 输入<br/>只补首遍漏掉的鸟"]
-    D2 -->|否| D4
-    D3 --> D4{"设置了每张最多鸟数？"}
+    D2 -->|否| DS
+    D3 --> DS["忽略小鸟：min_bird_side > 0 时丢掉鸟框长边 < N px（全分辨率）的鸟<br/>复检 / 增强 / 模型链给定的鸟同样过滤"]
+    DS --> D4{"设置了每张最多鸟数？"}
     D4 -->|是且超出| D5["压在焦点框上的鸟优先，其余按 置信度×面积 截断"]
     D4 -->|否| E
     D5 --> E{"有鸟？"}
@@ -122,8 +123,9 @@ flowchart TD
     C --> D{"有任一鸟框短边 < 64 px？<br/>（1024 px 副本像素，FLOCK_BIRD_SIDE）"}
     D -->|是| E["鸟群补检 _small_bird_pass：<br/>rgb8 缩到 2048 px，imgsz 2048<br/>新鸟 found_by = full_small"]
     E --> F["首遍鸟按比例放到 2048 坐标系（掩膜不动，测量结果不变）<br/>+ 补检鸟 → 再次去重"]
-    D -->|否| G
-    F --> G{"max_birds > 0 且鸟数超出？"}
+    D -->|否| H0
+    F --> H0["_drop_small：min_bird_side > 0 时丢掉框长边 < N px 的鸟<br/>（识别步骤注明忽略只数；全部丢掉 → 走复检 / 无鸟分支）"]
+    H0 --> G{"max_birds > 0 且鸟数超出？"}
     G -->|是| H["prefer_focus_birds：与焦点框相交的鸟排前<br/>其余保持 置信度×面积 顺序 → 截取前 max_birds 只"]
     G -->|否| I
     H --> I["detections（每只带 box、mask 或 None、confidence、found_by）"]
@@ -201,10 +203,10 @@ flowchart TD
 
 ```mermaid
 flowchart TD
-    A["鸟框映射到全分辨率，四周外扩 15%（CROP_PAD_RATIO）作为 ROI"] --> B{"有分割掩膜？"}
+    A["鸟框映射到全分辨率，四周外扩 15%（CROP_PAD_RATIO）作为 ROI"] --> B{"有分割掩膜，且 bird_pixels = outline？"}
     B -->|是| C["掩膜缩放到 ROI，并裁到该鸟框内<br/>（检测分辨率的掩膜可能溢到邻鸟）"]
-    B -->|否| D["框内核：四边各内缩 8%（BOX_INSET_RATIO）"]
-    C --> E{"SAM 精修适用？<br/>sam_model 已设且（scope = all，或该鸟来自复检 / 增强）"}
+    B -->|否（无掩膜，或 bird_pixels = box）| D["框内核：四边各内缩 8%（BOX_INSET_RATIO）<br/>box 模式下 masked = False"]
+    C --> E{"SAM 精修适用？<br/>bird_pixels = outline，sam_model 已设，且（scope = all，或该鸟来自复检 / 增强）"}
     D --> E
     E -->|是| F["SAM 按鸟框抠图 → 只保留框外扩 10% 内的像素"]
     F --> G{"保留像素 ≥ 检测掩膜的 20%？"}
@@ -213,13 +215,21 @@ flowchart TD
     E -->|否| J
     H --> J["bird_px = 该鸟像素"]
     I --> J
-    J --> K["body = bird_px 腐蚀 15 px（BODY_MASK_ERODE_PX）<br/>腐蚀后为空则用 bird_px"]
-    J --> K2["core = bird_px 内缩约一个识别掩膜像素<br/>（W / 掩膜宽，限 4–12 px；无掩膜 4 px）− 高光排除区<br/>为空则用 bird_px − 高光排除区"]
+    J --> GF{"grey_fill 开启？"}
+    GF -->|是| GF1["ROI 的 gray / rgb8 复制一份，bird_px 以外涂成灰 114（MASK_FILL）<br/>之后高光检测、梯度场、鸟眼定位都用这份抠图；原图不动"]
+    GF -->|否| GF2["直接用 ROI 的原像素"]
+    GF1 --> K
+    GF2 --> K
+    GF1 --> K2
+    GF2 --> K2
+    K["body = bird_px 腐蚀 15 px（BODY_MASK_ERODE_PX）<br/>腐蚀后为空则用 bird_px"]
+    K2["core = bird_px 内缩约一个识别掩膜像素<br/>（W / 掩膜宽，限 4–12 px；无掩膜 4 px）− 高光排除区<br/>为空则用 bird_px − 高光排除区"]
     K2 --> K3["高光排除区 specular_highlights：<br/>白顶帽（核 ≈ 0.2×头部尺度，≥ 15 px）比周围高 ≥ 0.10 且 ≥ 3× 周围的小亮斑<br/>面积 ≤ π(0.15×头部尺度)²，外扩 8 px"]
     K --> L["EdgeBlurField(ROI 的 gray)：预计算梯度场（见第 10 节）"]
 ```
 
 - 头部尺度 = max(40 px, 15% × 鸟框长边)，与关键点无关，先于头部定位算出。
+- `bird_pixels` / `grey_fill`（`AnalysisParams`，设置 / 参数页 / CLI `--pixels` `--grey-fill`）：「整个鸟框区域」忽略分割与 SAM 轮廓、只测框内核；「鸟以外涂灰再测量」复刻模型链「抠出像素 + 涂灰」：SAM 在涂灰前用原图像素抠图，涂灰后的裁切交给第 7.2–7.4 节的全部测量和鸟眼定位（`locate_head` 看到的是抠图）。灰与轮廓之间的人工锐利边缘因 core / body 都向内收而通常测不到。非默认值记入版本后缀 `-box` / `-grey`。
 - 为什么内缩而不是外扩：掩膜来自 1024 px 识别副本，轮廓有约一个掩膜像素的误差；原来外扩 9 px 时，轮廓上的背景树皮裂缝会成为头部“最强边缘”（DSC06285：38 个头部测点里 13 个在树皮上）。内缩会丢掉鸟的轮廓边缘，头内的羽毛、眼、喙仍在。
 - 为什么排除高光：脱焦的点光源不是高斯模糊，而是硬边的光斑（bokeh 圆），阶跃边缘估计会把它的边缘测成 0.3–0.9 px。DSC06285 整只鸟脱焦（羽毛 2.2–2.7 px），眼睛里 7 px 的高光提供了 38 个头部测点中的 16 个，头部中位数 0.70 判成“清晰”；排除后头部 2.75，判“模糊”。
 
@@ -244,7 +254,7 @@ flowchart LR
 ```mermaid
 flowchart TD
     A{"有 CUB-200 关键点模型？"} -->|否| Z["keypoints = None → 走 7.4 的“无眼模型”分支"]
-    A -->|是| B["ROI 裁切跑一次：左眼、右眼、喙 坐标 + 可见度<br/>取可见度高的眼"]
+    A -->|是| B["ROI 裁切（grey_fill 时为涂灰抠图）跑一次：左眼、右眼、喙 坐标 + 可见度<br/>取可见度高的眼"]
     B --> C["ROI 左右镜像再跑一次，坐标映射回来<br/>（左右眼互换）"]
     C --> D["eye_gap = 两次眼距 / 鸟长边<br/>beak_gap = 两次喙距 / 鸟长边"]
     D --> E{"eye_gap ≤ 0.10？（EYE_MIRROR_MAX）"}
@@ -462,6 +472,9 @@ flowchart TD
 | `edge_estimator` | standard | 第 10 节 min_kept / 分位 | `-dense` |
 | `detector` | auto | 第 4、5、6 节识别模型 | `-<模型名>` |
 | `sam_model` / `sam_scope` | 空 / rechecked | 第 7.1 节掩膜精修 | `-<sam名>-rechecked` / `-all` |
+| `min_bird_side` | 0（不忽略） | 第 4–6 节：丢掉框长边 < N px 的鸟 | `-min<N>` |
+| `bird_pixels` | outline | 第 7.1 节：轮廓内 / 整个鸟框内核（box 时不做 SAM） | `-box` |
+| `grey_fill` | False | 第 7.1 节：鸟以外涂灰 114 后再测（含鸟眼定位） | `-grey` |
 | `enhanced.*` | off | 第 6 节 | `-enh-<mode><region>g<grid>i<imgsz>c<conf>[-nolift]` |
 | `tiles.full_tile` | 1024 | 第 9 节全图分块 | `-t<n>` |
 | `tiles.mf_center` / `mf_center_percent` / `mf_tile` / `mf_sharpest_percent` | True / 50 / 256 / 10 | 第 9 节手动对焦 | `-mf<pct>-<tile>-<sharp>` 或 `-mf-off` |

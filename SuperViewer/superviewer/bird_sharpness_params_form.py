@@ -10,7 +10,8 @@ from typing import Iterable, Optional
 
 from bird_sharpness import model_catalog
 from bird_sharpness.metrics import MF_MIN_TILES, TileOptions
-from bird_sharpness.params import ENH_MANUAL, ENH_NOBIRD, ENH_OFF, SAM_SCOPE_ALL, SAM_SCOPE_RECHECKED, AnalysisParams
+from bird_sharpness.params import (ENH_MANUAL, ENH_NOBIRD, ENH_OFF, PIXELS_BOX, PIXELS_OUTLINE, SAM_SCOPE_ALL,
+                                   SAM_SCOPE_RECHECKED, AnalysisParams)
 
 from .qt_compat import (
     QApplication, QCheckBox, QComboBox, QGridLayout, QHBoxLayout, QLabel, QMessageBox, QPushButton, QSpinBox, QVBoxLayout,
@@ -48,6 +49,7 @@ ESTIMATOR_CHOICES = (
 )
 ENH_CHOICES = ((ENH_OFF, "关闭（默认）"), (ENH_MANUAL, "仅手动对焦的照片"), (ENH_NOBIRD, "所有没找到鸟的照片"))
 SAM_SCOPE_CHOICES = ((SAM_SCOPE_RECHECKED, "仅复检/增强找到的鸟"), (SAM_SCOPE_ALL, "全部鸟（鸟群较慢）"))
+PIXELS_CHOICES = ((PIXELS_OUTLINE, "抠出的鸟体像素（轮廓内，默认）"), (PIXELS_BOX, "整个鸟框区域"))
 
 
 def _heading(text: str, parent) -> QLabel:
@@ -133,11 +135,14 @@ def params_summary(params: dict) -> str:
     p = AnalysisParams.from_params(params)
     detector = "内置（自动）" if p.detector == "auto" else p.detector
     sam = "关" if not p.sam_model else f"{p.sam_model}（{dict(SAM_SCOPE_CHOICES)[p.sam_scope]}）"
+    pixels = ("轮廓内" if p.bird_pixels == PIXELS_OUTLINE else "整个鸟框") + ("，鸟以外涂灰" if p.grey_fill else "")
+    if p.min_bird_side:
+        pixels += f"，忽略长边 < {p.min_bird_side} px 的鸟"
     e = p.enhanced
     enh = ("关" if e.mode == ENH_OFF else
            f"{dict(ENH_CHOICES)[e.mode]} · 区域 {e.region_percent}% · {e.grid}×{e.grid} 窗口 · 输入 {e.imgsz} px"
            f" · 门槛 {e.min_conf_percent / 100:.2f}")
-    return f"检测模型 {detector}；SAM 精修 {sam}；增强找鸟 {enh}；分块 {tile_summary(params)}"
+    return f"检测模型 {detector}；SAM 精修 {sam}；测量像素 {pixels}；增强找鸟 {enh}；分块 {tile_summary(params)}"
 
 
 def missing_models(params: dict) -> list:
@@ -229,6 +234,10 @@ class AnalysisParamsForm(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
 
         self.max_birds = _spin(self, 0, 999, 1, " 只", "0 = 不限制。设了上限时，压在相机焦点框上的鸟优先测量。", "不限制")
+        self.min_bird_side = _spin(self, 0, 4096, 8, " px",
+                                   "识别出的鸟框长边（全分辨率像素）小于此值时忽略这只鸟：不计数、不测量，复检、增强找鸟和"
+                                   "模型链给定的鸟同样适用。0 = 不忽略。注意鸟群补检专门找 20–50 px 的小鸟，设得太大会把它们丢掉。"
+                                   "非默认值记入算法版本后缀。", "不忽略")
         self.estimator = QComboBox(self)
         for key, label, tip in ESTIMATOR_CHOICES:
             self.estimator.addItem(label, key)
@@ -239,8 +248,8 @@ class AnalysisParamsForm(QWidget):
         self.estimator.currentIndexChanged.connect(self._update_estimator_note)
         for combo in (self.estimator,):
             _narrow(combo)
-        layout.addLayout(_grid(self, (("每张最多测量鸟数", self.max_birds), ("边缘统计方式", self.estimator)),
-                               expand_fields))
+        layout.addLayout(_grid(self, (("每张最多测量鸟数", self.max_birds), ("忽略小鸟（框长边小于）", self.min_bird_side),
+                                      ("边缘统计方式", self.estimator)), expand_fields))
         layout.addWidget(self.estimator_note)
 
         layout.addSpacing(6)
@@ -252,7 +261,16 @@ class AnalysisParamsForm(QWidget):
         self.sam_scope = QComboBox(self)
         for key, label in SAM_SCOPE_CHOICES:
             self.sam_scope.addItem(label, key)
-        for combo in (self.detector, self.sam_model, self.sam_scope):
+        self.pixels = QComboBox(self)
+        for key, label in PIXELS_CHOICES:
+            self.pixels.addItem(label, key)
+        self.pixels.setToolTip("测哪些像素：分割模型 / SAM 抠出的鸟体轮廓内（没有轮廓时为鸟框内缩 8%），"
+                               "或忽略轮廓、测整个鸟框内缩 8% 的区域（背景的枝叶会一起算进去）。选「整个鸟框区域」时不做 SAM 精修。")
+        self.grey_fill = QCheckBox("鸟以外涂灰再测量（灰 114）", self)
+        self.grey_fill.setToolTip("先把裁切里鸟以外的像素涂成灰色 114（与模型链的抠图一致），再定位鸟眼、测边缘。"
+                                  "灰色与轮廓之间是一条人工的锐利边缘；头部和身体区域都向内收，通常测不到它，"
+                                  "但鸟眼模型看到的是抠图而不是原图。非默认值记入算法版本后缀。")
+        for combo in (self.detector, self.sam_model, self.sam_scope, self.pixels):
             _narrow(combo)
         self.models_status = QLabel("", self)
         self.models_status.setWordWrap(True)
@@ -265,13 +283,15 @@ class AnalysisParamsForm(QWidget):
         self.sam_preview_btn = self._preview_button("sam", self.sam_model)
         layout.addLayout(_grid(self, (("检测模型", self._with_button(self.detector, self.detector_preview_btn)),
                                       ("SAM 精修", self._with_button(self.sam_model, self.sam_preview_btn)),
-                                      ("SAM 精修范围", self.sam_scope)), expand_fields))
+                                      ("SAM 精修范围", self.sam_scope), ("测量像素", self.pixels),
+                                      (None, self.grey_fill)), expand_fields))
         layout.addLayout(status_row)
         self._fill_model_combos()
         for combo in (self.detector, self.sam_model):
             combo.currentIndexChanged.connect(self._update_models_status)
             combo.currentIndexChanged.connect(lambda _i: self._update_preview_buttons())
-        self.sam_model.currentIndexChanged.connect(lambda _i: self.sam_scope.setEnabled(bool(self.sam_model.currentData())))
+        self.sam_model.currentIndexChanged.connect(self._update_enabled)
+        self.pixels.currentIndexChanged.connect(self._update_enabled)
 
         layout.addSpacing(6)
         layout.addWidget(_heading("增强找鸟（没找到鸟时放大找）", self))
@@ -318,7 +338,8 @@ class AnalysisParamsForm(QWidget):
 
     def _update_preview_buttons(self) -> None:
         self.detector_preview_btn.setEnabled(self._preview)
-        self.sam_preview_btn.setEnabled(self._preview and bool(self.sam_model.currentData()))
+        outline = self.pixels.currentData() != PIXELS_BOX
+        self.sam_preview_btn.setEnabled(self._preview and outline and bool(self.sam_model.currentData()))
 
     # ── models ──
     def _fill_model_combos(self) -> None:
@@ -371,15 +392,21 @@ class AnalysisParamsForm(QWidget):
         on = self.enh_mode.currentData() != ENH_OFF
         for widget in (self.enh_region, self.enh_grid, self.enh_imgsz, self.enh_conf, self.enh_lift):
             widget.setEnabled(on)
-        self.sam_scope.setEnabled(bool(self.sam_model.currentData()))
+        outline = self.pixels.currentData() != PIXELS_BOX  # the whole box has no outline to refine
+        self.sam_model.setEnabled(outline)
+        self.sam_scope.setEnabled(outline and bool(self.sam_model.currentData()))
+        self._update_preview_buttons()
 
     def set_params(self, params: Optional[dict]) -> None:
         p = AnalysisParams.from_params(params)
         self.max_birds.setValue(p.max_birds)
+        self.min_bird_side.setValue(p.min_bird_side)
         self.estimator.setCurrentIndex(max(0, self.estimator.findData(p.edge_estimator)))
         self._select_model(self.detector, p.detector)
         self._select_model(self.sam_model, p.sam_model)
         self.sam_scope.setCurrentIndex(max(0, self.sam_scope.findData(p.sam_scope)))
+        self.pixels.setCurrentIndex(max(0, self.pixels.findData(p.bird_pixels)))
+        self.grey_fill.setChecked(p.grey_fill)
         e = p.enhanced
         self.enh_mode.setCurrentIndex(max(0, self.enh_mode.findData(e.mode)))
         self.enh_region.setValue(e.region_percent)
@@ -395,9 +422,11 @@ class AnalysisParamsForm(QWidget):
 
     def params(self) -> dict:
         return AnalysisParams.from_params({
-            "max_birds": int(self.max_birds.value()), "edge_estimator": self.estimator.currentData() or "standard",
+            "max_birds": int(self.max_birds.value()), "min_bird_side": int(self.min_bird_side.value()),
+            "edge_estimator": self.estimator.currentData() or "standard",
             "detector": self.detector.currentData() or "auto", "sam_model": self.sam_model.currentData() or "",
             "sam_scope": self.sam_scope.currentData() or SAM_SCOPE_RECHECKED,
+            "bird_pixels": self.pixels.currentData() or PIXELS_OUTLINE, "grey_fill": self.grey_fill.isChecked(),
             "enh_mode": self.enh_mode.currentData() or ENH_OFF, "enh_region_percent": int(self.enh_region.value()),
             "enh_grid": int(self.enh_grid.value()), "enh_imgsz": int(self.enh_imgsz.value()),
             "enh_min_conf_percent": int(self.enh_conf.value()), "enh_lift": self.enh_lift.isChecked(),

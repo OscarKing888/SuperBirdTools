@@ -435,7 +435,8 @@ class AnalysisTracer:
             metrics.append(("图像文件", os.path.basename(source_path)))
 
     def detect(self, detections, scale_to_full: float, *, has_masks: bool, has_keypoints: bool,
-               unmeasured: int = 0, limit: int = 0, small_pass=None, detector: str = "") -> None:
+               unmeasured: int = 0, limit: int = 0, small_pass=None, detector: str = "",
+               ignored_small: int = 0) -> None:
         """``small_pass``: ``(first-pass birds, high-resolution birds, added)`` when the
         small-bird pass ran (see ``analyzer.FLOCK_BIRD_SIDE``)."""
         img = _dim(self._overview, None, 0.55)
@@ -466,6 +467,8 @@ class AnalysisTracer:
                    ("鸟数", str(len(detections)))]
         if unmeasured:
             metrics.insert(3, ("未测量", f"另有 {unmeasured} 只（超过上限 {limit} 只；焦点框上的鸟优先测量）"))
+        if ignored_small:
+            metrics.insert(3, ("已忽略", f"{ignored_small} 只鸟框长边小于设置的「忽略小鸟」门槛，不计数、不测量"))
         if small_pass is not None:
             from . import analyzer as A
 
@@ -626,10 +629,12 @@ class AnalysisTracer:
 
     # ── per bird ──
     def bird(self, index: int, image, roi, mask: np.ndarray, body: np.ndarray, head: Optional[np.ndarray],
-             keypoints, selection, body_detail, measurement, *, detector_px: Optional[np.ndarray] = None) -> None:
-        """``detector_px``: the detector's mask (ROI px) when SAM replaced it with ``mask``."""
+             keypoints, selection, body_detail, measurement, *, detector_px: Optional[np.ndarray] = None,
+             rgb_roi: Optional[np.ndarray] = None) -> None:
+        """``detector_px``: the detector's mask (ROI px) when SAM replaced it with ``mask``;
+        ``rgb_roi``: the crop as measured when it differs from the photo (grey-filled)."""
         X1, Y1, X2, Y2 = roi
-        crop = image.rgb8[Y1:Y2, X1:X2]
+        crop = image.rgb8[Y1:Y2, X1:X2] if rgb_roi is None else rgb_roi
         crop_small, s = _downscale(crop, self.roi_long_edge)
         crop_small = _auto_exposure(crop_small)
         frame = f"bird{index}"
@@ -652,6 +657,8 @@ class AnalysisTracer:
             legend.append((hex_color(C_REJECT_LINE), "检测模型的轮廓（已由 SAM 替换）"))
             source = (f"{measurement.refined_by} 精修（{source} {int(detector_px.sum()):,} 像素 → "
                       f"{int(mask.sum()):,}）")
+        if measurement.grey_filled:
+            source += "；鸟以外涂灰 114 后再定位鸟眼和测边缘（设置「鸟以外涂灰再测量」）"
         _contour(img, m_small, C_MASK, lw)
         _contour(img, body_small, BIRD_COLORS[index % len(BIRD_COLORS)], lw)
         bw, bh = measurement.box[2] - measurement.box[0], measurement.box[3] - measurement.box[1]

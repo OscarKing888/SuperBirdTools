@@ -43,7 +43,8 @@ from .metrics import (ESTIMATOR_STANDARD, EdgeBlurField, EdgeEstimator, TileOpti
 from .models import (BIRD_CONFIDENCE_MIN, FOUND_ENHANCED, FOUND_FOCUS_WEAK, FOUND_FOCUS_ZOOM, FOUND_FULL, FOUND_GIVEN,
                      FOUND_FULL_FINE, FOUND_FULL_LIFTED, FOUND_FULL_SMALL, BirdDetection, BirdSharpnessModels,
                      shared_models)
-from .params import ENH_MANUAL, ENH_NOBIRD, ENH_OFF, SAM_SCOPE_ALL, AnalysisParams
+from .params import ENH_MANUAL, ENH_NOBIRD, ENH_OFF, PIXELS_BOX, SAM_SCOPE_ALL, AnalysisParams
+from .preview import MASK_FILL, MASK_FILL_GRAY
 from .scoring import ALGORITHM_VERSION, VERDICT_ERROR, VERDICT_NO_BIRD, blank_head_sigma, classify, sigma_to_score
 
 _log = get_logger("bird_sharpness")
@@ -122,6 +123,7 @@ class BirdMeasurement:
     eye_reliable: Optional[bool] = None
     index: int = 0  # detection number (trace "鸟 #index+1"), kept when false extras are dropped
     refined_by: str = ""  # SAM model whose mask replaced the detector's ("" = detector mask/box)
+    grey_filled: bool = False  # the crop was painted grey outside the bird before measuring (params.grey_fill)
 
     def rank(self) -> tuple:
         # Best bird: highest score, then smallest blur radius, then detector confidence.
@@ -687,6 +689,16 @@ class BirdSharpnessAnalyzer:
     def _edge_stats(self, samples):
         return edge_stats(samples, self.estimator.quantile)
 
+    def _drop_small(self, detections: List[BirdDetection], scale: float) -> Tuple[List[BirdDetection], int]:
+        """``(kept, ignored)``: birds whose box long side is below ``params.min_bird_side`` full-resolution
+        px are ignored (``scale``: detection px per full-resolution px)."""
+        side = int(self._params.min_bird_side or 0)
+        if side <= 0:
+            return detections, 0
+        kept = [d for d in detections
+                if max(d.box[2] - d.box[0], d.box[3] - d.box[1]) / max(scale, 1e-9) >= side]
+        return kept, len(detections) - len(kept)
+
     def _limit(self, detections: List[BirdDetection]) -> List[BirdDetection]:
         limit = int(self.max_birds or 0)
         return detections[:limit] if limit > 0 else detections
@@ -738,6 +750,7 @@ class BirdSharpnessAnalyzer:
         small_pass = None
         if detections and has_small_birds(detections) and not cancelled():
             detections, scale, small_pass = self._small_bird_pass(image, detections, scale)
+        detections, ignored_small = self._drop_small(detections, scale)
         limit = int(self.max_birds or 0)
         unmeasured = max(0, len(detections) - limit) if limit > 0 else 0
         if unmeasured:
@@ -748,12 +761,12 @@ class BirdSharpnessAnalyzer:
             tracer.detect(detections, scale, has_masks=bool(getattr(self.models, "has_masks", True)),
                           has_keypoints=bool(getattr(self.models, "has_keypoints", True)), unmeasured=unmeasured,
                           limit=limit, small_pass=small_pass,
-                          detector=str(getattr(self.models, "detector_name", "") or ""))
+                          detector=str(getattr(self.models, "detector_name", "") or ""), ignored_small=ignored_small)
         if not detections and not cancelled():
             if focus_px is _UNSET:
                 focus_px = self._focus_box_px(path, image)
             recheck = self._recheck(image, small_bgr, scale, focus_px, cancelled)
-            detections = recheck.accepted
+            detections, _ignored = self._drop_small(recheck.accepted, scale)
             if tracer is not None:
                 tracer.recheck(recheck)
         manual_known: List[bool] = []
@@ -769,7 +782,7 @@ class BirdSharpnessAnalyzer:
                 focus_px = self._focus_box_px(path, image)
             found = self._enhanced_search(image, small_bgr, scale, focus_px, cancelled)
             found.manual = manual_known[0] if manual_known else None
-            detections = found.accepted
+            detections, _ignored = self._drop_small(found.accepted, scale)
             if tracer is not None:
                 tracer.enhanced(found)
         on_stage(STAGE_MEASURE)
@@ -795,10 +808,14 @@ class BirdSharpnessAnalyzer:
                       for b in given.birds]
         if not detections:
             raise ValueError("没有给定的鸟")
+        detections, ignored_small = self._drop_small(detections, 1.0)
+        if not detections:
+            raise ValueError(f"给定的 {ignored_small} 只鸟的框长边都小于 {self._params.min_bird_side} px（设置「忽略小鸟」）")
         on_stage(STAGE_DETECT)
         if tracer is not None:
             tracer.detect(detections, 1.0, has_masks=any(d.mask is not None for d in detections),
-                          has_keypoints=bool(getattr(self.models, "has_keypoints", True)), detector=given.label)
+                          has_keypoints=bool(getattr(self.models, "has_keypoints", True)), detector=given.label,
+                          ignored_small=ignored_small)
         on_stage(STAGE_MEASURE)
         birds = [self._measure_bird(image, det, 1.0, index=i, tracer=tracer) for i, det in enumerate(detections)]
         excluded = excluded_birds(birds)
@@ -989,8 +1006,10 @@ class BirdSharpnessAnalyzer:
         X1, Y1, X2, Y2 = max(0, x1 - pad), max(0, y1 - pad), min(W, x2 + pad), min(H, y2 + pad)
         cw, ch = X2 - X1, Y2 - Y1
 
-        # This bird's pixels in ROI coordinates: its segmentation mask, else the core of its box.
-        if det.mask is not None:
+        # This bird's pixels in ROI coordinates: its segmentation mask, else the core of its box
+        # (always the box core when the options measure the whole box).
+        use_mask = det.mask is not None and self._params.bird_pixels != PIXELS_BOX
+        if use_mask:
             mh, mw = det.mask.shape[:2]
             sx, sy = mw / float(W), mh / float(H)
             mx1, my1 = int(np.floor(X1 * sx)), int(np.floor(Y1 * sy))
@@ -1011,22 +1030,30 @@ class BirdSharpnessAnalyzer:
                 detector_px, refined_by = mask.astype(bool), self._params.sam_model
                 mask = refined.astype(np.uint8)
         bird_px = mask.astype(bool)
+        # Optionally paint everything but the bird letterbox grey (the model chain's cut-out):
+        # the eye model and the edge measurement then see the cut-out, never the photo.
+        roi_gray, roi_rgb = image.gray[Y1:Y2, X1:X2], image.rgb8[Y1:Y2, X1:X2]
+        grey_filled = bool(self._params.grey_fill)
+        if grey_filled:
+            roi_gray, roi_rgb = roi_gray.copy(), roi_rgb.copy()
+            roi_gray[~bird_px] = MASK_FILL_GRAY
+            roi_rgb[~bird_px] = MASK_FILL
         # Head / whole-bird edges come from the mask core with specular highlights cut out.
-        mask_px = max(1.0, W / float(det.mask.shape[1])) if det.mask is not None else 1.0
+        mask_px = max(1.0, W / float(det.mask.shape[1])) if use_mask else 1.0
         erode_px = int(min(HEAD_MASK_ERODE_MAX_PX, max(HEAD_MASK_ERODE_MIN_PX, round(mask_px))))
         head_scale = max(HEAD_RADIUS_MIN_PX, HEAD_RADIUS_BOX_RATIO * max(bw, bh))
-        glare = specular_highlights(image.gray[Y1:Y2, X1:X2], head_scale)
+        glare = specular_highlights(roi_gray, head_scale)
         core = cv2.erode(mask, np.ones((2 * erode_px + 1, 2 * erode_px + 1), np.uint8)).astype(bool) & ~glare
         if not core.any():
             core = bird_px & ~glare
 
-        field_ = EdgeBlurField(image.gray[Y1:Y2, X1:X2])
+        field_ = EdgeBlurField(roi_gray)
         body = cv2.erode(mask, np.ones((BODY_MASK_ERODE_PX, BODY_MASK_ERODE_PX), np.uint8)).astype(bool)
         if not body.any():
             body = bird_px
         body_stats, motion_ratio, body_detail = field_.body_blur_detail(body)
 
-        keypoints = locate_head(self.models, image.rgb8[Y1:Y2, X1:X2], max(bw, bh))
+        keypoints = locate_head(self.models, roi_rgb, max(bw, bh))
         head_samples = None
         eye_vis = None
         eye_abs = None
@@ -1106,21 +1133,24 @@ class BirdSharpnessAnalyzer:
             eye_xy=eye_abs,
             head_radius=None if radius is None else round(float(radius), 1),
             head_edges=head_stats.edge_count if head_stats is not None else 0,
-            masked=det.mask is not None,
+            masked=use_mask,
             found_by=getattr(det, "source", FOUND_FULL),
             head_samples=None if not head_samples else [round(v, 3) for v in head_samples],
             eye_mirror_gap=None if keypoints is None else keypoints.eye_gap,
             eye_reliable=None if keypoints is None else keypoints.eye_reliable,
             index=index,
             refined_by=refined_by,
+            grey_filled=grey_filled,
         )
         if tracer is not None:
             tracer.bird(index, image, (X1, Y1, X2, Y2), bird_px, body, head, trace_keypoints, selection,
-                        body_detail, measurement, detector_px=detector_px)
+                        body_detail, measurement, detector_px=detector_px, rgb_roi=roi_rgb if grey_filled else None)
         return measurement
 
     def _sam_applies(self, det: BirdDetection) -> bool:
         p = self._params
+        if p.bird_pixels == PIXELS_BOX:  # the whole box is measured: no outline to refine
+            return False
         return bool(p.sam_model) and (p.sam_scope == SAM_SCOPE_ALL
                                       or getattr(det, "source", FOUND_FULL) not in (FOUND_FULL, FOUND_FULL_SMALL))
 

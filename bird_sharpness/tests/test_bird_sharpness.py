@@ -607,3 +607,95 @@ def test_sharp_background_at_the_outline_does_not_measure_the_head(monkeypatch) 
     models = _StubModels([(cx, cy, r)], full_w=1800)
     result = BirdSharpnessAnalyzer(models, focus_provider=_no_focus).analyze("bird.ARW")
     assert result.verdict in (bsf.VERDICT_SOFT, bsf.VERDICT_MOTION), result
+
+
+# ── measured pixels (outline / whole box) and grey fill ──────────────────────────
+
+class _CropKeepingModels(_StubModels):
+    """Keeps the crops handed to the eye model, to see what it was shown."""
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.crops = []
+
+    def keypoints(self, rgb_crop):
+        self.crops.append(rgb_crop.copy())
+        return super().keypoints(rgb_crop)
+
+
+def test_bird_pixels_and_grey_fill_params_roundtrip_and_tag_the_version() -> None:
+    from bird_sharpness.params import PIXELS_BOX, PIXELS_OUTLINE, AnalysisParams
+
+    default = AnalysisParams()
+    assert (default.bird_pixels, default.grey_fill) == (PIXELS_OUTLINE, False) and default.version_tags() == []
+    flat = AnalysisParams.from_params({"bird_pixels": "box", "grey_fill": 1, "sam_model": "sam2.1_b.pt",
+                                       "sam_scope": "all", "edge_estimator": "dense"})
+    assert (flat.bird_pixels, flat.grey_fill) == (PIXELS_BOX, True)
+    assert AnalysisParams.from_params(flat.as_params()) == flat
+    assert flat.version_tags() == ["dense", "sam2.1_b-all", "box", "grey"]  # fixed order, after the SAM tag
+    assert AnalysisParams.from_params({"bird_pixels": "mask", "grey_fill": None}).bird_pixels == PIXELS_OUTLINE
+    assert AnalysisParams(grey_fill=True).version_tags() == ["grey"]
+
+
+def test_grey_fill_measures_a_grey_cut_out_without_touching_the_photo(monkeypatch) -> None:
+    from bird_sharpness.params import AnalysisParams
+    from bird_sharpness.preview import MASK_FILL
+    from bird_sharpness.scoring import ALGORITHM_VERSION
+
+    cx, cy, r = 900, 600, 300
+    scene = _scene([(cx, cy, r, 0.3)])
+    _install_image(monkeypatch, scene)
+    before = scene.copy()
+    models = _CropKeepingModels([(cx, cy, r)], full_w=1800)
+    plain = BirdSharpnessAnalyzer(models, focus_provider=_no_focus).analyze("bird.jpg")
+    filled = BirdSharpnessAnalyzer(models, focus_provider=_no_focus,
+                                   params=AnalysisParams(grey_fill=True)).analyze("bird.jpg")
+    assert plain.verdict == filled.verdict == bsf.VERDICT_SHARP
+    assert plain.version == ALGORITHM_VERSION and filled.version == f"{ALGORITHM_VERSION}-grey"
+    assert not plain.birds[0]["grey_filled"] and filled.birds[0]["grey_filled"]
+    assert np.array_equal(scene, before)  # the fill is on a copy of the crop
+    plain_crop, filled_crop = models.crops[0], models.crops[2]  # each analysis runs the eye model twice (mirror)
+    assert plain_crop.shape == filled_crop.shape
+    assert tuple(filled_crop[2, 2]) == (MASK_FILL,) * 3 and tuple(plain_crop[2, 2]) != (MASK_FILL,) * 3  # corner: background
+    h, w = filled_crop.shape[:2]
+    assert np.array_equal(filled_crop[h // 2, w // 2], plain_crop[h // 2, w // 2])  # the bird's own pixels
+
+
+def test_whole_box_pixels_ignore_masks_and_skip_sam(monkeypatch) -> None:
+    from bird_sharpness.params import PIXELS_BOX, AnalysisParams
+    from bird_sharpness.scoring import ALGORITHM_VERSION
+
+    cx, cy, r = 900, 600, 300
+    _install_image(monkeypatch, _scene([(cx, cy, r, 0.3)]))
+    models = _StubModels([(cx, cy, r)], full_w=1800)
+
+    def never_refine(name):
+        raise AssertionError("SAM must not run when the whole box is measured")
+
+    outline = BirdSharpnessAnalyzer(models, focus_provider=_no_focus).analyze("bird.jpg")
+    box = BirdSharpnessAnalyzer(
+        models, focus_provider=_no_focus, refiner_provider=never_refine,
+        params=AnalysisParams(bird_pixels=PIXELS_BOX, sam_model="sam2.1_b.pt", sam_scope="all")).analyze("bird.jpg")
+    assert outline.birds[0]["masked"] and not box.birds[0]["masked"]
+    assert box.version == f"{ALGORITHM_VERSION}-sam2.1_b-all-box"
+    assert box.verdict == outline.verdict == bsf.VERDICT_SHARP
+
+
+def test_small_birds_below_min_bird_side_are_ignored(monkeypatch) -> None:
+    from bird_sharpness.params import AnalysisParams
+    from bird_sharpness.scoring import ALGORITHM_VERSION
+
+    big, tiny = (900, 600, 300), (200, 200, 20)  # the tiny one: a 40 px box
+    _install_image(monkeypatch, _scene([(900, 600, 300, 0.3), (200, 200, 20, 0.3)]))
+    models = _StubModels([big, tiny], full_w=1800)
+    every = BirdSharpnessAnalyzer(models, focus_provider=_no_focus).analyze("bird.jpg")
+    assert every.bird_count == 2 and AnalysisParams().min_bird_side == 0
+    strict = BirdSharpnessAnalyzer(models, focus_provider=_no_focus,
+                                   params=AnalysisParams(min_bird_side=64)).analyze("bird.jpg")
+    assert strict.bird_count == 1 and strict.bird_box == every.bird_box and strict.verdict == bsf.VERDICT_SHARP
+    assert strict.version == f"{ALGORITHM_VERSION}-min64"
+    assert AnalysisParams.from_params({"min_bird_side": "64"}).min_bird_side == 64
+    assert AnalysisParams(min_bird_side=-5).normalized().min_bird_side == 0
+    none_left = BirdSharpnessAnalyzer(_StubModels([tiny], full_w=1800), focus_provider=_no_focus,
+                                      params=AnalysisParams(min_bird_side=64)).analyze("bird.jpg")
+    assert none_left.verdict == bsf.VERDICT_NO_BIRD and none_left.bird_count == 0  # falls through to the no-bird path
