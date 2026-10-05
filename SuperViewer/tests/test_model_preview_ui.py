@@ -250,3 +250,112 @@ def test_closing_the_window_drops_late_results(dialog) -> None:
     _APP.processEvents()
     assert not host._alive and not host.stages
     host._on_done(stage, stage.generation, pv.PreviewResult("x", "cpu", 0, "", []))  # late: ignored, no crash
+
+
+# ── saved chain ──
+def _new_dialog(tmp_path, store, birds=((50, 60, 250, 260),)):
+    from bird_sharpness.image_source import AnalysisImage, DecodedImageCache
+
+    rgb = np.full((1200, 1800, 3), 90, np.uint8)
+    cache = DecodedImageCache()
+    cache.get_or_load(DecodedImageCache.key(str(tmp_path / "x.ARW"), "raw"),
+                      lambda: AnalysisImage(rgb, rgb[..., 1].astype(np.float32) / 255.0, True))
+    d = BirdSharpnessTraceDialog(None, str(tmp_path / "x.ARW"))
+    d.image_cache, d.chain_store = cache, store
+    d.trace = SimpleNamespace(result=SimpleNamespace(birds=[{"box": b} for b in birds]))
+    d.show()
+    d.stack.setCurrentWidget(d.content)
+    _APP.processEvents()
+    return d
+
+
+def test_the_chain_is_saved_and_rebuilt_in_the_next_window(dialog, tmp_path) -> None:
+    from SuperViewer.superviewer.model_chain_state import ModelChainStore
+
+    d, calls, _fail = dialog
+    store = ModelChainStore(tmp_path / "state" / "model_chain.json")
+    d.chain_store = store
+    d._update_chain()  # first trace: nothing saved yet
+    host = d.preview_host
+    assert host.store is store and not host.stages
+    yolo = d.open_model_preview("detector", "yolo11x-seg.pt")
+    sam = d.open_model_preview("sam", "sam2.1_t.pt")
+    host.add_action.trigger()
+    yolo2 = host.stages[2]
+    assert _idle(host)
+    yolo.imgsz.setValue(1024)
+    yolo.classes.setCurrentIndex(1)
+    yolo2.use.setCurrentIndex(yolo2.use.findData(USE_MASK))
+    yolo2.margin.setValue(50)
+    sam.input_combo.setCurrentIndex(sam.input_combo.findData(INPUT_TRACE))  # picked: saved as such
+    host.auto_check.setChecked(False)
+    assert _wait(lambda: store.path.exists() and len(store.load()["stages"]) == 3
+                 and store.load()["stages"][2]["margin"] == 50 and store.load()["auto"] is False)
+    saved = store.load()["stages"]
+    assert [s["model"] for s in saved] == ["yolo11x-seg.pt", "sam2.1_t.pt", "auto"]
+    assert [s["input"] for s in saved] == [None, "trace", None]  # unpicked inputs follow the position
+    assert saved[0]["imgsz"] == 1024 and saved[0]["birds_only"] is False and saved[2]["use"] == "mask"
+    d.close()  # closing the trace window keeps the saved chain
+    _APP.processEvents()
+    assert len(store.load()["stages"]) == 3
+
+    d2 = _new_dialog(tmp_path, store)
+    try:
+        n_det, n_sam = len(calls["detector"]), len(calls["sam_on"])
+        d2._update_chain()
+        host2 = d2.preview_host
+        assert [s.model for s in host2.stages] == ["yolo11x-seg.pt", "sam2.1_t.pt", "auto"]
+        assert not host2.isHidden() and host2.auto_check.isChecked() is False
+        a, b, c = host2.stages
+        assert a.imgsz.value() == 1024 and a.classes.currentData() is False
+        assert b.input == INPUT_TRACE and b.input_picked and c.input == INPUT_PREVIOUS and not c.input_picked
+        assert c.use.currentData() == USE_MASK and c.margin.value() == 50
+        assert _idle(host2) and len(calls["detector"]) == n_det + 1 and len(calls["sam_on"]) == n_sam + 1  # ran
+        d2._update_chain()  # a recompute (same image), auto off: the window on the trace's birds is stale
+        assert _idle(host2) and len(calls["sam_on"]) == n_sam + 1 and "计算过程已更新" in b.status.text()
+        host2.auto_check.setChecked(True)
+        d2._update_chain()  # auto on: it reruns
+        assert _idle(host2) and len(calls["sam_on"]) == n_sam + 2
+        host2.close_all_action.trigger()  # 全部关闭: nothing comes back next time
+        _APP.processEvents()
+        assert _wait(lambda: store.load()["stages"] == [])
+    finally:
+        d2.close()
+        _APP.processEvents()
+
+
+def test_restoring_skips_models_that_are_gone(dialog, tmp_path, monkeypatch) -> None:
+    import bird_sharpness.model_catalog as catalog
+    import SuperViewer.superviewer.bird_sharpness_trace_view as tv
+    from SuperViewer.superviewer.model_chain_state import ModelChainStore
+
+    d, _calls, _fail = dialog
+    store = ModelChainStore(tmp_path / "model_chain.json")
+    store.save({"stages": [{"model": "auto"}, {"model": "sam2.1_l.pt"}, {"model": "yolo26n.pt"}]})
+    monkeypatch.setattr(catalog, "locate", lambda name: None if name == "sam2.1_l.pt" else "/models/" + name)
+    offered = []
+    monkeypatch.setattr(tv, "download_models", lambda parent, names: offered.append(names) or False)
+    d.chain_store = store
+    d._update_chain()
+    host = d.preview_host
+    assert [s.model for s in host.stages] == ["auto", "yolo26n.pt"] and offered == []  # no download prompt
+    assert "sam2.1_l.pt" in host.note.text()
+    assert _idle(host)
+    assert len(store.load()["stages"]) == 3  # restoring alone does not rewrite the file
+
+
+def test_another_image_source_reloads_the_photo_and_reruns(dialog) -> None:
+    d, calls, _fail = dialog
+    host = d.preview_host
+    d._update_chain()
+    stage = d.open_model_preview("detector", "auto")
+    assert _idle(host)
+    first = host.display
+    d.image_source = "jpeg"
+    d.image_cache.get_or_load(d.image_cache.key(d.path, "jpeg"),
+                              lambda: AnalysisImage(np.full((600, 900, 3), 30, np.uint8),
+                                                    np.zeros((600, 900), np.float32), False))
+    n = len(calls["detector"])
+    d._update_chain()
+    assert _idle(host) and host.display is not first and host.display[0].shape[1] < first[0].shape[1]
+    assert len(calls["detector"]) == n + 1 and stage.result is not None

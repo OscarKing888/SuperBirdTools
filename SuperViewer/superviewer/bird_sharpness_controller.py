@@ -399,6 +399,10 @@ class BirdSharpnessController(QObject):
 
         # 「按此参数重新计算」and source switches reuse this window's decode instead of decoding again.
         dialog.image_cache = DecodedImageCache()
+        from .model_chain_state import ModelChainStore
+
+        # The model chain on the right is saved on every change and rebuilt in the next window.
+        dialog.chain_store = ModelChainStore()
         dialog.closed.connect(self._on_trace_dialog_closed)
         dialog.source_changed.connect(lambda d, s: self._run_trace(d, s))
         dialog.params_changed.connect(lambda d: self._run_trace(d, d.image_source))

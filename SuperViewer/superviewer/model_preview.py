@@ -17,9 +17,13 @@ When a window finishes, the next one that takes 上一窗口的结果 runs on th
 results (toolbar 「自动传给下一窗口」), so YOLO → SAM → YOLO combinations can be
 compared. The 「预览」 buttons next to the model lists in the 参数 tab append a window
 running that model. No sharpness is measured here: only what the models output.
+
+With a store (``model_chain_state.ModelChainStore``, set by the controller) every change
+is saved and the next trace window rebuilds the same chain once its trace is shown.
 """
 from __future__ import annotations
 
+import logging
 import threading
 from typing import Callable, Dict, List, Optional
 
@@ -34,12 +38,12 @@ from .qt_compat import (
 from app_common.toggle_button import ToggleToolButton
 
 try:
-    from PyQt6.QtCore import QObject, QPointF, QRectF, Qt
+    from PyQt6.QtCore import QObject, QPointF, QRectF, Qt, QTimer
     from PyQt6.QtGui import QBrush, QColor, QPen
     from PyQt6.QtWidgets import (QButtonGroup, QDockWidget, QGraphicsEllipseItem, QGraphicsRectItem,
                                  QGraphicsView, QToolBar, QToolButton)
 except ImportError:  # pragma: no cover - PyQt5 fallback
-    from PyQt5.QtCore import QObject, QPointF, QRectF, Qt
+    from PyQt5.QtCore import QObject, QPointF, QRectF, Qt, QTimer
     from PyQt5.QtGui import QBrush, QColor, QPen
     from PyQt5.QtWidgets import (QButtonGroup, QDockWidget, QGraphicsEllipseItem, QGraphicsRectItem,
                                  QGraphicsView, QToolBar, QToolButton)
@@ -60,6 +64,7 @@ PAN, BOX, POINTS = "pan", "box", "points"
 INPUT_PREVIOUS, INPUT_TRACE, INPUT_IMAGE = "previous", "trace", "image"
 USE_CROP, USE_MASK = "crop", "mask"
 _CIRCLED = "①②③④⑤⑥⑦⑧⑨⑩⑪⑫⑬⑭⑮⑯⑰⑱⑲⑳"
+_LOG = logging.getLogger(__name__)
 STAGE_MIN_WIDTH = 320
 STAGE_WIDTH = 360  # the trace window makes this much room per chain window
 C_PROMPT, C_KEEP, C_EXCLUDE = QColor(255, 214, 10), QColor(60, 220, 90), QColor(240, 70, 70)
@@ -196,6 +201,7 @@ class ChainStage(QWidget):
     changed = pyqtSignal(object)        # self: model / input switched (title, chain wiring)
     run_requested = pyqtSignal(object)  # self
     move_requested = pyqtSignal(object, int)  # self, -1 / +1
+    config_changed = pyqtSignal()       # a parameter changed (the chain is saved)
 
     def __init__(self, model: str, parent=None) -> None:
         super().__init__(parent)
@@ -211,6 +217,7 @@ class ChainStage(QWidget):
         self.pending = False       # run again once the current run / the upstream finishes
         self.generation = 0
         self.input_picked = False  # the user chose the input; else it follows the chain position
+        self.preset_input: Optional[str] = None  # a restored window's saved input, applied when placed
         self.boxes: list = []      # manual SAM prompts, image px
         self.points: list = []     # (x, y, keep), image px
 
@@ -330,6 +337,11 @@ class ChainStage(QWidget):
             self._detector_rows[key] = (caption, widget)
         grid.addWidget(self.lift, 6, 0, 1, 2)
         grid.setColumnStretch(1, 1)
+        for combo in (self.scope, self.use, self.classes):
+            combo.currentIndexChanged.connect(lambda _i: self.config_changed.emit())
+        for spin in (self.margin, self.imgsz, self.min_conf):
+            spin.valueChanged.connect(lambda _v: self.config_changed.emit())
+        self.lift.toggled.connect(lambda _c: self.config_changed.emit())
         return page
 
     def _build_sam_page(self) -> QWidget:
@@ -367,6 +379,8 @@ class ChainStage(QWidget):
         """Called by the host after adding / moving / removing windows."""
         self.index = index
         keep = self.input_combo.currentData() if self.input_picked else None
+        if self.preset_input is not None:
+            keep, self.preset_input = self.preset_input, None
         self.input_combo.blockSignals(True)
         self.input_combo.clear()
         if has_previous:
@@ -380,6 +394,28 @@ class ChainStage(QWidget):
         self.input_combo.setCurrentIndex(max(0, self.input_combo.findData(keep)))
         self.input_combo.blockSignals(False)
         self._update_controls()
+
+    # ── saved configuration ──
+    def config(self) -> dict:
+        """What the chain saves for this window (see ``model_chain_state``)."""
+        return {"model": self.model, "input": self.input if self.input_picked else None,
+                "scope": self.scope.currentData(), "use": self.use.currentData(), "margin": int(self.margin.value()),
+                "imgsz": int(self.imgsz.value()), "min_conf": int(self.min_conf.value()),
+                "birds_only": bool(self.classes.currentData()), "lift": self.lift.isChecked()}
+
+    def apply_config(self, config: dict) -> None:
+        """A restored window: parameters now, the input when the host places it."""
+        for combo, value in ((self.scope, config.get("scope")), (self.use, config.get("use")),
+                             (self.classes, config.get("birds_only"))):
+            index = combo.findData(value)
+            if index >= 0:
+                combo.setCurrentIndex(index)
+        for spin, key in ((self.margin, "margin"), (self.imgsz, "imgsz"), (self.min_conf, "min_conf")):
+            if isinstance(config.get(key), int):
+                spin.setValue(config[key])
+        self.lift.setChecked(bool(config.get("lift", True)))
+        if config.get("input"):
+            self.preset_input, self.input_picked = config["input"], True
 
     def _on_model_changed(self, _index: int) -> None:
         model = self.model_combo.currentData()
@@ -574,9 +610,10 @@ class ModelChainHost(QMainWindow):
 
     emptied = pyqtSignal()
     stage_added = pyqtSignal()
+    SAVE_DELAY_MS = 300
 
     def __init__(self, image_provider: Callable, boxes_provider: Callable[[], list],
-                 download: Callable[..., bool], parent=None) -> None:
+                 download: Callable[..., bool], parent=None, *, store=None) -> None:
         super().__init__(parent)
         self.setWindowFlags(getattr(getattr(Qt, "WindowType", Qt), "Widget"))
         self.setDockNestingEnabled(True)
@@ -586,11 +623,17 @@ class ModelChainHost(QMainWindow):
         self.image = None
         self.display = None
         self._loading = False
+        self._load_generation = 0  # a newer image (another source) drops an older load
         self._alive = True
         self._lock = threading.Lock()
         self._threads: List[threading.Thread] = []
         self._bridge = _Bridge()
         self._bridge.done.connect(self._on_done)
+        self.store = store          # ModelChainStore: save every change (None = not saved)
+        self._restoring = False
+        self._save_timer = QTimer(self)
+        self._save_timer.setSingleShot(True)
+        self._save_timer.timeout.connect(self.save_now)
 
         bar = QToolBar("模型链", self)
         bar.setMovable(False)
@@ -603,10 +646,14 @@ class ModelChainHost(QMainWindow):
         self.auto_check = QCheckBox("自动传给下一窗口", bar)
         self.auto_check.setChecked(True)
         self.auto_check.setToolTip("一个窗口有了新结果，就让后面输入为「上一窗口的结果」的窗口接着运行")
+        self.auto_check.toggled.connect(lambda _c: self.save_soon())
         bar.addWidget(self.auto_check)
         bar.addSeparator()
         self.close_all_action = bar.addAction("全部关闭")
+        self.close_all_action.setToolTip("关闭所有窗口（下次打开计算过程窗口时也不再恢复）")
         self.close_all_action.triggered.connect(self.close_all)
+        self.note = QLabel("", bar)
+        bar.addWidget(self.note)
         self.addToolBar(bar)
         self.toolbar = bar
 
@@ -623,12 +670,15 @@ class ModelChainHost(QMainWindow):
         installed = [m.name for m in model_catalog.SAM_MODELS if model_catalog.locate(m.name)]
         return installed[0] if installed else "sam2.1_t.pt"
 
-    def add_stage(self, model: Optional[str] = None) -> Optional[ChainStage]:
+    def add_stage(self, model: Optional[str] = None, config: Optional[dict] = None) -> Optional[ChainStage]:
         model = model or self.default_model()
         if not self.ensure_model(model):
             return None
         stage = ChainStage(model, self)
+        if config:
+            stage.apply_config(config)
         stage.changed.connect(self._on_stage_changed)
+        stage.config_changed.connect(self.save_soon)
         stage.run_requested.connect(self.request_run)
         stage.move_requested.connect(self.move_stage)
         dock = _ChainDock(stage, self)
@@ -643,6 +693,7 @@ class ModelChainHost(QMainWindow):
         self._renumber()
         self.equalize()
         self.stage_added.emit()
+        self.save_soon()
         if self.display is not None:
             stage.set_display(self.display)
             if stage.auto_runs():
@@ -676,6 +727,7 @@ class ModelChainHost(QMainWindow):
         self._renumber()
         self.equalize()
         self._rewired()
+        self.save_soon()
 
     def equalize(self) -> None:
         """Share the width evenly between the docked windows."""
@@ -692,6 +744,7 @@ class ModelChainHost(QMainWindow):
         self._docks.pop(stage, None)
         self._renumber()
         self._rewired()
+        self.save_soon()
         if not self.stages:
             self.emptied.emit()
 
@@ -700,9 +753,74 @@ class ModelChainHost(QMainWindow):
             self._docks[stage].close()
 
     def shutdown(self) -> None:
-        """The trace window is closing: close every window, drop late results."""
+        """The trace window is closing: save the chain as it is, close every window, drop late results."""
+        if self._save_timer.isActive():
+            self._save_timer.stop()
+            self.save_now()
         self._alive = False
         self.close_all()
+
+    # ── saved chain ──
+    def state(self) -> dict:
+        return {"auto": self.auto_check.isChecked(), "stages": [s.config() for s in self.stages]}
+
+    def save_soon(self) -> None:
+        if self.store is not None and self._alive and not self._restoring:
+            self._save_timer.start(self.SAVE_DELAY_MS)
+
+    def save_now(self) -> None:
+        if self.store is None or not self._alive:
+            return
+        try:
+            self.store.save(self.state())
+        except OSError as exc:  # a read-only profile: the chain just is not remembered
+            _LOG.warning("model chain not saved: %s", exc)
+
+    def restore(self) -> int:
+        """Rebuild the saved chain (windows whose model is gone are skipped); returns the count."""
+        if self.store is None:
+            return 0
+        state = self.store.load()
+        skipped = []
+        self._restoring = True
+        try:
+            self.auto_check.setChecked(state["auto"])
+            for config in state["stages"]:
+                model = config["model"]
+                if model != model_catalog.AUTO_DETECTOR and model_catalog.locate(model) is None:
+                    skipped.append(model)
+                    continue
+                self.add_stage(model, config)
+        finally:
+            self._restoring = False
+        self.note.setText(f"未恢复（模型未下载）：{'、'.join(skipped)}" if skipped else "")
+        return len(self.stages)
+
+    def trace_changed(self, image_changed: bool = False) -> None:
+        """The trace window has a new trace: rerun what depends on it (all of it for another image)."""
+        if not self.stages:
+            if image_changed:
+                self.image = self.display = None
+                self._loading = False
+            return
+        self._renumber()  # 「计算过程识别到的鸟（没有）」
+        if image_changed:
+            ran = [s for s in self.stages if s.result is not None or s.error is not None or s.busy]
+            self.image = self.display = None
+            self._loading = False
+            for s in self.stages:
+                s.generation += 1
+                s.set_busy(False)
+                s.pending = s in ran
+                s.show_message("正在载入新图像…")
+            self._load_image()
+            return
+        for s in self.stages:
+            if s.input == INPUT_TRACE and (s.result is not None or s.error is not None or s.busy):
+                if self.auto_check.isChecked():
+                    self.request_run(s)
+                else:
+                    s.show_message("计算过程已更新，点「运行」用新的鸟框。")
 
     def _renumber(self) -> None:
         has_trace = bool(self._boxes_provider())
@@ -713,6 +831,7 @@ class ModelChainHost(QMainWindow):
             self._docks[stage].setWindowTitle(f"{circled(i + 1)} {stage.model}")
 
     def _on_stage_changed(self, stage: ChainStage) -> None:
+        self.save_soon()
         self._renumber()
         self._mark_downstream_stale(stage)
         if stage.auto_runs():
@@ -760,7 +879,8 @@ class ModelChainHost(QMainWindow):
             image = provider()
             return image, display_image(image)
 
-        self._spawn(None, 0, load)
+        self._load_generation += 1
+        self._spawn(None, self._load_generation, load)
 
     # ── runs ──
     def run_all(self) -> None:
@@ -848,6 +968,8 @@ class ModelChainHost(QMainWindow):
         if not self._alive:
             return
         if stage is None:  # the photo
+            if generation != self._load_generation:
+                return
             self._loading = False
             if isinstance(result, Exception):
                 for s in self.stages:

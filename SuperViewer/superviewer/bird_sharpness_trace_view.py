@@ -597,6 +597,7 @@ class BirdSharpnessTraceDialog(QDialog):
         self.preview_host.setVisible(False)
         self.preview_host.emptied.connect(lambda: self.preview_host.setVisible(False))
         self.preview_host.stage_added.connect(self._make_room_for_chain)
+        self._chain_source: Optional[str] = None  # image source the chain was opened on (None = no trace yet)
         body.addWidget(self.preview_host)
         self._body = body
         body.setStretchFactor(0, 1)
@@ -818,6 +819,19 @@ class BirdSharpnessTraceDialog(QDialog):
         self._load_steps(trace.steps_all() if multi else trace.steps_for(None), keep_key=None)
         self.stack.setCurrentWidget(self.content)
         QTimer.singleShot(0, lambda: self.go(0, force=True))
+        self._update_chain()
+
+    def _update_chain(self) -> None:
+        """First trace: rebuild the saved model chain; later traces: rerun what depends on them."""
+        if self._chain_source is None:
+            self._chain_source = self.image_source
+            store = getattr(self, "chain_store", None)
+            if store is not None:
+                self.preview_host.store = store
+                self.preview_host.restore()
+            return
+        changed, self._chain_source = self.image_source != self._chain_source, self.image_source
+        self.preview_host.trace_changed(image_changed=changed)
 
     def _step_label(self, step) -> str:
         """Title with the bird number when several birds are traced."""
