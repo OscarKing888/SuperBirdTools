@@ -318,7 +318,7 @@ def test_result_xmp_fields_use_superpicky_formats() -> None:
     assert out["XMP-superpicky:bird_sharpness_bird_count"] == "2"
     assert out["XMP-superpicky:bird_sharpness_head_sigma"] == "1.269"
     assert out["XMP-superpicky:bird_sharpness_motion_ratio"] == "1.23"
-    assert out["XMP-superpicky:bird_sharpness_version"] == "sbt-blur-v13"
+    assert out["XMP-superpicky:bird_sharpness_version"] == "sbt-blur-v14"
     # No bird: the focus/whole-image value still fills the sharpness slot.
     focus = BirdSharpnessResult(path="x", verdict="no_bird", score=420, sigma=0.9, region="focus").to_xmp_fields()
     assert focus[bsf.SHARPNESS_XMP_KEY] == "420.00"
@@ -552,3 +552,58 @@ def test_edge_estimators_and_their_version_tags(monkeypatch) -> None:
     assert dense.version == f"{ALGORITHM_VERSION}-dense" and dense.edge_estimator == "dense"
     assert dense.to_xmp_fields()["XMP-superpicky:bird_sharpness_version"] == dense.version
     assert dense.verdict == standard.verdict == bsf.VERDICT_SHARP
+
+
+# ── v14: catchlights and background at the outline do not measure the head ───────
+
+def test_specular_highlights_are_small_blobs_far_above_their_surroundings() -> None:
+    from bird_sharpness.metrics import HIGHLIGHT_MARGIN_PX, specular_highlights
+
+    gray = np.full((300, 300), 0.2, np.float32)
+    cv2.circle(gray, (60, 60), 4, 0.9, -1)      # catchlight
+    cv2.circle(gray, (200, 200), 40, 0.9, -1)   # breast-sized bright patch
+    cv2.circle(gray, (60, 220), 4, 0.3, -1)     # faint spot
+    hl = specular_highlights(gray, 90.0)
+    assert hl[60, 60] and hl[60, 60 + 4 + HIGHLIGHT_MARGIN_PX - 1]
+    assert not hl[60, 60 + 4 + HIGHLIGHT_MARGIN_PX + 2]
+    assert not hl[200, 200] and not hl[220, 60]
+    assert not specular_highlights(np.full((100, 100), 0.5, np.float32), 40.0).any()
+
+
+def _catchlight_scene(sigma: float = 2.0) -> np.ndarray:
+    """A soft bird with a dark eye and a hard-edged catchlight in it (DSC06285)."""
+    scene = _scene([(900, 600, 300, sigma)])
+    eye = scene.copy()
+    cv2.circle(eye, (900, 600), 16, 0.05, -1)
+    eye = cv2.GaussianBlur(eye, (0, 0), sigma)
+    scene[560:640, 860:940] = eye[560:640, 860:940]
+    cv2.circle(scene, (905, 596), 4, 1.0, -1)  # defocused point light: a hard-rimmed disc
+    return scene
+
+
+def test_catchlight_does_not_make_a_soft_head_sharp(monkeypatch) -> None:
+    _install_image(monkeypatch, _catchlight_scene())
+    models = _StubModels([(900, 600, 300)], full_w=1800)
+    result = BirdSharpnessAnalyzer(models, focus_provider=_no_focus).analyze("bird.ARW")
+    assert result.verdict in (bsf.VERDICT_SOFT, bsf.VERDICT_MOTION), result
+    assert result.head_sigma is not None and result.head_sigma >= 1.55
+
+
+def test_without_highlight_exclusion_the_catchlight_reads_sharp(monkeypatch) -> None:
+    """Guards the previous test: the hard-rimmed disc alone would decide the head."""
+    monkeypatch.setattr(analyzer_mod, "specular_highlights", lambda gray, r: np.zeros(gray.shape, bool))
+    _install_image(monkeypatch, _catchlight_scene())
+    models = _StubModels([(900, 600, 300)], full_w=1800)
+    result = BirdSharpnessAnalyzer(models, focus_provider=_no_focus).analyze("bird.ARW")
+    assert result.verdict == bsf.VERDICT_SHARP, result
+
+
+def test_sharp_background_at_the_outline_does_not_measure_the_head(monkeypatch) -> None:
+    """A small soft bird whose head circle reaches past its mask; sharp bark stripes start
+    2 px outside the mask (the dilated mask used to measure them)."""
+    cx, cy, r = 900, 600, 60
+    scene = _scene([(cx, cy, r, 2.0)], texture=[(cx + r + 2 + 24, cy, 24, 0.3)])
+    _install_image(monkeypatch, scene)
+    models = _StubModels([(cx, cy, r)], full_w=1800)
+    result = BirdSharpnessAnalyzer(models, focus_provider=_no_focus).analyze("bird.ARW")
+    assert result.verdict in (bsf.VERDICT_SOFT, bsf.VERDICT_MOTION), result
