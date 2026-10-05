@@ -292,7 +292,7 @@ def test_bird_limit_option_reaches_the_analyzer_and_the_options_dialog():
         est = opts.KEY_BIRD_SHARPNESS_EDGE_ESTIMATOR
         assert controller.analyzer().max_birds == 0  # default: every bird
         assert controller.analyzer().edge_estimator == "standard"
-        assert controller.analyzer().tile_options.mf_center and controller.analyzer().version.endswith("v14")
+        assert controller.analyzer().tile_options.mf_center and controller.analyzer().version.endswith("v15")
         opts.apply_runtime_user_options({key: 6, est: "dense", opts.KEY_BIRD_SHARPNESS_MF_TILE: 128})
         assert controller.analyzer().max_birds == 6  # picked up at the next job start
         assert controller.analyzer().edge_estimator == "dense"

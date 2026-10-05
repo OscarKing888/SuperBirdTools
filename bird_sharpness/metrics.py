@@ -27,6 +27,12 @@ import numpy as np
 
 PRE_SIGMA = 1.0
 REBLUR_SIGMA = 1.5
+# Pixel sampling and the discrete Sobel difference put a real step edge at ~0.6-0.73 px even
+# in a perfectly focused image, so a radius below this floor cannot come from a step edge: it
+# is a thin line (a pine needle, an eye-ring, a mask outline staircase) whose two sides
+# merge into one over-sharp response. DSC06726 (a soft bird behind sharp needles): 11 head
+# edges at 0.3-0.44 px made the photo "sharp". Such edges are rejected as line-like (v15).
+SIGMA_FLOOR_PX = 0.5
 MIN_HEAD_EDGES = 20
 
 
@@ -196,11 +202,12 @@ class EdgeBlurField:
         """Per-pixel blur radius for ``sel`` plus which pixels are valid step edges."""
         ratio = self.mag0[sel] / np.maximum(self.mag1[sel], 1e-9)
         total = self.reblur_sigma / np.sqrt(np.maximum(ratio ** 2 - 1.0, 1e-12))
-        # A step edge already smoothed by pre_sigma cannot measure below it. Thinner
-        # structures (eye-ring lines, catchlights, twigs) do and would read as
-        # impossibly sharp, so they are not edges for this estimator.
-        valid = (ratio > 1.02) & (total >= self.pre_sigma)
+        # A step edge already smoothed by pre_sigma cannot measure below it, nor below
+        # SIGMA_FLOOR_PX once that smoothing is removed. Thinner structures (eye-ring
+        # lines, catchlights, twigs, needles) do and would read as impossibly sharp,
+        # so they are not edges for this estimator.
         sigma = np.sqrt(np.maximum(total ** 2 - self.pre_sigma ** 2, 0.0))
+        valid = (ratio > 1.02) & (total >= self.pre_sigma) & (sigma >= SIGMA_FLOOR_PX)
         return sigma, valid
 
     def _sigma_at(self, sel: np.ndarray) -> np.ndarray:
@@ -263,8 +270,8 @@ class EdgeBlurField:
         ratio = self.mag0[edges] / np.maximum(self.mag1[edges], 1e-9)
         ok = ratio > 1.02
         total = self.reblur_sigma / np.sqrt(np.maximum(ratio ** 2 - 1.0, 1e-6))
-        ok = ok & (total >= self.pre_sigma)  # drop line-like responses, as in _sigma_at
         sig = np.sqrt(np.maximum(total ** 2 - self.pre_sigma ** 2, 0.0))
+        ok = ok & (total >= self.pre_sigma) & (sig >= SIGMA_FLOOR_PX)  # drop line-like responses, as in _sigma_at
         theta = np.mod(np.arctan2(self.gy0[edges], self.gx0[edges]), np.pi)
         per_dir = []
         by_bin = []

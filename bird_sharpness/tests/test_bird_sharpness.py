@@ -318,7 +318,7 @@ def test_result_xmp_fields_use_superpicky_formats() -> None:
     assert out["XMP-superpicky:bird_sharpness_bird_count"] == "2"
     assert out["XMP-superpicky:bird_sharpness_head_sigma"] == "1.269"
     assert out["XMP-superpicky:bird_sharpness_motion_ratio"] == "1.23"
-    assert out["XMP-superpicky:bird_sharpness_version"] == "sbt-blur-v14"
+    assert out["XMP-superpicky:bird_sharpness_version"] == "sbt-blur-v15"
     # No bird: the focus/whole-image value still fills the sharpness slot.
     focus = BirdSharpnessResult(path="x", verdict="no_bird", score=420, sigma=0.9, region="focus").to_xmp_fields()
     assert focus[bsf.SHARPNESS_XMP_KEY] == "420.00"
@@ -699,3 +699,24 @@ def test_small_birds_below_min_bird_side_are_ignored(monkeypatch) -> None:
     none_left = BirdSharpnessAnalyzer(_StubModels([tiny], full_w=1800), focus_provider=_no_focus,
                                       params=AnalysisParams(min_bird_side=64)).analyze("bird.jpg")
     assert none_left.verdict == bsf.VERDICT_NO_BIRD and none_left.bird_count == 0  # falls through to the no-bird path
+
+
+# ── v15: radii below the step-edge floor are line-like ─────────────────────────
+
+def test_edges_below_the_sigma_floor_are_rejected_as_line_like() -> None:
+    from bird_sharpness.metrics import SIGMA_FLOOR_PX
+
+    # Sharp 1 px bright needles across a soft disc: the needles' two sides merge into one
+    # over-sharp response that read 0.3-0.45 px before the floor (DSC06726).
+    img = _blurred_disc(2.0, noise=0.004)
+    for y in range(40, img.shape[0] - 40, 24):
+        img[y, 20:-20] = 0.9
+    sel = EdgeBlurField(img).select_strongest_edges(np.ones_like(img, bool))
+    assert sel.selected.sum() >= 30 and sel.line_like.sum() > 0
+    assert sel.sigma.size == 0 or float(sel.sigma.min()) >= SIGMA_FLOOR_PX
+    # A real step edge measures above the floor and is still accepted.
+    clean = EdgeBlurField(_blurred_disc(0.0, noise=0.004)).select_strongest_edges(None)
+    assert clean.sigma.size >= 30 and float(np.median(clean.sigma)) == pytest.approx(_expected(0.0), rel=0.15)
+    # The body statistics apply the same rule.
+    stats, _ratio, (_ys, _xs, body_sig, _bins) = EdgeBlurField(img).body_blur_detail(np.ones_like(img, bool))
+    assert body_sig.size == 0 or float(body_sig.min()) >= SIGMA_FLOOR_PX

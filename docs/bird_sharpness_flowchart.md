@@ -2,7 +2,7 @@
 
 本文按代码的实际执行顺序，用流程图说明一张照片从入队到写入 XMP 的每个环节。算法的背景、标定数据和取舍理由见 [bird_sharpness.md](bird_sharpness.md)；本文只讲“先做什么、再做什么、什么条件走哪条分支”。所有阈值都标注了代码位置，以代码为准。
 
-版本：`sbt-blur-v14`（[scoring.py](../bird_sharpness/scoring.py) `ALGORITHM_VERSION`），非默认参数会追加后缀（见文末）。
+版本：`sbt-blur-v15`（[scoring.py](../bird_sharpness/scoring.py) `ALGORITHM_VERSION`），非默认参数会追加后缀（见文末）。
 
 ## 目录
 
@@ -381,14 +381,15 @@ flowchart TD
     C -->|是| E["keep = max(5%, min_kept / n)<br/>standard：min_kept 30；dense：60"]
     E --> F["selected = passed 中 mag0 位于前 keep 的边缘"]
     F --> G["每像素：R = mag0 / mag1<br/>total = 1.5 / sqrt(R² − 1)"]
-    G --> H{"R > 1.02 且 total ≥ 1.0？"}
-    H -->|否| I["line_like：比预平滑还“锐”的线状结构（眼圈高光、细枝）→ 舍弃"]
-    H -->|是| J["σ = sqrt(total² − 1.0²)（扣除预平滑）"]
+    G --> G1["σ = sqrt(total² − 1.0²)（扣除预平滑）"]
+    G1 --> H{"R > 1.02 且 total ≥ 1.0 且 σ ≥ 0.5？（SIGMA_FLOOR_PX）"}
+    H -->|否| I["line_like：比预平滑还“锐”、或低于真实阶跃边缘下限的线状结构<br/>（眼圈高光、细枝、松针、掩膜锯齿）→ 舍弃"]
+    H -->|是| J["σ 进入样本"]
     J --> K["EdgeSelection：ys, xs, sigma[], noise_sigma, threshold<br/>（计算过程窗口按此着色）"]
     K --> L["_edge_stats：样本 < 8 → None；否则<br/>standard 取中位数，dense 取第 40 百分位；另给 p25 / p75 / 数量"]
 ```
 
-原理：Zhuo & Sim (2011) 梯度再模糊比值法。σ 与对比度、曝光、羽色无关。像素采样与 Sobel 差分带来约 0.6–0.73 px 的固有下限，阈值已按实测值标定。
+原理：Zhuo & Sim (2011) 梯度再模糊比值法。σ 与对比度、曝光、羽色无关。像素采样与 Sobel 差分带来约 0.6–0.73 px 的固有下限，阈值已按实测值标定；因此低于 0.5 px 的值不可能来自阶跃边缘，v15 起按线状舍弃（身体的 `body_blur_detail` 用同一规则）。
 
 ---
 
@@ -504,6 +505,7 @@ flowchart TD
 | `HIGHLIGHT_MIN_RISE` / `HIGHLIGHT_CONTRAST` / `HIGHLIGHT_KERNEL_RATIO` / `HIGHLIGHT_MAX_RADIUS_RATIO` / `HIGHLIGHT_MARGIN_PX` | 0.10 / 3.0 / 0.2 / 0.15 / 8 | metrics.py | 高光（眼睛反光）排除 |
 | `EXTRA_BIRD_CONFIDENCE_MAX` / `EXTRA_BIRD_ANCHOR_MIN` / `PART_OF_BIRD_OVERLAP` | 0.4 / 0.5 / 0.5 | analyzer.py | 排除假鸟 / 局部 |
 | `PRE_SIGMA` / `REBLUR_SIGMA` | 1.0 / 1.5 | metrics.py | 再模糊比值法 |
+| `SIGMA_FLOOR_PX` | 0.5 | metrics.py | 低于它的边缘按线状舍弃（真实阶跃边缘 ≥ 约 0.6） |
 | `NOISE_EDGE_FACTOR` | 4.0 | metrics.py | 边缘信噪门槛 |
 | `MIN_HEAD_EDGES` / `MIN_BODY_EDGES` | 20 / 60 | metrics.py | 最少边缘数 |
 | `DIRECTION_BINS` / `MIN_EDGES_PER_DIRECTION` | 8 / 15 | metrics.py | 运动模糊方向统计 |

@@ -15,7 +15,8 @@ is mapped piecewise-linearly so that those gates line up with what a 100% view
 shows: ``sigma <= 0.85`` crisp, ``0.85..1.05`` usable, ``> 1.05`` soft and
 ``>= 1.55`` clearly blurred (v2: noise-level and line-like edges excluded, which
 lifts every radius by ~0.05-0.1 px versus v1's 0.80/1.00/1.50; v3: edges must
-reach 4x the noise level, and a visible head without any is "clearly blurred"). Calibrated on a Sony ILCE-1M2 ISO 2500-3200 burst
+reach 4x the noise level, and a visible head without any is "clearly blurred"; v15: radii
+below ``metrics.SIGMA_FLOOR_PX`` (0.5 px) are rejected as line-like). Calibrated on a Sony ILCE-1M2 ISO 2500-3200 burst
 (LibRaw LINEAR demosaic, analysis at full output resolution); sigma is in pixels
 of that resolution, so the same thresholds describe what a 100% view shows.
 """
@@ -35,7 +36,7 @@ from app_common.bird_sharpness_fields import (
     VERDICT_USABLE,
 )
 
-ALGORITHM_VERSION = "sbt-blur-v14"
+ALGORITHM_VERSION = "sbt-blur-v15"
 
 # (sigma_px, score) anchors, sigma ascending / score descending.
 SCORE_ANCHORS: Tuple[Tuple[float, float], ...] = (
