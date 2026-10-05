@@ -471,7 +471,7 @@ flowchart TD
 | `max_birds` | 0（不限） | 第 4 节限数 | 无 |
 | `edge_estimator` | standard | 第 10 节 min_kept / 分位 | `-dense` |
 | `detector` | auto | 第 4、5、6 节识别模型 | `-<模型名>` |
-| `sam_model` / `sam_scope` | 空 / rechecked | 第 7.1 节掩膜精修 | `-<sam名>-rechecked` / `-all` |
+| `sam_model` / `sam_scope` | 空 / all | 第 7.1 节掩膜精修：设了 SAM 模型时每只检测到的鸟都经 SAM 抠一次；rechecked = 只有复检 / 增强找到的鸟 | `-<sam名>-all` / `-rechecked` |
 | `min_bird_side` | 0（不忽略） | 第 4–6 节：丢掉框长边 < N px 的鸟 | `-min<N>` |
 | `bird_pixels` | outline | 第 7.1 节：轮廓内 / 整个鸟框内核（box 时不做 SAM） | `-box` |
 | `grey_fill` | False | 第 7.1 节：鸟以外涂灰 114 后再测（含鸟眼定位） | `-grey` |

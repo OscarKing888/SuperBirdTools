@@ -64,8 +64,8 @@ def main(argv: List[str] | None = None) -> int:
                         help="鸟体识别模型文件名（如 yolo11x-seg.pt、yolo26l.pt；默认 auto = 内置选择）；见 --list-models")
     parser.add_argument("--sam", default="", metavar="MODEL",
                         help="用 SAM 模型精修鸟体像素（如 sam2.1_t.pt；默认不精修）")
-    parser.add_argument("--sam-scope", choices=("rechecked", "all"), default="rechecked",
-                        help="SAM 精修范围：rechecked = 复检/增强找到的鸟（默认），all = 全部鸟")
+    parser.add_argument("--sam-scope", choices=("all", "rechecked"), default="all",
+                        help="SAM 精修范围：all = YOLO 检测到的每只鸟都经 SAM 抠一次（默认），rechecked = 只有复检/增强找到的鸟（更快）")
     parser.add_argument("--min-bird-side", type=int, default=0, metavar="PX",
                         help="忽略鸟框长边小于 PX（全分辨率像素）的鸟，如 64；默认 0 = 不忽略")
     parser.add_argument("--pixels", choices=("outline", "box"), default="outline",

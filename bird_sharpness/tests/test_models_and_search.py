@@ -132,7 +132,8 @@ def test_params_round_trip_normalize_and_tag_the_version() -> None:
     assert AnalysisParams.from_params(custom.as_params()) == custom
     bad = AnalysisParams.from_params({"detector": "../x.pt", "sam_model": "a b.pt", "enh_mode": "always",
                                       "sam_scope": "?", "enh_grid": 99, "max_birds": -2})
-    assert (bad.detector, bad.sam_model, bad.enhanced.mode, bad.sam_scope) == ("auto", "", "off", "rechecked")
+    assert (bad.detector, bad.sam_model, bad.enhanced.mode, bad.sam_scope) == ("auto", "", "off", "all")
+    assert AnalysisParams().sam_scope == "all"  # every detected bird goes through SAM once a model is set
     assert bad.enhanced.grid == 6 and bad.max_birds == 0
 
 
@@ -256,7 +257,8 @@ class _FakeRefiner:
 
 def test_sam_refines_rechecked_birds_and_keeps_detector_masks_otherwise(monkeypatch) -> None:
     refiner = _FakeRefiner()
-    _m, analyzer = _enhanced_analyzer(monkeypatch, sam={"sam_model": "sam2.1_t.pt"}, refiner=lambda name: refiner)
+    _m, analyzer = _enhanced_analyzer(monkeypatch, sam={"sam_model": "sam2.1_t.pt", "sam_scope": "rechecked"},
+                                      refiner=lambda name: refiner)
     tracer = AnalysisTracer()
     result = analyzer.analyze("x.ARW", tracer=tracer)
     assert result.birds[0]["refined_by"] == "sam2.1_t.pt" and result.sam_model == "sam2.1_t.pt"
@@ -264,13 +266,14 @@ def test_sam_refines_rechecked_birds_and_keeps_detector_masks_otherwise(monkeypa
     bird_step = next(s for s in tracer.trace.steps_all() if s.key == "bird")
     assert "sam2.1_t.pt 精修" in dict(bird_step.metrics)["像素来源"]
     assert dict(tracer.trace.final[0].metrics)["SAM 精修"] == "sam2.1_t.pt"
-    # birds of the normal pass are left alone unless the scope is "all"
+    # by default every detected bird goes through SAM; "rechecked" leaves the normal pass alone
     _install_image(monkeypatch, _scene([(900, 600, 300, 0.3)]))
-    normal = BirdSharpnessAnalyzer(_StubModels([(900, 600, 300)], full_w=1800), focus_provider=_no_focus,
-                                   params=AnalysisParams(sam_model="sam2.1_t.pt"), refiner_provider=lambda n: refiner)
-    assert normal.analyze("x.ARW").birds[0]["refined_by"] == "" and len(refiner.calls) == 1
-    everyone = normal.with_options(params=replace(normal.params, sam_scope="all"))
-    assert everyone.analyze("x.ARW").birds[0]["refined_by"] == "sam2.1_t.pt"
+    everyone = BirdSharpnessAnalyzer(_StubModels([(900, 600, 300)], full_w=1800), focus_provider=_no_focus,
+                                     params=AnalysisParams(sam_model="sam2.1_t.pt"), refiner_provider=lambda n: refiner)
+    assert everyone.analyze("x.ARW").birds[0]["refined_by"] == "sam2.1_t.pt" and len(refiner.calls) == 2
+    assert everyone.version.endswith("-sam2.1_t-all")
+    normal = everyone.with_options(params=replace(everyone.params, sam_scope="rechecked"))
+    assert normal.analyze("x.ARW").birds[0]["refined_by"] == "" and len(refiner.calls) == 2
 
 
 def test_sam_mask_that_misses_the_bird_is_not_used(monkeypatch) -> None:

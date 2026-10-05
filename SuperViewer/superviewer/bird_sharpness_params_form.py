@@ -48,7 +48,8 @@ ESTIMATOR_CHOICES = (
      "但在已标注照片上有 2/15 张在清晰与可用之间对调，结果仅供对比。"),
 )
 ENH_CHOICES = ((ENH_OFF, "关闭（默认）"), (ENH_MANUAL, "仅手动对焦的照片"), (ENH_NOBIRD, "所有没找到鸟的照片"))
-SAM_SCOPE_CHOICES = ((SAM_SCOPE_RECHECKED, "仅复检/增强找到的鸟"), (SAM_SCOPE_ALL, "全部鸟（鸟群较慢）"))
+SAM_SCOPE_CHOICES = ((SAM_SCOPE_ALL, "全部鸟（默认；每只鸟都经 SAM 抠一次，鸟群较慢）"),
+                     (SAM_SCOPE_RECHECKED, "仅复检/增强找到的鸟（更快）"))
 PIXELS_CHOICES = ((PIXELS_OUTLINE, "抠出的鸟体像素（轮廓内，默认）"), (PIXELS_BOX, "整个鸟框区域"))
 
 
@@ -425,7 +426,7 @@ class AnalysisParamsForm(QWidget):
             "max_birds": int(self.max_birds.value()), "min_bird_side": int(self.min_bird_side.value()),
             "edge_estimator": self.estimator.currentData() or "standard",
             "detector": self.detector.currentData() or "auto", "sam_model": self.sam_model.currentData() or "",
-            "sam_scope": self.sam_scope.currentData() or SAM_SCOPE_RECHECKED,
+            "sam_scope": self.sam_scope.currentData() or SAM_SCOPE_ALL,
             "bird_pixels": self.pixels.currentData() or PIXELS_OUTLINE, "grey_fill": self.grey_fill.isChecked(),
             "enh_mode": self.enh_mode.currentData() or ENH_OFF, "enh_region_percent": int(self.enh_region.value()),
             "enh_grid": int(self.enh_grid.value()), "enh_imgsz": int(self.enh_imgsz.value()),

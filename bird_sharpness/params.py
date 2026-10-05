@@ -81,7 +81,7 @@ class AnalysisParams:
     edge_estimator: str = ESTIMATOR_STANDARD.key
     detector: str = "auto"                   # model file name, "auto" = built-in choice
     sam_model: str = ""                      # SAM/SAM2 file name, "" = no refinement
-    sam_scope: str = SAM_SCOPE_RECHECKED     # rechecked: birds the normal pass missed; all: every bird
+    sam_scope: str = SAM_SCOPE_ALL           # all (default): every detected bird; rechecked: only birds the normal pass missed
     enhanced: EnhancedSearch = field(default_factory=EnhancedSearch)
     tiles: TileOptions = field(default_factory=TileOptions)
     # The measured pixels of each bird (PIXELS_OUTLINE / PIXELS_BOX) and whether everything else in
@@ -115,7 +115,7 @@ class AnalysisParams:
             _clamp(self.max_birds, 0, 999, 0),
             self.edge_estimator if self.edge_estimator in EDGE_ESTIMATORS else ESTIMATOR_STANDARD.key,
             _model_name(self.detector, "auto", "auto"), _model_name(self.sam_model, "", ""),
-            self.sam_scope if self.sam_scope in SAM_SCOPES else SAM_SCOPE_RECHECKED,
+            self.sam_scope if self.sam_scope in SAM_SCOPES else SAM_SCOPE_ALL,
             self.enhanced.normalized(), self.tiles.normalized(),
             self.bird_pixels if self.bird_pixels in BIRD_PIXELS else PIXELS_OUTLINE, bool(self.grey_fill),
             _clamp(self.min_bird_side, 0, 4096, 0))
