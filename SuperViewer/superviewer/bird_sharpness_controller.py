@@ -122,6 +122,9 @@ class BirdSharpnessWorker(QThread):
             self.status_changed.emit("正在加载检测模型…")
             analyzer = self._holder.analyzer()
             analyzer.load()
+            sam_model = getattr(getattr(analyzer, "params", None), "sam_model", "")
+            if sam_model:  # fail the job once, not every photo, when the SAM model is missing
+                analyzer.refiner_provider(sam_model).load()
             models = getattr(analyzer, "models", None)
             if models is not None and getattr(models, "has_keypoints", True) is False:
                 self.warning_changed.emit("未找到鸟眼关键点模型：鸟体按整只鸟计算，翅膀/尾羽和遮挡树叶会干扰结果，准确度明显降低。")
@@ -264,29 +267,17 @@ class _TraceBridge(QObject):
 
 
 def _analysis_options() -> dict:
-    """Bird sharpness options from the SuperViewer user options (defaults when unavailable):
-    ``max_birds``, ``edge_estimator`` and the no-bird tiling (``TileOptions.as_params`` keys)."""
-    from bird_sharpness.metrics import TileOptions
+    """Every bird sharpness option (``AnalysisParams.as_params`` names) from the SuperViewer
+    user options (设置 → 鸟清晰度), defaults when unavailable. Batch detection runs on these;
+    trace windows start from them and may change them for one window."""
+    from bird_sharpness.params import AnalysisParams
 
     try:
-        from app_common.superviewer_user_options import (get_bird_sharpness_edge_estimator,
-                                                         get_bird_sharpness_max_birds,
-                                                         get_bird_sharpness_tile_options)
+        from app_common.superviewer_user_options import get_bird_sharpness_params
 
-        return {"max_birds": max(0, int(get_bird_sharpness_max_birds())),
-                "edge_estimator": str(get_bird_sharpness_edge_estimator()),
-                **TileOptions.from_params(get_bird_sharpness_tile_options()).as_params()}
+        return AnalysisParams.from_params(get_bird_sharpness_params()).as_params()
     except Exception:
-        return {"max_birds": 0, "edge_estimator": "standard", **TileOptions().as_params()}
-
-
-def _tile_option_keys() -> dict:
-    """Trace/analyzer tiling parameter -> SuperViewer user option key."""
-    from app_common import superviewer_user_options as opts
-
-    return {"full_tile": opts.KEY_BIRD_SHARPNESS_FULL_TILE, "mf_center": opts.KEY_BIRD_SHARPNESS_MF_CENTER,
-            "mf_center_percent": opts.KEY_BIRD_SHARPNESS_MF_CENTER_PERCENT, "mf_tile": opts.KEY_BIRD_SHARPNESS_MF_TILE,
-            "mf_sharpest_percent": opts.KEY_BIRD_SHARPNESS_MF_SHARPEST_PERCENT}
+        return AnalysisParams().as_params()
 
 
 class BirdSharpnessController(QObject):
@@ -326,12 +317,9 @@ class BirdSharpnessController(QObject):
                 # Same focus-box loader as the preview overlay, so the measured window is what users see.
                 self._analyzer = BirdSharpnessAnalyzer(focus_provider=_viewer_focus_box)
             # Read at every job start: a changed user option applies to the next detection or trace.
-            params = _analysis_options()
-            self._analyzer.max_birds = params["max_birds"]
-            self._analyzer.edge_estimator = params["edge_estimator"]
-            from bird_sharpness.metrics import TileOptions
+            from bird_sharpness.params import AnalysisParams
 
-            self._analyzer.tile_options = TileOptions.from_params(params)
+            self._analyzer.params = AnalysisParams.from_params(_analysis_options())
             return self._analyzer
 
     @property
@@ -425,11 +413,11 @@ class BirdSharpnessController(QObject):
         cancel = threading.Event()
         request = [dialog, None, cancel]
         params = getattr(dialog, "params", None) or {}
-        from bird_sharpness.metrics import TileOptions
+        from bird_sharpness.params import AnalysisParams
 
+        # This window's parameters on top of the user options; the shared analyzer stays untouched.
         base = self.analyzer()
-        analyzer = base.with_options(max_birds=params.get("max_birds"), edge_estimator=params.get("edge_estimator"),
-                                     tile_options=TileOptions.from_params({**base.tile_options.as_params(), **params}))
+        analyzer = base.with_options(params=AnalysisParams.from_params({**base.params.as_params(), **params}))
         action = BirdSharpnessTraceAction(analyzer, dialog.path, cancelled=cancel.is_set,
                                           image_source=image_source,
                                           denoised_lookup=self._denoised_lookup if self._denoise is not None else None)
@@ -457,17 +445,13 @@ class BirdSharpnessController(QObject):
 
     def _save_trace_params(self, dialog) -> None:
         """「保存为默认设置」in a trace window: store its parameters as user options."""
-        from app_common.superviewer_user_options import (KEY_BIRD_SHARPNESS_EDGE_ESTIMATOR,
-                                                         KEY_BIRD_SHARPNESS_MAX_BIRDS, apply_runtime_user_options,
+        from app_common.superviewer_user_options import (apply_runtime_user_options,
+                                                         bird_sharpness_params_to_options,
                                                          get_runtime_user_options, save_user_options)
 
         params = dialog.selected_params()
         options = get_runtime_user_options()
-        options[KEY_BIRD_SHARPNESS_MAX_BIRDS] = params["max_birds"]
-        options[KEY_BIRD_SHARPNESS_EDGE_ESTIMATOR] = params["edge_estimator"]
-        for name, key in _tile_option_keys().items():
-            if name in params:
-                options[key] = int(params[name])
+        options.update(bird_sharpness_params_to_options(params))
         try:
             normalized = save_user_options(options)
         except Exception as exc:
@@ -718,6 +702,15 @@ class BirdSharpnessController(QObject):
                 analyzer.release()
             except Exception:
                 pass
+        # Trace windows may have loaded other detectors / SAM models: free those too.
+        try:
+            from bird_sharpness.models import release_shared_models
+            from bird_sharpness.refine import release_shared_refiners
+
+            release_shared_models()
+            release_shared_refiners()
+        except Exception:
+            pass
 
     def _show_message(self, text: str) -> None:
         from .qt_compat import QMessageBox

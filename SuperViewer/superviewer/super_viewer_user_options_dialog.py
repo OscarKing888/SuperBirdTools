@@ -6,20 +6,14 @@ from __future__ import annotations
 import os
 
 from app_common.superviewer_user_options import (
-    BIRD_SHARPNESS_MAX_BIRDS_LIMIT,
-    KEY_BIRD_SHARPNESS_EDGE_ESTIMATOR,
-    KEY_BIRD_SHARPNESS_FULL_TILE,
-    KEY_BIRD_SHARPNESS_MAX_BIRDS,
-    KEY_BIRD_SHARPNESS_MF_CENTER,
-    KEY_BIRD_SHARPNESS_MF_CENTER_PERCENT,
-    KEY_BIRD_SHARPNESS_MF_SHARPEST_PERCENT,
-    KEY_BIRD_SHARPNESS_MF_TILE,
+    BIRD_SHARPNESS_PARAM_KEYS,
     KEY_NAVIGATION_FPS_OPTIONS,
     KEY_PERF_PROBES_ENABLED,
     PERSISTENT_THUMB_SIZE_LEVELS,
     USER_OPTIONS_FILENAME,
     get_runtime_user_options,
     get_user_options_path,
+    bird_sharpness_params_to_options,
     normalize_user_options,
     valid_denoise_subdir,
 )
@@ -35,6 +29,7 @@ from .qt_compat import (
     QFileDialog,
     QMessageBox,
     QPushButton,
+    QScrollArea,
     QSpinBox,
     QTabWidget,
     QWidget,
@@ -44,8 +39,10 @@ from .qt_compat import (
 
 try:
     from PyQt6.QtCore import Qt
+    from PyQt6.QtGui import QPalette
 except ImportError:  # pragma: no cover - PyQt5 fallback
     from PyQt5.QtCore import Qt
+    from PyQt5.QtGui import QPalette
 
 _TOOLTIP_ROLE = getattr(getattr(Qt, "ItemDataRole", Qt), "ToolTipRole")
 
@@ -215,53 +212,31 @@ class SuperViewerUserOptionsDialog(QDialog):
 
         sharpness = QWidget(tabs)
         sharpness_layout = QVBoxLayout(sharpness)
-        sharpness_grid = QGridLayout()
-        sharpness_grid.setVerticalSpacing(10)
-        self._spin_bird_sharpness_max_birds = QSpinBox(sharpness)
-        self._spin_bird_sharpness_max_birds.setRange(0, BIRD_SHARPNESS_MAX_BIRDS_LIMIT)
-        self._spin_bird_sharpness_max_birds.setSpecialValueText("不限制")
-        self._spin_bird_sharpness_max_birds.setSuffix(" 只")
-        self._spin_bird_sharpness_max_birds.setValue(int(opts[KEY_BIRD_SHARPNESS_MAX_BIRDS]))
-        self._spin_bird_sharpness_max_birds.setToolTip("0 = 不限制。鸟群照片里每只鸟都要单独定位和测量，限制数量可缩短耗时。")
-        sharpness_grid.addWidget(QLabel("每张最多测量鸟数"), 0, 0)
-        sharpness_grid.addWidget(self._spin_bird_sharpness_max_birds, 0, 1)
-        from .bird_sharpness_trace_view import ESTIMATOR_CHOICES
+        from .bird_sharpness_params_form import AnalysisParamsForm
 
-        self._combo_bird_sharpness_estimator = QComboBox(sharpness)
-        for key, label, tip in ESTIMATOR_CHOICES:
-            self._combo_bird_sharpness_estimator.addItem(label, key)
-            self._combo_bird_sharpness_estimator.setItemData(
-                self._combo_bird_sharpness_estimator.count() - 1, tip, _TOOLTIP_ROLE)
-        self._combo_bird_sharpness_estimator.setCurrentIndex(
-            max(0, self._combo_bird_sharpness_estimator.findData(opts[KEY_BIRD_SHARPNESS_EDGE_ESTIMATOR])))
-        sharpness_grid.addWidget(QLabel("边缘统计方式"), 1, 0)
-        sharpness_grid.addWidget(self._combo_bird_sharpness_estimator, 1, 1)
-        sharpness_grid.setColumnStretch(2, 1)
-        sharpness_layout.addLayout(sharpness_grid)
-        from .bird_sharpness_trace_view import TileParamsForm
-
-        tiles_heading = QLabel("无鸟时的分块", sharpness)
-        tiles_font = tiles_heading.font()
-        tiles_font.setBold(True)
-        tiles_heading.setFont(tiles_font)
-        sharpness_layout.addSpacing(6)
-        sharpness_layout.addWidget(tiles_heading)
-        self._bird_sharpness_tiles = TileParamsForm(sharpness, expand_fields=False)
-        self._bird_sharpness_tiles.set_params({
-            "full_tile": opts[KEY_BIRD_SHARPNESS_FULL_TILE], "mf_center": opts[KEY_BIRD_SHARPNESS_MF_CENTER],
-            "mf_center_percent": opts[KEY_BIRD_SHARPNESS_MF_CENTER_PERCENT], "mf_tile": opts[KEY_BIRD_SHARPNESS_MF_TILE],
-            "mf_sharpest_percent": opts[KEY_BIRD_SHARPNESS_MF_SHARPEST_PERCENT]})
-        sharpness_layout.addWidget(self._bird_sharpness_tiles)
-        sharpness_note = QLabel("默认测量照片中的全部鸟，取最清晰的一只作为整张照片的清晰度。\n"
+        # The same form as the trace window's 参数 tab: one pipeline, parameters from here for batch runs.
+        self._bird_sharpness_form = AnalysisParamsForm(sharpness, expand_fields=False)
+        self._bird_sharpness_form.set_params({name: opts[key] for name, key in BIRD_SHARPNESS_PARAM_KEYS.items()})
+        self._spin_bird_sharpness_max_birds = self._bird_sharpness_form.max_birds
+        self._combo_bird_sharpness_estimator = self._bird_sharpness_form.estimator
+        self._bird_sharpness_tiles = self._bird_sharpness_form.tiles
+        sharpness_layout.addWidget(self._bird_sharpness_form)
+        sharpness_note = QLabel("默认测量照片中的全部鸟，取最清晰的一只作为整张照片的清晰度。"
                                 "设了上限时，压在相机焦点框上的鸟优先测量，其余按识别置信度 × 鸟框面积排序。\n"
-                                "边缘统计方式：「标准」是门槛标定所用的方式；「密集」让小鸟的结果更稳，但仍属实验性，"
-                                "结果以单独的算法版本记录，「跳过已检测」不会把两种方式的结果混用。\n"
-                                "无鸟时的分块：没有鸟、没有焦点框时测全图；相机记录为手动对焦时只测画面中心，"
-                                "取最清晰的分块（焦平面）。非默认的分块参数同样以单独的算法版本记录。\n"
+                                "边缘统计方式：「标准」是门槛标定所用的方式；「密集」让小鸟的结果更稳，但仍属实验性。\n"
+                                "识别模型：可换用其他 YOLO 检测模型，或用 SAM 重新抠出被枝叶挡住的鸟；未下载的模型可在此下载。\n"
+                                "增强找鸟：没找到鸟时放大窗口再找，放大后的树叶也会被认成鸟，建议先在计算过程窗口里试门槛。\n"
+                                "无鸟时的分块：没有鸟、没有焦点框时测全图；相机记录为手动对焦时测画面中心的焦平面（不是鸟）。\n"
+                                "所有非默认的参数都以单独的算法版本记录，「跳过已检测」不会把不同设置的结果混用。"
                                 "新的设置用于下一次检测和计算过程查看；计算过程窗口的「参数」页可临时改用其他参数对比。", sharpness)
         sharpness_note.setWordWrap(True)
+        sharpness_note.setForegroundRole(getattr(QPalette, "ColorRole", QPalette).PlaceholderText)
         sharpness_layout.addWidget(sharpness_note)
         sharpness_layout.addStretch(1)
+        sharpness_scroll = QScrollArea(tabs)
+        sharpness_scroll.setWidget(sharpness)
+        sharpness_scroll.setWidgetResizable(True)
+        sharpness = sharpness_scroll
         tabs.addTab(sharpness, "鸟清晰度")
         self._combo_denoise_mode.currentIndexChanged.connect(self._update_denoise_mode)
         self._update_denoise_mode()
@@ -314,14 +289,5 @@ class SuperViewerUserOptionsDialog(QDialog):
             "denoise_strength": self._spin_denoise_strength.value(),
             "denoise_device": str(self._combo_denoise_device.currentData()),
             "denoise_workers": self._spin_denoise_workers.value(),
-            KEY_BIRD_SHARPNESS_MAX_BIRDS: int(self._spin_bird_sharpness_max_birds.value()),
-            KEY_BIRD_SHARPNESS_EDGE_ESTIMATOR: str(self._combo_bird_sharpness_estimator.currentData()),
-            **self._bird_sharpness_tile_options(),
+            **bird_sharpness_params_to_options(self._bird_sharpness_form.params()),
         }
-
-    def _bird_sharpness_tile_options(self) -> dict[str, int]:
-        tiles = self._bird_sharpness_tiles.params()
-        return {KEY_BIRD_SHARPNESS_FULL_TILE: tiles["full_tile"], KEY_BIRD_SHARPNESS_MF_CENTER: int(tiles["mf_center"]),
-                KEY_BIRD_SHARPNESS_MF_CENTER_PERCENT: tiles["mf_center_percent"],
-                KEY_BIRD_SHARPNESS_MF_TILE: tiles["mf_tile"],
-                KEY_BIRD_SHARPNESS_MF_SHARPEST_PERCENT: tiles["mf_sharpest_percent"]}

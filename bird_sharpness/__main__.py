@@ -44,7 +44,7 @@ def collect_image_paths(inputs: Iterable[str], *, recursive: bool) -> List[str]:
 def main(argv: List[str] | None = None) -> int:
     _bootstrap_repo_root()
     parser = argparse.ArgumentParser(prog="bird_sharpness", description="检测照片中鸟的清晰度（头部模糊半径）")
-    parser.add_argument("paths", nargs="+", help="图片文件或目录")
+    parser.add_argument("paths", nargs="*", help="图片文件或目录")
     parser.add_argument("-r", "--recursive", action="store_true", help="递归子目录")
     parser.add_argument("--write-xmp", action="store_true", help="把结果写入同名 XMP sidecar")
     parser.add_argument("--json", action="store_true", help="逐行输出 JSON")
@@ -60,6 +60,22 @@ def main(argv: List[str] | None = None) -> int:
     parser.add_argument("--edge-estimator", choices=("standard", "dense"), default="standard",
                         help="边缘统计方式：standard = 最强 30 条边缘的中位数（默认）；"
                              "dense = 至少 60 条边缘的第 40 百分位（小鸟更稳）")
+    parser.add_argument("--detector", default="auto",
+                        help="鸟体识别模型文件名（如 yolo11x-seg.pt、yolo26l.pt；默认 auto = 内置选择）；见 --list-models")
+    parser.add_argument("--sam", default="", metavar="MODEL",
+                        help="用 SAM 模型精修鸟体像素（如 sam2.1_t.pt；默认不精修）")
+    parser.add_argument("--sam-scope", choices=("rechecked", "all"), default="rechecked",
+                        help="SAM 精修范围：rechecked = 复检/增强找到的鸟（默认），all = 全部鸟")
+    parser.add_argument("--enhanced", choices=("off", "manual", "nobird"), default="off",
+                        help="增强找鸟（没找到鸟时放大窗口再找）：off（默认）/ manual 仅手动对焦 / nobird 所有无鸟照片")
+    parser.add_argument("--enh-region-percent", type=int, default=70, help="增强找鸟：中心区域每边占画幅百分比（默认 70）")
+    parser.add_argument("--enh-grid", type=int, default=2, help="增强找鸟：N×N 个重叠窗口（默认 2）")
+    parser.add_argument("--enh-imgsz", type=int, default=1024, help="增强找鸟：网络输入尺寸（默认 1024）")
+    parser.add_argument("--enh-min-conf", type=float, default=0.5, help="增强找鸟：采纳门槛（默认 0.5）")
+    parser.add_argument("--no-enh-lift", action="store_true", help="增强找鸟：画面暗时不提亮")
+    parser.add_argument("--list-models", action="store_true", help="列出可选模型及是否已安装，然后退出")
+    parser.add_argument("--download-model", action="append", default=[], metavar="MODEL",
+                        help="下载模型到用户模型目录后退出（可重复）")
     parser.add_argument("--full-tile", type=int, default=1024,
                         help="无鸟、无焦点时全图的分块边长（px，默认 1024）")
     parser.add_argument("--no-mf-center", action="store_true",
@@ -74,6 +90,20 @@ def main(argv: List[str] | None = None) -> int:
         help="并行检测的照片数（模型推理串行，解码与计算并行；默认 CPU 核数的一半，最多 6）",
     )
     args = parser.parse_args(argv)
+    if args.list_models or args.download_model:
+        from . import model_catalog
+
+        if args.list_models:
+            for model in (*model_catalog.DETECTORS, *model_catalog.SAM_MODELS):
+                where = model_catalog.locate(model.name)
+                print(f"{model.name:18s} {model.label:28s} {where or '未安装'}")
+            print(f"下载目录：{model_catalog.user_model_dir()}")
+        for name in args.download_model:
+            print(f"下载 {name} …", flush=True)
+            print(model_catalog.download(name))
+        return 0
+    if not args.paths:
+        parser.error("请指定图片或目录")
     if args.write_xmp and args.source != "raw":
         parser.error("--write-xmp 只能与 --source raw 一起使用（XMP 里的清晰度按 RAW 解码标定）")
 
@@ -130,8 +160,19 @@ def main(argv: List[str] | None = None) -> int:
 
     tiles = TileOptions(args.full_tile, not args.no_mf_center, args.mf_center_percent, args.mf_tile,
                         args.mf_sharpest_percent).normalized()
-    analyzer = BirdSharpnessAnalyzer(max_birds=max(0, args.max_birds), edge_estimator=args.edge_estimator,
-                                     tile_options=tiles)
+    from .params import AnalysisParams, EnhancedSearch
+
+    params = AnalysisParams(max(0, args.max_birds), args.edge_estimator, args.detector, args.sam, args.sam_scope,
+                            EnhancedSearch(args.enhanced, args.enh_region_percent, args.enh_grid, args.enh_imgsz,
+                                           int(round(args.enh_min_conf * 100)), not args.no_enh_lift),
+                            tiles).normalized()
+    from .models import BirdSharpnessModelError, find_model
+
+    for name in (params.detector if params.detector != "auto" else "", params.sam_model):
+        if name and find_model((name,)) is None:
+            print(f"找不到模型 {name}：先用 --download-model {name} 下载", file=sys.stderr)
+            return 2
+    analyzer = BirdSharpnessAnalyzer(params=params)
     try:
         if args.trace:
             from .trace import AnalysisTracer

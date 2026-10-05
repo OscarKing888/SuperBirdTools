@@ -41,6 +41,7 @@ FOUND_FULL_SMALL = "full_small"  # high-resolution pass for small birds (flocks)
 FOUND_FULL_FINE = "full_fine"    # whole frame at the finer recheck input size
 FOUND_FOCUS_WEAK = "focus_weak"  # weak whole-frame candidate lying on the camera focus box
 FOUND_FOCUS_ZOOM = "focus_zoom"  # zoomed window around the focus point, confirmed by a weak candidate
+FOUND_ENHANCED = "enhanced"      # enhanced search: zoomed windows over the centre region (optional)
 KEYPOINT_MODEL_NAME = "cub200_keypoint_resnet50_slim.pth"
 BIRD_CLASS_ID = 14
 KEYPOINT_INPUT_SIZE = 416
@@ -57,6 +58,9 @@ def _candidate_model_dirs() -> List[Path]:
     env_dir = os.environ.get(MODEL_DIR_ENV, "").strip()
     if env_dir:
         dirs.append(Path(env_dir))
+    from .model_catalog import user_model_dir
+
+    dirs.append(user_model_dir())  # models downloaded from 设置 → 鸟清晰度
     meipass = getattr(sys, "_MEIPASS", None)
     if meipass:
         dirs.append(Path(meipass) / "models")
@@ -228,10 +232,16 @@ class BirdDetection:
 
 
 class BirdSharpnessModels:
-    """Holds the loaded detector + keypoint model; thread-safe lazy initialisation."""
+    """Holds the loaded detector + keypoint model; thread-safe lazy initialisation.
 
-    def __init__(self, paths: Optional[ModelPaths] = None):
+    ``detector``: a model file name from :mod:`bird_sharpness.model_catalog` (looked
+    up like every model), or ``"auto"`` for the built-in choice.
+    """
+
+    def __init__(self, paths: Optional[ModelPaths] = None, *, detector: str = "auto"):
         self._paths = paths
+        self.detector = str(detector or "auto")
+        self.detector_path: Optional[Path] = None
         self._lock = threading.RLock()
         self._seg = None
         self._kp = None
@@ -256,6 +266,13 @@ class BirdSharpnessModels:
             if self.loaded:
                 return
             paths = self._paths or resolve_model_paths()
+            if self._paths is None and self.detector != "auto":
+                chosen = find_model((self.detector,))
+                if chosen is None:
+                    raise BirdSharpnessModelError(
+                        f"找不到检测模型 {self.detector}：请在「设置 → 用户选项 → 鸟清晰度」中下载")
+                paths = ModelPaths(chosen if "-seg" in chosen.name else None, paths.keypoint,
+                                   None if "-seg" in chosen.name else chosen)
             if not paths.complete:
                 raise BirdSharpnessModelError(f"找不到模型文件：{paths.missing_description()}")
             try:
@@ -270,6 +287,9 @@ class BirdSharpnessModels:
             _log.info("[BirdSharpness] loading YOLO=%s (masks=%s) keypoint=%s device=%s",
                       detector_path, masks, paths.keypoint, self.device)
             seg = YOLO(str(detector_path))
+            task = getattr(seg, "task", None)
+            if task in ("segment", "detect"):
+                masks = task == "segment"  # the model knows; the file name is only a convention
             names = getattr(seg, "names", {}) or {}
             if names and str(names.get(BIRD_CLASS_ID, "")).lower() != "bird":
                 raise BirdSharpnessModelError(f"YOLO 模型类别 {BIRD_CLASS_ID} 不是 bird：{detector_path}")
@@ -297,6 +317,7 @@ class BirdSharpnessModels:
             self._seg = seg
             self._kp = kp
             self._masks = masks
+            self.detector_path = Path(detector_path)
 
     def release(self) -> None:
         with self._lock:
@@ -355,6 +376,11 @@ class BirdSharpnessModels:
                  reverse=True)
         return out
 
+    @property
+    def detector_name(self) -> str:
+        """File name of the loaded detector (the requested one before loading)."""
+        return self.detector_path.name if self.detector_path is not None else self.detector
+
     def keypoints(self, rgb_crop):
         """Return ``(coords[3,2] normalised, visibility[3])`` for left eye, right eye, beak.
 
@@ -384,3 +410,25 @@ class BirdSharpnessModels:
                 with torch.inference_mode():
                     coords, vis = self._kp(tensor)
         return coords[0].float().cpu().numpy(), vis[0].float().cpu().numpy()
+
+
+_SHARED_LOCK = threading.Lock()
+_SHARED: dict = {}
+
+
+def shared_models(detector: str = "auto") -> BirdSharpnessModels:
+    """One :class:`BirdSharpnessModels` per detector for the whole process, so batch
+    detection and trace windows using the same detector load it once."""
+    key = str(detector or "auto")
+    with _SHARED_LOCK:
+        models = _SHARED.get(key)
+        if models is None:
+            models = _SHARED[key] = BirdSharpnessModels(detector=key)
+        return models
+
+
+def release_shared_models() -> None:
+    with _SHARED_LOCK:
+        models = list(_SHARED.values())
+    for item in models:
+        item.release()

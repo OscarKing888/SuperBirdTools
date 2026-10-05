@@ -428,13 +428,29 @@ def test_params_tab_reruns_this_window_and_saves_defaults(monkeypatch) -> None:
         form.mf_center.setChecked(False)
         assert not form.mf_tile.isEnabled() and form.full_tile.isEnabled()
         form.mf_center.setChecked(True)
-        tiles = {"full_tile": 1024, "mf_center": True, "mf_center_percent": 50, "mf_tile": 128,
-                 "mf_sharpest_percent": 20}
+        # enhanced bird search + models: the same form as 设置 → 鸟清晰度
+        pf = dialog.params_form
+        assert not pf.enh_grid.isEnabled() and "就绪" in pf.models_status.text()
+        pf.enh_mode.setCurrentIndex(pf.enh_mode.findData("manual"))
+        pf.enh_conf.setValue(60)
+        assert pf.enh_grid.isEnabled()
+        from bird_sharpness.params import AnalysisParams
+
+        expected = {**AnalysisParams().as_params(), "edge_estimator": "dense", "mf_tile": 128,
+                    "mf_sharpest_percent": 20, "enh_mode": "manual", "enh_min_conf_percent": 60}
         dialog.rerun_btn.click()
-        assert rerun == [{"max_birds": 0, "edge_estimator": "dense", **tiles}]
+        assert rerun == [expected]
         assert dialog.stack.currentWidget() is dialog.loading
         dialog.save_defaults_btn.click()
-        assert saved == [{"max_birds": 0, "edge_estimator": "dense", **tiles}]
+        assert saved == [expected]
+        # a model that is not installed: offered for download first, no rerun when declined
+        import SuperViewer.superviewer.bird_sharpness_trace_view as tv
+
+        offered = []
+        monkeypatch.setattr(tv, "missing_models", lambda params: ["yolo26x-seg.pt"])
+        monkeypatch.setattr(tv, "download_models", lambda parent, names: offered.append(list(names)) or False)
+        dialog.rerun_btn.click()
+        assert offered == [["yolo26x-seg.pt"]] and len(rerun) == 1
     finally:
         dialog.deleteLater()
         opts.apply_runtime_user_options(None)

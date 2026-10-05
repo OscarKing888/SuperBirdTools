@@ -29,7 +29,7 @@
      - SuperViewer 预览“显示鸟体”首遍（相机内嵌预览 + `yolo11n`）没有鸟时，也调用同一复检（`find_missed_bird()`），见 [SuperViewer 架构](../SuperViewer/docs/ARCHITECTURE.md)。
      - 结果中每只鸟带 `found_by`：`full`（第一遍）/ `full_lifted`（提亮复检）/ `full_fine`（1024 px 复检）/ `focus_weak`（焦点弱候选）/ `focus_zoom`（焦点放大复检），JSON 输出与计算过程查看器可见，不写 XMP。
 4. **没有鸟 → 焦点区域**：焦点框（Viewer 用与预览叠加相同的读取逻辑，含 report.db 兜底；CLI 读文件元数据）映射到全分辨率像素后：两边都 ≤ 128 px 时取以焦点为中心的 128×128；任一边 > 128 px 时取焦点框本身（另一边不足 128 时补到 128，以保证有足够边缘）。窗口贴边时平移而不缩小。
-5. **没有焦点、相机记录为手动对焦 → 手动对焦中心**（`region = manual`）：手动对焦时相机不记焦点框（Sony 的 FocusLocation 只是画面中心），被摄体通常在画面中部，而焦平面就是画面里最清晰的部分。取相机画幅中心（默认每边 50%），按小分块（默认 256 px）各取最强边缘的模糊半径，**取最清晰的一部分分块（默认有效块的 10%，至少 3 块）汇总取中位数**。
+5. **没有焦点、相机记录为手动对焦 → 手动对焦焦平面**（`region = manual`，测的是焦平面，不是鸟）：手动对焦时相机不记焦点框（Sony 的 FocusLocation 只是画面中心），被摄体通常在画面中部，而焦平面就是画面里最清晰的部分。取相机画幅中心（默认每边 50%），按小分块（默认 256 px）各取最强边缘的模糊半径，**取最清晰的一部分分块（默认有效块的 10%，至少 3 块）汇总取中位数**。
    - 手动对焦判定：`FocusMode` 文字为 manual / MF（ExifTool、exifread 解出文字的机型）；Sony RAW 的 MakerNote 0x201B 为数字，0 = 手动（2 AF-S、3 AF-C、4 AF-A、6 DMF；DMF 是自动对焦加手动微调，不算手动）。2026-10-04 夜拍 19 张 ILCE-1M2 ARW 与 ExifTool 逐张一致。其他品牌只认文字。
    - 为什么不是“分块更小”而是“取最清晰”：DSC05639（鸟睡在叶后，4 s 曝光）全图 1024 px 中位数 σ 1.69 → 86 分；只缩小分块或只看中心，全部中位数仍是 σ 1.51–1.64（85–117 分）——前景叶子和背景的虚化占了大多数分块；取最清晰的分块后落在鸟和同一焦平面的叶片上，σ 0.98 → 320 分。
    - 只有落在真实细节上的分块参与排序：至少 15 条实测边缘，且最强边缘中至少一半是阶跃边缘。夜景长曝光时近乎全黑的分块也能凭噪点越过 4× 噪声门槛，大部分被判为点/线状舍弃，剩下的几条测出 σ≈0.4（DSC05625 的“最清晰”分块原本全是这种噪点块）。
@@ -46,7 +46,7 @@
 | σ ≤ 1.05 | 可用 `usable` | |
 | σ > 1.05 | 失焦 `soft` / 运动模糊 `motion` | 身体同时有方向性模糊时为 motion |
 | 眼不可见（可见度 < 0.5） | `no_eye` / `soft` / `motion` | 用身体 σ，分数封顶 299 |
-| 无鸟 | `no_bird` | 仍写入焦点区域 / 手动对焦中心 / 全图的分数与 σ，区域见 `bird_sharpness_region` |
+| 无鸟 | `no_bird` | 仍写入焦点区域 / 手动对焦焦平面 / 全图的分数与 σ，区域见 `bird_sharpness_region` |
 
 分数按分段线性映射到 SuperPicky 0–1000 锐度刻度：σ 0.50→1000、0.85→500、1.05→300（SuperPicky 三星门槛）、1.55→100（SuperPicky 判废门槛）、2.55→0。
 
@@ -66,10 +66,11 @@ SuperViewer 文件列表/缩略图右键「查看清晰度计算过程…」（�
 | 头部 | 眼/喙关键点（空心圈为镜像结果）、头部测量区域 | 可见度、镜像复核、头部半径 |
 | 边缘 | 每个边缘点按去向着色：低于 4×噪声舍弃 / 非最强未测 / 线状舍弃 / 实测（按 σ 绿→黄→红） | 噪声、阈值、各类计数 |
 | 分布 | 实测点 σ 热点 | 头部+身体 σ 直方图（判定区间着色、中位数）、8 方向模糊柱状图 |
-| 焦点 / 手动对焦中心 / 分块（无鸟） | 焦点框与 128 px 测量窗口 / 中心区域（黄框）、真实细节分块 σ 热力格、参与计算的最清晰分块（白框） / 全图分块 σ 热力格 | 窗口尺寸 / 中心尺寸、分块数、有效块、取块数与 σ 范围、不挑块时的对比结果 / 分块统计、直方图 |
+| 增强找鸟（开启且仍无鸟时） | 区域（黄框）、放大窗口（虚线）、全部 ≥ 0.10 的候选（采纳的彩色、低于门槛的灰色，标置信度） | 区域、窗口数与网络输入、门槛、暗部提亮 γ、候选与采纳数；候选列表可悬停高亮 |
+| 焦点 / 手动对焦焦平面 / 分块（无鸟） | 焦点框与 128 px 测量窗口 / 中心区域（黄框）、真实细节分块 σ 热力格、参与计算的最清晰分块（白框） / 全图分块 σ 热力格 | 窗口尺寸 / 中心尺寸、分块数、有效块、取块数与 σ 范围、不挑块时的对比结果 / 分块统计、直方图 |
 | 结论 | 各鸟按判定着色，最佳加粗 | σ→分数曲线（含三星/判废门槛）、逐鸟结果、焦点是否在鸟上 |
 
-侧栏另有「参数」页：可改「每张最多测量鸟数」「边缘统计方式」和「无鸟时的分块」，「按此参数重新计算」只影响本窗口；「保存为默认设置」写入用户选项，之后的目录/文件检测按它计算。
+侧栏另有「参数」页：与「设置 → 用户选项 → 鸟清晰度」是同一个表单（每张最多测量鸟数、边缘统计方式、识别模型、SAM 精修、增强找鸟、无鸟时的分块），「按此参数重新计算」只影响本窗口（所需模型未下载时先提示下载）；「保存为默认设置」写入用户选项，之后的目录/文件检测按它计算。开启 SAM 精修时「鸟的像素」一步同时画出 SAM 的轮廓（白）和被替换的检测模型轮廓（紫）。
 
 图像来源（见下文「用哪种图像计算」）：「RAW 解码」是默认且阈值按它标定；「相机 JPEG」测相机内嵌的全尺寸 JPEG；「降噪成片」测 `image_denoise` 生成的降噪图，按 Viewer 的降噪设置查找，没有时自动调用现有降噪（进度见降噪窗口），完成后自动按降噪成片计算；降噪正在处理别的照片时提示稍后再试。后两种只用于对比，从不写 XMP。
 
@@ -114,17 +115,27 @@ CLI 导出同样的过程：
 | `XMP-superpicky:bird_sharpness_verdict` | `sharp` / `usable` / `soft` / `motion` / `no_eye` / `no_bird` |
 | `XMP-superpicky:bird_sharpness_score` | 0–1000 整数 |
 | `XMP-superpicky:bird_sharpness_sigma` | 得出分数的模糊半径（px）：最佳鸟的头部/整鸟/身体 σ，或焦点区域、全图 σ |
-| `XMP-superpicky:bird_sharpness_region` | `bird`（鸟体）/ `focus`（焦点区域）/ `manual`（手动对焦中心）/ `full`（全图） |
+| `XMP-superpicky:bird_sharpness_region` | `bird`（鸟体）/ `focus`（焦点区域）/ `manual`（手动对焦焦平面）/ `full`（全图） |
 | `XMP-superpicky:bird_sharpness_bird_count` | 识别到的鸟数 |
 | `XMP-superpicky:bird_sharpness_head_sigma` / `_body_sigma` | 模糊半径（px） |
 | `XMP-superpicky:bird_sharpness_motion_ratio` / `_eye_visibility` | 方向比、鸟眼可见度 |
-| `XMP-superpicky:bird_sharpness_version` | 算法版本（当前 `sbt-blur-v13`；v13 新增手动对焦中心、分块带邻域计算；非默认参数带后缀），目录检测“跳过已检测”按版本判断 |
+| `XMP-superpicky:bird_sharpness_version` | 算法版本（当前 `sbt-blur-v13`；v13 新增手动对焦焦平面、分块带邻域计算；非默认参数带后缀，见「可选模型与参数」），目录检测“跳过已检测”按版本判断 |
 
 `XMP-superpicky:*` 由 `PhotoMetaDataXMP.write()` 直接编辑 XML（ExifTool 不认识该私有命名空间）；与 `XMP-photoshop:City` 等 ExifTool 字段同一次提交。空字符串删除旧值。
 
+## 可选模型与参数（批量检测与计算过程窗口共用）
+
+检测流程只有一套（`BirdSharpnessAnalyzer`），所有可调项集中在 [`params.py`](../bird_sharpness/params.py) 的 `AnalysisParams`，只是来源不同：批量检测读 SuperViewer「设置 → 用户选项 → 鸟清晰度」，计算过程窗口「参数」页只改本窗口（可「保存为默认设置」），CLI 用参数。两处界面是同一个表单（`SuperViewer/superviewer/bird_sharpness_params_form.py`），用户选项键与参数名的唯一对应在 `app_common/superviewer_user_options.py` 的 `BIRD_SHARPNESS_PARAM_KEYS`。非默认值按固定顺序记入算法版本后缀（`-dense`、`-t512`、`-mf50-128-10` / `-mf-off`、检测模型名如 `-yolo26x-seg`、`-enh-manual70g2i1024c50`（`-nolift`）、`-sam2.1_t-rechecked` / `-all`），「跳过已检测」不会混用不同设置的结果。默认值下结果与版本不变。
+
+- **检测模型**：内置（自动：`yolo11l-seg` 等）或任选 [`model_catalog.py`](../bird_sharpness/model_catalog.py) 中的 35 个 YOLO：YOLO11 / YOLO26 / YOLOv8 的 n–x 分割与检测框模型、YOLO12 n–x（只有检测框权重）。是否有掩膜由模型自身的任务决定。也可放入目录中的其他同类 `.pt`（如自行微调的模型）。批量检测与各计算过程窗口按检测模型共享已加载的模型（`models.shared_models`），结束时一并释放。
+- **SAM 精修**（`refine.py`）：SAM2.1 / SAM2 的 t/s/b/l（78–449 MB）。按鸟框提示抠出看得见的鸟体替换检测模型的掩膜（只保留在鸟框外扩 10% 内；保留的像素不足检测掩膜 20% 时视为抠错对象，不用）。范围：仅复检/增强找到的鸟（默认）或全部鸟（鸟群每只约 0.1–0.4 s）。SAM 不认识鸟，只抠框里的东西：框错了它也会把树枝抠得很干净（DSC05639 的一个增强候选）。模型缺失时整批报错，不会悄悄退回检测模型的掩膜。
+- **增强找鸟**（默认关闭）：复检后仍没有鸟、且模式为「所有无鸟照片」或「仅手动对焦」（按 `FocusMode` 判断）时，把中心区域（默认每边 70%，有焦点框时以焦点为中心）分成 N×N（默认 2×2）个重叠 25% 的窗口逐个识别（默认网络输入 1024 px，画面暗时先提亮），置信度达到门槛（默认 0.50）的候选当成鸟（`found_by = enhanced`），之后与普通的鸟一样逐只测量。重叠窗口里同一只鸟会被窗口边界切成几片、且碎片的置信度可能更高，合并时不被窗口边界切到的、框更大的视角优先，保留整只鸟。
+  - 依据（2026-10-04 夜拍）：DSC05639（睡在叶后的鸟）全图检测为 bird ≤ 0.01（认成“盆栽” 0.07），以鸟为中心放大后 0.42–0.68。但放大后的树叶也常认成鸟：3×3 滑窗在夜拍和 40 张已判无鸟的照片上，真鸟 0.37–0.93（含 DSC05015 画面边上一只鹰鹃的尾羽，原先漏检），树叶 0.3–0.8，两者重叠，单靠门槛分不开；窗口位置稍变，这只鸟的置信度在 0.15–0.47 之间跳动，而叶子可达 0.81。窗口比鸟小时只看到鸟的一部分（50% / 3×3 时窗口约画幅 0.2，这只鸟约 0.26，采纳的 0.65 是鸟旁的树枝）。所以默认关闭、窗口取约画幅 0.4（70% / 2×2）；计算过程窗口列出全部 ≥ 0.10 的候选，用于按照片试门槛、窗口和检测模型。
+- **下载**：未安装的模型在两处表单里显示「未下载」，「下载所选模型…」确认名称、大小、来源（Ultralytics assets v8.4.0，与已装 `ultralytics` 包同源）后下载到用户模型目录（macOS `~/Library/Application Support/SuperBirdTools/models`，Windows `%LOCALAPPDATA%\SuperBirdTools\models`），先写 `.part`、大小一致再改名，可取消，下载线程在对话框关闭前结束。CLI：`--list-models`、`--download-model NAME`。
+
 ## 模型
 
-不入 git。至少需要一个鸟体识别模型（分割模型优先，否则 `yolo11n.pt` 等检测模型）；鸟眼关键点模型可选但强烈建议（没有它准确度明显降低）。按顺序查找：`$SUPERBIRD_SHARPNESS_MODEL_DIR` → 打包资源 `models/` → `SuperViewer/models`、`SuperBirdStamp/models` → 已安装的 SuperPicky（macOS `/Applications/SuperPicky.app/Contents/Resources/models`）→ 同级 `SuperPicky/models`。分割模型 `yolo11l-seg.pt`（或 m/s/n-seg），检测模型 `yolo11n.pt` / `yolo11s.pt` / `yolov8n.pt`，关键点模型 `cub200_keypoint_resnet50_slim.pth`。设备：CUDA → Apple Silicon MPS → CPU，可用 `SUPERBIRD_SHARPNESS_DEVICE` 强制；GPU 推理失败自动回退 CPU。
+不入 git。至少需要一个鸟体识别模型（分割模型优先，否则 `yolo11n.pt` 等检测模型）；鸟眼关键点模型可选但强烈建议（没有它准确度明显降低）。按顺序查找：`$SUPERBIRD_SHARPNESS_MODEL_DIR` → 用户模型目录（设置里下载的模型，见上节） → 打包资源 `models/` → `SuperViewer/models`、`SuperBirdStamp/models` → 已安装的 SuperPicky（macOS `/Applications/SuperPicky.app/Contents/Resources/models`）→ 同级 `SuperPicky/models`。分割模型 `yolo11l-seg.pt`（或 m/s/n-seg），检测模型 `yolo11n.pt` / `yolo11s.pt` / `yolov8n.pt`，关键点模型 `cub200_keypoint_resnet50_slim.pth`。设备：CUDA → Apple Silicon MPS → CPU，可用 `SUPERBIRD_SHARPNESS_DEVICE` 强制；GPU 推理失败自动回退 CPU。
 
 ## 使用
 

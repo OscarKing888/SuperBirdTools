@@ -311,9 +311,17 @@ def test_bird_limit_option_reaches_the_analyzer_and_the_options_dialog():
             assert (tiles.full_tile.value(), tiles.mf_center.isChecked(), tiles.mf_tile.value()) == (1024, True, 256)
             tiles.full_tile.setValue(512)
             tiles.mf_center.setChecked(False)
+            form = dialog._bird_sharpness_form
+            form.enh_mode.setCurrentIndex(form.enh_mode.findData("nobird"))
+            form.sam_model.setCurrentIndex(form.sam_model.findData("sam2.1_b.pt"))
+            form.sam_scope.setCurrentIndex(form.sam_scope.findData("all"))
             chosen = dialog.selected_options()
             assert chosen[opts.KEY_BIRD_SHARPNESS_FULL_TILE] == 512 and chosen[opts.KEY_BIRD_SHARPNESS_MF_CENTER] == 0
             assert chosen[opts.KEY_BIRD_SHARPNESS_MF_TILE] == 256
+            assert chosen[opts.KEY_BIRD_SHARPNESS_ENH_MODE] == "nobird" and chosen[opts.KEY_BIRD_SHARPNESS_ENH_LIFT] == 1
+            assert (chosen[opts.KEY_BIRD_SHARPNESS_SAM_MODEL], chosen[opts.KEY_BIRD_SHARPNESS_SAM_SCOPE]) == \
+                ("sam2.1_b.pt", "all")
+            assert opts.normalize_user_options(chosen)[opts.KEY_BIRD_SHARPNESS_SAM_MODEL] == "sam2.1_b.pt"
         finally:
             dialog.deleteLater()
     finally:

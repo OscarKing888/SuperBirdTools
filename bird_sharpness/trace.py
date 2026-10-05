@@ -33,7 +33,8 @@ DISPLAY_LONG_EDGE = 2400
 ROI_LONG_EDGE = 2400
 
 # Birds not found on the whole frame are flagged in the conclusion.
-FOUND_LABELS = {"full_lifted": "（提亮复检）", "full_fine": "（复检）", "focus_weak": "（焦点复检）", "focus_zoom": "（焦点放大复检）"}
+FOUND_LABELS = {"full_lifted": "（提亮复检）", "full_fine": "（复检）", "focus_weak": "（焦点复检）", "focus_zoom": "（焦点放大复检）",
+                "enhanced": "（增强找鸟）"}
 
 # Colours (RGB) shared by step images and the viewer legend.
 C_SHARP = (46, 157, 79)
@@ -64,6 +65,7 @@ STEP_DISTRIBUTION = "distribution"
 STEP_FOCUS = "focus"
 STEP_TILES = "tiles"
 STEP_MANUAL = "manual"
+STEP_ENHANCED = "enhanced"
 STEP_RESULT = "result"
 
 
@@ -317,6 +319,12 @@ def _paint_points(img: np.ndarray, ys: np.ndarray, xs: np.ndarray, colors, radiu
         cv2.circle(img, (x, y), radius, tuple(int(v) for v in c), -1, cv2.LINE_AA)
 
 
+def _box_iou(a, b) -> float:
+    inter = max(0.0, min(a[2], b[2]) - max(a[0], b[0])) * max(0.0, min(a[3], b[3]) - max(a[1], b[1]))
+    union = (a[2] - a[0]) * (a[3] - a[1]) + (b[2] - b[0]) * (b[3] - b[1]) - inter
+    return inter / max(1e-6, union)
+
+
 def _expand(box, factor: float, shape) -> Tuple[float, float, float, float]:
     x1, y1, x2, y2 = box
     cx, cy, w, h = (x1 + x2) / 2, (y1 + y2) / 2, (x2 - x1) * factor, (y2 - y1) * factor
@@ -418,7 +426,7 @@ class AnalysisTracer:
             metrics.append(("图像文件", os.path.basename(source_path)))
 
     def detect(self, detections, scale_to_full: float, *, has_masks: bool, has_keypoints: bool,
-               unmeasured: int = 0, limit: int = 0, small_pass=None) -> None:
+               unmeasured: int = 0, limit: int = 0, small_pass=None, detector: str = "") -> None:
         """``small_pass``: ``(first-pass birds, high-resolution birds, added)`` when the
         small-bird pass ran (see ``analyzer.FLOCK_BIRD_SIDE``)."""
         img = _dim(self._overview, None, 0.55)
@@ -443,7 +451,8 @@ class AnalysisTracer:
                                      hex_color(color), self._display((x1, y1, x2, y2)), i))
         if self._focus_px is not None:
             _rect(img, self._display(self._focus_px), C_FOCUS, lw)
-        metrics = [("识别模型", "分割（像素掩膜）" if has_masks else "检测（鸟框）"),
+        kind = "分割（像素掩膜）" if has_masks else "检测（鸟框）"
+        metrics = [("识别模型", f"{detector} · {kind}" if detector else kind),
                    ("鸟眼模型", "有" if has_keypoints else "无（按整只鸟计算，准确度低）"),
                    ("鸟数", str(len(detections)))]
         if unmeasured:
@@ -553,9 +562,63 @@ class AnalysisTracer:
             img, "full", rows, legend=legend,
             focus_rect=None if zoom_to is None else tuple(int(v) for v in _expand(zoom_to, 1.3, img.shape))))
 
+    def enhanced(self, found) -> None:
+        """Step for :meth:`BirdSharpnessAnalyzer._enhanced_search`: region, windows, every candidate."""
+        img = _dim(self._overview, None, 0.55)
+        lw = _line_w(img)
+        font = max(0.4, lw * 0.45)
+        _rect(img, self._display(found.region), C_WINDOW, lw + 1)
+        for window in found.windows:
+            _rect(img, self._display(window["box"]), C_CROP, max(1, lw // 2), dashed=True)
+        # The same bird seen by overlapping windows: one row per place (strongest wins).
+        candidates = []
+        for k, window in enumerate(found.windows):
+            for conf, box, ok in window["detections"]:
+                candidates.append((conf, box, ok, k + 1))
+        candidates.sort(key=lambda c: -c[0])
+        places = []
+        for cand in candidates:
+            if all(_box_iou(cand[1], p[1]) < 0.5 for p in places):
+                places.append(cand)
+        rows = []
+        accepted_n = 0
+        for n, (conf, box, ok, window_no) in enumerate(places[:40]):
+            color = BIRD_COLORS[accepted_n % len(BIRD_COLORS)] if ok else C_WEAK
+            accepted_n += int(ok)
+            _rect(img, self._display(box), color, lw + 1 if ok else max(1, lw // 2))
+            x1, y1 = (int(v) for v in self._display(box)[:2])
+            cv2.putText(img, f"{conf:.2f}", (x1 + 2 * lw, max(12, y1 - 2 * lw)), cv2.FONT_HERSHEY_SIMPLEX, font, color,
+                        max(1, lw // 2), cv2.LINE_AA)
+            rows.append(TraceBirdRow(
+                f"候选 {n + 1}{'（采纳）' if ok else ''}",
+                f"置信度 {conf:.2f}{'' if ok else '（低于门槛）'} · 框 {int(box[2] - box[0])} × {int(box[3] - box[1])} px"
+                f" · 窗口 {window_no}", hex_color(color), self._display(box)))
+        rx1, ry1, rx2, ry2 = found.region
+        metrics = [("区域", f"{rx2 - rx1} × {ry2 - ry1} px（每边 {round(100 * (rx2 - rx1) / max(1, self._image_shape[1]))}%"
+                          f"{'，以焦点框为中心' if self._focus_px is not None else '，画面中心'}）"),
+                   ("窗口", f"{len(found.windows)} 个（重叠 25%），网络输入 {found.imgsz} px"),
+                   ("采纳门槛", f"置信度 ≥ {found.min_conf:.2f}"),
+                   ("暗部提亮", "不需要（画面不暗）或未开启" if found.gamma is None else f"γ {found.gamma:.2f}（仅用于识别）"),
+                   ("候选（≥ 0.10）", f"{len(places)} 处"), ("采纳", f"{len(found.accepted)} 只")]
+        if found.manual is not None:
+            metrics.insert(0, ("对焦方式", "手动对焦（相机记录）" if found.manual else "自动对焦"))
+        legend = [(hex_color(C_WINDOW), "增强找鸟区域"), (hex_color(C_CROP), "放大窗口"),
+                  (hex_color(BIRD_COLORS[0]), "采纳的鸟"), (hex_color(C_WEAK), "低于门槛的候选")]
+        if self._focus_px is not None:
+            _rect(img, self._display(self._focus_px), C_FOCUS, lw)
+            legend.append((hex_color(C_FOCUS), "相机焦点框"))
+        self.trace.common.append(TraceStep(
+            STEP_ENHANCED, "增强找鸟",
+            "前面几遍都没有找到鸟：把中心区域分成相互重叠的放大窗口逐个识别，小鸟、被枝叶挡住一半的鸟在放大后置信度高得多"
+            "（DSC05639：全图 0.01，放大后 0.67）。但放大后的树叶也常被认成鸟（0.3–0.8），所以只采纳达到门槛的候选；"
+            "所有 ≥ 0.10 的候选都列在下面，悬停可在图中高亮，用于调整「设置 → 用户选项 → 鸟清晰度」中的门槛和窗口。",
+            img, "full", metrics, legend=legend, bird_rows=rows,
+            focus_rect=tuple(int(v) for v in _expand(self._display(found.region), 1.1, img.shape))))
+
     # ── per bird ──
     def bird(self, index: int, image, roi, mask: np.ndarray, body: np.ndarray, head: Optional[np.ndarray],
-             keypoints, selection, body_detail, measurement) -> None:
+             keypoints, selection, body_detail, measurement, *, detector_px: Optional[np.ndarray] = None) -> None:
+        """``detector_px``: the detector's mask (ROI px) when SAM replaced it with ``mask``."""
         X1, Y1, X2, Y2 = roi
         crop = image.rgb8[Y1:Y2, X1:X2]
         crop_small, s = _downscale(crop, self.roi_long_edge)
@@ -573,18 +636,26 @@ class AnalysisTracer:
 
         # ③ bird pixels
         img = _dim(crop_small, m_small, 0.3)
+        legend = [(hex_color(C_MASK), "鸟体轮廓"), (hex_color(BIRD_COLORS[index % len(BIRD_COLORS)]), "身体区域")]
+        source = "分割掩膜" if measurement.masked else "检测框内核"
+        if detector_px is not None:
+            _contour(img, small(detector_px), C_REJECT_LINE, max(1, lw // 2 + 1))
+            legend.append((hex_color(C_REJECT_LINE), "检测模型的轮廓（已由 SAM 替换）"))
+            source = (f"{measurement.refined_by} 精修（{source} {int(detector_px.sum()):,} 像素 → "
+                      f"{int(mask.sum()):,}）")
         _contour(img, m_small, C_MASK, lw)
         _contour(img, body_small, BIRD_COLORS[index % len(BIRD_COLORS)], lw)
         bw, bh = measurement.box[2] - measurement.box[0], measurement.box[3] - measurement.box[1]
         steps.append(TraceStep(
             STEP_BIRD, f"鸟 #{index + 1} 的像素",
-            "只计算这只鸟自己的像素：白线为鸟体轮廓（分割掩膜，或检测框内缩 8%），彩线为向内收缩 15 px 的身体区域"
+            "只计算这只鸟自己的像素：白线为鸟体轮廓（分割掩膜，或检测框内缩 8%；开启 SAM 精修时为 SAM 抠出的鸟，"
+            "紫线为被替换的检测模型轮廓），彩线为向内收缩 15 px 的身体区域"
             "（测身体模糊与运动方向）。轮廓外压暗部分不参与计算。",
             img, frame,
             [("鸟框", f"{bw} × {bh} px"), ("裁切（含 15% 外扩）", f"{X2 - X1} × {Y2 - Y1} px"),
              ("鸟体像素", f"{int(mask.sum()):,}"), ("身体区域像素", f"{int(body.sum()):,}"),
-             ("像素来源", "分割掩膜" if measurement.masked else "检测框内核")],
-            legend=[(hex_color(C_MASK), "鸟体轮廓"), (hex_color(BIRD_COLORS[index % len(BIRD_COLORS)]), "身体区域")]))
+             ("像素来源", source)],
+            legend=legend))
 
         # ④ head
         measure_mask = head if head is not None else mask
@@ -910,7 +981,8 @@ class AnalysisTracer:
                    ("测量值（中位数）", _fmt(stats.sigma, "%.3f px")),
                    ("对比：全部有效块", "—" if overall is None else
                     f"σ {overall:.3f} → 分数 {sigma_to_score(overall)}（不挑块时的结果）")]
-        desc = ("没有鸟、也没有焦点框，而相机记录为手动对焦：手动对焦时被摄体通常在画面中部，而焦平面就是画面里最清晰的部分。"
+        desc = ("测的是焦平面，不是鸟：没有找到鸟、也没有焦点框，而相机记录为手动对焦。手动对焦时被摄体通常在画面中部，"
+                "而焦平面就是画面里最清晰的部分（鸟可能并不在焦平面上，需要知道鸟本身时请开启「增强找鸟」）。"
                 "于是只看画幅中心，按小分块各取最强边缘的模糊半径，取最清晰的一部分分块（白框）汇总取中位数，"
                 f"不让前景、背景的虚化拉低结果。只有落在真实细节上的分块参与（着色）：至少 {MF_TILE_MIN_EDGES} 条实测边缘，"
                 f"且最强边缘中至少 {MF_TILE_MIN_STEP_FRACTION:.0%} 是真实的阶跃边缘——夜景长曝光时近乎全黑的分块里，"
@@ -919,7 +991,7 @@ class AnalysisTracer:
         if stats.sigma is None:
             desc += "\n\n中心没有足够的可测分块：改用全图分块。"
         self.trace.region_steps.append(TraceStep(
-            STEP_MANUAL, "手动对焦中心", desc, img, "full", metrics,
+            STEP_MANUAL, "手动对焦焦平面", desc, img, "full", metrics,
             [_histogram([{"name": "最清晰块", "color": hex_color(C_MASK), "values": best},
                          {"name": "中心全部块", "color": "#9aa0a6", "values": everything}],
                         stats.sigma, "模糊半径分布（px）")],
@@ -972,6 +1044,10 @@ class AnalysisTracer:
         metrics.append(("边缘统计", {"standard": "标准（最强 30 条边缘的中位数）",
                                  "dense": "密集（≥ 60 条边缘的第 40 百分位，实验性）"}.get(
                                      getattr(result, "edge_estimator", ""), "—")))
+        if getattr(result, "detector", ""):
+            metrics.append(("检测模型", result.detector))
+        if getattr(result, "sam_model", ""):
+            metrics.append(("SAM 精修", result.sam_model))
         metrics.append(("算法版本", result.version))
         charts = [TraceChart("score_curve", "模糊半径 → 分数（SuperPicky 0–1000 刻度）", {
             "anchors": [list(a) for a in SCORE_ANCHORS], "points": points,

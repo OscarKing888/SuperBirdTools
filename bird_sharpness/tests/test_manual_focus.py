@@ -105,7 +105,7 @@ def test_manual_focus_without_bird_measures_the_sharpest_centre_tiles(monkeypatc
     assert metrics["对焦方式"].startswith("手动对焦") and metrics["分块"] == "128 px"
     assert metrics["取最清晰"].endswith(f"至少 {MF_MIN_TILES} 块）")
     assert "不挑块" in metrics["对比：全部有效块"] and step.focus_rect is not None
-    assert dict(tracer.trace.final[0].metrics)["计算区域"] == "手动对焦中心"
+    assert dict(tracer.trace.final[0].metrics)["计算区域"] == "手动对焦焦平面"
 
 
 def test_autofocus_or_disabled_option_keeps_the_whole_image(monkeypatch) -> None:

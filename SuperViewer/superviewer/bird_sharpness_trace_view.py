@@ -18,10 +18,12 @@ import numpy as np
 from app_common.bird_sharpness_fields import VERDICT_STYLES
 from app_common.toggle_button import ToggleToolButton
 from bird_sharpness.image_source import SOURCE_DENOISED, SOURCE_JPEG, SOURCE_LABELS, SOURCE_RAW
-from bird_sharpness.metrics import MF_MIN_TILES, TileOptions
+from bird_sharpness.params import AnalysisParams
 from bird_sharpness.scoring import SIGMA_SHARP_MAX
 from bird_sharpness.trace import C_PEAKING, hex_color, peaking_overlay
 
+from .bird_sharpness_params_form import (ESTIMATOR_CHOICES, AnalysisParamsForm, TileParamsForm,  # noqa: F401
+                                         download_models, missing_models, params_summary, tile_summary)
 from .qt_compat import (
     QCheckBox, QComboBox, QDialog, QHBoxLayout, QLabel, QPushButton, QScrollArea, QSplitter, QStackedWidget,
     QToolButton, QVBoxLayout, QWidget, pyqtSignal,
@@ -60,19 +62,11 @@ _EVENT = getattr(QEvent, "Type", QEvent)
 
 STEP_ICONS = {
     "decode": "解码", "detect": "识别", "recheck": "复检", "birds": "逐只鸟", "bird": "鸟体", "head": "头部", "edges": "边缘",
-    "distribution": "分布", "focus": "焦点", "tiles": "分块", "manual": "中心", "result": "结论",
+    "distribution": "分布", "focus": "焦点", "tiles": "分块", "manual": "焦平面", "enhanced": "找鸟", "result": "结论",
 }
 _CIRCLED = "①②③④⑤⑥⑦⑧⑨⑩⑪⑫⑬⑭⑮⑯⑰⑱⑲⑳"
 _TOOLTIP_ROLE = getattr(getattr(Qt, "ItemDataRole", Qt), "ToolTipRole")
-# Edge estimator choices for the 参数 tab (bird_sharpness.metrics.EDGE_ESTIMATORS keys).
-ESTIMATOR_CHOICES = (
-    ("standard", "标准（默认）",
-     "最强 30 条边缘（或前 5%）的模糊半径中位数。清晰/可用/失焦门槛按它与人工判断标定。"),
-    ("dense", "密集（实验性）",
-     "至少 60 条最强边缘，取第 40 百分位。小鸟头部边缘少时判定更稳，整体不偏移；"
-     "但在已标注照片上有 2/15 张在清晰与可用之间对调，结果仅供对比。"),
-)
-DEFAULT_TRACE_PARAMS = {"max_birds": 0, "edge_estimator": "standard", **TileOptions().as_params()}
+DEFAULT_TRACE_PARAMS = AnalysisParams().as_params()
 
 SOURCE_CHOICES = (
     (SOURCE_RAW, "RAW 解码", "LibRaw 全分辨率解码；阈值按它标定（默认，最可靠）"),
@@ -100,69 +94,6 @@ def numpy_to_pixmap(image: np.ndarray) -> QPixmap:
     h, w = rgb.shape[:2]
     qimage = QImage(rgb.data, w, h, 3 * w, _FMT_RGB888)
     return QPixmap.fromImage(qimage.copy())
-
-
-class TileParamsForm(QWidget):
-    """No-bird tiling controls (``TileOptions``), shared by the trace 参数 tab and 设置 → 鸟清晰度."""
-
-    def __init__(self, parent=None, *, expand_fields: bool = True) -> None:
-        super().__init__(parent)
-        grid = QGridLayout(self)
-        grid.setContentsMargins(0, 0, 0, 0)
-        grid.setVerticalSpacing(10)
-
-        def spin(low, high, step, suffix, tip):
-            box = QSpinBox(self)
-            box.setRange(low, high)
-            box.setSingleStep(step)
-            box.setSuffix(suffix)
-            box.setToolTip(tip)
-            return box
-
-        self.full_tile = spin(128, 4096, 64, " px", "没有鸟、也没有相机焦点框时，全图按此边长分块，汇总全部分块的中位数。")
-        self.mf_center = QCheckBox("手动对焦时只测画面中心的最清晰分块", self)
-        self.mf_center.setToolTip("没有鸟、没有焦点框且相机记录为手动对焦时启用：焦平面是画面里最清晰的部分，"
-                                  "只取最清晰的分块，前景/背景虚化不会拉低结果。")
-        self.mf_center_percent = spin(10, 100, 5, " %", "中心区域每边占画幅的比例（100% = 整个画幅）。")
-        self.mf_tile = spin(32, 2048, 32, " px", "中心区域的分块边长。越小越能只框住焦平面，但每块边缘越少。")
-        self.mf_sharpest = spin(1, 100, 5, " %",
-                                f"按分块模糊半径排序，取最清晰的这部分有效分块（至少 {MF_MIN_TILES} 块）汇总中位数。")
-        rows = (("全图分块（无焦点框）", self.full_tile), (None, self.mf_center),
-                ("中心区域（每边占画幅）", self.mf_center_percent), ("中心分块", self.mf_tile),
-                ("取最清晰的分块", self.mf_sharpest))
-        for row, (label, widget) in enumerate(rows):
-            if label is None:
-                grid.addWidget(widget, row, 0, 1, 2)
-            else:
-                grid.addWidget(QLabel(label, self), row, 0)
-                grid.addWidget(widget, row, 1)
-        grid.setColumnStretch(1 if expand_fields else 2, 1)  # compact fields: the empty 3rd column stretches
-        self.mf_center.toggled.connect(self._update_enabled)
-        self.set_params(TileOptions().as_params())
-
-    def _update_enabled(self, *_args) -> None:
-        for widget in (self.mf_center_percent, self.mf_tile, self.mf_sharpest):
-            widget.setEnabled(self.mf_center.isChecked())
-
-    def set_params(self, params: dict) -> None:
-        o = TileOptions.from_params(params)
-        self.full_tile.setValue(o.full_tile)
-        self.mf_center.setChecked(o.mf_center)
-        self.mf_center_percent.setValue(o.mf_center_percent)
-        self.mf_tile.setValue(o.mf_tile)
-        self.mf_sharpest.setValue(o.mf_sharpest_percent)
-        self._update_enabled()
-
-    def params(self) -> dict:
-        return TileOptions(int(self.full_tile.value()), self.mf_center.isChecked(), int(self.mf_center_percent.value()),
-                           int(self.mf_tile.value()), int(self.mf_sharpest.value())).as_params()
-
-
-def tile_summary(params: dict) -> str:
-    o = TileOptions.from_params(params)
-    mf = (f"手动对焦中心 {o.mf_center_percent}% · {o.mf_tile} px · 最清晰 {o.mf_sharpest_percent}%"
-          if o.mf_center else "手动对焦不单独处理")
-    return f"全图 {o.full_tile} px；{mf}"
 
 
 class TraceImageView(QGraphicsView):
@@ -763,34 +694,13 @@ class BirdSharpnessTraceDialog(QDialog):
         font.setBold(True)
         heading.setFont(font)
         layout.addWidget(heading)
-        grid = QGridLayout()
-        grid.setVerticalSpacing(10)
-        self.max_birds_spin = QSpinBox(page)
-        self.max_birds_spin.setRange(0, 999)
-        self.max_birds_spin.setSpecialValueText("不限制")
-        self.max_birds_spin.setSuffix(" 只")
-        self.max_birds_spin.setToolTip("0 = 不限制。设了上限时，压在相机焦点框上的鸟优先测量。")
-        self.estimator_combo = QComboBox(page)
-        for key, label, tip in ESTIMATOR_CHOICES:
-            self.estimator_combo.addItem(label, key)
-            self.estimator_combo.setItemData(self.estimator_combo.count() - 1, tip, _TOOLTIP_ROLE)
-        self.estimator_note = QLabel("", page)
-        self.estimator_note.setWordWrap(True)
-        self.estimator_note.setForegroundRole(_ROLE.PlaceholderText)
-        self.estimator_combo.currentIndexChanged.connect(self._update_estimator_note)
-        grid.addWidget(QLabel("每张最多测量鸟数", page), 0, 0)
-        grid.addWidget(self.max_birds_spin, 0, 1)
-        grid.addWidget(QLabel("边缘统计方式", page), 1, 0)
-        grid.addWidget(self.estimator_combo, 1, 1)
-        grid.setColumnStretch(1, 1)
-        layout.addLayout(grid)
-        layout.addWidget(self.estimator_note)
-        tiles_heading = QLabel("无鸟时的分块", page)
-        tiles_heading.setFont(font)
-        layout.addSpacing(6)
-        layout.addWidget(tiles_heading)
-        self.tile_form = TileParamsForm(page)
-        layout.addWidget(self.tile_form)
+        # The same form as 设置 → 鸟清晰度: batch detection and this window run the same pipeline.
+        self.params_form = AnalysisParamsForm(page)
+        self.max_birds_spin = self.params_form.max_birds
+        self.estimator_combo = self.params_form.estimator
+        self.estimator_note = self.params_form.estimator_note
+        self.tile_form = self.params_form.tiles
+        layout.addWidget(self.params_form)
         self.params_status = QLabel("", page)
         self.params_status.setWordWrap(True)
         layout.addWidget(self.params_status)
@@ -810,24 +720,24 @@ class BirdSharpnessTraceDialog(QDialog):
         layout.addWidget(note)
         layout.addStretch(1)
         self._show_params(self.params)
-        return page
+        scroll = QScrollArea(self.content)  # the form is long: scroll down rather than squeeze
+        scroll.setWidget(page)
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(_FRAME_NONE)
+        scroll.setHorizontalScrollBarPolicy(_SCROLL_OFF)  # fit the panel's width
+        return scroll
 
     def _show_params(self, params: dict) -> None:
-        self.max_birds_spin.setValue(int(params.get("max_birds", 0) or 0))
-        self.estimator_combo.setCurrentIndex(max(0, self.estimator_combo.findData(params.get("edge_estimator"))))
-        self._update_estimator_note()
-        self.tile_form.set_params(params)
-
-    def _update_estimator_note(self, *_args) -> None:
-        index = self.estimator_combo.currentIndex()
-        self.estimator_note.setText(ESTIMATOR_CHOICES[index][2] if 0 <= index < len(ESTIMATOR_CHOICES) else "")
+        self.params_form.set_params(params)
 
     def selected_params(self) -> dict:
-        return {"max_birds": int(self.max_birds_spin.value()),
-                "edge_estimator": str(self.estimator_combo.currentData() or "standard"),
-                **self.tile_form.params()}
+        return self.params_form.params()
 
     def _rerun_with_params(self) -> None:
+        missing = missing_models(self.selected_params())
+        if missing and not download_models(self, missing):
+            self.params_form.set_params(self.selected_params())  # refresh the 未下载 status
+            return
         self.params = self.selected_params()
         self.set_loading()
         self.params_changed.emit(self)
@@ -838,8 +748,10 @@ class BirdSharpnessTraceDialog(QDialog):
         parts = [f"当前结果：{labels.get(getattr(result, 'edge_estimator', ''), '—')}",
                  f"上限 {'不限制' if limit <= 0 else f'{limit} 只'}",
                  f"测量 {getattr(result, 'bird_count', 0)} 只鸟",
-                 f"分块 {tile_summary(self.params)}",
+                 params_summary(self.params),
                  f"算法版本 {getattr(result, 'version', '—')}"]
+        if getattr(result, "detector", ""):
+            parts.insert(3, f"实际检测模型 {result.detector}")
         return "，".join(parts) + "。"
 
     # ── data ──────────────────────────────────────────────────────────────

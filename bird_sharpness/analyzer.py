@@ -12,8 +12,10 @@ Pipeline (see ``docs/bird_sharpness.md``):
    otherwise, plus body median/directional blur for motion; the bird with the
    best score decides the photo;
 4. no bird: the camera focus box, at least 128 x 128 px;
+   Optional (``params.AnalysisParams``): another detector, an enhanced search in
+   zoomed windows when still no bird is found, SAM2 mask refinement;
 5. no bird, no focus point, manual focus: the sharpest small tiles of the frame
-   centre (the plane the photographer focused on; see ``metrics.TileOptions``);
+   centre (the focal plane, not a bird; see ``metrics.TileOptions``);
    otherwise the whole image (tiled);
 6. map the blur radius to a SuperPicky-compatible 0..1000 score and a verdict.
 """
@@ -37,8 +39,10 @@ from .focus import FocusProvider, ManualFocusProvider, default_focus_box, defaul
 from .image_source import AnalysisImage, load_analysis_image
 from .metrics import (ESTIMATOR_STANDARD, EdgeBlurField, EdgeEstimator, TileOptions,
                       edge_estimator as get_edge_estimator, edge_stats, full_image_blur, sharpest_tiles_blur)
-from .models import (BIRD_CONFIDENCE_MIN, FOUND_FOCUS_WEAK, FOUND_FOCUS_ZOOM, FOUND_FULL, FOUND_FULL_FINE,
-                     FOUND_FULL_LIFTED, FOUND_FULL_SMALL, BirdDetection, BirdSharpnessModels)
+from .models import (BIRD_CONFIDENCE_MIN, FOUND_ENHANCED, FOUND_FOCUS_WEAK, FOUND_FOCUS_ZOOM, FOUND_FULL,
+                     FOUND_FULL_FINE, FOUND_FULL_LIFTED, FOUND_FULL_SMALL, BirdDetection, BirdSharpnessModels,
+                     shared_models)
+from .params import ENH_MANUAL, ENH_NOBIRD, ENH_OFF, SAM_SCOPE_ALL, AnalysisParams
 from .scoring import ALGORITHM_VERSION, VERDICT_ERROR, VERDICT_NO_BIRD, blank_head_sigma, classify, sigma_to_score
 
 _log = get_logger("bird_sharpness")
@@ -110,6 +114,7 @@ class BirdMeasurement:
     eye_mirror_gap: Optional[float] = None  # eye distance between crop and mirrored crop / bird size
     eye_reliable: Optional[bool] = None
     index: int = 0  # detection number (trace "鸟 #index+1"), kept when false extras are dropped
+    refined_by: str = ""  # SAM model whose mask replaced the detector's ("" = detector mask/box)
 
     def rank(self) -> tuple:
         # Best bird: highest score, then smallest blur radius, then detector confidence.
@@ -141,6 +146,8 @@ class BirdSharpnessResult:
     error: str = ""
     version: str = ALGORITHM_VERSION
     edge_estimator: str = ESTIMATOR_STANDARD.key
+    detector: str = ""   # detector file actually used (JSON / trace only; the version carries non-defaults)
+    sam_model: str = ""  # SAM model used for refinement, "" = none
 
     @property
     def ok(self) -> bool:
@@ -356,6 +363,51 @@ class MissedBird:
     confidence: float
 
 
+# Enhanced bird search (params.EnhancedSearch): zoomed overlapping windows over the
+# centre region when every other pass found no bird. Candidates down to
+# ENH_CANDIDATE_CONFIDENCE are recorded for the trace; only those at the user's
+# threshold are taken.
+ENH_CANDIDATE_CONFIDENCE = 0.10
+ENH_WINDOW_OVERLAP = 0.25
+
+
+@dataclass
+class EnhancedPass:
+    """What the enhanced search looked at (full-resolution boxes) and what it took."""
+
+    region: Tuple[int, int, int, int]
+    min_conf: float
+    imgsz: int
+    gamma: Optional[float] = None  # set when dark mid-tones were lifted
+    manual: Optional[bool] = None  # manual focus (when the mode asked)
+    windows: List[dict] = dc_field(default_factory=list)  # {"box", "detections": [(conf, box, accepted)]}
+    accepted: List[BirdDetection] = dc_field(default_factory=list)  # detection-image coordinates
+
+
+def _cut_by_window(box, window, bounds, margin: float = 3.0) -> bool:
+    """Whether ``box`` touches a border of ``window`` that is not also the picture's edge."""
+    x1, y1, x2, y2 = window
+    bx1, by1, bx2, by2 = bounds
+    return ((box[0] <= x1 + margin and x1 > bx1) or (box[1] <= y1 + margin and y1 > by1)
+            or (box[2] >= x2 - margin and x2 < bx2) or (box[3] >= y2 - margin and y2 < by2))
+
+
+def enhanced_windows(region, grid: int, overlap: float = ENH_WINDOW_OVERLAP) -> List[Tuple[int, int, int, int]]:
+    """``grid`` x ``grid`` windows covering ``region`` with ``overlap`` between neighbours."""
+    x1, y1, x2, y2 = region
+    rw, rh = x2 - x1, y2 - y1
+    grid = max(1, int(grid))
+    ww = rw / (1.0 + (grid - 1) * (1.0 - overlap))
+    wh = rh / (1.0 + (grid - 1) * (1.0 - overlap))
+    out = []
+    for j in range(grid):
+        for i in range(grid):
+            wx = x1 + (0.0 if grid == 1 else i * (rw - ww) / (grid - 1))
+            wy = y1 + (0.0 if grid == 1 else j * (rh - wh) / (grid - 1))
+            out.append((int(round(wx)), int(round(wy)), int(round(wx + ww)), int(round(wy + wh))))
+    return out
+
+
 # Small birds (flocks): the first pass sees the 1024 px copy through a 640 px
 # network input, so a shorebird 20-50 px long there is ~15-30 px to the network
 # and most of a flock is missed (DSC00925: 13 of ~60 found; 59 at 2048 px).
@@ -529,26 +581,71 @@ class BirdSharpnessAnalyzer:
     """
 
     def __init__(self, models: Optional[BirdSharpnessModels] = None, *,
-                 focus_provider: Optional[FocusProvider] = None, max_birds: int = DEFAULT_MAX_BIRDS,
-                 edge_estimator: str = ESTIMATOR_STANDARD.key, tile_options: Optional[TileOptions] = None,
-                 manual_focus_provider: Optional[ManualFocusProvider] = None):
-        self.models = models or BirdSharpnessModels()
+                 focus_provider: Optional[FocusProvider] = None, max_birds: Optional[int] = None,
+                 edge_estimator: Optional[str] = None, tile_options: Optional[TileOptions] = None,
+                 manual_focus_provider: Optional[ManualFocusProvider] = None,
+                 params: Optional[AnalysisParams] = None, refiner_provider=None):
+        """``params`` holds every option (see :mod:`bird_sharpness.params`); ``max_birds``,
+        ``edge_estimator`` and ``tile_options`` override it. Without ``models`` the
+        process-wide models of ``params.detector`` are used (shared with other analyzers)."""
+        base = params or AnalysisParams()
+        overrides = {k: v for k, v in (("max_birds", max_birds), ("edge_estimator", edge_estimator),
+                                       ("tiles", tile_options)) if v is not None}
+        self._params = replace(base, **overrides).normalized()
+        self._explicit_models = models is not None
+        self.models = models if models is not None else shared_models(self._params.detector)
         self.focus_provider = focus_provider or default_focus_box
         self.manual_focus_provider = manual_focus_provider or default_manual_focus
-        # Read per photo, so apps may change them between jobs.
-        self.max_birds = max_birds  # 0 = measure every bird
-        self.edge_estimator = edge_estimator  # metrics.EDGE_ESTIMATORS key; unknown = standard
-        self.tile_options = tile_options or TileOptions()  # no-bird tiling
+        if refiner_provider is None:
+            from .refine import shared_refiner as refiner_provider
+        self.refiner_provider = refiner_provider  # SAM model name -> refiner with .mask(rgb, box)
 
-    def with_options(self, *, max_birds: Optional[int] = None, edge_estimator: Optional[str] = None,
+    # Options are read per photo, so apps may change them between jobs.
+    @property
+    def params(self) -> AnalysisParams:
+        return self._params
+
+    @params.setter
+    def params(self, value: Optional[AnalysisParams]) -> None:
+        value = (value or AnalysisParams()).normalized()
+        if not self._explicit_models and value.detector != self._params.detector:
+            self.models = shared_models(value.detector)
+        self._params = value
+
+    @property
+    def max_birds(self) -> int:  # 0 = measure every bird
+        return self._params.max_birds
+
+    @max_birds.setter
+    def max_birds(self, value: int) -> None:
+        self.params = replace(self._params, max_birds=value)
+
+    @property
+    def edge_estimator(self) -> str:  # metrics.EDGE_ESTIMATORS key
+        return self._params.edge_estimator
+
+    @edge_estimator.setter
+    def edge_estimator(self, value: str) -> None:
+        self.params = replace(self._params, edge_estimator=value)
+
+    @property
+    def tile_options(self) -> TileOptions:  # no-bird tiling
+        return self._params.tiles
+
+    @tile_options.setter
+    def tile_options(self, value: TileOptions) -> None:
+        self.params = replace(self._params, tiles=value or TileOptions())
+
+    def with_options(self, *, params: Optional[AnalysisParams] = None, max_birds: Optional[int] = None,
+                     edge_estimator: Optional[str] = None,
                      tile_options: Optional[TileOptions] = None) -> "BirdSharpnessAnalyzer":
-        """A sibling sharing the loaded models and focus providers, with its own options
-        (e.g. one trace window), leaving this analyzer's options untouched."""
+        """A sibling with its own options (e.g. one trace window), sharing the focus
+        providers and the loaded models (same detector), leaving this analyzer untouched."""
         return BirdSharpnessAnalyzer(
-            self.models, focus_provider=self.focus_provider, manual_focus_provider=self.manual_focus_provider,
-            max_birds=self.max_birds if max_birds is None else max_birds,
-            edge_estimator=self.edge_estimator if edge_estimator is None else edge_estimator,
-            tile_options=self.tile_options if tile_options is None else tile_options)
+            self.models if self._explicit_models else None, focus_provider=self.focus_provider,
+            manual_focus_provider=self.manual_focus_provider, refiner_provider=self.refiner_provider,
+            params=params or self._params, max_birds=max_birds, edge_estimator=edge_estimator,
+            tile_options=tile_options)
 
     @property
     def estimator(self) -> EdgeEstimator:
@@ -558,10 +655,7 @@ class BirdSharpnessAnalyzer:
     def version(self) -> str:
         """Algorithm version written to XMP; non-default options (dense estimator, tiling) are
         tagged so "skip analysed" never mixes their results with the defaults."""
-        key = self.estimator.key
-        tags = [] if key == ESTIMATOR_STANDARD.key else [key]
-        tiles = self.tile_options.version_tag()
-        return "-".join([ALGORITHM_VERSION, *tags, *([tiles] if tiles else [])])
+        return "-".join([ALGORITHM_VERSION, *self._params.version_tags()])
 
     def _select(self, field_: EdgeBlurField, region):
         return field_.select_strongest_edges(region, min_kept=self.estimator.min_kept)
@@ -624,7 +718,8 @@ class BirdSharpnessAnalyzer:
         if tracer is not None:
             tracer.detect(detections, scale, has_masks=bool(getattr(self.models, "has_masks", True)),
                           has_keypoints=bool(getattr(self.models, "has_keypoints", True)), unmeasured=unmeasured,
-                          limit=limit, small_pass=small_pass)
+                          limit=limit, small_pass=small_pass,
+                          detector=str(getattr(self.models, "detector_name", "") or ""))
         if not detections and not cancelled():
             if focus_px is _UNSET:
                 focus_px = self._focus_box_px(path, image)
@@ -632,6 +727,22 @@ class BirdSharpnessAnalyzer:
             detections = recheck.accepted
             if tracer is not None:
                 tracer.recheck(recheck)
+        manual_known: List[bool] = []
+
+        def manual() -> bool:  # looked up once, only when needed
+            if not manual_known:
+                manual_known.append(self._manual_focus(path))
+            return manual_known[0]
+
+        enh = self._params.enhanced
+        if not detections and not cancelled() and enh.mode != ENH_OFF and (enh.mode == ENH_NOBIRD or manual()):
+            if focus_px is _UNSET:
+                focus_px = self._focus_box_px(path, image)
+            found = self._enhanced_search(image, small_bgr, scale, focus_px, cancelled)
+            found.manual = manual_known[0] if manual_known else None
+            detections = found.accepted
+            if tracer is not None:
+                tracer.enhanced(found)
         on_stage(STAGE_MEASURE)
         if detections:
             birds = [self._measure_bird(image, det, scale, index=i, tracer=tracer) for i, det in enumerate(detections)]
@@ -642,7 +753,7 @@ class BirdSharpnessAnalyzer:
             return self._bird_result(path, kept, max(H, W))
         return self._no_bird_result(path, image, cancelled, tracer,
                                     focus_px=None if focus_px is _UNSET else focus_px,
-                                    focus_known=focus_px is not _UNSET)
+                                    focus_known=focus_px is not _UNSET, manual=manual)
 
     def _small_bird_pass(self, image: AnalysisImage, first: List[BirdDetection], scale: float):
         """Detect again on a 2048 px copy and merge (see FLOCK_BIRD_SIDE).
@@ -722,6 +833,52 @@ class BirdSharpnessAnalyzer:
                 break
         return check
 
+    def _enhanced_search(self, image: AnalysisImage, small_bgr, scale: float, focus_px: Optional[Box],
+                         cancelled) -> EnhancedPass:
+        """Zoomed overlapping windows over the centre region (see :class:`params.EnhancedSearch`)."""
+        o = self._params.enhanced
+        vx1, vy1, vx2, vy2 = valid_bounds(image)
+        rw = max(32, int(round((vx2 - vx1) * o.region_percent / 100.0)))
+        rh = max(32, int(round((vy2 - vy1) * o.region_percent / 100.0)))
+        if focus_px is not None:
+            cx, cy = (focus_px[0] + focus_px[2]) / 2.0, (focus_px[1] + focus_px[3]) / 2.0
+        else:
+            cx, cy = (vx1 + vx2) / 2.0, (vy1 + vy2) / 2.0
+        rx1 = int(round(min(max(vx1, cx - rw / 2.0), vx2 - rw)))
+        ry1 = int(round(min(max(vy1, cy - rh / 2.0), vy2 - rh)))
+        found = EnhancedPass((rx1, ry1, rx1 + rw, ry1 + rh), o.min_conf_percent / 100.0, o.imgsz)
+        lut = None
+        if o.lift:
+            _lifted, gamma = lift_midtones(small_bgr, bgr=True)
+            if gamma < LIFT_DARK_GAMMA:
+                found.gamma = gamma
+                lut = np.clip(np.power(np.arange(256) / 255.0, gamma) * 255.0 + 0.5, 0, 255).astype(np.uint8)
+        accepted = []
+        for win in enhanced_windows(found.region, o.grid):
+            if cancelled():
+                break
+            x1, y1, x2, y2 = win
+            crop = cv2.cvtColor(np.ascontiguousarray(image.rgb8[y1:y2, x1:x2]), cv2.COLOR_RGB2BGR)
+            if lut is not None:
+                crop = lut[crop]
+            seen = []
+            for det in self.models.detect_birds(crop, conf=ENH_CANDIDATE_CONFIDENCE, imgsz=o.imgsz):
+                box = (det.box[0] + x1, det.box[1] + y1, det.box[2] + x1, det.box[3] + y1)
+                ok = det.confidence >= found.min_conf
+                seen.append((det.confidence, box, ok))
+                if ok:
+                    cut = _cut_by_window(box, win, (vx1, vy1, vx2, vy2))
+                    accepted.append((cut, replace(_window_detection(det, box, win, scale, small_bgr.shape[:2]),
+                                                  source=FOUND_ENHANCED)))
+            found.windows.append({"box": win, "detections": seen})
+        # A bird cut by a window border is seen whole by an overlapping window: uncut and larger views
+        # first, so merging (containment) keeps the whole bird rather than a slice of it, whose
+        # confidence can be the higher one.
+        accepted.sort(key=lambda item: (item[0], -_area(item[1].box), -item[1].confidence))
+        found.accepted = [_focus_part(d, focus_px, scale)
+                          for d in self._limit(dedupe_detections([d for _cut, d in accepted]))]
+        return found
+
     def find_missed_bird(self, path: str, *, cancelled: Callable[[], bool] = lambda: False) -> Optional[MissedBird]:
         """Run only the no-bird recheck, for callers with their own first pass.
 
@@ -765,6 +922,8 @@ class BirdSharpnessAnalyzer:
             image_long_edge=long_edge,
             version=self.version,
             edge_estimator=self.estimator.key,
+            detector=str(getattr(self.models, "detector_name", "") or ""),
+            sam_model=self._params.sam_model,
         )
 
     def _measure_bird(self, image: AnalysisImage, det: BirdDetection, scale: float, *, index: int = 0,
@@ -793,6 +952,12 @@ class BirdSharpnessAnalyzer:
             mask = np.zeros((ch, cw), np.uint8)
             ix, iy = int(BOX_INSET_RATIO * bw), int(BOX_INSET_RATIO * bh)
             mask[y1 - Y1 + iy:y2 - Y1 - iy, x1 - X1 + ix:x2 - X1 - ix] = 1
+        detector_px, refined_by = None, ""
+        if self._sam_applies(det):
+            refined = self._sam_mask(image.rgb8[Y1:Y2, X1:X2], (x1 - X1, y1 - Y1, x2 - X1, y2 - Y1), mask)
+            if refined is not None:
+                detector_px, refined_by = mask.astype(bool), self._params.sam_model
+                mask = refined.astype(np.uint8)
         bird_px = mask.astype(bool)
 
         field_ = EdgeBlurField(image.gray[Y1:Y2, X1:X2])
@@ -888,11 +1053,36 @@ class BirdSharpnessAnalyzer:
             eye_mirror_gap=None if keypoints is None else keypoints.eye_gap,
             eye_reliable=None if keypoints is None else keypoints.eye_reliable,
             index=index,
+            refined_by=refined_by,
         )
         if tracer is not None:
             tracer.bird(index, image, (X1, Y1, X2, Y2), bird_px, body, head, trace_keypoints, selection,
-                        body_detail, measurement)
+                        body_detail, measurement, detector_px=detector_px)
         return measurement
+
+    def _sam_applies(self, det: BirdDetection) -> bool:
+        p = self._params
+        return bool(p.sam_model) and (p.sam_scope == SAM_SCOPE_ALL
+                                      or getattr(det, "source", FOUND_FULL) not in (FOUND_FULL, FOUND_FULL_SMALL))
+
+    def _sam_mask(self, rgb_roi: np.ndarray, box, detector_mask: np.ndarray) -> Optional[np.ndarray]:
+        """SAM's mask of the bird in ``box`` (ROI px), kept inside the box + 10 %; ``None`` when
+        it keeps less than ``refine.MIN_KEEP_FRACTION`` of the detector's mask (wrong object)."""
+        from .refine import MIN_KEEP_FRACTION
+
+        refined = self.refiner_provider(self._params.sam_model).mask(rgb_roi, box)
+        if refined is None:
+            return None
+        x1, y1, x2, y2 = box
+        mx, my = int(0.1 * (x2 - x1)), int(0.1 * (y2 - y1))
+        keep = np.zeros(refined.shape, bool)
+        keep[max(0, y1 - my):y2 + my, max(0, x1 - mx):x2 + mx] = True
+        refined = refined & keep
+        if refined.sum() < MIN_KEEP_FRACTION * max(1, int(np.count_nonzero(detector_mask))):
+            _log.info("[BirdSharpness] SAM mask too small (%d px vs detector %d px); keeping the detector's",
+                      int(refined.sum()), int(np.count_nonzero(detector_mask)))
+            return None
+        return refined
 
     def _focus_box_px(self, path: str, image: AnalysisImage) -> Optional[Tuple[float, float, float, float]]:
         """Camera focus box mapped onto the decoded pixels (RAW sensor margins included)."""
@@ -926,7 +1116,7 @@ class BirdSharpnessAnalyzer:
             return False
 
     def _no_bird_result(self, path: str, image: AnalysisImage, cancelled, tracer=None, *,
-                        focus_px=None, focus_known: bool = False) -> BirdSharpnessResult:
+                        focus_px=None, focus_known: bool = False, manual=None) -> BirdSharpnessResult:
         H, W = image.gray.shape[:2]
         vx1, vy1, vx2, vy2 = valid_bounds(image)
         region, region_box, stats = "", None, None
@@ -943,7 +1133,8 @@ class BirdSharpnessAnalyzer:
             if tracer is not None:
                 tracer.focus_window(image, region_box, selection, stats)
         options = self.tile_options.normalized()
-        if (stats is None or stats.sigma is None) and options.mf_center and self._manual_focus(path):
+        if (stats is None or stats.sigma is None) and options.mf_center and (
+                manual() if manual is not None else self._manual_focus(path)):
             # Manual focus: the sharpest part of the frame centre is the focused plane.
             cw = max(32, int(round((vx2 - vx1) * options.mf_center_percent / 100.0)))
             ch = max(32, int(round((vy2 - vy1) * options.mf_center_percent / 100.0)))
@@ -984,6 +1175,8 @@ class BirdSharpnessAnalyzer:
             image_long_edge=max(H, W),
             version=self.version,
             edge_estimator=self.estimator.key,
+            detector=str(getattr(self.models, "detector_name", "") or ""),
+            sam_model=self._params.sam_model,
         )
 
 
