@@ -24,6 +24,9 @@
 /super_viewer.cfg
 /SuperViewer/SuperViewerUser.cfg
 /SuperViewer/models/denoise/
+# Model weights fetched by download_models.sh / .bat (never committed)
+/SuperViewer/models/*.pt
+/SuperViewer/models/*.pt.part
 
 SuperBirdStamp/tools/ffmpeg/macos/ffmpeg
 SuperBirdStamp/tools/ffmpeg/windows/ffmpeg.exe

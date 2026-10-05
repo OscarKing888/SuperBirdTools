@@ -35,12 +35,13 @@ SuperPicky 的鸟眼模型：
 模型查找顺序：
 
 1. 环境变量 `SUPERBIRD_SHARPNESS_MODEL_DIR`；
-2. 打包程序自带的 `models` 目录；
-3. 仓库的 `SuperViewer/models`、`SuperBirdStamp/models`；
-4. 已安装的 SuperPicky：
+2. 用户模型目录（在「设置 → 用户选项 → 鸟清晰度」里下载的模型）；
+3. 打包程序自带的 `models` 目录；
+4. 仓库的 `SuperViewer/models`、`SuperBirdStamp/models`；
+5. 已安装的 SuperPicky：
    - macOS：`/Applications/SuperPicky.app/Contents/Resources/models`、`~/Applications/SuperPicky.app/...`；
    - Windows：`%ProgramFiles%\SuperPicky`、`%LOCALAPPDATA%\SuperPicky` 下的 `_internal\models` 或 `models`；
-5. 与本仓库同级的 SuperPicky 源码目录 `SuperPicky/models`。
+6. 与本仓库同级的 SuperPicky 源码目录 `SuperPicky/models`。
 
 所以要获得完整的鸟清晰度检测，请安装 SuperPicky，或把上面两个文件放进 `SuperViewer/models`。打包版 SuperViewer 目前只带 `yolo11n.pt`，没装 SuperPicky 的电脑只能按鸟框测整只鸟，检测进度窗口会提示。SuperPicky 自带的其他模型（飞行判断 `superFlier_efficientnet.pth`、鸟种识别 `model20240824.pth`、美学评分 `cfanet_iaa_ava_res50`）目前没有使用。细节见 [鸟清晰度检测](docs/bird_sharpness.md#模型)；两者清晰度算法的区别与实测对比见 [与 SuperPicky 锐度算法对比](docs/bird_sharpness_vs_superpicky.md)。
 
@@ -71,6 +72,16 @@ python init_dev.py
 ```
 
 初始化完成后，日常运行、测试和打包都应使用仓库根目录的共享 `.venv`，不要改用全局 Python。
+
+预下载全部模型到 workspace（`SuperViewer/models`，不入 git），之后 build、打包和本机检测都不再联网下载：鸟清晰度可选的 43 个 YOLO / SAM 模型（约 3.45 GB）和 NAFNet 降噪模型，每个文件按大小与 SHA-256 校验，已校验的跳过，断线自动续传。
+
+```bash
+./download_models.sh                 # macOS / Linux；Windows：download_models.bat
+./download_models.sh yolo11x-seg.pt sam2.1_b.pt   # 只下载这些
+./download_models.sh --dry-run       # 只看计划；--check-only 离线校验；--list 列出全部
+```
+
+打包内容不变：安装包仍只带 `yolo11n.pt` 和降噪模型，build 直接使用 workspace 里已校验的文件；其余模型供本机开发和计算过程窗口对比，用户可在设置里按需下载。
 
 从仓库根目录启动 GUI：
 

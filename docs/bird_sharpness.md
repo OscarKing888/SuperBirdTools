@@ -131,7 +131,8 @@ CLI 导出同样的过程：
 - **SAM 精修**（`refine.py`）：SAM2.1 / SAM2 的 t/s/b/l（78–449 MB）。按鸟框提示抠出看得见的鸟体替换检测模型的掩膜（只保留在鸟框外扩 10% 内；保留的像素不足检测掩膜 20% 时视为抠错对象，不用）。范围：仅复检/增强找到的鸟（默认）或全部鸟（鸟群每只约 0.1–0.4 s）。SAM 不认识鸟，只抠框里的东西：框错了它也会把树枝抠得很干净（DSC05639 的一个增强候选）。模型缺失时整批报错，不会悄悄退回检测模型的掩膜。
 - **增强找鸟**（默认关闭）：复检后仍没有鸟、且模式为「所有无鸟照片」或「仅手动对焦」（按 `FocusMode` 判断）时，把中心区域（默认每边 70%，有焦点框时以焦点为中心）分成 N×N（默认 2×2）个重叠 25% 的窗口逐个识别（默认网络输入 1024 px，画面暗时先提亮），置信度达到门槛（默认 0.50）的候选当成鸟（`found_by = enhanced`），之后与普通的鸟一样逐只测量。重叠窗口里同一只鸟会被窗口边界切成几片、且碎片的置信度可能更高，合并时不被窗口边界切到的、框更大的视角优先，保留整只鸟。
   - 依据（2026-10-04 夜拍）：DSC05639（睡在叶后的鸟）全图检测为 bird ≤ 0.01（认成“盆栽” 0.07），以鸟为中心放大后 0.42–0.68。但放大后的树叶也常认成鸟：3×3 滑窗在夜拍和 40 张已判无鸟的照片上，真鸟 0.37–0.93（含 DSC05015 画面边上一只鹰鹃的尾羽，原先漏检），树叶 0.3–0.8，两者重叠，单靠门槛分不开；窗口位置稍变，这只鸟的置信度在 0.15–0.47 之间跳动，而叶子可达 0.81。窗口比鸟小时只看到鸟的一部分（50% / 3×3 时窗口约画幅 0.2，这只鸟约 0.26，采纳的 0.65 是鸟旁的树枝）。所以默认关闭、窗口取约画幅 0.4（70% / 2×2）；计算过程窗口列出全部 ≥ 0.10 的候选，用于按照片试门槛、窗口和检测模型。
-- **下载**：未安装的模型在两处表单里显示「未下载」，「下载所选模型…」确认名称、大小、来源（Ultralytics assets v8.4.0，与已装 `ultralytics` 包同源）后下载到用户模型目录（macOS `~/Library/Application Support/SuperBirdTools/models`，Windows `%LOCALAPPDATA%\SuperBirdTools\models`），先写 `.part`、大小一致再改名，可取消，下载线程在对话框关闭前结束。CLI：`--list-models`、`--download-model NAME`。
+- **下载**：未安装的模型在两处表单里显示「未下载」，「下载所选模型…」确认名称、大小、来源（Ultralytics assets v8.4.0，与已装 `ultralytics` 包同源）后下载到用户模型目录（macOS `~/Library/Application Support/SuperBirdTools/models`，Windows `%LOCALAPPDATA%\SuperBirdTools\models`），先写 `.part`、大小一致再改名，可取消，下载线程在对话框关闭前结束。CLI：`--list-models`、`--download-model NAME`。目录里每个模型都固定了大小和 SHA-256（来自 GitHub release 的 digest），下载边读边算哈希，两者一致才改名为正式文件；连接中途断开时用 HTTP Range 从断点续传（GitHub CDN 偶尔截断连接，2026-10-05 实测 yolo11n 连续 3 次在 5.59 / 5.61 MB 处断开）。
+- **开发与打包预下载**：`download_models.sh` / `download_models.bat`（`build_tools/download_models.py`）把全部 43 个模型和 NAFNet 降噪模型下载到 workspace 的 `SuperViewer/models`（`.gitignore` 已排除），已校验的跳过；build 只打包 spec 已有的 `yolo11n.pt` 与降噪模型，不再临时下载。
 
 ## 模型
 

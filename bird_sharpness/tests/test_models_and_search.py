@@ -35,9 +35,10 @@ def test_catalog_lists_every_supported_model() -> None:
 
 
 class _Response(io.BytesIO):
-    def __init__(self, data: bytes, length: int):
+    def __init__(self, data: bytes, status: int = 200):
         super().__init__(data)
-        self.headers = {"Content-Length": str(length)}
+        self.status = status
+        self.headers = {"Content-Length": str(len(data))}
 
     def __enter__(self):
         return self
@@ -46,23 +47,75 @@ class _Response(io.BytesIO):
         self.close()
 
 
-def test_download_streams_atomically_and_cleans_up(monkeypatch, tmp_path) -> None:
+def _fake_model(monkeypatch, name: str, payload: bytes):
+    """Make ``name`` a catalog model whose size and SHA-256 are those of ``payload``."""
+    import hashlib
+
+    real = model_catalog.catalog_model(name)
+    fake = replace(real, size_bytes=len(payload), sha256=hashlib.sha256(payload).hexdigest())
+    monkeypatch.setitem(model_catalog._BY_NAME, name, fake)
+    return fake
+
+
+def test_catalog_pins_size_and_checksum_of_every_model() -> None:
+    for m in (*model_catalog.DETECTORS, *model_catalog.SAM_MODELS):
+        assert m.size_bytes > 1_000_000 and len(m.sha256) == 64
+    assert model_catalog.catalog_model("yolo11n.pt").size_bytes == 5613764
+
+
+def test_download_verifies_streams_atomically_and_cleans_up(monkeypatch, tmp_path) -> None:
     import urllib.request
 
-    payload = b"x" * (3 << 20)
-    monkeypatch.setattr(urllib.request, "urlopen", lambda req, timeout, context: _Response(payload, len(payload)))
+    payload = bytes(range(256)) * 12_000
+    _fake_model(monkeypatch, "yolo11n.pt", payload)
+    monkeypatch.setattr(urllib.request, "urlopen", lambda req, timeout, context: _Response(payload))
     seen = []
     path = model_catalog.download("yolo11n.pt", directory=tmp_path, progress=lambda d, t: seen.append((d, t)))
     assert path == tmp_path / "yolo11n.pt" and path.read_bytes() == payload
     assert seen[-1] == (len(payload), len(payload)) and not list(tmp_path.glob("*.part"))
+    assert model_catalog.verify(path) and not model_catalog.verify(tmp_path / "missing.pt")
     with pytest.raises(model_catalog.DownloadCancelled):
         model_catalog.download("yolo11s.pt", directory=tmp_path, cancelled=lambda: True)
-    monkeypatch.setattr(urllib.request, "urlopen", lambda req, timeout, context: _Response(payload, len(payload) + 1))
-    with pytest.raises(IOError):
+    _fake_model(monkeypatch, "yolo11m.pt", payload)  # right size, wrong bytes: checksum must catch it
+    monkeypatch.setattr(urllib.request, "urlopen", lambda req, timeout, context: _Response(b"y" * len(payload)))
+    with pytest.raises(IOError, match="SHA-256"):
         model_catalog.download("yolo11m.pt", directory=tmp_path)
-    assert sorted(p.name for p in tmp_path.iterdir()) == ["yolo11n.pt"]  # nothing truncated left behind
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["yolo11n.pt"]  # nothing bad left behind
     with pytest.raises(ValueError):
         model_catalog.download("../../etc/passwd", directory=tmp_path)
+
+
+def test_download_resumes_a_cut_connection(monkeypatch, tmp_path) -> None:
+    import urllib.request
+
+    payload = bytes(range(256)) * 8_000
+    _fake_model(monkeypatch, "yolo11s.pt", payload)
+    ranges = []
+
+    def cut_after_a_third(req, timeout, context):
+        start = int((req.get_header("Range") or "bytes=0-")[6:-1])
+        ranges.append(start)
+        end = min(len(payload), start + len(payload) // 3)
+        return _Response(payload[start:end], 206 if start else 200)
+
+    monkeypatch.setattr(urllib.request, "urlopen", cut_after_a_third)
+    path = model_catalog.download("yolo11s.pt", directory=tmp_path)
+    assert path.read_bytes() == payload and ranges[0] == 0 and len(ranges) >= 3 and ranges == sorted(ranges)
+    # a server that ignores Range starts over (status 200) and still ends verified
+    calls = []
+
+    def ignore_range(req, timeout, context):
+        calls.append(req.get_header("Range"))
+        return _Response(payload if len(calls) > 1 else payload[:1000])
+
+    monkeypatch.setattr(urllib.request, "urlopen", ignore_range)
+    assert model_catalog.download("yolo11s.pt", directory=tmp_path).read_bytes() == payload
+    assert calls == [None, "bytes=1000-"]
+    # endless cuts: give up after MAX_RESUMES, no partial file kept
+    monkeypatch.setattr(urllib.request, "urlopen", lambda req, timeout, context: _Response(b"", 206))
+    with pytest.raises(IOError, match="下载不完整"):
+        model_catalog.download("yolo11s.pt", directory=tmp_path / "other")
+    assert not list((tmp_path / "other").glob("*"))
 
 
 # ── parameters ─────────────────────────────────────────────────────────────
