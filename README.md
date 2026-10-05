@@ -150,6 +150,12 @@ build_all.bat
 bash build_all.sh --apps-only
 ```
 
+macOS 也可直接使用免 ZIP 入口，支持传入 `--clean` 等原有参数：
+
+```bash
+bash build_all_no_zip.sh
+```
+
 ```bat
 build_all.bat --apps-only
 ```
