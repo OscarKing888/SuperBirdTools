@@ -1,6 +1,6 @@
 # 鸟清晰度检测（bird_sharpness）
 
-判断“对上焦了，但鸟本身是否清晰”。常规 Laplacian 方差 / Tenengrad 在高 ISO、暗色羽毛、叶子遮挡的鸟片上失效：像素级梯度主要反映噪点和对比度，框内的清晰树叶也会冒充鸟。本模块改为在**全分辨率**下测量**鸟头部边缘的模糊半径**（像素），与人眼 100% 查看的结论一致。与 SuperPicky Tenengrad 锐度的区别和实测对比见 [对比文档](bird_sharpness_vs_superpicky.md)。
+判断“对上焦了，但鸟本身是否清晰”。常规 Laplacian 方差 / Tenengrad 在高 ISO、暗色羽毛、叶子遮挡的鸟片上失效：像素级梯度主要反映噪点和对比度，框内的清晰树叶也会冒充鸟。本模块改为在**全分辨率**下测量**鸟头部边缘的模糊半径**（像素），与人眼 100% 查看的结论一致。与 SuperPicky Tenengrad 锐度的区别和实测对比见 [对比文档](bird_sharpness_vs_superpicky.md)。各环节的执行顺序与分支条件见 [流程图文档](bird_sharpness_flowchart.md)。
 
 ## 算法
 
