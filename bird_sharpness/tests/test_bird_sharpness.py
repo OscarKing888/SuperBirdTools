@@ -720,3 +720,32 @@ def test_edges_below_the_sigma_floor_are_rejected_as_line_like() -> None:
     # The body statistics apply the same rule.
     stats, _ratio, (_ys, _xs, body_sig, _bins) = EdgeBlurField(img).body_blur_detail(np.ones_like(img, bool))
     assert body_sig.size == 0 or float(body_sig.min()) >= SIGMA_FLOOR_PX
+
+
+def test_grey_filled_crop_keeps_the_photo_noise_estimate(monkeypatch) -> None:
+    from bird_sharpness.metrics import estimate_noise_sigma
+    from bird_sharpness.params import AnalysisParams
+    from bird_sharpness.preview import MASK_FILL_GRAY
+
+    scene = _scene([(900, 600, 300, 0.3)], noise=0.01)
+    photo_noise = estimate_noise_sigma(scene[300:900, 600:1200])
+    filled = scene[300:900, 600:1200].copy()
+    yy, xx = np.ogrid[:600, :600]
+    filled[(xx - 300) ** 2 + (yy - 300) ** 2 > 120 ** 2] = MASK_FILL_GRAY  # bird keeps ~13 % of the crop
+    assert estimate_noise_sigma(filled) < 0.5 * photo_noise  # the flat grey hides the sensor noise
+    assert EdgeBlurField(filled, noise_source=scene[300:900, 600:1200]).noise_sigma == pytest.approx(photo_noise)
+
+    _install_image(monkeypatch, scene)
+    fields = []
+    real = analyzer_mod.EdgeBlurField
+
+    def spy(gray, **kw):
+        f = real(gray, **kw)
+        fields.append(f.noise_sigma)
+        return f
+
+    monkeypatch.setattr(analyzer_mod, "EdgeBlurField", spy)
+    models = _StubModels([(900, 600, 300)], full_w=1800)
+    BirdSharpnessAnalyzer(models, focus_provider=_no_focus).analyze("bird.jpg")
+    BirdSharpnessAnalyzer(models, focus_provider=_no_focus, params=AnalysisParams(grey_fill=True)).analyze("bird.jpg")
+    assert fields[1] == pytest.approx(fields[0])  # same noise gate with and without the fill

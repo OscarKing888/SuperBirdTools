@@ -175,7 +175,11 @@ def specular_highlights(gray: np.ndarray, head_radius: float, *,
 class EdgeBlurField:
     """Pre-computed gradient fields of one grayscale ROI, reused by all region queries."""
 
-    def __init__(self, gray: np.ndarray, *, pre_sigma: float = PRE_SIGMA, reblur_sigma: float = REBLUR_SIGMA):
+    def __init__(self, gray: np.ndarray, *, pre_sigma: float = PRE_SIGMA, reblur_sigma: float = REBLUR_SIGMA,
+                 noise_source: Optional[np.ndarray] = None):
+        """``noise_source``: pixels the sensor noise is estimated on when ``gray`` is not the
+        photo itself (a grey-filled cut-out is mostly flat, which would read ~4x less noise
+        and let weak edges through the noise gate: DSC06726 0.0095 -> 0.0022)."""
         gray = np.ascontiguousarray(gray, dtype=np.float32)
         self.pre_sigma = float(pre_sigma)
         self.reblur_sigma = float(reblur_sigma)
@@ -190,7 +194,7 @@ class EdgeBlurField:
         u8 = np.clip((g0 - lo) * scale, 0, 255).astype(np.uint8)
         self._u8 = u8
         self._canny_cache: dict = {}
-        self.noise_sigma = estimate_noise_sigma(gray)
+        self.noise_sigma = estimate_noise_sigma(gray if noise_source is None else noise_source)
 
     def _edges(self, low: int, high: int) -> np.ndarray:
         key = (low, high)

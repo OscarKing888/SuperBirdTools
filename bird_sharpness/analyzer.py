@@ -1047,7 +1047,8 @@ class BirdSharpnessAnalyzer:
         if not core.any():
             core = bird_px & ~glare
 
-        field_ = EdgeBlurField(roi_gray)
+        # Sensor noise is always estimated on the photo's pixels: a grey-filled crop is mostly flat.
+        field_ = EdgeBlurField(roi_gray, noise_source=image.gray[Y1:Y2, X1:X2] if grey_filled else None)
         body = cv2.erode(mask, np.ones((BODY_MASK_ERODE_PX, BODY_MASK_ERODE_PX), np.uint8)).astype(bool)
         if not body.any():
             body = bird_px

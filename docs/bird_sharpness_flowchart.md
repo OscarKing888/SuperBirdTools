@@ -216,7 +216,7 @@ flowchart TD
     H --> J["bird_px = 该鸟像素"]
     I --> J
     J --> GF{"grey_fill 开启？"}
-    GF -->|是| GF1["ROI 的 gray / rgb8 复制一份，bird_px 以外涂成灰 114（MASK_FILL）<br/>之后高光检测、梯度场、鸟眼定位都用这份抠图；原图不动"]
+    GF -->|是| GF1["ROI 的 gray / rgb8 复制一份，bird_px 以外涂成灰 114（MASK_FILL）<br/>之后高光检测、梯度场、鸟眼定位都用这份抠图；原图不动<br/>噪声 σ 仍按原 ROI 像素估计（抠图大片平灰会把噪声低估约 4×）"]
     GF -->|否| GF2["直接用 ROI 的原像素"]
     GF1 --> K
     GF2 --> K
