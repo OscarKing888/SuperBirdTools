@@ -129,7 +129,9 @@ class ArchiveDialog(QDialog):
         self.date_prefix.setChecked(options.date_prefix)
         form.addRow("文件命名", self.date_prefix)
         layout.addLayout(form)
-        hint = QLabel("例：白鹭 / 20261005_083015_DSC01234.ARW\n"
+        hint = QLabel("例：白鹭 / RAW / 20261005_083015_DSC01234.ARW\n"
+                      "自动分类：RAW/HIF/HEIF/HEIC → RAW；PSD → PSD；PNG/JPG/JPEG → Export。\n"
+                      "其他图片格式保留在鸟名目录。\n"
                       "同名自动追加 _002、_003…，绝不覆盖已有照片。\n"
                       "XMP 随照片入册；没有鸟名的照片跳过，拍摄日期缺失时标为“日期未知”。", self)
         hint.setWordWrap(True)

@@ -2,12 +2,15 @@
 """珍禽入册：无 Qt 的鸟名归档、命名规划及照片/XMP 事务。"""
 from __future__ import annotations
 
+from contextlib import ExitStack
 from dataclasses import dataclass, field
 from datetime import datetime
 import json
 import os
 from pathlib import Path
 import re
+import shutil
+import tempfile
 import unicodedata
 import xml.etree.ElementTree as ET
 
@@ -17,7 +20,10 @@ from app_common.exif_io.photo_meta import (
 )
 from app_common.exif_io.xmp_sidecar import _photo_descriptions, find_same_stem_xmp_sidecar
 from app_common.file_transactions import transfer_file_pairs
-from app_common.image_formats import IMAGE_EXTENSIONS
+from app_common.image_formats import (
+    HEIF_IMAGE_EXTENSIONS, IMAGE_EXTENSIONS, JPEG_IMAGE_EXTENSIONS,
+    PHOTOSHOP_IMAGE_EXTENSIONS, RAW_IMAGE_EXTENSIONS,
+)
 
 
 @dataclass(frozen=True)
@@ -134,6 +140,18 @@ def _make_sidecar_portable(sidecar: str, sources: tuple[str, ...]) -> None:
         raise OSError(f"无法保存可迁移的 XMP：{sidecar}")
 
 
+def archive_format_directory(path: Path) -> str:
+    """使用共享格式定义：相机源片、PSD 和 PNG/JPEG 成片分别入子目录。"""
+    extension = path.suffix.lower()
+    if extension in RAW_IMAGE_EXTENSIONS or extension in HEIF_IMAGE_EXTENSIONS:
+        return "RAW"
+    if extension in PHOTOSHOP_IMAGE_EXTENSIONS:
+        return "PSD"
+    if extension in JPEG_IMAGE_EXTENSIONS or extension == ".png":
+        return "Export"
+    return ""  # 未指定分类的其它受支持图片仍放在鸟名目录。
+
+
 @dataclass
 class ArchiveSession:
     """单批次目录索引；同 stem 的 RAW/JPEG 共用一个命名分配。"""
@@ -150,31 +168,43 @@ class ArchiveSession:
         if self.root.exists() and not self.root.is_dir():
             raise ValueError("归档位置不是目录")
         if self.root.exists():
-            self._folders = {name_key(p.name): p for p in self.root.iterdir()}
+            self._folders[str(self.root)] = {name_key(p.name): p for p in self.root.iterdir()}
 
-    def destination(self, paths: tuple[Path, ...], species: str, metadata: dict) -> tuple[Path, str]:
-        folder_name = safe_component(species)
-        folder = self._folders.setdefault(name_key(folder_name), self.root / folder_name)
+    def _child_directory(self, parent: Path, name: str) -> Path:
+        key = str(parent)
+        if key not in self._folders:
+            self._folders[key] = {name_key(p.name): p for p in parent.iterdir()} if parent.exists() else {}
+        folder = self._folders[key].setdefault(name_key(name), parent / name)
         if folder.exists() and not folder.is_dir():
-            raise ValueError(f"鸟名目录被同名文件占用：{folder}")
-        if not folder.resolve().is_relative_to(self.root.resolve()):
-            raise ValueError(f"鸟名目录指向归档目录之外：{folder}")
-        if any(p.parent.resolve() == folder.resolve() for p in paths):
-            raise ValueError("照片已经位于对应鸟名目录，无需重复入册")
-        key = str(folder)
-        if key not in self._stems:
-            self._stems[key] = {name_key(p.stem) for p in folder.iterdir()} if folder.exists() else set()
-        used = self._stems[key]
+            raise ValueError(f"归档目录被同名文件占用：{folder}")
+        if not folder.resolve().is_relative_to(parent.resolve()):
+            raise ValueError(f"归档目录指向所属目录之外：{folder}")
+        return folder
+
+    def destination(self, paths: tuple[Path, ...], species: str, metadata: dict) -> tuple[tuple[Path, ...], str]:
+        bird_folder = self._child_directory(self.root, safe_component(species))
+        folders = tuple(self._child_directory(bird_folder, category) if category else bird_folder
+                        for category in (archive_format_directory(p) for p in paths))
+        if any(path.parent.resolve() == folder.resolve() for path, folder in zip(paths, folders)):
+            raise ValueError("照片已经位于对应鸟名的格式目录，无需重复入册")
+        used_sets = []
+        for folder in dict.fromkeys(folders):
+            key = str(folder.resolve())
+            if key not in self._stems:
+                self._stems[key] = {name_key(p.stem) for p in folder.iterdir()} if folder.exists() else set()
+            used_sets.append(self._stems[key])
         prefix = capture_prefix(metadata) if self.options.date_prefix else ""
         original = safe_component(paths[0].stem)
         base = original if prefix and original.startswith(prefix) else prefix + original
         candidate = base
         suffix = 2
-        while name_key(candidate) in used:
+        # 任一格式目录发生冲突时整组加相同序号，保留 RAW/成片对应关系。
+        while any(name_key(candidate) in used for used in used_sets):
             candidate = f"{base}_{suffix:03d}"
             suffix += 1
-        used.add(name_key(candidate))
-        return folder, candidate
+        for used in used_sets:
+            used.add(name_key(candidate))
+        return folders, candidate
 
     def archive_group(self, paths: tuple[Path, ...], report_rows: dict) -> ArchiveResult:
         sources = tuple(str(p) for p in paths)
@@ -187,23 +217,34 @@ class ArchiveSession:
                 return ArchiveResult(sources, status="skipped", message="缺少鸟名，请先填写鸟名再入册")
             if len(species) != 1:
                 raise ValueError("同名 RAW/JPEG 的鸟名不一致，请先统一鸟名")
-            folder, stem = self.destination(paths, species.pop(), records[0][0])
+            folders, stem = self.destination(paths, species.pop(), records[0][0])
             # 保留报告中的鸟名、评分、标签等，不能让移动后失去报告上下文。
             for path, (_, report) in zip(paths, records):
                 _preserve_report(str(path), report)
             sidecar = find_same_stem_xmp_sidecar(sources[0])
-            pairs = [(str(p), str(folder / (stem + p.suffix))) for p in paths]
-            copied_sidecars = ()
-            if sidecar:
-                _make_sidecar_portable(sidecar, sources)
-                pairs.append((sidecar, str(folder / (stem + Path(sidecar).suffix))))
-                selected = set(sources)
-                # 未选择的同名照片仍依赖源 XMP；只复制侧车，不顺带移动未选照片。
-                if any(str(p) not in selected and name_key(p.stem) == name_key(paths[0].stem)
-                       and p.suffix.lower() in IMAGE_EXTENSIONS for p in paths[0].parent.iterdir()):
-                    copied_sidecars = (sidecar,)
-            transfer_file_pairs(pairs, action="cut" if self.options.mode == "move" else "copy",
-                                copy_sources=copied_sidecars, no_replace=True)
+            pairs = [(str(p), str(folder / (stem + p.suffix))) for p, folder in zip(paths, folders)]
+            copied_sidecars = []
+            with ExitStack() as cleanup:
+                if sidecar:
+                    _make_sidecar_portable(sidecar, sources)
+                    sidecar_folders = list(dict.fromkeys(folders))
+                    pairs.append((sidecar, str(sidecar_folders[0] / (stem + Path(sidecar).suffix))))
+                    if len(sidecar_folders) > 1:
+                        # 每个目标目录各放一份 XMP；额外副本有独立源路径，
+                        # 与原侧车一起参加共享事务，避免多目标回滚混淆同一个源。
+                        temporary = Path(cleanup.enter_context(tempfile.TemporaryDirectory(prefix="sbt-archive-xmp-")))
+                        for index, folder in enumerate(sidecar_folders[1:], 1):
+                            replica = temporary / f"{index}.xmp"
+                            shutil.copy2(sidecar, replica)
+                            pairs.append((str(replica), str(folder / (stem + Path(sidecar).suffix))))
+                            copied_sidecars.append(str(replica))
+                    selected = set(sources)
+                    # 未选择的同名照片仍依赖源 XMP；只复制侧车，不顺带移动未选照片。
+                    if any(str(p) not in selected and name_key(p.stem) == name_key(paths[0].stem)
+                           and p.suffix.lower() in IMAGE_EXTENSIONS for p in paths[0].parent.iterdir()):
+                        copied_sidecars.append(sidecar)
+                transfer_file_pairs(pairs, action="cut" if self.options.mode == "move" else "copy",
+                                    copy_sources=tuple(copied_sidecars), no_replace=True)
         return ArchiveResult(sources, tuple(dest for _, dest in pairs[:len(paths)]))
 
 
