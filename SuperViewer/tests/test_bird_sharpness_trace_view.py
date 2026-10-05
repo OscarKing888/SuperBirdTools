@@ -258,6 +258,9 @@ def test_context_menu_opens_trace_computed_as_worker_action(stub_trace_env, monk
     from app_common.file_browser._work_pool import BrowserWorkPool
 
     analyzer, _gate = stub_trace_env
+    decodes = []
+    installed = analyzer_mod.load_analysis_image
+    monkeypatch.setattr(analyzer_mod, "load_analysis_image", lambda p: decodes.append(p) or installed(p))
     pool = BrowserWorkPool(4, 2, analysis_workers=1) if use_pool else None
     window = QWidget()
     file_list = _FakeFileList(pool)
@@ -279,7 +282,16 @@ def test_context_menu_opens_trace_computed_as_worker_action(stub_trace_env, monk
         assert not Path("/photos/a.xmp").exists()  # read-only
         if pool is not None:
             assert pool.snapshot()["completed"] >= 1
+        assert len(decodes) == 1 and len(dialog.image_cache) == 1
+        # 按此参数重新计算: same window, other parameters, no second RAW decode
+        dialog.max_birds_spin.setValue(1)
+        dialog.rerun_btn.click()
+        assert _wait(lambda: dialog.stack.currentWidget() is dialog.content, timeout=20)
+        assert len(decodes) == 1
+        assert dict(dialog.steps[0].metrics)["解码耗时"].startswith("复用本窗口已解码的图像")
+        cache = dialog.image_cache
         dialog.close()
+        assert len(cache) == 0  # freed with the window
         assert _wait(controller.is_shutdown_done)
     finally:
         controller.request_shutdown()

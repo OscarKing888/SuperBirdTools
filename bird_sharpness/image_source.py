@@ -174,3 +174,65 @@ def load_image_file(file_path: str, *, source: str, camera_crop=None) -> Analysi
                                  camera_crop=camera_crop, source=source, source_path=file_path)
         return _from_rgb8(pixels.astype(np.uint8), source=source, source_path=file_path, camera_crop=camera_crop)
     return replace(_load_pillow(file_path), camera_crop=camera_crop, source=source, source_path=file_path)
+
+
+class DecodedImageCache:
+    """Decoded images kept for later runs of the same photo (a trace window's reruns).
+
+    Only the analysis parameters change between reruns, never the decode, so a
+    50 MP RAW (~1.5 s, ~350 MB) is decoded once per window. Keyed by file, image
+    source and the decoded file's size / mtime (a re-rendered denoised image is
+    decoded again); at most ``capacity`` images (RAW <-> JPEG switches stay
+    instant); a run starting while another decodes the same key waits for it.
+    """
+
+    def __init__(self, capacity: int = 2):
+        import threading
+        from collections import OrderedDict
+
+        self.capacity = max(1, int(capacity))
+        self._items: "OrderedDict[tuple, AnalysisImage]" = OrderedDict()
+        self._lock = threading.Lock()
+        self._key_locks: dict = {}
+
+    @staticmethod
+    def key(path: str, source: str, decoded_path: Optional[str] = None) -> tuple:
+        target = decoded_path or path
+        try:
+            stat = os.stat(target)
+            stamp = (stat.st_size, stat.st_mtime_ns)
+        except OSError:
+            stamp = (None, None)
+        return (os.path.normcase(os.path.abspath(path)), source,
+                os.path.normcase(os.path.abspath(target)), *stamp)
+
+    def get_or_load(self, key: tuple, load) -> Tuple[AnalysisImage, bool]:
+        """``(image, reused)``: the cached image, else ``load()``'s (then cached)."""
+        import threading
+
+        with self._lock:
+            if key in self._items:
+                self._items.move_to_end(key)
+                return self._items[key], True
+            key_lock = self._key_locks.setdefault(key, threading.Lock())
+        with key_lock:  # one decode per key, also for overlapping reruns
+            with self._lock:
+                if key in self._items:
+                    self._items.move_to_end(key)
+                    return self._items[key], True
+            image = load()
+            with self._lock:
+                self._items[key] = image
+                self._items.move_to_end(key)
+                while len(self._items) > self.capacity:
+                    self._items.popitem(last=False)
+                self._key_locks.pop(key, None)
+        return image, False
+
+    def __len__(self) -> int:
+        with self._lock:
+            return len(self._items)
+
+    def clear(self) -> None:
+        with self._lock:
+            self._items.clear()

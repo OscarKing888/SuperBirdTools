@@ -367,6 +367,7 @@ class AnalysisTracer:
         self._bird_boxes: List[Tuple[int, int, int, int]] = []
         self._det_scale = 1.0
         self._measurements: Dict[int, object] = {}
+        self.decode_reused = False  # set by the trace action when a cached decode is reused
 
     # ── shared frame ──
     def _display(self, box):
@@ -416,7 +417,7 @@ class AnalysisTracer:
             desc = ("清晰度以全分辨率像素计（100% 观看）。RAW 不用内嵌预览（相机 JPEG 经过机内锐化、降噪，有的还很小），"
                     "而用 LibRaw 解码；焦点框按相机画幅映射到解码像素上。")
         metrics = [("图像来源", kind), ("分辨率", f"{W} × {H}"),
-                   ("解码耗时", f"{decode_s:.2f} s"),
+                   ("解码耗时", "复用本窗口已解码的图像（未重新解码）" if self.decode_reused else f"{decode_s:.2f} s"),
                    ("焦点", "无" if focus_px is None else
                     f"{int(focus_px[2] - focus_px[0])} × {int(focus_px[3] - focus_px[1])} px")]
         self.trace.common.append(TraceStep(

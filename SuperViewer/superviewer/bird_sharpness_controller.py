@@ -395,6 +395,10 @@ class BirdSharpnessController(QObject):
             except Exception:
                 source = path
         dialog = BirdSharpnessTraceDialog(self._main, source, image_source, params=_analysis_options())
+        from bird_sharpness.image_source import DecodedImageCache
+
+        # 「按此参数重新计算」and source switches reuse this window's decode instead of decoding again.
+        dialog.image_cache = DecodedImageCache()
         dialog.closed.connect(self._on_trace_dialog_closed)
         dialog.source_changed.connect(lambda d, s: self._run_trace(d, s))
         dialog.params_changed.connect(lambda d: self._run_trace(d, d.image_source))
@@ -420,6 +424,7 @@ class BirdSharpnessController(QObject):
         analyzer = base.with_options(params=AnalysisParams.from_params({**base.params.as_params(), **params}))
         action = BirdSharpnessTraceAction(analyzer, dialog.path, cancelled=cancel.is_set,
                                           image_source=image_source,
+                                          image_cache=getattr(dialog, "image_cache", None),
                                           denoised_lookup=self._denoised_lookup if self._denoise is not None else None)
         pool_getter = getattr(self._file_list, "background_work_pool", None)
         pool = pool_getter() if callable(pool_getter) else None
@@ -465,6 +470,9 @@ class BirdSharpnessController(QObject):
         for request in [r for r in self._trace_requests if r[0] is dialog]:
             self._cancel_trace(request)
         self._forget_denoise_wait(dialog)
+        cache = getattr(dialog, "image_cache", None)
+        if cache is not None:
+            cache.clear()  # free the decoded image(s) with the window
 
     def _cancel_trace(self, request) -> None:
         request[2].set()

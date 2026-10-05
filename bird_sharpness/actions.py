@@ -102,14 +102,17 @@ class BirdSharpnessTraceAction(WorkerAction):
 
     def __init__(self, analyzer: BirdSharpnessAnalyzer, source_path: str, *,
                  cancelled: Callable[[], bool] = lambda: False, image_source: str = "raw",
-                 denoised_lookup: Optional[Callable[[str], object]] = None):
+                 denoised_lookup: Optional[Callable[[str], object]] = None, image_cache=None):
         """``image_source``: ``image_source.SOURCE_*``; ``denoised_lookup(path)`` finds the
-        denoised rendering (``None`` when there is none) and runs here, on the worker."""
+        denoised rendering (``None`` when there is none) and runs here, on the worker.
+        ``image_cache`` (``image_source.DecodedImageCache``, one per trace window) reuses
+        the decoded image when the same window recomputes with other parameters."""
         super().__init__(cancelled=cancelled)
         self.analyzer = analyzer
         self.source_path = os.path.normpath(source_path)
         self.image_source = image_source
         self.denoised_lookup = denoised_lookup
+        self.image_cache = image_cache
 
     def execute(self) -> BirdSharpnessTraceOutcome:
         path, source = self.source_path, self.image_source
@@ -123,6 +126,7 @@ class BirdSharpnessTraceAction(WorkerAction):
         if reason:
             return BirdSharpnessTraceOutcome(path, error=reason, image_source=source)
         lookup = self.denoised_lookup
+        found = None
         if source == SOURCE_DENOISED:
             if lookup is None:
                 return BirdSharpnessTraceOutcome(path, error="降噪功能不可用", image_source=source)
@@ -133,6 +137,18 @@ class BirdSharpnessTraceAction(WorkerAction):
         loader = source_loader(source, denoised_lookup=lookup)
 
         tracer = AnalysisTracer()
+        if self.image_cache is not None:
+            from . import analyzer as analyzer_mod
+            from .image_source import DecodedImageCache
+
+            key = DecodedImageCache.key(path, source, getattr(found, "path", None))
+            base = loader or (lambda p: analyzer_mod.load_analysis_image(p))  # RAW decode (late-bound)
+
+            def loader(p, base=base, key=key):
+                image, reused = self.image_cache.get_or_load(key, lambda: base(p))
+                tracer.decode_reused = reused
+                return image
+
         result = self.analyzer.analyze(path, tracer=tracer, cancelled=self.is_cancelled, image_loader=loader)
         if self.is_cancelled():
             return BirdSharpnessTraceOutcome(path, cancelled=True, image_source=source)
