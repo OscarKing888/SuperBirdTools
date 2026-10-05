@@ -34,7 +34,7 @@ ROI_LONG_EDGE = 2400
 
 # Birds not found on the whole frame are flagged in the conclusion.
 FOUND_LABELS = {"full_lifted": "（提亮复检）", "full_fine": "（复检）", "focus_weak": "（焦点复检）", "focus_zoom": "（焦点放大复检）",
-                "enhanced": "（增强找鸟）"}
+                "enhanced": "（增强找鸟）", "given": "（模型链给定）"}
 
 # Colours (RGB) shared by step images and the viewer legend.
 C_SHARP = (46, 157, 79)
@@ -368,6 +368,7 @@ class AnalysisTracer:
         self._det_scale = 1.0
         self._measurements: Dict[int, object] = {}
         self.decode_reused = False  # set by the trace action when a cached decode is reused
+        self.decode_note = ""       # set for a temporary image (the model chain's 测清晰度)
 
     # ── shared frame ──
     def _display(self, box):
@@ -416,8 +417,12 @@ class AnalysisTracer:
             kind = "RAW（LibRaw 全分辨率解码）" if image.is_raw else "位图"
             desc = ("清晰度以全分辨率像素计（100% 观看）。RAW 不用内嵌预览（相机 JPEG 经过机内锐化、降噪，有的还很小），"
                     "而用 LibRaw 解码；焦点框按相机画幅映射到解码像素上。")
+        if self.decode_note:
+            desc = (f"{self.decode_note}。测量只看给定的鸟的像素（轮廓，没有轮廓按框内核）；"
+                    "临时图是原图的这块像素，不是相机画幅，所以没有焦点框，也不重新识别鸟。")
         metrics = [("图像来源", kind), ("分辨率", f"{W} × {H}"),
-                   ("解码耗时", "复用本窗口已解码的图像（未重新解码）" if self.decode_reused else f"{decode_s:.2f} s"),
+                   ("解码耗时", "未重新解码（用模型链窗口的图像）" if self.decode_note
+                    else "复用本窗口已解码的图像（未重新解码）" if self.decode_reused else f"{decode_s:.2f} s"),
                    ("焦点", "无" if focus_px is None else
                     f"{int(focus_px[2] - focus_px[0])} × {int(focus_px[3] - focus_px[1])} px")]
         self.trace.common.append(TraceStep(

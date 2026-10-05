@@ -403,11 +403,30 @@ class BirdSharpnessController(QObject):
 
         # The model chain on the right is saved on every change and rebuilt in the next window.
         dialog.chain_store = ModelChainStore()
+        self._connect_trace_dialog(dialog)
+        self._run_trace(dialog, image_source)
+        dialog.show()
+        return dialog
+
+    def _connect_trace_dialog(self, dialog) -> None:
         dialog.closed.connect(self._on_trace_dialog_closed)
         dialog.source_changed.connect(lambda d, s: self._run_trace(d, s))
         dialog.params_changed.connect(lambda d: self._run_trace(d, d.image_source))
         dialog.save_defaults_requested.connect(self._save_trace_params)
-        self._run_trace(dialog, image_source)
+        dialog.analyze_pixels_requested.connect(self.show_trace_for_given)
+
+    def show_trace_for_given(self, source_dialog, image, given, title: str):
+        """A model chain window's 「测清晰度」: a new trace window measuring its results as birds on
+        a temporary image (the photo's pixels around them), with the source window's parameters."""
+        if self._shutdown_requested:
+            return None
+        from .bird_sharpness_trace_view import BirdSharpnessTraceDialog
+
+        dialog = BirdSharpnessTraceDialog(self._main, source_dialog.path, source_dialog.image_source,
+                                          params=dict(source_dialog.params))
+        dialog.set_given_input(image, given, title)
+        self._connect_trace_dialog(dialog)
+        self._run_trace(dialog, source_dialog.image_source)
         dialog.show()
         return dialog
 
@@ -429,7 +448,8 @@ class BirdSharpnessController(QObject):
         action = BirdSharpnessTraceAction(analyzer, dialog.path, cancelled=cancel.is_set,
                                           image_source=image_source,
                                           image_cache=getattr(dialog, "image_cache", None),
-                                          denoised_lookup=self._denoised_lookup if self._denoise is not None else None)
+                                          denoised_lookup=self._denoised_lookup if self._denoise is not None else None,
+                                          given_input=getattr(dialog, "given_input", None))
         pool_getter = getattr(self._file_list, "background_work_pool", None)
         pool = pool_getter() if callable(pool_getter) else None
         future = None

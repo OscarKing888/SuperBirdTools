@@ -39,7 +39,7 @@ from .focus import FocusProvider, ManualFocusProvider, default_focus_box, defaul
 from .image_source import AnalysisImage, load_analysis_image
 from .metrics import (ESTIMATOR_STANDARD, EdgeBlurField, EdgeEstimator, TileOptions,
                       edge_estimator as get_edge_estimator, edge_stats, full_image_blur, sharpest_tiles_blur)
-from .models import (BIRD_CONFIDENCE_MIN, FOUND_ENHANCED, FOUND_FOCUS_WEAK, FOUND_FOCUS_ZOOM, FOUND_FULL,
+from .models import (BIRD_CONFIDENCE_MIN, FOUND_ENHANCED, FOUND_FOCUS_WEAK, FOUND_FOCUS_ZOOM, FOUND_FULL, FOUND_GIVEN,
                      FOUND_FULL_FINE, FOUND_FULL_LIFTED, FOUND_FULL_SMALL, BirdDetection, BirdSharpnessModels,
                      shared_models)
 from .params import ENH_MANUAL, ENH_NOBIRD, ENH_OFF, SAM_SCOPE_ALL, AnalysisParams
@@ -286,6 +286,22 @@ FOCUS_ZOOM_OVERLAP = 0.2
 FOCUS_ZOOM_AGREEMENT_IOU = 0.3
 
 Box = Tuple[float, float, float, float]
+
+
+@dataclass
+class GivenBird:
+    """A bird handed to :meth:`BirdSharpnessAnalyzer.analyze` (``given``), in the loaded image's
+    pixels: its box and, when known, its pixels (bool/uint8 mask of the whole image)."""
+
+    box: Box
+    mask: Optional[np.ndarray] = None
+    confidence: float = 1.0
+
+
+@dataclass
+class GivenBirds:
+    birds: List[GivenBird]
+    label: str = ""  # shown as the step's 识别模型 (e.g. which model chain window)
 
 
 def _area(box: Box) -> float:
@@ -675,14 +691,17 @@ class BirdSharpnessAnalyzer:
 
     def analyze(self, path: str, *, on_stage: Optional[Callable[[str], None]] = None,
                 cancelled: Callable[[], bool] = lambda: False, tracer=None,
-                image_loader: Optional[Callable[[str], AnalysisImage]] = None) -> BirdSharpnessResult:
+                image_loader: Optional[Callable[[str], AnalysisImage]] = None,
+                given: Optional["GivenBirds"] = None) -> BirdSharpnessResult:
         """Analyse one photo. ``tracer`` (:class:`~bird_sharpness.trace.AnalysisTracer`)
         records every key step with the exact data used; ``None`` costs nothing.
         ``image_loader(path)`` replaces the RAW decode (embedded JPEG, denoised image;
-        see :mod:`bird_sharpness.image_source`); focus metadata still comes from ``path``."""
+        see :mod:`bird_sharpness.image_source`); focus metadata still comes from ``path``.
+        ``given``: measure these birds (in the loaded image's pixels) instead of detecting;
+        the image is not the photo's frame, so no focus box or manual-focus lookup."""
         t0 = time.perf_counter()
         try:
-            result = self._analyze(path, on_stage or (lambda stage: None), cancelled, tracer, image_loader)
+            result = self._analyze(path, on_stage or (lambda stage: None), cancelled, tracer, image_loader, given)
         except Exception as exc:
             _log.error("[BirdSharpness] analysis failed path=%r: %s", path, traceback.format_exc())
             result = BirdSharpnessResult(path=path, verdict=VERDICT_ERROR, error=f"{type(exc).__name__}: {exc}")
@@ -693,10 +712,12 @@ class BirdSharpnessAnalyzer:
 
     # ── pipeline ──────────────────────────────────────────────────────────
     def _analyze(self, path: str, on_stage: Callable[[str], None], cancelled, tracer=None,
-                 image_loader=None) -> BirdSharpnessResult:
+                 image_loader=None, given: Optional["GivenBirds"] = None) -> BirdSharpnessResult:
         on_stage(STAGE_DECODE)
         t_decode = time.perf_counter()
         image = (image_loader or load_analysis_image)(path)
+        if given is not None:
+            return self._analyze_given(path, image, given, on_stage, tracer, time.perf_counter() - t_decode)
         focus_px = _UNSET = object()
         if tracer is not None:
             focus_px = self._focus_box_px(path, image)
@@ -754,6 +775,29 @@ class BirdSharpnessAnalyzer:
         return self._no_bird_result(path, image, cancelled, tracer,
                                     focus_px=None if focus_px is _UNSET else focus_px,
                                     focus_known=focus_px is not _UNSET, manual=manual)
+
+    def _analyze_given(self, path: str, image: AnalysisImage, given: "GivenBirds", on_stage, tracer,
+                       decode_s: float) -> BirdSharpnessResult:
+        """Measure the caller's birds as they are: no detection, rechecks, focus box or tiles."""
+        if tracer is not None:
+            tracer.decode(path, image, None, decode_s=decode_s)
+        H, W = image.gray.shape[:2]
+        detections = [BirdDetection(float(b.confidence), tuple(float(v) for v in b.box),
+                                    None if b.mask is None else b.mask.astype(np.uint8), FOUND_GIVEN)
+                      for b in given.birds]
+        if not detections:
+            raise ValueError("没有给定的鸟")
+        on_stage(STAGE_DETECT)
+        if tracer is not None:
+            tracer.detect(detections, 1.0, has_masks=any(d.mask is not None for d in detections),
+                          has_keypoints=bool(getattr(self.models, "has_keypoints", True)), detector=given.label)
+        on_stage(STAGE_MEASURE)
+        birds = [self._measure_bird(image, det, 1.0, index=i, tracer=tracer) for i, det in enumerate(detections)]
+        excluded = excluded_birds(birds)
+        kept = [b for i, b in enumerate(birds) if i not in excluded]
+        if tracer is not None:
+            tracer.mark_best(birds.index(max(kept, key=BirdMeasurement.rank)), excluded=excluded)
+        return self._bird_result(path, kept, max(H, W))
 
     def _small_bird_pass(self, image: AnalysisImage, first: List[BirdDetection], scale: float):
         """Detect again on a 2048 px copy and merge (see FLOCK_BIRD_SIDE).

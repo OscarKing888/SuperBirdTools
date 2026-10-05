@@ -31,6 +31,7 @@ SAM_CROP_MARGIN = 0.5     # SAM sees the prompts' region plus this share on ever
 SAM_CROP_MIN = 256
 CHAIN_MARGIN = 0.3        # a detector zooming into an input result sees its box plus this share per side
 CHAIN_MIN_SIDE = 64
+ANALYSIS_MARGIN = 0.3     # 测清晰度: the temporary image is the results' bounds plus this share per side
 MASK_FILL = 114           # outside-the-mask fill: YOLO's own letterbox grey
 PALETTE = [(0, 200, 255), (255, 120, 200), (120, 255, 120), (255, 200, 60), (160, 140, 255),
            (255, 255, 120), (80, 255, 220), (255, 160, 120)]
@@ -355,6 +356,37 @@ def cutout_display(display: np.ndarray, scale: float, cut: Cutout) -> np.ndarray
         part = cv2.resize(cut.mask.astype(np.uint8), (x2 - x1, y2 - y1), interpolation=cv2.INTER_NEAREST).astype(bool)
         img[y1:y2, x1:x2][part] = display[y1:y2, x1:x2][part]
     return img
+
+
+def analysis_input(image: AnalysisImage, inputs: Sequence[PreviewItem], label: str = ""):
+    """``(temporary image, GivenBirds, region)`` for measuring ``inputs`` as birds.
+
+    The temporary image is the photo's own pixels (``rgb8`` and the measured ``gray``)
+    around the results — no grey fill, which would add a sharp artificial edge along
+    every outline — and each result is a given bird: its mask (else its box) in the
+    temporary image's pixels. Measuring then looks only at those pixels.
+    """
+    from .analyzer import GivenBird, GivenBirds
+
+    if not inputs:
+        raise ValueError("这个窗口没有结果")
+    union = (min(i.box[0] for i in inputs), min(i.box[1] for i in inputs),
+             max(i.box[2] for i in inputs), max(i.box[3] for i in inputs))
+    x1, y1, x2, y2 = expand_box(union, ANALYSIS_MARGIN, image.rgb8.shape)
+    x1, y1, x2, y2 = int(x1), int(y1), int(np.ceil(x2)), int(np.ceil(y2))
+    if x2 - x1 < 16 or y2 - y1 < 16:
+        raise ValueError("结果区域太小")
+    region = (float(x1), float(y1), float(x2), float(y2))
+    crop = replace(image, rgb8=np.ascontiguousarray(image.rgb8[y1:y2, x1:x2]),
+                   gray=np.ascontiguousarray(image.gray[y1:y2, x1:x2]), camera_crop=None)
+    h, w = y2 - y1, x2 - x1
+    birds = []
+    for item in inputs:
+        bx1, by1 = max(0.0, item.box[0] - x1), max(0.0, item.box[1] - y1)
+        bx2, by2 = min(float(w), item.box[2] - x1), min(float(h), item.box[3] - y1)
+        birds.append(GivenBird((bx1, by1, bx2, by2), mask_in(item, region, (h, w)),
+                               1.0 if item.confidence is None else float(item.confidence)))
+    return crop, GivenBirds(birds, label), region
 
 
 def items_from_boxes(boxes: Sequence[Box], label: str = "计算过程识别的鸟") -> List[PreviewItem]:

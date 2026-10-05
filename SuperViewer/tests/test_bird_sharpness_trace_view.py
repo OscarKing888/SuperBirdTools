@@ -572,3 +572,48 @@ def test_focal_plane_toggle_tints_focused_pixels_red(monkeypatch) -> None:
     finally:
         dialog.close()
         _APP.processEvents()
+
+
+def test_chain_results_open_a_trace_on_a_temporary_image(stub_trace_env, monkeypatch) -> None:
+    """A model chain window's 「测清晰度」: its results measured as birds on the photo's own pixels."""
+    import cv2
+
+    from bird_sharpness import preview as pv
+    from bird_sharpness.models import FOUND_GIVEN
+
+    analyzer, _gate = stub_trace_env
+    decodes = []
+    installed = analyzer_mod.load_analysis_image
+    monkeypatch.setattr(analyzer_mod, "load_analysis_image", lambda p: decodes.append(p) or installed(p))
+    window = QWidget()
+    controller = BirdSharpnessController(window, _FakeFileList(None))
+    monkeypatch.setattr(controller, "analyzer", lambda: analyzer)
+    try:
+        dialog = controller.show_trace("/photos/a.ARW")
+        assert _wait(lambda: dialog.stack.currentWidget() is dialog.content, timeout=20)
+        photo = dialog.image_cache.latest("raw")
+        mask = np.zeros((1200, 1800), bool)
+        cv2.circle(mask.view(np.uint8), (900, 600), 300, 1, -1)
+        item = pv.PreviewItem("对象 1", 0.8, (600, 300, 1200, 900), mask, (0, 0, 1800, 1200))
+        image, given, _region = pv.analysis_input(photo, [item], "模型链 ② sam2.1_t.pt 的 1 个结果")
+        dialog.analyze_pixels_requested.emit(dialog, image, given, "模型链 ② sam2.1_t.pt 的 1 个结果")
+        temp = next(w for w in QApplication.topLevelWidgets()
+                    if isinstance(w, BirdSharpnessTraceDialog) and w.given_input is not None)
+        assert "临时图" in temp.windowTitle() and not temp.source_combo.isEnabled()
+        assert _wait(lambda: temp.stack.currentWidget() is temp.content, timeout=20)
+        assert len(decodes) == 1  # the temporary window decodes nothing
+        result = temp.trace.result
+        assert result.bird_count == 1 and result.birds[0]["found_by"] == FOUND_GIVEN
+        assert "模型链 ②" in dict(temp.steps[1].metrics)["识别模型"]
+        assert temp._preview_image() is image  # a chain opened there works on the temporary image
+        temp.max_birds_spin.setValue(1)
+        temp.rerun_btn.click()  # 按此参数重新计算: same temporary image, same birds
+        assert _wait(lambda: temp.stack.currentWidget() is temp.content, timeout=20)
+        assert len(decodes) == 1 and temp.trace.result.birds[0]["found_by"] == FOUND_GIVEN
+        temp.close()
+        dialog.close()
+        assert _wait(controller.is_shutdown_done)
+    finally:
+        controller.request_shutdown()
+        window.deleteLater()
+        _APP.processEvents()

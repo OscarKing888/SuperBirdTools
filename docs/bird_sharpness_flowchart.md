@@ -26,6 +26,8 @@
 
 一张照片 = 一个 `BirdSharpnessAction`（[actions.py](../bird_sharpness/actions.py)），核心在 `BirdSharpnessAnalyzer._analyze()`（[analyzer.py](../bird_sharpness/analyzer.py)）。
 
+例外：计算过程窗口里模型链的「测清晰度」传入 `given`（`GivenBirds`，临时图上的给定鸟）时走 `_analyze_given()`：① 用传入的临时图（不解码）→ 直接 ⑤ 逐只鸟测量 → ⑥ 排除 → 取最好的一只；跳过 ②–④ 的识别、复检、增强找鸟和 ⑦ 无鸟分块，也不读焦点框（临时图不是相机画幅）。见 [鸟清晰度检测](bird_sharpness.md) 的「测清晰度」。
+
 ```mermaid
 flowchart TD
     A["任务入队<br/>BirdSharpnessAction.execute()"] --> B{"跳过已检测？<br/>sidecar 已有同版本 verdict"}

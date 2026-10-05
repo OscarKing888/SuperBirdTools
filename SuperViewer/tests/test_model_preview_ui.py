@@ -516,3 +516,25 @@ def test_cut_out_previous_results_as_a_new_image(dialog) -> None:
     yolo.run_btn.click()
     assert _idle(host) and len(calls["sam_cut"]) == n + 1
     assert sam.config()["sam_use"] == USE_CUTOUT and yolo2.config()["use"] == "crop"
+
+
+def test_measure_sharpness_sends_the_window_results(dialog) -> None:
+    from SuperViewer.superviewer.model_preview import ToggleToolButton
+
+    d, _calls, _fail = dialog
+    host = d.preview_host
+    assert isinstance(host.auto_check, ToggleToolButton)
+    assert host.auto_check.font() == host.toolbar.widgetForAction(host.add_action).font() == host.note.font()
+    sent = []
+    d.analyze_pixels_requested.connect(lambda dlg, image, given, title: sent.append((dlg, image, given, title)))
+    stage = d.open_model_preview("detector", "auto")
+    assert not stage.analyze_btn.isEnabled()  # nothing to send yet
+    assert _idle(host) and stage.analyze_btn.isEnabled()
+    stage.analyze_btn.click()
+    dlg, image, given, title = sent[0]
+    assert dlg is d and title == "模型链 ① auto 的 2 个结果" and given.label == title
+    assert len(given.birds) == 2 and image.rgb8.shape[:2] == image.gray.shape
+    assert given.birds[0].box[0] >= 0  # in the temporary image's pixels
+    stage.run_btn.click()
+    assert not stage.analyze_btn.isEnabled()  # busy
+    assert _idle(host) and stage.analyze_btn.isEnabled()
