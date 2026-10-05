@@ -24,7 +24,7 @@ _MODEL_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._+-]{0,63}\.pt$")
 _INPUTS = ("previous", "trace", "image")
 _CHOICES = {"scope": ("full", "view"), "use": ("crop", "mask", "cutout"), "sam_use": ("boxes", "cutout")}
 _INTS = {"margin": (30, 0, 200), "imgsz": (640, 320, 2048), "min_conf": (10, 1, 95)}
-_BOOLS = {"birds_only": True, "lift": True, "floating": False}
+_BOOLS = {"birds_only": True, "lift": True, "floating": False, "analyze_fill": False}
 _POS, _SIZE = (-50000, 50000), (100, 20000)  # sane screen coordinates / window sizes
 _WIDTH = (200, 20000)                          # a docked window's width
 

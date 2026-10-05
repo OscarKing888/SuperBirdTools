@@ -538,3 +538,24 @@ def test_measure_sharpness_sends_the_window_results(dialog) -> None:
     stage.run_btn.click()
     assert not stage.analyze_btn.isEnabled()  # busy
     assert _idle(host) and stage.analyze_btn.isEnabled()
+
+
+
+def test_measure_sharpness_can_use_a_grey_filled_cut_out(dialog) -> None:
+    d, _calls, _fail = dialog
+    host = d.preview_host
+    sent = []
+    d.analyze_pixels_requested.connect(lambda dlg, image, given, title: sent.append((image, given, title)))
+    stage = d.open_model_preview("detector", "auto")
+    assert _idle(host) and stage.analyze_btn.text() == "测清晰度" and stage.config()["analyze_fill"] is False
+    stage.analyze_actions[True].trigger()  # the arrow's menu: 涂灰抠图（对比用）
+    assert stage.analyze_fill and stage.analyze_btn.text() == "测清晰度·涂灰" and "当前：涂灰抠图" in stage.analyze_btn.toolTip()
+    stage.analyze_btn.click()
+    image, given, title = sent[0]
+    assert given.filled and title.endswith("（涂灰抠图）")
+    assert stage.config()["analyze_fill"] is True
+    stage.analyze_actions[False].trigger()
+    stage.analyze_btn.click()
+    assert not sent[1][1].filled and stage.analyze_btn.text() == "测清晰度"
+    restored = host.add_stage("auto", {**stage.config(), "analyze_fill": True})
+    assert restored.analyze_fill and restored.analyze_actions[True].isChecked()

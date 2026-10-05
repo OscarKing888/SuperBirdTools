@@ -1101,8 +1101,10 @@ class BirdSharpnessTraceDialog(QDialog):
         if host.image is None or stage.result is None or not stage.result.items:
             return
         title = f"模型链 {circled(stage.index + 1)} {stage.model} 的 {len(stage.result.items)} 个结果"
+        if stage.analyze_fill:
+            title += "（涂灰抠图）"
         try:
-            image, given, _region = analysis_input(host.image, stage.result.items, title)
+            image, given, _region = analysis_input(host.image, stage.result.items, title, fill=stage.analyze_fill)
         except ValueError as exc:
             stage.show_message(str(exc))
             return

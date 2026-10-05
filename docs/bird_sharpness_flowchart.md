@@ -26,7 +26,7 @@
 
 一张照片 = 一个 `BirdSharpnessAction`（[actions.py](../bird_sharpness/actions.py)），核心在 `BirdSharpnessAnalyzer._analyze()`（[analyzer.py](../bird_sharpness/analyzer.py)）。
 
-例外：计算过程窗口里模型链的「测清晰度」传入 `given`（`GivenBirds`，临时图上的给定鸟）时走 `_analyze_given()`：① 用传入的临时图（不解码）→ 直接 ⑤ 逐只鸟测量 → ⑥ 排除 → 取最好的一只；跳过 ②–④ 的识别、复检、增强找鸟和 ⑦ 无鸟分块，也不读焦点框（临时图不是相机画幅）。见 [鸟清晰度检测](bird_sharpness.md) 的「测清晰度」。
+例外：计算过程窗口里模型链的「测清晰度」传入 `given`（`GivenBirds`，临时图上的给定鸟）时走 `_analyze_given()`：① 用传入的临时图（不解码）→ 直接 ⑤ 逐只鸟测量 → ⑥ 排除 → 取最好的一只；跳过 ②–④ 的识别、复检、增强找鸟和 ⑦ 无鸟分块，也不读焦点框（临时图不是相机画幅）。临时图（`preview.analysis_input()`）是原图在这些鸟周围外扩 `ANALYSIS_MARGIN` 的一块像素；按钮箭头可选「涂灰抠图（对比用）」（`fill=True`，`GivenBirds.filled`）：鸟以外的 `rgb8` 涂成 `MASK_FILL`、测量用灰度涂成 `MASK_FILL_GRAY`，灰色与轮廓之间的人工锐利边缘在测量区域碰到轮廓时会被测进去，结果可能偏锐。见 [鸟清晰度检测](bird_sharpness.md) 的「测清晰度」。
 
 ```mermaid
 flowchart TD
@@ -474,6 +474,8 @@ flowchart TD
 | `FOCUS_ZOOM_DIVISORS` / `FOCUS_ZOOM_OVERLAP` / `FOCUS_ZOOM_AGREEMENT_IOU` | (6, 4, 2.5) / 0.2 / 0.3 | analyzer.py | 复检规则二 |
 | `ENH_CANDIDATE_CONFIDENCE` / `ENH_WINDOW_OVERLAP` | 0.10 / 0.25 | analyzer.py | 增强找鸟 |
 | `CROP_PAD_RATIO` / `BOX_INSET_RATIO` | 0.15 / 0.08 | analyzer.py | ROI 外扩 / 框内核 |
+| `ANALYSIS_MARGIN` | 0.3 | preview.py | 测清晰度临时图：给定鸟范围每边外扩 |
+| `MASK_FILL` / `MASK_FILL_GRAY` | 114 / 114÷255 | preview.py | 涂灰抠图（及模型链抠图）的灰色：rgb8 / 测量灰度 |
 | `MIN_KEEP_FRACTION` | 0.2 | refine.py | SAM 掩膜可信下限 |
 | `EYE_VISIBLE_MIN` / `BEAK_VISIBLE_MIN` | 0.5 / 0.3 | analyzer.py | 关键点可见度 |
 | `EYE_MIRROR_MAX` / `BEAK_MIRROR_MAX` | 0.10 / 0.15 | analyzer.py | 镜像复核 |

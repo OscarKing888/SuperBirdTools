@@ -14,7 +14,7 @@ def test_normalize_keeps_valid_windows_and_defaults_the_rest() -> None:
     sam, det = state["stages"]
     assert sam == {"model": "sam2.1_t.pt", "input": "trace", "scope": "full", "use": "crop", "sam_use": "boxes",
                    "margin": 30,
-                   "imgsz": 640, "min_conf": 10, "birds_only": True, "lift": True, "floating": False, "geometry": None, "width": None}
+                   "imgsz": 640, "min_conf": 10, "birds_only": True, "lift": True, "floating": False, "analyze_fill": False, "geometry": None, "width": None}
     assert det["input"] is None and det["use"] == "mask" and det["scope"] == "view"
     assert (det["margin"], det["imgsz"], det["min_conf"], det["birds_only"], det["lift"]) == (200, 640, 1, False, True)
     assert len(normalize({"stages": [{"model": "auto"}] * 50})["stages"]) == MAX_STAGES

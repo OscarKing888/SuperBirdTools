@@ -369,6 +369,7 @@ class AnalysisTracer:
         self._measurements: Dict[int, object] = {}
         self.decode_reused = False  # set by the trace action when a cached decode is reused
         self.decode_note = ""       # set for a temporary image (the model chain's 测清晰度)
+        self.decode_filled = False  # that temporary image is grey outside the given birds
 
     # ── shared frame ──
     def _display(self, box):
@@ -419,7 +420,9 @@ class AnalysisTracer:
                     "而用 LibRaw 解码；焦点框按相机画幅映射到解码像素上。")
         if self.decode_note:
             desc = (f"{self.decode_note}。测量只看给定的鸟的像素（轮廓，没有轮廓按框内核）；"
-                    "临时图是原图的这块像素，不是相机画幅，所以没有焦点框，也不重新识别鸟。")
+                    + ("临时图里鸟以外涂成灰色（114）：灰色和轮廓之间是一条完全锐利的人工边缘，测量区域碰到轮廓时"
+                       "会被测进去，结果可能偏锐，只用于和原图像素方式对比。" if self.decode_filled else "临时图是原图的这块像素。")
+                    + "临时图不是相机画幅，所以没有焦点框，也不重新识别鸟。")
         metrics = [("图像来源", kind), ("分辨率", f"{W} × {H}"),
                    ("解码耗时", "未重新解码（用模型链窗口的图像）" if self.decode_note
                     else "复用本窗口已解码的图像（未重新解码）" if self.decode_reused else f"{decode_s:.2f} s"),

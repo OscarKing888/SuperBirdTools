@@ -302,6 +302,7 @@ class GivenBird:
 class GivenBirds:
     birds: List[GivenBird]
     label: str = ""  # shown as the step's 识别模型 (e.g. which model chain window)
+    filled: bool = False  # the temporary image is grey outside the birds (comparison only, reads sharper)
 
 
 def _area(box: Box) -> float:

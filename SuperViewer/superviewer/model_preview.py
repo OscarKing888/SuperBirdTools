@@ -41,14 +41,15 @@ from app_common.toggle_button import ToggleToolButton
 
 try:
     from PyQt6.QtCore import QObject, QPointF, QRect, QRectF, Qt, QTimer
-    from PyQt6.QtGui import QBrush, QColor, QGuiApplication, QPen
+    from PyQt6.QtGui import QActionGroup, QBrush, QColor, QGuiApplication, QPen
     from PyQt6.QtWidgets import (QButtonGroup, QDockWidget, QGraphicsEllipseItem, QGraphicsRectItem,
-                                 QGraphicsView, QToolBar, QToolButton)
+                                 QGraphicsView, QMenu, QToolBar, QToolButton)
 except ImportError:  # pragma: no cover - PyQt5 fallback
     from PyQt5.QtCore import QObject, QPointF, QRect, QRectF, Qt, QTimer
     from PyQt5.QtGui import QBrush, QColor, QGuiApplication, QPen
+    from PyQt5.QtWidgets import QActionGroup
     from PyQt5.QtWidgets import (QButtonGroup, QDockWidget, QGraphicsEllipseItem, QGraphicsRectItem,
-                                 QGraphicsView, QToolBar, QToolButton)
+                                 QGraphicsView, QMenu, QToolBar, QToolButton)
 
 _BUTTON = getattr(Qt, "MouseButton", Qt)
 _LEFT, _RIGHT = _BUTTON.LeftButton, _BUTTON.RightButton
@@ -291,11 +292,24 @@ class ChainStage(QWidget):
         self.run_btn.clicked.connect(lambda: self.run_requested.emit(self))
         self.status = QLabel("正在载入图像…", self)
         self.status.setWordWrap(True)
-        self.analyze_btn = QPushButton("测清晰度", self)
-        self.analyze_btn.setToolTip("把这个窗口的结果当作鸟送去清晰度检测：从原图裁出它们周围的一块像素作为临时图，"
-                                    "只测结果像素（轮廓，没有轮廓按框），不重新识别；在新的「清晰度计算过程」窗口里显示。")
+        self.analyze_btn = QToolButton(self)
+        self.analyze_btn.setPopupMode(getattr(getattr(QToolButton, "ToolButtonPopupMode", QToolButton),
+                                              "MenuButtonPopup"))
         self.analyze_btn.setEnabled(False)
         self.analyze_btn.clicked.connect(lambda: self.analyze_requested.emit(self))
+        menu = QMenu(self.analyze_btn)
+        group = QActionGroup(menu)
+        self.analyze_actions = {}
+        for fill, text in ((False, "原图像素（推荐）"), (True, "涂灰抠图（对比用）")):
+            action = menu.addAction(text)
+            action.setCheckable(True)
+            action.setChecked(not fill)
+            group.addAction(action)
+            action.triggered.connect(lambda _c=False, f=fill: self.set_analyze_fill(f))
+            self.analyze_actions[fill] = action
+        self.analyze_btn.setMenu(menu)
+        self.analyze_fill = False
+        self._show_analyze_mode()
         row.addWidget(self.run_btn)
         row.addWidget(self.analyze_btn)
         row.addWidget(self.status, 1)
@@ -433,7 +447,8 @@ class ChainStage(QWidget):
                 "scope": self.scope.currentData(), "use": self.use.currentData(), "sam_use": self.sam_use.currentData(),
                 "margin": int(self.margin.value()),
                 "imgsz": int(self.imgsz.value()), "min_conf": int(self.min_conf.value()),
-                "birds_only": bool(self.classes.currentData()), "lift": self.lift.isChecked()}
+                "birds_only": bool(self.classes.currentData()), "lift": self.lift.isChecked(),
+                "analyze_fill": self.analyze_fill}
 
     def apply_config(self, config: dict) -> None:
         """A restored window: parameters now, the input when the host places it."""
@@ -451,6 +466,9 @@ class ChainStage(QWidget):
         self.lift.setChecked(bool(config.get("lift", True)))
         for widget in widgets:
             widget.blockSignals(False)
+        self.analyze_fill = bool(config.get("analyze_fill", False))
+        self.analyze_actions[self.analyze_fill].setChecked(True)
+        self._show_analyze_mode()
         if config.get("input"):
             self.preset_input, self.input_picked = config["input"], True
         if isinstance(config.get("width"), int):
@@ -569,6 +587,22 @@ class ChainStage(QWidget):
         self._draw_inputs()
         if not self.auto_runs():
             self.status.setText("画框或点选后点「运行」。")
+
+    def set_analyze_fill(self, fill: bool) -> None:
+        """How 「测清晰度」 builds its temporary image: the photo's pixels, or grey outside the results."""
+        self.analyze_fill = bool(fill)
+        self.analyze_actions[self.analyze_fill].setChecked(True)
+        self._show_analyze_mode()
+        self.config_changed.emit()
+
+    def _show_analyze_mode(self) -> None:
+        self.analyze_btn.setText("测清晰度·涂灰" if self.analyze_fill else "测清晰度")
+        self.analyze_btn.setToolTip(
+            "把这个窗口的结果当作鸟送去清晰度检测，在新的「清晰度计算过程」窗口里显示；只测结果像素（轮廓，没有轮廓按框），"
+            "不重新识别。点右边的箭头选临时图：\n"
+            "· 原图像素（推荐）：从原图裁出结果周围的一块像素。\n"
+            "· 涂灰抠图（对比用）：结果以外涂成灰色。灰色与轮廓之间是一条完全锐利的人工边缘，测量区域碰到轮廓时结果会偏锐。\n"
+            f"当前：{'涂灰抠图' if self.analyze_fill else '原图像素'}")
 
     def _update_analyze(self) -> None:
         self.analyze_btn.setEnabled(not self.busy and bool(self.result is not None and self.result.items))

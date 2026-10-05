@@ -88,3 +88,35 @@ def test_trace_action_measures_given_input_without_decoding(monkeypatch) -> None
                                      manual_focus_provider=_no_focus_allowed)
     outcome = BirdSharpnessTraceAction(analyzer, "/photos/a.ARW", given_input=(image, given)).execute()
     assert outcome.trace is not None and outcome.result.verdict == bsf.VERDICT_SHARP
+
+
+
+def test_grey_filled_temporary_image_never_touches_the_photo() -> None:
+    photo = _photo(0.3)
+    before = photo.gray.copy()
+    wide = pv.PreviewItem("bird", 0.5, (0, 300, 1800, 900))  # full width: the crop could be a view
+    image, given, _region = pv.analysis_input(photo, [_sam_like_item(), wide], "x", fill=True)
+    assert given.filled and np.array_equal(photo.gray, before)
+    image, given, region = pv.analysis_input(photo, [_sam_like_item()], "x", fill=True)
+    y, x = int(600 - region[1]), int(900 - region[0])
+    assert image.gray[y, x] == photo.gray[600, 900] and tuple(image.rgb8[y, x]) == tuple(photo.rgb8[600, 900])
+    assert image.gray[5, 5] == pytest.approx(pv.MASK_FILL_GRAY) and tuple(image.rgb8[5, 5]) == (114, 114, 114)
+    assert not pv.analysis_input(photo, [_sam_like_item()], "x")[1].filled
+
+
+def test_grey_filled_temporary_image_is_measured_and_labelled() -> None:
+    """Both ways measure the same given bird; the trace says which. (On DSC05639 the fill read
+    slightly sharper, 1.331 → 1.309 px: the grey meets the outline in an artificial edge.)"""
+    sigmas = {}
+    for fill in (False, True):
+        image, given, _region = pv.analysis_input(_photo(1.6), [_sam_like_item()], "x", fill=fill)
+        tracer = AnalysisTracer()
+        tracer.decode_note, tracer.decode_filled = "临时图：x", fill
+        analyzer = BirdSharpnessAnalyzer(_BlindModels(), focus_provider=_no_focus_allowed,
+                                         manual_focus_provider=_no_focus_allowed)
+        result = analyzer.analyze("/photos/a.ARW", image_loader=lambda _p, i=image: i, given=given, tracer=tracer)
+        sigmas[fill] = result.sigma
+        assert result.verdict == bsf.VERDICT_SOFT
+        assert ("涂成灰色" in tracer.trace.common[0].description) is fill
+    # this bird's measured edges lie well inside the outline, so the fill changes nothing here
+    assert sigmas[True] == pytest.approx(sigmas[False], abs=0.05)

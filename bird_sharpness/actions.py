@@ -173,6 +173,7 @@ class BirdSharpnessTraceAction(WorkerAction):
         image, given = self.given_input
         tracer = AnalysisTracer()
         tracer.decode_note = f"临时图：{given.label}" if given.label else "临时图"
+        tracer.decode_filled = bool(getattr(given, "filled", False))
         result = self.analyzer.analyze(path, tracer=tracer, cancelled=self.is_cancelled,
                                        image_loader=lambda _p: image, given=given)
         if self.is_cancelled():

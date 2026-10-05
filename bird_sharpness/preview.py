@@ -33,6 +33,7 @@ CHAIN_MARGIN = 0.3        # a detector zooming into an input result sees its box
 CHAIN_MIN_SIDE = 64
 ANALYSIS_MARGIN = 0.3     # 测清晰度: the temporary image is the results' bounds plus this share per side
 MASK_FILL = 114           # outside-the-mask fill: YOLO's own letterbox grey
+MASK_FILL_GRAY = MASK_FILL / 255.0  # the same grey in the measured luminance (0..1)
 PALETTE = [(0, 200, 255), (255, 120, 200), (120, 255, 120), (255, 200, 60), (160, 140, 255),
            (255, 255, 120), (80, 255, 220), (255, 160, 120)]
 
@@ -358,13 +359,17 @@ def cutout_display(display: np.ndarray, scale: float, cut: Cutout) -> np.ndarray
     return img
 
 
-def analysis_input(image: AnalysisImage, inputs: Sequence[PreviewItem], label: str = ""):
+def analysis_input(image: AnalysisImage, inputs: Sequence[PreviewItem], label: str = "", *, fill: bool = False):
     """``(temporary image, GivenBirds, region)`` for measuring ``inputs`` as birds.
 
     The temporary image is the photo's own pixels (``rgb8`` and the measured ``gray``)
-    around the results — no grey fill, which would add a sharp artificial edge along
-    every outline — and each result is a given bird: its mask (else its box) in the
+    around the results, and each result is a given bird: its mask (else its box) in the
     temporary image's pixels. Measuring then looks only at those pixels.
+
+    ``fill``: everything outside the results becomes :data:`MASK_FILL` grey (``gray``
+    :data:`MASK_FILL_GRAY`), like the cut-out the chain shows. For comparison only: the
+    grey meets each outline in a perfectly sharp artificial edge, so where the measured
+    region reaches the outline the result reads sharper.
     """
     from .analyzer import GivenBird, GivenBirds
 
@@ -377,16 +382,26 @@ def analysis_input(image: AnalysisImage, inputs: Sequence[PreviewItem], label: s
     if x2 - x1 < 16 or y2 - y1 < 16:
         raise ValueError("结果区域太小")
     region = (float(x1), float(y1), float(x2), float(y2))
-    crop = replace(image, rgb8=np.ascontiguousarray(image.rgb8[y1:y2, x1:x2]),
-                   gray=np.ascontiguousarray(image.gray[y1:y2, x1:x2]), camera_crop=None)
+    # Always copies (a full-width slice would be a view): the fill must never touch the photo.
+    crop = replace(image, rgb8=image.rgb8[y1:y2, x1:x2].copy(), gray=image.gray[y1:y2, x1:x2].copy(),
+                   camera_crop=None)
     h, w = y2 - y1, x2 - x1
     birds = []
+    keep = np.zeros((h, w), bool)
     for item in inputs:
         bx1, by1 = max(0.0, item.box[0] - x1), max(0.0, item.box[1] - y1)
         bx2, by2 = min(float(w), item.box[2] - x1), min(float(h), item.box[3] - y1)
-        birds.append(GivenBird((bx1, by1, bx2, by2), mask_in(item, region, (h, w)),
-                               1.0 if item.confidence is None else float(item.confidence)))
-    return crop, GivenBirds(birds, label), region
+        mask = mask_in(item, region, (h, w))
+        birds.append(GivenBird((bx1, by1, bx2, by2), mask, 1.0 if item.confidence is None else float(item.confidence)))
+        if fill:
+            if mask is None:
+                keep[int(by1):int(np.ceil(by2)), int(bx1):int(np.ceil(bx2))] = True
+            else:
+                keep |= mask
+    if fill:
+        crop.rgb8[~keep] = MASK_FILL
+        crop.gray[~keep] = MASK_FILL_GRAY
+    return crop, GivenBirds(birds, label, filled=fill), region
 
 
 def items_from_boxes(boxes: Sequence[Box], label: str = "计算过程识别的鸟") -> List[PreviewItem]:
