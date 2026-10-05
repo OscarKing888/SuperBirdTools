@@ -81,7 +81,7 @@ python init_dev.py
 ./download_models.sh --dry-run       # 只看计划；--check-only 离线校验；--list 列出全部
 ```
 
-打包内容不变：安装包仍只带 `yolo11n.pt` 和降噪模型，build 直接使用 workspace 里已校验的文件；其余模型供本机开发和计算过程窗口对比，用户可在设置里按需下载。
+发布安装包仍只带 `yolo11n.pt` 和降噪模型，build 直接使用 workspace 里已校验的文件；`build_all_no_zip.sh` 会把全部模型打进本机构建的 SuperViewer（见「打包入口」），用户也可在设置里按需下载。
 
 从仓库根目录启动 GUI：
 
@@ -150,11 +150,14 @@ build_all.bat
 bash build_all.sh --apps-only
 ```
 
-macOS 也可直接使用免 ZIP 入口，支持传入 `--clean` 等原有参数：
+macOS 也可直接使用免 ZIP 入口，支持传入 `--clean` 等原有参数。它还会把全部 43 个鸟清晰度模型（YOLO / SAM，约 3.45 GB）打进 SuperViewer，用于本机实验和对比；模型须先下载到 workspace，build 前会逐个校验大小与 SHA-256，缺失或损坏时直接停止、不会联网下载：
 
 ```bash
+./download_models.sh        # 首次，或模型清单变化后
 bash build_all_no_zip.sh
 ```
+
+任何 `build_all.sh` 都可以用 `--bundle-all-models` 打包全部模型（Windows 可在构建前设置环境变量 `SUPERBIRDTOOLS_BUNDLE_MODELS=all`）；发布构建不带此参数，安装包和更新分卷保持只有 `yolo11n.pt` 与降噪模型。
 
 ```bat
 build_all.bat --apps-only
