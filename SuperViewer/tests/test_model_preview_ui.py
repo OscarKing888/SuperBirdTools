@@ -359,3 +359,51 @@ def test_another_image_source_reloads_the_photo_and_reruns(dialog) -> None:
     d._update_chain()
     assert _idle(host) and host.display is not first and host.display[0].shape[1] < first[0].shape[1]
     assert len(calls["detector"]) == n + 1 and stage.result is not None
+
+
+def test_floating_windows_come_back_where_they_were(dialog, tmp_path) -> None:
+    from PyQt6.QtCore import QRect
+    from SuperViewer.superviewer.model_chain_state import ModelChainStore
+    from SuperViewer.superviewer.model_preview import on_screen
+
+    d, _calls, _fail = dialog
+    store = ModelChainStore(tmp_path / "model_chain.json")
+    d.chain_store = store
+    d._update_chain()
+    host = d.preview_host
+    d.open_model_preview("detector", "auto")
+    d.open_model_preview("sam", "sam2.1_t.pt")
+    assert _idle(host)
+    dock = host._docks[host.stages[1]]
+    dock.setFloating(True)
+    dock.setGeometry(QRect(120, 90, 420, 560))
+    _APP.processEvents()
+    def saved(i):  # the save is delayed: the file may not list the window yet
+        stages = store.load()["stages"]
+        return stages[i] if i < len(stages) else {}
+
+    assert _wait(lambda: saved(1).get("floating") and saved(1).get("geometry") == [120, 90, 420, 560])
+    assert store.load()["stages"][0]["floating"] is False and host.docked_count() == 1
+    d.close()
+    _APP.processEvents()
+    assert store.load()["stages"][1]["geometry"] == [120, 90, 420, 560]  # kept on close
+
+    d2 = _new_dialog(tmp_path, store)
+    try:
+        d2._update_chain()
+        host2 = d2.preview_host
+        a, b = host2.stages
+        assert not host2._docks[a].isFloating() and host2._docks[b].isFloating()
+        g = host2._docks[b].geometry()
+        assert (g.x(), g.y(), g.width(), g.height()) == (120, 90, 420, 560) and host2.docked_count() == 1
+        assert _idle(host2)
+        host2._docks[b].setFloating(False)  # docked again: saved as docked
+        _APP.processEvents()
+        assert _wait(lambda: saved(1).get("floating") is False)
+    finally:
+        d2.close()
+        _APP.processEvents()
+    # a window saved on a monitor that is gone comes back on a screen
+    area = _APP.primaryScreen().availableGeometry()
+    moved = on_screen(QRect(area.right() + 3000, area.bottom() + 3000, 400, 99999))
+    assert area.contains(moved) and moved.height() == area.height()

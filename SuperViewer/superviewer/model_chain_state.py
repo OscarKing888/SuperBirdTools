@@ -3,7 +3,8 @@
 
 One small JSON file per user, next to the downloaded models
 (``…/SuperBirdTools/model_chain.json``): the toolbar's 「自动传给下一窗口」 and, per
-window, its model, its input when the user picked one, and the detector parameters.
+window, its model, its input when the user picked one, the detector parameters and,
+for a floating window, its place on screen (``geometry`` = x, y, width, height).
 SAM's drawn boxes / points are not saved (they belong to one photo). Everything read
 back is validated; a missing or broken file is an empty chain. Qt-free.
 """
@@ -23,7 +24,8 @@ _MODEL_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._+-]{0,63}\.pt$")
 _INPUTS = ("previous", "trace", "image")
 _CHOICES = {"scope": ("full", "view"), "use": ("crop", "mask")}
 _INTS = {"margin": (30, 0, 200), "imgsz": (640, 320, 2048), "min_conf": (10, 1, 95)}
-_BOOLS = {"birds_only": True, "lift": True}
+_BOOLS = {"birds_only": True, "lift": True, "floating": False}
+_POS, _SIZE = (-50000, 50000), (100, 20000)  # sane screen coordinates / window sizes
 
 
 def default_path() -> Path:
@@ -47,7 +49,17 @@ def _stage(data) -> Optional[dict]:
     for key, default in _BOOLS.items():
         value = data.get(key, default)
         stage[key] = value if isinstance(value, bool) else default
+    stage["geometry"] = _geometry(data.get("geometry")) if stage["floating"] else None
     return stage
+
+
+def _geometry(value) -> Optional[list]:
+    if not (isinstance(value, list) and len(value) == 4
+            and all(isinstance(v, int) and not isinstance(v, bool) for v in value)):
+        return None
+    x, y, w, h = value
+    ok = all(_POS[0] <= v <= _POS[1] for v in (x, y)) and all(_SIZE[0] <= v <= _SIZE[1] for v in (w, h))
+    return [x, y, w, h] if ok else None
 
 
 def normalize(data) -> dict:

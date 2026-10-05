@@ -1074,7 +1074,7 @@ class BirdSharpnessTraceDialog(QDialog):
 
         self.preview_host.setVisible(True)
         sizes = self._body.sizes()
-        want = STAGE_WIDTH * len(self.preview_host.stages)
+        want = STAGE_WIDTH * max(1, self.preview_host.docked_count())  # floating windows need no room
         extra = want - sizes[2]
         if extra <= 0:
             return

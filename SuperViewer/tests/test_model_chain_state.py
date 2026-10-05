@@ -13,7 +13,7 @@ def test_normalize_keeps_valid_windows_and_defaults_the_rest() -> None:
     assert state["auto"] is False and len(state["stages"]) == 2
     sam, det = state["stages"]
     assert sam == {"model": "sam2.1_t.pt", "input": "trace", "scope": "full", "use": "crop", "margin": 30,
-                   "imgsz": 640, "min_conf": 10, "birds_only": True, "lift": True}
+                   "imgsz": 640, "min_conf": 10, "birds_only": True, "lift": True, "floating": False, "geometry": None}
     assert det["input"] is None and det["use"] == "mask" and det["scope"] == "view"
     assert (det["margin"], det["imgsz"], det["min_conf"], det["birds_only"], det["lift"]) == (200, 640, 1, False, True)
     assert len(normalize({"stages": [{"model": "auto"}] * 50})["stages"]) == MAX_STAGES
@@ -30,3 +30,15 @@ def test_store_round_trips_through_a_non_ascii_folder(tmp_path) -> None:
     assert store.load()["stages"] == []
     store.path.write_text(json.dumps([1, 2]), encoding="utf-8")
     assert store.load()["stages"] == []
+
+
+def test_floating_windows_keep_a_checked_geometry() -> None:
+    stages = normalize({"stages": [
+        {"model": "auto", "floating": True, "geometry": [100, -20, 400, 700]},
+        {"model": "auto", "floating": True, "geometry": [1, 2, 3]},           # malformed → default place
+        {"model": "auto", "floating": True, "geometry": [0, 0, 50, 700]},     # too small
+        {"model": "auto", "floating": True, "geometry": [0, 0, True, 700]},
+        {"model": "auto", "floating": False, "geometry": [100, 100, 400, 700]},  # docked: no geometry
+        {"model": "auto", "floating": "yes"}]})["stages"]
+    assert [(s["floating"], s["geometry"]) for s in stages] == [
+        (True, [100, -20, 400, 700]), (True, None), (True, None), (True, None), (False, None), (False, None)]

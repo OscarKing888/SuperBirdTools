@@ -79,7 +79,7 @@ SuperViewer 文件列表/缩略图右键「查看清晰度计算过程…」（�
 
 一个窗口出了新结果，后面输入为「上一窗口的结果」的窗口接着运行（「自动传给下一窗口」，关掉后只提示已过期；「运行整条链」总是从头跑完）。前面的窗口失败时后面的窗口显示失败、不重试；模型串行运行（同一时刻 GPU 上只有一个模型）。结果列表注明每个结果来自哪个输入。计算过程更新后，输入为「计算过程识别到的鸟」的窗口重新运行；切换图像来源（RAW/JPEG/降噪）后整条链换图重跑。
 
-**模型链会保存**：每次改动（加/关/移窗口、换模型或输入、改参数、「自动传给下一窗口」）都写入用户目录的 `model_chain.json`（与下载的模型同一父目录：macOS `~/Library/Application Support/SuperBirdTools/`，Windows `%LOCALAPPDATA%\SuperBirdTools\`）。下次打开计算过程窗口、计算过程出来后自动重建同样的链并运行。保存的是每个窗口的模型、手动选过的输入（没选过的仍按位置：接上一窗口）和检测参数；SAM 的手画框和点只属于一张照片，不保存。关闭计算过程窗口保留这条链，「全部关闭」则清空（下次不再恢复）。模型已不在的窗口跳过，工具栏注明「未恢复（模型未下载）」，不弹下载。见 `SuperViewer/superviewer/model_chain_state.py`。
+**模型链会保存**：每次改动（加/关/移窗口、换模型或输入、改参数、「自动传给下一窗口」）都写入用户目录的 `model_chain.json`（与下载的模型同一父目录：macOS `~/Library/Application Support/SuperBirdTools/`，Windows `%LOCALAPPDATA%\SuperBirdTools\`）。下次打开计算过程窗口、计算过程出来后自动重建同样的链并运行。保存的是每个窗口的模型、手动选过的输入（没选过的仍按位置：接上一窗口）、检测参数，以及拖出成独立窗口的位置和大小（恢复时仍浮动在原处；原来的显示器不在了就移到当前屏幕内）；SAM 的手画框和点只属于一张照片，不保存。关闭计算过程窗口保留这条链，「全部关闭」则清空（下次不再恢复）。模型已不在的窗口跳过，工具栏注明「未恢复（模型未下载）」，不弹下载。见 `SuperViewer/superviewer/model_chain_state.py`。
 
 只显示模型的原始输出，不测清晰度。窗口复用本窗口已解码的图像，模型与批量检测共享（`bird_sharpness/preview.py`：`run_detector_on` / `run_sam_on`；界面 `SuperViewer/superviewer/model_preview.py`）。
 

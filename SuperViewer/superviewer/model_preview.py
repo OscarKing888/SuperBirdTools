@@ -38,13 +38,13 @@ from .qt_compat import (
 from app_common.toggle_button import ToggleToolButton
 
 try:
-    from PyQt6.QtCore import QObject, QPointF, QRectF, Qt, QTimer
-    from PyQt6.QtGui import QBrush, QColor, QPen
+    from PyQt6.QtCore import QObject, QPointF, QRect, QRectF, Qt, QTimer
+    from PyQt6.QtGui import QBrush, QColor, QGuiApplication, QPen
     from PyQt6.QtWidgets import (QButtonGroup, QDockWidget, QGraphicsEllipseItem, QGraphicsRectItem,
                                  QGraphicsView, QToolBar, QToolButton)
 except ImportError:  # pragma: no cover - PyQt5 fallback
-    from PyQt5.QtCore import QObject, QPointF, QRectF, Qt, QTimer
-    from PyQt5.QtGui import QBrush, QColor, QPen
+    from PyQt5.QtCore import QObject, QPointF, QRect, QRectF, Qt, QTimer
+    from PyQt5.QtGui import QBrush, QColor, QGuiApplication, QPen
     from PyQt5.QtWidgets import (QButtonGroup, QDockWidget, QGraphicsEllipseItem, QGraphicsRectItem,
                                  QGraphicsView, QToolBar, QToolButton)
 
@@ -576,10 +576,24 @@ class ChainStage(QWidget):
         self.view.set_prompts([tuple(v * s for v in b) for b in boxes], [(x * s, y * s, k) for x, y, k in points])
 
 
+def on_screen(rect: "QRect") -> "QRect":
+    """``rect`` moved / shrunk onto the screen under its centre (else the primary screen), so a
+    floating window saved on a monitor that is gone comes back where it can be seen."""
+    screen = QGuiApplication.screenAt(rect.center()) or QGuiApplication.primaryScreen()
+    if screen is None:
+        return rect
+    area = screen.availableGeometry()
+    w, h = min(rect.width(), area.width()), min(rect.height(), area.height())
+    x = min(max(rect.x(), area.left()), area.left() + area.width() - w)
+    y = min(max(rect.y(), area.top()), area.top() + area.height() - h)
+    return QRect(x, y, w, h)
+
+
 class _ChainDock(QDockWidget):
     """A chain window's dock (scrolls when short); closing it removes the window from the chain."""
 
     closed = pyqtSignal(object)  # the stage
+    geometry_changed = pyqtSignal()  # moved / resized while floating
 
     def __init__(self, stage: ChainStage, parent) -> None:
         super().__init__("", parent)
@@ -596,6 +610,16 @@ class _ChainDock(QDockWidget):
     def closeEvent(self, event) -> None:  # noqa: N802 - Qt API
         self.closed.emit(self.stage)
         super().closeEvent(event)
+
+    def moveEvent(self, event) -> None:  # noqa: N802 - Qt API
+        super().moveEvent(event)
+        if self.isFloating():
+            self.geometry_changed.emit()
+
+    def resizeEvent(self, event) -> None:  # noqa: N802 - Qt API
+        super().resizeEvent(event)
+        if self.isFloating():
+            self.geometry_changed.emit()
 
 
 class ModelChainHost(QMainWindow):
@@ -683,6 +707,8 @@ class ModelChainHost(QMainWindow):
         stage.move_requested.connect(self.move_stage)
         dock = _ChainDock(stage, self)
         dock.closed.connect(self._on_dock_closed)
+        dock.topLevelChanged.connect(lambda _floating: self.save_soon())
+        dock.geometry_changed.connect(self.save_soon)
         docked = [self._docks[s] for s in self.stages if not self._docks[s].isFloating()]
         if docked:
             self.splitDockWidget(docked[-1], dock, _HORIZONTAL)
@@ -690,6 +716,8 @@ class ModelChainHost(QMainWindow):
             self.addDockWidget(_RIGHT_AREA, dock)
         self.stages.append(stage)
         self._docks[stage] = dock
+        if config and config.get("floating"):
+            self._float(dock, config.get("geometry"))
         self._renumber()
         self.equalize()
         self.stage_added.emit()
@@ -729,6 +757,16 @@ class ModelChainHost(QMainWindow):
         self._rewired()
         self.save_soon()
 
+    def _float(self, dock: _ChainDock, geometry) -> None:
+        """A restored floating window: float it again at its saved place (kept on a screen)."""
+        dock.setFloating(True)
+        if geometry:
+            dock.setGeometry(on_screen(QRect(*geometry)))
+        dock.show()
+
+    def docked_count(self) -> int:
+        return sum(1 for s in self.stages if not self._docks[s].isFloating())
+
     def equalize(self) -> None:
         """Share the width evenly between the docked windows."""
         docked = [self._docks[s] for s in self.stages if not self._docks[s].isFloating()]
@@ -762,7 +800,14 @@ class ModelChainHost(QMainWindow):
 
     # ── saved chain ──
     def state(self) -> dict:
-        return {"auto": self.auto_check.isChecked(), "stages": [s.config() for s in self.stages]}
+        stages = []
+        for stage in self.stages:
+            config, dock = stage.config(), self._docks[stage]
+            if dock.isFloating():
+                g = dock.geometry()
+                config.update(floating=True, geometry=[g.x(), g.y(), g.width(), g.height()])
+            stages.append(config)
+        return {"auto": self.auto_check.isChecked(), "stages": stages}
 
     def save_soon(self) -> None:
         if self.store is not None and self._alive and not self._restoring:
