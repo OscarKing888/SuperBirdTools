@@ -136,6 +136,7 @@ try:
     from .superviewer.tagged_file_list import SuperViewerTaggedFileListPanel
     from .superviewer.bird_sharpness_controller import BirdSharpnessController
     from .superviewer.bird_body_controller import BirdBodyController
+    from .superviewer.bird_archive_ui import BirdArchiveController, archive_action
     from .superviewer.denoise_controller import DenoiseController
     from .superviewer.burst_info_controller import BurstInfoController
     from .superviewer.preview_key_router import PreviewKeyRouter
@@ -221,6 +222,7 @@ except ImportError:
     from superviewer.tagged_file_list import SuperViewerTaggedFileListPanel
     from superviewer.bird_sharpness_controller import BirdSharpnessController
     from superviewer.bird_body_controller import BirdBodyController
+    from superviewer.bird_archive_ui import BirdArchiveController, archive_action
     from superviewer.denoise_controller import DenoiseController
     from superviewer.burst_info_controller import BurstInfoController
     from superviewer.preview_key_router import PreviewKeyRouter
@@ -370,6 +372,7 @@ class MainWindow(QMainWindow):
         self._dir_browser.directory_selected.connect(self._on_directory_selected)
         # 鸟清晰度检测：目录树 / 文件列表右键菜单 → 后台检测 → 写 XMP → 刷新列表与缩略图
         self._bird_sharpness = BirdSharpnessController(self, self._file_list, self._dir_browser)
+        self._bird_archive = BirdArchiveController(self, self._file_list)
         self._denoise = DenoiseController(self, self._file_list, self._dir_browser)
         self._bird_sharpness.set_denoise_controller(self._denoise)
         # 计算连拍信息：目录树右键 → 按拍摄时间分组 → 写 XMP burst_id/burst_position → 刷新连拍显示
@@ -479,6 +482,7 @@ class MainWindow(QMainWindow):
         self._file_list.playback_state_changed.connect(self._on_preview_playback_state_changed)
         self._bird_body.status_changed.connect(lambda message: self.statusBar().showMessage(message, 6000))
         self._denoise.output_ready.connect(self._on_denoised_output_ready)
+        self._bird_archive.photos_moved.connect(self._on_archive_photos_moved)
         b_overlays = ViewportOverlayTools(focus=self.check_show_focus, bird=self.check_show_bird,
                                            grid=self.combo_preview_grid, width=self.combo_preview_grid_line_width)
         self.ab_preview = ViewerABPreview(
@@ -766,6 +770,10 @@ class MainWindow(QMainWindow):
 
     def _init_menu_bar(self):
         file_menu = self.menuBar().addMenu("文件")
+        action = archive_action(self)
+        action.triggered.connect(lambda: self._bird_archive.start_selected())
+        file_menu.addAction(action)
+        file_menu.addSeparator()
         extern_apps = get_external_apps()
         if extern_apps:
             send_menu = file_menu.addMenu("发送到外部应用")
@@ -786,6 +794,9 @@ class MainWindow(QMainWindow):
         user_options_act = QAction("用户选项...", self)
         user_options_act.triggered.connect(self._open_user_options_dialog)
         settings_menu.addAction(user_options_act)
+        archive_settings = archive_action(self, "珍禽入册 · 归档设置…")
+        archive_settings.triggered.connect(lambda: self._bird_archive.configure())
+        settings_menu.addAction(archive_settings)
         perf_probe_act = QAction("性能探针日志", self)
         perf_probe_act.setCheckable(True)
         perf_probe_act.setChecked(bool(get_runtime_user_options().get(KEY_PERF_PROBES_ENABLED, 0)))
@@ -1309,6 +1320,21 @@ class MainWindow(QMainWindow):
             for panel in (self.preview_panel, self.preview_a):
                 panel.set_navigation_playback_active(False)
 
+    def _on_archive_photos_moved(self, sources) -> None:
+        """归档后的旧源路径不可继续编辑；列表刷新后会正常选择剩余照片。"""
+        if self._shutdown_requested:
+            return
+        moved = {os.path.normcase(os.path.abspath(path)) for path in sources}
+        clear_info = False
+        for side, panel in (("a", self.preview_a), ("b", self.preview_panel)):
+            source = panel.source_identity_path()
+            if source and os.path.normcase(os.path.abspath(source)) in moved:
+                clear_info = clear_info or panel is self._active_preview_panel()
+                panel.set_image("")
+                self.ab_preview.set_side_path(side, "", display_path="")
+        if clear_info:
+            self.on_image_loaded("")
+
     def _on_denoised_output_ready(self, source: str, destination: str) -> None:
         if self._shutdown_requested:
             return
@@ -1616,6 +1642,10 @@ class MainWindow(QMainWindow):
             except Exception:
                 pass
             try:
+                self._bird_archive.request_shutdown()
+            except Exception:
+                pass
+            try:
                 self._denoise.request_shutdown()
             except Exception:
                 pass
@@ -1650,17 +1680,18 @@ class MainWindow(QMainWindow):
         pool_pending = getattr(self._file_list, 'has_pending_pool_work', lambda: False)
         directory_scans_done = directory_scans_done and not pool_pending()
         bird_sharpness_done = self._bird_sharpness.is_shutdown_done()
+        archive_done = self._bird_archive.is_shutdown_done()
         denoise_done = self._denoise.is_shutdown_done()
         bird_body_done = self._bird_body.is_shutdown_done()
         burst_info_done = self._burst_info.is_shutdown_done()
         pending_state = (
             focus_done, tabs_done, preview_done, exiftool_done, directory_scans_done, bird_sharpness_done,
-            burst_info_done, denoise_done, bird_body_done,
+            burst_info_done, denoise_done, bird_body_done, archive_done,
         )
         if not all(pending_state):
             if pending_state != self._shutdown_pending_state:
                 _log.info(
-                    "[shutdown] waiting focus=%s image_info=%s preview=%s exiftool=%s directory_scans_and_pool=%s bird_sharpness=%s burst_info=%s denoise=%s bird_body=%s",
+                    "[shutdown] waiting focus=%s image_info=%s preview=%s exiftool=%s directory_scans_and_pool=%s bird_sharpness=%s burst_info=%s denoise=%s bird_body=%s archive=%s",
                     focus_done,
                     tabs_done,
                     preview_done,
@@ -1670,6 +1701,7 @@ class MainWindow(QMainWindow):
                     burst_info_done,
                     denoise_done,
                     bird_body_done,
+                    archive_done,
                 )
                 self._shutdown_pending_state = pending_state
             event.ignore()
