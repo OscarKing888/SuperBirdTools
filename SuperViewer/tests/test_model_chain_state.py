@@ -12,7 +12,8 @@ def test_normalize_keeps_valid_windows_and_defaults_the_rest() -> None:
         {"model": "../evil.pt"}, {"model": 3}, "junk"]})
     assert state["auto"] is False and len(state["stages"]) == 2
     sam, det = state["stages"]
-    assert sam == {"model": "sam2.1_t.pt", "input": "trace", "scope": "full", "use": "crop", "margin": 30,
+    assert sam == {"model": "sam2.1_t.pt", "input": "trace", "scope": "full", "use": "crop", "sam_use": "boxes",
+                   "margin": 30,
                    "imgsz": 640, "min_conf": 10, "birds_only": True, "lift": True, "floating": False, "geometry": None, "width": None}
     assert det["input"] is None and det["use"] == "mask" and det["scope"] == "view"
     assert (det["margin"], det["imgsz"], det["min_conf"], det["birds_only"], det["lift"]) == (200, 640, 1, False, True)
@@ -49,3 +50,9 @@ def test_docked_windows_keep_a_checked_width() -> None:
         {"model": "auto", "width": 480}, {"model": "auto", "width": 50}, {"model": "auto", "width": "wide"},
         {"model": "auto", "width": True}, {"model": "auto", "floating": True, "width": 480}]})["stages"]
     assert [s["width"] for s in stages] == [480, None, None, None, None]  # floating: its geometry instead
+
+
+def test_cut_out_input_use_is_kept() -> None:
+    stages = normalize({"stages": [{"model": "auto", "use": "cutout", "sam_use": "cutout"},
+                                   {"model": "auto", "use": "cut", "sam_use": "mask"}]})["stages"]
+    assert [(s["use"], s["sam_use"]) for s in stages] == [("cutout", "cutout"), ("crop", "boxes")]

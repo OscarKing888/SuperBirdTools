@@ -222,3 +222,62 @@ def test_items_from_boxes_turns_trace_birds_into_chain_inputs() -> None:
     items = pv.items_from_boxes([(1, 2, 3, 4), np.array([5, 6, 7, 8])])
     assert [i.box for i in items] == [(1.0, 2.0, 3.0, 4.0), (5.0, 6.0, 7.0, 8.0)]
     assert items[0].confidence is None and items[1].label.endswith("2")
+
+
+
+# ── 抠出上一步结果的像素: the input results' pixels as a new image ──
+def _masked_item(box, mask_box, mask):
+    return pv.PreviewItem("对象", 0.9, box, mask, mask_box)
+
+
+def test_cutout_keeps_only_the_input_pixels_cropped_to_them() -> None:
+    image = _image(1000, 1000)
+    image.rgb8[:] = 200
+    mask = np.zeros((10, 10), bool)
+    mask[:5] = True  # top half of 100..200 × 100..200
+    cut = pv.cutout(image, [_masked_item((100, 100, 200, 200), (100, 100, 200, 200), mask),
+                            pv.PreviewItem("bird", 0.5, (300, 150, 350, 250))])  # no mask: the box
+    assert cut.region == (100, 100, 350, 250) and cut.rgb.shape == (150, 250, 3) and cut.count == 2
+    assert (cut.rgb[:50, :100] == 200).all() and (cut.rgb[50:100, :100] == pv.MASK_FILL).all()
+    assert (cut.rgb[50:150, 200:250] == 200).all() and (cut.rgb[:, 120:190] == pv.MASK_FILL).all()
+    assert cut.mask[:50, :100].all() and not cut.mask[60:, :100].any()
+    with pytest.raises(ValueError):
+        pv.cutout(image, [])
+
+
+def test_detector_runs_once_on_the_cutout_and_maps_back() -> None:
+    image, det = _image(1000, 1000), _GreyAwareDetector()
+    inputs = [pv.PreviewItem("bird", 0.5, (100, 200, 500, 400)), pv.PreviewItem("bird", 0.4, (600, 300, 700, 600))]
+    out = pv.run_detector_cutout(image, pv.DetectorPreview(lift=False), inputs, models=det)
+    assert len(det.crops) == 1 and det.crops[0].shape[:2] == (400, 600)  # one new image: 100..700 × 200..600
+    assert out.items[0].box == pytest.approx((250, 300, 400, 400))  # quarter → half of the new image, photo px
+    assert out.items[0].mask_box == (100, 200, 700, 600) and out.cutout.region == (100, 200, 700, 600)
+    assert out.input_desc.startswith("抠出 2 个输入的像素为新图（600 × 400 px）")
+    view = pv.run_detector_cutout(image, pv.DetectorPreview(region=(0, 0, 400, 1000), lift=False), inputs, models=det)
+    assert det.crops[1].shape[:2] == (400, 300) and view.items[0].box[0] == pytest.approx(175)  # view ∩ new image
+    with pytest.raises(ValueError, match="不在抠出的图内"):
+        pv.run_detector_cutout(image, pv.DetectorPreview(region=(800, 0, 1000, 100)), inputs, models=det)
+
+
+def test_sam_on_the_cutout_uses_drawn_prompts_or_the_whole_new_image() -> None:
+    image, ref = _image(1000, 1000), _Refiner()
+    inputs = [pv.PreviewItem("bird", 0.5, (100, 200, 500, 400))]
+    out = pv.run_sam_cutout(image, pv.SamPreview("sam2.1_t.pt"), inputs, refiner=ref)
+    shape, boxes, points, _labels = ref.calls[0]
+    assert len(boxes) == 1 and points is None and out.cutout.region == (100, 200, 500, 400)
+    assert all(0 <= v <= 400 for v in boxes[0])  # the whole new image, in its crop's px
+    assert out.items[0].mask_box[0] >= 100 and out.items[0].box[0] >= 100  # photo px
+    pv.run_sam_cutout(image, pv.SamPreview("sam2.1_t.pt", ((150, 250, 300, 350),), ((200, 300, True),)), inputs,
+                      refiner=ref)
+    _shape, boxes, points, labels = ref.calls[1]
+    assert len(boxes) == 1 and len(points) == 1 and labels == [1]
+
+
+def test_cutout_display_shows_only_the_cut_pixels() -> None:
+    display = np.full((100, 100, 3), 10, np.uint8)
+    mask = np.zeros((40, 40), bool)
+    mask[:20] = True
+    cut = pv.Cutout(np.zeros((40, 40, 3), np.uint8), mask, (200, 200, 600, 600), 1)
+    img = pv.cutout_display(display, 0.1, cut)  # region 20..60 at display scale
+    assert (img[20:40, 20:60] == 10).all() and (img[40:60, 20:60] == pv.MASK_FILL).all()
+    assert (img[:20] == pv.MASK_FILL).all()

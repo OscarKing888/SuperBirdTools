@@ -43,7 +43,7 @@ def dialog(monkeypatch, tmp_path):
     image = AnalysisImage(rgb, rgb[..., 1].astype(np.float32) / 255.0, True)
     cache = DecodedImageCache()
     cache.get_or_load(DecodedImageCache.key(str(tmp_path / "x.ARW"), "raw"), lambda: image)
-    calls = {"detector": [], "sam": [], "detector_on": [], "sam_on": []}
+    calls = {"detector": [], "sam": [], "detector_on": [], "sam_on": [], "detector_cut": [], "sam_cut": []}
     fail = {"detector": False}
     mask = np.ones((10, 10), bool)
 
@@ -70,8 +70,26 @@ def dialog(monkeypatch, tmp_path):
                                                                            (0, 0, 1800, 1200), k)
                                                             for k, i in enumerate(inputs, 1)])
 
+    def cut_of(inputs):
+        x1, y1 = min(i.box[0] for i in inputs), min(i.box[1] for i in inputs)
+        x2, y2 = max(i.box[2] for i in inputs), max(i.box[3] for i in inputs)
+        h, w = int(y2 - y1), int(x2 - x1)
+        return pv.Cutout(np.zeros((h, w, 3), np.uint8), np.ones((h, w), bool), (x1, y1, x2, y2), len(inputs))
+
+    def fake_detector_cut(img, params, inputs):
+        calls["detector_cut"].append((params, list(inputs)))
+        cut = cut_of(inputs)
+        return pv.PreviewResult(params.model, "mps", 0.1, "抠出", [pv.PreviewItem("bird", 0.9, cut.region)], cutout=cut)
+
+    def fake_sam_cut(img, params, inputs):
+        calls["sam_cut"].append((params, list(inputs)))
+        cut = cut_of(inputs)
+        return pv.PreviewResult(params.model, "mps", 0.1, "抠出", [pv.PreviewItem("对象 1", 0.8, cut.region, mask,
+                                                                                  cut.region)], cutout=cut)
+
     for name, fake in (("run_detector", fake_detector), ("run_sam", fake_sam), ("run_detector_on", fake_detector_on),
-                       ("run_sam_on", fake_sam_on)):
+                       ("run_sam_on", fake_sam_on), ("run_detector_cutout", fake_detector_cut),
+                       ("run_sam_cutout", fake_sam_cut)):
         monkeypatch.setattr(pv, name, fake)
     d = BirdSharpnessTraceDialog(None, str(tmp_path / "x.ARW"))
     d.image_cache = cache
@@ -462,3 +480,39 @@ def test_docked_windows_keep_their_widths(dialog, tmp_path) -> None:
     finally:
         d2.close()
         _APP.processEvents()
+
+
+
+def test_cut_out_previous_results_as_a_new_image(dialog) -> None:
+    from SuperViewer.superviewer.model_preview import USE_CUTOUT
+
+    d, calls, _fail = dialog
+    host = d.preview_host
+    yolo = d.open_model_preview("detector", "auto")
+    sam = d.open_model_preview("sam", "sam2.1_t.pt")
+    assert _idle(host) and not sam.tools_box.isVisibleTo(sam) and sam.sam_use_row.isVisibleTo(sam)
+    sam.sam_use.setCurrentIndex(sam.sam_use.findData(USE_CUTOUT))  # SAM on the cut-out: prompts drawn on it
+    assert sam.cutout_mode and sam.tools_box.isVisibleTo(sam) and "抠出的新图" in sam.prompt_label.text()
+    sam.run_btn.click()  # no prompts: the whole new image
+    assert _idle(host) and calls["sam_cut"][-1][0].boxes == () and len(calls["sam_cut"][-1][1]) == 2
+    assert sam.cut_base is not None and sam.cut_region == (100, 100, 1000, 600)
+    s = sam.display[1]
+    assert sam.view.visible_scene_rect()[0] >= 100 * s - 60  # zoomed to the cut-out
+    sam.view.box_drawn.emit((150 * s, 150 * s, 350 * s, 300 * s))
+    sam.run_btn.click()
+    assert _idle(host) and calls["sam_cut"][-1][0].boxes[0] == pytest.approx((150, 150, 350, 300))
+    host.add_action.trigger()  # YOLO after SAM, on SAM's cut-out as one new image
+    yolo2 = host.stages[2]
+    assert _idle(host)
+    yolo2.use.setCurrentIndex(yolo2.use.findData(USE_CUTOUT))
+    assert yolo2.scope.isVisibleTo(yolo2) and not yolo2.margin.isVisibleTo(yolo2)
+    yolo2.run_btn.click()
+    assert _idle(host) and calls["detector_cut"][-1][0].region is None and yolo2.cut_base is not None
+    assert [i.source for i in calls["detector_cut"][-1][1]] == [None]  # SAM's single result, its own source
+    yolo2.use.setCurrentIndex(yolo2.use.findData("crop"))  # back: the photo again
+    assert yolo2.cut_base is None and yolo2.margin.isVisibleTo(yolo2)
+    # rerunning the first window carries the cut-out down the chain
+    n = len(calls["sam_cut"])
+    yolo.run_btn.click()
+    assert _idle(host) and len(calls["sam_cut"]) == n + 1
+    assert sam.config()["sam_use"] == USE_CUTOUT and yolo2.config()["use"] == "crop"

@@ -8,13 +8,16 @@ uses, so trace boxes line up).
 A chain feeds one window's results to the next: :func:`run_detector_on` zooms the
 detector into each input result (optionally keeping only the pixels inside its mask,
 so SAM's cut-out can be checked by YOLO), and :func:`run_sam_on` segments each input
-box as its own object.
+box as its own object. Or :func:`cutout` makes the input results' pixels a new image
+(everything else :data:`MASK_FILL` grey, cropped to them) and :func:`run_detector_cutout` /
+:func:`run_sam_cutout` run the model once on that image; results come back in photo pixels.
 """
 
 from __future__ import annotations
 
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
+from types import SimpleNamespace
 from typing import Callable, List, Optional, Sequence, Tuple
 
 import cv2
@@ -68,6 +71,18 @@ class PreviewResult:
     input_desc: str
     items: List[PreviewItem] = field(default_factory=list)
     gamma: Optional[float] = None
+    cutout: Optional["Cutout"] = None  # the new image the model saw (cut-out runs)
+
+
+@dataclass
+class Cutout:
+    """Input results' pixels as a new image: ``rgb`` is the photo inside ``region`` with
+    everything outside the results (``mask`` False) :data:`MASK_FILL` grey."""
+
+    rgb: np.ndarray
+    mask: np.ndarray
+    region: Box     # image px (integers)
+    count: int      # input results cut out
 
 
 def display_image(image: AnalysisImage) -> Tuple[np.ndarray, float]:
@@ -253,6 +268,93 @@ def run_sam_on(image: AnalysisImage, model: str, inputs: Sequence[PreviewItem], 
             items.append(found)
     return PreviewResult(model, str(getattr(refiner, "device", "")), time.perf_counter() - t0,
                          f"{len(inputs)} 个输入框，每个单独作为一个对象", items)
+
+
+def cutout(image: AnalysisImage, inputs: Sequence[PreviewItem], *, fill: int = MASK_FILL) -> Cutout:
+    """The input results' pixels (masks; plain boxes for results without one) as a new image
+    cropped to them, no margin."""
+    if not inputs:
+        raise ValueError("没有输入结果")
+    H, W = image.rgb8.shape[:2]
+    x1 = max(0, int(np.floor(min(i.box[0] for i in inputs))))
+    y1 = max(0, int(np.floor(min(i.box[1] for i in inputs))))
+    x2 = min(W, int(np.ceil(max(i.box[2] for i in inputs))))
+    y2 = min(H, int(np.ceil(max(i.box[3] for i in inputs))))
+    if x2 - x1 < 16 or y2 - y1 < 16:
+        raise ValueError("抠出的区域太小")
+    region = (float(x1), float(y1), float(x2), float(y2))
+    keep = np.zeros((y2 - y1, x2 - x1), bool)
+    for item in inputs:
+        mask = mask_in(item, region, keep.shape)
+        if mask is None:
+            bx1, by1 = max(0, int(item.box[0]) - x1), max(0, int(item.box[1]) - y1)
+            bx2, by2 = int(np.ceil(item.box[2])) - x1, int(np.ceil(item.box[3])) - y1
+            keep[by1:by2, bx1:bx2] = True
+        else:
+            keep |= mask
+    rgb = image.rgb8[y1:y2, x1:x2].copy()
+    rgb[~keep] = fill
+    return Cutout(rgb, keep, region, len(inputs))
+
+
+def _on_cutout(result: PreviewResult, cut: Cutout) -> PreviewResult:
+    """A run on ``cut.rgb``: results moved back to photo pixels, the cut-out attached."""
+    dx, dy = cut.region[0], cut.region[1]
+    for item in result.items:
+        item.box = (item.box[0] + dx, item.box[1] + dy, item.box[2] + dx, item.box[3] + dy)
+        if item.mask_box is not None:
+            b = item.mask_box
+            item.mask_box = (b[0] + dx, b[1] + dy, b[2] + dx, b[3] + dy)
+    h, w = cut.rgb.shape[:2]
+    result.input_desc = f"抠出 {cut.count} 个输入的像素为新图（{w} × {h} px）；{result.input_desc}"
+    result.cutout = cut
+    return result
+
+
+def _local(box: Box, cut: Cutout) -> Box:
+    dx, dy = cut.region[0], cut.region[1]
+    return (box[0] - dx, box[1] - dy, box[2] - dx, box[3] - dy)
+
+
+def run_detector_cutout(image: AnalysisImage, params: DetectorPreview, inputs: Sequence[PreviewItem], *,
+                        models=None) -> PreviewResult:
+    """The detector once on the cut-out (``params.region``, photo px, limits it to that part)."""
+    cut = cutout(image, inputs)
+    region = None
+    if params.region is not None:
+        x1, y1, x2, y2 = _local(params.region, cut)
+        h, w = cut.rgb.shape[:2]
+        region = (max(0.0, x1), max(0.0, y1), min(float(w), x2), min(float(h), y2))
+        if region[2] - region[0] < 16 or region[3] - region[1] < 16:
+            raise ValueError("当前视图不在抠出的图内")
+    result = run_detector(SimpleNamespace(rgb8=cut.rgb), replace(params, region=region), models=models)
+    return _on_cutout(result, cut)
+
+
+def run_sam_cutout(image: AnalysisImage, params: SamPreview, inputs: Sequence[PreviewItem], *,
+                   refiner=None) -> PreviewResult:
+    """SAM once on the cut-out with the drawn prompts (photo px); none = the whole new image as one box."""
+    cut = cutout(image, inputs)
+    h, w = cut.rgb.shape[:2]
+    boxes = tuple(_local(b, cut) for b in params.boxes)
+    points = tuple((x - cut.region[0], y - cut.region[1], keep) for x, y, keep in params.points)
+    if not boxes and not points:
+        boxes = ((0.0, 0.0, float(w), float(h)),)
+    result = run_sam(SimpleNamespace(rgb8=cut.rgb), SamPreview(params.model, boxes, points), refiner=refiner)
+    return _on_cutout(result, cut)
+
+
+def cutout_display(display: np.ndarray, scale: float, cut: Cutout) -> np.ndarray:
+    """The trace display frame showing only the cut-out's pixels (the rest grey), so the new
+    image keeps the photo's coordinates."""
+    img = np.full_like(display, MASK_FILL)
+    dh, dw = display.shape[:2]
+    x1, y1, x2, y2 = (int(round(v * scale)) for v in cut.region)
+    x1, y1, x2, y2 = max(0, x1), max(0, y1), min(dw, x2), min(dh, y2)
+    if x2 > x1 and y2 > y1:
+        part = cv2.resize(cut.mask.astype(np.uint8), (x2 - x1, y2 - y1), interpolation=cv2.INTER_NEAREST).astype(bool)
+        img[y1:y2, x1:x2][part] = display[y1:y2, x1:x2][part]
+    return img
 
 
 def items_from_boxes(boxes: Sequence[Box], label: str = "计算过程识别的鸟") -> List[PreviewItem]:

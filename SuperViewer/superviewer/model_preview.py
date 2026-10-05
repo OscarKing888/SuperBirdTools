@@ -8,7 +8,9 @@ with it) and an input:
 
 - 上一窗口的结果: the previous window's results. A detector zooms into each one
   (optionally only the pixels inside its mask, e.g. SAM's cut-out); SAM takes each
-  box as its own object.
+  box as its own object. Or 「抠出上一步结果的像素」: the results' pixels become a new
+  image (the rest grey) that the window shows and runs its model on once (SAM with
+  prompts drawn on it, else the whole new image as one box).
 - 计算过程识别到的鸟: the trace's detected birds, used the same way.
 - 原图: a detector sees the whole frame or the current view; SAM takes drawn boxes
   and keep/exclude points.
@@ -62,7 +64,11 @@ _SCROLL_OFF = getattr(getattr(Qt, "ScrollBarPolicy", Qt), "ScrollBarAlwaysOff")
 DETECTOR, SAM = "detector", "sam"
 PAN, BOX, POINTS = "pan", "box", "points"
 INPUT_PREVIOUS, INPUT_TRACE, INPUT_IMAGE = "previous", "trace", "image"
-USE_CROP, USE_MASK = "crop", "mask"
+USE_CROP, USE_MASK, USE_CUTOUT = "crop", "mask", "cutout"
+USE_BOXES = "boxes"  # SAM: each input box its own object
+_CUTOUT_LABEL = "抠出上一步结果的像素（一张新图）"
+_CUTOUT_TIP = ("抠出上一步结果的像素：把输入结果的像素（有轮廓按轮廓，没有按框）抠成一张新图，其余涂灰、"
+               "裁到它们的范围（不外扩），模型在这张新图上运行一次；窗口显示这张新图。")
 _CIRCLED = "①②③④⑤⑥⑦⑧⑨⑩⑪⑫⑬⑭⑮⑯⑰⑱⑲⑳"
 _LOG = logging.getLogger(__name__)
 STAGE_MIN_WIDTH = 320
@@ -219,6 +225,8 @@ class ChainStage(QWidget):
         self.input_picked = False  # the user chose the input; else it follows the chain position
         self.preset_input: Optional[str] = None  # a restored window's saved input, applied when placed
         self.width_hint: Optional[int] = None    # docked width to keep (saved, or as last laid out)
+        self.cut_base = None      # display frame of the last cut-out (「抠出上一步结果的像素」), else None
+        self.cut_region = None    # its region, photo px
         self.boxes: list = []      # manual SAM prompts, image px
         self.points: list = []     # (x, y, keep), image px
 
@@ -303,8 +311,10 @@ class ChainStage(QWidget):
         self.use = QComboBox(page)
         self.use.addItem("放大到每个输入框", USE_CROP)
         self.use.addItem("只留输入轮廓内像素", USE_MASK)
-        self.use.setToolTip("放大到每个输入框：在框（外扩后）里重新检测。\n"
-                            "只留输入轮廓内像素：轮廓外涂成灰色，看模型能否只凭抠出的部分认出鸟（输入需带轮廓，如 SAM）。")
+        self.use.addItem(_CUTOUT_LABEL, USE_CUTOUT)
+        self.use.setToolTip("放大到每个输入框：在原图上每个框（外扩后）里各检测一次。\n"
+                            "只留输入轮廓内像素：同上，但轮廓外涂成灰色，看模型能否只凭抠出的部分认出鸟（输入需带轮廓，如 SAM）。\n"
+                            + _CUTOUT_TIP)
         self.margin = QSpinBox(page)
         self.margin.setRange(0, 200)
         self.margin.setSingleStep(10)
@@ -340,6 +350,7 @@ class ChainStage(QWidget):
         grid.setColumnStretch(1, 1)
         for combo in (self.scope, self.use, self.classes):
             combo.currentIndexChanged.connect(lambda _i: self.config_changed.emit())
+        self.use.currentIndexChanged.connect(lambda _i: self._on_use_changed())
         for spin in (self.margin, self.imgsz, self.min_conf):
             spin.valueChanged.connect(lambda _v: self.config_changed.emit())
         self.lift.toggled.connect(lambda _c: self.config_changed.emit())
@@ -349,6 +360,18 @@ class ChainStage(QWidget):
         page = QWidget(self)
         box = QVBoxLayout(page)
         box.setContentsMargins(0, 0, 0, 0)
+        self.sam_use_row = QWidget(page)
+        row = QHBoxLayout(self.sam_use_row)
+        row.setContentsMargins(0, 0, 0, 0)
+        self.sam_use = QComboBox(self.sam_use_row)
+        self.sam_use.addItem("每个输入框单独作为一个对象", USE_BOXES)
+        self.sam_use.addItem(_CUTOUT_LABEL, USE_CUTOUT)
+        self.sam_use.setToolTip(_CUTOUT_TIP + "\n没有画框或点选时，整张新图作为一个框。")
+        self.sam_use.currentIndexChanged.connect(lambda _i: self.config_changed.emit())
+        self.sam_use.currentIndexChanged.connect(lambda _i: self._on_use_changed())
+        row.addWidget(QLabel("输入用法", self.sam_use_row))
+        row.addWidget(self.sam_use, 1)
+        box.addWidget(self.sam_use_row)
         self.prompt_label = QLabel("", page)
         self.prompt_label.setWordWrap(True)
         box.addWidget(self.prompt_label)
@@ -400,14 +423,18 @@ class ChainStage(QWidget):
     def config(self) -> dict:
         """What the chain saves for this window (see ``model_chain_state``)."""
         return {"model": self.model, "input": self.input if self.input_picked else None,
-                "scope": self.scope.currentData(), "use": self.use.currentData(), "margin": int(self.margin.value()),
+                "scope": self.scope.currentData(), "use": self.use.currentData(), "sam_use": self.sam_use.currentData(),
+                "margin": int(self.margin.value()),
                 "imgsz": int(self.imgsz.value()), "min_conf": int(self.min_conf.value()),
                 "birds_only": bool(self.classes.currentData()), "lift": self.lift.isChecked()}
 
     def apply_config(self, config: dict) -> None:
         """A restored window: parameters now, the input when the host places it."""
+        widgets = (self.scope, self.use, self.sam_use, self.classes, self.margin, self.imgsz, self.min_conf, self.lift)
+        for widget in widgets:  # quietly: the host places the window (and updates its controls) next
+            widget.blockSignals(True)
         for combo, value in ((self.scope, config.get("scope")), (self.use, config.get("use")),
-                             (self.classes, config.get("birds_only"))):
+                             (self.sam_use, config.get("sam_use")), (self.classes, config.get("birds_only"))):
             index = combo.findData(value)
             if index >= 0:
                 combo.setCurrentIndex(index)
@@ -415,6 +442,8 @@ class ChainStage(QWidget):
             if isinstance(config.get(key), int):
                 spin.setValue(config[key])
         self.lift.setChecked(bool(config.get("lift", True)))
+        for widget in widgets:
+            widget.blockSignals(False)
         if config.get("input"):
             self.preset_input, self.input_picked = config["input"], True
         if isinstance(config.get("width"), int):
@@ -451,14 +480,33 @@ class ChainStage(QWidget):
             widget = widget.parent()
         return widget
 
+    @property
+    def cutout_mode(self) -> bool:
+        """Input results cut out as a new image (「抠出上一步结果的像素」)."""
+        if self.input == INPUT_IMAGE:
+            return False
+        return (self.use if self.kind == DETECTOR else self.sam_use).currentData() == USE_CUTOUT
+
+    def _on_use_changed(self) -> None:
+        if self.cut_base is not None and not self.cutout_mode:
+            self._reset("输入用法已切换，点「运行」。")
+        else:
+            self.status.setText("输入用法已切换，点「运行」。")
+        self._update_controls()
+
+    def _base(self):
+        """The image results are drawn on: the cut-out (cut-out runs) or the photo."""
+        return self.cut_base if self.cut_base is not None else self.display[0]
+
     def _update_controls(self) -> None:
-        detector, from_image = self.kind == DETECTOR, self.input == INPUT_IMAGE
+        detector, from_image, cut = self.kind == DETECTOR, self.input == INPUT_IMAGE, self.cutout_mode
         self.params_stack.setCurrentIndex(0 if detector else 1)
         for key, (caption, widget) in self._detector_rows.items():
-            show = (key != "scope" or from_image) and (key not in ("use", "margin") or not from_image)
+            show = {"scope": from_image or cut, "use": not from_image, "margin": not from_image and not cut}.get(key, True)
             caption.setVisible(show)
             widget.setVisible(show)
-        manual = not detector and from_image
+        self.sam_use_row.setVisible(not from_image)
+        manual = not detector and (from_image or cut)
         self.tools_box.setVisible(manual)
         if manual:
             if self.view.mode == PAN and not self.boxes and not self.points:
@@ -472,12 +520,21 @@ class ChainStage(QWidget):
         """Runs by itself when opened / switched (manual SAM waits for prompts)."""
         return self.kind == DETECTOR or self.input != INPUT_IMAGE or bool(self.boxes or self.points)
 
+    def _view_region(self):
+        """The visible part of the view in photo px."""
+        scale = self.display[1]
+        x1, y1, x2, y2 = self.view.visible_scene_rect()
+        return (max(0.0, x1 / scale), max(0.0, y1 / scale), x2 / scale, y2 / scale)
+
     # ── runs (driven by the host) ──
     def make_job(self, image, inputs) -> Callable:
         """The worker-thread callable for this window's run; ValueError when it cannot run."""
         from bird_sharpness import preview
 
         if self.kind == SAM:
+            if self.cutout_mode:
+                params = preview.SamPreview(self.model, tuple(self.boxes), tuple(self.points))
+                return lambda: preview.run_sam_cutout(image, params, inputs)
             if self.input == INPUT_IMAGE:
                 if not self.boxes and not self.points:
                     raise ValueError("请先画框或点选。")
@@ -486,14 +543,15 @@ class ChainStage(QWidget):
             model = self.model
             return lambda: preview.run_sam_on(image, model, inputs)
         region = None
-        if self.input == INPUT_IMAGE and self.scope.currentData() == "view" and self.display is not None:
-            scale = self.display[1]
-            x1, y1, x2, y2 = self.view.visible_scene_rect()
-            region = (max(0.0, x1 / scale), max(0.0, y1 / scale), x2 / scale, y2 / scale)
+        if (self.input == INPUT_IMAGE or self.cutout_mode) and self.scope.currentData() == "view" \
+                and self.display is not None:
+            region = self._view_region()
         params = preview.DetectorPreview(self.model, region, int(self.imgsz.value()), self.min_conf.value() / 100.0,
                                          bool(self.classes.currentData()), self.lift.isChecked())
         if self.input == INPUT_IMAGE:
             return lambda: preview.run_detector(image, params)
+        if self.cutout_mode:
+            return lambda: preview.run_detector_cutout(image, params, inputs)
         margin, mask_only = self.margin.value() / 100.0, self.use.currentData() == USE_MASK
         return lambda: preview.run_detector_on(image, params, inputs, margin=margin, mask_only=mask_only)
 
@@ -514,13 +572,19 @@ class ChainStage(QWidget):
             self._draw_inputs()
 
     def show_result(self, result) -> None:
-        from bird_sharpness.preview import render
+        from bird_sharpness.preview import cutout_display, render
 
         self.result, self.error = result, None
         if self.display is None:
             return
-        img, rows = render(self.display[0], self.display[1], result.items)
+        cut = getattr(result, "cutout", None)
+        first_cut = cut is not None and cut.region != self.cut_region
+        self.cut_base = None if cut is None else cutout_display(self.display[0], self.display[1], cut)
+        self.cut_region = None if cut is None else cut.region
+        img, rows = render(self._base(), self.display[1], result.items)
         self.view.set_image(img)
+        if first_cut:  # a new cut-out: show it whole
+            self.view.zoom_to(tuple(v * self.display[1] for v in cut.region))
         self._draw_inputs()
         self.results.set_rows(rows)
         lift = "" if result.gamma is None else f"，提亮 γ {result.gamma:.2f}"
@@ -532,7 +596,7 @@ class ChainStage(QWidget):
         self.error, self.result = message, None
         self.results.set_rows([])
         if self.display is not None:
-            self.view.set_image(self.display[0])
+            self.view.set_image(self._base())
             self._draw_inputs()
         self.status.setText(f"失败：{message}")
 
@@ -542,6 +606,7 @@ class ChainStage(QWidget):
     def _reset(self, why: str) -> None:
         self.generation += 1  # a run still in flight is dropped
         self.result, self.error, self.inputs = None, None, []
+        self.cut_base = self.cut_region = None
         self.results.set_rows([])
         if self.display is not None:
             self.view.set_image(self.display[0])
@@ -568,11 +633,13 @@ class ChainStage(QWidget):
     def _draw_inputs(self) -> None:
         """Dashed yellow: what this window is fed (manual prompts, or the input results' boxes)."""
         s = self._scale()
-        if self.kind == SAM and self.input == INPUT_IMAGE:
+        if self.kind == SAM and (self.input == INPUT_IMAGE or self.cutout_mode):
             boxes, points = self.boxes, self.points
             keep = sum(1 for p in points if p[2])
-            self.prompt_label.setText(f"提示：{len(boxes)} 个框，{keep} 个保留点，{len(points) - keep} 个排除点。"
-                                      "画框：拖动；点选：左键保留、右键排除；点选时最多配合一个框。")
+            self.prompt_label.setText(
+                f"提示：{len(boxes)} 个框，{keep} 个保留点，{len(points) - keep} 个排除点。"
+                + ("在抠出的新图上画框或点选；没有提示时整张新图作为一个框。" if self.cutout_mode else "")
+                + "画框：拖动；点选：左键保留、右键排除；点选时最多配合一个框。")
         else:
             boxes, points = [item.box for item in self.inputs], []
             self.prompt_label.setText("每个输入框单独作为一个对象（虚线框为本窗口收到的输入）。")
