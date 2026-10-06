@@ -749,3 +749,77 @@ def test_grey_filled_crop_keeps_the_photo_noise_estimate(monkeypatch) -> None:
     BirdSharpnessAnalyzer(models, focus_provider=_no_focus).analyze("bird.jpg")
     BirdSharpnessAnalyzer(models, focus_provider=_no_focus, params=AnalysisParams(grey_fill=True)).analyze("bird.jpg")
     assert fields[1] == pytest.approx(fields[0])  # same noise gate with and without the fill
+
+
+# ── per-stage timing ───────────────────────────────────────────────────────────
+
+def test_stage_clock_adds_up_and_orders_stages() -> None:
+    from bird_sharpness.timing import StageClock
+
+    # start 0.0; decode 0.0-0.5, detect 0.5-1.25, decode again 1.25-1.75 (a stage entered twice adds up)
+    clock = StageClock(now=iter([0.0, 0.0, 0.5, 1.25, 1.75]).__next__)
+    clock.enter("decode")
+    clock.enter("detect")
+    clock.enter("decode")
+    assert clock.finish() == {"decode": 1.0, "detect": 0.75}
+
+
+def test_analysis_reports_time_per_stage(monkeypatch) -> None:
+    from bird_sharpness.timing import STAGES
+
+    _install_image(monkeypatch, _scene([(900, 600, 300, 0.3)]))
+    seen = []
+    result = BirdSharpnessAnalyzer(_StubModels([(900, 600, 300)], full_w=1800), focus_provider=_no_focus).analyze(
+        "bird.jpg", on_stage=seen.append)
+    assert seen == ["decode", "detect", "measure"]
+    assert list(result.stage_s) == ["decode", "detect", "measure"] and all(v >= 0 for v in result.stage_s.values())
+    assert sum(result.stage_s.values()) <= result.elapsed_s + 0.01 and set(result.stage_s) <= set(STAGES)
+    assert "stage_s" in result.to_dict() and "stage_s" not in "".join(result.to_xmp_fields())
+
+
+def test_recheck_has_its_own_stage_when_the_first_pass_finds_no_bird(monkeypatch) -> None:
+    _install_image(monkeypatch, _scene([]))
+    seen = []
+    result = BirdSharpnessAnalyzer(_StubModels([], full_w=1800), focus_provider=_no_focus).analyze(
+        "none.jpg", on_stage=seen.append)
+    assert seen == ["decode", "detect", "recheck", "measure"] and "recheck" in result.stage_s
+    assert result.verdict == bsf.VERDICT_NO_BIRD
+
+
+def test_timing_stats_total_parallel_work_and_wall_clock() -> None:
+    from bird_sharpness.timing import PhotoTiming, TimingStats, stage_summary
+
+    stats = TimingStats()
+    stats.add(PhotoTiming("a.ARW", {"check": 0.1, "decode": 1.0, "detect": 0.5, "measure": 0.5, "write": 0.1}, 2.2))
+    stats.add(PhotoTiming("b.ARW", {"check": 0.1, "decode": 1.2, "detect": 0.6, "recheck": 0.4, "measure": 0.7}, 3.0))
+    stats.add(PhotoTiming("c.ARW", {"check": 0.05}, 0.05, skipped=True))
+    assert (stats.photos, stats.skipped, stats.failed) == (2, 1, 0)
+    assert stats.work_s == pytest.approx(5.2) and stats.mean_photo_s == pytest.approx(2.6)
+    assert stats.stages["decode"].count == 2 and stats.stages["decode"].total_s == pytest.approx(2.2)
+    assert stats.stages["decode"].mean_s == pytest.approx(1.1) and stats.stages["decode"].max_s == pytest.approx(1.2)
+    assert stats.stages["recheck"].count == 1 and stats.stages["check"].count == 3  # skipped photos are checked too
+    assert stats.slowest == ("b.ARW", 3.0)
+    assert stats.wall_per_photo(2.6) == pytest.approx(1.3) and stats.speedup(2.6) == pytest.approx(2.0)  # 2 workers
+    assert stats.wall_per_photo(0.0) is None
+    assert [k for k, *_ in stats.rows()] == ["check", "decode", "detect", "recheck", "measure", "write"]
+    assert sum(share for *_x, share in stats.rows()) == pytest.approx(1.0)
+    text = "\n".join(stats.lines(2.6))
+    assert "平均每张 2.60 s" in text and "并行后每张 1.30 s（×2.0）" in text and "解码：2 次" in text
+    assert stage_summary({"measure": 1.0, "decode": 0.5}, 1.5) == "解码 0.50 s · 测量 1.00 s · 合计 1.50 s"
+
+
+def test_action_times_check_analysis_and_write(monkeypatch, tmp_path) -> None:
+    from bird_sharpness import xmp_store
+    from bird_sharpness.actions import BirdSharpnessAction
+
+    _install_image(monkeypatch, _scene([(900, 600, 300, 0.3)]))
+    monkeypatch.setattr(xmp_store, "write_result", lambda path, result, **kw: True)
+    monkeypatch.setattr(xmp_store, "already_analyzed", lambda path, version, **kw: False)
+    analyzer = BirdSharpnessAnalyzer(_StubModels([(900, 600, 300)], full_w=1800), focus_provider=_no_focus)
+    outcome = BirdSharpnessAction(analyzer, "bird.jpg", "bird.jpg").execute()
+    assert outcome.written and outcome.timing is not None and not outcome.timing.skipped
+    assert list(outcome.timing.stages) == ["check", "decode", "detect", "measure", "write"]
+    assert outcome.timing.total_s == pytest.approx(sum(outcome.timing.stages.values()), abs=0.01)
+    monkeypatch.setattr(xmp_store, "already_analyzed", lambda path, version, **kw: True)
+    skipped = BirdSharpnessAction(analyzer, "bird.jpg", "bird.jpg", skip_existing=True).execute()
+    assert skipped.skipped and skipped.timing.skipped and list(skipped.timing.stages) == ["check"]

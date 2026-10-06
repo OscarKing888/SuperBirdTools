@@ -617,3 +617,23 @@ def test_chain_results_open_a_trace_on_a_temporary_image(stub_trace_env, monkeyp
         controller.request_shutdown()
         window.deleteLater()
         _APP.processEvents()
+
+
+def test_trace_window_shows_per_stage_timing(monkeypatch) -> None:
+    trace = _trace(monkeypatch, birds=((900, 600, 300, 0.3),))
+    assert set(trace.result.stage_s) == {"decode", "detect", "measure"}
+    dialog = BirdSharpnessTraceDialog(None, "t.ARW")
+    try:
+        dialog.set_trace(trace)
+        assert not dialog.timing.isHidden()
+        for label in ("解码", "识别", "测量", "合计"):
+            assert label in dialog.timing.text() and label in dialog.summary.toolTip()
+        step = next(s for s in dialog.steps if s.key == "result")
+        assert "分阶段耗时" in dict(step.metrics) and "测量" in dict(step.metrics)["分阶段耗时"]
+        dialog.set_loading()
+        trace.result.stage_s = {}
+        dialog.set_trace(trace)
+        assert dialog.timing.isHidden()
+    finally:
+        dialog.close()
+        _APP.processEvents()

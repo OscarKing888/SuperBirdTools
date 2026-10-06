@@ -103,3 +103,34 @@ def test_info_panel_text_names_region_and_bird_count() -> None:
     assert _bird_sharpness_text({"bird_sharpness_verdict": "soft", "bird_sharpness_head_sigma": "1.27"}) \
         == "失焦（模糊半径 1.27px）"
     assert _bird_sharpness_text({}) == ""
+
+
+def test_progress_window_shows_per_stage_timing_for_parallel_jobs() -> None:
+    from bird_sharpness.timing import PhotoTiming, TimingStats
+
+    dialog = BirdSharpnessProgressDialog(None, "检测")
+    try:
+        assert dialog.timing.isHidden() and dialog.timing_text() == ""
+        stats = TimingStats()
+        stats.setup_s = 1.5
+        dialog.set_progress(0, 4, "")
+        dialog._started_at -= 2.0  # the job has been running for 2 s of wall clock
+        for i, name in enumerate(("a", "b", "c")):  # three photos finished by 2 workers in 2 s
+            stats.add(PhotoTiming(f"{name}.ARW", {"check": 0.05, "decode": 0.6, "detect": 0.3, "measure": 0.4,
+                                                   "write": 0.05}, 1.4))
+        stats.add(PhotoTiming("d.ARW", {"check": 0.02}, 0.02, skipped=True))
+        dialog.set_progress(4, 4, "d.ARW")
+        dialog.set_timing(stats)
+        assert not dialog.timing.isHidden()
+        text = dialog.timing_text()
+        assert "平均每张 1.40 s" in text and "累计处理 4.20 s" in text and "加载模型 1.50 s" in text
+        assert "并行后每张" in text and "解码：3 次" in text and "跳过 1 张" in text
+        html_text = dialog.timing.text()
+        for label in ("准备", "解码", "识别", "测量", "写入"):
+            assert label in html_text
+        assert "复检" not in html_text  # a stage nobody ran is not listed
+        dialog.mark_finished("检测完成。")
+        assert dialog.elapsed_seconds() is not None and "总用时" in dialog.timing_text()
+    finally:
+        dialog._tick.stop()
+        dialog.deleteLater()

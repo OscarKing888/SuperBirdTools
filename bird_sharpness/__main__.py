@@ -66,6 +66,8 @@ def main(argv: List[str] | None = None) -> int:
                         help="用 SAM 模型精修鸟体像素（如 sam2.1_t.pt；默认不精修）")
     parser.add_argument("--sam-scope", choices=("all", "rechecked"), default="all",
                         help="SAM 精修范围：all = YOLO 检测到的每只鸟都经 SAM 抠一次（默认），rechecked = 只有复检/增强找到的鸟（更快）")
+    parser.add_argument("--timing", action="store_true",
+                        help="每张照片显示分阶段耗时，结束时在 stderr 汇总总计 / 平均 / 各阶段累计（--json 的每行始终含 stage_s）")
     parser.add_argument("--min-bird-side", type=int, default=0, metavar="PX",
                         help="忽略鸟框长边小于 PX（全分辨率像素）的鸟，如 64；默认 0 = 不忽略")
     parser.add_argument("--pixels", choices=("outline", "box"), default="outline",
@@ -119,8 +121,11 @@ def main(argv: List[str] | None = None) -> int:
     if reason:
         print(reason, file=sys.stderr)
         return 2
+    import time
+
     from .analyzer import BirdSharpnessAnalyzer, analyze_paths
     from .scoring import verdict_label
+    from .timing import stage_summary, stats_of_results
 
     paths = collect_image_paths(args.paths, recursive=args.recursive)
     if not paths:
@@ -151,6 +156,8 @@ def main(argv: List[str] | None = None) -> int:
             f"sigma={sigma_text}  region={result.region or '-'}  birds={result.bird_count}  eye={result.eye_visibility}  {result.elapsed_s:.1f}s{written}{extra}",
             flush=True,
         )
+        if args.timing and result.stage_s:
+            print(f"    {stage_summary(result.stage_s, result.elapsed_s)}", flush=True)
 
     from .image_source import source_loader
 
@@ -179,6 +186,7 @@ def main(argv: List[str] | None = None) -> int:
             print(f"找不到模型 {name}：先用 --download-model {name} 下载", file=sys.stderr)
             return 2
     analyzer = BirdSharpnessAnalyzer(params=params)
+    wall_start = time.perf_counter()
     try:
         if args.trace:
             from .trace import AnalysisTracer
@@ -197,6 +205,9 @@ def main(argv: List[str] | None = None) -> int:
                                     image_loader=loader)
     finally:
         analyzer.release()
+    if args.timing and results:  # stderr: stdout stays one JSON object per line with --json
+        for line in stats_of_results(results).lines(time.perf_counter() - wall_start):
+            print(f"[计时] {line}", file=sys.stderr, flush=True)
     return 0 if all(r.ok for r in results) else 3
 
 

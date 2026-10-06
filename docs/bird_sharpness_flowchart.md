@@ -7,7 +7,7 @@
 ## 目录
 
 1. [总流程](#1-总流程)
-2. [入口与任务调度](#2-入口与任务调度)
+2. [入口与任务调度](#2-入口与任务调度)（含 [2.1 分阶段计时](#21-分阶段计时单张与批量)）
 3. [解码全分辨率图像](#3-解码全分辨率图像)
 4. [鸟体识别：首遍、鸟群补检、去重与限数](#4-鸟体识别首遍鸟群补检去重与限数)
 5. [无鸟复检：提亮、1024 px、焦点处弱候选与放大](#5-无鸟复检提亮1024-px焦点处弱候选与放大)
@@ -63,7 +63,7 @@ flowchart TD
     Q -->|否| S["只返回结果（CLI 不加 --write-xmp、计算过程窗口）"]
 ```
 
-进度窗口显示的 4 个阶段即 `decode → detect → measure → write`（`check` 是写入前的版本检查，`queued` 为排队）。
+进度窗口显示的阶段即 `decode → detect →（recheck）→ measure → write`（`check` 是分析前的版本检查，`queued` 为排队；`recheck` 只在首遍无鸟、进入复检或增强找鸟时出现）。每个阶段都单独计时，见 [2.1 分阶段计时](#21-分阶段计时单张与批量)。
 
 ---
 
@@ -88,6 +88,33 @@ flowchart LR
 
 - 三处入口共用同一套 `AnalysisParams`（[params.py](../bird_sharpness/params.py)），只是来源不同。默认值下结果和版本号不变。
 - 模型推理（YOLO / 关键点 / SAM）在 `BirdSharpnessModels` 的锁内串行执行，RAW 解码、预处理和 σ 计算并行。
+
+### 2.1 分阶段计时（单张与批量）
+
+代码：[timing.py](../bird_sharpness/timing.py)（无 Qt、无第三方依赖）、`BirdSharpnessAnalyzer.analyze()`、`BirdSharpnessAction.execute()`。
+
+```mermaid
+flowchart TD
+    A["BirdSharpnessAction.execute()：StageClock"] --> B["check 准备：版本检查 / 跳过已检测"]
+    B --> C["analyze()：StageClock，每次 on_stage 都是一个计时边界"]
+    C --> D["decode 解码"]
+    D --> E["detect 识别：首遍 + 鸟群补检"]
+    E --> F{"首遍无鸟？"}
+    F -->|是| G["recheck 复检 / 增强找鸟"]
+    F -->|否| H
+    G --> H["measure 测量：逐只鸟，或无鸟区域"]
+    H --> I["result.stage_s / elapsed_s"]
+    I --> J["write 写入 XMP（动作里计时）"]
+    J --> K["outcome.timing = PhotoTiming<br/>各阶段秒数 + 本张合计（工作时间）"]
+    K --> L["TimingStats.add（GUI 线程）：每阶段次数 / 累计 / 平均 / 最长 / 占比<br/>+ 跳过张数 + 加载模型耗时"]
+    L --> M["进度窗口「计时」块：总用时、累计处理、平均每张、并行后每张"]
+    I --> N["计算过程窗口：标题下一行 + 结论步骤「分阶段耗时」"]
+    I --> O["CLI --timing：每张一行 + stderr 汇总；--json 每行含 stage_s"]
+```
+
+- **单张**：每个阶段边界由 `on_stage` 触发，同一阶段进入两次会累加；`stage_s` 之和约等于 `elapsed_s`（阶段外的零星开销不计）。计算过程窗口复用已解码图像时，解码一栏就是这次的实际开销。
+- **批量 / 并行**：各阶段的「累计」是所有线程工作时间之和，会超过墙钟时间，约为并行度倍；`累计处理 ÷ 总用时` 即实际并行度（×N）。「平均每张」= 单张工作时间均值（一个线程处理一张要多久）；「并行后每张」= 总用时 ÷ 张数（用户实际等待的每张时间）。总用时从第一张开始算，不含加载模型（单列）。
+- 被「跳过已检测」的照片只计 `check`，不进每张平均；被停止的不计。
 
 ---
 

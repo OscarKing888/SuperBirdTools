@@ -60,7 +60,8 @@ class _FakeAnalyzer:
         verdict = "sharp" if path.endswith("a.jpg") else "soft"
         sigma = 0.7 if verdict == "sharp" else 1.3
         return BirdSharpnessResult(path=path, verdict=verdict, score=520 if verdict == "sharp" else 180,
-                                   head_sigma=sigma, body_sigma=0.9, eye_visibility=0.99)
+                                   head_sigma=sigma, body_sigma=0.9, eye_visibility=0.99,
+                                   stage_s={"decode": 0.1, "detect": 0.2, "measure": 0.3}, elapsed_s=0.6)
 
 
 def _wait(predicate, timeout=10.0):
@@ -118,6 +119,14 @@ def test_file_job_writes_xmp_and_refreshes_list(env) -> None:
     assert updates["XMP:City"] == "180.00"
     assert "清晰 1" in controller._dialog.summary_text() and "失焦 1" in controller._dialog.summary_text()
     assert controller._dialog.button.text() == "关闭"
+    # every stage is timed per photo and totalled in the progress window (准备/写入 come from the action)
+    stats = controller._timing
+    assert stats.photos == 2 and stats.skipped == 0 and stats.setup_s is not None
+    assert stats.stages["decode"].total_s == pytest.approx(0.2) and stats.stages["measure"].mean_s == pytest.approx(0.3)
+    assert {"check", "decode", "detect", "measure", "write"} <= set(stats.stages)
+    text = controller._dialog.timing_text()
+    assert "2 张" in text and "解码：2 次" in text and "写入：2 次" in text and "总用时" in text
+    assert not controller._dialog.timing.isHidden()
 
 
 def test_directory_job_skips_photos_already_analyzed_with_same_version(env) -> None:

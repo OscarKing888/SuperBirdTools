@@ -14,6 +14,7 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 from app_common.bird_sharpness_fields import VERDICT_STYLES
+from bird_sharpness.timing import TimingStats, format_seconds
 
 from .qt_compat import QDialog, QHBoxLayout, QLabel, QPushButton, QTimer, QVBoxLayout, QWidget, pyqtSignal
 
@@ -63,6 +64,7 @@ STAGE_DISPLAY = {
     "check": ("准备", 0),
     "decode": ("解码", 1),
     "detect": ("识别", 2),
+    "recheck": ("复检", 2),
     "measure": ("测量", 3),
     "write": ("写入", 4),
 }
@@ -310,6 +312,13 @@ class BirdSharpnessProgressDialog(QDialog):
         self.pool_note.setWordWrap(True)
         self.pool_note.setVisible(False)
 
+        self.timing = QLabel("", self)  # per-stage timing, see set_timing()
+        self.timing.setTextFormat(_RICH_TEXT)
+        self.timing.setWordWrap(True)
+        self.timing.setVisible(False)
+        self._timing_stats: Optional[TimingStats] = None
+        self._timing_plain = ""
+
         self.summary = QLabel("", self)
         self.summary.setTextFormat(_RICH_TEXT)
         self.summary.setWordWrap(True)
@@ -331,6 +340,8 @@ class BirdSharpnessProgressDialog(QDialog):
         layout.addSpacing(4)
         layout.addWidget(self.load_view)
         layout.addWidget(self.pool_note)
+        layout.addSpacing(4)
+        layout.addWidget(self.timing)
         layout.addSpacing(4)
         layout.addLayout(row)
 
@@ -377,6 +388,59 @@ class BirdSharpnessProgressDialog(QDialog):
         self.pool_note.setText(note)
         self.pool_note.setVisible(bool(note))
 
+    def set_timing(self, stats: TimingStats) -> None:
+        """Show the job's per-stage timing (work time summed over all workers, mean, longest)."""
+        self._timing_stats = stats
+        self._refresh_timing()
+
+    def elapsed_seconds(self) -> Optional[float]:
+        """Wall-clock seconds since the first photo started (until the job finished)."""
+        if self._started_at is None:
+            return None
+        return max(0.0, (self._finished_at or time.monotonic()) - self._started_at)
+
+    def timing_text(self) -> str:
+        """The timing block as plain text (what the label shows)."""
+        return self._timing_plain
+
+    def _refresh_timing(self) -> None:
+        stats = self._timing_stats
+        if stats is None or not (stats.photos or stats.skipped):
+            self.timing.setVisible(False)
+            self._timing_plain = ""
+            return
+        wall = self.elapsed_seconds()
+        self._timing_plain = "\n".join(stats.lines(wall))
+        self.timing.setText(self._timing_html(stats, wall))
+        self.timing.setVisible(True)
+
+    @staticmethod
+    def _timing_html(stats: TimingStats, wall: Optional[float]) -> str:
+        head = [f"总用时 <b>{format_seconds(wall)}</b>" if wall is not None else "",
+                f"累计处理 <b>{format_seconds(stats.work_s)}</b>（各线程相加）",
+                f"平均每张 <b>{format_seconds(stats.mean_photo_s)}</b>" if stats.photos else ""]
+        per_photo = stats.wall_per_photo(wall) if wall is not None else None
+        if per_photo is not None:
+            head.append(f"并行后每张 <b>{format_seconds(per_photo)}</b>（约 ×{stats.speedup(wall):.1f} 并行）")
+        if stats.setup_s is not None:
+            head.append(f"加载模型 {format_seconds(stats.setup_s)}")
+        rows = ['<tr style="color:gray"><td>阶段</td><td align="right">次数</td><td align="right">累计</td>'
+                '<td align="right">平均</td><td align="right">最长</td><td align="right">占比</td><td></td></tr>']
+        for _key, label, s, share in stats.rows():
+            bar = "▇" * max(1, int(round(share * 14))) if share > 0 else ""
+            rows.append(
+                f"<tr><td>{html.escape(label)}</td><td align='right'>{s.count}</td>"
+                f"<td align='right'>{format_seconds(s.total_s)}</td><td align='right'>{format_seconds(s.mean_s)}</td>"
+                f"<td align='right'>{format_seconds(s.max_s)}</td><td align='right'>{share * 100:.0f}%</td>"
+                f"<td>&nbsp;<span style='color:#4a90d9'>{bar}</span></td></tr>")
+        slowest = ""
+        if stats.slowest is not None and stats.photos > 1:
+            import os
+
+            slowest = f"<br>最慢 {html.escape(os.path.basename(stats.slowest[0]))}  {format_seconds(stats.slowest[1])}"
+        return ("<b>计时</b>　" + "　·　".join(h for h in head if h) + "<table cellspacing='4'>" + "".join(rows)
+                + "</table>" + slowest)
+
     def set_counts(self, counts: Counter, skipped: int, write_failures: int) -> None:
         chips, plain = [], []
         for verdict, style in VERDICT_STYLES.items():
@@ -415,6 +479,7 @@ class BirdSharpnessProgressDialog(QDialog):
         self.pool_note.setText("")
         self.pool_note.setVisible(False)
         self._refresh_stats()
+        self._refresh_timing()
         self._tick.stop()
         self.adjustSize()
 
@@ -455,4 +520,5 @@ class BirdSharpnessProgressDialog(QDialog):
         if not self._running:
             return
         self._refresh_stats()
+        self._refresh_timing()
         self.load_view.update()

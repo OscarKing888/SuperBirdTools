@@ -1058,6 +1058,10 @@ class AnalysisTracer:
                    ("模糊半径", _fmt(result.sigma, "%.3f px")), ("计算区域", region), ("鸟数", str(result.bird_count))]
         if on_bird is not None:
             metrics.append(("焦点在鸟上", "是" if on_bird else "否（相机焦点不在任何鸟上）"))
+        if getattr(result, "stage_s", None):
+            from .timing import stage_summary
+
+            metrics.append(("分阶段耗时", stage_summary(result.stage_s, result.elapsed_s, sep="；")))
         metrics.append(("边缘统计", {"standard": "标准（最强 30 条边缘的中位数）",
                                  "dense": "密集（≥ 60 条边缘的第 40 百分位，实验性）"}.get(
                                      getattr(result, "edge_estimator", ""), "—")))

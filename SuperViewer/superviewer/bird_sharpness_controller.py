@@ -20,6 +20,8 @@ from dataclasses import dataclass, field
 from app_common.bird_sharpness_fields import VERDICT_ERROR
 from app_common.log import get_logger
 
+from bird_sharpness.timing import TimingStats
+
 from .bird_sharpness_progress import BirdSharpnessProgressDialog, WorkerLane, WorkerLoad
 from .qt_compat import QThread, pyqtSignal
 
@@ -67,6 +69,8 @@ class BirdSharpnessWorker(QThread):
     failed = pyqtSignal(str)
     load_changed = pyqtSignal(object)  # WorkerLoad snapshot for the progress window
     warning_changed = pyqtSignal(str)
+    timing_ready = pyqtSignal(object)  # PhotoTiming of every finished (or skipped) photo
+    setup_timed = pyqtSignal(float)    # seconds spent loading the models before the first photo
 
     def __init__(self, job: BirdSharpnessJob, analyzer_holder: "BirdSharpnessController", pool=None) -> None:
         super().__init__()
@@ -93,6 +97,9 @@ class BirdSharpnessWorker(QThread):
         return [(os.path.normpath(p), os.path.normpath(p)) for p in paths]
 
     def _emit_outcome(self, outcome) -> None:
+        timing = getattr(outcome, "timing", None)
+        if timing is not None:
+            self.timing_ready.emit(timing)
         if outcome.skipped:
             self.item_skipped.emit(outcome.display_path)
         elif outcome.result is not None:
@@ -120,11 +127,13 @@ class BirdSharpnessWorker(QThread):
                 self.failed.emit("没有找到可检测的图片。")
                 return
             self.status_changed.emit("正在加载检测模型…")
+            t_setup = time.perf_counter()
             analyzer = self._holder.analyzer()
             analyzer.load()
             sam_model = getattr(getattr(analyzer, "params", None), "sam_model", "")
             if sam_model:  # fail the job once, not every photo, when the SAM model is missing
                 analyzer.refiner_provider(sam_model).load()
+            self.setup_timed.emit(time.perf_counter() - t_setup)
             models = getattr(analyzer, "models", None)
             if models is not None and getattr(models, "has_keypoints", True) is False:
                 self.warning_changed.emit("未找到鸟眼关键点模型：鸟体按整只鸟计算，翅膀/尾羽和遮挡树叶会干扰结果，准确度明显降低。")
@@ -296,6 +305,7 @@ class BirdSharpnessController(QObject):
         self._skipped = 0
         self._write_failures = 0
         self._failure_message = ""
+        self._timing = TimingStats()
         self._trace_requests: list = []  # [dialog, future, cancel_event]
         self._denoise = None  # DenoiseController, for "降噪成片" traces
         self._denoise_waits: dict = {}  # normcase(source) -> dialogs waiting for its denoised image
@@ -591,6 +601,7 @@ class BirdSharpnessController(QObject):
         self._skipped = 0
         self._write_failures = 0
         self._failure_message = ""
+        self._timing = TimingStats()
         pool_getter = getattr(self._file_list, "background_work_pool", None)
         pool = pool_getter() if callable(pool_getter) else None
         worker = BirdSharpnessWorker(job, self, pool)
@@ -605,6 +616,8 @@ class BirdSharpnessController(QObject):
         worker.failed.connect(lambda msg, w=worker: self._on_failed(w, msg))
         worker.load_changed.connect(lambda load, w=worker: self._on_load(w, load))
         worker.warning_changed.connect(lambda text, w=worker: self._on_warning(w, text))
+        worker.timing_ready.connect(lambda t, w=worker: self._on_timing(w, t))
+        worker.setup_timed.connect(lambda s, w=worker: self._on_setup_timed(w, s))
         worker.finished.connect(lambda w=worker: self._on_thread_finished(w))
         _log.info("[BirdSharpness] start job title=%r dir=%r recursive=%s items=%s skip_existing=%s",
                   job.title, job.directory, job.recursive, len(job.items), job.skip_existing)
@@ -627,6 +640,17 @@ class BirdSharpnessController(QObject):
     def _on_progress(self, worker, done: int, total: int, name: str) -> None:
         if worker is self._worker and self._dialog is not None:
             self._dialog.set_progress(done, total, name)
+
+    def _on_timing(self, worker, timing) -> None:
+        if worker is self._worker and self._dialog is not None:
+            self._timing.add(timing)
+            self._dialog.set_timing(self._timing)
+
+    def _on_setup_timed(self, worker, seconds: float) -> None:
+        if worker is self._worker:
+            self._timing.setup_s = seconds
+            if self._dialog is not None:
+                self._dialog.set_timing(self._timing)
 
     def _on_warning(self, worker, text: str) -> None:
         if worker is self._worker and self._dialog is not None:
@@ -684,6 +708,9 @@ class BirdSharpnessController(QObject):
         dialog = self._dialog
         _log.info("[BirdSharpness] job finished cancelled=%s counts=%s skipped=%s write_failures=%s failure=%r",
                   cancelled, dict(self._counts), self._skipped, self._write_failures, self._failure_message)
+        if self._timing.photos or self._timing.skipped:
+            wall = dialog.elapsed_seconds() if dialog is not None else None
+            _log.info("[BirdSharpness] timing %s", " | ".join(self._timing.lines(wall)))
         try:
             worker.deleteLater()
         except Exception:

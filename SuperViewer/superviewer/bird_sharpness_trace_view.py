@@ -541,6 +541,10 @@ class BirdSharpnessTraceDialog(QDialog):
         header.addWidget(self.bird_label)
         header.addWidget(self.bird_combo)
         layout.addLayout(header)
+        self.timing = QLabel("", self.content)  # per-stage seconds of this computation
+        self.timing.setForegroundRole(_ROLE.PlaceholderText)
+        self.timing.setVisible(False)
+        layout.addWidget(self.timing)
 
         self.view_a = TraceImageView(self.content)
         self.view_b = TraceImageView(self.content)
@@ -809,6 +813,17 @@ class BirdSharpnessTraceDialog(QDialog):
             parts.append(f"鸟 {result.bird_count} 只")
             parts.append(f"耗时 {result.elapsed_s:.1f} s")
         self.summary.setText("　·　".join(parts))
+        stage_s = getattr(result, "stage_s", None) if result is not None else None
+        if stage_s:
+            from bird_sharpness.timing import stage_summary
+
+            self.summary.setToolTip("分阶段耗时\n" + stage_summary(stage_s, result.elapsed_s, sep="\n"))
+            self.timing.setText("分阶段耗时：" + stage_summary(stage_s, result.elapsed_s))
+            self.timing.setVisible(True)
+        else:
+            self.summary.setToolTip("")
+            self.timing.setText("")
+            self.timing.setVisible(False)
         multi = len(trace.birds) > 1
         self.bird_combo.blockSignals(True)
         self.bird_combo.clear()

@@ -17,10 +17,10 @@ from app_common.file_browser._work_action import WorkerAction
 
 from .analyzer import BirdSharpnessAnalyzer, BirdSharpnessResult
 
-STAGE_QUEUED = "queued"
-STAGE_CHECK = "check"
-STAGE_WRITE = "write"
 from .scoring import ALGORITHM_VERSION, VERDICT_ERROR
+from .timing import STAGE_CHECK, STAGE_WRITE, PhotoTiming, StageClock
+
+STAGE_QUEUED = "queued"
 
 
 @dataclass
@@ -31,6 +31,7 @@ class BirdSharpnessOutcome:
     written: bool = False
     skipped: bool = False
     cancelled: bool = False
+    timing: Optional[PhotoTiming] = None  # per-stage seconds of this photo (not set when cancelled before starting)
 
 
 class BirdSharpnessAction(WorkerAction):
@@ -70,19 +71,34 @@ class BirdSharpnessAction(WorkerAction):
             return outcome
         from .xmp_store import already_analyzed, write_result
 
+        clock = StageClock()
         self._set_stage(STAGE_CHECK)
+        clock.enter(STAGE_CHECK)
         version = getattr(self.analyzer, "version", ALGORITHM_VERSION)
         if self.skip_existing and already_analyzed(self.source_path, version):
             outcome.skipped = True
+            stages = clock.finish()
+            outcome.timing = PhotoTiming(self.source_path, stages, round(sum(stages.values()), 3), skipped=True)
             return outcome
+        checked = clock.finish()
         outcome.result = self.analyzer.analyze(self.source_path, on_stage=self._set_stage, cancelled=self.is_cancelled)
         # A stop request during analysis must not leave a freshly written sidecar behind.
         if self.is_cancelled():
             outcome.cancelled = True
             return outcome
+        write_s = 0.0
         if self.write_xmp and outcome.result.verdict != VERDICT_ERROR:
             self._set_stage(STAGE_WRITE)
+            t = time.perf_counter()
             outcome.written = write_result(self.source_path, outcome.result)
+            write_s = time.perf_counter() - t
+        stages = dict(checked)
+        for stage, seconds in (getattr(outcome.result, "stage_s", None) or {}).items():
+            stages[stage] = stages.get(stage, 0.0) + seconds
+        if write_s or self.write_xmp:
+            stages[STAGE_WRITE] = round(write_s, 3)
+        outcome.timing = PhotoTiming(self.source_path, stages, round(sum(stages.values()), 3),
+                                     failed=outcome.result.verdict == VERDICT_ERROR)
         return outcome
 
 

@@ -46,6 +46,7 @@ from .models import (BIRD_CONFIDENCE_MIN, FOUND_ENHANCED, FOUND_FOCUS_WEAK, FOUN
 from .params import ENH_MANUAL, ENH_NOBIRD, ENH_OFF, PIXELS_BOX, SAM_SCOPE_ALL, AnalysisParams
 from .preview import MASK_FILL, MASK_FILL_GRAY
 from .scoring import ALGORITHM_VERSION, VERDICT_ERROR, VERDICT_NO_BIRD, blank_head_sigma, classify, sigma_to_score
+from .timing import STAGE_DECODE, STAGE_DETECT, STAGE_MEASURE, STAGE_RECHECK, StageClock
 
 _log = get_logger("bird_sharpness")
 
@@ -90,10 +91,7 @@ HEAD_MASK_ERODE_MIN_PX = 4
 HEAD_MASK_ERODE_MAX_PX = 12
 BODY_MASK_ERODE_PX = 15
 BOX_INSET_RATIO = 0.08  # detection boxes include background; measure their core
-# Progress stages reported through ``analyze(..., on_stage=...)``.
-STAGE_DECODE = "decode"
-STAGE_DETECT = "detect"
-STAGE_MEASURE = "measure"
+# Progress stages reported through ``analyze(..., on_stage=...)`` are the timed stages of :mod:`.timing`.
 
 
 def _r3(value) -> Optional[float]:
@@ -152,6 +150,7 @@ class BirdSharpnessResult:
     birds: List[dict] = dc_field(default_factory=list)
     image_long_edge: int = 0
     elapsed_s: float = 0.0
+    stage_s: Dict[str, float] = dc_field(default_factory=dict)  # seconds per stage of this analysis (timing.STAGES)
     error: str = ""
     version: str = ALGORITHM_VERSION
     edge_estimator: str = ESTIMATOR_STANDARD.key
@@ -720,11 +719,19 @@ class BirdSharpnessAnalyzer:
         ``given``: measure these birds (in the loaded image's pixels) instead of detecting;
         the image is not the photo's frame, so no focus box or manual-focus lookup."""
         t0 = time.perf_counter()
+        clock = StageClock()
+        report = on_stage or (lambda stage: None)
+
+        def staged(stage: str) -> None:  # every stage change is also a timing boundary
+            clock.enter(stage)
+            report(stage)
+
         try:
-            result = self._analyze(path, on_stage or (lambda stage: None), cancelled, tracer, image_loader, given)
+            result = self._analyze(path, staged, cancelled, tracer, image_loader, given)
         except Exception as exc:
             _log.error("[BirdSharpness] analysis failed path=%r: %s", path, traceback.format_exc())
             result = BirdSharpnessResult(path=path, verdict=VERDICT_ERROR, error=f"{type(exc).__name__}: {exc}")
+        result.stage_s = clock.finish()
         result.elapsed_s = round(time.perf_counter() - t0, 3)
         if tracer is not None and getattr(tracer, "trace", None) is not None and result.ok:
             tracer.result(result)
@@ -763,6 +770,7 @@ class BirdSharpnessAnalyzer:
                           limit=limit, small_pass=small_pass,
                           detector=str(getattr(self.models, "detector_name", "") or ""), ignored_small=ignored_small)
         if not detections and not cancelled():
+            on_stage(STAGE_RECHECK)
             if focus_px is _UNSET:
                 focus_px = self._focus_box_px(path, image)
             recheck = self._recheck(image, small_bgr, scale, focus_px, cancelled)
@@ -778,6 +786,7 @@ class BirdSharpnessAnalyzer:
 
         enh = self._params.enhanced
         if not detections and not cancelled() and enh.mode != ENH_OFF and (enh.mode == ENH_NOBIRD or manual()):
+            on_stage(STAGE_RECHECK)
             if focus_px is _UNSET:
                 focus_px = self._focus_box_px(path, image)
             found = self._enhanced_search(image, small_bgr, scale, focus_px, cancelled)
