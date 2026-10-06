@@ -36,7 +36,7 @@ from app_common import bird_sharpness_fields as fields
 from app_common.log import get_logger
 
 from .focus import FocusProvider, ManualFocusProvider, default_focus_box, default_manual_focus, focus_window
-from .image_source import AnalysisImage, load_analysis_image
+from .image_source import SOURCE_RAW, AnalysisImage, load_analysis_image, source_loader
 from .metrics import (ESTIMATOR_STANDARD, EdgeBlurField, EdgeEstimator, TileOptions,
                       edge_estimator as get_edge_estimator, edge_stats, full_image_blur, sharpest_tiles_blur,
                       specular_highlights)
@@ -489,6 +489,11 @@ def valid_bounds(image: AnalysisImage) -> Tuple[int, int, int, int]:
     return x1, y1, x2, y2
 
 
+def _no_denoised_lookup(_path: str) -> None:
+    """Without the app's denoise output settings no denoised rendering can be found."""
+    return None
+
+
 def _resize_long_edge(img: np.ndarray, long_edge: int) -> Tuple[np.ndarray, float]:
     h, w = img.shape[:2]
     scale = min(1.0, float(long_edge) / float(max(h, w)))
@@ -609,10 +614,13 @@ class BirdSharpnessAnalyzer:
                  focus_provider: Optional[FocusProvider] = None, max_birds: Optional[int] = None,
                  edge_estimator: Optional[str] = None, tile_options: Optional[TileOptions] = None,
                  manual_focus_provider: Optional[ManualFocusProvider] = None,
-                 params: Optional[AnalysisParams] = None, refiner_provider=None):
+                 params: Optional[AnalysisParams] = None, refiner_provider=None,
+                 denoised_lookup: Optional[Callable[[str], object]] = None):
         """``params`` holds every option (see :mod:`bird_sharpness.params`); ``max_birds``,
         ``edge_estimator`` and ``tile_options`` override it. Without ``models`` the
-        process-wide models of ``params.detector`` are used (shared with other analyzers)."""
+        process-wide models of ``params.detector`` are used (shared with other analyzers).
+        ``denoised_lookup(path)`` finds a photo's denoised rendering for ``params.image_source``
+        ``denoised`` (see :func:`bird_sharpness.image_source.source_loader`)."""
         base = params or AnalysisParams()
         overrides = {k: v for k, v in (("max_birds", max_birds), ("edge_estimator", edge_estimator),
                                        ("tiles", tile_options)) if v is not None}
@@ -624,6 +632,7 @@ class BirdSharpnessAnalyzer:
         if refiner_provider is None:
             from .refine import shared_refiner as refiner_provider
         self.refiner_provider = refiner_provider  # SAM model name -> refiner with .mask(rgb, box)
+        self.denoised_lookup = denoised_lookup
 
     # Options are read per photo, so apps may change them between jobs.
     @property
@@ -669,8 +678,8 @@ class BirdSharpnessAnalyzer:
         return BirdSharpnessAnalyzer(
             self.models if self._explicit_models else None, focus_provider=self.focus_provider,
             manual_focus_provider=self.manual_focus_provider, refiner_provider=self.refiner_provider,
-            params=params or self._params, max_birds=max_birds, edge_estimator=edge_estimator,
-            tile_options=tile_options)
+            denoised_lookup=self.denoised_lookup, params=params or self._params, max_birds=max_birds,
+            edge_estimator=edge_estimator, tile_options=tile_options)
 
     @property
     def estimator(self) -> EdgeEstimator:
@@ -702,6 +711,13 @@ class BirdSharpnessAnalyzer:
         limit = int(self.max_birds or 0)
         return detections[:limit] if limit > 0 else detections
 
+    def image_loader(self) -> Callable[[str], AnalysisImage]:
+        """Decoder of ``params.image_source`` (RAW decode, embedded JPEG, denoised rendering)."""
+        source = self._params.image_source
+        if source == SOURCE_RAW:
+            return load_analysis_image
+        return source_loader(source, denoised_lookup=self.denoised_lookup or _no_denoised_lookup)
+
     def load(self) -> None:
         self.models.load()
 
@@ -714,7 +730,7 @@ class BirdSharpnessAnalyzer:
                 given: Optional["GivenBirds"] = None) -> BirdSharpnessResult:
         """Analyse one photo. ``tracer`` (:class:`~bird_sharpness.trace.AnalysisTracer`)
         records every key step with the exact data used; ``None`` costs nothing.
-        ``image_loader(path)`` replaces the RAW decode (embedded JPEG, denoised image;
+        ``image_loader(path)`` replaces the decode of ``params.image_source`` (:meth:`image_loader`;
         see :mod:`bird_sharpness.image_source`); focus metadata still comes from ``path``.
         ``given``: measure these birds (in the loaded image's pixels) instead of detecting;
         the image is not the photo's frame, so no focus box or manual-focus lookup."""
@@ -742,7 +758,7 @@ class BirdSharpnessAnalyzer:
                  image_loader=None, given: Optional["GivenBirds"] = None) -> BirdSharpnessResult:
         on_stage(STAGE_DECODE)
         t_decode = time.perf_counter()
-        image = (image_loader or load_analysis_image)(path)
+        image = (image_loader or self.image_loader())(path)
         if given is not None:
             return self._analyze_given(path, image, given, on_stage, tracer, time.perf_counter() - t_decode)
         focus_px = _UNSET = object()

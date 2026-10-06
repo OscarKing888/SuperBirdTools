@@ -14,6 +14,7 @@ import re
 from dataclasses import dataclass, field
 from typing import List, Optional
 
+from .image_source import SOURCE_DENOISED, SOURCE_JPEG, SOURCE_RAW
 from .metrics import EDGE_ESTIMATORS, ESTIMATOR_STANDARD, TileOptions
 
 ENH_OFF, ENH_MANUAL, ENH_NOBIRD = "off", "manual", "nobird"
@@ -24,6 +25,7 @@ SAM_SCOPES = (SAM_SCOPE_RECHECKED, SAM_SCOPE_ALL)
 # or the whole box core regardless of masks.
 PIXELS_OUTLINE, PIXELS_BOX = "outline", "box"
 BIRD_PIXELS = (PIXELS_OUTLINE, PIXELS_BOX)
+IMAGE_SOURCES = (SOURCE_RAW, SOURCE_JPEG, SOURCE_DENOISED)
 _MODEL_FILE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}\.pt$")
 
 
@@ -95,6 +97,11 @@ class AnalysisParams:
     # measuring (fragments like a 34 x 30 px sliver of a cut-out); 0 = keep every bird. Applies to
     # every detection stage and to given birds. Note the flock pass exists to find 20-50 px birds.
     min_bird_side: int = 0
+    # Which pixels are measured (image_source.SOURCE_*): the RAW decode the thresholds are calibrated
+    # on (default here and in the CLI), the camera's embedded JPEG (SuperViewer's default user option)
+    # or the denoised rendering (needs the analyzer's ``denoised_lookup``). Non-RAW sources tag the
+    # version, so their results never pass for RAW ones.
+    image_source: str = SOURCE_RAW
 
     @classmethod
     def from_params(cls, params: Optional[dict]) -> "AnalysisParams":
@@ -108,7 +115,8 @@ class AnalysisParams:
         return cls(p.get("max_birds", d.max_birds), p.get("edge_estimator", d.edge_estimator),
                    p.get("detector", d.detector), p.get("sam_model", d.sam_model), p.get("sam_scope", d.sam_scope),
                    enh, TileOptions.from_params(p), p.get("bird_pixels", d.bird_pixels),
-                   p.get("grey_fill", d.grey_fill), p.get("min_bird_side", d.min_bird_side)).normalized()
+                   p.get("grey_fill", d.grey_fill), p.get("min_bird_side", d.min_bird_side),
+                   p.get("image_source", d.image_source)).normalized()
 
     def normalized(self) -> "AnalysisParams":
         return AnalysisParams(
@@ -118,7 +126,8 @@ class AnalysisParams:
             self.sam_scope if self.sam_scope in SAM_SCOPES else SAM_SCOPE_ALL,
             self.enhanced.normalized(), self.tiles.normalized(),
             self.bird_pixels if self.bird_pixels in BIRD_PIXELS else PIXELS_OUTLINE, bool(self.grey_fill),
-            _clamp(self.min_bird_side, 0, 4096, 0))
+            _clamp(self.min_bird_side, 0, 4096, 0),
+            self.image_source if self.image_source in IMAGE_SOURCES else SOURCE_RAW)
 
     def as_params(self) -> dict:
         o = self.normalized()
@@ -127,7 +136,8 @@ class AnalysisParams:
                 "sam_model": o.sam_model, "sam_scope": o.sam_scope, "enh_mode": e.mode,
                 "enh_region_percent": e.region_percent, "enh_grid": e.grid, "enh_imgsz": e.imgsz,
                 "enh_min_conf_percent": e.min_conf_percent, "enh_lift": e.lift, **o.tiles.as_params(),
-                "bird_pixels": o.bird_pixels, "grey_fill": o.grey_fill, "min_bird_side": o.min_bird_side}
+                "bird_pixels": o.bird_pixels, "grey_fill": o.grey_fill, "min_bird_side": o.min_bird_side,
+                "image_source": o.image_source}
 
     def version_tags(self) -> List[str]:
         """Algorithm version suffixes for the non-default settings, in a fixed order."""
@@ -136,7 +146,8 @@ class AnalysisParams:
         for tag in (o.tiles.version_tag(), "" if o.detector == "auto" else o.detector[:-3], o.enhanced.version_tag(),
                     "" if not o.sam_model else f"{o.sam_model[:-3]}-{o.sam_scope}",
                     "" if o.bird_pixels == PIXELS_OUTLINE else o.bird_pixels, "grey" if o.grey_fill else "",
-                    f"min{o.min_bird_side}" if o.min_bird_side else ""):
+                    f"min{o.min_bird_side}" if o.min_bird_side else "",
+                    "" if o.image_source == SOURCE_RAW else o.image_source):
             if tag:
                 tags.append(tag)
         return tags

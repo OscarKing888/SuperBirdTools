@@ -9,6 +9,7 @@ import threading
 from typing import Iterable, Optional
 
 from bird_sharpness import model_catalog
+from bird_sharpness.image_source import SOURCE_DENOISED, SOURCE_JPEG, SOURCE_LABELS, SOURCE_RAW
 from bird_sharpness.metrics import MF_MIN_TILES, TileOptions
 from bird_sharpness.params import (ENH_MANUAL, ENH_NOBIRD, ENH_OFF, PIXELS_BOX, PIXELS_OUTLINE, SAM_SCOPE_ALL,
                                    SAM_SCOPE_RECHECKED, AnalysisParams)
@@ -51,6 +52,14 @@ ENH_CHOICES = ((ENH_OFF, "关闭（默认）"), (ENH_MANUAL, "仅手动对焦的
 SAM_SCOPE_CHOICES = ((SAM_SCOPE_ALL, "全部鸟（默认；每只鸟都经 SAM 抠一次，鸟群较慢）"),
                      (SAM_SCOPE_RECHECKED, "仅复检/增强找到的鸟（更快）"))
 PIXELS_CHOICES = ((PIXELS_OUTLINE, "抠出的鸟体像素（轮廓内，默认）"), (PIXELS_BOX, "整个鸟框区域"))
+# Which pixels are measured (AnalysisParams.image_source); SuperViewer's user option defaults to the JPEG.
+SOURCE_CHOICES = (
+    (SOURCE_JPEG, "相机内嵌 JPEG", "RAW 里相机生成的全尺寸 JPEG（JPEG 照片就是它本身）：解码快，"
+                                 "但经过机内锐化/降噪/压缩；门槛按 RAW 解码标定，结果会有偏移。算法版本带 -jpeg 后缀。"),
+    (SOURCE_RAW, "RAW 解码", "LibRaw 全分辨率解码：清晰度门槛按它标定，最可靠，但每张多花约 1–2 秒。"),
+    (SOURCE_DENOISED, "降噪成片", "按当前降噪输出设置查找降噪后的成片。批量检测时没有成片的照片记为失败（不会自动降噪），"
+                                "计算过程窗口里会先自动降噪。算法版本带 -denoised 后缀。"),
+)
 
 
 def _heading(text: str, parent) -> QLabel:
@@ -134,6 +143,7 @@ def tile_summary(params: dict) -> str:
 def params_summary(params: dict) -> str:
     """One line for status texts: models, enhanced search, tiling."""
     p = AnalysisParams.from_params(params)
+    source = SOURCE_LABELS.get(p.image_source, p.image_source)
     detector = "内置（自动）" if p.detector == "auto" else p.detector
     sam = "关" if not p.sam_model else f"{p.sam_model}（{dict(SAM_SCOPE_CHOICES)[p.sam_scope]}）"
     pixels = ("轮廓内" if p.bird_pixels == PIXELS_OUTLINE else "整个鸟框") + ("，鸟以外涂灰" if p.grey_fill else "")
@@ -143,7 +153,7 @@ def params_summary(params: dict) -> str:
     enh = ("关" if e.mode == ENH_OFF else
            f"{dict(ENH_CHOICES)[e.mode]} · 区域 {e.region_percent}% · {e.grid}×{e.grid} 窗口 · 输入 {e.imgsz} px"
            f" · 门槛 {e.min_conf_percent / 100:.2f}")
-    return f"检测模型 {detector}；SAM 精修 {sam}；测量像素 {pixels}；增强找鸟 {enh}；分块 {tile_summary(params)}"
+    return f"图像 {source}；检测模型 {detector}；SAM 精修 {sam}；测量像素 {pixels}；增强找鸟 {enh}；分块 {tile_summary(params)}"
 
 
 def missing_models(params: dict) -> list:
@@ -223,16 +233,36 @@ class AnalysisParamsForm(QWidget):
 
     ``preview``: the 「预览」 buttons next to the model lists are live (the trace window,
     which has a photo) and emit ``preview_requested(kind, model)``; elsewhere they are
-    shown disabled with a hint.
+    shown disabled with a hint. ``source``: show the image source choice (the trace
+    window has its own switch above the steps and hides it here).
     """
 
     preview_requested = pyqtSignal(str, str)  # "detector" | "sam", model file name
 
-    def __init__(self, parent=None, *, expand_fields: bool = True, preview: bool = False) -> None:
+    def __init__(self, parent=None, *, expand_fields: bool = True, preview: bool = False,
+                 source: bool = True) -> None:
         super().__init__(parent)
         self._preview = bool(preview)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
+
+        self.image_source = QComboBox(self)
+        for key, label, tip in SOURCE_CHOICES:
+            self.image_source.addItem(label, key)
+            self.image_source.setItemData(self.image_source.count() - 1, tip, _TOOLTIP_ROLE)
+        self.image_source.setToolTip("测量哪种图像。默认相机内嵌 JPEG（快）；RAW 解码最准（门槛按它标定）；"
+                                     "降噪成片需先降噪。不同来源的结果带不同的算法版本，「跳过已检测」不会混用。")
+        self.image_source_note = QLabel("", self)
+        self.image_source_note.setWordWrap(True)
+        self.image_source_note.setForegroundRole(_ROLE.PlaceholderText)
+        self.image_source.currentIndexChanged.connect(self._update_source_note)
+        _narrow(self.image_source)
+        if source:
+            layout.addLayout(_grid(self, (("图像来源", self.image_source),), expand_fields))
+            layout.addWidget(self.image_source_note)
+        else:
+            self.image_source.hide()
+            self.image_source_note.hide()
 
         self.max_birds = _spin(self, 0, 999, 1, " 只", "0 = 不限制。设了上限时，压在相机焦点框上的鸟优先测量。", "不限制")
         self.min_bird_side = _spin(self, 0, 4096, 8, " px",
@@ -385,6 +415,10 @@ class AnalysisParamsForm(QWidget):
         self._update_models_status()
 
     # ── values ──
+    def _update_source_note(self, *_args) -> None:
+        index = self.image_source.currentIndex()
+        self.image_source_note.setText(SOURCE_CHOICES[index][2] if 0 <= index < len(SOURCE_CHOICES) else "")
+
     def _update_estimator_note(self, *_args) -> None:
         index = self.estimator.currentIndex()
         self.estimator_note.setText(ESTIMATOR_CHOICES[index][2] if 0 <= index < len(ESTIMATOR_CHOICES) else "")
@@ -400,6 +434,7 @@ class AnalysisParamsForm(QWidget):
 
     def set_params(self, params: Optional[dict]) -> None:
         p = AnalysisParams.from_params(params)
+        self.image_source.setCurrentIndex(max(0, self.image_source.findData(p.image_source)))
         self.max_birds.setValue(p.max_birds)
         self.min_bird_side.setValue(p.min_bird_side)
         self.estimator.setCurrentIndex(max(0, self.estimator.findData(p.edge_estimator)))
@@ -416,6 +451,7 @@ class AnalysisParamsForm(QWidget):
         self.enh_conf.setValue(e.min_conf_percent)
         self.enh_lift.setChecked(e.lift)
         self.tiles.set_params(p.tiles.as_params())
+        self._update_source_note()
         self._update_estimator_note()
         self._update_enabled()
         self._update_models_status()
@@ -423,6 +459,7 @@ class AnalysisParamsForm(QWidget):
 
     def params(self) -> dict:
         return AnalysisParams.from_params({
+            "image_source": self.image_source.currentData() or SOURCE_RAW,
             "max_birds": int(self.max_birds.value()), "min_bird_side": int(self.min_bird_side.value()),
             "edge_estimator": self.estimator.currentData() or "standard",
             "detector": self.detector.currentData() or "auto", "sam_model": self.sam_model.currentData() or "",

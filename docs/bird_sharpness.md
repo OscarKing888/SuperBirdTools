@@ -124,7 +124,7 @@ CLI 导出同样的过程：
 - 相机 JPEG：机内降噪与压缩抹掉最细的羽毛边缘，清晰的照片测得更模糊；机内锐化给模糊的边缘加了反差，模糊的照片测得更清晰，两组间隔减半。
 - 降噪成片：降噪把细羽毛纹理当噪声去掉，清晰照片的 σ 大幅上升（0.83 → 1.50），与失焦照片重叠，无法区分。降噪成片适合看，不适合判断合焦。
 
-计算过程查看器和 CLI `--source` 可以按另外两种图像计算以作对比；它们从不写 XMP。
+图像来源是一个分析参数（`AnalysisParams.image_source`：`raw` / `jpeg` / `denoised`）。库和 CLI 默认 RAW 解码；SuperViewer「设置 → 用户选项 → 鸟清晰度 → 图像来源」默认 **相机内嵌 JPEG**（不用 LibRaw 解码，更快），也可改选 RAW 解码或降噪成片。按上表，内嵌 JPEG 的清晰/模糊间隔约为 RAW 的一半，门槛没有为它重新标定，临界照片更容易在相邻两档之间变动；需要最可靠的判定时选 RAW 解码。RAW 以外的来源在算法版本后追加 `-jpeg` / `-denoised`（如 SuperViewer 默认的 `sbt-blur-v15-jpeg`），「跳过已检测」不会把它们与 RAW 结果混用；从旧版本（RAW）改为默认 JPEG 后，「跳过已检测」会按 JPEG 重新检测一遍。批量检测选「降噪成片」时按当前降噪输出设置查找成片，没有成片的照片记为失败（不会自动降噪）。计算过程窗口按用户选项的图像来源打开，顶部可随时切换（「降噪成片」缺成片时先自动降噪），「保存为默认设置」连同当前来源一起保存；CLI 用 `--source`。
 
 ## 存储（XMP sidecar，不改原图）
 
@@ -146,7 +146,7 @@ CLI 导出同样的过程：
 
 ## 可选模型与参数（批量检测与计算过程窗口共用）
 
-检测流程只有一套（`BirdSharpnessAnalyzer`），所有可调项集中在 [`params.py`](../bird_sharpness/params.py) 的 `AnalysisParams`，只是来源不同：批量检测读 SuperViewer「设置 → 用户选项 → 鸟清晰度」，计算过程窗口「参数」页只改本窗口（可「保存为默认设置」），CLI 用参数。两处界面是同一个表单（`SuperViewer/superviewer/bird_sharpness_params_form.py`），用户选项键与参数名的唯一对应在 `app_common/superviewer_user_options.py` 的 `BIRD_SHARPNESS_PARAM_KEYS`。非默认值按固定顺序记入算法版本后缀（`-dense`、`-t512`、`-mf50-128-10` / `-mf-off`、检测模型名如 `-yolo26x-seg`、`-enh-manual70g2i1024c50`（`-nolift`）、`-sam2.1_t-rechecked` / `-all`、`-box`、`-grey`、`-min64`），「跳过已检测」不会混用不同设置的结果。默认值下结果与版本不变。
+检测流程只有一套（`BirdSharpnessAnalyzer`），所有可调项集中在 [`params.py`](../bird_sharpness/params.py) 的 `AnalysisParams`，只是来源不同：批量检测读 SuperViewer「设置 → 用户选项 → 鸟清晰度」，计算过程窗口「参数」页只改本窗口（可「保存为默认设置」），CLI 用参数。两处界面是同一个表单（`SuperViewer/superviewer/bird_sharpness_params_form.py`），用户选项键与参数名的唯一对应在 `app_common/superviewer_user_options.py` 的 `BIRD_SHARPNESS_PARAM_KEYS`。非默认值按固定顺序记入算法版本后缀（`-dense`、`-t512`、`-mf50-128-10` / `-mf-off`、检测模型名如 `-yolo26x-seg`、`-enh-manual70g2i1024c50`（`-nolift`）、`-sam2.1_t-rechecked` / `-all`、`-box`、`-grey`、`-min64`，最后是图像来源 `-jpeg` / `-denoised`），「跳过已检测」不会混用不同设置的结果。`AnalysisParams` 默认值下结果与版本不变；SuperViewer 的图像来源用户选项默认相机内嵌 JPEG，因此 SuperViewer 默认版本带 `-jpeg`。
 
 - **检测模型**：内置（自动：`yolo11l-seg` 等）或任选 [`model_catalog.py`](../bird_sharpness/model_catalog.py) 中的 35 个 YOLO：YOLO11 / YOLO26 / YOLOv8 的 n–x 分割与检测框模型、YOLO12 n–x（只有检测框权重）。是否有掩膜由模型自身的任务决定。也可放入目录中的其他同类 `.pt`（如自行微调的模型）。批量检测与各计算过程窗口按检测模型共享已加载的模型（`models.shared_models`），结束时一并释放。
 - **SAM 精修**（`refine.py`）：SAM2.1 / SAM2 的 t/s/b/l（78–449 MB）。按鸟框提示抠出看得见的鸟体替换检测模型的掩膜（只保留在鸟框外扩 10% 内；保留的像素不足检测掩膜 20% 时视为抠错对象，不用）。范围：全部鸟（默认：YOLO 检测到的每只鸟都经 SAM 抠一次，鸟群每只约 0.1–0.4 s）或仅复检/增强找到的鸟（更快）。DSC06726（白胸苦恶鸟，糊的鸟被清晰的松针挡住）：YOLO 掩膜连松针一起算进来，头部只剩 11 条 σ 0.44 的针叶边缘，判「清晰」；SAM 抠出的鸟体头部没有可测边缘，判「失焦」，与人眼一致。SAM 不认识鸟，只抠框里的东西：框错了它也会把树枝抠得很干净（DSC05639 的一个增强候选）。模型缺失时整批报错，不会悄悄退回检测模型的掩膜。
@@ -171,7 +171,7 @@ CLI 导出同样的过程：
 .venv/bin/python3 -m bird_sharpness --write-xmp /path/to/folder
 ```
 
-（`-r` 递归，`--json` 逐行 JSON；不加 `--write-xmp` 只输出不写入；`--source jpeg|denoised` 改测相机 JPEG / 降噪成片做对比，`--denoised-dir` 指定降噪成片目录，二者不能与 `--write-xmp` 同用。）
+（`-r` 递归，`--json` 逐行 JSON；不加 `--write-xmp` 只输出不写入；`--source jpeg|denoised` 改测相机 JPEG / 降噪成片（默认 raw），`--denoised-dir` 指定降噪成片目录；与 `--write-xmp` 同用时版本带 `-jpeg` / `-denoised` 后缀。）
 
 单线程约 1.1–1.3 s/张（6144×4096 Sony ARW，Apple Silicon MPS，含 RAW 解码）。
 

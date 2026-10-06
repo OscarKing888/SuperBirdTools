@@ -79,6 +79,7 @@ class BirdSharpnessWorker(QThread):
         self._pool = pool
         self._cancel = threading.Event()
         self.max_parallel = 0
+        self._source_label = ""  # image source of this job, shown in the status line
 
     def stop(self) -> None:
         self._cancel.set()
@@ -129,6 +130,13 @@ class BirdSharpnessWorker(QThread):
             self.status_changed.emit("正在加载检测模型…")
             t_setup = time.perf_counter()
             analyzer = self._holder.analyzer()
+            from bird_sharpness.image_source import SOURCE_DENOISED, SOURCE_LABELS
+
+            source = getattr(getattr(analyzer, "params", None), "image_source", "")
+            if source == SOURCE_DENOISED and getattr(analyzer, "denoised_lookup", None) is None:
+                self.failed.emit("图像来源为「降噪成片」，但降噪功能不可用；请在 设置 → 鸟清晰度 改选其他图像来源。")
+                return
+            self._source_label = SOURCE_LABELS.get(source, "")
             analyzer.load()
             sam_model = getattr(getattr(analyzer, "params", None), "sam_model", "")
             if sam_model:  # fail the job once, not every photo, when the SAM model is missing
@@ -187,7 +195,8 @@ class BirdSharpnessWorker(QThread):
         workers = max(1, int(getattr(pool, "analysis_workers", 1)))
         self.max_parallel = workers
         window = workers * 2
-        self.status_changed.emit(f"正在检测（{workers} 线程并行）…")
+        source = f"，图像：{self._source_label}" if self._source_label else ""
+        self.status_changed.emit(f"正在检测（{workers} 线程并行{source}）…")
         self.progress_changed.emit(0, total, "")
         try:
             token = pool.begin_producer(WorkKind.ANALYSIS)
@@ -279,14 +288,15 @@ def _analysis_options() -> dict:
     """Every bird sharpness option (``AnalysisParams.as_params`` names) from the SuperViewer
     user options (设置 → 鸟清晰度), defaults when unavailable. Batch detection runs on these;
     trace windows start from them and may change them for one window."""
+    from bird_sharpness.image_source import SOURCE_JPEG
     from bird_sharpness.params import AnalysisParams
 
     try:
         from app_common.superviewer_user_options import get_bird_sharpness_params
 
         return AnalysisParams.from_params(get_bird_sharpness_params()).as_params()
-    except Exception:
-        return AnalysisParams().as_params()
+    except Exception:  # SuperViewer measures the embedded JPEG by default (the user option's default)
+        return AnalysisParams(image_source=SOURCE_JPEG).as_params()
 
 
 class BirdSharpnessController(QObject):
@@ -330,6 +340,8 @@ class BirdSharpnessController(QObject):
             from bird_sharpness.params import AnalysisParams
 
             self._analyzer.params = AnalysisParams.from_params(_analysis_options())
+            # Batch detection with image source 降噪成片 finds the renderings with the current denoise settings.
+            self._analyzer.denoised_lookup = self._denoised_lookup if self._denoise is not None else None
             return self._analyzer
 
     @property
@@ -364,8 +376,8 @@ class BirdSharpnessController(QObject):
     def extend_file_menu(self, menu, paths: list[str]) -> None:
         if paths:
             trace_act = menu.addAction("查看清晰度计算过程…")
-            trace_act.setToolTip("逐步显示这张照片的清晰度是如何算出来的（只读，不写入）；"
-                                 "窗口里可切换 RAW 解码 / 相机 JPEG / 降噪成片")
+            trace_act.setToolTip("逐步显示这张照片的清晰度是如何算出来的（只读，不写入）；按设置里的图像来源开始，"
+                                 "窗口里可切换 相机 JPEG / RAW 解码 / 降噪成片")
             trace_act.triggered.connect(lambda checked=False, p=paths[0]: self.show_trace(p))
         if self.busy:
             self._add_stop_action(menu)
@@ -391,8 +403,9 @@ class BirdSharpnessController(QObject):
 
         return find_denoised_preview(path, current_denoise_options())
 
-    def show_trace(self, path: str, image_source: str = "raw"):
-        """Open a step viewer for one photo; the trace runs as a pool ANALYSIS action."""
+    def show_trace(self, path: str, image_source: str | None = None):
+        """Open a step viewer for one photo; the trace runs as a pool ANALYSIS action.
+        ``image_source`` defaults to the user option (设置 → 鸟清晰度 → 图像来源)."""
         if self._shutdown_requested:
             return None
         from .bird_sharpness_trace_view import BirdSharpnessTraceDialog
@@ -404,7 +417,9 @@ class BirdSharpnessController(QObject):
                 source = resolve(path) or path
             except Exception:
                 source = path
-        dialog = BirdSharpnessTraceDialog(self._main, source, image_source, params=_analysis_options())
+        params = _analysis_options()
+        image_source = image_source or params["image_source"]
+        dialog = BirdSharpnessTraceDialog(self._main, source, image_source, params=params)
         from bird_sharpness.image_source import DecodedImageCache
 
         # 「按此参数重新计算」and source switches reuse this window's decode instead of decoding again.
@@ -454,7 +469,8 @@ class BirdSharpnessController(QObject):
 
         # This window's parameters on top of the user options; the shared analyzer stays untouched.
         base = self.analyzer()
-        analyzer = base.with_options(params=AnalysisParams.from_params({**base.params.as_params(), **params}))
+        analyzer = base.with_options(params=AnalysisParams.from_params(
+            {**base.params.as_params(), **params, "image_source": image_source}))
         action = BirdSharpnessTraceAction(analyzer, dialog.path, cancelled=cancel.is_set,
                                           image_source=image_source,
                                           image_cache=getattr(dialog, "image_cache", None),

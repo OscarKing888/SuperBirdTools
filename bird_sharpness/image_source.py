@@ -20,14 +20,20 @@ import numpy as np
 from app_common.image_formats import HEIF_IMAGE_EXTENSIONS, RAW_IMAGE_EXTENSIONS
 
 
-# Which pixels are measured. RAW decode is the calibrated default; the camera's
-# embedded JPEG and a denoised rendering are offered for comparison (trace viewer,
-# CLI ``--source``). Their noise, sharpening and tone differ, so thresholds
-# calibrated on RAW decodes are not re-tuned for them.
+# Which pixels are measured (``AnalysisParams.image_source``). RAW decode is the
+# calibrated library / CLI default; SuperViewer's user option defaults to the camera's
+# embedded JPEG, and a denoised rendering can be chosen too (also in the trace viewer
+# and CLI ``--source``). Their noise, sharpening and tone differ, so thresholds
+# calibrated on RAW decodes are not re-tuned for them; non-RAW results carry a
+# version suffix (``-jpeg`` / ``-denoised``).
 SOURCE_RAW = "raw"
 SOURCE_JPEG = "jpeg"
 SOURCE_DENOISED = "denoised"
 SOURCE_LABELS = {SOURCE_RAW: "RAW 解码", SOURCE_JPEG: "相机 JPEG", SOURCE_DENOISED: "降噪成片"}
+# An embedded JPEG shorter than this is a preview, not the camera's full-size JPEG (Sony's ARW
+# PreviewImage is 1616 px, EXIF thumbnails 160 px): blur radii there are on another scale than the
+# thresholds, so such RAWs are decoded instead (full-size ones: 5616 px and up on the test cameras).
+EMBEDDED_JPEG_MIN_LONG_EDGE = 3000
 
 
 @dataclass
@@ -40,6 +46,7 @@ class AnalysisImage:
     camera_crop: Optional[Tuple[float, float, float, float]] = None
     source: str = SOURCE_RAW
     source_path: str = ""  # file actually decoded (embedded JPEG: the RAW itself)
+    note: str = ""  # why these pixels differ from the requested source (shown in the trace)
 
     @property
     def long_edge(self) -> int:
@@ -112,7 +119,8 @@ def load_embedded_jpeg(path: str) -> AnalysisImage:
     """The camera's embedded full-size JPEG of a RAW (camera frame, no sensor margins).
 
     Non-RAW files are their own JPEG. The camera has sharpened, noise-reduced and
-    compressed these pixels.
+    compressed these pixels. A RAW without a full-size JPEG (none, or one shorter than
+    ``EMBEDDED_JPEG_MIN_LONG_EDGE``) is decoded instead, with ``note`` saying so.
     """
     if Path(path).suffix.lower() not in RAW_IMAGE_EXTENSIONS:
         return replace(_load_pillow(path), source=SOURCE_JPEG, source_path=path)
@@ -123,12 +131,18 @@ def load_embedded_jpeg(path: str) -> AnalysisImage:
     from app_common import thumb_stream
 
     data = thumb_stream.get_raw_preview_jpeg(path)
-    if not data:
-        raise ValueError("RAW 文件里没有内嵌 JPEG")
-    with Image.open(io.BytesIO(data)) as img:
-        img = ImageOps.exif_transpose(img)  # same orientation rule as the Viewer preview
-        rgb8 = np.asarray(img.convert("RGB"), dtype=np.uint8)
-    return _from_rgb8(rgb8, source=SOURCE_JPEG, source_path=path)
+    size = None
+    if data:
+        with Image.open(io.BytesIO(data)) as img:
+            size = img.size
+            if max(size) >= EMBEDDED_JPEG_MIN_LONG_EDGE:
+                img = ImageOps.exif_transpose(img)  # same orientation rule as the Viewer preview
+                rgb8 = np.asarray(img.convert("RGB"), dtype=np.uint8)
+                return _from_rgb8(rgb8, source=SOURCE_JPEG, source_path=path)
+    image = _load_raw(path)
+    image.note = ("RAW 里没有内嵌 JPEG" if size is None else
+                  f"RAW 里只有 {size[0]} × {size[1]} 的内嵌预览，不是全尺寸 JPEG") + "，改用 RAW 解码"
+    return image
 
 
 class DenoisedImageMissing(LookupError):

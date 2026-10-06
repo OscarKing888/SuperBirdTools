@@ -408,16 +408,19 @@ class AnalysisTracer:
         source = getattr(image, "source", "")
         if source == SOURCE_JPEG:
             kind = "相机内嵌 JPEG（机内锐化、降噪、8 位压缩）"
-            desc = ("本次按「相机 JPEG」计算：测的是相机内嵌的全尺寸 JPEG。机内锐化会让边缘看起来更锐、降噪会抹掉细节，"
-                    "阈值是按 RAW 解码标定的，结果仅供对比。JPEG 已是相机画幅，焦点框直接对应。")
+            desc = ("本次按「相机 JPEG」计算（SuperViewer 默认）：测的是相机内嵌的全尺寸 JPEG。机内锐化会让边缘看起来更锐、"
+                    "降噪会抹掉细节，阈值是按 RAW 解码标定的，临界照片可能差一档（算法版本带 -jpeg）。"
+                    "JPEG 已是相机画幅，焦点框直接对应。")
         elif source == SOURCE_DENOISED:
             kind = "降噪成片（NAFNet，RAW 渲染后降噪）"
             desc = ("本次按「降噪成片」计算：测的是降噪后的图像。降噪会改变噪声和细小边缘，阈值是按 RAW 解码标定的，"
-                    "结果仅供对比。")
+                    "结果仅供对比（算法版本带 -denoised）。")
         else:
             kind = "RAW（LibRaw 全分辨率解码）" if image.is_raw else "位图"
-            desc = ("清晰度以全分辨率像素计（100% 观看）。RAW 不用内嵌预览（相机 JPEG 经过机内锐化、降噪，有的还很小），"
-                    "而用 LibRaw 解码；焦点框按相机画幅映射到解码像素上。")
+            desc = ("清晰度以全分辨率像素计（100% 观看）。RAW 用 LibRaw 解码（阈值按它标定；相机 JPEG 经过机内锐化、降噪，"
+                    "有的还很小）；焦点框按相机画幅映射到解码像素上。")
+        if getattr(image, "note", ""):
+            desc = f"{image.note}。{desc}"
         if self.decode_note:
             desc = (f"{self.decode_note}。测量只看给定的鸟的像素（轮廓，没有轮廓按框内核）；"
                     + ("临时图里鸟以外涂成灰色（114）：灰色和轮廓之间是一条完全锐利的人工边缘，测量区域碰到轮廓时"

@@ -221,13 +221,15 @@ class SuperViewerUserOptionsDialog(QDialog):
         self._combo_bird_sharpness_estimator = self._bird_sharpness_form.estimator
         self._bird_sharpness_tiles = self._bird_sharpness_form.tiles
         sharpness_layout.addWidget(self._bird_sharpness_form)
-        sharpness_note = QLabel("默认测量照片中的全部鸟，取最清晰的一只作为整张照片的清晰度。"
+        sharpness_note = QLabel("图像来源：默认测 RAW 里相机内嵌的全尺寸 JPEG（快）；选「RAW 解码」最准，门槛按它标定；"
+                                "「降噪成片」只测已降噪的照片。\n"
+                                "默认测量照片中的全部鸟，取最清晰的一只作为整张照片的清晰度。"
                                 "设了上限时，压在相机焦点框上的鸟优先测量，其余按识别置信度 × 鸟框面积排序。\n"
                                 "边缘统计方式：「标准」是门槛标定所用的方式；「密集」让小鸟的结果更稳，但仍属实验性。\n"
                                 "识别模型：可换用其他 YOLO 检测模型，或用 SAM 重新抠出被枝叶挡住的鸟；未下载的模型可在此下载。\n"
                                 "增强找鸟：没找到鸟时放大窗口再找，放大后的树叶也会被认成鸟，建议先在计算过程窗口里试门槛。\n"
                                 "无鸟时的分块：没有鸟、没有焦点框时测全图；相机记录为手动对焦时测画面中心的焦平面（不是鸟）。\n"
-                                "所有非默认的参数都以单独的算法版本记录，「跳过已检测」不会把不同设置的结果混用。"
+                                "所有非默认的参数（以及 RAW 以外的图像来源）都以单独的算法版本记录，「跳过已检测」不会把不同设置的结果混用。"
                                 "新的设置用于下一次检测和计算过程查看；计算过程窗口的「参数」页可临时改用其他参数对比。", sharpness)
         sharpness_note.setWordWrap(True)
         sharpness_note.setForegroundRole(getattr(QPalette, "ColorRole", QPalette).PlaceholderText)

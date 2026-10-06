@@ -238,7 +238,12 @@ class _FakeFileList:
 
 @pytest.fixture
 def stub_trace_env(monkeypatch):
+    import SuperViewer.superviewer.bird_sharpness_controller as controller_mod
+    from bird_sharpness.params import AnalysisParams
+
     monkeypatch.setattr(bs_models, "check_runtime", lambda: None)
+    # The user option 图像来源 = RAW decode: these traces decode through the stubbed RAW loader.
+    monkeypatch.setattr(controller_mod, "_analysis_options", lambda: AnalysisParams().as_params())
     _install_image(monkeypatch, _scene([(900, 600, 300, 0.3)]))
     gate = threading.Event()
     gate.set()
@@ -276,7 +281,7 @@ def test_context_menu_opens_trace_computed_as_worker_action(stub_trace_env, monk
         action.trigger()
         dialog = opened[0]
         assert dialog.path == os.path.normpath("/photos/a.ARW") or dialog.path == "/photos/a.ARW"
-        assert dialog.source_combo.currentData() == "raw"  # starts on RAW; switch inside the window
+        assert dialog.source_combo.currentData() == "raw"  # starts on the user option; switch inside the window
         assert _wait(lambda: dialog.stack.currentWidget() is dialog.content, timeout=20)
         assert [s.key for s in dialog.steps][-1] == "result"
         assert not Path("/photos/a.xmp").exists()  # read-only
@@ -325,6 +330,42 @@ def test_closing_window_cancels_pending_trace_and_shutdown_waits(stub_trace_env,
         pool.shutdown(timeout=5)
         window.deleteLater()
         _APP.processEvents()
+
+
+def test_trace_starts_on_the_user_image_source_and_saves_the_switched_one(monkeypatch) -> None:
+    from app_common import superviewer_user_options as opts
+    from bird_sharpness.image_source import SOURCE_DENOISED, SOURCE_JPEG, SOURCE_RAW
+
+    monkeypatch.setattr(bs_models, "check_runtime", lambda: None)
+    opts.apply_runtime_user_options(None)  # defaults: 图像来源 = 相机内嵌 JPEG
+    window = QWidget()
+    controller = BirdSharpnessController(window, _FakeFileList(None))
+    runs = []
+    monkeypatch.setattr(controller, "_run_trace", lambda dialog, source: runs.append(source))
+    try:
+        dialog = controller.show_trace("/photos/a.ARW")
+        assert dialog.image_source == SOURCE_JPEG and dialog.source_combo.currentData() == SOURCE_JPEG
+        assert runs == [SOURCE_JPEG] and dialog.params["image_source"] == SOURCE_JPEG
+        assert dialog.params_form.image_source.isHidden()  # one switch: the one above the steps
+        dialog.source_combo.setCurrentIndex(dialog.source_combo.findData(SOURCE_RAW))
+        assert runs == [SOURCE_JPEG, SOURCE_RAW] and dialog.selected_params()["image_source"] == SOURCE_RAW
+        dialog.max_birds_spin.setValue(3)
+        dialog.rerun_btn.click()
+        assert dialog.params["image_source"] == SOURCE_RAW and runs[-1] == SOURCE_RAW
+        assert controller.show_trace("/photos/b.ARW", SOURCE_DENOISED).image_source == SOURCE_DENOISED  # explicit wins
+        # the batch analyzer follows the option and only gets a denoised lookup when denoising is available
+        assert controller.analyzer().params.image_source == SOURCE_JPEG
+        assert controller.analyzer().denoised_lookup is None
+        controller.set_denoise_controller(_FakeDenoise())
+        assert controller.analyzer().denoised_lookup is not None
+    finally:
+        controller.request_shutdown()
+        for widget in QApplication.topLevelWidgets():
+            if isinstance(widget, BirdSharpnessTraceDialog):
+                widget.close()
+        window.deleteLater()
+        _APP.processEvents()
+        opts.apply_runtime_user_options(None)
 
 
 def _source_metric(dialog) -> str:

@@ -50,7 +50,7 @@ def main(argv: List[str] | None = None) -> int:
     parser.add_argument("--json", action="store_true", help="逐行输出 JSON")
     parser.add_argument("--source", choices=("raw", "jpeg", "denoised"), default="raw",
                         help="测量哪种图像：raw = RAW 解码（默认，阈值按它标定）；jpeg = 相机内嵌 JPEG；"
-                             "denoised = 降噪成片（image_denoise 生成的）。后两者仅供对比，不能与 --write-xmp 同用")
+                             "denoised = 降噪成片（image_denoise 生成的）。后两者的算法版本带 -jpeg / -denoised 后缀")
     parser.add_argument("--denoised-dir", default="",
                         help="--source denoised 时降噪成片所在的固定目录；默认找照片旁的 denoised 子目录")
     parser.add_argument("--trace", metavar="DIR",
@@ -112,8 +112,6 @@ def main(argv: List[str] | None = None) -> int:
         return 0
     if not args.paths:
         parser.error("请指定图片或目录")
-    if args.write_xmp and args.source != "raw":
-        parser.error("--write-xmp 只能与 --source raw 一起使用（XMP 里的清晰度按 RAW 解码标定）")
 
     from .models import check_runtime
 
@@ -178,7 +176,8 @@ def main(argv: List[str] | None = None) -> int:
     params = AnalysisParams(max(0, args.max_birds), args.edge_estimator, args.detector, args.sam, args.sam_scope,
                             EnhancedSearch(args.enhanced, args.enh_region_percent, args.enh_grid, args.enh_imgsz,
                                            int(round(args.enh_min_conf * 100)), not args.no_enh_lift),
-                            tiles, args.pixels, bool(args.grey_fill), max(0, args.min_bird_side)).normalized()
+                            tiles, args.pixels, bool(args.grey_fill), max(0, args.min_bird_side),
+                            args.source).normalized()
     from .models import BirdSharpnessModelError, find_model
 
     for name in (params.detector if params.detector != "auto" else "", params.sam_model):

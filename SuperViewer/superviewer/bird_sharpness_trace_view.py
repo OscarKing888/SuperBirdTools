@@ -17,13 +17,13 @@ import numpy as np
 
 from app_common.bird_sharpness_fields import VERDICT_STYLES
 from app_common.toggle_button import ToggleToolButton
-from bird_sharpness.image_source import SOURCE_DENOISED, SOURCE_JPEG, SOURCE_LABELS, SOURCE_RAW
+from bird_sharpness.image_source import SOURCE_LABELS, SOURCE_RAW
 from bird_sharpness.params import AnalysisParams
 from bird_sharpness.scoring import SIGMA_SHARP_MAX
 from bird_sharpness.trace import C_PEAKING, hex_color, peaking_overlay
 
-from .bird_sharpness_params_form import (ESTIMATOR_CHOICES, AnalysisParamsForm, TileParamsForm,  # noqa: F401
-                                         download_models, missing_models, params_summary, tile_summary)
+from .bird_sharpness_params_form import (ESTIMATOR_CHOICES, SOURCE_CHOICES, AnalysisParamsForm,  # noqa: F401
+                                         TileParamsForm, download_models, missing_models, params_summary, tile_summary)
 from .qt_compat import (
     QCheckBox, QComboBox, QDialog, QHBoxLayout, QLabel, QPushButton, QScrollArea, QSplitter, QStackedWidget,
     QToolButton, QVBoxLayout, QWidget, pyqtSignal,
@@ -68,11 +68,6 @@ _CIRCLED = "①②③④⑤⑥⑦⑧⑨⑩⑪⑫⑬⑭⑮⑯⑰⑱⑲⑳"
 _TOOLTIP_ROLE = getattr(getattr(Qt, "ItemDataRole", Qt), "ToolTipRole")
 DEFAULT_TRACE_PARAMS = AnalysisParams().as_params()
 
-SOURCE_CHOICES = (
-    (SOURCE_RAW, "RAW 解码", "LibRaw 全分辨率解码；阈值按它标定（默认，最可靠）"),
-    (SOURCE_JPEG, "相机 JPEG", "相机内嵌的全尺寸 JPEG：机内锐化/降噪/压缩，仅供对比"),
-    (SOURCE_DENOISED, "降噪成片", "NAFNet 降噪后的图；没有时先自动降噪，仅供对比"),
-)
 ALL_BIRDS = -1  # bird selector item: every bird's steps in turn
 PEAKING_MIN, PEAKING_MAX = 0.4, 2.5  # 焦平面 threshold range (px)
 PEAKING_SLIDER_SCALE = 100  # slider ticks per px: 0.01 px steps
@@ -476,8 +471,9 @@ class BirdSharpnessTraceDialog(QDialog):
         super().__init__(parent)
         self.path = path
         self.image_source = image_source
-        # Analysis options for this window only; "保存为默认设置" makes them the user's defaults.
-        self.params = {**DEFAULT_TRACE_PARAMS, **(params or {})}
+        # Analysis options for this window only; "保存为默认设置" makes them the user's defaults
+        # (the image source included: it follows the switch above the steps).
+        self.params = {**DEFAULT_TRACE_PARAMS, **(params or {}), "image_source": image_source}
         self.trace = None
         self.given_input = None  # (temporary image, GivenBirds): measures a model chain window's results
         self.steps: List = []
@@ -714,7 +710,8 @@ class BirdSharpnessTraceDialog(QDialog):
         heading.setFont(font)
         layout.addWidget(heading)
         # The same form as 设置 → 鸟清晰度: batch detection and this window run the same pipeline.
-        self.params_form = AnalysisParamsForm(page, preview=True)
+        # The image source is the switch above the steps, not a second combo here.
+        self.params_form = AnalysisParamsForm(page, preview=True, source=False)
         self.params_form.preview_requested.connect(self.open_model_preview)
         self.max_birds_spin = self.params_form.max_birds
         self.estimator_combo = self.params_form.estimator
@@ -751,7 +748,7 @@ class BirdSharpnessTraceDialog(QDialog):
         self.params_form.set_params(params)
 
     def selected_params(self) -> dict:
-        return self.params_form.params()
+        return {**self.params_form.params(), "image_source": self.image_source}
 
     def _rerun_with_params(self) -> None:
         missing = missing_models(self.selected_params())
@@ -789,6 +786,7 @@ class BirdSharpnessTraceDialog(QDialog):
         source = self.source_combo.itemData(index)
         if source and source != self.image_source:
             self.image_source = source
+            self.params = {**self.params, "image_source": source}
             self.set_loading()
             self.source_changed.emit(self, source)
 

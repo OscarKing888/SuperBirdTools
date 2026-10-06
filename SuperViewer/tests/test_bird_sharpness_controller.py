@@ -290,6 +290,21 @@ def test_missing_eye_model_is_reported_in_progress_window(env) -> None:
     assert not controller._dialog.warning.isHidden()
 
 
+def test_denoised_source_without_denoising_fails_the_job_once(env) -> None:
+    from bird_sharpness.params import AnalysisParams
+
+    controller, _file_list, analyzer, _folder, paths = env
+    analyzer.params = AnalysisParams(image_source="denoised")
+    analyzer.denoised_lookup = None
+    controller.start_for_paths(paths)
+    assert _wait(lambda: not controller.busy)
+    assert analyzer.analyzed == [] and "降噪功能不可用" in controller._dialog.label.text()
+    analyzer.params = AnalysisParams(image_source="jpeg")  # the analyzer decodes the other sources itself
+    controller.start_for_paths(paths)
+    assert _wait(lambda: not controller.busy)
+    assert len(analyzer.analyzed) == 2
+
+
 def test_bird_limit_option_reaches_the_analyzer_and_the_options_dialog():
     from app_common import superviewer_user_options as opts
     from SuperViewer.superviewer.super_viewer_user_options_dialog import SuperViewerUserOptionsDialog
@@ -301,16 +316,23 @@ def test_bird_limit_option_reaches_the_analyzer_and_the_options_dialog():
         est = opts.KEY_BIRD_SHARPNESS_EDGE_ESTIMATOR
         assert controller.analyzer().max_birds == 0  # default: every bird
         assert controller.analyzer().edge_estimator == "standard"
-        assert controller.analyzer().tile_options.mf_center and controller.analyzer().version.endswith("v15")
-        opts.apply_runtime_user_options({key: 6, est: "dense", opts.KEY_BIRD_SHARPNESS_MF_TILE: 128})
+        # default image source: the camera's embedded JPEG, tagged so it never passes for a RAW result
+        assert controller.analyzer().tile_options.mf_center and controller.analyzer().version.endswith("v15-jpeg")
+        opts.apply_runtime_user_options({key: 6, est: "dense", opts.KEY_BIRD_SHARPNESS_MF_TILE: 128,
+                                         opts.KEY_BIRD_SHARPNESS_IMAGE_SOURCE: "raw"})
         assert controller.analyzer().max_birds == 6  # picked up at the next job start
         assert controller.analyzer().edge_estimator == "dense"
         assert controller.analyzer().tile_options.mf_tile == 128
-        assert controller.analyzer().version.endswith("-dense-mf50-128-10")
+        assert controller.analyzer().version.endswith("v15-dense-mf50-128-10")  # RAW decode: no source tag
         dialog = SuperViewerUserOptionsDialog(options={key: 6, est: "dense"})
         try:
             assert dialog._spin_bird_sharpness_max_birds.value() == 6
             assert dialog._combo_bird_sharpness_estimator.currentData() == "dense"
+            form = dialog._bird_sharpness_form
+            assert not form.image_source.isHidden() and form.image_source.currentData() == "jpeg"
+            assert "-jpeg" in form.image_source_note.text()
+            form.image_source.setCurrentIndex(form.image_source.findData("denoised"))
+            assert dialog.selected_options()[opts.KEY_BIRD_SHARPNESS_IMAGE_SOURCE] == "denoised"
             dialog._spin_bird_sharpness_max_birds.setValue(0)
             assert dialog._spin_bird_sharpness_max_birds.text() == "不限制"
             dialog._combo_bird_sharpness_estimator.setCurrentIndex(0)

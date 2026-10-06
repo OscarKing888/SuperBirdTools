@@ -2,7 +2,7 @@
 
 本文按代码的实际执行顺序，用流程图说明一张照片从入队到写入 XMP 的每个环节。算法的背景、标定数据和取舍理由见 [bird_sharpness.md](bird_sharpness.md)；本文只讲“先做什么、再做什么、什么条件走哪条分支”。所有阈值都标注了代码位置，以代码为准。
 
-版本：`sbt-blur-v15`（[scoring.py](../bird_sharpness/scoring.py) `ALGORITHM_VERSION`），非默认参数会追加后缀（见文末）。
+版本：`sbt-blur-v15`（[scoring.py](../bird_sharpness/scoring.py) `ALGORITHM_VERSION`），非默认参数和 RAW 以外的图像来源会追加后缀（见文末；SuperViewer 默认测相机内嵌 JPEG，即 `sbt-blur-v15-jpeg`）。
 
 ## 目录
 
@@ -86,7 +86,8 @@ flowchart LR
     POOL --> ACT["每张一个 BirdSharpnessAction<br/>模型推理在锁内串行，解码/测量并行"]
 ```
 
-- 三处入口共用同一套 `AnalysisParams`（[params.py](../bird_sharpness/params.py)），只是来源不同。默认值下结果和版本号不变。
+- 三处入口共用同一套 `AnalysisParams`（[params.py](../bird_sharpness/params.py)），只是来源不同。`AnalysisParams` 默认值下结果和版本号不变。
+- 例外：图像来源 `image_source` 的库 / CLI 默认是 RAW 解码，而 SuperViewer 用户选项（设置 → 鸟清晰度 → 图像来源）默认 **相机内嵌 JPEG**，所以 SuperViewer 默认写入的版本带 `-jpeg` 后缀（见第 3 节、第 13 节）。计算过程窗口按用户选项的图像来源打开，窗口顶部可切换，「保存为默认设置」连同当前来源一起保存。
 - 模型推理（YOLO / 关键点 / SAM）在 `BirdSharpnessModels` 的锁内串行执行，RAW 解码、预处理和 σ 计算并行。
 
 ### 2.1 分阶段计时（单张与批量）
@@ -120,22 +121,30 @@ flowchart TD
 
 ## 3. 解码全分辨率图像
 
-代码：[image_source.py](../bird_sharpness/image_source.py) `load_analysis_image()`。
+代码：[image_source.py](../bird_sharpness/image_source.py) `load_analysis_image()` / `load_embedded_jpeg()` / `source_loader()`；按 `AnalysisParams.image_source` 选择的解码器是 `BirdSharpnessAnalyzer.image_loader()`（调用方传入 `image_loader` 时以它为准，如计算过程窗口的解码缓存）。
 
 ```mermaid
 flowchart TD
-    A["输入文件"] --> B{"RAW？"}
+    A["输入文件"] --> S{"image_source"}
+    S -->|"raw（库 / CLI 默认）"| B{"RAW？"}
+    S -->|"jpeg（SuperViewer 默认）"| J{"RAW？"}
+    J -->|是| J1["RAW 里最大的内嵌 JPEG<br/>thumb_stream.get_raw_preview_jpeg（JpgFromRaw 优先）<br/>按 EXIF 方向转正；camera_crop = 无（本身就是相机画幅）"]
+    J -->|否| D
+    S -->|denoised| N{"denoised_lookup 找到降噪成片？"}
+    N -->|是| N1["load_image_file：16 位 TIFF 保留全精度<br/>camera_crop 取自降噪成片"]
+    N -->|否| NE["本张失败「没有降噪成片」（批量不自动降噪）<br/>计算过程窗口会先降噪再计算"]
     B -->|是| C["LibRaw 解码（rawpy）<br/>相机白平衡、16 位、LINEAR 去马赛克、不自动提亮"]
     C --> C1["gray = 绿色通道 / 65535（用于测量）<br/>rgb8 = 高 8 位（用于识别）"]
     C --> C2["camera_crop：相机 JPEG 画幅在 RAW 输出中的位置<br/>焦点框按它映射，测量只在画幅内"]
     B -->|否| D["Pillow 解码 JPEG / TIFF 等<br/>gray 取亮度"]
-    C1 --> E["AnalysisImage（rgb8, gray, is_raw, camera_crop）"]
+    C1 --> E["AnalysisImage（rgb8, gray, is_raw, camera_crop, source）"]
     C2 --> E
     D --> E
-    E --> F["计算过程窗口可改用：相机内嵌 JPEG / 降噪成片<br/>仅用于对比，从不写 XMP"]
+    J1 --> E
+    N1 --> E
 ```
 
-要点：不使用 RAW 内嵌预览（机内锐化、降噪和 8 位压缩会改变边缘宽度）。`valid_bounds()` 按 `camera_crop` 裁掉 RAW 输出的黑边，否则黑边的硬边界会被测成“清晰”。
+要点：门槛按 RAW 解码标定。内嵌 JPEG 经过机内锐化、降噪和 8 位压缩，会改变边缘宽度，降噪成片的噪声和细节也不同；这两种来源的结果没有重新标定，版本号带 `-jpeg` / `-denoised` 后缀，「跳过已检测」不会把它们和 RAW 结果混用。SuperViewer 批量检测的图像来源为「降噪成片」而降噪功能不可用时，整个任务开头就失败，不逐张报错。`valid_bounds()` 按 `camera_crop` 裁掉 RAW 输出的黑边，否则黑边的硬边界会被测成“清晰”。
 
 ---
 
@@ -503,6 +512,7 @@ flowchart TD
 | `min_bird_side` | 0（不忽略） | 第 4–6 节：丢掉框长边 < N px 的鸟 | `-min<N>` |
 | `bird_pixels` | outline | 第 7.1 节：轮廓内 / 整个鸟框内核（box 时不做 SAM） | `-box` |
 | `grey_fill` | False | 第 7.1 节：鸟以外涂灰 114 后再测（含鸟眼定位） | `-grey` |
+| `image_source` | raw（库 / CLI）；SuperViewer 用户选项 jpeg | 第 3 节：测 RAW 解码 / 相机内嵌 JPEG / 降噪成片 | `-jpeg` / `-denoised`（排在最后） |
 | `enhanced.*` | off | 第 6 节 | `-enh-<mode><region>g<grid>i<imgsz>c<conf>[-nolift]` |
 | `tiles.full_tile` | 1024 | 第 9 节全图分块 | `-t<n>` |
 | `tiles.mf_center` / `mf_center_percent` / `mf_tile` / `mf_sharpest_percent` | True / 50 / 256 / 10 | 第 9 节手动对焦 | `-mf<pct>-<tile>-<sharp>` 或 `-mf-off` |
