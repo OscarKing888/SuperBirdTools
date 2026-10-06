@@ -13,6 +13,7 @@ from birdstamp.overlays.model import document, new_item
 from birdstamp.overlays.assets import import_image
 from birdstamp.render.text_effects import DEFAULT_TEXT_EFFECTS, TEXT_EFFECT_RANGES
 from .color_editor import ColorEditor
+from .percent_editor import PercentEditor
 from .editor_utils import get_template_context_field_options, template_font_choices
 
 
@@ -48,6 +49,7 @@ class OverlayPanel(QWidget):
         self.selected_id = ''
         self._updating = False
         self._history = OrderedDict()
+        self._percent_drag = None
         self._jobs = []
         self._context_generation = 0
         self._text_timer = QTimer(self)
@@ -104,14 +106,14 @@ class OverlayPanel(QWidget):
         self._combo('align_horizontal','水平对齐', [('左','left'),('居中','center'),('右','right')])
         self._combo('align_vertical','垂直对齐', [('上','top'),('居中','center'),('下','bottom')])
         for key,label in [('x_offset_pct','X 偏移 %'),('y_offset_pct','Y 偏移 %')]:
-            self._spin(key,label,-100,100)
+            self._percent(key,label,-100,100)
         for key,label in [('x','中心 X %'),('y','中心 Y %')]:
-            self._spin(key,label,-10000,10000,factor=100)
-        self._spin('scale','缩放 %',.1,10000,factor=100)
-        self._spin('width','宽度 %',.1,1000,factor=100,kinds=('image','background'))
-        self._spin('height','高度 %',.1,1000,factor=100,kinds=('background',))
+            self._percent(key,label,-10000,10000,factor=100,slider_range=(-100,200))
+        self._percent('scale','缩放 %',.1,10000,factor=100,slider_range=(.1,300))
+        self._percent('width','宽度 %',.1,1000,factor=100,slider_range=(.1,100),kinds=('image','background'))
+        self._percent('height','高度 %',.1,1000,factor=100,slider_range=(.1,100),kinds=('background',))
         self._spin('rotation','旋转 °',-360,360)
-        self._spin('opacity','不透明度 %',0,100)
+        self._percent('opacity','不透明度 %',0,100)
         reset=QPushButton('恢复自动布局'); reset.clicked.connect(lambda:self.edit('layout_mode','auto'))
         self.form.addRow(reset)
         self.reset_layout_button=reset
@@ -139,6 +141,7 @@ class OverlayPanel(QWidget):
                     'shadow_offset_x':'阴影 X','shadow_offset_y':'阴影 Y','shadow_blur':'阴影柔化'}
             if isinstance(value,bool): self._check(key,labels[key],('text',))
             elif isinstance(value,str): self._color(key,labels[key],('text',))
+            elif key=='shadow_opacity': self._percent(key,labels[key],*TEXT_EFFECT_RANGES[key],kinds=('text',))
             else: self._spin(key,labels[key],*TEXT_EFFECT_RANGES[key],kinds=('text',))
         self._combo('banner_background_style','背景样式',[('纯色','solid'),('渐变','gradient_bottom')],kinds=('background',))
         self._color('banner_color','背景颜色',('background',))
@@ -152,7 +155,7 @@ class OverlayPanel(QWidget):
             self._color(key,label,('background',))
         for key,label in [('banner_gradient_top_opacity_pct','顶部不透明度 %'),
                           ('banner_gradient_bottom_opacity_pct','底部不透明度 %'),('banner_gradient_height_pct','自动背景高度 %')]:
-            self._spin(key,label,0,100,kinds=('background',))
+            self._percent(key,label,10 if key=='banner_gradient_height_pct' else 0,100,kinds=('background',))
         hint=QLabel('拖动移动 · 角手柄缩放 · 顶部手柄旋转\nShift 旋转吸附 · Alt 关闭吸附 · 空格平移 · Esc 取消')
         hint.setWordWrap(True); layout.addWidget(hint)
         self._organize_properties()
@@ -201,6 +204,22 @@ class OverlayPanel(QWidget):
         widget.valueChanged.connect(lambda value:self.edit(key,value/factor))
         self._row(key,label,widget,kinds)
 
+    def _percent(self,key,label,low,high,*,factor=1,slider_range=None,kinds=()):
+        label=label.removesuffix(' %')
+        widget=PercentEditor(low,high,slider_range=slider_range,label=label)
+        widget.setProperty('factor',factor)
+        widget.valueChanged.connect(lambda value:self.edit(key,value/factor))
+        widget.dragStarted.connect(self._begin_percent_drag)
+        widget.dragFinished.connect(self._end_percent_drag)
+        self._row(key,label,widget,kinds)
+
+    def _begin_percent_drag(self):
+        self.flush_text()
+        self._percent_drag=(self.context,self.selected_id,False)
+
+    def _end_percent_drag(self):
+        self._percent_drag=None
+
     def _combo(self,key,label,choices,*,kinds=()):
         widget=QComboBox()
         for caption,value in choices: widget.addItem(caption,value)
@@ -215,6 +234,7 @@ class OverlayPanel(QWidget):
         doc=document(payload)
         if self.context==str(context) and self.doc==doc and self.following==following:
             return
+        self._end_percent_drag()
         if self.context != str(context):
             self._context_generation += 1
         elif self.doc != doc:
@@ -233,6 +253,7 @@ class OverlayPanel(QWidget):
 
     def select(self,item_id):
         self.flush_text()
+        self._end_percent_drag()
         self.selected_id=item_id
         self._refresh()
         self.selectionChanged.emit(item_id)
@@ -242,6 +263,7 @@ class OverlayPanel(QWidget):
         # 提交待保存文字会重建列表，先取出 id，避免访问已被 Qt 删除的行。
         item_id=current.data(Qt.ItemDataRole.UserRole) if current else ''
         self.flush_text()
+        self._end_percent_drag()
         self.selected_id=item_id
         self._refresh(); self.selectionChanged.emit(self.selected_id)
 
@@ -278,7 +300,7 @@ class OverlayPanel(QWidget):
                 if key=='tint_color': widget.setEnabled(not item['locked'] and item.get('tint_enabled',False))
                 value=item.get(key)
                 if isinstance(widget,QCheckBox): widget.setChecked(bool(value))
-                elif isinstance(widget,QDoubleSpinBox): widget.setValue(float(value or 0)*widget.property('factor'))
+                elif isinstance(widget,(QDoubleSpinBox,PercentEditor)): widget.setValue(float(value or 0)*widget.property('factor'))
                 elif isinstance(widget,QLineEdit): widget.setText(str(value or ''))
                 elif isinstance(widget,QPlainTextEdit):
                     if widget.toPlainText()!=str(value or ''): widget.setPlainText(str(value or ''))
@@ -302,7 +324,11 @@ class OverlayPanel(QWidget):
         doc=document(doc)
         if self.doc==doc and self.following==following: return
         undo,redo=self._history.setdefault(self.context,([],[]))
-        undo.append((self.doc,self.following,self.selected_id)); redo.clear()
+        grouped=self._percent_drag is not None and self._percent_drag[:2]==(self.context,self.selected_id)
+        if not grouped or not self._percent_drag[2]:
+            undo.append((self.doc,self.following,self.selected_id))
+        if grouped: self._percent_drag=(self.context,self.selected_id,True)
+        redo.clear()
         self._history.move_to_end(self.context)
         while sum(len(a)+len(b) for a,b in self._history.values())>100:
             key=next(iter(self._history)); a,b=self._history[key]
@@ -314,6 +340,7 @@ class OverlayPanel(QWidget):
 
     def _travel(self,back):
         self.flush_text()
+        self._end_percent_drag()
         undo,redo=self._history.get(self.context,([],[]))
         source,target=(undo,redo) if back else (redo,undo)
         if not source: return

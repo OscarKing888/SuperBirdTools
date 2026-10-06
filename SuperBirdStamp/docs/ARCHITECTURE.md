@@ -100,6 +100,8 @@ A/B 的布局与显隐约定见 [A/B 预览工具栏布局](ux/AB_PREVIEW_LAYOUT
 
 图像叠加层复用 `ColorEditor` 的单色选择；`overlays/model.py:normalize_item()` 规范化 `tint_enabled`（旧配置默认关闭）与 `tint_color`。`overlays/render.py:build_scene()` 仅替换已解码图层副本的 RGB，保留素材 alpha 和缓存原色；手势预览与导出共用着色后的场景。颜色属于图层属性，随模板/实例持久化和撤销，并参与源帧缓存签名。
 
+[percent_editor.py](../birdstamp/gui/percent_editor.py) 的 `PercentEditor` 为叠加层的所有百分比参数组合滑动条与精确数值输入；常用滑动区间随超界输入扩展，同步配置不发出编辑信号。`OverlayPanel` 统一处理百分数与归一化值的转换，并把一次滑动手势合并为一条撤销记录，模板和实例共用。
+
 ## 4. 预览与导出图像管线
 
 ```mermaid
