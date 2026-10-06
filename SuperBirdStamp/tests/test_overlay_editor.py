@@ -59,6 +59,31 @@ def test_panel_crud_history_and_context(overlay_doc):
     panel.close(); panel.deleteLater()
 
 
+def test_image_color_controls_undo_lock_and_type_visibility(overlay_doc,tmp_path,monkeypatch):
+    monkeypatch.setattr(config,'get_user_data_dir',lambda:tmp_path/'user')
+    panel=OverlayPanel(); panel.set_document(overlay_doc,'photo:color',following=True)
+    try:
+        panel.select(overlay_doc['overlays'][0]['id'])
+        enabled=panel.widgets['tint_enabled']; color=panel.widgets['tint_color']
+        assert not enabled.isHidden() and not color.isEnabled()
+        enabled.setChecked(True)
+        color.set_value('#00CC77',emit=True)
+        assert color.isEnabled() and not panel.following
+        assert panel.selected()['tint_color']=='#00CC77'
+        panel.undo(); assert panel.selected()['tint_color']=='#FFFFFF'
+        panel.undo(); assert not panel.selected()['tint_enabled'] and panel.following
+        panel.redo(); panel.redo()
+        enabled.setChecked(False)
+        assert not color.isEnabled() and panel.selected()['tint_color']=='#00CC77'
+        enabled.setChecked(True); panel.edit('locked',True)
+        assert not enabled.isEnabled() and not color.isEnabled()
+        panel.select(overlay_doc['overlays'][1]['id'])
+        assert enabled.isHidden() and color.isHidden()
+    finally:
+        panel.close(); panel.deleteLater()
+        QCoreApplication.sendPostedEvents(None,QEvent.Type.DeferredDelete)
+
+
 def test_pending_text_survives_list_selection_and_new_layer(overlay_doc):
     panel=OverlayPanel(); panel.set_document(overlay_doc,'photo:one')
     text_id=overlay_doc['overlays'][1]['id']
@@ -103,6 +128,9 @@ def test_canvas_drag_rotate_cancel_and_scale(overlay_doc):
     session.release(mouse(QEvent.Type.MouseButtonRelease,corner+QPointF(80,80)))
     assert panel.selected()['width']>initial['overlays'][0]['width']
     session.clear(); canvas.close(); panel.close(); image.close()
+    # 在 QApplication 仍存活时释放事件过滤器，避免循环引用拖到解释器退出。
+    canvas.deleteLater(); panel.deleteLater()
+    QCoreApplication.sendPostedEvents(None,QEvent.Type.DeferredDelete)
 
 
 def test_template_manager_new_layers_save_roundtrip(tmp_path,monkeypatch):
@@ -120,7 +148,9 @@ def test_template_manager_new_layers_save_roundtrip(tmp_path,monkeypatch):
     dlg.overlay_panel.undo()
     assert load_template_payload(folder/'test.json')['overlays'][-1]['text']=='自定义文本'
     dlg.overlay_edit_check.setChecked(False)
-    dlg.close(); dlg.deleteLater(); _APP.processEvents()
+    dlg.close(); dlg.deleteLater()
+    QCoreApplication.sendPostedEvents(None,QEvent.Type.DeferredDelete)
+    _APP.processEvents()
 
 
 def test_photo_instance_switch_and_batch(window,overlay_doc,tmp_path):

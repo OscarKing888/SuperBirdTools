@@ -210,6 +210,9 @@ class OverlaySession(QObject):
         painter.restore()
 
     def eventFilter(self,watched,event):
+        # Qt 销毁窗口时仍可能分发事件，此时 Python 循环引用已被清理。
+        if not hasattr(self, 'canvas'):
+            return False
         kind=event.type()
         if kind in (QEvent.Type.FocusOut,QEvent.Type.WindowDeactivate,QEvent.Type.Hide):
             if self.drag: self.cancel()

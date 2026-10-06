@@ -98,6 +98,8 @@ A/B 的布局与显隐约定见 [A/B 预览工具栏布局](ux/AB_PREVIEW_LAYOUT
 
 [color_editor.py](../birdstamp/gui/color_editor.py) 的 `ColorEditor` 统一文本、描边、阴影、Banner、渐变端点及外圈填充的预设/色值/可点击色块；调色板和屏幕吸色使用图标按钮。`AdvancedColorDialog` 提供高级选色和命名调色板，`PaletteStore` 原子保存到用户配置目录的 `color_palettes.json`，所有入口跨会话复用（最多 32 个色板，每板 16 色）。文本和 Banner 支持透明度；渐变和阴影的不透明度仍由各自参数管理。回归见 [test_color_editor.py](../tests/test_color_editor.py)。
 
+图像叠加层复用 `ColorEditor` 的单色选择；`overlays/model.py:normalize_item()` 规范化 `tint_enabled`（旧配置默认关闭）与 `tint_color`。`overlays/render.py:build_scene()` 仅替换已解码图层副本的 RGB，保留素材 alpha 和缓存原色；手势预览与导出共用着色后的场景。颜色属于图层属性，随模板/实例持久化和撤销，并参与源帧缓存签名。
+
 ## 4. 预览与导出图像管线
 
 ```mermaid

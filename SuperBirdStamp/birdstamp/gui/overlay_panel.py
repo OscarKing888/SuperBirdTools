@@ -142,6 +142,9 @@ class OverlayPanel(QWidget):
             else: self._spin(key,labels[key],*TEXT_EFFECT_RANGES[key],kinds=('text',))
         self._combo('banner_background_style','背景样式',[('纯色','solid'),('渐变','gradient_bottom')],kinds=('background',))
         self._color('banner_color','背景颜色',('background',))
+        self._check('tint_enabled','自定义颜色',('image',))
+        self._color('tint_color','图像颜色',('image',))
+        self.widgets['tint_enabled'].setToolTip('将图像改为指定的单色，保留原图透明度；取消勾选恢复原图颜色。')
         self.replace_image_button=QPushButton('替换图像…')
         self.replace_image_button.clicked.connect(lambda:self.import_file(replace_id=self.selected_id))
         self.form.addRow(self.replace_image_button)
@@ -272,6 +275,7 @@ class OverlayPanel(QWidget):
                 if key=='text_source': show &= item.get('text_mode')=='metadata'
                 self.forms.get(key,self.form).setRowVisible(widget,show)
                 widget.setEnabled(not item['locked'] or key in ('locked','visible','name'))
+                if key=='tint_color': widget.setEnabled(not item['locked'] and item.get('tint_enabled',False))
                 value=item.get(key)
                 if isinstance(widget,QCheckBox): widget.setChecked(bool(value))
                 elif isinstance(widget,QDoubleSpinBox): widget.setValue(float(value or 0)*widget.property('factor'))

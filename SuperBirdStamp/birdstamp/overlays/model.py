@@ -4,6 +4,7 @@ from __future__ import annotations
 from copy import deepcopy
 import math
 import uuid
+from PIL import ImageColor
 
 VERSION = 1
 
@@ -26,6 +27,13 @@ def normalize_item(raw, index=0):
     if kind not in ('text', 'image', 'background'):
         raise ValueError(f'不支持的叠加层类型: {kind}')
     item = deepcopy(raw)
+    if kind == 'image':
+        try:
+            rgb = ImageColor.getrgb(str(raw.get('tint_color') or '#FFFFFF'))[:3]
+        except ValueError:
+            rgb = (255, 255, 255)
+        item.update(tint_enabled=flag(raw.get('tint_enabled'), False),
+                    tint_color='#{:02X}{:02X}{:02X}'.format(*rgb))
     if kind == 'background':
         from birdstamp.gui import editor_template as t
         item.update(banner_background_style=t._normalize_banner_background_style(raw.get('banner_background_style')),

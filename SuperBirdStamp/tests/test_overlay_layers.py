@@ -45,8 +45,10 @@ def test_new_normalization_roundtrip_and_legacy_unchanged(tmp_path,overlay_doc):
 
 @pytest.mark.parametrize('size',[(1600,900),(900,1600)])
 @pytest.mark.parametrize('rotation',[0,30,90,179])
-def test_rotated_alpha_preview_matches_pipeline(overlay_doc,size,rotation):
+@pytest.mark.parametrize('tint',[False,True])
+def test_rotated_alpha_preview_matches_pipeline(overlay_doc,size,rotation,tint):
     overlay_doc['overlays'][0]['rotation']=rotation
+    overlay_doc['overlays'][0].update(tint_enabled=tint,tint_color='#00CC77')
     settings=dict(template_payload=overlay_doc,ratio='no_crop',draw_banner=False)
     with Image.new('RGB',size,'#708090') as source:
         result=render_video_frame(VideoFrameJob(Path('bird.jpg'),settings,{}, {},source_image=source))
@@ -56,6 +58,57 @@ def test_rotated_alpha_preview_matches_pipeline(overlay_doc,size,rotation):
         assert max(ImageStat.Stat(ImageChops.difference(expected,preview)).mean)<1.5
         assert preview.tobytes()!=small.tobytes()
         result.close(); small.close(); preview.close(); expected.close()
+
+
+def test_image_tint_preserves_alpha_original_asset_and_opacity(tmp_path):
+    path=tmp_path/'多色透明图像.png'
+    source_pixels=[(255,0,0,0),(255,255,255,64),(0,0,0,128),(0,0,255,255)]
+    with Image.new('RGBA',(4,1)) as image:
+        image.putdata(source_pixels); image.save(path)
+    key,asset=import_image(path)
+    item=new_item('image')
+    item.update(asset_id=key,width=1,opacity=50,tint_enabled=True,tint_color='#33CC66')
+    payload=dict(overlays=[item],overlay_assets={key:asset})
+    scene=build_scene(payload,(4,1))
+    try:
+        assert [scene.layers[0].pixels.getpixel((x,0)) for x in range(4)]==[(51,204,102,p[3]) for p in source_pixels]
+        with Image.new('RGBA',(4,1)) as base:
+            result=compose_scene(base,scene)
+        try:
+            assert [result.getpixel((x,0))[3] for x in range(4)]==[0,32,64,128]
+        finally: result.close()
+    finally: scene.close()
+    with decode_asset(key,payload['overlay_assets']) as original:
+        assert [original.getpixel((x,0)) for x in range(4)]==source_pixels
+    item['tint_enabled']=False
+    scene=build_scene(payload,(4,1))
+    try:
+        assert [scene.layers[0].pixels.getpixel((x,0)) for x in range(4)]==source_pixels
+    finally: scene.close()
+
+
+def test_image_tint_defaults_persistence_and_cache_signature(overlay_doc,tmp_path):
+    old=deepcopy(overlay_doc)
+    old['overlays'][0].pop('tint_enabled',None); old['overlays'][0].pop('tint_color',None)
+    assert not document(old)['overlays'][0]['tint_enabled']
+    item=overlay_doc['overlays'][0]
+    item.update(tint_enabled='true',tint_color='bad-color')
+    assert document(overlay_doc)['overlays'][0]['tint_color']=='#FFFFFF'
+    item.update(tint_enabled=True,tint_color='#12ab34')
+    path=tmp_path/'彩色模板.json'; template.save_template_payload(path,overlay_doc)
+    saved=template.load_template_payload(path)
+    assert saved['overlays'][0]['tint_enabled'] is True
+    assert saved['overlays'][0]['tint_color']=='#12AB34'
+    workspace=tmp_path/'颜色工作区.json'
+    write_workspace_json(workspace,dict(photos=[{'render_settings':{'overlay_override':saved}}]))
+    restored=read_workspace_json(workspace)['photos'][0]['render_settings']['overlay_override']
+    assert restored==saved
+    job=VideoFrameJob(Path('bird.jpg'),dict(template_payload=old,overlay_override=restored),{}, {})
+    colored=source_frame_signature_for_job(job)
+    restored['overlays'][0]['tint_color']='#FF0000'
+    recolored=source_frame_signature_for_job(job)
+    restored['overlays'][0]['tint_enabled']=False
+    assert len({colored,recolored,source_frame_signature_for_job(job)})==3
 
 
 def test_scene_hits_rotated_geometry_and_manual_conversion(overlay_doc):
@@ -148,12 +201,14 @@ def test_crop_aligned_overlay_preview_matches_export(overlay_doc,order):
         for im in (exported,preview,region,expected,renderer.current_source_image): im.close()
 
 
-def test_image_only_cli_overlay(overlay_doc,tmp_path,monkeypatch):
+@pytest.mark.parametrize('tint',[False,True])
+def test_image_only_cli_overlay(overlay_doc,tmp_path,monkeypatch,tint):
     from typer.testing import CliRunner
     from birdstamp import cli,config
     monkeypatch.setattr(config,'get_user_data_dir',lambda:tmp_path/'user')
     source=tmp_path/'source.png'; Image.new('RGB',(800,450)).save(source)
     overlay_doc['overlays']=overlay_doc['overlays'][:1]
+    overlay_doc['overlays'][0].update(tint_enabled=tint,tint_color='#00FF00')
     path=tmp_path/'template.json'; template.save_template_payload(path,dict(overlay_doc,ratio='no_crop'))
     monkeypatch.setattr(cli,'extract_many_with_xmp_priority',lambda *a,**k:{source:{'SourceFile':str(source)}})
     for enabled in (True,False):
@@ -164,3 +219,6 @@ def test_image_only_cli_overlay(overlay_doc,tmp_path,monkeypatch):
         assert result.exit_code==0, result.output+str(result.exception)
         with Image.open(next(output.glob('*.png'))) as rendered:
             assert bool(rendered.getbbox())==enabled
+            if enabled:
+                r,g,b=rendered.getpixel((400,225))[:3]
+                assert (g>0 and r==0) if tint else (r>0 and g==0)

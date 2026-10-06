@@ -108,6 +108,11 @@ def build_scene(payload, size, *, raw_metadata=None, metadata_context=None, phot
                     layers[item['id']] = layer
             elif kind == 'image':
                 pixels = decode_asset(item.get('asset_id'), doc['overlay_assets'])
+                if item['tint_enabled']:
+                    # 仅替换图层副本的 RGB，保留透明边缘和素材缓存中的原色。
+                    with pixels.getchannel('A') as alpha:
+                        pixels.paste(item['tint_color'], (0, 0, pixels.width, pixels.height))
+                        pixels.putalpha(alpha)
                 w = item['width']*size[0]*item['scale']
                 h = w*pixels.height/pixels.width
                 if item['layout_mode']=='auto':
