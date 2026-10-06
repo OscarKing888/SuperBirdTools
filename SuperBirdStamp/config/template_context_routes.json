@@ -28,6 +28,28 @@
       ]
     }
   ],
+  "bird_species_pinyin": [
+    {
+      "provider_id": "exif",
+      "candidate_keys": [
+        "XMP-superpicky:bird_species_pinyin",
+        "bird_species_pinyin",
+        "bird_pinyin",
+        "pinyin_name",
+        "pinyin"
+      ]
+    },
+    {
+      "provider_id": "report_db",
+      "candidate_keys": [
+        "bird_species_pinyin",
+        "report.bird_species_pinyin",
+        "bird_pinyin",
+        "pinyin_name",
+        "pinyin"
+      ]
+    }
+  ],
   "bird_species_en": [
     {
       "provider_id": "exif",

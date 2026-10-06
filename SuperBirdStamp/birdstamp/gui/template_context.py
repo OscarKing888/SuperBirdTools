@@ -17,6 +17,7 @@ from app_common.exif_io.config import load_exif_settings
 from app_common.report_db import PHOTO_COLUMNS, report_pick_value
 from birdstamp.config import resolve_bundled_path
 from birdstamp.meta.normalize import format_settings_line, normalize_metadata
+from birdstamp.meta.pinyin_names import pinyin_for
 
 _PHOTO_AUTHOR_KEY_CANDIDATES: tuple[str, ...] = (
     "XMP-dc:Creator",
@@ -1342,6 +1343,9 @@ class AutoProxyCandidateResult:
 
 _CANONICAL_META_FIELD_DEFINITIONS: tuple[TemplateContextField, ...] = (
     TemplateContextField("bird_species_cn", "鸟种中文名", aliases=("bird", "bird_common")),
+    TemplateContextField(
+        "bird_species_pinyin", "鸟种拼音", aliases=("bird_pinyin", "pinyin_name", "pinyin"),
+    ),
     TemplateContextField("bird_species_en", "鸟种英文名", aliases=("bird_latin", "bird_scientific")),
     TemplateContextField("title", "标题"),
     TemplateContextField("caption", "说明", aliases=("description", "image_description")),
@@ -1614,6 +1618,22 @@ _FALLBACK_AUTO_PROXY_ROUTE_CONFIG: dict[str, list[dict[str, Any]]] = {
             "candidate_keys": [
                 "bird_species_cn",
                 "report.bird_species_cn",
+            ],
+        },
+    ],
+    "bird_species_pinyin": [
+        {
+            "provider_id": TEMPLATE_SOURCE_EXIF,
+            "candidate_keys": [
+                "XMP-superpicky:bird_species_pinyin", "bird_species_pinyin",
+                "bird_pinyin", "pinyin_name", "pinyin",
+            ],
+        },
+        {
+            "provider_id": TEMPLATE_SOURCE_REPORT_DB,
+            "candidate_keys": [
+                "bird_species_pinyin", "report.bird_species_pinyin",
+                "bird_pinyin", "pinyin_name", "pinyin",
             ],
         },
     ],
@@ -2671,6 +2691,12 @@ class ReportDBTemplateContextProvider(TemplateContextProvider):
             context["bird_scientific"] = species_en
             context["bird_species_en"] = species_en
 
+        set_if_value(
+            "bird_species_pinyin",
+            first_row_value("bird_species_pinyin", "bird_pinyin", "pinyin_name", "pinyin"),
+            "bird_pinyin", "pinyin_name", "pinyin", "report.bird_species_pinyin",
+        )
+
         for field in cls.available_fields():
             column_name = field.key
             if column_name not in row:
@@ -3014,6 +3040,7 @@ class AutoProxyTemplateContextProvider(TemplateContextProvider):
         # 合并上下文时先低优先级、后高优先级，让 Exif/sidecar 字段最终胜出。
         for provider_cls in reversed(cls.delegate_provider_classes()):
             context.update(provider_cls.build_context_entries(photo_info))
+        _add_bird_pinyin_context(context)
         return _blank_not_burst_context_values(context)
 
     @classmethod
@@ -3091,6 +3118,23 @@ class AutoProxyTemplateContextProvider(TemplateContextProvider):
             candidates.append(candidate)
         return tuple(candidates)
 
+    @staticmethod
+    def _derived_candidate(
+        photo_info: PhotoInfo, field: TemplateContextField | None,
+    ) -> AutoProxyCandidateResult | None:
+        if field is None or field.key != "bird_species_pinyin":
+            return None
+        # 使用合并后的规范鸟名：XMP 修正优先，文件名推测（如 DSC_001）不能盖过 report 鸟名。
+        merged = build_template_context(photo_info)
+        species = _clean_text(merged.get("bird_species_cn") or merged.get("bird"))
+        return AutoProxyCandidateResult(
+            provider_id="bird_name_lookup",
+            provider_name="鸟名拼音表",
+            source_key="bird_species_cn",
+            display_caption=f"鸟名拼音表:{species}",
+            text_content=pinyin_for(species),
+        )
+
     def inspect_candidates(self, photo_info: PhotoInfo) -> tuple[AutoProxyCandidateResult, ...]:
         info = ensure_photo_info(photo_info)
         field = self.resolve_field_definition(self.source_key)
@@ -3108,6 +3152,9 @@ class AutoProxyTemplateContextProvider(TemplateContextProvider):
                         text_content=_clean_text(provider.get_text_content(info)),
                     )
                 )
+        derived = self._derived_candidate(info, field)
+        if derived is not None:
+            results.append(derived)
         return tuple(results)
 
     def _read_text_value(self, photo_info: PhotoInfo, field: TemplateContextField | None) -> str:
@@ -3121,6 +3168,9 @@ class AutoProxyTemplateContextProvider(TemplateContextProvider):
                     return MISSING_TEMPLATE_TEXT
                 if not _is_missing_template_text(text):
                     return text
+        derived = self._derived_candidate(photo_info, field)
+        if derived is not None and derived.text_content:
+            return derived.text_content
         return MISSING_TEMPLATE_TEXT
 
     def get_display_caption(self, photo_info: PhotoInfo) -> str:
@@ -3187,6 +3237,17 @@ def get_template_context_field_options() -> list[tuple[str, str, str]]:
     return result
 
 
+def _add_bird_pinyin_context(context: TemplateContext) -> None:
+    """自由文本占位符与元数据 Overlay 字段共用显式值优先、查表兜底的规则。"""
+    # 此处只消费已合并的上下文；来源 provider 自身也可能通过占位符进入这里。
+    value = _clean_text(context.get("bird_species_pinyin"))
+    if _is_missing_template_text(value):
+        value = pinyin_for(_clean_text(context.get("bird_species_cn") or context.get("bird")))
+    field = canonical_meta_field_definition("bird_species_pinyin")
+    for key in (field.key, *field.aliases):
+        context[key] = value
+
+
 def build_template_context(
     photo: PhotoInfo | Path | str,
     raw_metadata: Dict[str, Any] | None = None,
@@ -3200,6 +3261,7 @@ def build_template_context(
     context["filename"] = photo_info.path.name
     for provider_cls in iter_template_context_provider_classes():
         context.update(provider_cls.build_context_entries(photo_info))
+    _add_bird_pinyin_context(context)
     return _blank_not_burst_context_values(context)
 
 
