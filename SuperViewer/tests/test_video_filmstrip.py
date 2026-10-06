@@ -26,6 +26,9 @@ def test_real_timeline_is_bounded_changing_and_cached(clip, monkeypatch):
     progress = []
     samples = frames_core.video_frames(clip, 2, fps=24, on_progress=progress.append)
     assert len(samples) == frames_core.FRAME_COUNT
+    # 2 秒片段只有一个关键帧：先快速铺满，再一次顺序解码得到各格精确画面。
+    assert len({item.rgb for item in samples}) == frames_core.FRAME_COUNT
+    assert progress[0][0] is not None and progress[0][1:].count(None) == len(samples) - 1
     assert all(max(item.width, item.height) <= frames_core.FRAME_SIZE for item in samples)
     assert samples[0].seconds < .1 and samples[-1].seconds > 1.9
     assert samples[0].rgb != samples[-1].rgb
@@ -37,15 +40,20 @@ def test_real_timeline_is_bounded_changing_and_cached(clip, monkeypatch):
         frames_core.video_frames(clip, 2, fps=24, cancelled=lambda: True)
 
 
-def test_cache_invalidation_eviction_and_cancellation(tmp_path, monkeypatch):
+def jpeg(color, size=(20, 10)):
     buffer = io.BytesIO()
-    Image.new('RGB', (20, 10), 'green').save(buffer, format='JPEG')
+    Image.new('RGB', size, color).save(buffer, format='JPEG')
+    return buffer.getvalue()
+
+
+def test_cache_invalidation_eviction_and_cancellation(tmp_path, monkeypatch):
     calls = []
 
     def decode(args, **kwargs):
         assert args.index('-ss') < args.index('-i')  # 长视频采用输入定位，不顺序解完整段。
+        assert '-skip_frame' in args  # 各格画面不同时只解关键帧，不做精确定位。
         calls.append(args)
-        return 0, buffer.getvalue(), b''
+        return 0, jpeg((len(calls) * 7 % 256, 90, 40)), b''
 
     monkeypatch.setattr(frames_core, 'run_video_tool', decode)
     monkeypatch.setattr(frames_core, '_CACHE', frames_core.OrderedDict())
@@ -67,6 +75,68 @@ def test_cache_invalidation_eviction_and_cancellation(tmp_path, monkeypatch):
     for index in range(frames_core._CACHE_LIMIT + 2):
         frames_core.video_frames(path, (index + 1) / 1000, fps=1)
     assert len(frames_core._CACHE) == frames_core._CACHE_LIMIT
+
+
+def test_keyframes_fill_coarse_to_fine_then_long_video_refines_shared(tmp_path, monkeypatch):
+    calls = []
+
+    def decode(args, **kwargs):
+        seconds = float(args[args.index('-ss') + 1])
+        keyframe = '-skip_frame' in args
+        calls.append((keyframe, seconds))
+        # 关键帧每 20 秒一个：60 秒内的 32 格只解出 3 种画面，需精确定位。
+        value = int(seconds // 20) if keyframe else int(seconds * 4)
+        return 0, jpeg((value % 256, value // 256, 9)), b''
+
+    monkeypatch.setattr(frames_core, 'run_video_tool', decode)
+    monkeypatch.setattr(frames_core, '_CACHE', frames_core.OrderedDict())
+    path = tmp_path / '长 GOP.mp4'
+    path.write_bytes(b'video')
+    progress = []
+    samples = frames_core.video_frames(path, 64, fps=25, on_progress=progress.append)
+    first = [index for keyframe, index in
+             ((k, round(s / 2 - .5)) for k, s in calls[:4]) if keyframe]
+    assert first == [0, 16, 8, 24]
+    assert sum(keyframe for keyframe, _ in calls) == frames_core.FRAME_COUNT
+    assert sum(not keyframe for keyframe, _ in calls) == frames_core.FRAME_COUNT
+    assert len({item.rgb for item in samples}) == frames_core.FRAME_COUNT
+    assert progress[-1] == samples
+    assert frames_core._coarse_to_fine(5) == [0, 4, 2, 1, 3]
+
+
+def test_keyframe_failure_falls_back_to_exact_and_refine_failure_keeps_strip(tmp_path,
+                                                                            monkeypatch):
+    calls = []
+
+    def decode(args, **kwargs):
+        calls.append(args)
+        if '-skip_frame' in args:
+            return 1, b'', b'no keyframe flags'
+        if '-ss' not in args:
+            return 1, b'', b'sequential failed'
+        return 0, jpeg('green'), b''
+
+    monkeypatch.setattr(frames_core, 'run_video_tool', decode)
+    monkeypatch.setattr(frames_core, '_CACHE', frames_core.OrderedDict())
+    path = tmp_path / '无关键帧.ts'
+    path.write_bytes(b'video')
+    samples = frames_core.video_frames(path, 1, fps=2)
+    assert len(samples) == 2 and all(samples)
+    assert [('-skip_frame' in args, '-ss' in args) for args in calls] == [
+        (True, True), (False, True), (True, True), (False, True), (False, False)]
+
+
+def test_strip_borrows_nearest_frame_until_samples_arrive():
+    strip = FilmstripSlider()
+    try:
+        strip.set_frames((frame('red'), None, None, frame('blue'), None))
+        assert strip._images[1] is strip._images[0]
+        assert strip._images[2] is strip._images[3]
+        assert strip._images[4] is strip._images[3]
+        strip.set_frames((None, None))
+        assert strip._images == (None, None)
+    finally:
+        strip.deleteLater()
 
 
 def test_one_frame_portrait_clip_without_audio(panel, tmp_path):

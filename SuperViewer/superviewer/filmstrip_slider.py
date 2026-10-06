@@ -21,9 +21,15 @@ class FilmstripSlider(WaveformSlider):
         # QImage 只持有当前视频的小图；工作线程从不创建 QPixmap。
         self._frames = tuple(frames)
         fmt = getattr(QImage, 'Format', QImage).Format_RGB888
-        self._images = tuple(QImage(frame.rgb, frame.width, frame.height,
-                                    frame.width * 3, fmt).copy() if frame else None
-                             for frame in self._frames)
+        images = [QImage(frame.rgb, frame.width, frame.height,
+                         frame.width * 3, fmt).copy() if frame else None
+                  for frame in self._frames]
+        ready = [index for index, image in enumerate(images) if image is not None]
+        # 抽帧按由粗到细交付；未到的格先借用最近已到的画面，整条立即铺满。
+        self._images = tuple(
+            image if image is not None or not ready else
+            images[min(ready, key=lambda i: (abs(i - index), i))]
+            for index, image in enumerate(images))
         self._status = status
         self.setToolTip((status or '视频序列帧') + ' · 点击或拖动定位视频')
         self.update()

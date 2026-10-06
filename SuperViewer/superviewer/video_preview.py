@@ -14,7 +14,7 @@ from .preview_panel import PreviewPanel, _qimage_rgb888_format
 from .waveform_slider import WaveformSlider
 from .filmstrip_slider import FilmstripSlider
 from .qt_compat import (
-    QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel, QPushButton, QSlider, QComboBox,
+    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QSlider, QComboBox,
     QStackedWidget, QTableWidget, QTableWidgetItem, QThread, QImage, QPixmap,
     pyqtSignal, Qt, _Horizontal, _AlignCenter, _KeepAspectRatio, _SmoothTransformation,
     _NoEditTriggers,
@@ -177,22 +177,19 @@ class VideoPlayerView(QWidget):
         self.message = QLabel('点击播放视频')
         self.message.setWordWrap(True)
         layout.addWidget(self.message)
-        timeline = QGridLayout()
-        timeline.setVerticalSpacing(2)
-        timeline.setColumnStretch(0, 1)
+        # 两条时间轴占满整行、上下对齐；时间文字放在控制行，不挤占时间轴。
+        timeline = QVBoxLayout()
+        timeline.setSpacing(2)
         self.filmstrip = FilmstripSlider()
         self.filmstrip.setEnabled(False)
         self.filmstrip.position_selected.connect(self._filmstrip_seek)
         self.filmstrip.sliderMoved.connect(self._scrub_time)
-        timeline.addWidget(self.filmstrip, 0, 0)
+        timeline.addWidget(self.filmstrip)
         self.seek = WaveformSlider()
         self.seek.setEnabled(False)
         self.seek.position_selected.connect(self._seek)
         self.seek.sliderMoved.connect(self._scrub_time)
-        self.time_label = QLabel('00:00 / —')
-        self.time_label.setMinimumWidth(125)
-        timeline.addWidget(self.seek, 1, 0)
-        timeline.addWidget(self.time_label, 1, 1)
+        timeline.addWidget(self.seek)
         layout.addLayout(timeline)
         controls = QHBoxLayout()
         self.play = QPushButton('▶ 播放')
@@ -201,6 +198,13 @@ class VideoPlayerView(QWidget):
         self.restart = QPushButton('↺ 重播')
         self.restart.clicked.connect(self._restart)
         controls.addWidget(self.restart)
+        self.time_label = QLabel('00:00 / —')
+        self.time_label.setToolTip('当前位置 / 总时长')
+        # 按最宽的时长文字预留宽度，播放中数字变化时控制行不抖动。
+        self.time_label.setMinimumWidth(
+            self.time_label.fontMetrics().horizontalAdvance('0:00:00 / 0:00:00') + 12)
+        controls.addSpacing(8)
+        controls.addWidget(self.time_label)
         controls.addStretch(1)
         self.speed = QComboBox()
         for speed in (0.25, 0.5, 1, 1.5, 2):
