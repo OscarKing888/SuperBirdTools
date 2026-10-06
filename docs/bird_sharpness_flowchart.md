@@ -86,6 +86,7 @@ flowchart LR
     POOL --> ACT["每张一个 BirdSharpnessAction<br/>模型推理在锁内串行，解码/测量并行"]
 ```
 
+- 目录树菜单由 [`BirdSharpnessController.extend_directory_menu()`](../SuperViewer/superviewer/bird_sharpness_controller.py) 创建：跳过已检测与全部重新检测均提供本目录和包含所有子目录两种范围。「重新检测本目录及子目录全部照片」使用 `recursive=True, skip_existing=False`，由后台扫描所有层级子目录，不跳过已有结果；单张清晰度计算流程不变。
 - 三处入口共用同一套 `AnalysisParams`（[params.py](../bird_sharpness/params.py)），只是来源不同。`AnalysisParams` 默认值下结果和版本号不变。
 - 例外：图像来源 `image_source` 的库 / CLI 默认是 RAW 解码，而 SuperViewer 用户选项（设置 → 鸟清晰度 → 图像来源）默认 **相机内嵌 JPEG**，所以 SuperViewer 默认写入的版本带 `-jpeg` 后缀（见第 3 节、第 13 节）。计算过程窗口按用户选项的图像来源打开，窗口顶部可切换，「保存为默认设置」连同当前来源一起保存。
 - 模型推理（YOLO / 关键点 / SAM）在 `BirdSharpnessModels` 的锁内串行执行，RAW 解码、预处理和 σ 计算并行。

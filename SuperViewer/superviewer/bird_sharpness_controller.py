@@ -363,6 +363,7 @@ class BirdSharpnessController(QObject):
             ("检测本目录（跳过已检测）", False, True),
             ("检测本目录及子目录（跳过已检测）", True, True),
             ("重新检测本目录全部照片", False, False),
+            ("重新检测本目录及子目录全部照片", True, False),
         ):
             act = sub.addAction(text)
             act.triggered.connect(
