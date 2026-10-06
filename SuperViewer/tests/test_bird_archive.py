@@ -1,4 +1,4 @@
-"""照片/XMP 的真实文件归档与失败恢复；所有素材均在临时目录。"""
+"""照片/XMP/ACR 的真实文件归档与失败恢复；所有素材均在临时目录。"""
 from pathlib import Path
 import unicodedata
 
@@ -243,6 +243,9 @@ def test_format_routing_preserves_photo_and_chinese_sidecar(tmp_path, extension,
 @pytest.mark.parametrize('mode', ['move', 'copy'])
 def test_raw_hif_psd_and_exports_split_with_one_xmp_per_directory(tmp_path, mode):
     sources = [photo(tmp_path / 'source', '鸟片' + ext) for ext in ('.ARW', '.HIF', '.PSD', '.PNG', '.JPG')]
+    acr = sources[0].with_suffix('.acr')
+    acr.write_bytes(b'\x00\xffACR masks and adjustments')
+    acr_before = acr.read_bytes()
     before = {p: p.read_bytes() for p in sources}
     sidecar = sources[0].with_suffix('.xmp')
     xmp_before = sidecar.read_bytes()
@@ -257,20 +260,26 @@ def test_raw_hif_psd_and_exports_split_with_one_xmp_per_directory(tmp_path, mode
         assert PhotoMetaDataXMP().read(str(destination))['Title'] == '白鹭'
         assert source.exists() == (mode == 'copy')
     assert sidecar.exists() == (mode == 'copy')
+    assert list(bird.rglob('*.acr')) == [bird / 'RAW/鸟片.acr']
+    assert (bird / 'RAW/鸟片.acr').read_bytes() == acr_before
+    assert acr.exists() == (mode == 'copy')
 
 
 @pytest.mark.parametrize('category', ['RAW', 'PSD', 'Export'])
-def test_collision_in_any_destination_renames_whole_group(tmp_path, category):
+@pytest.mark.parametrize('sidecar_extension', ['.XMP', '.ACR'])
+def test_collision_in_any_destination_renames_whole_group(tmp_path, category, sidecar_extension):
     sources = [photo(tmp_path / 'source', 'DSC01234' + ext) for ext in ('.ARW', '.PSD', '.JPG')]
+    sources[0].with_suffix('.acr').write_bytes(b'new adjustments')
     folder = tmp_path / 'archive/白鹭' / category
     folder.mkdir(parents=True)
-    conflict = folder / 'dsc01234.XMP'
+    conflict = folder / ('dsc01234' + sidecar_extension)
     conflict.write_bytes(b'keep existing metadata')
     result, = run(sources, tmp_path / 'archive', date=False)
     assert result.status == 'success', result.message
     assert {Path(p).stem for p in result.destinations} == {'DSC01234_002'}
     assert conflict.read_bytes() == b'keep existing metadata'
     assert all(Path(p).with_suffix('.xmp').is_file() for p in result.destinations)
+    assert (tmp_path / 'archive/白鹭/RAW/DSC01234_002.acr').read_bytes() == b'new adjustments'
 
 
 @pytest.mark.parametrize('mode', ['move', 'copy'])
@@ -278,7 +287,9 @@ def test_split_sidecar_failure_rolls_back_all_format_directories(tmp_path, monke
     from app_common import file_transactions as tx
     sources = [photo(tmp_path / 'source', '鸟片' + ext) for ext in ('.ARW', '.PSD', '.JPG')]
     sidecar = sources[0].with_suffix('.xmp')
-    originals = {p: p.read_bytes() for p in [*sources, sidecar]}
+    acr = sources[0].with_suffix('.acr')
+    acr.write_bytes(b'\x00\xffACR adjustments')
+    originals = {p: p.read_bytes() for p in [*sources, sidecar, acr]}
     publish = tx.publish_without_overwrite
     def fail_last_xmp(src, dest):
         if Path(dest).parent.name == 'Export' and Path(dest).suffix == '.xmp':
@@ -335,3 +346,100 @@ def test_invalid_format_directory_keeps_source_bundle(tmp_path, kind):
     result, = run([source], bird.parent)
     assert result.status == 'failed'
     assert source.exists() and source.with_suffix('.xmp').exists()
+
+
+@pytest.mark.parametrize('mode', ['move', 'copy'])
+@pytest.mark.parametrize('extension', ['.ARW', '.DNG', '.HIF'])
+def test_acr_follows_raw_with_date_case_insensitive_matching_and_unchanged_bytes(tmp_path, mode, extension):
+    source = photo(tmp_path / '相机', '鸟片_DSC01234' + extension)
+    acr = source.parent / '鸟片_dsc01234.AcR'
+    content = b'\x00\xff\x80ACR opaque binary adjustments'
+    acr.write_bytes(content)
+    unrelated = source.parent / 'other.acr'
+    unrelated.write_bytes(b'keep unrelated')
+    result, = run([source], tmp_path / '名册', mode)
+    assert result.status == 'success', result.message
+    destination = Path(result.destinations[0])
+    assert destination.parent.name == 'RAW'
+    assert destination.with_suffix('.AcR').name == '20261005_083015_鸟片_DSC01234.AcR'
+    assert destination.with_suffix('.AcR').read_bytes() == content
+    assert PhotoMetaDataXMP().read(str(destination))['Title'] == '白鹭'
+    assert acr.exists() == (mode == 'copy')
+    if mode == 'copy':
+        assert acr.read_bytes() == content
+    assert unrelated.read_bytes() == b'keep unrelated'
+
+
+@pytest.mark.parametrize('selected_extension', ['.ARW', '.JPG'])
+def test_partial_selection_preserves_acr_at_source(tmp_path, selected_extension):
+    raw = photo(tmp_path / 'source', 'bird.ARW')
+    jpeg = photo(raw.parent, 'bird.JPG')
+    acr = raw.with_suffix('.acr')
+    acr.write_bytes(b'original adjustments')
+    selected = raw if selected_extension == '.ARW' else jpeg
+    result, = run([selected], tmp_path / 'archive', date=False)
+    assert result.status == 'success', result.message
+    assert acr.read_bytes() == b'original adjustments'
+    assert (jpeg if selected == raw else raw).exists()
+    destination = Path(result.destinations[0]).with_suffix('.acr')
+    assert destination.exists() == (selected == raw)
+    if selected == raw:
+        assert destination.read_bytes() == b'original adjustments'
+
+
+def test_acr_is_carried_even_without_xmp(tmp_path, monkeypatch):
+    source = photo(tmp_path / 'source', 'bird.ARW', bird=None)
+    source.with_suffix('.acr').write_bytes(b'ACR')
+    monkeypatch.setattr(archive.PhotoMetaDataEXIFEmbeded, 'read', lambda self, path: {'Title': '白鹭'})
+    result, = run([source], tmp_path / 'archive', date=False)
+    assert result.status == 'success', result.message
+    destination = Path(result.destinations[0])
+    assert destination.with_suffix('.acr').read_bytes() == b'ACR'
+    assert not source.with_suffix('.acr').exists()
+    assert not destination.with_suffix('.xmp').exists()
+
+
+@pytest.mark.parametrize('mode', ['move', 'copy'])
+@pytest.mark.parametrize('phase', ['staging', 'publishing'])
+def test_acr_failure_rolls_back_entire_bundle(tmp_path, monkeypatch, mode, phase):
+    from app_common import file_transactions as tx
+    source = photo(tmp_path / 'source', 'bird.ARW')
+    acr = source.with_suffix('.acr')
+    acr.write_bytes(b'\x00\xffACR')
+    originals = {p: p.read_bytes() for p in [source, acr, source.with_suffix('.xmp')]}
+    if phase == 'staging':
+        operation_name = 'move' if mode == 'move' else 'copy2'
+        operation = getattr(tx.shutil, operation_name)
+        def fail_acr(src, dest, *args, **kwargs):
+            if Path(src) == acr:
+                raise OSError('ACR 暂存失败')
+            return operation(src, dest, *args, **kwargs)
+        monkeypatch.setattr(tx.shutil, operation_name, fail_acr)
+    else:
+        publish = tx.publish_without_overwrite
+        def fail_acr(src, dest):
+            if Path(dest).suffix == '.acr':
+                raise OSError('ACR 发布失败')
+            return publish(src, dest)
+        monkeypatch.setattr(tx, 'publish_without_overwrite', fail_acr)
+    result, = run([source], tmp_path / 'archive', mode)
+    assert result.status == 'failed' and 'ACR' in result.message
+    assert all(p.read_bytes() == content for p, content in originals.items())
+    assert not [p for p in (tmp_path / 'archive').rglob('*') if p.is_file()]
+
+
+@pytest.mark.parametrize('kind', ['directory', 'symlink'])
+def test_invalid_acr_keeps_source_bundle(tmp_path, kind):
+    source = photo(tmp_path / 'source', 'bird.ARW')
+    acr = source.with_suffix('.acr')
+    if kind == 'directory':
+        acr.mkdir()
+    else:
+        try:
+            acr.symlink_to(tmp_path / 'missing.acr')
+        except OSError:
+            pytest.skip('当前环境不支持创建符号链接')
+    originals = {p: p.read_bytes() for p in [source, source.with_suffix('.xmp')]}
+    result, = run([source], tmp_path / 'archive')
+    assert result.status == 'failed' and 'ACR' in result.message
+    assert all(p.read_bytes() == content for p, content in originals.items())

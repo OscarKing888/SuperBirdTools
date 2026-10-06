@@ -133,7 +133,8 @@ class ArchiveDialog(QDialog):
                       "自动分类：RAW/HIF/HEIF/HEIC → RAW；PSD → PSD；PNG/JPG/JPEG → Export。\n"
                       "其他图片格式保留在鸟名目录。\n"
                       "同名自动追加 _002、_003…，绝不覆盖已有照片。\n"
-                      "XMP 随照片入册；没有鸟名的照片跳过，拍摄日期缺失时标为“日期未知”。", self)
+                      "XMP 随照片入册；同名 ACR 随 RAW/HIF 一起入册。\n"
+                      "没有鸟名的照片跳过，拍摄日期缺失时标为“日期未知”。", self)
         hint.setWordWrap(True)
         layout.addWidget(hint)
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel, self)

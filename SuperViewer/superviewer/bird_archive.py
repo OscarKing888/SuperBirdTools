@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""珍禽入册：无 Qt 的鸟名归档、命名规划及照片/XMP 事务。"""
+"""珍禽入册：无 Qt 的鸟名归档、命名规划及照片/XMP/ACR 事务。"""
 from __future__ import annotations
 
 from contextlib import ExitStack
@@ -152,6 +152,20 @@ def archive_format_directory(path: Path) -> str:
     return ""  # 未指定分类的其它受支持图片仍放在鸟名目录。
 
 
+def find_same_stem_acr_sidecar(path: Path) -> Path | None:
+    """按跨平台同名规则查找 ACR；内容原样转移，不解析或改写调整数据。"""
+    matches = [p for p in path.parent.iterdir()
+               if p.suffix.lower() == ".acr" and name_key(p.stem) == name_key(path.stem)]
+    if len(matches) > 1:
+        raise ValueError("存在多个同名 ACR，请先整理以兼容 Windows：" + "、".join(str(p) for p in matches))
+    if not matches:
+        return None
+    sidecar = matches[0]
+    if sidecar.is_symlink() or not sidecar.is_file():
+        raise ValueError(f"ACR 不是独立文件，请检查后重试：{sidecar}")
+    return sidecar
+
+
 @dataclass
 class ArchiveSession:
     """单批次目录索引；同 stem 的 RAW/JPEG 共用一个命名分配。"""
@@ -218,12 +232,24 @@ class ArchiveSession:
             if len(species) != 1:
                 raise ValueError("同名 RAW/JPEG 的鸟名不一致，请先统一鸟名")
             folders, stem = self.destination(paths, species.pop(), records[0][0])
+            raw_folder = next((folder for path, folder in zip(paths, folders)
+                               if archive_format_directory(path) == "RAW"), None)
+            acr = find_same_stem_acr_sidecar(paths[0]) if raw_folder is not None else None
             # 保留报告中的鸟名、评分、标签等，不能让移动后失去报告上下文。
             for path, (_, report) in zip(paths, records):
                 _preserve_report(str(path), report)
             sidecar = find_same_stem_xmp_sidecar(sources[0])
             pairs = [(str(p), str(folder / (stem + p.suffix))) for p, folder in zip(paths, folders)]
             copied_sidecars = []
+            selected = set(sources)
+            # 未选择的同名照片可能仍依赖侧车；源目录保留副本，不顺带移动照片。
+            keep_source_sidecars = any(
+                str(p) not in selected and name_key(p.stem) == name_key(paths[0].stem)
+                and p.suffix.lower() in IMAGE_EXTENSIONS for p in paths[0].parent.iterdir())
+            if acr is not None:
+                pairs.append((str(acr), str(raw_folder / (stem + acr.suffix))))
+                if keep_source_sidecars:
+                    copied_sidecars.append(str(acr))
             with ExitStack() as cleanup:
                 if sidecar:
                     _make_sidecar_portable(sidecar, sources)
@@ -238,10 +264,7 @@ class ArchiveSession:
                             shutil.copy2(sidecar, replica)
                             pairs.append((str(replica), str(folder / (stem + Path(sidecar).suffix))))
                             copied_sidecars.append(str(replica))
-                    selected = set(sources)
-                    # 未选择的同名照片仍依赖源 XMP；只复制侧车，不顺带移动未选照片。
-                    if any(str(p) not in selected and name_key(p.stem) == name_key(paths[0].stem)
-                           and p.suffix.lower() in IMAGE_EXTENSIONS for p in paths[0].parent.iterdir()):
+                    if keep_source_sidecars:
                         copied_sidecars.append(sidecar)
                 transfer_file_pairs(pairs, action="cut" if self.options.mode == "move" else "copy",
                                     copy_sources=tuple(copied_sidecars), no_replace=True)
@@ -286,7 +309,7 @@ def main(argv=None):
     import argparse
     from app_common.exif_io import close_exiftool_process
 
-    parser = argparse.ArgumentParser(description="珍禽入册：按鸟名归档照片与 XMP")
+    parser = argparse.ArgumentParser(description="珍禽入册：按鸟名归档照片、XMP 与 RAW 的 ACR")
     parser.add_argument("photos", nargs="+")
     parser.add_argument("--directory", required=True)
     parser.add_argument("--mode", choices=("move", "copy"), default="move")

@@ -288,6 +288,8 @@ Qt 进度回调只更新界面/初始需求提示，实际任务完成和需求�
 
 归档前由 `PhotoMetaDataXMP` 把缺少的报告字段保存到源侧车（保留标准 XMP 用户值），对指向源照片的显式 RDF 文件引用规范化为可迁移主资源。照片本身和 `report.db` 不写元数据。文件转移复用共享 [`transfer_file_pairs()`](../../app_common/file_transactions.py)：原剪贴板事务提取到无 Qt 模块，浏览器兼容入口保留；归档使用独占发布，避免覆盖并发出现的目标，跨卷/不支持硬链接时有复制回退，失败恢复照片和侧车；恢复不完整保留完整副本并在结果中报告路径。跨格式目录的额外 XMP 使用有作用域所有者的临时副本作为独立复制源，与所有照片及原侧车参加同一事务，避免一源多目标的回滚歧义，临时副本在成功或失败后均清理。
 
+选中 RAW/HIF/HEIF/HEIC 时，`find_same_stem_acr_sidecar()` 按同目录、Unicode NFC 和大小写无关的 stem 查找 `.acr`，原样带入 `RAW` 子目录，使用照片分配的日期前缀与冲突序号。ACR 不解析、不生成、不写入元数据；不影响仅选择成片时的源 ACR。源目录仍有未选中的同名照片时复制保留源 ACR，否则随移动入册移走；复制入册始终保留源文件。多个匹配 ACR、非普通文件或符号链接会使该组失败。照片、XMP 和 ACR 参加同一个转移事务，ACR 暂存/发布失败及后续 XMP 失败均回滚整组。
+
 CLI 与 GUI 共用核心：在仓库根使用共享 `.venv` 执行 `python -m SuperViewer.superviewer.bird_archive --directory <归档目录> --mode move <照片...>`；`--mode copy` 保留源图，`--no-date-prefix` 保留原名（冲突仍加序号）。CLI 显式关闭 ExifTool。模块由入口静态导入且已包含在现有 `collect_submodules("superviewer")` 打包收集中，鸟章由 QPainter 绘制，无新增资源依赖。回归：[归档规则与真实 XMP](../tests/test_bird_archive.py)、[菜单/配置/线程/真实列表和缩略图窗口](../tests/test_bird_archive_ui.py)、[共享文件事务](../../app_common/tests/test_file_transactions.py)、[现有剪贴板回滚](../../app_common/tests/test_file_browser_clipboard_sidecars.py)。
 
 ## 批量 RGB 降噪
