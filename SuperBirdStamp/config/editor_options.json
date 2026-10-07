@@ -1,4 +1,13 @@
 {
+  "overlay_badge": {
+    "badge_color_mode": "auto",
+    "badge_background": "#64748B",
+    "color": "#FFFFFF",
+    "badge_text_format": "auto",
+    "badge_padding_x": 0.5,
+    "badge_padding_y": 0.25,
+    "badge_radius": 0.35
+  },
   "overlay_new_text_size": 48,
   "overlay_image_width_pct": 30,
   "overlay_snap_distance": 6,

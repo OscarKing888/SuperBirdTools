@@ -15,8 +15,8 @@ FRAME_CACHE_MANIFEST_VERSION = 1
 FRAME_CACHE_ROOT_NAME = "birdstamp_export_cache"
 SOURCE_FRAME_BUCKET_KIND = "rendered_source_frames"
 VIDEO_FRAME_BUCKET_KIND = "video_frames"
-# v10 保留完整 EXIF；v11 支持图像叠加层着色，避免复用旧渲染结果。
-SOURCE_FRAME_CACHE_VERSION = 11
+# v10 保留完整 EXIF；v11 支持图像着色；v12 支持圆角 Badge 与外部稀有度配色。
+SOURCE_FRAME_CACHE_VERSION = 12
 VIDEO_FRAME_CACHE_VERSION = 2
 _DEFAULT_PIPELINE_STAGE_ORDER = (
     "template_crop",
@@ -223,6 +223,9 @@ def build_source_frame_signature(
         "photo_info": dict(photo_info or {}),
         "template_signature": dict(template_signature or {}),
     }
+    # 跟随配色是外部渲染输入，设置变化后不能复用旧徽章帧（含文件模板）。
+    from birdstamp.overlays.badge import load_badge_palette
+    payload["rarity_badge_palette"] = load_badge_palette()
     return hash_payload(payload)
 
 

@@ -474,6 +474,10 @@ SAMPLE_RAW_METADATA: dict[str, Any] = _EDITOR_OPTIONS["sample_raw_metadata"]
 TEXT_EFFECT_DEFAULTS = normalize_text_effects(_load_builtin_editor_options_raw().get("text_effects", {}))
 
 # 叠加层交互默认值统一从内置 editor_options.json 读取。
+# 新建 Badge 的默认外观；旧模板的规范化不受新增默认值影响。
+from birdstamp.overlays.badge import normalize_badge
+BADGE_DEFAULTS = normalize_badge(_load_builtin_editor_options_raw().get("overlay_badge", {}))
+
 OVERLAY_NEW_TEXT_SIZE = _bounded_preview_option("overlay_new_text_size", 48, 8, 300)
 OVERLAY_IMAGE_WIDTH_PCT = _bounded_preview_option("overlay_image_width_pct", 30, 1, 100)
 OVERLAY_SNAP_DISTANCE = _bounded_preview_option("overlay_snap_distance", 6, 0, 30)

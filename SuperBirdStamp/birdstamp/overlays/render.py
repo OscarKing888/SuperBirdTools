@@ -33,7 +33,7 @@ class Layer:
     def manual_item(self, canvas_size):
         item = dict(self.item, layout_mode='manual', x=self.center[0]/canvas_size[0],
                     y=self.center[1]/canvas_size[1], rotation=self.rotation)
-        if item['type'] == 'text':
+        if item['type'] in ('text', 'badge'):
             item['scale'] = self.effective_scale
         else:
             item.update(width=self.size[0]/canvas_size[0], height=self.size[1]/canvas_size[1], scale=1)
@@ -106,6 +106,19 @@ def build_scene(payload, size, *, raw_metadata=None, metadata_context=None, phot
                 layer = _text_layer(t, item, size, photo_info, raw_metadata, text_scale)
                 if layer:
                     layers[item['id']] = layer
+            elif kind == 'badge':
+                from .badge import render_badge
+                pixels = render_badge(t, item, size, photo_info, raw_metadata, text_scale)
+                if pixels is not None:
+                    w, h = pixels.size
+                    if item['layout_mode']=='auto':
+                        x,y = t._compute_template_text_position(canvas_width=size[0],canvas_height=size[1],
+                            text_width=w,text_height=h,align_h=item['align_horizontal'],align_v=item['align_vertical'],
+                            x_offset_pct=number(item['x_offset_pct'])/100,y_offset_pct=number(item['y_offset_pct'])/100)
+                        center = (x+w/2,y+h/2)
+                    else:
+                        center = (item['x']*size[0],item['y']*size[1])
+                    layers[item['id']] = Layer(item,pixels,center,(w,h),item['rotation'],item['scale'])
             elif kind == 'image':
                 pixels = decode_asset(item.get('asset_id'), doc['overlay_assets'])
                 if item['tint_enabled']:
@@ -163,7 +176,7 @@ def build_scene(payload, size, *, raw_metadata=None, metadata_context=None, phot
             layer = layers.pop(item['id'],None)
             if layer is None:
                 continue
-            enabled = {'text':draw_text,'image':draw_images,'background':draw_banner}[item['type']]
+            enabled = {'badge':draw_text,'text':draw_text,'image':draw_images,'background':draw_banner}[item['type']]
             if enabled:
                 result.append(layer)
             else:

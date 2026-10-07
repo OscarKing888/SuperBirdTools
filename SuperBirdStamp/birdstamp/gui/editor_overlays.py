@@ -73,7 +73,7 @@ class _BirdStampOverlaysMixin:
             self._set_pipeline_stage_enabled_map(enabled,save=True,mark_dirty=True)
         item=self.overlay_panel.selected()
         if item:
-            widget={'text':self.draw_text_check,'image':self.draw_images_check,'background':self.draw_banner_check}[item['type']]
+            widget={'badge':self.draw_text_check,'text':self.draw_text_check,'image':self.draw_images_check,'background':self.draw_banner_check}[item['type']]
             widget.setChecked(True)
         self._overlay_session()
         self.render_preview()
