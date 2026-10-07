@@ -207,7 +207,13 @@ def _fingerprint(path):
 def candidate_fields(response, best, *, confirmed):
     """自动确认和手动采纳共用字段映射，完整响应保持原始候选顺序。"""
     confidence = float(best["confidence"])
-    values = {"birdid_response": json.dumps(response, ensure_ascii=False, allow_nan=False, separators=(",", ":"))}
+    # 单列全部返回候选，保留服务顺序和 0 分；采纳其它候选也不缩减此列表。
+    candidates = [{"cn_name": item.get("cn_name", ""), "en_name": item.get("en_name", ""),
+                   "confidence": float(item["confidence"])} for item in response["results"]]
+    values = {
+        "birdid_response": json.dumps(response, ensure_ascii=False, allow_nan=False, separators=(",", ":")),
+        "birdid_candidates": json.dumps(candidates, ensure_ascii=False, allow_nan=False, separators=(",", ":")),
+    }
     if confirmed:
         values.update(bird_species_cn=best.get("cn_name", ""), bird_species_en=best.get("en_name", ""),
                       birdid_confidence=confidence, alt_species_cn="", alt_species_en="", alt_confidence="")

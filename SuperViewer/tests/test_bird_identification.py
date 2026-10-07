@@ -375,3 +375,43 @@ def test_adoption_preserves_newer_data_and_reports_failures(photo, response, mon
     assert adopted.status == ('cancelled' if change == 'cancel' else
                               'failed' if change in {'write_failure', 'bad_index'} else 'skipped')
     assert sidecar.read_bytes() == before
+
+
+@pytest.mark.parametrize('threshold', [50, 99])
+def test_all_candidate_names_confidences_roundtrip_and_adoption(photo, response, monkeypatch, threshold):
+    # 不依赖服务排序，保留英文单名、数值 0 和低置信度候选。
+    response['results'].reverse()
+    response['results'].append({'cn_name': '', 'en_name': 'Common Kingfisher', 'confidence': 0})
+    expected = [
+        {'cn_name': '红耳鹎', 'en_name': 'Red-whiskered Bulbul', 'confidence': 51.2},
+        {'cn_name': '白头鹎', 'en_name': 'Light-vented Bulbul', 'confidence': 95.5},
+        {'cn_name': '', 'en_name': 'Common Kingfisher', 'confidence': 0.0},
+    ]
+    store = PhotoMetaDataXMP()
+    assert store.write(str(photo), {'XMP-dc:Description': '保留中文说明', 'XMP-xmp:Rating': 4})
+    original = photo.read_bytes()
+    result = bird.identify_file(str(photo), client_for(monkeypatch, response, bird.BirdIDOptions(threshold=threshold)))
+    assert result.status == ('success' if threshold == 50 else 'candidate'), result.message
+    meta = store.read(str(photo))
+    assert json.loads(meta['XMP-superpicky:birdid_candidates']) == expected
+    assert json.loads(meta['birdid_candidates']) == expected
+    assert json.loads(result.updates['birdid_candidates']) == expected
+    assert json.loads(meta['birdid_response']) == response
+    if threshold == 50:
+        assert meta['bird_species_cn'] == '白头鹎'
+    adopted = bird.adopt_candidate(result, 0)
+    assert adopted.status == 'success', adopted.message
+    meta = store.read(str(photo))
+    assert meta['bird_species_cn'] == '红耳鹎'
+    assert json.loads(meta['birdid_candidates']) == expected
+    assert meta['Description'] == '保留中文说明' and meta['rating'] == 4
+    assert photo.read_bytes() == original
+    assert '红耳鹎' in photo.with_suffix('.xmp').read_text(encoding='utf-8')
+
+
+def test_new_recognition_replaces_candidate_list(photo, response, monkeypatch):
+    assert bird.identify_file(str(photo), client_for(monkeypatch, response)).status == 'success'
+    response['results'] = [{'cn_name': '家燕', 'en_name': 'Barn Swallow', 'confidence': 91}]
+    result = bird.identify_file(str(photo), client_for(monkeypatch, response))
+    assert result.status == 'success', result.message
+    assert json.loads(PhotoMetaDataXMP().read(str(photo))['birdid_candidates']) == response['results']

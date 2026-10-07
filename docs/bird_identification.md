@@ -50,7 +50,19 @@ SuperPicky 服务端设置。服务会按相对置信度差距裁掉较弱候选
 | 已确认 IUCN 保护等级 | `XMP-superpicky:iucn_category`；兼容 `XMP-iptcCore:IntellectualGenre` |
 | 已确认置信度 | 原有 `XMP-superpicky:birdid_confidence` |
 | 低于阈值的中文/英文候选与置信度 | 原有 `XMP-superpicky:alt_species_cn`、`alt_species_en`、`alt_confidence` |
+| 全部候选鸟名与置信度 | `XMP-superpicky:birdid_candidates`，UTF-8 JSON 数组，每项含 `cn_name`、`en_name`、`confidence`（0–100） |
 | 完整服务响应 | 新增补充记录 `XMP-superpicky:birdid_response`，UTF-8 JSON 文本，存在 XMP 内，不另建 JSON 侧车 |
+
+`birdid_candidates` 是服务实际返回的全部候选的精简列表，保留原始顺序和有效的 0 分，不再次按确认阈值过滤。自动确认、低置信度待确定和手动采纳都同步保存此字段；改选主鸟名不会删掉其它候选。再次识别用新列表替换旧列表，不累计历史。原有 XMP 的完整候选仍可从 `birdid_response.results` 读取，新字段在下次识别或采纳时写入，不自动批量迁移旧侧车。
+
+例如（示例分数）：
+
+```json
+[
+  {"cn_name": "白头鹎", "en_name": "Light-vented Bulbul", "confidence": 95.5},
+  {"cn_name": "红耳鹎", "en_name": "Red-whiskered Bulbul", "confidence": 51.2}
+]
+```
 
 完整响应保留每个候选的 `rank`、`cn_name`、`en_name`、`display_name`、`scientific_name`、
 `confidence`、`description`、`ebird_match`、`pinyin_name`、`gbif_rarity_100`、`iucn_category`，以及 `yolo_info`、`gps_info`、`geo_info`、`warning`。
