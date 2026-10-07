@@ -257,6 +257,8 @@ RAW 源图的去抖动分析、成片预览和导出统一优先读取长边至�
 
 ## 6. 工作区、自动保存与配置
 
+照片列表区的「起始编号」默认读取 `editor_options.json.photo_start_number`（1），按当前列表顺序递增。无 Qt 的 [photo_numbering.py](../birdstamp/photo_numbering.py) 统一校验和计算；[PhotoListWidget](../birdstamp/gui/editor_photo_list.py) 同步编号列、显示角色与 `EditorPhotoInfo.editor_row_number`，排序、删除与追加后仍使用相同规则。模板的 `row_number` / `editor.row_number` / `editor.index` / `editor.sequence` 及 `index` / `sequence` / `seq` 别名均沿用现有 Editor provider。编号变化刷新当前预览上下文并使导出缓存失效，图片、GIF、视频作业采用同一 PhotoInfo 快照。设置保存在工作区 `editor_state.photo_start_number`，旧工作区恢复为 1；这是编辑器列表状态，不新增独立 CLI 参数。回归见 [test_photo_start_number.py](../tests/test_photo_start_number.py)。
+
 [workspace.py](../birdstamp/workspace.py) 是不依赖窗口的 JSON 存取层。`serialize_workspace_path` 保存相对/绝对路径信息，`resolve_workspace_path` 优先使用可用的相对路径，再回退绝对路径。`read_workspace_json` 校验格式；`write_workspace_json` 在同目录写临时文件、flush/fsync 后原子替换，失败清理临时文件。
 
 [editor_workspace.py](../birdstamp/gui/editor_workspace.py) 把 UI 状态映射为工作区：照片顺序与逐图覆盖、report.db 路径、当前/选中照片、排序、全局设置、导出与预览状态。恢复是异步流程：

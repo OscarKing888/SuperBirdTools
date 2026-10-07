@@ -14,6 +14,7 @@ from PyQt6.QtWidgets import QFileDialog, QMessageBox
 from app_common.log import get_logger
 from birdstamp import perf as birdstamp_perf
 from birdstamp.config import get_config_path
+from birdstamp.photo_numbering import normalize_start_number
 from . import editor_options
 from birdstamp.constants import SUPPORTED_EXTENSIONS
 from birdstamp.gui.edit_modes import (
@@ -693,6 +694,7 @@ class _BirdStampWorkspaceMixin:
                 "sort_order": "desc" if sort_order == Qt.SortOrder.DescendingOrder else "asc",
             },
             "editor_state": {
+                "photo_start_number": self.photo_list.start_number(),
                 "current_render_settings": self._build_current_render_settings(),
                 "global_export_settings": self._current_global_export_settings(),
                 "image_export": self._collect_workspace_image_export_state(workspace_path),
@@ -978,6 +980,14 @@ class _BirdStampWorkspaceMixin:
             editor_state = payload.get("editor_state")
             if not isinstance(editor_state, dict):
                 editor_state = {}
+            # 旧工作区固定从 1 开始，不能沿用上一个工作区的编号。
+            start_number = normalize_start_number(editor_state.get("photo_start_number", 1))
+            blocked = self.photo_start_number_spin.blockSignals(True)
+            try:
+                self.photo_start_number_spin.setValue(start_number)
+                self.photo_list.set_start_number(start_number)
+            finally:
+                self.photo_start_number_spin.blockSignals(blocked)
             current_render_settings = self._normalize_render_settings(
                 editor_state.get("current_render_settings"),
                 fallback=self._build_current_render_settings(),

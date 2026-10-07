@@ -145,7 +145,7 @@ These areas have repeatedly regressed during feature work. Treat them as protect
   - Never reintroduce a single synchronous loop that applies thousands of UI row updates on the GUI thread without yielding.
 - Tree numbering column:
   - The `#` column is display-only.
-  - It must always be natural-order numbering from `1`, refreshed after rebuild/filter/sort, and must not become a real sort key.
+  - It must follow the current visible order, refreshed after rebuild/filter/sort, and must not become a real sort key. SuperViewer starts from `1`; SuperBirdStamp uses the workspace's “起始编号” (default `1`) and shares that calculation with template list-number fields.
 
 ## 11) Recommended Design Patterns for This Codebase
 

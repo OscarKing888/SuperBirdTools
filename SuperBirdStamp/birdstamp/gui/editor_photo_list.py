@@ -23,6 +23,7 @@ from app_common.file_browser import FileListPanel
 from app_common.file_browser._browser_core import _exec_menu
 from app_common.file_utils import reveal_in_file_manager
 from birdstamp.constants import SUPPORTED_EXTENSIONS
+from birdstamp.photo_numbering import normalize_start_number, photo_row_number
 from birdstamp.gui import template_context as _template_context
 from birdstamp.gui.editor_utils import path_key as _path_key
 
@@ -134,8 +135,10 @@ class PhotoListWidget(FileListPanel):
     pathsDropped = pyqtSignal(list)
     currentItemChanged = pyqtSignal(object, object)  # (QTreeWidgetItem | None, QTreeWidgetItem | None)
     itemSelectionChanged = pyqtSignal()
+    rowNumbersChanged = pyqtSignal()
 
     def __init__(self) -> None:
+        self._start_number = 1
         super().__init__()
         self._configure_editor_compat_view()
         self._install_drop_event_filters()
@@ -461,7 +464,8 @@ class PhotoListWidget(FileListPanel):
             finally:
                 header.blockSignals(False)
             self._tree_widget.sortByColumn(PHOTO_COL_SEQ, Qt.SortOrder.AscendingOrder)
-        self.refresh_row_numbers()
+        # 先完成排序，再把可见顺序同步到模板编号。
+        self.resort()
 
     def resort(self) -> None:
         """按当前表头排序规则重排；首次默认按编号列升序。"""
@@ -477,14 +481,27 @@ class PhotoListWidget(FileListPanel):
             finally:
                 header.blockSignals(False)
         self._tree_widget.sortByColumn(column, order)
+        self.refresh_row_numbers()
+
+    def start_number(self) -> int:
+        return self._start_number
+
+    def set_start_number(self, value: object) -> None:
+        self._start_number = normalize_start_number(value)
+        self.refresh_row_numbers()
+
+    def row_number(self, row: int) -> int:
+        return photo_row_number(row, self._start_number)
 
     def refresh_row_numbers(self) -> None:
         """刷新首列显示编号，并同步回编辑器 photo info。"""
+        changed = False
         for row in range(self._tree_widget.topLevelItemCount()):
             item = self._tree_widget.topLevelItem(row)
             if item is None:
                 continue
-            display_row_number = row + 1
+            display_row_number = self.row_number(row)
+            changed |= item.data(PHOTO_COL_ROW, PHOTO_LIST_DISPLAY_ROW_ROLE) != display_row_number
             item.setText(PHOTO_COL_SEQ, str(display_row_number))
             item.setTextAlignment(PHOTO_COL_SEQ, int(Qt.AlignmentFlag.AlignCenter))
             item.setToolTip(PHOTO_COL_SEQ, str(display_row_number))
@@ -500,3 +517,11 @@ class PhotoListWidget(FileListPanel):
                         editor_row_number=display_row_number,
                     ),
                 )
+
+        # 大编号仍需完整可见；只调整编号列，不改用户设置的其他列宽。
+        last_number = self.row_number(max(0, self._tree_widget.topLevelItemCount() - 1))
+        self.header().resizeSection(
+            PHOTO_COL_SEQ, max(44, self._tree_widget.fontMetrics().horizontalAdvance(str(last_number)) + 24)
+        )
+        if changed:
+            self.rowNumbersChanged.emit()

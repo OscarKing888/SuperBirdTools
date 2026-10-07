@@ -7,6 +7,7 @@ from functools import lru_cache
 from typing import Any
 
 from birdstamp.config import resolve_bundled_path
+from birdstamp.photo_numbering import normalize_start_number
 from birdstamp.image_dejitter.matching_options import normalize_matching_settings
 from birdstamp.render.text_effects import normalize_text_effects
 from birdstamp.render.text_scale import TEXT_SCALE_DEFAULT, TEXT_SCALE_MIN, TEXT_SCALE_MAX
@@ -432,6 +433,7 @@ DEJITTER_EXPORT_INTERSECTION = _load_builtin_editor_options_raw().get('dejitter_
 PREVIEW_AB_ENABLED = _load_builtin_editor_options_raw().get("preview_ab_enabled", False) is True
 PREVIEW_AB_LINKED = _load_builtin_editor_options_raw().get("preview_ab_linked", False) is True
 PREVIEW_AUTO_FOCUS_CENTER = _load_builtin_editor_options_raw().get("preview_auto_focus_center", False) is True
+PHOTO_START_NUMBER = normalize_start_number(_load_builtin_editor_options_raw().get("photo_start_number", 1))
 
 # 成片两级预览共用最终源像素框；有界小图缓存不参与原尺寸导出。
 DEJITTER_QUICK_MAX_EDGE = _bounded_preview_option("dejitter_quick_max_edge", 768, 128, 1024)

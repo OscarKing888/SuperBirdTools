@@ -61,6 +61,7 @@ from PyQt6.QtWidgets import (
     QScrollArea,
     QSizePolicy,
     QSlider,
+    QSpinBox,
     QSplitter,
     QToolButton,
     QTreeWidget,
@@ -110,6 +111,7 @@ from birdstamp.render.typography import list_available_font_paths, load_font
 
 from birdstamp.gui import editor_core
 from birdstamp.gui import editor_options
+from birdstamp.photo_numbering import MAX_START_NUMBER
 from birdstamp.gui import editor_template
 from birdstamp.gui import editor_utils
 from birdstamp.gui import template_context as _template_context
@@ -1188,6 +1190,20 @@ class BirdStampEditorWindow(
         photo_manage_row.addWidget(clear_btn)
         photos_layout.addLayout(photo_manage_row)
 
+        numbering_row = QHBoxLayout()
+        numbering_label = QLabel("起始编号")
+        self.photo_start_number_spin = QSpinBox()
+        self.photo_start_number_spin.setRange(1, MAX_START_NUMBER)
+        self.photo_start_number_spin.setValue(editor_options.PHOTO_START_NUMBER)
+        self.photo_start_number_spin.setKeyboardTracking(False)
+        self.photo_start_number_spin.setAccessibleName("照片起始编号")
+        self.photo_start_number_spin.setToolTip("第一张照片的编号，后续照片按当前列表顺序递增；模板中的列表编号同步更新。")
+        numbering_label.setBuddy(self.photo_start_number_spin)
+        numbering_row.addWidget(numbering_label)
+        numbering_row.addWidget(self.photo_start_number_spin)
+        numbering_row.addStretch(1)
+        photos_layout.addLayout(numbering_row)
+
         self.photo_list_progress = QProgressBar()
         self.photo_list_progress.setMinimum(0)
         self.photo_list_progress.setMaximum(1)
@@ -1209,6 +1225,9 @@ class BirdStampEditorWindow(
         photos_layout.addWidget(self.receive_progress)
 
         self.photo_list = PhotoListWidget()
+        self.photo_list.set_start_number(self.photo_start_number_spin.value())
+        self.photo_start_number_spin.valueChanged.connect(self._on_photo_start_number_changed)
+        self.photo_list.rowNumbersChanged.connect(self._on_photo_row_numbers_changed)
         self.photo_list.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         self.photo_list.pathsDropped.connect(self._add_photo_paths)
         self.photo_list.currentItemChanged.connect(self._on_photo_selected)
@@ -2889,6 +2908,23 @@ class BirdStampEditorWindow(
     def _on_workspace_state_changed(self, *_args: Any) -> None:
         self._schedule_workspace_autosave()
 
+    def _on_photo_start_number_changed(self, value: int) -> None:
+        self.photo_list.set_start_number(value)
+        self._schedule_workspace_autosave()
+
+    def _on_photo_row_numbers_changed(self) -> None:
+        """编号改变只更新派生上下文，不重新读 EXIF 或解码照片。"""
+        self._mark_all_photo_exports_dirty()
+        self._metadata_context_cache.clear()
+        item = self._find_photo_item_by_path(self.current_path) if self.current_path else None
+        if item is not None:
+            self.current_photo_info = item.data(PHOTO_COL_ROW, PHOTO_LIST_PHOTO_INFO_ROLE)
+            self.current_metadata_context = dict(self.current_metadata_context)
+            self.current_metadata_context.update(
+                _template_context.EditorTemplateContextProvider.build_context_entries(self.current_photo_info)
+            )
+            self._preview_debounce_timer.start()
+
     def _on_preview_scale_preset_activated(self, index: int) -> None:
         percent = self.preview_scale_combo.itemData(index)
         try:
@@ -4461,11 +4497,12 @@ class BirdStampEditorWindow(
         item = PhotoListItem(["", "", "", "", "", "", "", "", "", ""])
         if sequence_value is None or sequence_value <= 0:
             sequence_value = self._next_photo_sequence_value()
+        display_row_number = self.photo_list.row_number(self.photo_list.topLevelItemCount())
         placeholder_metadata = {"SourceFile": str(path)}
         ratio_text = self._format_ratio_display(_parse_ratio_value(current_settings.get("ratio")))
-        item.setText(PHOTO_COL_SEQ, str(sequence_value))
+        item.setText(PHOTO_COL_SEQ, str(display_row_number))
         item.setTextAlignment(PHOTO_COL_SEQ, int(Qt.AlignmentFlag.AlignCenter))
-        item.setToolTip(PHOTO_COL_SEQ, str(sequence_value))
+        item.setToolTip(PHOTO_COL_SEQ, str(display_row_number))
         item.setText(PHOTO_COL_NAME, path.name)
         item.setText(PHOTO_COL_CAPTURE_TIME, "-")
         item.setText(PHOTO_COL_TITLE, "-")
@@ -4496,11 +4533,11 @@ class BirdStampEditorWindow(
                 raw_metadata=placeholder_metadata,
                 sidecar_path="",
                 crop_box=current_settings.get("crop_box"),
-                editor_row_number=sequence_value,
+                editor_row_number=display_row_number,
             ),
         )
         item.setData(PHOTO_COL_ROW, PHOTO_LIST_SEQUENCE_ROLE, sequence_value)
-        item.setData(PHOTO_COL_ROW, PHOTO_LIST_DISPLAY_ROW_ROLE, sequence_value)
+        item.setData(PHOTO_COL_ROW, PHOTO_LIST_DISPLAY_ROW_ROLE, display_row_number)
         item.setData(PHOTO_COL_ROW, PHOTO_LIST_SORT_ROLE, (0, sequence_value))
         item.setToolTip(PHOTO_COL_NAME, str(path))
         item.setToolTip(PHOTO_COL_RATIO, ratio_text)
@@ -5376,7 +5413,10 @@ class BirdStampEditorWindow(
     ) -> dict[str, str]:
         if not _is_complete_list_metadata(raw_metadata):
             return self._fast_metadata_context(photo_info, raw_metadata)
-        cache_key = f"{_path_key(photo_info.path)}:{_metadata_digest_for_cache(raw_metadata)}"
+        cache_key = (
+            f"{_path_key(photo_info.path)}:{_metadata_digest_for_cache(raw_metadata)}"
+            f":{getattr(photo_info, 'editor_row_number', None)}"
+        )
         cached = self._metadata_context_cache.get(cache_key)
         if cached is not None:
             birdstamp_perf.plog("metadata_context cache_hit path=%s", photo_info.path)
@@ -5407,6 +5447,7 @@ class BirdStampEditorWindow(
                     continue
                 context.setdefault(key_text, value_text)
                 context.setdefault(key_text.split(":")[-1], value_text)
+        context.update(_template_context.EditorTemplateContextProvider.build_context_entries(photo_info))
         return context
 
     def _load_raw_metadata(self, path: Path) -> dict[str, Any]:
