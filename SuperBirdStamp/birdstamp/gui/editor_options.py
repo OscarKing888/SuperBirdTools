@@ -8,6 +8,7 @@ from typing import Any
 
 from birdstamp.config import resolve_bundled_path
 from birdstamp.photo_numbering import normalize_start_number
+from birdstamp.overlays.model import number as _overlay_number
 from birdstamp.image_dejitter.matching_options import normalize_matching_settings
 from birdstamp.render.text_effects import normalize_text_effects
 from birdstamp.render.text_scale import TEXT_SCALE_DEFAULT, TEXT_SCALE_MIN, TEXT_SCALE_MAX
@@ -485,3 +486,6 @@ OVERLAY_IMAGE_WIDTH_PCT = _bounded_preview_option("overlay_image_width_pct", 30,
 OVERLAY_SNAP_DISTANCE = _bounded_preview_option("overlay_snap_distance", 6, 0, 30)
 OVERLAY_ROTATION_STEP = _bounded_preview_option("overlay_rotation_step", 15, 1, 90)
 OVERLAY_PREVIEW_MAX_EDGE = _bounded_preview_option("overlay_preview_max_edge", 1600, 400, 4096)
+
+OVERLAY_LAYOUT_GAP_PCT = _overlay_number(_load_builtin_editor_options_raw().get("overlay_layout_gap_pct"), .6, 0, 100)
+OVERLAY_LAYOUT_SNAP_DISTANCE = _bounded_preview_option("overlay_layout_snap_distance", 12, 1, 40)

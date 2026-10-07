@@ -104,7 +104,7 @@ class OverlayPanel(QWidget):
         self._line('name','名称')
         self._check('visible','显示')
         self._check('locked','锁定')
-        self._combo('layout_mode','布局',[('自动布局','auto'),('手动位置','manual')])
+        self._combo('layout_mode','独立定位',[('旧版对齐 / 避让','auto'),('自由拖动','manual')])
         self._combo('align_horizontal','水平对齐', [('左','left'),('居中','center'),('右','right')])
         self._combo('align_vertical','垂直对齐', [('上','top'),('居中','center'),('下','bottom')])
         for key,label in [('x_offset_pct','X 偏移 %'),('y_offset_pct','Y 偏移 %')]:
@@ -173,9 +173,10 @@ class OverlayPanel(QWidget):
         for key,label in [('banner_gradient_top_opacity_pct','顶部不透明度 %'),
                           ('banner_gradient_bottom_opacity_pct','底部不透明度 %'),('banner_gradient_height_pct','自动背景高度 %')]:
             self._percent(key,label,10 if key=='banner_gradient_height_pct' else 0,100,kinds=('background',))
-        hint=QLabel('拖动移动 · 角手柄缩放 · 顶部手柄旋转\nShift 旋转吸附 · Alt 关闭吸附 · 空格平移 · Esc 取消')
+        hint=QLabel('拖到相邻边缘自动组成行 / 列；文字变化时自动排开。\n⌘/Ctrl 拖动整组 · Alt 拖出组合且关闭吸附\n角手柄缩放 · Shift 旋转吸附 · 空格平移 · Esc 取消')
         hint.setWordWrap(True); layout.addWidget(hint)
         self._organize_properties()
+        self._build_layout_controls()
         self._refresh()
 
     def _organize_properties(self):
@@ -197,6 +198,103 @@ class OverlayPanel(QWidget):
             self.form.takeRow(widget); forms[group].addRow(widget)
         self.form.addRow(self.tabs)
         self.setMinimumWidth(0)
+
+    def _build_layout_controls(self):
+        self.layout_box = QGroupBox('自动行 / 列组合')
+        form = QFormLayout(self.layout_box)
+        self.layout_group = QComboBox()
+        self.layout_group.currentIndexChanged.connect(lambda _: self._layout_properties())
+        form.addRow('编辑组合', self.layout_group)
+        self.layout_direction = QComboBox()
+        for label, key in [('行：从左到右', 'row'), ('列：从上到下', 'down'), ('列：从下到上', 'up')]:
+            self.layout_direction.addItem(label, key)
+        self.layout_direction.activated.connect(lambda _: self._edit_layout('direction', self.layout_direction.currentData()))
+        form.addRow('排列方向', self.layout_direction)
+        self.layout_gap = PercentEditor(0, 100, slider_range=(0, 5), label='元素间距')
+        self.layout_gap.setToolTip('按成片短边的百分比计算；设为 0 可紧贴排列。')
+        self.layout_gap.dragStarted.connect(self._begin_percent_drag)
+        self.layout_gap.dragFinished.connect(self._end_percent_drag)
+        self.layout_gap.valueChanged.connect(lambda value: self._edit_layout('gap', value/100))
+        form.addRow('元素间距', self.layout_gap)
+        self.layout_align = QComboBox()
+        for label, key in [('起始边', 'start'), ('居中', 'center'), ('末尾边', 'end')]:
+            self.layout_align.addItem(label, key)
+        self.layout_align.activated.connect(lambda _: self._edit_layout('align', self.layout_align.currentData()))
+        self.layout_align.setToolTip('行：顶部 / 居中 / 底部；列：左侧 / 居中 / 右侧')
+        form.addRow('交叉方向对齐', self.layout_align)
+        self.layout_anchor = QComboBox()
+        for y, vertical in ((0, '上'), (.5, '中'), (1, '下')):
+            for x, horizontal in ((0, '左'), (.5, '中'), (1, '右')):
+                self.layout_anchor.addItem(vertical+horizontal, (x, y))
+        self.layout_anchor.activated.connect(self._anchor_layout)
+        form.addRow('整组固定边', self.layout_anchor)
+        self.detach_button = QPushButton('移出组合（保留位置）')
+        self.detach_button.clicked.connect(self._detach_layout)
+        form.addRow(self.detach_button)
+        self.dissolve_button = QPushButton('解散此组合')
+        self.dissolve_button.clicked.connect(self._dissolve_layout)
+        form.addRow(self.dissolve_button)
+        self.forms['layout_mode'].insertRow(0, self.layout_box)
+        self.advanced_geometry = QCheckBox('精确位置 / 兼容设置')
+        self.advanced_geometry.toggled.connect(lambda _: self._properties())
+        self.forms['layout_mode'].insertRow(1, self.advanced_geometry)
+        self.tabs.setTabText(1, '布局')
+
+    def _layout_properties(self):
+        from birdstamp.overlays.layout import indexes, members
+        if not hasattr(self, 'layout_group'):
+            return
+        groups, parents = indexes(self.doc)
+        node = groups.get(self.layout_group.currentData())
+        self.layout_box.setVisible(node is not None)
+        if not node:
+            return
+        locked = any(i['locked'] for i in self.doc['overlays'] if i['id'] in members(self.doc, node['id']))
+        for widget in (self.layout_direction, self.layout_gap, self.layout_align, self.layout_anchor,
+                       self.detach_button, self.dissolve_button):
+            widget.setEnabled(not locked)
+        self.layout_anchor.setEnabled(not locked and node['id'] not in parents)
+        self.layout_direction.setCurrentIndex(self.layout_direction.findData(node['direction']))
+        self.layout_align.setCurrentIndex(self.layout_align.findData(node['align']))
+        self.layout_gap.blockSignals(True); self.layout_gap.setValue(node['gap']*100); self.layout_gap.blockSignals(False)
+        anchor = (node['anchor_x'], node['anchor_y'])
+        self.layout_anchor.setCurrentIndex(next((i for i in range(9) if self.layout_anchor.itemData(i) == anchor), 4))
+
+    def _edit_layout(self, key, value):
+        if self._updating or not self.layout_direction.isEnabled():
+            return
+        self.flush_text()
+        doc = deepcopy(self.doc)
+        node = next((n for n in doc.get('overlay_layouts', []) if n['id'] == self.layout_group.currentData()), None)
+        if node:
+            node[key] = value
+            # 改生长方向时保留整组当前位置，以相应边为固定边。
+            scene = getattr(self, 'layout_scene', lambda: None)()
+            if key == 'direction' and scene is not None:
+                from birdstamp.overlays.layout import anchor_group
+                ay = 1 if value == 'up' else 0 if value == 'down' else node['anchor_y']
+                doc = anchor_group(doc, node['id'], (node['anchor_x'], ay), scene)
+            self.commit(doc)
+
+    def _anchor_layout(self, index):
+        scene = getattr(self, 'layout_scene', lambda: None)()
+        if scene is None:
+            return
+        from birdstamp.overlays.layout import anchor_group
+        self.commit(anchor_group(self.doc, self.layout_group.currentData(), self.layout_anchor.itemData(index), scene))
+
+    def _detach_layout(self):
+        scene = getattr(self, 'layout_scene', lambda: None)()
+        if scene is not None and self.detach_button.isEnabled():
+            from birdstamp.overlays.layout import detach
+            self.commit(detach(self.doc, self.selected_id, scene))
+
+    def _dissolve_layout(self):
+        scene = getattr(self, 'layout_scene', lambda: None)()
+        if scene is None or not self.dissolve_button.isEnabled():
+            return
+        from birdstamp.overlays.layout import dissolve
+        self.commit(dissolve(self.doc, self.layout_group.currentData(), scene))
 
     def _row(self,key,label,widget,kinds=()):
         self.widgets[key]=widget; self.kinds[key]=kinds
@@ -287,8 +385,11 @@ class OverlayPanel(QWidget):
     def _refresh(self):
         self._updating=True
         self.list.clear()
+        from birdstamp.overlays.layout import ancestors
         for item in reversed(self.doc['overlays']):
             marks=('🔒 ' if item['locked'] else '')+('隐藏 · ' if not item['visible'] else '')
+            chain = ancestors(self.doc, item['id'])
+            marks += (' / '.join('行' if n['direction']=='row' else '列' for n in reversed(chain))+' · ') if chain else ''
             row=QListWidgetItem(marks+item['name']); row.setData(Qt.ItemDataRole.UserRole,item['id'])
             row.setCheckState(Qt.CheckState.Checked if item['visible'] else Qt.CheckState.Unchecked)
             if item['locked']: row.setFlags(row.flags() & ~Qt.ItemFlag.ItemIsDragEnabled)
@@ -306,10 +407,21 @@ class OverlayPanel(QWidget):
         self.delete_button.setEnabled(item is not None and not item["locked"])
         self.duplicate_button.setEnabled(item is not None)
         if item:
+            from birdstamp.overlays.layout import ancestors
+            chain = ancestors(self.doc, item['id'])
+            selected_group = self.layout_group.currentData()
+            self.layout_group.blockSignals(True); self.layout_group.clear()
+            for depth, node in enumerate(chain):
+                self.layout_group.addItem(('所在组合' if depth == 0 else f'外层组合 {depth}') + (' · 行' if node['direction']=='row' else ' · 列'), node['id'])
+            self.layout_group.setCurrentIndex(max(0, self.layout_group.findData(selected_group)))
+            self.layout_group.blockSignals(False)
+            self._layout_properties()
             for key,widget in self.widgets.items():
                 show=not self.kinds[key] or item['type'] in self.kinds[key]
                 if key in ('align_horizontal','align_vertical','x_offset_pct','y_offset_pct'): show &= item['layout_mode']=='auto' and item['type']!='background'
                 if key in ('x','y'): show &= item['layout_mode']=='manual'
+                if key in ('layout_mode','align_horizontal','align_vertical','x_offset_pct','y_offset_pct','x','y'):
+                    show &= self.advanced_geometry.isChecked() and not chain
                 if key=='text': show &= item.get('text_mode')=='literal'
                 if key=='text_source': show &= item.get('text_mode')=='metadata'
                 self.forms.get(key,self.form).setRowVisible(widget,show)
@@ -340,6 +452,7 @@ class OverlayPanel(QWidget):
             self.replace_image_button.setVisible(item['type']=='image')
             self.replace_image_button.setEnabled(not item['locked'])
             self.tabs.setTabVisible(2,item['type'] in ('text','badge'))
+            self.reset_layout_button.setVisible(self.advanced_geometry.isChecked() and not chain)
             self.reset_layout_button.setEnabled(not item['locked'])
         self._updating=False
 

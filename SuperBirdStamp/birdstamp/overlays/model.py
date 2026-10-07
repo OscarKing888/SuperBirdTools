@@ -90,8 +90,13 @@ def document(payload):
         items.append(item)
     assets = payload.get('overlay_assets') or {}
     references = {i.get('asset_id') for i in items if i['type']=='image'}
-    return dict(overlay_version=VERSION, overlays=items,
-                overlay_assets={k:deepcopy(v) for k,v in assets.items() if k in references})
+    from .layout import normalize_layouts
+    result = dict(overlay_version=VERSION, overlays=items,
+                  overlay_assets={k:deepcopy(v) for k,v in assets.items() if k in references})
+    layouts = normalize_layouts(payload.get('overlay_layouts'), items)
+    if layouts:
+        result['overlay_layouts'] = layouts
+    return result
 
 
 def with_document(payload, doc):
@@ -100,6 +105,7 @@ def with_document(payload, doc):
     for key in list(result):
         if key == 'fields' or key == 'draw_banner_background' or key.startswith('banner_'):
             result.pop(key)
+    result.pop('overlay_layouts', None)
     result.update(document(doc))
     return result
 

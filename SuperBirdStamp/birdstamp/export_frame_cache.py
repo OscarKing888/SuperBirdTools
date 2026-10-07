@@ -15,8 +15,8 @@ FRAME_CACHE_MANIFEST_VERSION = 1
 FRAME_CACHE_ROOT_NAME = "birdstamp_export_cache"
 SOURCE_FRAME_BUCKET_KIND = "rendered_source_frames"
 VIDEO_FRAME_BUCKET_KIND = "video_frames"
-# v10 保留完整 EXIF；v11 支持图像着色；v12 支持圆角 Badge 与外部稀有度配色。
-SOURCE_FRAME_CACHE_VERSION = 12
+# v10 保留完整 EXIF；v11 支持图像着色；v12 支持圆角 Badge；v13 支持嵌套行/列布局。
+SOURCE_FRAME_CACHE_VERSION = 13
 VIDEO_FRAME_CACHE_VERSION = 2
 _DEFAULT_PIPELINE_STAGE_ORDER = (
     "template_crop",

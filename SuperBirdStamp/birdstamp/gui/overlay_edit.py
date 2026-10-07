@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
+from copy import deepcopy
 import math
 from PyQt6.QtCore import QObject, QEvent, Qt, QPointF, QRectF
 from PyQt6.QtGui import QColor, QPen, QPolygonF, QKeySequence
@@ -9,6 +10,7 @@ from .edit_modes import EditMode
 from .editor_utils import pil_to_qpixmap
 from . import editor_options
 from birdstamp.overlays.render import Scene, compose_scene
+from birdstamp.overlays import layout as flow
 
 EDIT_MODE_OVERLAY = 'overlay'
 
@@ -19,6 +21,7 @@ class OverlaySession(QObject):
         self.canvas, self.panel = canvas, panel
         self.committed = committed
         panel.manual_geometry = lambda: self.selected_layer().manual_item(self.scene.size) if self.selected_layer() else None
+        panel.layout_scene = lambda: self.scene
         self.scene = None
         self.base = None
         self.crop = (0,0,1,1)
@@ -100,7 +103,8 @@ class OverlaySession(QObject):
             handle='move'
         if layer:
             self._original_pixmap=self.canvas._source_pixmap
-            self.drag=dict(original=layer,preview=layer,start=point,handle=handle,changed=False)
+            self.drag=dict(original=layer,preview=layer,start=point,handle=handle,changed=False,
+                           document=None, layers=None, snap=None)
             self.canvas.setCursor(Qt.CursorShape.ClosedHandCursor)
         event.accept(); return True
 
@@ -113,10 +117,12 @@ class OverlaySession(QObject):
             center=[x+px-sx,y+py-sy]
             if not event.modifiers() & Qt.KeyboardModifier.AltModifier:
                 r=self.target(); thresholds=(editor_options.OVERLAY_SNAP_DISTANCE*self.scene.size[0]/max(1,r.width()),editor_options.OVERLAY_SNAP_DISTANCE*self.scene.size[1]/max(1,r.height()))
+                chain=flow.ancestors(self.panel.doc,layer.item['id'])
+                moving_ids=flow.members(self.panel.doc,chain[-1]['id']) if chain and event.modifiers() & Qt.KeyboardModifier.ControlModifier else []
                 for axis in (0,1):
                     targets=[0,self.scene.size[axis]/2,self.scene.size[axis]]
                     for other in self.scene.layers:
-                        if other is layer or other.item['type']=='background': continue
+                        if other is layer or other.item['type']=='background' or other.item['id'] in moving_ids: continue
                         coords=[p[axis] for p in other.corners()]; targets.extend([min(coords),other.center[axis],max(coords)])
                     coords=[p[axis]+center[axis]-layer.center[axis] for p in layer.corners()]
                     anchors=[min(coords),center[axis],max(coords)]
@@ -146,13 +152,71 @@ class OverlaySession(QObject):
             preview=replace(layer,center=center,size=(max(1,layer.size[0]*ratio),max(1,layer.size[1]*ratio)),
                             effective_scale=layer.effective_scale*ratio)
         d['preview']=preview; d['changed']=preview.center!=layer.center or preview.size!=layer.size or preview.rotation!=layer.rotation
+        self._layout_preview(event)
         self.draw_preview(); event.accept(); return True
+
+    def _layout_preview(self, event):
+        d = self.drag
+        original, preview = d['original'], d['preview']
+        key = original.item['id']
+        doc = self.panel.doc
+        chain = flow.ancestors(doc, key)
+        d['snap'] = None
+        if d['handle'] == 'move' and chain and event.modifiers() & Qt.KeyboardModifier.ControlModifier:
+            root = chain[-1]
+            ids = flow.members(doc, root['id'])
+            if any(i['locked'] for i in doc['overlays'] if i['id'] in ids):
+                d['changed'] = False
+                d['preview'] = original
+                d['layers'] = self.scene.layers
+                return
+            dx, dy = preview.center[0]-original.center[0], preview.center[1]-original.center[1]
+            result = deepcopy(doc)
+            node = next(n for n in result['overlay_layouts'] if n['id'] == root['id'])
+            node['x'] += dx/self.scene.size[0]; node['y'] += dy/self.scene.size[1]
+            layers = [replace(v, center=(v.center[0]+dx, v.center[1]+dy)) if v.item['id'] in ids else v for v in self.scene.layers]
+            if not event.modifiers() & Qt.KeyboardModifier.AltModifier:
+                l, t, right, bottom = flow.bounds([v for v in layers if v.item['id'] in ids])
+                group_layer = replace(preview, item=dict(preview.item, id=root['id']),
+                                      center=((l+right)/2, (t+bottom)/2), size=(right-l, bottom-t), rotation=0)
+                r = self.target()
+                threshold = (editor_options.OVERLAY_LAYOUT_SNAP_DISTANCE*self.scene.size[0]/max(1, r.width()),
+                             editor_options.OVERLAY_LAYOUT_SNAP_DISTANCE*self.scene.size[1]/max(1, r.height()))
+                gap = editor_options.OVERLAY_LAYOUT_GAP_PCT/100
+                snap = flow.snap_candidate(result, layers, group_layer, threshold, gap*min(self.scene.size))
+                if snap:
+                    result = flow.join(result, root['id'], snap, Scene(self.scene.size, layers), gap)
+                    positioned = {v.item['id']: v for v in layers}
+                    flow.arrange(result, positioned, self.scene.size)
+                    layers = [positioned[v.item['id']] for v in layers]
+                    d['snap'] = snap
+                    self.guides = []
+        else:
+            result = flow.detach(doc, key, self.scene) if d['handle'] == 'move' else deepcopy(doc)
+            item = next(i for i in result['overlays'] if i['id'] == key)
+            item.update(preview.manual_item(self.scene.size))
+            layers = [preview if v is original else v for v in self.scene.layers]
+            if d['handle'] == 'move' and original.item['type'] != 'background' and not event.modifiers() & Qt.KeyboardModifier.AltModifier:
+                r = self.target()
+                threshold = (editor_options.OVERLAY_LAYOUT_SNAP_DISTANCE*self.scene.size[0]/max(1, r.width()),
+                             editor_options.OVERLAY_LAYOUT_SNAP_DISTANCE*self.scene.size[1]/max(1, r.height()))
+                gap = editor_options.OVERLAY_LAYOUT_GAP_PCT/100
+                snap = flow.snap_candidate(result, layers, preview, threshold, gap*min(self.scene.size))
+                if snap:
+                    result = flow.join(result, key, snap, Scene(self.scene.size, layers), gap)
+                    d['snap'] = snap
+                    self.guides = []
+            positioned = {v.item['id']: v for v in layers}
+            flow.arrange(result, positioned, self.scene.size)
+            layers = [positioned[v.item['id']] for v in layers]
+        d['document'], d['layers'] = result, layers
+        d['preview'] = next(v for v in layers if v.item['id'] == key)
 
     def draw_preview(self):
         if self.base is None or self.scene is None: return
         scene=self.scene
         if self.drag:
-            scene=Scene(scene.size,[self.drag['preview'] if v is self.drag['original'] else v for v in scene.layers])
+            scene=Scene(scene.size,self.drag.get('layers') or [self.drag['preview'] if v is self.drag['original'] else v for v in scene.layers])
         l,t,r,b=self.crop
         box=(round(l*self.base.width),round(t*self.base.height),round(r*self.base.width),round(b*self.base.height))
         region=self.base.crop(box)
@@ -172,7 +236,10 @@ class OverlaySession(QObject):
         if not self.drag or event.button()!=Qt.MouseButton.LeftButton: return False
         d=self.drag; self.drag=None; self.guides=[]; self.canvas.unsetCursor()
         if d['changed']:
-            self.panel.replace_item(d['preview'].manual_item(self.scene.size))
+            if d.get('document') is not None:
+                self.panel.commit(d['document'])
+            else:
+                self.panel.replace_item(d['preview'].manual_item(self.scene.size))
             self.committed()
         else:
             self.cancel()
@@ -207,6 +274,20 @@ class OverlaySession(QObject):
             start=(value,0) if axis==0 else (0,value)
             end=(value,self.scene.size[1]) if axis==0 else (self.scene.size[0],value)
             painter.drawLine(self.to_widget(start),self.to_widget(end))
+        chain=flow.ancestors(self.panel.doc,layer.item['id'])
+        snap=self.drag.get('snap') if self.drag else None
+        if snap or chain:
+            current_doc=self.drag.get('document') if self.drag else self.panel.doc
+            current_chain=flow.ancestors(current_doc or self.panel.doc,layer.item['id'])
+            if current_chain:
+                ids=flow.members(current_doc or self.panel.doc,current_chain[-1]['id'])
+                layers=(self.drag.get('layers') or self.scene.layers) if self.drag else self.scene.layers
+                l,t,r,b=flow.bounds([v for v in layers if v.item['id'] in ids])
+                painter.setBrush(Qt.BrushStyle.NoBrush)
+                painter.setPen(QPen(QColor('#20CBA8'),1.5,Qt.PenStyle.DashLine))
+                painter.drawRect(QRectF(self.to_widget((l,t)),self.to_widget((r,b))))
+                caption=('松手：组合为行' if snap.direction=='row' else '松手：组合为列') if snap else '自动布局 · ⌘/Ctrl 拖动整组'
+                painter.drawText(self.to_widget((l,t))+QPointF(0,-8),caption)
         painter.restore()
 
     def eventFilter(self,watched,event):
@@ -244,7 +325,17 @@ class OverlaySession(QObject):
         if key in directions and layer and not layer.item['locked']:
             dx,dy=directions[key]; step=10 if event.modifiers() & Qt.KeyboardModifier.ShiftModifier else 1
             item=replace(layer,center=(layer.center[0]+dx*step,layer.center[1]+dy*step)).manual_item(self.scene.size)
-            self.panel.replace_item(item); self.committed(); return True
+            chain=flow.ancestors(self.panel.doc,layer.item['id'])
+            if chain:
+                ids=flow.members(self.panel.doc,chain[-1]['id'])
+                if any(i['locked'] for i in self.panel.doc['overlays'] if i['id'] in ids): return True
+                doc=deepcopy(self.panel.doc)
+                node=next(n for n in doc['overlay_layouts'] if n['id']==chain[-1]['id'])
+                node['x']+=dx*step/self.scene.size[0]; node['y']+=dy*step/self.scene.size[1]
+                self.panel.commit(doc)
+            else:
+                self.panel.replace_item(item)
+            self.committed(); return True
         return False
 
 

@@ -80,6 +80,9 @@ def build_scene(payload, size, *, raw_metadata=None, metadata_context=None, phot
     text_scale = normalize_text_scale(text_scale)
     layers = {}
     auto = [i for i in doc['overlays'] if i['type']=='text' and i['visible'] and i['layout_mode']=='auto']
+    from .layout import indexes, arrange
+    _, grouped = indexes(doc)
+    auto = [i for i in auto if i['id'] not in grouped]
     commands = []
     # 复用旧排版的逐字号避让，避免老模板的自动位置和字号变化。
     if auto:
@@ -102,7 +105,7 @@ def build_scene(payload, size, *, raw_metadata=None, metadata_context=None, phot
             if not item['visible']:
                 continue
             kind = item['type']
-            if kind == 'text' and item['layout_mode'] == 'manual':
+            if kind == 'text' and (item['layout_mode'] == 'manual' or item['id'] in grouped):
                 layer = _text_layer(t, item, size, photo_info, raw_metadata, text_scale)
                 if layer:
                     layers[item['id']] = layer
@@ -136,6 +139,7 @@ def build_scene(payload, size, *, raw_metadata=None, metadata_context=None, phot
                 else:
                     center = (item['x']*size[0],item['y']*size[1])
                 layers[item['id']] = Layer(item,pixels,center,(w,h),item['rotation'])
+        arrange(doc, layers, size)
         text_layers = [v for v in layers.values() if v.item['type']=='text']
         for item in doc['overlays']:
             if item['type']!='background' or not item['visible']:
