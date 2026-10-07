@@ -281,8 +281,6 @@ class BirdIDResultsTable(QTableView):
                 painter.drawLine(spine, top, spine, bottom)
                 painter.drawLine(spine, top, arm, top)
                 painter.drawLine(spine, bottom, arm, bottom)
-            center = self.rowViewportPosition(row) + self.rowHeight(row) // 2
-            painter.drawLine(spine, center, arm, center)
         painter.end()
 
     def _request(self, row):
