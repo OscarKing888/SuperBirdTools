@@ -13,6 +13,7 @@ from birdstamp.overlays.model import document, new_item
 from birdstamp.overlays.assets import import_image
 from birdstamp.render.text_effects import DEFAULT_TEXT_EFFECTS, TEXT_EFFECT_RANGES
 from .color_editor import ColorEditor
+from .filterable_combo import FilterableComboBox
 from .percent_editor import PercentEditor
 from .editor_utils import get_template_context_field_options, template_font_choices
 
@@ -121,7 +122,11 @@ class OverlayPanel(QWidget):
         self.text=QPlainTextEdit(); self.text.setMaximumHeight(100)
         self.text.textChanged.connect(lambda:self._text_timer.start() if not self._updating else None)
         self._row('text','文本',self.text,('text',))
-        self.metadata=QComboBox(); self.metadata.setEditable(True)
+        self.metadata=FilterableComboBox(); self.metadata.setEditable(True)
+        self.metadata.setInsertPolicy(QComboBox.InsertPolicy.NoInsert)
+        self.metadata.setMaxVisibleItems(18)
+        self.metadata.setFilterPlaceholderText('搜索字段，如：鸟种 / 拼音 / ISO / rating')
+        self.metadata.lineEdit().setPlaceholderText('选择元数据字段，或输入自定义占位符')
         for source,key,label in get_template_context_field_options():
             self.metadata.addItem(f'{label} ({key})',(source,key))
         self.metadata.activated.connect(self._metadata_selected)
@@ -306,7 +311,9 @@ class OverlayPanel(QWidget):
                     if widget.toPlainText()!=str(value or ''): widget.setPlainText(str(value or ''))
                 elif isinstance(widget,ColorEditor): widget.set_value(str(value or '#000000'))
                 elif key=='text_source':
-                    value=value or {}; idx=widget.findData((value.get('type'),value.get('key')))
+                    value=value or {}; target=(value.get('type'),value.get('key'))
+                    # Qt 对 Python tuple 的 findData 比较不稳定，按实际来源/字段键匹配。
+                    idx=next((i for i in range(widget.count()) if widget.itemData(i)==target),-1)
                     if idx>=0: widget.setCurrentIndex(idx)
                     else: widget.setEditText(str(value.get('key','')))
                 else:
@@ -416,7 +423,12 @@ class OverlayPanel(QWidget):
         doc['overlays']=[by_id[i] for i in reversed(ids)]; self.commit(doc)
 
     def _metadata_selected(self,index):
-        source,key=self.metadata.itemData(index); self.edit('text_source',dict(type=source,key=key))
+        data=self.metadata.itemData(index)
+        if data is None or self.metadata.currentText()!=self.metadata.itemText(index):
+            self._metadata_typed()
+            return
+        source,key=data
+        self.edit('text_source',dict(type=source,key=key))
 
     def _metadata_typed(self):
         idx=self.metadata.currentIndex()
