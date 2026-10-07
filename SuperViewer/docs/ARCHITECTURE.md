@@ -300,6 +300,12 @@ CLI 与 GUI 共用核心：在仓库根使用共享 `.venv` 执行 `python -m Su
 
 模型只在后台首次使用时加载；运行时不下载。固定模型清单/查找在 `image_denoise.models`，下载器与三个 spec 的资源门禁在 `build_tools`。算法、默认设置、资源和 CLI 详见 [批量降噪](../../docs/image_denoise.md)，回归位于 `image_denoise/tests` 和 Viewer 的 `test_denoise_controller.py`。
 
+## SuperPicky 识鸟
+
+[`BirdIDController`](../superviewer/bird_identification_controller.py) 在照片/目录右键菜单接入单张、多选和目录（可递归）识鸟；独立 `BirdIDWorker` 顺序访问本机 SuperPicky HTTP 服务。无 Qt 核心 [`bird_identification.py`](../superviewer/bird_identification.py) 共用原文件路径解析后的输入、扫描去重、协议校验、置信度分流和 XMP 保存，CLI 复用相同入口，不导入 SuperPicky 的模型栈。
+
+已确认鸟种沿用 `bird_species_cn` / `bird_species_en` / `birdid_confidence` 并同步标准标题；低置信度沿用 `alt_species_*` / `alt_confidence`。完整响应保存在 XMP 的 `birdid_response`。共享 `PhotoMetaDataXMP.write()` 将标准与私有原生字段一次原子发布；识别期间的照片/侧车变更使该结果跳过写入。完成后按当前列表同侧车路径局部同步缓存与信息页，不重新选图；保留未提交备注，拒绝晚到回调，主窗口关闭等待真正的线程完成。服务接口及返回字段限制、使用和验证见 [识鸟说明](../../docs/bird_identification.md)。
+
 ## 10. 扩展与验证步骤
 
 1. 从上表定位控件入口和状态所有者，阅读对应测试；涉及共享实现时同时检查 BirdStamp 调用。约定源图路径、显示路径、缓存路径，明确是否需要写 XMP。
