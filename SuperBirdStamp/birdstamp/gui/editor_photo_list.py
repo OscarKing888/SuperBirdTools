@@ -6,7 +6,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from PyQt6.QtCore import QEvent, QObject, Qt, pyqtSignal
+from PyQt6.QtCore import QEvent, QObject, QSignalBlocker, Qt, pyqtSignal
 from PyQt6.QtWidgets import (
     QAbstractItemView,
     QHeaderView,
@@ -24,6 +24,7 @@ from app_common.file_browser._browser_core import _exec_menu
 from app_common.file_utils import reveal_in_file_manager
 from birdstamp.constants import SUPPORTED_EXTENSIONS
 from birdstamp.photo_numbering import normalize_start_number, photo_row_number
+from birdstamp.photo_order import moved_photo_rows
 from birdstamp.gui import template_context as _template_context
 from birdstamp.gui.editor_utils import path_key as _path_key
 
@@ -136,6 +137,7 @@ class PhotoListWidget(FileListPanel):
     currentItemChanged = pyqtSignal(object, object)  # (QTreeWidgetItem | None, QTreeWidgetItem | None)
     itemSelectionChanged = pyqtSignal()
     rowNumbersChanged = pyqtSignal()
+    manualOrderChanged = pyqtSignal()
 
     def __init__(self) -> None:
         self._start_number = 1
@@ -386,6 +388,39 @@ class PhotoListWidget(FileListPanel):
 
     def selectedItems(self) -> list[QTreeWidgetItem]:
         return list(self._tree_widget.selectedItems())
+
+    def can_move_selected(self, direction: int) -> bool:
+        selected = {self.indexOfTopLevelItem(item) for item in self.selectedItems()}
+        count = self.topLevelItemCount()
+        return any(0 <= row + direction < count and row + direction not in selected for row in selected)
+
+    def move_selected(self, direction: int) -> bool:
+        """把当前可见顺序保存为手动顺序，不拆卸行或触发重新选图。"""
+        count = self.topLevelItemCount()
+        order = moved_photo_rows(
+            count, (self.indexOfTopLevelItem(item) for item in self.selectedItems()), direction,
+        )
+        if order == list(range(count)):
+            return False
+        items = [self.topLevelItem(row) for row in range(count)]
+        sorting_enabled = self.isSortingEnabled()
+        self.setSortingEnabled(False)
+        try:
+            with QSignalBlocker(self._tree_widget), QSignalBlocker(self.header()):
+                for sequence, row in enumerate(order, start=1):
+                    item = items[row]
+                    item.setData(PHOTO_COL_ROW, PHOTO_LIST_SEQUENCE_ROLE, sequence)
+                    item.setData(PHOTO_COL_SEQ, PHOTO_LIST_SORT_ROLE, (0, sequence))
+                    item.setData(PHOTO_COL_ROW, PHOTO_LIST_SORT_ROLE, (0, sequence))
+                self.header().setSortIndicator(PHOTO_COL_SEQ, Qt.SortOrder.AscendingOrder)
+                self._tree_widget.sortByColumn(PHOTO_COL_SEQ, Qt.SortOrder.AscendingOrder)
+        finally:
+            self.setSortingEnabled(sorting_enabled)
+        self.refresh_row_numbers()
+        if self.currentItem() is not None:
+            self._tree_widget.scrollToItem(self.currentItem())
+        self.manualOrderChanged.emit()
+        return True
 
     def _photo_path_from_item(self, item: QTreeWidgetItem | None) -> str | None:
         if item is None:

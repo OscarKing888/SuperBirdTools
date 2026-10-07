@@ -3,7 +3,10 @@ import os
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PyQt6.QtCore import Qt
-from PyQt6.QtWidgets import QApplication
+from PyQt6.QtWidgets import QAbstractItemView, QApplication
+import pytest
+
+from birdstamp.photo_order import moved_photo_rows
 
 from birdstamp.gui.editor_photo_list import (
     PHOTO_COL_CAPTURE_TIME,
@@ -18,11 +21,64 @@ from birdstamp.gui.editor_photo_list import (
 )
 
 
+_APP = QApplication.instance() or QApplication([])
+
+
 def _app() -> QApplication:
-    app = QApplication.instance()
-    if app is None:
-        app = QApplication([])
-    return app
+    return _APP
+
+
+@pytest.mark.parametrize("selected,direction,expected", [
+    ([], -1, [0, 1, 2, 3, 4]),
+    ([0], -1, [0, 1, 2, 3, 4]),
+    ([4], 1, [0, 1, 2, 3, 4]),
+    ([1, 2], -1, [1, 2, 0, 3, 4]),
+    ([1, 2], 1, [0, 3, 1, 2, 4]),
+    ([1, 3], -1, [1, 0, 3, 2, 4]),
+    ([0, 2], -1, [0, 2, 1, 3, 4]),
+    ([1, 3], 1, [0, 2, 1, 4, 3]),
+    ([0, 1, 2, 3, 4], 1, [0, 1, 2, 3, 4]),
+])
+def test_move_photo_rows(selected, direction, expected):
+    assert moved_photo_rows(5, selected, direction) == expected
+
+
+@pytest.mark.parametrize("sorting_enabled", [True, False])
+def test_manual_order_preserves_selection_and_survives_metadata_sort(sorting_enabled):
+    app = _app()
+    widget = PhotoListWidget()
+    try:
+        widget.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
+        items = [_make_item(seq, name, (0, seq)) for seq, name in enumerate(("c", "a", "b"), 1)]
+        for item in items:
+            widget.addTopLevelItem(item)
+        widget.header().setSortIndicator(PHOTO_COL_NAME, Qt.SortOrder.AscendingOrder)
+        widget.setCurrentItem(items[2])
+        items[0].setSelected(True)
+        widget.setSortingEnabled(sorting_enabled)
+        changed, reordered = [], []
+        widget.currentItemChanged.connect(lambda *args: changed.append(args))
+        widget.manualOrderChanged.connect(lambda: reordered.append(True))
+
+        assert widget.move_selected(-1)
+        assert [widget.topLevelItem(i).text(PHOTO_COL_NAME) for i in range(3)] == ["b", "c", "a"]
+        assert widget.currentItem() is items[2]
+        assert {id(item) for item in widget.selectedItems()} == {id(items[0]), id(items[2])}
+        assert not changed
+        assert reordered == [True]
+        assert widget.isSortingEnabled() == sorting_enabled
+        # 模拟迟到元数据及批处理结束，不能把手动顺序恢复为文件名排序。
+        items[0].setData(PHOTO_COL_NAME, PHOTO_LIST_SORT_ROLE, (0, "0"))
+        widget.setSortingEnabled(True)
+        widget.resort()
+        assert [widget.topLevelItem(i).text(PHOTO_COL_NAME) for i in range(3)] == ["b", "c", "a"]
+        assert [widget.topLevelItem(i).text(PHOTO_COL_SEQ) for i in range(3)] == ["1", "2", "3"]
+        assert not widget.can_move_selected(-1)
+        assert not widget.move_selected(-1)
+        assert reordered == [True]
+    finally:
+        widget.deleteLater()
+        app.processEvents()
 
 
 def _make_item(seq: int, name: str, capture_sort: tuple[int, int]) -> PhotoListItem:

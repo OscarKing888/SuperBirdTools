@@ -143,3 +143,41 @@ def test_workspace_roundtrip_and_legacy_default(window, tmp_path):
 @pytest.mark.parametrize("value,expected", [(None, 1), ("bad", 1), (-3, 1), (0, 1), ("250", 250), (10**20, MAX_START_NUMBER)])
 def test_start_number_validation(value, expected):
     assert normalize_start_number(value) == expected
+
+
+def test_move_buttons_numbering_append_and_workspace_round_trip(window, tmp_path):
+    paths = _add_photos(window, tmp_path, ("甲.png", "乙.png", "丙.png"))
+    window.photo_start_number_spin.setValue(101)
+    current = window.photo_list.topLevelItem(1)
+    window.photo_list.setCurrentItem(current)
+    assert window.photo_move_up_button.isEnabled()
+    assert window.photo_move_down_button.isEnabled()
+    window._workspace_autosave_timer.stop()
+    window.photo_move_up_button.click()
+    assert window._list_photo_paths() == [paths[1], paths[0], paths[2]]
+    assert window.photo_list.currentItem() is current
+    assert not window.photo_move_up_button.isEnabled()
+    assert window._workspace_autosave_timer.isActive()
+    _assert_numbers(window, [101, 102, 103])
+
+    window.photo_move_down_button.click()
+    window.photo_move_down_button.click()
+    assert window._list_photo_paths() == [paths[0], paths[2], paths[1]]
+    assert not window.photo_move_down_button.isEnabled()
+    extra = _add_photos(window, tmp_path, ("追加.png",))[0]
+    expected = [paths[0], paths[2], paths[1], extra]
+    assert window._list_photo_paths() == expected
+    _assert_numbers(window, [101, 102, 103, 104])
+
+    workspace = tmp_path / "手动排序.birdstamp-workspace.json"
+    window._save_workspace_to_path(workspace)
+    payload = read_workspace_json(workspace)
+    window._restore_workspace_payload(
+        payload, workspace, mark_as_current_workspace=False, autosave_after_restore=False,
+    )
+    deadline = time.monotonic() + 5
+    while window._workspace_restore_in_progress() and time.monotonic() < deadline:
+        _APP.processEvents()
+    assert not window._workspace_restore_in_progress()
+    assert window._list_photo_paths() == expected
+    _assert_numbers(window, [101, 102, 103, 104])

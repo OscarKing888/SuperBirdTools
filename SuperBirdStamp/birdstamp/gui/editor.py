@@ -1202,6 +1202,20 @@ class BirdStampEditorWindow(
         numbering_row.addWidget(numbering_label)
         numbering_row.addWidget(self.photo_start_number_spin)
         numbering_row.addStretch(1)
+        self.photo_move_up_button = QToolButton()
+        self.photo_move_down_button = QToolButton()
+        for button, text, arrow, direction in (
+            (self.photo_move_up_button, "上移", Qt.ArrowType.UpArrow, -1),
+            (self.photo_move_down_button, "下移", Qt.ArrowType.DownArrow, 1),
+        ):
+            button.setText(text)
+            button.setArrowType(arrow)
+            button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+            button.setAccessibleName(f"照片{text}")
+            button.setToolTip(f"将选中的照片{text}一行（支持多选），并使用手动顺序。")
+            button.setEnabled(False)
+            button.clicked.connect(lambda checked=False, step=direction: self._move_selected_photos(step))
+            numbering_row.addWidget(button)
         photos_layout.addLayout(numbering_row)
 
         self.photo_list_progress = QProgressBar()
@@ -1232,6 +1246,9 @@ class BirdStampEditorWindow(
         self.photo_list.pathsDropped.connect(self._add_photo_paths)
         self.photo_list.currentItemChanged.connect(self._on_photo_selected)
         self.photo_list.itemSelectionChanged.connect(self._on_workspace_state_changed)
+        self.photo_list.itemSelectionChanged.connect(self._update_photo_move_buttons)
+        self.photo_list.rowNumbersChanged.connect(self._update_photo_move_buttons)
+        self.photo_list.manualOrderChanged.connect(self._on_photo_manual_order_changed)
         self.photo_list.header().sortIndicatorChanged.connect(self._on_workspace_state_changed)
         self.photo_list.setMinimumHeight(240)
         self.photo_list.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Expanding)
@@ -2910,6 +2927,24 @@ class BirdStampEditorWindow(
 
     def _on_photo_start_number_changed(self, value: int) -> None:
         self.photo_list.set_start_number(value)
+        self._schedule_workspace_autosave()
+
+    def _update_photo_move_buttons(self) -> None:
+        self.photo_move_up_button.setEnabled(self.photo_list.can_move_selected(-1))
+        self.photo_move_down_button.setEnabled(self.photo_list.can_move_selected(1))
+
+    def _move_selected_photos(self, direction: int) -> None:
+        if self._workspace_restore_in_progress() or not self.photo_list.can_move_selected(direction):
+            return
+        self.sequence_transport.stop(commit=False)
+        self.photo_list.move_selected(direction)
+
+    def _on_photo_manual_order_changed(self) -> None:
+        # 顺序参与播放、参考图接力及导出缓存；旧计算结果不能沿用。
+        self._next_photo_sequence_number = 0
+        self._invalidate_reference_tracking()
+        self.sequence_transport.sync()
+        self._update_photo_move_buttons()
         self._schedule_workspace_autosave()
 
     def _on_photo_row_numbers_changed(self) -> None:
