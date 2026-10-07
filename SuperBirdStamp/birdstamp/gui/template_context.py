@@ -1625,15 +1625,15 @@ _FALLBACK_AUTO_PROXY_ROUTE_CONFIG: dict[str, list[dict[str, Any]]] = {
         {
             "provider_id": TEMPLATE_SOURCE_EXIF,
             "candidate_keys": [
-                "XMP-superpicky:bird_species_pinyin", "bird_species_pinyin",
-                "bird_pinyin", "pinyin_name", "pinyin",
+                "XMP-superpicky:pinyin_name", "pinyin_name",
+                "XMP-superpicky:bird_species_pinyin", "bird_species_pinyin", "bird_pinyin", "pinyin",
             ],
         },
         {
             "provider_id": TEMPLATE_SOURCE_REPORT_DB,
             "candidate_keys": [
-                "bird_species_pinyin", "report.bird_species_pinyin",
-                "bird_pinyin", "pinyin_name", "pinyin",
+                "pinyin_name", "report.pinyin_name",
+                "bird_species_pinyin", "report.bird_species_pinyin", "bird_pinyin", "pinyin",
             ],
         },
     ],
@@ -2440,6 +2440,13 @@ class ExifTemplateContextProvider(TemplateContextProvider):
         title = _extract_title_text(metadata)
         set_if_value("title", title)
         set_if_value("bird_species_cn", title, "bird", "bird_common")
+        set_if_value(
+            "bird_species_pinyin",
+            _lookup_metadata_text(metadata, "XMP-superpicky:pinyin_name", "pinyin_name",
+                                  "XMP-superpicky:bird_species_pinyin", "bird_species_pinyin",
+                                  "XMP-superpicky:bird_pinyin", "bird_pinyin", "XMP-superpicky:pinyin", "pinyin"),
+            "bird_pinyin", "pinyin_name", "pinyin",
+        )
         description = _extract_description_text(metadata)
         set_if_value("caption", description, "description")
         set_if_value("author", _extract_author_text(metadata))
@@ -2693,7 +2700,7 @@ class ReportDBTemplateContextProvider(TemplateContextProvider):
 
         set_if_value(
             "bird_species_pinyin",
-            first_row_value("bird_species_pinyin", "bird_pinyin", "pinyin_name", "pinyin"),
+            first_row_value("pinyin_name", "bird_species_pinyin", "bird_pinyin", "pinyin"),
             "bird_pinyin", "pinyin_name", "pinyin", "report.bird_species_pinyin",
         )
 

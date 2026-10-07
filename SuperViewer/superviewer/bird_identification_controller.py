@@ -10,16 +10,15 @@ import traceback
 from pathlib import Path
 
 from app_common.log import get_logger
-from .bird_identification import BirdIDClient, BirdIDOptions, collect_paths, identify_file, _fingerprint
-from app_common.exif_io.photo_meta import PhotoMetaDataXMP
+from .bird_identification import BirdIDClient, BirdIDOptions, collect_paths, identify_file
 from .qt_compat import QThread, pyqtSignal
 
 try:
-    from PyQt6.QtCore import QObject, QSignalBlocker
+    from PyQt6.QtCore import QObject
     from PyQt6.QtWidgets import (QCheckBox, QDialog, QDialogButtonBox, QDoubleSpinBox,
         QFormLayout, QLabel, QLineEdit, QMessageBox, QProgressBar, QPushButton, QTextEdit, QVBoxLayout)
 except ImportError:  # pragma: no cover
-    from PyQt5.QtCore import QObject, QSignalBlocker
+    from PyQt5.QtCore import QObject
     from PyQt5.QtWidgets import (QCheckBox, QDialog, QDialogButtonBox, QDoubleSpinBox,
         QFormLayout, QLabel, QLineEdit, QMessageBox, QProgressBar, QPushButton, QTextEdit, QVBoxLayout)
 
@@ -265,32 +264,10 @@ class BirdIDController(QObject):
             self._refresh_rows(result, worker.job)
 
     def _refresh_rows(self, result, job):
-        files = self._file_list
-        if result.saved_fingerprint != _fingerprint(PhotoMetaDataXMP().sidecar_path_for(result.source)):
-            return  # 排队结果之后又有本地编辑，不能覆盖最新界面状态。
-        # 不调用重新选图信号；仅刷新当前目录内同侧车的行与信息页。
-        all_files = getattr(files, "_all_files", ())
-        stamp = (id(all_files), len(all_files))
-        if stamp != getattr(self, "_rows_stamp", None):
-            self._rows_files = all_files
-            self._rows_stamp, self._rows_by_stem = stamp, {}
-            self._listed_paths = set(all_files)
-            for path in all_files:
-                key = os.path.normcase(os.path.splitext(os.path.abspath(path))[0])
-                self._rows_by_stem.setdefault(key, []).append(path)
-        key = os.path.normcase(os.path.splitext(result.source)[0])
-        paths = list(self._rows_by_stem.get(key, []))
-        for display, source in job.display_paths:
-            if os.path.normcase(os.path.abspath(source)) == os.path.normcase(result.source) and display in self._listed_paths and display not in paths:
-                paths.append(display)
-        if not paths:
-            return
-        blocker = QSignalBlocker(files)
-        try:
-            files.sync_metadata_edits_for_paths({path: result.updates for path in dict.fromkeys([*paths, result.source])})
-        finally:
-            del blocker
-        files.photo_metadata_cache_updated.emit(list(dict.fromkeys([*paths, result.source])))
+        if not hasattr(self, "_metadata_sync"):
+            from .metadata_result_sync import MetadataResultSync
+            self._metadata_sync = MetadataResultSync(self._file_list)
+        self._metadata_sync.sync([result], job.display_paths)
 
     def _failed(self, worker, text):
         if self._active(worker):

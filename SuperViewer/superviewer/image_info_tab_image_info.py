@@ -24,6 +24,7 @@ from app_common.file_browser._browser_core import (
     _metadata_species_text,
     _metadata_value_from_candidates,
 )
+from app_common.bird_pinyin import bird_name, stored_pinyin
 from app_common.bird_sharpness_fields import bird_sharpness_from_meta
 from app_common.log import get_logger
 from app_common.perf_probe import perf_log
@@ -55,6 +56,7 @@ from .ui_theme import PanelThemeColors, current_panel_colors
 _PREVIEW_HEIGHT = 180
 _BASIC_INFO_ROWS = (
     "鸟名",
+    "拼音",
     #"文件夹",
     "评分",
     "尺寸",
@@ -254,7 +256,9 @@ class ImageInfoTabPanel_ImageInfo(ImageInfoTabPanel):
         parent=None,
         *,
         available_tag_tree_provider: Callable[[], list[TagTreeNode]] | None = None,
+        pinyin_update_callback: Callable[[str], None] | None = None,
     ) -> None:
+        self._pinyin_update_callback = pinyin_update_callback
         self._available_tags_provider = available_tags_provider
         self._available_tag_tree_provider = available_tag_tree_provider
         self._tags_for_path_provider = tags_for_path_provider
@@ -521,6 +525,13 @@ class ImageInfoTabPanel_ImageInfo(ImageInfoTabPanel):
         value.setStyleSheet("color: %s; font-size: 13px;" % self._theme_colors.value_text)
         row.addWidget(label)
         row.addWidget(value, stretch=1)
+        if label_text == "拼音":
+            self.pinyin_update_button = QToolButton(self)
+            self.pinyin_update_button.setText("更新拼音")
+            self.pinyin_update_button.setToolTip("根据已有鸟名补全带声调拼音并保存到 XMP")
+            self.pinyin_update_button.clicked.connect(self._update_pinyin)
+            self.pinyin_update_button.hide()
+            row.addWidget(self.pinyin_update_button)
         layout.addLayout(row)
         self.basic_rows[label_text] = value
 
@@ -728,7 +739,8 @@ class ImageInfoTabPanel_ImageInfo(ImageInfoTabPanel):
             created_ts = stat.st_ctime
 
         info = {
-            "鸟名": _metadata_species_text(metadata) or "-",
+            "鸟名": bird_name(metadata) or _metadata_species_text(metadata) or "-",
+            "拼音": stored_pinyin(metadata) or "-",
             #"文件夹": str(p.parent),
             "评分": _rating_text(metadata.get("rating")),
             "尺寸": f"{width} × {height}" if width and height else "-",
@@ -854,7 +866,16 @@ class ImageInfoTabPanel_ImageInfo(ImageInfoTabPanel):
                 return int(pixmap.width()), int(pixmap.height())
         return None, None
 
+    def _update_pinyin(self) -> None:
+        path = self.current_photo_path()
+        if path and self._pinyin_update_callback is not None and self._writes_allowed(path):
+            self._pinyin_update_callback(path)
+
     def _set_basic_info(self, info: dict[str, str]) -> None:
+        has_name = info.get("鸟名", "-") not in ("", "-")
+        missing = info.get("拼音", "-") in ("", "-")
+        self.pinyin_update_button.setVisible(has_name and missing)
+        self.pinyin_update_button.setEnabled(self._pinyin_update_callback is not None and self._writes_allowed(self.current_photo_path()))
         for key, label in self.basic_rows.items():
             value = str(info.get(key) or "-")
             label.setText(value)

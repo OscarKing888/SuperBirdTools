@@ -243,3 +243,16 @@ def test_cancel_interrupts_http10_response_after_connection_detaches_socket(monk
         client.cancel()
         with pytest.raises(bird.BirdIDCancelled):
             pending.result(timeout=3)
+
+
+@pytest.mark.parametrize("threshold", [50, 99])
+def test_optional_service_pinyin_uses_canonical_xmp_only_for_confirmed(photo, response, monkeypatch, threshold):
+    response["results"][0]["pinyin_name"] = "bái tóu bēi"
+    store = PhotoMetaDataXMP()
+    assert store.write(str(photo), {"XMP-superpicky:pinyin_name": "old", "XMP-dc:Title": "旧鸟名"})
+    result = bird.identify_file(str(photo), client_for(monkeypatch, response, bird.BirdIDOptions(threshold=threshold)))
+    values = store.read(str(photo))
+    assert result.status == ("success" if threshold == 50 else "candidate")
+    assert values["pinyin_name"] == ("bái tóu bēi" if threshold == 50 else "old")
+    if threshold == 50:
+        assert values["pinyin_name_source"] == "白头鹎"

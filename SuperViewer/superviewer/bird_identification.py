@@ -14,6 +14,7 @@ import threading
 from urllib.parse import urlsplit
 
 from app_common.exif_io.photo_meta import PhotoMetaDataXMP, xmp_sidecar_write_lock
+from app_common.bird_pinyin import PINYIN_FIELD, PINYIN_SOURCE_FIELD
 from app_common.image_formats import SUPPORTED_IMAGE_EXTENSIONS
 
 DEFAULT_URL = "http://127.0.0.1:5156"
@@ -170,7 +171,7 @@ def parse_response(response: dict):
     for candidate in candidates:
         if not isinstance(candidate, dict):
             raise BirdIDError("识鸟候选格式错误")
-        for key in ("cn_name", "en_name", "scientific_name", "description"):
+        for key in ("cn_name", "en_name", "scientific_name", "description", "pinyin_name"):
             if not isinstance(candidate.get(key, ""), str):
                 raise BirdIDError(f"识鸟候选字段格式错误：{key}")
         if not (candidate.get("cn_name", "").strip() or candidate.get("en_name", "").strip()):
@@ -219,6 +220,9 @@ def identify_file(source: str, client: BirdIDClient) -> BirdIDResult:
                           birdid_confidence=confidence, alt_species_cn="", alt_species_en="", alt_confidence="")
         else:
             values.update(alt_species_cn=best.get("cn_name", ""), alt_species_en=best.get("en_name", ""), alt_confidence=confidence)
+        if confirmed and best.get("pinyin_name", "").strip():
+            values[PINYIN_FIELD] = best["pinyin_name"].strip()
+            values[PINYIN_SOURCE_FIELD] = best.get("cn_name") or best["en_name"]
         fields = {f"XMP-superpicky:{key}": value for key, value in values.items()}
         if confirmed:
             values["title"] = best.get("cn_name") or best["en_name"]

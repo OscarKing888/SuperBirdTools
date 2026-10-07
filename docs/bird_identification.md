@@ -30,6 +30,7 @@ SuperPicky 服务端设置。服务会按相对置信度差距裁掉较弱候选
 | 信息 | 保存位置 |
 | --- | --- |
 | 已确认中文鸟名 | 原有 `XMP-superpicky:bird_species_cn`；标题同步到 `XMP-dc:Title` 和 `XMP-superpicky:title` |
+| 已确认鸟名拼音（服务返回时） | `XMP-superpicky:pinyin_name`；`pinyin_name_source` 保存对应鸟名 |
 | 已确认英文鸟名 | 原有 `XMP-superpicky:bird_species_en` |
 | 已确认置信度 | 原有 `XMP-superpicky:birdid_confidence` |
 | 低于阈值的中文/英文候选与置信度 | 原有 `XMP-superpicky:alt_species_cn`、`alt_species_en`、`alt_confidence` |
@@ -45,6 +46,24 @@ false；实际地理过滤采用 `geo_info` 和 `warning`，不要仅据 `ebird_
 `gbif_rarity_100` 或 `aesthetic_index`，因此本功能不生成或更新这些指标，也不从说明文字猜测。
 原有这些字段若存在，仍来自此前元数据，不代表这次识别的返回值。
 已确认后移除 XMP 中旧的待确定候选；历史 `report.db` 仍是只读兼容数据，不被修改。
+
+## 本地更新拼音
+
+当前 SuperPicky HTTP 响应尚未提供拼音；Viewer 已支持未来候选中的可选字符串 `pinyin_name`，例如 `{"cn_name":"白头鹎","pinyin_name":"bái tóu bēi"}`（完整识鸟候选仍需 `confidence`）。最高候选达到确认阈值时，拼音与鸟名一起保存；低置信度候选的拼音只保留在完整响应中，不覆盖已确认拼音。
+
+无需启动服务也能补全拼音：
+
+- 照片信息在鸟名下显示“拼音”；有鸟名但缺拼音时，旁边出现 **更新拼音**。
+- 照片右键 **更新拼音**，支持多选；目录树右键 **更新拼音** → 当前目录或目录及子目录。
+- 使用从 SuperPicky 移植的 11,388 个鸟名带声调词表，保留鸟类多音字读法，如“白头鹎” → `bái tóu bēi`。未收录名称跳过，不按普通汉字猜读音。
+- 仅补缺失拼音，已有 `pinyin_name` 或旧别名（`bird_species_pinyin`、`bird_pinyin`、`pinyin`）保留。新写入附带 `pinyin_name_source`；之后鸟名变更时允许重新补全。
+- 只写同名 XMP，保留原图、report.db 和其它元数据。进度窗报告更新、跳过及失败数量；停止保留已完成结果。
+- BirdStamp 的“鸟种拼音”模板字段可直接读取 Viewer 写入的 `pinyin_name`。
+
+```bash
+.venv/bin/python3 -m SuperViewer.superviewer.bird_pinyin_cli /path/to/photo.ARW
+.venv/bin/python3 -m SuperViewer.superviewer.bird_pinyin_cli /path/to/folder --recursive
+```
 
 ## 实现与数据保护
 

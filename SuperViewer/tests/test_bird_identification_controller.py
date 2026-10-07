@@ -162,8 +162,9 @@ def test_saved_result_queued_before_new_edit_does_not_clobber_ui(env, monkeypatc
     assert wait_for(lambda: not controller.busy)
 
 
+@pytest.mark.parametrize('operation', ['bird_id', 'pinyin'])
 @pytest.mark.parametrize('mode', ['list', 'thumbnail'])
-def test_real_window_result_refresh_preserves_preview_and_comment_draft(tmp_path, monkeypatch, mode):
+def test_real_window_result_refresh_preserves_preview_and_comment_draft(tmp_path, monkeypatch, mode, operation):
     import importlib
     from app_common import superviewer_user_options
     from SuperViewer.superviewer import paths_settings
@@ -184,14 +185,16 @@ def test_real_window_result_refresh_preserves_preview_and_comment_draft(tmp_path
     library = tmp_path / 'library'
     (library / '.superpicky').mkdir(parents=True)
     tags = library / '.superpicky/tags.cfg'
-    tags.write_text('鸟类\n    翠鸟\n', encoding='utf-8')
+    tags.write_text('鸟类\n    白头鹎\n', encoding='utf-8')
     monkeypatch.setattr(main, 'SuperViewerTaggedFileListPanel', lambda: SuperViewerTaggedFileListPanel(tag_config_path=tags))
     photo = library / '实测.jpg'
     Image.new('RGB', (24, 18), 'blue').save(photo)
     source = str(photo)
     monkeypatch.setattr(BirdIDClient, 'health', lambda _: {})
     monkeypatch.setattr(BirdIDClient, 'recognize', lambda *_: {
-        'success': True, 'results': [{'cn_name': '翠鸟', 'en_name': 'Common Kingfisher', 'confidence': 93}]})
+        'success': True, 'results': [{'cn_name': '白头鹎', 'en_name': 'Common Kingfisher', 'confidence': 93}]})
+    if operation == 'pinyin':
+        assert PhotoMetaDataXMP().write_title(source, '白头鹎')
     window = main.MainWindow(initial_received_files=['skip-restore'])
     window.show()
     try:
@@ -206,14 +209,26 @@ def test_real_window_result_refresh_preserves_preview_and_comment_draft(tmp_path
         window.image_info_panel.comment_edit.setPlainText('用户未保存的备注')
         reselections = []
         files.file_selected.connect(reselections.append)
-        assert window._bird_id.start_for_paths([source], options=BirdIDOptions())
-        assert wait_for(lambda: not window._bird_id.busy)
-        assert files.get_photo_metadata_for_path(source)['bird_species_cn'] == '翠鸟'
-        assert PhotoMetaDataXMP().read(source)['Title'] == '翠鸟'
+        if operation == 'bird_id':
+            controller = window._bird_id
+            assert controller.start_for_paths([source], options=BirdIDOptions())
+        else:
+            controller = window._bird_pinyin
+            panel = window.image_info_panel
+            assert not panel.pinyin_update_button.isHidden()
+            panel.pinyin_update_button.click()
+        assert wait_for(lambda: not controller.busy)
+        if operation == 'pinyin':
+            assert window.image_info_panel.basic_rows['拼音'].text() == 'bái tóu bēi'
+            assert window.image_info_panel.pinyin_update_button.isHidden()
+            assert PhotoMetaDataXMP().read(source)['pinyin_name'] == 'bái tóu bēi'
+        from app_common.bird_pinyin import bird_name
+        assert bird_name(files.get_photo_metadata_for_path(source)) == '白头鹎'
+        assert PhotoMetaDataXMP().read(source)['Title'] == '白头鹎'
         assert not reselections
         assert window.preview_panel.source_pixmap_for_path(source).cacheKey() == cache_key
         assert window.image_info_panel.comment_edit.toPlainText() == '用户未保存的备注'
-        assert window._bird_id._dialog.grab().save(str(tmp_path / f'birdid-{mode}.png'))
+        assert controller._dialog.grab().save(str(tmp_path / f'{operation}-{mode}.png'))
     finally:
         window.close()
         assert wait_for(lambda: window._shutdown_finalized)

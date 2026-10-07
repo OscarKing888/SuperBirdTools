@@ -139,6 +139,7 @@ try:
     from .superviewer.bird_archive_ui import BirdArchiveController, archive_action
     from .superviewer.denoise_controller import DenoiseController
     from .superviewer.bird_identification_controller import BirdIDController
+    from .superviewer.bird_pinyin_controller import PinyinController
     from .superviewer.burst_info_controller import BurstInfoController
     from .superviewer.preview_key_router import PreviewKeyRouter
     from .superviewer.viewer_ab_preview import ViewerABPreview
@@ -226,6 +227,7 @@ except ImportError:
     from superviewer.bird_archive_ui import BirdArchiveController, archive_action
     from superviewer.denoise_controller import DenoiseController
     from superviewer.bird_identification_controller import BirdIDController
+    from superviewer.bird_pinyin_controller import PinyinController
     from superviewer.burst_info_controller import BurstInfoController
     from superviewer.preview_key_router import PreviewKeyRouter
     from superviewer.viewer_ab_preview import ViewerABPreview
@@ -375,6 +377,7 @@ class MainWindow(QMainWindow):
         # 鸟清晰度检测：目录树 / 文件列表右键菜单 → 后台检测 → 写 XMP → 刷新列表与缩略图
         self._bird_sharpness = BirdSharpnessController(self, self._file_list, self._dir_browser)
         self._bird_archive = BirdArchiveController(self, self._file_list)
+        self._bird_pinyin = PinyinController(self, self._file_list, self._dir_browser)
         self._bird_id = BirdIDController(self, self._file_list, self._dir_browser)
         self._denoise = DenoiseController(self, self._file_list, self._dir_browser)
         self._bird_sharpness.set_denoise_controller(self._denoise)
@@ -516,6 +519,7 @@ class MainWindow(QMainWindow):
             tag_write_enabled_provider=self._sidecar_writes_allowed,
             available_tag_tree_provider=self._file_list.available_photo_tag_tree,
             parent=self.image_info_tabs,
+            pinyin_update_callback=lambda path: self._bird_pinyin.start_for_paths([path]),
         )
         self.tags_info_panel = ImageInfoTabPanel_Tags(
             self._file_list.available_photo_tags,
@@ -1649,6 +1653,10 @@ class MainWindow(QMainWindow):
             except Exception:
                 pass
             try:
+                self._bird_pinyin.request_shutdown()
+            except Exception:
+                pass
+            try:
                 self._bird_id.request_shutdown()
             except Exception:
                 pass
@@ -1688,18 +1696,19 @@ class MainWindow(QMainWindow):
         directory_scans_done = directory_scans_done and not pool_pending()
         bird_sharpness_done = self._bird_sharpness.is_shutdown_done()
         archive_done = self._bird_archive.is_shutdown_done()
+        bird_pinyin_done = self._bird_pinyin.is_shutdown_done()
         bird_id_done = self._bird_id.is_shutdown_done()
         denoise_done = self._denoise.is_shutdown_done()
         bird_body_done = self._bird_body.is_shutdown_done()
         burst_info_done = self._burst_info.is_shutdown_done()
         pending_state = (
             focus_done, tabs_done, preview_done, exiftool_done, directory_scans_done, bird_sharpness_done,
-            burst_info_done, denoise_done, bird_body_done, archive_done, bird_id_done,
+            burst_info_done, denoise_done, bird_body_done, archive_done, bird_id_done, bird_pinyin_done,
         )
         if not all(pending_state):
             if pending_state != self._shutdown_pending_state:
                 _log.info(
-                    "[shutdown] waiting focus=%s image_info=%s preview=%s exiftool=%s directory_scans_and_pool=%s bird_sharpness=%s burst_info=%s denoise=%s bird_body=%s archive=%s bird_id=%s",
+                    "[shutdown] waiting focus=%s image_info=%s preview=%s exiftool=%s directory_scans_and_pool=%s bird_sharpness=%s burst_info=%s denoise=%s bird_body=%s archive=%s bird_id=%s bird_pinyin=%s",
                     focus_done,
                     tabs_done,
                     preview_done,
@@ -1711,6 +1720,7 @@ class MainWindow(QMainWindow):
                     bird_body_done,
                     archive_done,
                     bird_id_done,
+                    bird_pinyin_done,
                 )
                 self._shutdown_pending_state = pending_state
             event.ignore()

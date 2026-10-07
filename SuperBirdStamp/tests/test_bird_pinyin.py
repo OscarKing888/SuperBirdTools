@@ -33,45 +33,17 @@ def test_shipped_pinyin_preserves_tones_and_bird_specific_readings(name, expecte
     assert pinyin_names.pinyin_for(name) == expected
 
 
-@pytest.mark.parametrize("contents", [None, "broken JSON", "[]", '{"家燕": 12}'])
-def test_missing_or_bad_table_is_cached_and_does_not_break_rendering(tmp_path, monkeypatch, contents):
-    path = tmp_path / "拼音表.json"
-    if contents is not None:
-        path.write_text(contents, encoding="utf-8")
-    paths = []
-
-    def resource(*parts):
-        paths.append(parts)
-        return path
-
-    monkeypatch.setattr(pinyin_names, "resolve_bundled_path", resource)
-    assert pinyin_names.pinyin_for("家燕") == ""
-    assert pinyin_names.pinyin_for("家燕") == ""
-    assert paths == [("config", "pinyin_toned.json")]
-
-
 @pytest.mark.parametrize("platform", ["win32", "darwin"])
-def test_pinyin_resource_lookup_in_frozen_windows_and_macos_layouts(tmp_path, monkeypatch, platform):
-    from birdstamp import config
+def test_pinyin_lookup_does_not_need_runtime_data_paths(tmp_path, monkeypatch, platform):
+    import sys
+    from app_common import bird_pinyin
 
-    if platform == "darwin":
-        executable = tmp_path / "SuperBirdStamp.app" / "Contents" / "MacOS" / "SuperBirdStamp"
-        resources = executable.parent.parent / "Resources"
-    else:
-        executable = tmp_path / "SuperBirdStamp" / "SuperBirdStamp.exe"
-        resources = executable.parent / "_internal"
-    table = resources / "config" / "pinyin_toned.json"
-    table.parent.mkdir(parents=True)
-    table.write_text('{"家燕": "jiā yàn"}', encoding="utf-8")
     with monkeypatch.context() as patch:
-        patch.setattr(config.sys, "frozen", True, raising=False)
-        patch.setattr(config.sys, "platform", platform)
-        patch.setattr(config.sys, "executable", str(executable))
-        patch.setattr(config.sys, "_MEIPASS", str(tmp_path / "frameworks"), raising=False)
-        resolved = config.resolve_bundled_path("config", "pinyin_toned.json")
-        text = pinyin_names.pinyin_for("家燕")
-    assert resolved == table
-    assert text == "jiā yàn"
+        patch.setattr(sys, "frozen", True, raising=False)
+        patch.setattr(sys, "platform", platform)
+        patch.setattr(sys, "_MEIPASS", str(tmp_path / "bundle"), raising=False)
+        assert pinyin_names.pinyin_for("家燕") == "jiā yàn"
+        assert pinyin_names.pinyin_for is bird_pinyin.pinyin_for
 
 
 @pytest.mark.parametrize("column", [None, "bird_species_pinyin", "bird_pinyin", "pinyin_name", "pinyin"])
@@ -204,3 +176,14 @@ def test_cli_inspects_pinyin_fallback_without_gui(tmp_path, monkeypatch):
     payload = json.loads(result.output)
     assert payload["text_content"] == "jiā yàn"
     assert payload["candidates"][-1]["provider_id"] == "bird_name_lookup"
+
+
+def test_viewer_canonical_pinyin_name_xmp_is_used_by_stamp(tmp_path, monkeypatch):
+    from app_common.exif_io.photo_meta import PhotoMetaDataXMP
+    path = tmp_path / "鸟.jpg"
+    Image.new("RGB", (16, 16)).save(path)
+    assert PhotoMetaDataXMP().write(str(path), {"XMP-dc:Title": "白头鹎",
+        "XMP-superpicky:pinyin_name": "bái tóu bēi", "XMP-superpicky:bird_species_pinyin": "旧拼音"})
+    monkeypatch.setattr(context, "pinyin_for", lambda _: pytest.fail("saved XMP must win"))
+    photo = context.PhotoInfo.from_path(path)
+    assert context.AutoProxyTemplateContextProvider("bird_pinyin").get_text_content(photo) == "bái tóu bēi"

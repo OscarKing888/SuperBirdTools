@@ -32,20 +32,22 @@
     {
       "provider_id": "exif",
       "candidate_keys": [
+        "XMP-superpicky:pinyin_name",
+        "pinyin_name",
         "XMP-superpicky:bird_species_pinyin",
         "bird_species_pinyin",
         "bird_pinyin",
-        "pinyin_name",
         "pinyin"
       ]
     },
     {
       "provider_id": "report_db",
       "candidate_keys": [
+        "pinyin_name",
+        "report.pinyin_name",
         "bird_species_pinyin",
         "report.bird_species_pinyin",
         "bird_pinyin",
-        "pinyin_name",
         "pinyin"
       ]
     }

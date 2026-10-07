@@ -353,3 +353,11 @@ Qt 测试在窗口构造前隔离 `paths_settings` 的应用/用户状态目录�
 [ViewerViewportPanel](../superviewer/viewer_ab_preview.py) 将来源、对焦点、鸟体框、构图线/线宽、焦点居中、适应窗口与缩放放在各自 A/B 视口内；主工具栏只保留 A/B 和视野同步。图标由共享 [preview_toolbar.py](../../app_common/preview_toolbar.py) 绘制，选中态沿用 `ToggleToolButton`。构图菜单直接在一级显示全部类型的互斥单选，下方通过滑动条和右侧输入框同步设置 1–32 px 整数线宽；来源菜单保持互斥单选，缩放图标菜单包含原缩放控件；悬停说明当前模式或比例。A 的显示设置独立保留在窗口会话内，B 继续兼容原设置存储，切换激活侧不复制选项。
 
 鸟体控制器 `set_panel_enabled()` 分侧控制绘制与分析需求，共享同源结果；隐藏侧框不取消另一侧仍需要的计算。切目录保留每侧开关，长按只读缓存。改构图线、线宽与工具栏主题不触发解码或元数据读取。回归见 [test_viewer_viewport_toolbar.py](../tests/test_viewer_viewport_toolbar.py) 和 [test_bird_body_controller.py](../tests/test_bird_body_controller.py)。
+
+## 鸟名拼音
+
+照片信息的“拼音”行只显示已保存的拼音；已有鸟名但没有可用拼音时显示“更新拼音”按钮。照片右键支持单张/多选，目录右键支持当前目录及递归目录。[`PinyinController`](../superviewer/bird_pinyin_controller.py) 使用独立线程、本批有界结果队列与定时分批刷新；取消后保留已写结果，关闭时等待线程真正结束。
+
+无 Qt 核心 [`PinyinUpdater`](../superviewer/bird_pinyin_update.py) 从 XMP、只读 report.db、原图元数据依次取得鸟名，查询共享 [`bird_pinyin`](../../app_common/bird_pinyin.py) 的 SuperPicky 带声调词表；未知名称跳过，已有拼音不覆盖。不需要识鸟服务或联网。写入 `XMP-superpicky:pinyin_name` 与 `pinyin_name_source`（对应鸟名，用于识别鸟名修改后的过期拼音），兼容旧别名。鸟种服务将来返回可选 `pinyin_name` 时，已确认结果也保存到同一字段。
+
+[`MetadataResultSync`](../superviewer/metadata_result_sync.py) 共用于识鸟和拼音，验证保存后的侧车指纹再同步当前目录及同侧车行，不重新选图，不丢失备注草稿。CLI 为 `python -m SuperViewer.superviewer.bird_pinyin_cli <照片或目录> [--recursive]`。测试见 `test_bird_pinyin_update.py`、`test_bird_pinyin_controller.py` 和 `test_bird_identification_controller.py` 的列表/缩略图实窗验证。
