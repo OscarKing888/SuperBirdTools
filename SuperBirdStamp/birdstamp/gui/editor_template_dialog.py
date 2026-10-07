@@ -10,6 +10,7 @@ Extracted classes:
 from __future__ import annotations
 
 from pathlib import Path
+import sys
 from typing import Any
 
 from PIL import Image
@@ -43,6 +44,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+from app_common.file_utils import reveal_in_file_manager
 from app_common.toggle_button import ToggleToolButton
 from app_common.preview_canvas import (
     PREVIEW_COMPOSITION_GRID_LINE_WIDTHS,
@@ -973,7 +975,9 @@ class TemplateManagerDialog(QDialog):
         self.template_list.blockSignals(True)
         self.template_list.clear()
         for name in names:
-            self.template_list.addItem(name)
+            item = QListWidgetItem(name)
+            item.setToolTip(str(self.template_paths[name].resolve()))
+            self.template_list.addItem(item)
         self.template_list.blockSignals(False)
 
         if not names:
@@ -994,14 +998,34 @@ class TemplateManagerDialog(QDialog):
         item = self.template_list.itemAt(pos)
         if item is None:
             return
+        # 固定右键目标，不能用当前正在编辑的模板代替点击的行。
+        name = item.text()
         menu = QMenu(self)
+        label = ("在 Finder 中显示 JSON 文件" if sys.platform == "darwin" else
+                 "在资源管理器中显示 JSON 文件" if sys.platform == "win32" else
+                 "打开 JSON 所在文件夹")
+        reveal_action = menu.addAction(label)
+        menu.addSeparator()
         rename_action = menu.addAction("重命名")
         delete_action = menu.addAction("删除")
-        selected = menu.exec(self.template_list.mapToGlobal(pos))
-        if selected is rename_action:
-            self._rename_template(item.text())
+        selected = menu.exec(self.template_list.viewport().mapToGlobal(pos))
+        if selected is reveal_action:
+            self._reveal_template_file(name)
+        elif selected is rename_action:
+            self._rename_template(name)
         elif selected is delete_action:
-            self._delete_template(item.text())
+            self._delete_template(name)
+
+    def _reveal_template_file(self, name: str) -> None:
+        path = self.template_paths.get(name)
+        if path is None:
+            return
+        path = path.resolve()
+        if not path.is_file():
+            QMessageBox.warning(self, "定位模板文件", f"模板 JSON 文件不存在：\n{path}")
+            return
+        if not reveal_in_file_manager(str(path)):
+            QMessageBox.warning(self, "定位模板文件", f"无法打开系统文件管理器：\n{path}")
 
     def _rename_template(self, source_name: str | None = None) -> None:
         origin_name = str(source_name or self.current_template_name or "").strip()
