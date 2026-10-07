@@ -360,7 +360,9 @@ Qt 测试在窗口构造前隔离 `paths_settings` 的应用/用户状态目录�
 
 共享 [`bird_rarity.py`](../../app_common/bird_rarity.py) 定义档位（8/25/50/75）、字段读取优先级、名称/颜色默认值及配置校验。`MetadataLoader._parse_rec` 携带等级与来源，支持重新打开目录。照片信息的 [`RarityBadge`](../superviewer/rarity_badge.py) 只读缓存，显示紧凑徽章和分数提示；IUCN 独立显示。“用户选项 → 稀有度徽章”的 `RarityBadgesForm` 提供名称、背景/文字颜色、即时预览与恢复默认，通过共享 `superviewer_user_options` 保存到 `SuperViewerUser.cfg`，当前信息面板局部刷新并保留备注草稿。
 
-无额外资源或网络请求，现有 CLI 同步保存上述字段。测试覆盖 `test_bird_rarity.py`、`test_rarity_badge.py`、识鸟核心中文 XMP 回读与真实列表/缩略图窗口。字段表和文本配置示例见 [识鸟说明](../../docs/bird_identification.md)。
+列表模式在鸟名后显示“稀有度”列，由 [`RarityFileTableModel` / `RarityBadgeDelegate`](../superviewer/rarity_file_table.py) 扩展共享模型并绘制圆角徽章，复用信息页的名称、颜色和分数提示；缺失、无效或鸟名过期的数据留空，0 分仍显示普通。只读取已有元数据，沿用增量刷新，不创建逐行控件或触发缩略图/EXIF 工作。逻辑列追加以保留原列索引，表头调整视觉顺序，默认宽 88 px 且可拖动。排序使用原始数值，列表和缩略图共用模型的 `sort_key_for_path()`；配置更新仅通知此列刷新。共享默认模型及 BirdStamp 不增加此列。
+
+无额外资源或网络请求，现有 CLI 同步保存上述字段。测试覆盖 `test_bird_rarity.py`、`test_rarity_badge.py`、`test_thumbnail_sort_controls.py`、识鸟核心中文 XMP 回读与真实列表/缩略图窗口。字段表和文本配置示例见 [识鸟说明](../../docs/bird_identification.md)。
 
 ## 鸟名拼音
 
