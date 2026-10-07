@@ -30,6 +30,7 @@ from .qt_compat import QCheckBox, QHBoxLayout, QLabel, QMenu, QMessageBox, QPixm
 from .photo_tag_commands import ClearPhotoTagsCommand, SetPhotoTagCommand
 from .tag_menu import add_filterable_tag_actions
 from .ui_theme import PanelThemeColors, panel_theme_colors
+from .rarity_file_table import RarityFileTableModel, RarityBadgeDelegate
 
 try:
     from PyQt6.QtCore import QSignalBlocker
@@ -228,6 +229,7 @@ class SuperViewerTaggedFileListPanel(FileListPanel):
     include_videos = True
     use_unified_worker_pool = True
     show_thumbnail_sort_controls = True
+    file_table_model_class = RarityFileTableModel
     video_playback_stop_requested = pyqtSignal()
     playback_state_changed = pyqtSignal(bool)
     use_preview_cache = True
@@ -299,6 +301,12 @@ class SuperViewerTaggedFileListPanel(FileListPanel):
         self._focus_source_index: dict[tuple[str, str], str] = {}
         self._command_history = CommandHistory(max_commands=100)
         super().__init__(parent)
+        from app_common.file_browser._browser_core import _TREE_COL_SPECIES
+        rarity_column = self._file_table_model.rarity_column
+        self._tree_widget.setItemDelegateForColumn(rarity_column, RarityBadgeDelegate(self._tree_widget))
+        self._tree_widget.setColumnWidth(rarity_column, 88)
+        header = self._tree_widget.header()
+        header.moveSection(header.visualIndex(rarity_column), header.visualIndex(_TREE_COL_SPECIES) + 1)
         # 保留评级徽章的紧凑形状；选中态与预览 Toggle 共用高对比蓝底。
         for button in self._rating_filter_badge_buttons:
             button.setStyleSheet(button.styleSheet() + TOGGLE_CHECKED_STYLE)
@@ -310,6 +318,10 @@ class SuperViewerTaggedFileListPanel(FileListPanel):
         if self._filter_edit is not None:
             self._filter_edit.setPlaceholderText("过滤文件名/备注/标签…")
             self._filter_edit.setToolTip("空格分隔多个关键词；每个关键词可匹配文件名、备注或照片标签，需全部命中。")
+
+    def apply_user_options(self) -> None:
+        super().apply_user_options()
+        self._file_table_model.refresh_badges()
 
     def changeEvent(self, event) -> None:
         super().changeEvent(event)

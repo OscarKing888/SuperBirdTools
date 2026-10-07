@@ -9,6 +9,47 @@ from SuperViewer.superviewer.super_viewer_user_options_dialog import SuperViewer
 _APP = QApplication.instance() or QApplication([])
 
 
+def test_list_badge_paint_uses_configured_colors_and_unknown_has_no_badge(monkeypatch):
+    from PyQt6.QtCore import QRect, Qt
+    from PyQt6.QtGui import QImage, QPainter
+    from PyQt6.QtWidgets import QStyleOptionViewItem
+    from SuperViewer.superviewer.rarity_file_table import RarityFileTableModel, RarityBadgeDelegate
+
+    monkeypatch.setattr(options, '_RUNTIME_OPTIONS', options.normalize_user_options({
+        'rarity_badge_epic_text': '<史诗>', 'rarity_badge_epic_background': '#654321',
+        'rarity_badge_epic_foreground': '#FEDCBA',
+    }))
+    model = RarityFileTableModel()
+    paths = ['known.jpg', 'unknown.jpg', 'stale.jpg', 'zero.jpg']
+    model.rebuild(paths, meta_cache={
+        paths[0]: {'XMP-superpicky:gbif_rarity_100': '50'},
+        paths[1]: {'gbif_rarity_100': 'NaN'},
+        paths[2]: {'title': '新鸟名', 'birdid_rarity_source': '旧鸟名', 'gbif_rarity_100': 90},
+        paths[3]: {'report.gbif_rarity_100': 0},
+    }, tooltip_fn=lambda _: (_ for _ in ()).throw(AssertionError('unexpected file tooltip')), mismatch_fn=None)
+    col = model.rarity_column
+    assert [model.index(row, col).data() for row in range(4)] == ['<史诗>', '', '', '普通']
+    delegate = RarityBadgeDelegate()
+    for row in range(3):
+        index = model.index(row, col)
+        image = QImage(120, 36, QImage.Format.Format_ARGB32)
+        image.fill(QColor('white'))
+        painter = QPainter(image)
+        option = QStyleOptionViewItem()
+        option.rect = QRect(0, 0, 120, 36)
+        try:
+            delegate.paint(painter, option, index)
+        finally:
+            painter.end()
+        colors = {image.pixelColor(x, y).name() for x in range(120) for y in range(36)}
+        assert ('#654321' in colors) == (row == 0)
+        if row == 0:
+            assert '#fedcba' in colors
+            assert '50/100' in index.data(Qt.ItemDataRole.ToolTipRole)
+        else:
+            assert colors == {'#ffffff'}
+
+
 def test_badge_zero_unknown_custom_plain_text_and_theme_refresh(monkeypatch):
     monkeypatch.setattr(options, '_RUNTIME_OPTIONS', dict(RARITY_DEFAULT_OPTIONS))
     badge = ui.RarityBadge()

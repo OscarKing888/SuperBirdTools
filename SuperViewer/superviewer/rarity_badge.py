@@ -13,6 +13,19 @@ except ImportError:  # pragma: no cover
     from PyQt5.QtWidgets import QColorDialog
 
 
+def rarity_badge_style(score, options=None, *, level=None):
+    """信息页和列表徽章共用名称与颜色。"""
+    options = normalize_rarity_options(get_runtime_user_options() if options is None else options)
+    key = f"rarity_badge_{level or rarity_level(score)}_"
+    return tuple(options[key + field] for field in ("text", "background", "foreground"))
+
+
+def rarity_badge_tooltip(score):
+    score = rarity_score(score)
+    return ("暂无 GBIF 稀有度数据" if score is None else
+            f"GBIF 稀有度：{score:g}/100，越高越稀有。\n档位分界：8、25、50、75；与 IUCN 保护等级独立。")
+
+
 class RarityBadge(QLabel):
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -27,16 +40,14 @@ class RarityBadge(QLabel):
 
     def set_score(self, score):
         self._score = rarity_score(score)
-        self.setToolTip("暂无 GBIF 稀有度数据" if self._score is None else
-                        f"GBIF 稀有度：{self._score:g}/100，越高越稀有。\n档位分界：8、25、50、75；与 IUCN 保护等级独立。")
+        self.setToolTip(rarity_badge_tooltip(self._score))
         self.refresh_style()
 
     def refresh_style(self, options=None, *, level=None):
-        options = normalize_rarity_options(get_runtime_user_options() if options is None else options)
-        key = f"rarity_badge_{level or rarity_level(self._score)}_"
-        self.setText(options[key + "text"])
-        self.setStyleSheet(f"QLabel {{ background-color: {options[key + 'background']}; "
-                           f"color: {options[key + 'foreground']}; border-radius: 6px; "
+        text, background, foreground = rarity_badge_style(self._score, options, level=level)
+        self.setText(text)
+        self.setStyleSheet(f"QLabel {{ background-color: {background}; "
+                           f"color: {foreground}; border-radius: 6px; "
                            "padding: 3px 9px; font-size: 13px; font-weight: 600; }")
 
 
