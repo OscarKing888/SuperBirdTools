@@ -130,9 +130,10 @@ def test_rounded_pixels_transparency_and_geometry():
 
 @pytest.mark.parametrize('size',[(1600,900),(900,1600)])
 @pytest.mark.parametrize('mode',['auto','custom'])
-def test_preview_matches_image_gif_video_pipeline(size,mode):
+@pytest.mark.parametrize('shape',['rounded_rect','circle'])
+def test_preview_matches_image_gif_video_pipeline(size,mode,shape):
     item = new_item('badge'); item.update(font_size=100, rotation=23,opacity=75,
-        badge_color_mode=mode,badge_background='#339966',color='#FFFFFF',shadow_enabled=True)
+        badge_shape=shape,badge_color_mode=mode,badge_background='#339966',color='#FFFFFF',shadow_enabled=True)
     payload = dict(overlays=[item],ratio='no_crop')
     raw = {'gbif_rarity_100':60}
     settings = dict(template_payload=payload,ratio='no_crop',draw_banner=False,draw_images=False)
@@ -150,8 +151,9 @@ def test_preview_matches_image_gif_video_pipeline(size,mode):
         for image in (result,small,preview,expected,hidden): image.close()
 
 
-def test_template_workspace_and_cache_invalidation(tmp_path,isolated_config):
-    item = new_item('badge'); item.update(badge_background='#abcdef',badge_radius=.42)
+@pytest.mark.parametrize('shape',['rounded_rect','circle'])
+def test_template_workspace_and_cache_invalidation(tmp_path,isolated_config,shape):
+    item = new_item('badge'); item.update(badge_background='#abcdef',badge_radius=.42,badge_shape=shape)
     payload = dict(overlays=[item],ratio='no_crop')
     path = tmp_path/'徽章模板.json'; template.save_template_payload(path,payload)
     loaded = template.load_template_payload(path)
@@ -198,13 +200,14 @@ def test_panel_add_fields_custom_switch_undo_and_lock():
         QCoreApplication.sendPostedEvents(None,QEvent.Type.DeferredDelete)
 
 
-def test_cli_metadata_badge(tmp_path,monkeypatch):
+@pytest.mark.parametrize('shape',['rounded_rect','circle'])
+def test_cli_metadata_badge(tmp_path,monkeypatch,shape):
     from typer.testing import CliRunner
     from birdstamp import cli
     source=tmp_path/'bird.png'
     with Image.new('RGB',(800,450)) as image: image.save(source)
     path=tmp_path/'badge.json'
-    template.save_template_payload(path,dict(overlays=[new_item('badge')],ratio='no_crop'))
+    template.save_template_payload(path,dict(overlays=[dict(new_item('badge'),badge_shape=shape)],ratio='no_crop'))
     monkeypatch.setattr(cli,'extract_many_with_xmp_priority',lambda *a,**k:{source:{'SourceFile':str(source),'gbif_rarity_100':60}})
     output=tmp_path/'out'
     result=CliRunner().invoke(cli.app,['render',str(source),'--out',str(output),'--template',str(path),
@@ -275,3 +278,67 @@ def test_export_sidecar_priority_and_preview_does_not_read(monkeypatch):
     monkeypatch.setattr(context,'_read_sidecar_metadata',forbidden)
     monkeypatch.setattr(context,'_read_file_metadata_with_xmp_priority_cached',forbidden)
     assert content(item,{'XMP-superpicky:gbif_rarity_100':0})[0]=='普通'
+
+
+def test_badge_shape_default_legacy_pixels_and_cache():
+    item=new_item('badge')
+    assert item['badge_shape']=='rounded_rect'
+    legacy=dict(item); legacy.pop('badge_shape')
+    assert document({'overlays':[legacy]})['overlays'][0]['badge_shape']=='rounded_rect'
+    assert badge.normalize_badge({'badge_shape':'invalid'})['badge_shape']=='rounded_rect'
+    raw={'gbif_rarity_100':60}
+    scenes=[build_scene({'overlays':[value]},(800,450),raw_metadata=raw,photo_info=photo(raw))
+            for value in (legacy,item)]
+    try:
+        assert scenes[0].layers[0].pixels.tobytes()==scenes[1].layers[0].pixels.tobytes()
+    finally:
+        for scene in scenes: scene.close()
+    job=VideoFrameJob(Path('bird.jpg'),dict(template_payload={'overlays':[item]}),raw,{})
+    signature=source_frame_signature_for_job(job)
+    item['badge_shape']='circle'
+    assert source_frame_signature_for_job(job)!=signature
+
+
+@pytest.mark.parametrize('text',['稀有','较长的自定义文字','中文\n第二行'])
+def test_circle_is_round_and_contains_centered_text(text):
+    item=new_item('badge'); item.update(badge_shape='circle',text_mode='literal',text=text,
+        font_size=100,badge_color_mode='custom',badge_background='#FF0000',color='#00FF00')
+    scene=build_scene({'overlays':[item]},(1600,900),photo_info=photo({}))
+    try:
+        pixels=scene.layers[0].pixels
+        d=pixels.width
+        assert d==pixels.height
+        for point in ((0,0),(d-1,0),(0,d-1),(d-1,d-1),(d//10,d//10)):
+            assert pixels.getpixel(point)[3]==0
+        for point in ((d//2,2),(d//2,d-3),(2,d//2),(d-3,d//2)):
+            assert pixels.getpixel(point)==(255,0,0,255)
+        positions=[(x,y) for y in range(d) for x in range(d)
+                   if pixels.getpixel((x,y))[1]>128]
+        assert positions
+        xs,ys=zip(*positions)
+        assert abs((min(xs)+max(xs))/2-(d-1)/2)<4
+        assert abs((min(ys)+max(ys))/2-(d-1)/2)<4
+        assert all((x-(d-1)/2)**2+(y-(d-1)/2)**2<(d/2)**2 for x,y in positions)
+    finally: scene.close()
+
+
+def test_shape_switch_keeps_radius_and_supports_undo():
+    panel=OverlayPanel(); panel.set_document({'fields':[]},'template:shape'); panel.add('badge')
+    try:
+        shape=panel.widgets['badge_shape']; radius=panel.widgets['badge_radius']
+        assert shape.currentData()=='rounded_rect' and radius.isEnabled()
+        panel.edit('badge_radius',.23)
+        shape.setCurrentIndex(1); shape.activated.emit(1)
+        assert panel.selected()['badge_shape']=='circle' and not radius.isEnabled()
+        assert panel.selected()['badge_radius']==.23
+        panel.undo()
+        assert shape.currentData()=='rounded_rect' and radius.isEnabled()
+        panel.redo()
+        assert shape.currentData()=='circle' and not radius.isEnabled()
+        shape.setCurrentIndex(0); shape.activated.emit(0)
+        assert panel.selected()['badge_radius']==.23 and radius.isEnabled()
+        panel.edit('locked',True)
+        assert not shape.isEnabled() and not radius.isEnabled()
+    finally:
+        panel.close(); panel.deleteLater()
+        QCoreApplication.sendPostedEvents(None,QEvent.Type.DeferredDelete)

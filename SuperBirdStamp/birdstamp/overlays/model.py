@@ -51,7 +51,7 @@ def normalize_item(raw, index=0):
         from .badge import normalize_badge
         item.update(normalize_badge(raw))
     item.update(id=str(raw.get('id') or f'legacy-{index}'), type=kind,
-                name=str(raw.get('name') or {'text': '文本', 'badge': '圆角 Badge', 'image': '图像', 'background': '背景'}[kind]),
+                name=str(raw.get('name') or {'text': '文本', 'badge': 'Badge 徽章', 'image': '图像', 'background': '背景'}[kind]),
                 visible=flag(raw.get('visible')), locked=flag(raw.get('locked'), False),
                 layout_mode='manual' if raw.get('layout_mode') == 'manual' else 'auto',
                 x=number(raw.get('x'), .5), y=number(raw.get('y'), .5),
@@ -119,7 +119,7 @@ def new_item(kind='text', *, metadata=False):
     if kind == 'badge':
         from birdstamp.gui.editor_options import BADGE_DEFAULTS
         return normalize_item(dict(TEXT_EFFECT_DEFAULTS, **BADGE_DEFAULTS,
-            id=uuid.uuid4().hex, type=kind, name='圆角 Badge',
+            id=uuid.uuid4().hex, type=kind, name='Badge 徽章',
             text_mode='metadata', text='自定义徽章',
             text_source={'type': 'auto', 'key': 'gbif_rarity_100'},
             font_size=OVERLAY_NEW_TEXT_SIZE, layout_mode='manual'))

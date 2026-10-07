@@ -1,9 +1,10 @@
-"""圆角徽章的数据解析、共享稀有度配色及 Pillow 绘制（无 Qt）。"""
+"""徽章形状、数据解析、共享稀有度配色及 Pillow 绘制（无 Qt）。"""
 from __future__ import annotations
 
 from functools import lru_cache
 import json
 import logging
+import math
 from pathlib import Path
 import sys
 
@@ -26,6 +27,7 @@ def _color(value, default):
 def normalize_badge(raw):
     raw = raw if isinstance(raw, dict) else {}
     return dict(
+        badge_shape='circle' if raw.get('badge_shape') == 'circle' else 'rounded_rect',
         badge_color_mode='custom' if raw.get('badge_color_mode') == 'custom' else 'auto',
         badge_background=_color(raw.get('badge_background'), '#64748B'),
         color=_color(raw.get('color'), '#FFFFFF'),
@@ -133,11 +135,21 @@ def render_badge(t, item, size, photo_info, raw_metadata, text_scale):
         px = round(font.size * item['badge_padding_x'])
         py = round(font.size * item['badge_padding_y'])
         width, height = pixels.width + 2*px, pixels.height + 2*py
-        # 局部蒙版超采样，缩略预览和原尺寸导出均有平滑圆角。
+        circle = item.get('badge_shape') == 'circle'
+        if circle:
+            # 圆包住含内边距和文字效果的完整矩形，长文本也不会伸出圆外。
+            width = height = math.ceil(math.hypot(width, height))
+            px, py = (width-pixels.width)//2, (height-pixels.height)//2
+        # 局部蒙版超采样，缩略预览和原尺寸导出均有平滑边缘。
         antialias = 3
         with Image.new('L', (width*antialias, height*antialias)) as mask:
-            ImageDraw.Draw(mask).rounded_rectangle((0, 0, mask.width-1, mask.height-1),
-                radius=min(height*item['badge_radius'], width/2)*antialias, fill=255)
+            draw = ImageDraw.Draw(mask)
+            bounds = (0, 0, mask.width-1, mask.height-1)
+            if circle:
+                draw.ellipse(bounds, fill=255)
+            else:
+                draw.rounded_rectangle(bounds,
+                    radius=min(height*item['badge_radius'], width/2)*antialias, fill=255)
             with mask.resize((width, height), Image.Resampling.LANCZOS) as alpha:
                 result = Image.new('RGBA', (width, height), background)
                 result.putalpha(alpha)
