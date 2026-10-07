@@ -135,6 +135,8 @@ class BirdIDResult:
     response: dict = field(default_factory=dict)
     updates: dict = field(default_factory=dict)
     saved_fingerprint: tuple | None = None
+    source_fingerprint: tuple | None = None
+    accepted_index: int | None = None
 
 
 def collect_paths(inputs, *, recursive=False, cancelled=lambda: False):
@@ -202,6 +204,34 @@ def _fingerprint(path):
         return None
 
 
+def candidate_fields(response, best, *, confirmed):
+    """自动确认和手动采纳共用字段映射，完整响应保持原始候选顺序。"""
+    confidence = float(best["confidence"])
+    values = {"birdid_response": json.dumps(response, ensure_ascii=False, allow_nan=False, separators=(",", ":"))}
+    if confirmed:
+        values.update(bird_species_cn=best.get("cn_name", ""), bird_species_en=best.get("en_name", ""),
+                      birdid_confidence=confidence, alt_species_cn="", alt_species_en="", alt_confidence="")
+    else:
+        values.update(alt_species_cn=best.get("cn_name", ""), alt_species_en=best.get("en_name", ""), alt_confidence=confidence)
+    if confirmed and best.get("pinyin_name", "").strip():
+        values[PINYIN_FIELD] = best["pinyin_name"].strip()
+        values[PINYIN_SOURCE_FIELD] = best.get("cn_name") or best["en_name"]
+    if confirmed:
+        # 空值明确清除旧鸟种数据；来源标记防止 report.db 回填过期等级。
+        values[RARITY_FIELD] = best.get(RARITY_FIELD) if best.get(RARITY_FIELD) is not None else ""
+        values[IUCN_FIELD] = (best.get(IUCN_FIELD) or "").strip()
+        values[RARITY_SOURCE_FIELD] = (best.get("cn_name") or best["en_name"]).strip()
+        values[RARITY_MISSING_FIELD] = ",".join(key for key in (RARITY_FIELD, IUCN_FIELD) if values[key] == "")
+    fields = {f"XMP-superpicky:{key}": value for key, value in values.items()}
+    if confirmed:
+        values["title"] = best.get("cn_name") or best["en_name"]
+        fields["XMP-dc:Title"] = values["title"]
+        fields["XMP-superpicky:title"] = values["title"]
+        fields[RARITY_COMPAT_FIELDS[RARITY_FIELD]] = f"{float(values[RARITY_FIELD]):.2f}" if values[RARITY_FIELD] != "" else ""
+        fields[RARITY_COMPAT_FIELDS[IUCN_FIELD]] = values[IUCN_FIELD]
+    return values, fields
+
+
 def identify_file(source: str, client: BirdIDClient) -> BirdIDResult:
     """慢请求期间不持写锁；提交前拒绝被移动、替换或编辑过的文件。"""
     source = os.path.normpath(os.path.abspath(source))
@@ -223,29 +253,7 @@ def identify_file(source: str, client: BirdIDClient) -> BirdIDResult:
         best = parse_response(response)
         confidence = float(best["confidence"])
         confirmed = confidence >= client.options.threshold
-        values = {"birdid_response": json.dumps(response, ensure_ascii=False, allow_nan=False, separators=(",", ":"))}
-        if confirmed:
-            values.update(bird_species_cn=best.get("cn_name", ""), bird_species_en=best.get("en_name", ""),
-                          birdid_confidence=confidence, alt_species_cn="", alt_species_en="", alt_confidence="")
-        else:
-            values.update(alt_species_cn=best.get("cn_name", ""), alt_species_en=best.get("en_name", ""), alt_confidence=confidence)
-        if confirmed and best.get("pinyin_name", "").strip():
-            values[PINYIN_FIELD] = best["pinyin_name"].strip()
-            values[PINYIN_SOURCE_FIELD] = best.get("cn_name") or best["en_name"]
-        if confirmed:
-            # 空值明确清除旧鸟种数据；来源标记防止 report.db 回填过期等级。
-            values[RARITY_FIELD] = best.get(RARITY_FIELD) if best.get(RARITY_FIELD) is not None else ""
-            values[IUCN_FIELD] = (best.get(IUCN_FIELD) or "").strip()
-            values[RARITY_SOURCE_FIELD] = (best.get("cn_name") or best["en_name"]).strip()
-            values[RARITY_MISSING_FIELD] = ",".join(key for key in (RARITY_FIELD, IUCN_FIELD) if values[key] == "")
-        fields = {f"XMP-superpicky:{key}": value for key, value in values.items()}
-        if confirmed:
-            values["title"] = best.get("cn_name") or best["en_name"]
-            fields["XMP-dc:Title"] = values["title"]
-            fields["XMP-superpicky:title"] = values["title"]
-            fields[RARITY_COMPAT_FIELDS[RARITY_FIELD]] = f"{float(values[RARITY_FIELD]):.2f}" if values[RARITY_FIELD] != "" else ""
-            fields[RARITY_COMPAT_FIELDS[IUCN_FIELD]] = values[IUCN_FIELD]
-
+        values, fields = candidate_fields(response, best, confirmed=confirmed)
         with xmp_sidecar_write_lock(source):
             client.check_cancelled()
             if before != (_fingerprint(source), _fingerprint(store.sidecar_path_for(source))):
@@ -258,9 +266,40 @@ def identify_file(source: str, client: BirdIDClient) -> BirdIDResult:
         if confirmed:
             updates["Title"] = values["title"]
         name = best.get("cn_name") or best["en_name"]
-        return BirdIDResult(source, "success" if confirmed else "candidate", f"{name} {confidence:.1f}%" + ("" if confirmed else "（待确定）"), response, updates, saved_fingerprint)
+        return BirdIDResult(source, "success" if confirmed else "candidate", f"{name} {confidence:.1f}%" + ("" if confirmed else "（待确定）"), response, updates, saved_fingerprint, before[0],
+                            response["results"].index(best) if confirmed else None)
     except BirdIDCancelled:
         return BirdIDResult(source, "cancelled", "已停止，未写入此照片")
+    except Exception as exc:
+        return BirdIDResult(source, "failed", f"[BirdID] {exc}")
+
+
+def adopt_candidate(result: BirdIDResult, index: int, *, cancelled=lambda: False) -> BirdIDResult:
+    """采纳本批次候选，不再次请求服务；过期结果不能覆盖后续编辑。"""
+    source, store = result.source, PhotoMetaDataXMP()
+    try:
+        parse_response(result.response)
+        if (result.status not in {"success", "candidate"} or result.saved_fingerprint is None
+                or result.source_fingerprint is None):
+            raise BirdIDError("没有可采纳的已保存识别结果")
+        if isinstance(index, bool) or not isinstance(index, int) or not 0 <= index < len(result.response["results"]):
+            raise BirdIDError("候选索引无效")
+        candidate = result.response["results"][index]
+        values, fields = candidate_fields(result.response, candidate, confirmed=True)
+        with xmp_sidecar_write_lock(source):
+            if cancelled():
+                raise BirdIDCancelled("已取消采纳")
+            if (result.source_fingerprint, result.saved_fingerprint) != (
+                    _fingerprint(source), _fingerprint(store.sidecar_path_for(source))):
+                return BirdIDResult(source, "skipped", "照片或 XMP 已变化，请重新识别后采纳")
+            if not store.write(source, fields):
+                raise BirdIDError("采纳保存失败，原元数据已保留，可重试")
+            saved = _fingerprint(store.sidecar_path_for(source))
+        updates = {**values, **fields, "Title": values["title"]}
+        return BirdIDResult(source, "success", f"已采纳：{values['title']} {float(candidate['confidence']):.1f}%",
+                            result.response, updates, saved, result.source_fingerprint, index)
+    except BirdIDCancelled:
+        return BirdIDResult(source, "cancelled", "已取消采纳，原结果保留")
     except Exception as exc:
         return BirdIDResult(source, "failed", f"[BirdID] {exc}")
 

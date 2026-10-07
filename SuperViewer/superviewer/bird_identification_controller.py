@@ -4,13 +4,11 @@ from __future__ import annotations
 
 from collections import Counter
 from dataclasses import dataclass
-import html
-import os
 import traceback
 from pathlib import Path
 
 from app_common.log import get_logger
-from .bird_identification import BirdIDClient, BirdIDOptions, collect_paths, identify_file
+from .bird_identification import BirdIDClient, BirdIDOptions, collect_paths, identify_file, adopt_candidate
 from .qt_compat import QThread, pyqtSignal
 
 try:
@@ -100,10 +98,24 @@ class BirdIDWorker(QThread):
             self.client.cancel()
 
 
+class BirdIDAdoptWorker(QThread):
+    def __init__(self, entry, index, job):
+        super().__init__()
+        self.entry, self.index, self.job = entry, index, job
+        self.previous = entry.result
+        self.result = None
+
+    def run(self):
+        self.result = adopt_candidate(self.previous, self.index, cancelled=self.isInterruptionRequested)
+
+    def stop(self):
+        self.requestInterruption()
+
+
 class BirdIDProgressDialog(QDialog):
     cancel_requested = pyqtSignal()
 
-    def __init__(self, parent):
+    def __init__(self, parent, *, results_table=False):
         super().__init__(parent)
         self.setWindowTitle("SuperPicky 识鸟进度")
         self.setMinimumSize(600, 380)
@@ -113,9 +125,14 @@ class BirdIDProgressDialog(QDialog):
         self.bar = QProgressBar(self)
         self.bar.setRange(0, 0)
         self.summary = QLabel("", self)
-        self.details = QTextEdit(self)
-        self.details.setReadOnly(True)
-        self.details.document().setMaximumBlockCount(1000)
+        if results_table:
+            from .bird_identification_table import BirdIDResultsTable
+            self.details = BirdIDResultsTable(self)
+            self.resize(1180, 540)
+        else:
+            self.details = QTextEdit(self)
+            self.details.setReadOnly(True)
+            self.details.document().setMaximumBlockCount(1000)
         self.button = QPushButton("停止", self)
         self.button.clicked.connect(self._clicked)
         layout = QVBoxLayout(self)
@@ -146,7 +163,7 @@ class BirdIDController(QObject):
     def __init__(self, window, file_list, dir_browser=None):
         super().__init__(window)
         self._main, self._file_list = window, file_list
-        self._worker = self._dialog = None
+        self._worker = self._dialog = self._adopt_worker = None
         self._shutdown_requested = False
         self._options = BirdIDOptions()
         self._counts = Counter()
@@ -158,7 +175,7 @@ class BirdIDController(QObject):
 
     @property
     def busy(self):
-        return self._worker is not None
+        return self._worker is not None or self._adopt_worker is not None
 
     def show_progress(self):
         if self._dialog is not None:
@@ -221,8 +238,10 @@ class BirdIDController(QObject):
             self._dialog.close()
             self._dialog.deleteLater()
         self._counts, self._failure, self._stopped = Counter(), "", False
+        self._job = job
         worker = self._worker = BirdIDWorker(job, options)
-        dialog = self._dialog = BirdIDProgressDialog(self._main)
+        dialog = self._dialog = BirdIDProgressDialog(self._main, results_table=True)
+        dialog.details.adopt_requested.connect(lambda entry, index, d=dialog: self._adopt(d, entry, index))
         dialog.cancel_requested.connect(self.stop)
         worker.status_changed.connect(lambda text, w=worker: self._status(w, text))
         worker.progress_changed.connect(lambda n, total, w=worker: self._progress(w, n, total))
@@ -250,18 +269,57 @@ class BirdIDController(QObject):
             return
         self._counts[result.status] += 1
         _log.info("[BirdID] %s %r: %s", result.status, result.source, result.message)
-        lines = [f"{Path(result.source).name}：{result.message}"]
-        for candidate in result.response.get("results", []):
-            lines.append(f"  {candidate.get('cn_name', '')} / {candidate.get('en_name', '')} / {candidate.get('scientific_name', '')} — {float(candidate['confidence']):.1f}%")
-            if candidate.get("description"):
-                lines.append(candidate["description"])
-        if result.response.get("warning"):
-            lines.append(f"地理筛选提示：{result.response['warning']}")
-        self._dialog.details.append(html.escape("\n".join(lines)).replace("\n", "<br>"))
-        labels = (("success", "已确认"), ("candidate", "待确定"), ("skipped", "跳过"), ("failed", "失败"), ("cancelled", "取消"))
-        self._dialog.summary.setText("，".join(f"{label} {self._counts[key]}" for key, label in labels))
+        self._dialog.details.append_result(result)
+        self._update_summary()
         if result.updates:
             self._refresh_rows(result, worker.job)
+
+    def _update_summary(self):
+        labels = (("success", "已确认"), ("candidate", "待确定"), ("skipped", "跳过"), ("failed", "失败"), ("cancelled", "取消"))
+        self._dialog.summary.setText("，".join(f"{label} {self._counts[key]}" for key, label in labels))
+
+    def _adopt(self, dialog, entry, index):
+        if (self._shutdown_requested or dialog is not self._dialog or self._adopt_worker is not None
+                or not 0 <= index < entry.row_count):
+            return
+        model = dialog.details.results
+        row = entry.first_row + index
+        if row >= len(model.rows) or model.rows[row][0] is not entry or not model.can_adopt(row):
+            return
+        worker = self._adopt_worker = BirdIDAdoptWorker(entry, index, self._job)
+        entry.pending_index = index
+        model.set_pending(True)
+        dialog.running = True
+        dialog.button.setText("停止")
+        dialog.button.setEnabled(True)
+        if self._worker is None:
+            dialog.label.setText("正在保存采纳结果…")
+        worker.finished.connect(lambda w=worker: self._adopt_finished(w))
+        worker.start()
+
+    def _adopt_finished(self, worker):
+        if worker is not self._adopt_worker:
+            return
+        self._adopt_worker = None
+        if not self._shutdown_requested:
+            result, entry = worker.result, worker.entry
+            entry.pending_index = None
+            if result.status == "success":
+                self._counts[entry.result.status] -= 1
+                self._counts[result.status] += 1
+                entry.result, entry.error = result, ""
+                self._refresh_rows(result, worker.job)
+                self._update_summary()
+            else:
+                entry.error = result.message
+                entry.stale = result.status == "skipped"
+            _log.info("[BirdID] adopt %r: %s", result.source, result.message)
+            self._dialog.details.results.refresh_entry(entry)
+            self._dialog.details.results.set_pending(False)
+        self._finish_dialog()
+        if not self._shutdown_requested and self._worker is None:
+            self._dialog.label.setText(worker.result.message)
+        worker.deleteLater()
 
     def _refresh_rows(self, result, job):
         if not hasattr(self, "_metadata_sync"):
@@ -277,6 +335,12 @@ class BirdIDController(QObject):
         if worker is not self._worker:
             return
         self._worker = None
+        worker.deleteLater()
+        self._finish_dialog()
+
+    def _finish_dialog(self):
+        if self.busy:
+            return
         if self._shutdown_requested:
             self._dialog.finish("已停止")
             self._dialog.close()
@@ -286,16 +350,17 @@ class BirdIDController(QObject):
             self._dialog.finish("识鸟已停止，已保存的结果保留。")
         else:
             self._dialog.finish("识鸟完成。" if not self._counts["failed"] else "识鸟结束，部分照片失败，请查看详情。")
-        worker.deleteLater()
 
     def stop(self):
         self._stopped = True
         if self._worker is not None:
             self._worker.stop()
+        if self._adopt_worker is not None:
+            self._adopt_worker.stop()
 
     def request_shutdown(self):
         self._shutdown_requested = True
         self.stop()
 
     def is_shutdown_done(self):
-        return self._worker is None
+        return not self.busy

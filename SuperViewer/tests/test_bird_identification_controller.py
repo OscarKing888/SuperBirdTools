@@ -89,7 +89,7 @@ def test_menus_resolved_source_and_cache_update_without_reselection(env):
     assert files.updates[-1]['stale-report.jpg']['title'] == '翠鸟'
     assert files.updates[-1][paths[0]]['bird_species_cn'] == '翠鸟'
     assert refreshed and not selected
-    assert '翠鸟' in controller._dialog.details.toPlainText()
+    assert controller._dialog.details.model().index(0, 4).data() == '翠鸟'
     assert '已确认 1' in controller._dialog.summary.text()
 
 
@@ -102,7 +102,7 @@ def test_batch_continues_after_error_and_counts_candidates(env, monkeypatch):
     assert controller.start(ui.BirdIDJob((str(Path(paths[0]).parent),)), options=BirdIDOptions())
     assert wait_for(lambda: not controller.busy)
     assert controller._counts == {'failed': 1, 'candidate': 2}
-    assert '待确定' in controller._dialog.details.toPlainText()
+    assert controller._dialog.details.model().index(1, 1).data() == '待确定'
     assert not Path(paths[0]).with_suffix('.xmp').exists()
     assert PhotoMetaDataXMP().read(paths[1])['alt_species_cn'] == '候选翠鸟'
 
@@ -255,3 +255,158 @@ def test_real_window_result_refresh_preserves_preview_and_comment_draft(tmp_path
         assert wait_for(lambda: window._shutdown_finalized)
         window.deleteLater()
         _APP.processEvents()
+
+
+def multi_response():
+    return {'success': True, 'results': [
+        {'cn_name': '白头鹎', 'en_name': 'Light-vented Bulbul', 'confidence': 45,
+         'scientific_name': 'Pycnonotus sinensis', 'pinyin_name': 'bái tóu bēi',
+         'gbif_rarity_100': 0, 'iucn_category': 'LC', 'description': '常见留鸟'},
+        {'cn_name': '红耳鹎', 'en_name': 'Red-whiskered Bulbul', 'confidence': 35},
+        {'cn_name': '黑短脚鹎', 'confidence': 20}], 'warning': '地理筛选信息不足'}
+
+
+@pytest.mark.parametrize("adoption_key", ["Key_Space", "Key_Return", "Key_Enter"])
+def test_table_candidates_buttons_and_background_adoption(env, monkeypatch, adoption_key):
+    from PyQt6.QtCore import Qt
+    from PyQt6.QtTest import QTest
+    controller, files, paths, state = env
+    monkeypatch.setattr(BirdIDClient, 'recognize', lambda *_: multi_response())
+    assert controller.start_for_paths(paths[:2], options=BirdIDOptions())
+    assert wait_for(lambda: not controller.busy)
+    table = controller._dialog.details
+    model = table.model()
+    assert model.rowCount() == 6
+    assert model.index(0, 9).data() == '0 / 100'
+    assert model.index(1, 9).data() == '—'
+    assert model.index(0, 7).data() == 'bái tóu bēi'
+    assert model.index(0, 12).data() == '地理筛选信息不足'
+    assert model.index(0, 0).data(Qt.ItemDataRole.ToolTipRole) == paths[0]
+    assert table.horizontalScrollBar().maximum() > 0
+    selected = []
+    files.file_selected.connect(selected.append)
+    target = model.index(1, model.ACTION_COLUMN)
+    QTest.mouseClick(table.viewport(), Qt.MouseButton.LeftButton, pos=table.visualRect(target).center())
+    assert wait_for(lambda: not controller.busy)
+    assert PhotoMetaDataXMP().read(paths[0])['Title'] == '红耳鹎'
+    assert 'Title' not in PhotoMetaDataXMP().read(paths[1])
+    assert model.index(1, model.ACTION_COLUMN).data() == '已采纳'
+    assert not model.can_adopt(1) and model.can_adopt(0)
+    assert controller._counts['success'] == 1 and controller._counts['candidate'] == 1
+    assert not selected
+    table.setCurrentIndex(model.index(0, model.ACTION_COLUMN))
+    QTest.keyClick(table, getattr(Qt.Key, adoption_key))
+    assert wait_for(lambda: not controller.busy)
+    assert PhotoMetaDataXMP().read(paths[0])['Title'] == '白头鹎'
+    assert controller._counts['success'] == 1
+
+
+def test_stale_adoption_disables_photo_candidates(env, monkeypatch):
+    controller, files, paths, state = env
+    monkeypatch.setattr(BirdIDClient, 'recognize', lambda *_: multi_response())
+    controller.start_for_paths(paths[:1], options=BirdIDOptions())
+    assert wait_for(lambda: not controller.busy)
+    assert PhotoMetaDataXMP().write_title(paths[0], '新的手动鸟名')
+    table = controller._dialog.details
+    table._request(2)
+    assert wait_for(lambda: not controller.busy)
+    assert '已变化' in controller._dialog.label.text()
+    assert all(not table.results.can_adopt(row) for row in range(3))
+    assert PhotoMetaDataXMP().read(paths[0])['Title'] == '新的手动鸟名'
+
+
+def test_shutdown_waits_for_adoption_thread_and_ignores_late_completion(env, monkeypatch):
+    controller, files, paths, state = env
+    monkeypatch.setattr(BirdIDClient, 'recognize', lambda *_: multi_response())
+    controller.start_for_paths(paths[:1], options=BirdIDOptions())
+    assert wait_for(lambda: not controller.busy)
+    gate, started = threading.Event(), threading.Event()
+    original = ui.adopt_candidate
+    def slow(*args, **kwargs):
+        started.set()
+        assert gate.wait(5)
+        return original(*args, **kwargs)
+    monkeypatch.setattr(ui, 'adopt_candidate', slow)
+    before = Path(paths[0]).with_suffix('.xmp').read_bytes()
+    controller._dialog.details._request(1)
+    assert started.wait(3)
+    worker = controller._adopt_worker
+    try:
+        controller.request_shutdown()
+        assert controller.busy and not controller.is_shutdown_done()
+        controller._adopt_finished(object())
+        assert controller._adopt_worker is worker
+    finally:
+        gate.set()
+    assert wait_for(controller.is_shutdown_done)
+    assert Path(paths[0]).with_suffix('.xmp').read_bytes() == before
+
+
+def test_scroll_table_retains_all_results_without_per_row_widgets(tmp_path):
+    from SuperViewer.superviewer.bird_identification import BirdIDResult
+    dialog = ui.BirdIDProgressDialog(None, results_table=True)
+    try:
+        dialog.show()
+        table = dialog.details
+        for i in range(350):
+            table.append_result(BirdIDResult(f'/照片/{i}.jpg', 'candidate', response=multi_response()))
+        _APP.processEvents()
+        assert table.model().rowCount() == 1050
+        assert table.verticalScrollBar().maximum() > 0
+        table.verticalScrollBar().setValue(0)
+        table.append_result(BirdIDResult('/照片/失败.jpg', 'failed', '服务不可用'))
+        _APP.processEvents()
+        assert table.verticalScrollBar().value() == 0
+        assert table.model().index(1050, 11).data() == '服务不可用'
+        assert not table.results.can_adopt(1050)
+        assert table.indexWidget(table.model().index(0, 2)) is None
+        assert dialog.grab().save(str(tmp_path / 'bird-id-table.png'))
+    finally:
+        dialog.finish('完成')
+        dialog.close()
+        dialog.deleteLater()
+
+
+def test_can_adopt_finished_photo_while_batch_continues(env, monkeypatch):
+    controller, files, paths, state = env
+    gate, waiting = threading.Event(), threading.Event()
+    def recognize(client, path):
+        if path == paths[1]:
+            waiting.set()
+            assert gate.wait(5)
+        return multi_response()
+    monkeypatch.setattr(BirdIDClient, 'recognize', recognize)
+    controller.start_for_paths(paths[:2], options=BirdIDOptions())
+    try:
+        assert wait_for(lambda: waiting.is_set() and controller._dialog.details.model().rowCount() == 3)
+        worker = controller._worker
+        table = controller._dialog.details
+        table._request(2)
+        assert wait_for(lambda: controller._adopt_worker is None)
+        assert controller._worker is worker and controller.busy
+        assert PhotoMetaDataXMP().read(paths[0])['Title'] == '黑短脚鹎'
+        assert table.model().index(2, 2).data() == '已采纳'
+        assert table.model().index(0, 1).data() == '候选'
+    finally:
+        gate.set()
+    assert wait_for(lambda: not controller.busy)
+    assert controller._counts == {'candidate': 1, 'success': 1}
+
+
+def test_adoption_write_failure_allows_retry(env, monkeypatch):
+    controller, files, paths, state = env
+    monkeypatch.setattr(BirdIDClient, 'recognize', lambda *_: multi_response())
+    controller.start_for_paths(paths[:1], options=BirdIDOptions())
+    assert wait_for(lambda: not controller.busy)
+    table = controller._dialog.details
+    with monkeypatch.context() as patch:
+        patch.setattr(PhotoMetaDataXMP, '_write_tree_atomic', staticmethod(lambda *_: False))
+        table._request(1)
+        assert wait_for(lambda: not controller.busy)
+    assert table.results.can_adopt(1)
+    assert '失败' in controller._dialog.label.text()
+    assert controller._counts['candidate'] == 1
+    table._request(1)
+    assert wait_for(lambda: not controller.busy)
+    assert PhotoMetaDataXMP().read(paths[0])['Title'] == '红耳鹎'
+    assert controller._counts['success'] == 1

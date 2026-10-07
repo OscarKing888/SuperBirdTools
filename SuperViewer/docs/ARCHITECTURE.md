@@ -312,7 +312,9 @@ CLI 与 GUI 共用核心：在仓库根使用共享 `.venv` 执行 `python -m Su
 
 [`BirdIDController`](../superviewer/bird_identification_controller.py) 在照片/目录右键菜单接入单张、多选和目录（可递归）识鸟；独立 `BirdIDWorker` 顺序访问本机 SuperPicky HTTP 服务。无 Qt 核心 [`bird_identification.py`](../superviewer/bird_identification.py) 共用原文件路径解析后的输入、扫描去重、协议校验、置信度分流和 XMP 保存，CLI 复用相同入口，不导入 SuperPicky 的模型栈。
 
-已确认鸟种沿用 `bird_species_cn` / `bird_species_en` / `birdid_confidence` 并同步标准标题；低置信度沿用 `alt_species_*` / `alt_confidence`。完整响应保存在 XMP 的 `birdid_response`。共享 `PhotoMetaDataXMP.write()` 将标准与私有原生字段一次原子发布；识别期间的照片/侧车变更使该结果跳过写入。完成后按当前列表同侧车路径局部同步缓存与信息页，不重新选图；保留未提交备注，拒绝晚到回调，主窗口关闭等待真正的线程完成。服务接口及返回字段限制、使用和验证见 [识鸟说明](../../docs/bird_identification.md)。
+已确认鸟种沿用 `bird_species_cn` / `bird_species_en` / `birdid_confidence` 并同步标准标题；低置信度沿用 `alt_species_*` / `alt_confidence`。完整响应保存在 XMP 的 `birdid_response`。共享 `PhotoMetaDataXMP.write()` 将标准与私有原生字段一次原子发布；识别期间的照片/侧车变更使该结果跳过写入。完成后按当前列表同侧车路径局部同步缓存与信息页，不重新选图；保留未提交备注，拒绝晚到回调，主窗口关闭等待真正的线程完成。识鸟进度由 [`BirdIDResultsTable`](../superviewer/bird_identification_table.py) 按每候选一行呈现；模型持有结果/候选索引与采纳状态，委托绘制可见按钮，支持双向滚动和完整字段提示。`BirdIDAdoptWorker` 调用核心 `adopt_candidate()` 后台采纳指定候选，与自动确认共用字段映射，提交前核对原图及已保存 XMP 的指纹；实际 `QThread.finished` 后才释放 worker 并同步界面，关闭时等待识别和采纳两个线程。拼音/拍摄地更新仍使用文本进度窗。
+
+服务接口及返回字段限制、使用和验证见 [识鸟说明](../../docs/bird_identification.md)。
 
 ## 10. 扩展与验证步骤
 
