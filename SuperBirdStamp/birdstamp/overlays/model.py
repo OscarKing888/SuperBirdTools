@@ -24,7 +24,7 @@ def flag(value, default=True):
 def normalize_item(raw, index=0):
     from birdstamp.gui.editor_template import normalize_template_field
     kind = raw.get('type', 'text')
-    if kind not in ('text', 'image', 'background'):
+    if kind not in ('text', 'badge', 'image', 'background'):
         raise ValueError(f'不支持的叠加层类型: {kind}')
     item = deepcopy(raw)
     if kind == 'image':
@@ -43,12 +43,15 @@ def normalize_item(raw, index=0):
                     banner_gradient_bottom_opacity_pct=t._normalize_banner_gradient_bottom_opacity_pct(raw.get('banner_gradient_bottom_opacity_pct')),
                     banner_gradient_top_color=t._normalize_banner_gradient_color(raw.get('banner_gradient_top_color'),'#000000'),
                     banner_gradient_bottom_color=t._normalize_banner_gradient_color(raw.get('banner_gradient_bottom_color'),'#000000'))
-    if kind == 'text':
+    if kind in ('text', 'badge'):
         item.update(normalize_template_field(raw, index))
         item['text'] = str(raw.get('text', ''))
         item['text_mode'] = 'literal' if raw.get('text_mode') == 'literal' else 'metadata'
+    if kind == 'badge':
+        from .badge import normalize_badge
+        item.update(normalize_badge(raw))
     item.update(id=str(raw.get('id') or f'legacy-{index}'), type=kind,
-                name=str(raw.get('name') or {'text': '文本', 'image': '图像', 'background': '背景'}[kind]),
+                name=str(raw.get('name') or {'text': '文本', 'badge': '圆角 Badge', 'image': '图像', 'background': '背景'}[kind]),
                 visible=flag(raw.get('visible')), locked=flag(raw.get('locked'), False),
                 layout_mode='manual' if raw.get('layout_mode') == 'manual' else 'auto',
                 x=number(raw.get('x'), .5), y=number(raw.get('y'), .5),
@@ -107,6 +110,13 @@ def effective_payload(payload, override):
 
 def new_item(kind='text', *, metadata=False):
     from birdstamp.gui.editor_options import TEXT_EFFECT_DEFAULTS, OVERLAY_NEW_TEXT_SIZE, OVERLAY_IMAGE_WIDTH_PCT
+    if kind == 'badge':
+        from birdstamp.gui.editor_options import BADGE_DEFAULTS
+        return normalize_item(dict(TEXT_EFFECT_DEFAULTS, **BADGE_DEFAULTS,
+            id=uuid.uuid4().hex, type=kind, name='圆角 Badge',
+            text_mode='metadata', text='自定义徽章',
+            text_source={'type': 'auto', 'key': 'gbif_rarity_100'},
+            font_size=OVERLAY_NEW_TEXT_SIZE, layout_mode='manual'))
     return normalize_item(dict(TEXT_EFFECT_DEFAULTS, id=uuid.uuid4().hex, type=kind,
                                name='元数据文本' if metadata else {'text': '自定义文本', 'image': '图像', 'background': '背景'}[kind],
                                text_mode='metadata' if metadata else 'literal', text='自定义文本',

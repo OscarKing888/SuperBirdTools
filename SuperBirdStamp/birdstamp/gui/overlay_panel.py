@@ -70,6 +70,7 @@ class OverlayPanel(QWidget):
         menu = QMenu(self)
         menu.addAction('自定义文本', lambda: self.add('text'))
         menu.addAction('元数据文本', lambda: self.add('text', metadata=True))
+        menu.addAction('圆角 Badge（徽章）', lambda: self.add('badge'))
         menu.addAction('图像…', self.import_file)
         menu.addAction('背景', lambda: self.add('background'))
         self.add_button.setMenu(menu)
@@ -118,10 +119,10 @@ class OverlayPanel(QWidget):
         reset=QPushButton('恢复自动布局'); reset.clicked.connect(lambda:self.edit('layout_mode','auto'))
         self.form.addRow(reset)
         self.reset_layout_button=reset
-        self._combo('text_mode','文字来源',[('自定义文本','literal'),('元数据字段','metadata')],kinds=('text',))
+        self._combo('text_mode','文字来源',[('自定义文本','literal'),('元数据字段','metadata')],kinds=('text','badge'))
         self.text=QPlainTextEdit(); self.text.setMaximumHeight(100)
         self.text.textChanged.connect(lambda:self._text_timer.start() if not self._updating else None)
-        self._row('text','文本',self.text,('text',))
+        self._row('text','文本',self.text,('text','badge'))
         self.metadata=FilterableComboBox(); self.metadata.setEditable(True)
         self.metadata.setInsertPolicy(QComboBox.InsertPolicy.NoInsert)
         self.metadata.setMaxVisibleItems(18)
@@ -131,23 +132,34 @@ class OverlayPanel(QWidget):
             self.metadata.addItem(f'{label} ({key})',(source,key))
         self.metadata.activated.connect(self._metadata_selected)
         self.metadata.lineEdit().editingFinished.connect(self._metadata_typed)
-        self._row('text_source','字段/占位符',self.metadata,('text',))
-        self._spin('font_size','基础字号',8,300,kinds=('text',))
+        self._row('text_source','字段/占位符',self.metadata,('text','badge'))
+        self._spin('font_size','基础字号',8,300,kinds=('text','badge'))
         self.font=QComboBox(); self.font.addItem('自动（系统默认）','auto')
         self.font.activated.connect(lambda i:self.edit('font_type',self.font.itemData(i)))
-        self._row('font_type','字体',self.font,('text',))
+        self._row('font_type','字体',self.font,('text','badge'))
         choose=QPushButton('加载字体列表'); choose.clicked.connect(self._load_fonts)
         self.form.addRow(choose); self.font_button=choose
-        self._combo('style','样式',[('常规','normal'),('粗体','bold'),('斜体','italic'),('粗斜体','bold_italic')],kinds=('text',))
-        self._color('color','文字颜色',('text',))
+        self._combo('style','样式',[('常规','normal'),('粗体','bold'),('斜体','italic'),('粗斜体','bold_italic')],kinds=('text','badge'))
+        self._combo('badge_color_mode','Badge 配色',[
+            ('自动（稀有度跟随徽章设置）','auto'),('自定义颜色','custom')],kinds=('badge',))
+        self.widgets['badge_color_mode'].setToolTip(
+            'GBIF 稀有度自动采用 SuperViewer 稀有度徽章的背景色和文字色；其他字段使用自定义颜色。'
+            '切换配色模式会保留自定义颜色。')
+        self._combo('badge_text_format','Badge 内容',[
+            ('自动（稀有度显示等级名称）','auto'),('原始字段值','raw')],kinds=('badge',))
+        self._color('badge_background','Badge 背景色',('badge',))
+        self._color('color','文字颜色',('text','badge'))
+        self._percent('badge_padding_x','水平内边距（字号 %）',0,200,factor=100,kinds=('badge',))
+        self._percent('badge_padding_y','垂直内边距（字号 %）',0,200,factor=100,kinds=('badge',))
+        self._percent('badge_radius','圆角（高度 %）',0,50,factor=100,kinds=('badge',))
         for key,value in DEFAULT_TEXT_EFFECTS.items():
             labels={'stroke_enabled':'描边','stroke_color':'描边颜色','stroke_width':'描边宽度',
                     'shadow_enabled':'阴影','shadow_color':'阴影颜色','shadow_opacity':'阴影不透明度 %',
                     'shadow_offset_x':'阴影 X','shadow_offset_y':'阴影 Y','shadow_blur':'阴影柔化'}
-            if isinstance(value,bool): self._check(key,labels[key],('text',))
-            elif isinstance(value,str): self._color(key,labels[key],('text',))
-            elif key=='shadow_opacity': self._percent(key,labels[key],*TEXT_EFFECT_RANGES[key],kinds=('text',))
-            else: self._spin(key,labels[key],*TEXT_EFFECT_RANGES[key],kinds=('text',))
+            if isinstance(value,bool): self._check(key,labels[key],('text','badge'))
+            elif isinstance(value,str): self._color(key,labels[key],('text','badge'))
+            elif key=='shadow_opacity': self._percent(key,labels[key],*TEXT_EFFECT_RANGES[key],kinds=('text','badge'))
+            else: self._spin(key,labels[key],*TEXT_EFFECT_RANGES[key],kinds=('text','badge'))
         self._combo('banner_background_style','背景样式',[('纯色','solid'),('渐变','gradient_bottom')],kinds=('background',))
         self._color('banner_color','背景颜色',('background',))
         self._check('tint_enabled','自定义颜色',('image',))
@@ -303,6 +315,10 @@ class OverlayPanel(QWidget):
                 self.forms.get(key,self.form).setRowVisible(widget,show)
                 widget.setEnabled(not item['locked'] or key in ('locked','visible','name'))
                 if key=='tint_color': widget.setEnabled(not item['locked'] and item.get('tint_enabled',False))
+                if key in ('color','badge_background') and item['type']=='badge':
+                    from birdstamp.overlays.badge import is_rarity_badge
+                    widget.setEnabled(not item['locked'] and not (
+                        item['badge_color_mode']=='auto' and is_rarity_badge(item)))
                 value=item.get(key)
                 if isinstance(widget,QCheckBox): widget.setChecked(bool(value))
                 elif isinstance(widget,(QDoubleSpinBox,PercentEditor)): widget.setValue(float(value or 0)*widget.property('factor'))
@@ -320,10 +336,10 @@ class OverlayPanel(QWidget):
                     idx=widget.findData(value)
                     if idx<0 and key=='font_type': widget.addItem(str(value),value); idx=widget.count()-1
                     widget.setCurrentIndex(max(0,idx))
-            self.font_button.setVisible(item['type']=='text')
+            self.font_button.setVisible(item['type'] in ('text','badge'))
             self.replace_image_button.setVisible(item['type']=='image')
             self.replace_image_button.setEnabled(not item['locked'])
-            self.tabs.setTabVisible(2,item['type']=='text')
+            self.tabs.setTabVisible(2,item['type'] in ('text','badge'))
             self.reset_layout_button.setEnabled(not item['locked'])
         self._updating=False
 
@@ -444,7 +460,7 @@ class OverlayPanel(QWidget):
 
     def focus_content(self):
         item=self.selected()
-        if not item or item['type']!='text' or item['locked']: return
+        if not item or item['type'] not in ('text','badge') or item['locked']: return
         self.tabs.setCurrentIndex(0)
         widget=self.text if item['text_mode']=='literal' else self.metadata
         parent=self.parentWidget()

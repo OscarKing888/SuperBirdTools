@@ -1,8 +1,21 @@
 # 叠加层编辑
 
-模板管理和主窗口的「模板叠加」区域使用同一套编辑器。点击「新增叠加层」添加自定义文本、元数据文本、静态图像或背景。图片会内嵌到配置，原素材移动后仍可使用；相同素材在一个工作区中只保存一份。
+模板管理和主窗口的「模板叠加」区域使用同一套编辑器。点击「新增叠加层」添加自定义文本、元数据文本、圆角 Badge（徽章）、静态图像或背景。图片会内嵌到配置，原素材移动后仍可使用；相同素材在一个工作区中只保存一份。
 
 添加「元数据文本」后，在字段中选择「鸟种拼音」，即可显示 `jiā yàn` 这样的带声调拼音，位置、字号和旋转与其它文字相同。优先读取已有的拼音元数据（XMP/文件优先于 report.db）；没有时按中文鸟名查询内置的 SuperPicky 拼音表，XMP 中修正过的鸟名优先于数据库旧名。支持约 1.14 万个鸟名，无需联网；未收录的名称按缺失字段处理。
+
+## 圆角 Badge 与稀有度配色
+
+「新增叠加层 → 圆角 Badge（徽章）」默认引用 **GBIF 稀有度**（`gbif_rarity_100`）。Badge 在画面中央创建，按分数显示普通、少见、稀有、史诗、传奇或未知。可在「字段/占位符」选择其他元数据，或把「文字来源」改成自定义文本。`rarity_index` 是另一字段，不套用 GBIF 的 0–100 分级。
+
+- **Badge 配色 → 自动**：引用 GBIF 稀有度时，背景色、文字色与 SuperViewer「设置 → 用户选项 → 稀有度徽章」一致，包括用户修改过的各档颜色。其他字段和自定义文本使用图层自己的背景色、文字色。
+- **Badge 配色 → 自定义颜色**：使用此图层保存的两种颜色，不再随照片等级或稀有度配置改变。切回自动再切回自定义，之前选的颜色仍保留。模板/工作区存配色模式和自定义值，不把自动解析出的颜色固化。
+- **Badge 内容**：自动模式把 GBIF 分数转为现有配置中的等级名称，也会跟随自定义名称；可选「原始字段值」显示分数。文字格式与配色模式独立。
+- **内边距与圆角**：水平/垂直内边距按实际字号缩放；圆角按徽章高度计算，最高 50% 为胶囊样式。字体、描边、阴影、整体透明度、移动、缩放和旋转沿用文字图层操作。
+
+自动配色只读同一源码目录/安装目录旁的 SuperViewer `SuperViewerUser.cfg`：源码为 `SuperViewer/SuperViewerUser.cfg`，macOS 为并列 `SuperViewer.app/Contents/MacOS/SuperViewerUser.cfg`，Windows 为并列 `SuperViewer/SuperViewerUser.cfg`，兼容同目录可执行文件布局。找不到时使用当前应用用户选项及共享内置默认值；文件格式错误会记录诊断。保存 Viewer 配色后，BirdStamp 下次刷新预览或导出时自动重读，不需要重新添加图层。改变配色也会使已有导出帧缓存失效。
+
+Badge 与「绘制文本」开关一起控制，不依赖 Banner/图像开关。图片、GIF/视频帧以及 CLI `render --template` 使用同一圆角绘制；`--no-draw-text` 同时关闭 Badge。自动位置使用完整徽章边界对齐，不参与旧文字的字号避让；拖动转手动时保持可见尺寸和位置。旧模板没有 Badge 时不改变其排版或像素。
 
 ## 直接在画面中调整
 
@@ -35,9 +48,10 @@ A/B 下只编辑 B 的当前照片；进入编辑会停止播放，显示 B 的�
 ## 实现入口与验证
 
 - `birdstamp/overlays/model.py`：旧字段/Banner 适配、规范化、实例优先级和工作区素材去重。
+- `birdstamp/overlays/badge.py`：无窗口的圆角绘制、GBIF 等级解析与 Viewer 配色读取。
 - `birdstamp/overlays/assets.py`：静态素材导入、内容哈希验证和 128 MiB 解码缓存。
 - `birdstamp/overlays/render.py`：逻辑画幅布局、旋转命中几何和 Pillow 合成，不依赖窗口状态。
 - `gui/overlay_panel.py`、`gui/overlay_edit.py`、`gui/editor_overlays.py`：共用属性编辑、手势会话和主窗口绑定。拖动只更新有界预览，松手后提交配置；切图清理旧场景，异步素材导入按上下文代次接收。
 - `render_template_overlay()`、模板叠加管线阶段、图片/GIF/视频均使用同一核心。CLI `render --template 模板.json` 支持新格式，`--no-draw-images` 可单独关闭图像图层。
 
-新建字号、图片默认宽度、吸附距离、旋转步长和交互预览尺寸从 `config/editor_options.json` 读取。回归入口为 `tests/test_overlay_layers.py` 和 `tests/test_overlay_editor.py`，并继续覆盖旧模板、文字效果、裁切坐标、工作区及预览模式测试。
+Badge 默认值（`overlay_badge`）、新建字号、图片默认宽度、吸附距离、旋转步长和交互预览尺寸从 `config/editor_options.json` 读取。回归入口为 `tests/test_overlay_badge.py`、`tests/test_overlay_layers.py` 和 `tests/test_overlay_editor.py`，并继续覆盖旧模板、文字效果、裁切坐标、工作区及预览模式测试。
