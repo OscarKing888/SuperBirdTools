@@ -331,3 +331,47 @@ def test_report_old_values_do_not_revive_after_browser_or_proxy_reload(photo, re
     assert parsed[str(photo)]['bird_species_cn'] == '白头鹎'
     assert rarity_metadata(parsed[str(photo)]) == (score, category or '')
     assert db_path.read_bytes() == before
+
+
+def test_adopt_non_top_candidate_roundtrip_and_switch_again(photo, response, monkeypatch):
+    response['results'][1].update(pinyin_name='hóng ěr bēi', gbif_rarity_100=0, iucn_category='LC')
+    store = PhotoMetaDataXMP()
+    assert store.write(str(photo), {'XMP-dc:Description': '拍鸟笔记', 'XMP-xmp:Rating': 3})
+    before = photo.read_bytes()
+    result = bird.identify_file(str(photo), client_for(monkeypatch, response, bird.BirdIDOptions(threshold=99)))
+    assert result.accepted_index is None
+    adopted = bird.adopt_candidate(result, 1)
+    assert adopted.status == 'success', adopted.message
+    assert adopted.accepted_index == 1
+    values = store.read(str(photo))
+    assert values['Title'] == values['bird_species_cn'] == '红耳鹎'
+    assert values['pinyin_name'] == 'hóng ěr bēi'
+    assert float(values['birdid_confidence']) == 51.2
+    assert float(values['gbif_rarity_100']) == 0
+    assert values['iucn_category'] == 'LC'
+    assert 'alt_species_cn' not in values
+    assert values['Description'] == '拍鸟笔记' and values['rating'] == 3
+    assert json.loads(values['birdid_response']) == response
+    assert photo.read_bytes() == before
+    switched = bird.adopt_candidate(adopted, 0)
+    assert switched.status == 'success' and switched.accepted_index == 0
+    assert store.read(str(photo))['Title'] == '白头鹎'
+
+
+@pytest.mark.parametrize('change', ['edit', 'replace', 'delete', 'cancel', 'write_failure', 'bad_index'])
+def test_adoption_preserves_newer_data_and_reports_failures(photo, response, monkeypatch, change):
+    result = bird.identify_file(str(photo), client_for(monkeypatch, response))
+    sidecar = photo.with_suffix('.xmp')
+    if change == 'edit':
+        assert PhotoMetaDataXMP().write_title(str(photo), '用户新标题')
+    elif change == 'replace':
+        photo.write_bytes(b'new source')
+    elif change == 'delete':
+        photo.unlink()
+    elif change == 'write_failure':
+        monkeypatch.setattr(PhotoMetaDataXMP, '_write_tree_atomic', staticmethod(lambda *_: False))
+    before = sidecar.read_bytes()
+    adopted = bird.adopt_candidate(result, -1 if change == 'bad_index' else 1, cancelled=lambda: change == 'cancel')
+    assert adopted.status == ('cancelled' if change == 'cancel' else
+                              'failed' if change in {'write_failure', 'bad_index'} else 'skipped')
+    assert sidecar.read_bytes() == before
