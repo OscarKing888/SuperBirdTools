@@ -5,12 +5,12 @@ import json
 from pathlib import Path
 
 try:
-    from PyQt6.QtGui import QPainter, QPalette
+    from PyQt6.QtGui import QFont, QPainter, QPalette
     from PyQt6.QtCore import QAbstractTableModel, QEvent, QModelIndex, QRect, QTimer, Qt, pyqtSignal
     from PyQt6.QtWidgets import (QAbstractItemView, QApplication, QHeaderView, QStyle,
         QStyledItemDelegate, QStyleOptionButton, QStyleOptionViewItem, QTableView)
 except ImportError:  # pragma: no cover
-    from PyQt5.QtGui import QPainter, QPalette
+    from PyQt5.QtGui import QFont, QPainter, QPalette
     from PyQt5.QtCore import QAbstractTableModel, QEvent, QModelIndex, QRect, QTimer, Qt, pyqtSignal
     from PyQt5.QtWidgets import (QAbstractItemView, QApplication, QHeaderView, QStyle,
         QStyledItemDelegate, QStyleOptionButton, QStyleOptionViewItem, QTableView)
@@ -21,6 +21,7 @@ class ResultEntry:
     result: object
     first_row: int
     row_count: int
+    candidate_indices: tuple = ()
     error: str = ""
     stale: bool = False
     pending_index: int | None = None
@@ -50,9 +51,11 @@ class BirdIDResultsModel(QAbstractTableModel):
 
     def append_result(self, result):
         count = max(1, len(result.response.get("results", [])))
-        entry = ResultEntry(result, len(self.rows), count)
+        candidates = result.response.get("results", [])
+        order = tuple(sorted(range(len(candidates)), key=lambda i: -float(candidates[i]['confidence']))) or (0,)
+        entry = ResultEntry(result, len(self.rows), count, order)
         self.beginInsertRows(QModelIndex(), entry.first_row, entry.first_row + count - 1)
-        self.rows.extend((entry, i) for i in range(count))
+        self.rows.extend((entry, i) for i in order)
         self.endInsertRows()
         return entry
 
@@ -61,7 +64,8 @@ class BirdIDResultsModel(QAbstractTableModel):
         result = entry.result
         return (not self.pending and not entry.stale and result.status in {"success", "candidate"}
                 and result.saved_fingerprint is not None and result.source_fingerprint is not None
-                and index < len(result.response.get("results", [])) and index != result.accepted_index)
+                and index < len(result.response.get("results", []))
+                and (index != result.accepted_index or result.candidates_missing))
 
     def refresh_entry(self, entry):
         self.dataChanged.emit(self.index(entry.first_row, 0),
@@ -80,6 +84,10 @@ class BirdIDResultsModel(QAbstractTableModel):
         candidates = result.response.get("results", [])
         candidate = candidates[number] if candidates else {}
         col = index.column()
+        if role == Qt.ItemDataRole.FontRole and candidate and number == entry.candidate_indices[0] and col in (4, 5):
+            font = QFont()
+            font.setBold(True)
+            return font
         if col == 0 and role == Qt.ItemDataRole.DecorationRole and self.thumbnails is not None:
             return self.thumbnails.image(result.source)
         if role == Qt.ItemDataRole.ToolTipRole:
@@ -87,6 +95,8 @@ class BirdIDResultsModel(QAbstractTableModel):
                 return result.source
             if col in (1, self.ACTION_COLUMN):
                 return entry.error or result.message
+            if col in (4, 5) and candidate and number == entry.candidate_indices[0]:
+                return f"最高置信度候选：{candidate.get('cn_name') or candidate.get('en_name')} {float(candidate['confidence']):.1f}%"
             return self.data(index)
         if role != Qt.ItemDataRole.DisplayRole:
             return None
@@ -104,7 +114,7 @@ class BirdIDResultsModel(QAbstractTableModel):
             if not candidate:
                 return "—"
             if result.accepted_index == number:
-                return "已采纳"
+                return "采纳并补存" if result.candidates_missing else "已采纳"
             return "保存中…" if entry.pending_index == number else "采纳"
         if col == 3:
             return str(candidate.get("rank", number + 1)) if candidate else "—"
@@ -244,6 +254,10 @@ class BirdIDResultsTable(QTableView):
         entry = self.results.append_result(result)
         if follow:
             self.scrollToBottom()
+        if entry.first_row == 0:
+            chosen = result.accepted_index if result.accepted_index is not None else entry.candidate_indices[0]
+            self.setCurrentIndex(self.results.index(entry.first_row + entry.candidate_indices.index(chosen),
+                                                    self.results.ACTION_COLUMN))
         self._schedule_previews()
         return entry
 

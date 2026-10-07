@@ -316,6 +316,8 @@ CLI 与 GUI 共用核心：在仓库根使用共享 `.venv` 执行 `python -m Su
 
 首列使用 [`BirdIDThumbnails`](../superviewer/bird_identification_thumbnails.py) 显示等比预览及文件名；它复用共享 `ThumbnailLoader`、列表的 `ThumbnailMemoryCache`、`BrowserWorkPool` 和报告/每文件磁盘缓存解析。只请求可见照片的 256 档缩略图，同照片候选去重；表格绘制不读取磁盘或解码，保留最多 64 张结果。目录和报告上下文在识别开始时快照，隐藏/滚动/换批次使旧请求失效，协调器保有唯一 loader 至真实 `finished` 后才交接；控制器退出条件也等待预览线程结束。回归见 [识鸟表格预览测试](../tests/test_bird_identification_thumbnails.py)。
 
+照片右键“选择候选鸟名…”通过同一 `BirdIDWorker` 的只读模式调用 [`load_saved_candidates()`](../superviewer/bird_identification_candidates.py)，不访问识鸟服务。新 `birdid_candidates` 优先，缺字段时回退完整响应；以原始候选索引维护数据身份，表格只按置信度排序显示，保留当前已采纳项，无已采纳项时选中最高分。详情按中英文名与置信度匹配，保存保留原始响应及候选顺序，旧记录可“采纳并补存”。实际写入沿用侧车指纹保护与元数据局部同步。回归见 [保存候选读取/采纳](../tests/test_bird_identification_candidates.py) 与识鸟控制器的列表/缩略图实窗测试。
+
 服务接口及返回字段限制、使用和验证见 [识鸟说明](../../docs/bird_identification.md)。
 
 ## 10. 扩展与验证步骤

@@ -193,7 +193,8 @@ def test_real_window_result_refresh_preserves_preview_and_comment_draft(tmp_path
     source = str(photo)
     monkeypatch.setattr(BirdIDClient, 'health', lambda _: {})
     monkeypatch.setattr(BirdIDClient, 'recognize', lambda *_: {
-        'success': True, 'results': [{'cn_name': '白头鹎', 'en_name': 'Light-vented Bulbul', 'confidence': 93, 'gbif_rarity_100': 80, 'iucn_category': 'NT'}]})
+        'success': True, 'results': [{'cn_name': '白头鹎', 'en_name': 'Light-vented Bulbul', 'confidence': 93, 'gbif_rarity_100': 80, 'iucn_category': 'NT'},
+        {'cn_name': '红耳鹎', 'en_name': 'Red-whiskered Bulbul', 'confidence': 40, 'gbif_rarity_100': 10, 'iucn_category': 'LC'}]})
     if operation in ('pinyin', 'location', 'rarity'):
         assert PhotoMetaDataXMP().write_title(source, '白头鹎')
     window = main.MainWindow(initial_received_files=['skip-restore'])
@@ -263,6 +264,17 @@ def test_real_window_result_refresh_preserves_preview_and_comment_draft(tmp_path
             })
             window.image_info_panel.refresh_metadata_fields()
             assert badge.text() == '传说' and '#123456' in badge.styleSheet() and '#ABCDEF' in badge.styleSheet()
+            assert controller.start_for_paths([source], saved_candidates=True)
+            assert wait_for(lambda: not controller.busy)
+            controller._dialog.details._request(1)
+            assert wait_for(lambda: not controller.busy)
+            assert PhotoMetaDataXMP().read(source)['Title'] == '红耳鹎'
+            assert '10/100' in badge.toolTip()
+            assert window.image_info_panel.basic_rows['保护等级'].text() == 'LC · 无危'
+            controller._dialog.details._request(0)
+            assert wait_for(lambda: not controller.busy)
+            assert badge.text() == '传说'
+
         from app_common.bird_pinyin import bird_name
         assert bird_name(files.get_photo_metadata_for_path(source)) == '白头鹎'
         assert PhotoMetaDataXMP().read(source)['Title'] == '白头鹎'
@@ -430,3 +442,65 @@ def test_adoption_write_failure_allows_retry(env, monkeypatch):
     assert wait_for(lambda: not controller.busy)
     assert PhotoMetaDataXMP().read(paths[0])['Title'] == '红耳鹎'
     assert controller._counts['success'] == 1
+
+
+@pytest.mark.parametrize('legacy', [False, True])
+def test_saved_candidates_menu_offline_selection_and_reopen(env, monkeypatch, legacy, tmp_path):
+    import json
+    from PyQt6.QtCore import Qt
+    from PyQt6.QtTest import QTest
+    controller, files, paths, state = env
+    # 返回顺序刻意与置信度相反，确保显示排序不会串采纳索引。
+    candidates = [
+        {'cn_name': '红耳鹎', 'en_name': 'Red-whiskered Bulbul', 'confidence': 20},
+        {'cn_name': '白头鹎', 'en_name': 'Light-vented Bulbul', 'confidence': 95}]
+    raw = json.dumps({'success': True, 'results': candidates}, ensure_ascii=False)
+    fields = {'XMP-superpicky:birdid_response': raw, 'XMP-dc:Title': '红耳鹎',
+              'XMP-superpicky:bird_species_cn': '红耳鹎'}
+    if not legacy:
+        fields['XMP-superpicky:birdid_candidates'] = json.dumps(candidates, ensure_ascii=False)
+    assert PhotoMetaDataXMP().write(paths[0], fields)
+    monkeypatch.setattr(BirdIDClient, 'health', lambda _: pytest.fail('查看已存候选不能访问服务'))
+    monkeypatch.setattr(BirdIDClient, 'recognize', lambda *_: pytest.fail('改选候选不能重新识别'))
+    menu = QMenu()
+    controller.extend_file_menu(menu, paths[:1])
+    next(a for a in menu.actions() if a.text() == '选择候选鸟名…').trigger()
+    assert wait_for(lambda: not controller.busy)
+    table = controller._dialog.details
+    model = table.model()
+    assert model.rowCount() == 2
+    assert model.index(0, 4).data() == '白头鹎'
+    assert model.index(1, 4).data() == '红耳鹎'
+    assert model.index(0, 4).data(Qt.ItemDataRole.FontRole).bold()
+    assert table.currentIndex().row() == 1
+    assert model.index(1, 2).data() == ('采纳并补存' if legacy else '已采纳')
+    assert controller._dialog.grab().save(str(tmp_path / 'saved-candidate-selection.png'))
+    target = model.index(0, 2)
+    QTest.mouseClick(table.viewport(), Qt.MouseButton.LeftButton, pos=table.visualRect(target).center())
+    assert wait_for(lambda: not controller.busy)
+    values = PhotoMetaDataXMP().read(paths[0])
+    assert values['Title'] == '白头鹎'
+    assert json.loads(values['birdid_candidates']) == candidates
+    assert values['birdid_response'] == raw
+    assert files.updates[-1][paths[0]]['title'] == '白头鹎'
+    assert model.index(0, 2).data() == '已采纳'
+    assert model.index(1, 2).data() == '采纳'
+    assert controller.start_for_paths(paths[:1], saved_candidates=True)
+    assert wait_for(lambda: not controller.busy)
+    assert controller._dialog.details.currentIndex().row() == 0
+
+
+def test_live_unsorted_candidates_default_to_highest_and_adopt_correct_row(env, monkeypatch):
+    controller, files, paths, state = env
+    candidates = multi_response()
+    candidates['results'].reverse()
+    monkeypatch.setattr(BirdIDClient, 'recognize', lambda *_: candidates)
+    controller.start_for_paths(paths[:1], options=BirdIDOptions(threshold=40))
+    assert wait_for(lambda: not controller.busy)
+    table = controller._dialog.details
+    assert table.model().index(0, 4).data() == '白头鹎'
+    assert table.model().index(0, 2).data() == '已采纳'
+    table._request(2)
+    assert wait_for(lambda: not controller.busy)
+    assert PhotoMetaDataXMP().read(paths[0])['Title'] == '黑短脚鹎'
+    assert table.model().index(2, 2).data() == '已采纳'

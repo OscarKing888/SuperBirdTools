@@ -137,6 +137,8 @@ class BirdIDResult:
     saved_fingerprint: tuple | None = None
     source_fingerprint: tuple | None = None
     accepted_index: int | None = None
+    response_record: str | None = None
+    candidates_missing: bool = False
 
 
 def collect_paths(inputs, *, recursive=False, cancelled=lambda: False):
@@ -292,6 +294,10 @@ def adopt_candidate(result: BirdIDResult, index: int, *, cancelled=lambda: False
             raise BirdIDError("候选索引无效")
         candidate = result.response["results"][index]
         values, fields = candidate_fields(result.response, candidate, confirmed=True)
+        if result.response_record is not None:
+            # 精简列表用于选择，完整服务响应仍原样保留，不用合成响应覆盖。
+            values["birdid_response"] = result.response_record
+            fields["XMP-superpicky:birdid_response"] = result.response_record
         with xmp_sidecar_write_lock(source):
             if cancelled():
                 raise BirdIDCancelled("已取消采纳")
@@ -303,7 +309,7 @@ def adopt_candidate(result: BirdIDResult, index: int, *, cancelled=lambda: False
             saved = _fingerprint(store.sidecar_path_for(source))
         updates = {**values, **fields, "Title": values["title"]}
         return BirdIDResult(source, "success", f"已采纳：{values['title']} {float(candidate['confidence']):.1f}%",
-                            result.response, updates, saved, result.source_fingerprint, index)
+                            result.response, updates, saved, result.source_fingerprint, index, result.response_record)
     except BirdIDCancelled:
         return BirdIDResult(source, "cancelled", "已取消采纳，原结果保留")
     except Exception as exc:

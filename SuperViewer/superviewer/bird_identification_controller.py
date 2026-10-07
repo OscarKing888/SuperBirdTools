@@ -28,6 +28,7 @@ class BirdIDJob:
     inputs: tuple[str, ...]
     recursive: bool = False
     display_paths: tuple[tuple[str, str], ...] = ()
+    saved_candidates: bool = False
 
 
 class BirdIDSettingsDialog(QDialog):
@@ -76,8 +77,9 @@ class BirdIDWorker(QThread):
 
     def run(self):
         try:
-            self.status_changed.emit("正在连接 SuperPicky…")
-            self.client.health()
+            if not self.job.saved_candidates:
+                self.status_changed.emit("正在连接 SuperPicky…")
+                self.client.health()
             self.status_changed.emit("正在扫描照片…")
             paths = collect_paths(self.job.inputs, recursive=self.job.recursive, cancelled=self.client.cancelled.is_set)
             if not paths and not self.client.cancelled.is_set():
@@ -86,8 +88,13 @@ class BirdIDWorker(QThread):
             for index, path in enumerate(paths, 1):
                 if self.client.cancelled.is_set():
                     break
-                self.status_changed.emit(f"正在识别：{Path(path).name}")
-                result = identify_file(path, self.client)
+                if self.job.saved_candidates:
+                    from .bird_identification_candidates import load_saved_candidates
+                    self.status_changed.emit(f"正在读取候选：{Path(path).name}")
+                    result = load_saved_candidates(path, cancelled=self.client.cancelled.is_set)
+                else:
+                    self.status_changed.emit(f"正在识别：{Path(path).name}")
+                    result = identify_file(path, self.client)
                 self.result_ready.emit(result)
                 self.progress_changed.emit(index, len(paths))
         except Exception as exc:
@@ -194,6 +201,7 @@ class BirdIDController(QObject):
         elif paths:
             label = "识别鸟种…" if len(paths) == 1 else f"批量识别鸟种…（{len(paths)} 张）"
             menu.addAction(label, lambda: self.start_for_paths(list(paths)))
+            menu.addAction("选择候选鸟名…", lambda: self.start_for_paths(list(paths), saved_candidates=True))
 
     def extend_directory_menu(self, menu, directory):
         sub = menu.addMenu("识别鸟种（SuperPicky）")
@@ -203,7 +211,7 @@ class BirdIDController(QObject):
             for label, recursive in (("识别当前目录…", False), ("识别目录及子目录…", True)):
                 sub.addAction(label, lambda _checked=False, r=recursive: self.start(BirdIDJob((directory,), r)))
 
-    def start_for_paths(self, paths, *, options=None):
+    def start_for_paths(self, paths, *, options=None, saved_candidates=False):
         resolve = getattr(self._file_list, "_resolve_source_path_for_action", None)
         sources = []
         try:
@@ -215,7 +223,8 @@ class BirdIDController(QObject):
         except Exception as exc:
             QMessageBox.information(self._main, "识别鸟种", str(exc))
             return False
-        return self.start(BirdIDJob(tuple(sources), display_paths=tuple(zip(paths, sources))), options=options)
+        return self.start(BirdIDJob(tuple(sources), display_paths=tuple(zip(paths, sources)),
+                                    saved_candidates=saved_candidates), options=options)
 
     def start(self, job, *, options=None):
         if self._shutdown_requested:
@@ -223,6 +232,8 @@ class BirdIDController(QObject):
         if self.busy:
             self.show_progress()
             return False
+        if job.saved_candidates:
+            options = self._options
         if options is None:
             settings = BirdIDSettingsDialog(self._main, self._options)
             accepted = settings.exec() == QDialog.DialogCode.Accepted
@@ -245,6 +256,8 @@ class BirdIDController(QObject):
         worker = self._worker = BirdIDWorker(job, options)
         dialog = self._dialog = BirdIDProgressDialog(self._main, results_table=True, thumbnails=self._thumbnails)
         dialog.details.adopt_requested.connect(lambda entry, index, d=dialog: self._adopt(d, entry, index))
+        if job.saved_candidates:
+            dialog.setWindowTitle("选择候选鸟名")
         dialog.cancel_requested.connect(self.stop)
         worker.status_changed.connect(lambda text, w=worker: self._status(w, text))
         worker.progress_changed.connect(lambda n, total, w=worker: self._progress(w, n, total))
@@ -286,7 +299,7 @@ class BirdIDController(QObject):
                 or not 0 <= index < entry.row_count):
             return
         model = dialog.details.results
-        row = entry.first_row + index
+        row = entry.first_row + entry.candidate_indices.index(index)
         if row >= len(model.rows) or model.rows[row][0] is not entry or not model.can_adopt(row):
             return
         worker = self._adopt_worker = BirdIDAdoptWorker(entry, index, self._job)
@@ -351,6 +364,9 @@ class BirdIDController(QObject):
             self._dialog.finish(f"识鸟未完成：{self._failure}")
         elif self._stopped:
             self._dialog.finish("识鸟已停止，已保存的结果保留。")
+        elif self._job.saved_candidates:
+            self._dialog.finish("候选已载入；默认推荐最高置信度，点击采纳可改选主鸟名。"
+                                if not self._counts["failed"] else "部分候选读取失败，请查看状态提示。")
         else:
             self._dialog.finish("识鸟完成。" if not self._counts["failed"] else "识鸟结束，部分照片失败，请查看详情。")
 
