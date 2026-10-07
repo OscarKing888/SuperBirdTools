@@ -248,6 +248,9 @@ def test_real_window_result_refresh_preserves_preview_and_comment_draft(tmp_path
             assert window.image_info_panel.pinyin_update_button.isHidden()
             assert PhotoMetaDataXMP().read(source)['pinyin_name'] == 'bái tóu bēi'
         if operation == 'bird_id':
+            assert wait_for(lambda: controller._thumbnails.image(source) is not None)
+            assert controller._thumbnails._context['thumb_cache'] is files._thumb_memory_cache
+            assert controller._thumbnails._context['work_pool'] is files._browser_work_pool
             badge = window.image_info_panel.basic_rows['稀有度']
             assert badge.text() == '传奇' and '80/100' in badge.toolTip()
             assert window.image_info_panel.basic_rows['保护等级'].text() == 'NT · 近危'

@@ -115,7 +115,7 @@ class BirdIDAdoptWorker(QThread):
 class BirdIDProgressDialog(QDialog):
     cancel_requested = pyqtSignal()
 
-    def __init__(self, parent, *, results_table=False):
+    def __init__(self, parent, *, results_table=False, thumbnails=None):
         super().__init__(parent)
         self.setWindowTitle("SuperPicky 识鸟进度")
         self.setMinimumSize(600, 380)
@@ -127,7 +127,7 @@ class BirdIDProgressDialog(QDialog):
         self.summary = QLabel("", self)
         if results_table:
             from .bird_identification_table import BirdIDResultsTable
-            self.details = BirdIDResultsTable(self)
+            self.details = BirdIDResultsTable(self, thumbnails=thumbnails)
             self.resize(1180, 540)
         else:
             self.details = QTextEdit(self)
@@ -165,6 +165,8 @@ class BirdIDController(QObject):
         self._main, self._file_list = window, file_list
         self._worker = self._dialog = self._adopt_worker = None
         self._shutdown_requested = False
+        from .bird_identification_thumbnails import BirdIDThumbnails
+        self._thumbnails = BirdIDThumbnails(self)
         self._options = BirdIDOptions()
         self._counts = Counter()
         self._failure = ""
@@ -238,9 +240,10 @@ class BirdIDController(QObject):
             self._dialog.close()
             self._dialog.deleteLater()
         self._counts, self._failure, self._stopped = Counter(), "", False
+        self._thumbnails.configure(self._file_list)
         self._job = job
         worker = self._worker = BirdIDWorker(job, options)
-        dialog = self._dialog = BirdIDProgressDialog(self._main, results_table=True)
+        dialog = self._dialog = BirdIDProgressDialog(self._main, results_table=True, thumbnails=self._thumbnails)
         dialog.details.adopt_requested.connect(lambda entry, index, d=dialog: self._adopt(d, entry, index))
         dialog.cancel_requested.connect(self.stop)
         worker.status_changed.connect(lambda text, w=worker: self._status(w, text))
@@ -360,7 +363,8 @@ class BirdIDController(QObject):
 
     def request_shutdown(self):
         self._shutdown_requested = True
+        self._thumbnails.request_shutdown()
         self.stop()
 
     def is_shutdown_done(self):
-        return not self.busy
+        return not self.busy and self._thumbnails.is_shutdown_done()
