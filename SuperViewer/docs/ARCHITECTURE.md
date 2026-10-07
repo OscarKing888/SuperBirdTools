@@ -372,6 +372,10 @@ Qt 测试在窗口构造前隔离 `paths_settings` 的应用/用户状态目录�
 
 无额外资源或网络请求，现有 CLI 同步保存上述字段。测试覆盖 `test_bird_rarity.py`、`test_rarity_badge.py`、`test_thumbnail_sort_controls.py`、识鸟核心中文 XMP 回读与真实列表/缩略图窗口。字段表和文本配置示例见 [识鸟说明](../../docs/bird_identification.md)。
 
+手动修改由 [`RarityController`](../superviewer/rarity_controller.py) 接入列表/缩略图右键“修改稀有度”及信息页按钮；支持单张和多选，快捷档位写入 0/8/25/50/75 分，也可输入 0–100 两位小数。菜单名称跟随用户徽章配置。无 Qt 核心 [`save_rarity()`](../superviewer/rarity_edit.py) 校验数值、保护已有损坏侧车与并发修改，在同一次 XMP 提交中写入 GBIF 原始/兼容字段，更新当前鸟名绑定及缺失标记，保留当前有效 IUCN。原图和 report.db 保持只读。
+
+批量保存去重 RAW/JPEG 共用侧车，后台线程使用有界结果队列，GUI 定时分批通过 `MetadataResultSync` 同步缓存，保留预览及备注草稿；单张失败继续后续照片，取消保留已保存结果，关窗等待真实线程完成。CLI 复用核心：`python -m SuperViewer.superviewer.rarity_edit <照片...> --score 75`（使用根 `.venv`）。验证见 `test_rarity_edit.py`、`test_rarity_controller.py` 和 `test_bird_identification_controller.py` 的列表/缩略图实窗回归。
+
 ## 鸟名拼音
 
 共享文件列表的“粘贴鸟名”会按新鸟名查询同一带声调词表，将标题、鸟名、拼音及来源标记一次写入 XMP；未收录名称清除旧拼音及别名。成功后通过 `sync_metadata_edits_for_paths()` 更新列表缓存并保护本地修改，避免晚到批次恢复旧拼音。回归见共享 `test_file_browser_species_pinyin.py` 和 Viewer `test_main_window_metadata_sync.py`。

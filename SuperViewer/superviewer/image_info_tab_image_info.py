@@ -263,7 +263,9 @@ class ImageInfoTabPanel_ImageInfo(ImageInfoTabPanel):
         available_tag_tree_provider: Callable[[], list[TagTreeNode]] | None = None,
         pinyin_update_callback: Callable[[str], None] | None = None,
         location_save_callback: Callable[[str, str], bool] | None = None,
+        rarity_edit_callback: Callable | None = None,
     ) -> None:
+        self._rarity_edit_callback = rarity_edit_callback
         self._location_save_callback = location_save_callback
         self._current_location = ""
         self._location_path = ""
@@ -556,6 +558,11 @@ class ImageInfoTabPanel_ImageInfo(ImageInfoTabPanel):
         if label_text == "稀有度":
             row.addWidget(value)
             row.addStretch(1)
+            self.rarity_edit_button = QToolButton(self)
+            self.rarity_edit_button.setText("修改稀有度")
+            self.rarity_edit_button.setToolTip("一键选择稀有度档位，或输入 0–100 分")
+            self.rarity_edit_button.clicked.connect(self._edit_rarity)
+            row.addWidget(self.rarity_edit_button)
         else:
             row.addWidget(value, stretch=1)
         if label_text == "拼音":
@@ -922,12 +929,19 @@ class ImageInfoTabPanel_ImageInfo(ImageInfoTabPanel):
                 return int(pixmap.width()), int(pixmap.height())
         return None, None
 
+    def _edit_rarity(self) -> None:
+        path = self.current_photo_path()
+        if path and self._rarity_edit_callback is not None and self._writes_allowed(path):
+            self._rarity_edit_callback(path, self.rarity_edit_button)
+
     def _update_pinyin(self) -> None:
         path = self.current_photo_path()
         if path and self._pinyin_update_callback is not None and self._writes_allowed(path):
             self._pinyin_update_callback(path)
 
     def _set_basic_info(self, info: dict[str, str]) -> None:
+        path = self.current_photo_path()
+        self.rarity_edit_button.setEnabled(bool(path and os.path.isfile(path) and self._rarity_edit_callback is not None and self._writes_allowed(path)))
         has_name = info.get("鸟名", "-") not in ("", "-")
         missing = info.get("拼音", "-") in ("", "-")
         self.pinyin_update_button.setVisible(has_name and missing)

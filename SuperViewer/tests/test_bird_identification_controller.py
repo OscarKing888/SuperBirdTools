@@ -162,10 +162,11 @@ def test_saved_result_queued_before_new_edit_does_not_clobber_ui(env, monkeypatc
     assert wait_for(lambda: not controller.busy)
 
 
-@pytest.mark.parametrize('operation', ['bird_id', 'pinyin', 'location'])
+@pytest.mark.parametrize('operation', ['bird_id', 'pinyin', 'location', 'rarity'])
 @pytest.mark.parametrize('mode', ['list', 'thumbnail'])
 def test_real_window_result_refresh_preserves_preview_and_comment_draft(tmp_path, monkeypatch, mode, operation):
     import importlib
+    from app_common.bird_rarity import rarity_metadata
     from app_common import superviewer_user_options
     from SuperViewer.superviewer import paths_settings
     from SuperViewer.superviewer.tagged_file_list import SuperViewerTaggedFileListPanel
@@ -193,7 +194,7 @@ def test_real_window_result_refresh_preserves_preview_and_comment_draft(tmp_path
     monkeypatch.setattr(BirdIDClient, 'health', lambda _: {})
     monkeypatch.setattr(BirdIDClient, 'recognize', lambda *_: {
         'success': True, 'results': [{'cn_name': '白头鹎', 'en_name': 'Light-vented Bulbul', 'confidence': 93, 'gbif_rarity_100': 80, 'iucn_category': 'NT'}]})
-    if operation in ('pinyin', 'location'):
+    if operation in ('pinyin', 'location', 'rarity'):
         assert PhotoMetaDataXMP().write_title(source, '白头鹎')
     window = main.MainWindow(initial_received_files=['skip-restore'])
     window.show()
@@ -212,6 +213,15 @@ def test_real_window_result_refresh_preserves_preview_and_comment_draft(tmp_path
         if operation == 'bird_id':
             controller = window._bird_id
             assert controller.start_for_paths([source], options=BirdIDOptions())
+        elif operation == 'rarity':
+            from SuperViewer.superviewer.rarity_controller import QMenu
+            controller = window._rarity_edit
+            def choose(path, anchor):
+                menu = QMenu(anchor)
+                controller.populate_menu(menu, [path])
+                menu.actions()[4].trigger()
+            window.image_info_panel._rarity_edit_callback = choose
+            window.image_info_panel.rarity_edit_button.click()
         elif operation == 'location':
             controller = window._shooting_location
             assert controller.start([source], '崇明东滩')
@@ -221,6 +231,13 @@ def test_real_window_result_refresh_preserves_preview_and_comment_draft(tmp_path
             assert not panel.pinyin_update_button.isHidden()
             panel.pinyin_update_button.click()
         assert wait_for(lambda: not controller.busy)
+        if operation == 'rarity':
+            assert window.image_info_panel.basic_rows['稀有度'].text() == '传奇'
+            assert rarity_metadata(PhotoMetaDataXMP().read(source))[0] == 75
+            model = files._file_table_model
+            if mode == 'list':
+                assert model.index(0, model.rarity_column).data() == '传奇'
+            assert rarity_metadata(files.cached_photo_metadata_for_path(source))[0] == 75
         if operation == 'location':
             assert window.image_info_panel.location_edit.text() == '崇明东滩'
             window.image_info_panel.location_edit.setText('云南高黎贡山')

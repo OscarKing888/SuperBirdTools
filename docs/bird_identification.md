@@ -128,3 +128,11 @@ Windows 64 位将解释器换为 `.venv\Scripts\python.exe`；路径作为参数
 验证入口：`SuperViewer/tests/test_bird_identification.py`、
 `SuperViewer/tests/test_bird_identification_controller.py`、`app_common/tests/test_xmp_native_atomic.py`，
 以及现有 XMP、Viewer 元数据/预览和 BirdStamp 元数据回归。自动测试不访问真实识鸟服务。
+
+### 手动修改稀有度
+
+SuperViewer 选中一张或多张照片后，右键 → **修改稀有度**，直接选择档位；单张也可使用右侧图片信息的 **修改稀有度** 按钮。快捷档位普通/少见/稀有/史诗/传奇分别设为 0/8/25/50/75 分，名称跟随徽章配置。**自定义分数…** 支持 0–100，保留两位小数；多选时同一分数应用于所有所选照片。
+
+保存只写 XMP，原图和 report.db 不变，保留当前鸟种有效的保护等级；旧鸟名绑定和缺失稀有度标记不会遮蔽新的手动值。RAW/JPEG 共用侧车只写一次，并同步相关行。批量处理可取消，保留已经保存的结果，失败文件会显示原因。
+
+命令行同样支持：使用根 `.venv` 执行 `python -m SuperViewer.superviewer.rarity_edit <照片...> --score 72.25`。
