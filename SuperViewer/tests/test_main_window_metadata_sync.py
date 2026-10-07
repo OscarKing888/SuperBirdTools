@@ -19,6 +19,33 @@ _APP = QApplication.instance() or QApplication([])
 main = importlib.import_module("SuperViewer.main")
 
 
+@pytest.mark.parametrize("mode", [FileListPanel._MODE_LIST, FileListPanel._MODE_THUMB])
+def test_paste_bird_name_keeps_new_pinyin_when_old_batch_arrives(tmp_path, mode):
+    from app_common.bird_pinyin import stored_pinyin
+
+    photo = tmp_path / "中文鸟名.jpg"
+    Image.new("RGB", (8, 6)).save(photo)
+    path = str(photo)
+    config = tmp_path / "tags.cfg"
+    config.write_text("飞行\n", encoding="utf-8")
+    files = SuperViewerTaggedFileListPanel(tag_config_path=config)
+    files._view_mode = mode
+    files._copied_species_payload = {"bird_species_cn": "白头鹎"}
+    try:
+        files._paste_species_to_paths([path])
+        files._on_metadata_batch_ready({path: {
+            "title": "家燕", "pinyin_name": "jiā yàn",
+            "pinyin_name_source": "家燕", "iso": "800",
+        }})
+        assert stored_pinyin(files.cached_photo_metadata_for_path(path)) == "bái tóu bēi"
+        assert files._meta_cache[path]["iso"] == "800"
+        assert stored_pinyin(PhotoMetaDataXMP().read(path)) == "bái tóu bēi"
+    finally:
+        files.shutdown()
+        files.deleteLater()
+        _APP.processEvents()
+
+
 @pytest.mark.parametrize("entry", ["info", "exif"])
 @pytest.mark.parametrize("new_text", ["中文新备注", ""])
 def test_comment_save_updates_parsed_cache_and_readback(tmp_path, entry, new_text):

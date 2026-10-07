@@ -364,6 +364,8 @@ Qt 测试在窗口构造前隔离 `paths_settings` 的应用/用户状态目录�
 
 ## 鸟名拼音
 
+共享文件列表的“粘贴鸟名”会按新鸟名查询同一带声调词表，将标题、鸟名、拼音及来源标记一次写入 XMP；未收录名称清除旧拼音及别名。成功后通过 `sync_metadata_edits_for_paths()` 更新列表缓存并保护本地修改，避免晚到批次恢复旧拼音。回归见共享 `test_file_browser_species_pinyin.py` 和 Viewer `test_main_window_metadata_sync.py`。
+
 照片信息的“拼音”行只显示已保存的拼音；已有鸟名但没有可用拼音时显示“更新拼音”按钮。照片右键支持单张/多选，目录右键支持当前目录及递归目录。[`PinyinController`](../superviewer/bird_pinyin_controller.py) 使用独立线程、本批有界结果队列与定时分批刷新；取消后保留已写结果，关闭时等待线程真正结束。
 
 无 Qt 核心 [`PinyinUpdater`](../superviewer/bird_pinyin_update.py) 从 XMP、只读 report.db、原图元数据依次取得鸟名，查询共享 [`bird_pinyin`](../../app_common/bird_pinyin.py) 的 SuperPicky 带声调词表；未知名称跳过，已有拼音不覆盖。不需要识鸟服务或联网。写入 `XMP-superpicky:pinyin_name` 与 `pinyin_name_source`（对应鸟名，用于识别鸟名修改后的过期拼音），兼容旧别名。鸟种服务将来返回可选 `pinyin_name` 时，已确认结果也保存到同一字段。
