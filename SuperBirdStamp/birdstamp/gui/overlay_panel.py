@@ -70,7 +70,7 @@ class OverlayPanel(QWidget):
         menu = QMenu(self)
         menu.addAction('自定义文本', lambda: self.add('text'))
         menu.addAction('元数据文本', lambda: self.add('text', metadata=True))
-        menu.addAction('圆角 Badge（徽章）', lambda: self.add('badge'))
+        menu.addAction('Badge（徽章）', lambda: self.add('badge'))
         menu.addAction('图像…', self.import_file)
         menu.addAction('背景', lambda: self.add('background'))
         self.add_button.setMenu(menu)
@@ -140,6 +140,7 @@ class OverlayPanel(QWidget):
         choose=QPushButton('加载字体列表'); choose.clicked.connect(self._load_fonts)
         self.form.addRow(choose); self.font_button=choose
         self._combo('style','样式',[('常规','normal'),('粗体','bold'),('斜体','italic'),('粗斜体','bold_italic')],kinds=('text','badge'))
+        self._combo('badge_shape','Badge 形状',[('圆角矩形','rounded_rect'),('圆形','circle')],kinds=('badge',))
         self._combo('badge_color_mode','Badge 配色',[
             ('自动（稀有度跟随徽章设置）','auto'),('自定义颜色','custom')],kinds=('badge',))
         self.widgets['badge_color_mode'].setToolTip(
@@ -426,6 +427,7 @@ class OverlayPanel(QWidget):
                 if key=='text_source': show &= item.get('text_mode')=='metadata'
                 self.forms.get(key,self.form).setRowVisible(widget,show)
                 widget.setEnabled(not item['locked'] or key in ('locked','visible','name'))
+                if key=='badge_radius': widget.setEnabled(not item['locked'] and item.get('badge_shape')!='circle')
                 if key=='tint_color': widget.setEnabled(not item['locked'] and item.get('tint_enabled',False))
                 if key in ('color','badge_background') and item['type']=='badge':
                     from birdstamp.overlays.badge import is_rarity_badge
