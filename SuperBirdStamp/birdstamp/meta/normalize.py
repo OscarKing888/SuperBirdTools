@@ -5,6 +5,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from app_common.shooting_location import shooting_location
 from birdstamp.models import NormalizedMetadata
 
 
@@ -181,25 +182,6 @@ def format_settings_line(meta: NormalizedMetadata, show_eq_focal: bool = True) -
     return "  ".join(parts) if parts else None
 
 
-def _dedupe_join(parts: list[str | None]) -> str | None:
-    seen: set[str] = set()
-    ordered: list[str] = []
-    for part in parts:
-        if not part:
-            continue
-        part = part.strip()
-        if not part:
-            continue
-        lowered = part.lower()
-        if lowered in seen:
-            continue
-        seen.add(lowered)
-        ordered.append(part)
-    if not ordered:
-        return None
-    return ", ".join(ordered)
-
-
 def _parse_bird_from_filename(stem: str, bird_regex: str) -> str | None:
     try:
         pattern = re.compile(bird_regex)
@@ -250,16 +232,9 @@ def normalize_metadata(
     if gps_lat is not None and gps_lon is not None:
         gps_text = f"{gps_lat:.5f}, {gps_lon:.5f}"
 
-    location = _dedupe_join(
-        [
-            _clean_text(_pick(lookup, ["SubLocation", "Location", "Sublocation"])),
-            _clean_text(_pick(lookup, ["City"])),
-            _clean_text(_pick(lookup, ["State", "Province-State"])),
-            _clean_text(_pick(lookup, ["Country", "Country-PrimaryLocationName"])),
-        ]
-    )
-    if not location and gps_text:
-        location = gps_text
+    # 地点与 Viewer 共用独立文本字段；City/State/Country 在本项目中存储分析结果。
+    # GPS 仍由 gps_text 单独提供，空地点不能回退为坐标或分数。
+    location = shooting_location(raw_metadata) or None
 
     make = _clean_text(_pick(lookup, ["Make"]))
     model = _clean_text(_pick(lookup, ["Model", "CameraModelName"]))

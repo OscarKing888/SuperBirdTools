@@ -1,4 +1,10 @@
 {
+  "location": [
+    {
+      "provider_id": "exif",
+      "candidate_keys": ["location"]
+    }
+  ],
   "bird_species_cn": [
     {
       "provider_id": "exif",

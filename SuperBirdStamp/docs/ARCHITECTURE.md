@@ -76,6 +76,8 @@ A/B 的布局与显隐约定见 [A/B 预览工具栏布局](ux/AB_PREVIEW_LAYOUT
 
 ## 3. 元数据与模板 provider
 
+“拍摄地点” `location` 使用共享 [shooting_location.py](../../app_common/shooting_location.py) 的 `XMP-superpicky:shooting_location` 文本，与 Viewer 编辑字段一致。[meta/normalize.py](../birdstamp/meta/normalize.py) 供模板、Overlay 预览/导出和 CLI 共用；不再拼接存储分析结果的 City/State/Country，也不以 GPS 代替地点，坐标仍由 `gps_text` 提供。自动字段路由固定读取已合并 XMP 的规范地点，清空侧车属性后不能回退到旧照片快照；空值沿用既有缺失字段显示规则。真实中文写入、修改/清空、原图及清晰度保留、Overlay 绘制回归见 [test_template_shooting_location.py](../tests/test_template_shooting_location.py)。
+
 [template_context.py](../birdstamp/gui/template_context.py) 是模板字段的主要定位入口：
 
 - `PhotoInfo` 保存源文件、sidecar 路径与原始元数据；`EditorPhotoInfo` 加入归一化裁切框和列表行号。

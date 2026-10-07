@@ -27,5 +27,5 @@ def test_normalize_metadata_prefers_datetimeoriginal_and_filename_bird() -> None
     assert metadata.bird == "灰喜鹊"
     assert metadata.camera == "Sony ILCE-1M2"
     assert metadata.settings_text == "f/4  1/2000s  ISO800  600mm"
-    assert metadata.location == "39.12345, 116.12345"
-
+    assert metadata.location is None
+    assert metadata.gps_text == "39.12345, 116.12345"

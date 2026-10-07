@@ -15,6 +15,7 @@ from PIL import Image
 
 from app_common.exif_io.config import load_exif_settings
 from app_common.report_db import PHOTO_COLUMNS, report_pick_value
+from app_common.shooting_location import LOCATION_TAG, shooting_location
 from birdstamp.config import resolve_bundled_path
 from birdstamp.meta.normalize import format_settings_line, normalize_metadata
 from birdstamp.meta.pinyin_names import pinyin_for
@@ -951,9 +952,7 @@ def _extract_normalized_file_entries(photo_info: PhotoInfo, raw_metadata: Dict[s
     except Exception:
         return {}
 
-    context: TemplateContext = {}
-    if normalized.location:
-        context["location"] = normalized.location
+    context: TemplateContext = {"location": normalized.location or ""}
     if normalized.gps_text:
         context["gps_text"] = normalized.gps_text
     if normalized.settings_text:
@@ -1142,9 +1141,9 @@ def _read_sidecar_metadata_cached(
         xmp_rows = read_xmp_sidecar(source_path_text)
     except Exception:
         return {}
-    if not xmp_rows:
-        return {}
     metadata = _xmp_rows_to_flat_metadata(Path(source_path_text), xmp_rows)
+    # 地点只存侧车；清空会删除 XML 属性，缺失不能被旧内存快照中的地点复活。
+    metadata[LOCATION_TAG] = shooting_location(metadata)
     _overlay_template_metadata_aliases(metadata, prefer_xmp=True)
     return metadata
 
@@ -2416,8 +2415,7 @@ class ExifTemplateContextProvider(TemplateContextProvider):
             context["bird"] = normalized.bird
         if normalized.capture_text:
             context["capture_text"] = normalized.capture_text
-        if normalized.location:
-            context["location"] = normalized.location
+        context["location"] = normalized.location or ""
         if normalized.gps_text:
             context["gps_text"] = normalized.gps_text
         if normalized.camera:
@@ -2511,6 +2509,9 @@ class ExifTemplateContextProvider(TemplateContextProvider):
             if column_name and text:
                 context[f"report.{column_name}"] = text
         for field in cls.canonical_fields():
+            if field.key == "location":
+                # 包括显式清空，不能从同名旧字段重新填入地点。
+                continue
             if _clean_text(context.get(field.key)):
                 continue
             superpicky_key = f"XMP-superpicky:{field.key}"
@@ -2525,6 +2526,8 @@ class ExifTemplateContextProvider(TemplateContextProvider):
         field: TemplateContextField | None,
     ) -> tuple[str, ...]:
         canonical_key = field.key if field is not None else canonical_meta_field_key(source_key)
+        if canonical_key == "location":
+            return ("location",)
         superpicky_key = f"XMP-superpicky:{canonical_key}" if canonical_key else ""
         tags = cls._CANONICAL_EXIF_TAG_CANDIDATES.get(canonical_key)
         if tags:
@@ -2542,6 +2545,8 @@ class ExifTemplateContextProvider(TemplateContextProvider):
         metadata: Dict[str, Any],
     ) -> str:
         context = type(self)._build_context_entries_from_metadata(photo_info, metadata)
+        if field is not None and field.key == "location":
+            return context.get("location", "")
         if field is not None:
             for candidate in (field.key, *field.aliases):
                 normalized = self.normalize_field_key(candidate)
