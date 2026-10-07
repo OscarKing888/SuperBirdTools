@@ -9,6 +9,8 @@ Extracted classes:
 """
 from __future__ import annotations
 
+from fractions import Fraction
+import math
 from pathlib import Path
 from typing import Any
 
@@ -56,6 +58,7 @@ from app_common.preview_canvas import (
 from birdstamp.gui import editor_core, editor_options, editor_template, editor_utils, template_context as _template_context
 from birdstamp.gui.color_editor import ColorEditor
 from birdstamp.gui.overlay_panel import OverlayPanel
+from birdstamp.gui.template_preview_format import preview_format_overridden, template_preview_settings
 from birdstamp.gui.filterable_combo import FilterableComboBox as _FilterableComboBox
 from birdstamp.gui.overlay_edit import OverlaySession, EDIT_MODE_OVERLAY
 from birdstamp.overlays.model import with_document
@@ -612,6 +615,26 @@ class TemplateManagerDialog(QDialog):
         layout = QVBoxLayout(panel)
         layout.setContentsMargins(8, 8, 8, 8)
         layout.setSpacing(8)
+
+        format_toolbar = QHBoxLayout()
+        format_toolbar.addWidget(QLabel("预览方向"))
+        self.preview_orientation_combo = QComboBox()
+        for label, value in (("跟随模板", "template"), ("横版", "landscape"), ("竖版", "portrait")):
+            self.preview_orientation_combo.addItem(label, value)
+        self.preview_orientation_combo.setToolTip("临时切换预览画幅方向")
+        format_toolbar.addWidget(self.preview_orientation_combo)
+        format_toolbar.addWidget(QLabel("比例"))
+        self.preview_ratio_combo = QComboBox()
+        self.preview_ratio_combo.addItem("跟随模板", None)
+        for label, ratio in editor_options.load_editor_options()["template_preview_ratio_options"]:
+            if isinstance(ratio, (int, float)) and math.isfinite(ratio) and ratio > 0:
+                self.preview_ratio_combo.addItem(label, ratio)
+        self.preview_ratio_combo.setToolTip("选择预览长宽比；仅用于查看排版效果")
+        format_toolbar.addWidget(self.preview_ratio_combo)
+        format_toolbar.addStretch(1)
+        layout.addLayout(format_toolbar)
+        self.preview_orientation_combo.currentIndexChanged.connect(self._on_preview_format_changed)
+        self.preview_ratio_combo.currentIndexChanged.connect(self._on_preview_format_changed)
 
         preview_toolbar = QHBoxLayout()
         preview_toolbar.setContentsMargins(0, 0, 0, 0)
@@ -1734,6 +1757,38 @@ class TemplateManagerDialog(QDialog):
         self._apply_preview_overlay_options()
         self._refresh_preview()
 
+    def _preview_render_settings(self) -> dict:
+        source = self._preview_source_image or self.placeholder
+        return template_preview_settings(
+            self.current_payload or {}, source.size,
+            orientation=self.preview_orientation_combo.currentData(),
+            ratio=self.preview_ratio_combo.currentData(),
+        )
+
+    def _update_preview_format_controls(self) -> None:
+        orientation = self.preview_orientation_combo.currentData()
+        self._preview_format_override = preview_format_overridden(orientation, self.preview_ratio_combo.currentData())
+        # 试览比例下仍可编辑叠加层；裁剪手柄只用于模板本身的画幅。
+        if self._preview_format_override:
+            self.crop_edit_mode_check.setChecked(False)
+        self.crop_edit_mode_check.setEnabled(not self._preview_format_override)
+        self.crop_edit_mode_check.setToolTip(
+            "方向和比例均选择“跟随模板”后可调整裁剪框。" if self._preview_format_override else
+            "拖动手柄即可显示分辨率参考线，靠近虚线框时吸附至配置的档位。"
+        )
+        for index in range(1, self.preview_ratio_combo.count()):
+            value = self.preview_ratio_combo.itemData(index)
+            if orientation == "portrait":
+                value = min(value, 1 / value)
+            elif orientation == "landscape":
+                value = max(value, 1 / value)
+            fraction = Fraction(value).limit_denominator(100)
+            self.preview_ratio_combo.setItemText(index, f"{fraction.numerator}:{fraction.denominator}")
+
+    def _on_preview_format_changed(self, *_args) -> None:
+        self.overlay_session.cancel()
+        self._refresh_preview()
+
     def _build_preview_overlay_options(self) -> EditorPreviewOverlayOptions:
         return EditorPreviewOverlayOptions(
             show_focus_box=bool(self.show_focus_box_check.isChecked()),
@@ -1757,7 +1812,7 @@ class TemplateManagerDialog(QDialog):
         canvas = self.preview_label.canvas
         source = self._preview_source_image or self.placeholder
         display_size = getattr(self, "_preview_display_size", None) or source.size
-        r = _parse_ratio_value(self.template_ratio_combo.currentData())
+        r = _parse_ratio_value(self._preview_render_settings().get("ratio"))
         ratio = float(r) if isinstance(r, (int, float)) and not isinstance(r, bool) else None
         if r is None:
             ratio = source.width / source.height
@@ -1769,10 +1824,11 @@ class TemplateManagerDialog(QDialog):
         if hasattr(canvas, "set_crop_edit_mode"):
             canvas.set_crop_edit_mode(
                 self.crop_edit_mode_check.isChecked()
-                and not _is_ratio_no_crop(_parse_ratio_value(self.template_ratio_combo.currentData()))
+                and not getattr(self, "_preview_format_override", False)
+                and not _is_ratio_no_crop(r)
             )
         if hasattr(canvas, "set_crop_ratio_constraint"):
-            r = _parse_ratio_value(self.template_ratio_combo.currentData())
+            r = _parse_ratio_value(self._preview_render_settings().get("ratio"))
             ratio_constraint = float(r) if isinstance(r, (int, float)) and not isinstance(r, bool) else None
             if r is None:
                 source = self._preview_source_image or self.placeholder
@@ -1783,6 +1839,8 @@ class TemplateManagerDialog(QDialog):
             )
 
     def _on_tmpl_canvas_crop_box_changed(self, box: tuple[float, float, float, float]) -> None:
+        if getattr(self, "_preview_format_override", False):
+            return
         if self.current_payload is not None:
             source = self._preview_source_image or self.placeholder
             display_size = getattr(self, "_preview_display_size", None) or source.size
@@ -1888,6 +1946,8 @@ class TemplateManagerDialog(QDialog):
         pending_timer = getattr(self, "_preview_refresh_timer", None)
         if pending_timer is not None:
             pending_timer.stop()
+        self._update_preview_format_controls()
+        preview_settings = self._preview_render_settings()
         full_source = self._preview_source_image or self.placeholder
         display_source = self._preview_display_source(full_source)
         source = display_source.copy()
@@ -1897,13 +1957,13 @@ class TemplateManagerDialog(QDialog):
         focus_camera_type = _resolve_focus_camera_type_from_metadata(self._preview_raw_metadata)
 
         if self.current_payload:
-            ratio = _parse_ratio_value(self.current_payload.get("ratio"))
+            ratio = _parse_ratio_value(preview_settings.get("ratio"))
             center_mode = _normalize_center_mode(
-                str(self.current_payload.get("center_mode") or _DEFAULT_TEMPLATE_CENTER_MODE)
+                str(preview_settings.get("center_mode") or _DEFAULT_TEMPLATE_CENTER_MODE)
             )
-            fill_color = str(self.current_payload.get("crop_padding_fill") or "#FFFFFF")
+            fill_color = str(preview_settings.get("crop_padding_fill") or "#FFFFFF")
             crop_box_override = None
-            cb_raw = self.current_payload.get("crop_box")
+            cb_raw = preview_settings.get("crop_box")
             if (
                 not _is_ratio_no_crop(ratio)
                 and cb_raw is not None
@@ -1922,7 +1982,7 @@ class TemplateManagerDialog(QDialog):
             crop_box, outer_pad = editor_core.compute_crop_plan_for_image(
                 image=full_source,
                 raw_metadata=self._preview_raw_metadata,
-                settings=self.current_payload,
+                settings=preview_settings,
                 bird_box=self._preview_source_bird_box()
                 if center_mode in {"bird", "focus"} and not _is_ratio_no_crop(ratio) else None,
                 camera_type=focus_camera_type,
@@ -1948,14 +2008,14 @@ class TemplateManagerDialog(QDialog):
                 _compute_crop_output_size(
                     *(self._preview_source_image or self.placeholder).size, crop_box, outer_pad
                 ),
-                int(self.current_payload.get("max_long_edge") or 0),
+                int(preview_settings.get("max_long_edge") or 0),
             )
             image = render_template_overlay_in_crop_region(
                 source,
                 raw_metadata=self._preview_raw_metadata,
                 metadata_context=self._preview_metadata_context,
                 photo_info=self._preview_photo_info,
-                template_payload=self.current_payload,
+                template_payload=preview_settings,
                 crop_box=display_crop_box,
                 layout_size=layout_size,
                 scene_callback=(lambda _region, scene: self.overlay_session.capture(source, scene, display_crop_box))
@@ -2009,7 +2069,7 @@ class TemplateManagerDialog(QDialog):
         self._preview_display_size = display_source.size
         if self._preview_crop_size is not None and self.current_payload:
             self._preview_crop_size = editor_core.resize_fit_size(
-                self._preview_crop_size, int(self.current_payload.get("max_long_edge") or 0)
+                self._preview_crop_size, int(preview_settings.get("max_long_edge") or 0)
             )
         self.preview_pixmap = editor_utils.pil_to_qpixmap(image) if image.mode == "RGB" else _pil_to_qpixmap(image)
         self._refresh_preview_label()

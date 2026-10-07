@@ -47,6 +47,14 @@
     "italic",
     "bold_italic"
   ],
+  "template_preview_ratio_options": [
+    {"label": "3:2", "value": 1.5},
+    {"label": "4:3", "value": 1.3333333333},
+    {"label": "16:9", "value": 1.7777777778},
+    {"label": "19.5:9", "value": 2.1666666667},
+    {"label": "5:4", "value": 1.25},
+    {"label": "1:1", "value": 1.0}
+  ],
   "ratio_options": [    
     {"label": "9:16", "value": 0.5625},
     {"label": "16:9", "value": 1.7777777778},    

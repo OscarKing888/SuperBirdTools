@@ -377,6 +377,7 @@ def load_editor_options() -> dict[str, Any]:
         "text_scale_slider": _normalize_text_scale_slider(raw.get("text_scale_slider")),
         "style_options": style_options,
         "ratio_options": ratio_options,
+        "template_preview_ratio_options": _normalize_ratio_options(raw.get("template_preview_ratio_options", raw.get("ratio_options"))),
         "max_long_edge_options": max_long_edge_options,
         "output_format_options": output_format_options,
         "gif_scale_options": gif_scale_options,
