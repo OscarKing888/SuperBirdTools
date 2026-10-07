@@ -32,24 +32,26 @@ SuperPicky 服务端设置。服务会按相对置信度差距裁掉较弱候选
 | 已确认中文鸟名 | 原有 `XMP-superpicky:bird_species_cn`；标题同步到 `XMP-dc:Title` 和 `XMP-superpicky:title` |
 | 已确认鸟名拼音（服务返回时） | `XMP-superpicky:pinyin_name`；`pinyin_name_source` 保存对应鸟名 |
 | 已确认英文鸟名 | 原有 `XMP-superpicky:bird_species_en` |
+| 已确认 GBIF 稀有度 | `XMP-superpicky:gbif_rarity_100`；兼容 SuperPicky 的 `XMP-iptcExt:Event`（两位小数） |
+| 已确认 IUCN 保护等级 | `XMP-superpicky:iucn_category`；兼容 `XMP-iptcCore:IntellectualGenre` |
 | 已确认置信度 | 原有 `XMP-superpicky:birdid_confidence` |
 | 低于阈值的中文/英文候选与置信度 | 原有 `XMP-superpicky:alt_species_cn`、`alt_species_en`、`alt_confidence` |
 | 完整服务响应 | 新增补充记录 `XMP-superpicky:birdid_response`，UTF-8 JSON 文本，存在 XMP 内，不另建 JSON 侧车 |
 
 完整响应保留每个候选的 `rank`、`cn_name`、`en_name`、`display_name`、`scientific_name`、
-`confidence`、`description`、`ebird_match`，以及 `yolo_info`、`gps_info`、`geo_info`、`warning`。
+`confidence`、`description`、`ebird_match`、`pinyin_name`、`gbif_rarity_100`、`iucn_category`，以及 `yolo_info`、`gps_info`、`geo_info`、`warning`。
 这些辅助信息可以是空值；`yolo_info` 在当前服务中可能是文本或对象，不保证含检测框坐标。
 GPS 只作为识鸟响应保存，不改写照片原有 GPS。`ebird_match` 是兼容字段，当前服务可能固定为
 false；实际地理过滤采用 `geo_info` 和 `warning`，不要仅据 `ebird_match` 判断是否过滤。
 
-目前 HTTP 接口**没有透传**模型内部的 `class_id`、`ebird_code`、`iucn_category`、
-`gbif_rarity_100` 或 `aesthetic_index`，因此本功能不生成或更新这些指标，也不从说明文字猜测。
+目前 HTTP 接口**没有透传**模型内部的 `class_id`、`ebird_code` 或 `aesthetic_index`，
+因此本功能不生成或更新这些指标，也不从说明文字猜测。
 原有这些字段若存在，仍来自此前元数据，不代表这次识别的返回值。
 已确认后移除 XMP 中旧的待确定候选；历史 `report.db` 仍是只读兼容数据，不被修改。
 
 ## 本地更新拼音
 
-当前 SuperPicky HTTP 响应尚未提供拼音；Viewer 已支持未来候选中的可选字符串 `pinyin_name`，例如 `{"cn_name":"白头鹎","pinyin_name":"bái tóu bēi"}`（完整识鸟候选仍需 `confidence`）。最高候选达到确认阈值时，拼音与鸟名一起保存；低置信度候选的拼音只保留在完整响应中，不覆盖已确认拼音。
+SuperPicky HTTP 响应现已提供可选字符串 `pinyin_name`，Viewer 接收并保存，例如 `{"cn_name":"白头鹎","pinyin_name":"bái tóu bēi"}`（完整识鸟候选仍需 `confidence`）。最高候选达到确认阈值时，拼音与鸟名一起保存；低置信度候选的拼音只保留在完整响应中，不覆盖已确认拼音。
 
 无需启动服务也能补全拼音：
 
@@ -64,6 +66,37 @@ false；实际地理过滤采用 `geo_info` 和 `warning`，不要仅据 `ebird_
 .venv/bin/python3 -m SuperViewer.superviewer.bird_pinyin_cli /path/to/photo.ARW
 .venv/bin/python3 -m SuperViewer.superviewer.bird_pinyin_cli /path/to/folder --recursive
 ```
+
+## 稀有度徽章与用户配置
+
+服务每个候选返回 `gbif_rarity_100`（数值 0–100，越高越稀有，拍摄地国家优先、全球回退）和 `iucn_category`（如 LC、NT、VU、EN、CR）。`0` 是有效分数；`null`/缺失表示未知，不默认填 0 或 LC。
+
+达到确认阈值时，原始数值和 IUCN 字符串写入上表的原有 XMP 字段；徽章文案和配色属于用户配置，不写入照片。`XMP-superpicky:birdid_rarity_source` 记录对应鸟名，`birdid_rarity_missing` 记录本次缺失的字段名：返回空值时清除上次识别的稀有度/保护等级，标记阻止旧 report.db 再回填；鸟名手动变更后旧等级也不继续展示。低置信度候选的稀有度只保存于完整 `birdid_response`，不覆盖已确认等级。
+
+照片信息面板在拼音下显示“稀有度”徽章，悬停可看原始分数；“保护等级”单独显示 IUCN 编码与中文含义。无数据为“未知”徽章，保护等级为 `-`。现有 XMP 私有字段、SuperPicky 兼容字段与只读 report.db 均可作为显示来源。
+
+**设置 → 用户选项 → 稀有度徽章** 可逐档修改显示名称、背景色、文字色，有即时预览和恢复默认按钮。保存后当前照片立即更新，保持预览与备注草稿。分界沿用 SuperPicky `core/rarity_tier.py`，默认方案：
+
+| 分数 | 配置档位 | 默认显示 | 背景色 | 文字色 |
+| --- | --- | --- | --- | --- |
+| 0 ≤ 分数 < 8 | common | 普通 | `#64748B` | `#FFFFFF` |
+| 8 ≤ 分数 < 25 | uncommon | 少见 | `#15803D` | `#FFFFFF` |
+| 25 ≤ 分数 < 50 | rare | 稀有 | `#2563EB` | `#FFFFFF` |
+| 50 ≤ 分数 < 75 | epic | 史诗 | `#9333EA` | `#FFFFFF` |
+| 75 ≤ 分数 ≤ 100 | legendary | 传奇 | `#C2410C` | `#FFFFFF` |
+| 缺失/无效 | unknown | 未知 | `#6B7280` | `#FFFFFF` |
+
+配置保存在 `SuperViewerUser.cfg`（用户选项顶部显示完整路径）。也可在退出应用后编辑 UTF-8 JSON，例如把传奇档改成“传说”：
+
+```json
+{
+  "rarity_badge_legendary_text": "传说",
+  "rarity_badge_legendary_background": "#C2410C",
+  "rarity_badge_legendary_foreground": "#FFFFFF"
+}
+```
+
+保留文件其它选项；六个档位都使用相同的 `_text`、`_background`、`_foreground` 键。颜色为 `#RRGGBB`，名称最多 32 个字符，缺省或无效配置逐项回退到内置值。
 
 ## 实现与数据保护
 

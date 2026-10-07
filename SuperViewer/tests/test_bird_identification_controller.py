@@ -192,7 +192,7 @@ def test_real_window_result_refresh_preserves_preview_and_comment_draft(tmp_path
     source = str(photo)
     monkeypatch.setattr(BirdIDClient, 'health', lambda _: {})
     monkeypatch.setattr(BirdIDClient, 'recognize', lambda *_: {
-        'success': True, 'results': [{'cn_name': '白头鹎', 'en_name': 'Common Kingfisher', 'confidence': 93}]})
+        'success': True, 'results': [{'cn_name': '白头鹎', 'en_name': 'Light-vented Bulbul', 'confidence': 93, 'gbif_rarity_100': 80, 'iucn_category': 'NT'}]})
     if operation == 'pinyin':
         assert PhotoMetaDataXMP().write_title(source, '白头鹎')
     window = main.MainWindow(initial_received_files=['skip-restore'])
@@ -222,6 +222,19 @@ def test_real_window_result_refresh_preserves_preview_and_comment_draft(tmp_path
             assert window.image_info_panel.basic_rows['拼音'].text() == 'bái tóu bēi'
             assert window.image_info_panel.pinyin_update_button.isHidden()
             assert PhotoMetaDataXMP().read(source)['pinyin_name'] == 'bái tóu bēi'
+        if operation == 'bird_id':
+            badge = window.image_info_panel.basic_rows['稀有度']
+            assert badge.text() == '传奇' and '80/100' in badge.toolTip()
+            assert window.image_info_panel.basic_rows['保护等级'].text() == 'NT · 近危'
+            # 配置修改即时生效，并保留预览与未提交备注。
+            superviewer_user_options.apply_runtime_user_options({
+                **superviewer_user_options.get_runtime_user_options(),
+                'rarity_badge_legendary_text': '传说',
+                'rarity_badge_legendary_background': '#123456',
+                'rarity_badge_legendary_foreground': '#ABCDEF',
+            })
+            window.image_info_panel.refresh_metadata_fields()
+            assert badge.text() == '传说' and '#123456' in badge.styleSheet() and '#ABCDEF' in badge.styleSheet()
         from app_common.bird_pinyin import bird_name
         assert bird_name(files.get_photo_metadata_for_path(source)) == '白头鹎'
         assert PhotoMetaDataXMP().read(source)['Title'] == '白头鹎'

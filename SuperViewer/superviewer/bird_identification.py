@@ -15,6 +15,9 @@ from urllib.parse import urlsplit
 
 from app_common.exif_io.photo_meta import PhotoMetaDataXMP, xmp_sidecar_write_lock
 from app_common.bird_pinyin import PINYIN_FIELD, PINYIN_SOURCE_FIELD
+from app_common.bird_rarity import (
+    RARITY_FIELD, IUCN_FIELD, RARITY_SOURCE_FIELD, RARITY_MISSING_FIELD, RARITY_COMPAT_FIELDS, rarity_score,
+)
 from app_common.image_formats import SUPPORTED_IMAGE_EXTENSIONS
 
 DEFAULT_URL = "http://127.0.0.1:5156"
@@ -174,6 +177,12 @@ def parse_response(response: dict):
         for key in ("cn_name", "en_name", "scientific_name", "description", "pinyin_name"):
             if not isinstance(candidate.get(key, ""), str):
                 raise BirdIDError(f"识鸟候选字段格式错误：{key}")
+        score = candidate.get(RARITY_FIELD)
+        if score is not None and (not isinstance(score, (int, float)) or rarity_score(score) is None):
+            raise BirdIDError("识鸟稀有度必须是 0–100 的数值或 null")
+        category = candidate.get(IUCN_FIELD)
+        if category is not None and not isinstance(category, str):
+            raise BirdIDError("识鸟 IUCN 等级必须是文本或 null")
         if not (candidate.get("cn_name", "").strip() or candidate.get("en_name", "").strip()):
             raise BirdIDError("候选鸟名为空")
         try:
@@ -223,11 +232,20 @@ def identify_file(source: str, client: BirdIDClient) -> BirdIDResult:
         if confirmed and best.get("pinyin_name", "").strip():
             values[PINYIN_FIELD] = best["pinyin_name"].strip()
             values[PINYIN_SOURCE_FIELD] = best.get("cn_name") or best["en_name"]
+        if confirmed:
+            # 空值明确清除旧鸟种数据；来源标记防止 report.db 回填过期等级。
+            values[RARITY_FIELD] = best.get(RARITY_FIELD) if best.get(RARITY_FIELD) is not None else ""
+            values[IUCN_FIELD] = (best.get(IUCN_FIELD) or "").strip()
+            values[RARITY_SOURCE_FIELD] = (best.get("cn_name") or best["en_name"]).strip()
+            values[RARITY_MISSING_FIELD] = ",".join(key for key in (RARITY_FIELD, IUCN_FIELD) if values[key] == "")
         fields = {f"XMP-superpicky:{key}": value for key, value in values.items()}
         if confirmed:
             values["title"] = best.get("cn_name") or best["en_name"]
             fields["XMP-dc:Title"] = values["title"]
             fields["XMP-superpicky:title"] = values["title"]
+            fields[RARITY_COMPAT_FIELDS[RARITY_FIELD]] = f"{float(values[RARITY_FIELD]):.2f}" if values[RARITY_FIELD] != "" else ""
+            fields[RARITY_COMPAT_FIELDS[IUCN_FIELD]] = values[IUCN_FIELD]
+
         with xmp_sidecar_write_lock(source):
             client.check_cancelled()
             if before != (_fingerprint(source), _fingerprint(store.sidecar_path_for(source))):

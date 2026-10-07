@@ -25,6 +25,8 @@ from app_common.file_browser._browser_core import (
     _metadata_value_from_candidates,
 )
 from app_common.bird_pinyin import bird_name, stored_pinyin
+from app_common.bird_rarity import rarity_metadata, IUCN_LABELS
+from .rarity_badge import RarityBadge
 from app_common.bird_sharpness_fields import bird_sharpness_from_meta
 from app_common.log import get_logger
 from app_common.perf_probe import perf_log
@@ -57,6 +59,8 @@ _PREVIEW_HEIGHT = 180
 _BASIC_INFO_ROWS = (
     "鸟名",
     "拼音",
+    "稀有度",
+    "保护等级",
     #"文件夹",
     "评分",
     "尺寸",
@@ -520,11 +524,15 @@ class ImageInfoTabPanel_ImageInfo(ImageInfoTabPanel):
         label = QLabel(label_text)
         label.setFixedWidth(64)
         self._basic_label_widgets.append(label)
-        value = QLabel("-")
+        value = RarityBadge(self) if label_text == "稀有度" else QLabel("-")
         value.setWordWrap(True)
         value.setStyleSheet("color: %s; font-size: 13px;" % self._theme_colors.value_text)
         row.addWidget(label)
-        row.addWidget(value, stretch=1)
+        if label_text == "稀有度":
+            row.addWidget(value)
+            row.addStretch(1)
+        else:
+            row.addWidget(value, stretch=1)
         if label_text == "拼音":
             self.pinyin_update_button = QToolButton(self)
             self.pinyin_update_button.setText("更新拼音")
@@ -738,7 +746,10 @@ class ImageInfoTabPanel_ImageInfo(ImageInfoTabPanel):
         if created_ts is None and stat is not None:
             created_ts = stat.st_ctime
 
+        rarity, iucn = rarity_metadata(metadata)
         info = {
+            "稀有度": f"{rarity:g}" if rarity is not None else "-",
+            "保护等级": f"{iucn} · {IUCN_LABELS[iucn]}" if iucn in IUCN_LABELS else iucn or "-",
             "鸟名": bird_name(metadata) or _metadata_species_text(metadata) or "-",
             "拼音": stored_pinyin(metadata) or "-",
             #"文件夹": str(p.parent),
@@ -878,12 +889,17 @@ class ImageInfoTabPanel_ImageInfo(ImageInfoTabPanel):
         self.pinyin_update_button.setEnabled(self._pinyin_update_callback is not None and self._writes_allowed(self.current_photo_path()))
         for key, label in self.basic_rows.items():
             value = str(info.get(key) or "-")
-            label.setText(value)
-            label.setToolTip(value if key == "文件夹" else "")
+            if key == "稀有度":
+                label.set_score(value)
+            else:
+                label.setText(value)
+                label.setToolTip(value if key == "文件夹" else "")
             self._apply_basic_row_style(key, value, label)
 
     def _apply_basic_row_style(self, key: str, value: str, label: QLabel) -> None:
-        if key == "对焦" and value and value != "-":
+        if key == "稀有度":
+            label.refresh_style()
+        elif key == "对焦" and value and value != "-":
             label.setStyleSheet(f"color: {_focus_status_text_color(value)}; font-size: 13px;")
         else:
             label.setStyleSheet("color: %s; font-size: 13px;" % self._theme_colors.value_text)

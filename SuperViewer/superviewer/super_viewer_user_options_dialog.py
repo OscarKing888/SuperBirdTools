@@ -210,6 +210,10 @@ class SuperViewerUserOptionsDialog(QDialog):
         denoise_layout.addStretch(1)
         tabs.addTab(denoise, "批量降噪")
 
+        from .rarity_badge import RarityBadgesForm
+        self._rarity_badges_form = RarityBadgesForm(opts, tabs)
+        tabs.addTab(self._rarity_badges_form, "稀有度徽章")
+
         sharpness = QWidget(tabs)
         sharpness_layout = QVBoxLayout(sharpness)
         from .bird_sharpness_params_form import AnalysisParamsForm
@@ -291,5 +295,6 @@ class SuperViewerUserOptionsDialog(QDialog):
             "denoise_strength": self._spin_denoise_strength.value(),
             "denoise_device": str(self._combo_denoise_device.currentData()),
             "denoise_workers": self._spin_denoise_workers.value(),
+            **self._rarity_badges_form.selected_options(),
             **bird_sharpness_params_to_options(self._bird_sharpness_form.params()),
         }

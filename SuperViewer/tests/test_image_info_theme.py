@@ -55,12 +55,13 @@ def test_image_info_theme_restyles_existing_chips_without_data_or_widget_rebuild
         panel._current_photo_path = str(source)
         panel._current_tags = {"飞行"}
         panel._rebuild_tag_chips()
-        panel._set_basic_info({"鸟名": "白鹭", "对焦": "精焦"})
+        panel._set_basic_info({"鸟名": "白鹭", "对焦": "精焦", "稀有度": "75"})
         panel.comment_edit.setPlainText("未保存的备注\n第二行")
         panel.filename_edit.setText("未保存的文件名")
         chip = panel.tags_layout.itemAt(0).widget()
         chip_label = chip.findChild(QLabel, "svTagChipLabel")
         focus_style = panel.basic_rows["对焦"].styleSheet()
+        rarity_style = panel.basic_rows["稀有度"].styleSheet()
         before_widgets = [panel.tags_layout.itemAt(index).widget() for index in range(panel.tags_layout.count())]
 
         def unexpected_reload(*_args, **_kwargs):
@@ -80,6 +81,8 @@ def test_image_info_theme_restyles_existing_chips_without_data_or_widget_rebuild
             assert colors.chip_bg in panel.tags_container.styleSheet()
             assert chip_label.palette().color(QPalette.ColorRole.WindowText).name() == colors.chip_text
             assert panel.basic_rows["对焦"].styleSheet() == focus_style
+            assert panel.basic_rows["稀有度"].styleSheet() == rarity_style
+            assert panel.basic_rows["稀有度"].text() == "传奇"
             assert panel.comment_edit.toPlainText() == "未保存的备注\n第二行"
             assert panel.filename_edit.text() == "未保存的文件名"
             assert [panel.tags_layout.itemAt(index).widget() for index in range(panel.tags_layout.count())] == before_widgets

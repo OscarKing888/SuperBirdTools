@@ -256,3 +256,78 @@ def test_optional_service_pinyin_uses_canonical_xmp_only_for_confirmed(photo, re
     assert values["pinyin_name"] == ("bái tóu bēi" if threshold == 50 else "old")
     if threshold == 50:
         assert values["pinyin_name_source"] == "白头鹎"
+
+
+@pytest.mark.parametrize('score,category', [(0, 'LC'), (75.5, 'VU'), (100, 'CR'), (None, None)])
+def test_rarity_and_iucn_roundtrip_and_browser_reload(photo, response, monkeypatch, score, category):
+    from app_common.bird_rarity import rarity_metadata
+    from app_common.file_browser._workers import MetadataLoader
+    response['results'][0].update(gbif_rarity_100=score, iucn_category=category)
+    before = photo.read_bytes()
+    result = bird.identify_file(str(photo), client_for(monkeypatch, response))
+    assert result.status == 'success', result.message
+    meta = PhotoMetaDataXMP().read(str(photo))
+    assert rarity_metadata(meta) == (score, category or '')
+    if score is not None:
+        assert float(meta['gbif_rarity_100']) == score
+        assert float(meta['XMP-Iptc4xmpExt:Event']) == score
+        assert meta['XMP-Iptc4xmpCore:IntellectualGenre'] == category
+    loader = MetadataLoader([str(photo)], meta_proxy=object())
+    parsed = loader._parse_rec(meta)
+    assert rarity_metadata(parsed) == (score, category or '')
+    assert photo.read_bytes() == before
+
+
+@pytest.mark.parametrize('confirmed', [False, True])
+def test_missing_rarity_preserves_unconfirmed_but_clears_confirmed_old_species(photo, response, monkeypatch, confirmed):
+    from app_common.bird_rarity import rarity_metadata
+    store = PhotoMetaDataXMP()
+    assert store.write(str(photo), {'XMP-dc:Title': '家燕', 'XMP-superpicky:gbif_rarity_100': 99,
+        'XMP-superpicky:iucn_category': 'CR', 'XMP-iptcExt:Event': '99', 'XMP-iptcCore:IntellectualGenre': 'CR'})
+    response['results'][0].update(gbif_rarity_100=None, iucn_category=None)
+    result = bird.identify_file(str(photo), client_for(monkeypatch, response, bird.BirdIDOptions(threshold=50 if confirmed else 99)))
+    assert result.status == ('success' if confirmed else 'candidate'), result.message
+    meta = store.read(str(photo))
+    # 模拟 report.db 中仍有原鸟种数据：明确 null 不能回填成原先的 99/CR。
+    meta.update({'report.gbif_rarity_100': 99, 'report.iucn_category': 'CR'})
+    assert rarity_metadata(meta) == ((None, '') if confirmed else (99, 'CR'))
+    if confirmed:
+        assert 'XMP-Iptc4xmpExt:Event' not in meta and 'XMP-Iptc4xmpCore:IntellectualGenre' not in meta
+
+
+@pytest.mark.parametrize('field,value', [('gbif_rarity_100', True), ('gbif_rarity_100', -1),
+    ('gbif_rarity_100', 101), ('gbif_rarity_100', '75'), ('gbif_rarity_100', float('nan')),
+    ('gbif_rarity_100', float('inf')), ('iucn_category', 0)])
+def test_invalid_rarity_response_does_not_modify_sidecar(photo, response, monkeypatch, field, value):
+    store = PhotoMetaDataXMP()
+    assert store.write_title(str(photo), '保留原值')
+    before = photo.with_suffix('.xmp').read_bytes()
+    response['results'][0][field] = value
+    assert bird.identify_file(str(photo), client_for(monkeypatch, response)).status == 'failed'
+    assert photo.with_suffix('.xmp').read_bytes() == before
+
+
+@pytest.mark.parametrize('score,category', [(0, 'LC'), (None, None), (75, None), (None, 'NT')])
+def test_report_old_values_do_not_revive_after_browser_or_proxy_reload(photo, response, monkeypatch, score, category):
+    from app_common.bird_rarity import rarity_metadata
+    from app_common.exif_io.photo_meta import PhotoMetaDataProxy, PhotoMetaDataReportDB
+    from app_common.file_browser._workers import MetadataLoader
+    row = {'filename': photo.stem, 'original_path': str(photo), 'current_path': str(photo),
+           'bird_species_cn': '家燕', 'gbif_rarity_100': 99, 'iucn_category': 'CR', 'rating': 0, 'caption': '保留说明'}
+    db = ReportDB(str(photo.parent))
+    try:
+        db.insert_photo(row)
+    finally:
+        db.close()
+    db_path = photo.parent / '.superpicky/report.db'
+    before = db_path.read_bytes()
+    response['results'][0].update(gbif_rarity_100=score, iucn_category=category)
+    result = bird.identify_file(str(photo), client_for(monkeypatch, response))
+    assert result.status == 'success', result.message
+    proxy = PhotoMetaDataProxy(report_db=PhotoMetaDataReportDB(str(photo.parent)))
+    assert rarity_metadata(proxy.read(str(photo))) == (score, category or '')
+    loader = MetadataLoader([str(photo)], meta_proxy=proxy, report_rows_by_path={str(photo): row})
+    parsed, _, _ = loader._read_parse_chunk([str(photo)])
+    assert parsed[str(photo)]['bird_species_cn'] == '白头鹎'
+    assert rarity_metadata(parsed[str(photo)]) == (score, category or '')
+    assert db_path.read_bytes() == before

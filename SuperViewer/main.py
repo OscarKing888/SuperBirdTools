@@ -846,6 +846,7 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "保存失败", f"无法写入用户选项：\n{exc}")
             return
         apply_runtime_user_options(normalized)
+        self.image_info_panel.refresh_metadata_fields()
         self._sync_perf_probe_action()
         self._file_list.apply_user_options()
         for panel in (self.preview_panel, self.preview_a):

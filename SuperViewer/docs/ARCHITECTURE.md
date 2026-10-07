@@ -354,6 +354,14 @@ Qt 测试在窗口构造前隔离 `paths_settings` 的应用/用户状态目录�
 
 鸟体控制器 `set_panel_enabled()` 分侧控制绘制与分析需求，共享同源结果；隐藏侧框不取消另一侧仍需要的计算。切目录保留每侧开关，长按只读缓存。改构图线、线宽与工具栏主题不触发解码或元数据读取。回归见 [test_viewer_viewport_toolbar.py](../tests/test_viewer_viewport_toolbar.py) 和 [test_bird_body_controller.py](../tests/test_bird_body_controller.py)。
 
+## 稀有度与保护等级
+
+识鸟核心 [`bird_identification.py`](../superviewer/bird_identification.py) 校验服务候选的 `gbif_rarity_100`（0–100，保留 0）和可空 `iucn_category`。已确认结果通过 `PhotoMetaDataXMP` 一次原子写入私有原始字段和 SuperPicky 兼容字段（`XMP-iptcExt:Event`、`XMP-iptcCore:IntellectualGenre`）；空值清除过期数据，`birdid_rarity_source` 绑定鸟名，`birdid_rarity_missing` 标记缺失字段以阻止旧报告回填空值。低置信度只保留在完整响应中。
+
+共享 [`bird_rarity.py`](../../app_common/bird_rarity.py) 定义档位（8/25/50/75）、字段读取优先级、名称/颜色默认值及配置校验。`MetadataLoader._parse_rec` 携带等级与来源，支持重新打开目录。照片信息的 [`RarityBadge`](../superviewer/rarity_badge.py) 只读缓存，显示紧凑徽章和分数提示；IUCN 独立显示。“用户选项 → 稀有度徽章”的 `RarityBadgesForm` 提供名称、背景/文字颜色、即时预览与恢复默认，通过共享 `superviewer_user_options` 保存到 `SuperViewerUser.cfg`，当前信息面板局部刷新并保留备注草稿。
+
+无额外资源或网络请求，现有 CLI 同步保存上述字段。测试覆盖 `test_bird_rarity.py`、`test_rarity_badge.py`、识鸟核心中文 XMP 回读与真实列表/缩略图窗口。字段表和文本配置示例见 [识鸟说明](../../docs/bird_identification.md)。
+
 ## 鸟名拼音
 
 照片信息的“拼音”行只显示已保存的拼音；已有鸟名但没有可用拼音时显示“更新拼音”按钮。照片右键支持单张/多选，目录右键支持当前目录及递归目录。[`PinyinController`](../superviewer/bird_pinyin_controller.py) 使用独立线程、本批有界结果队列与定时分批刷新；取消后保留已写结果，关闭时等待线程真正结束。
