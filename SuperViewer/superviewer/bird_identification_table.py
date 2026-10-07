@@ -5,12 +5,12 @@ import json
 from pathlib import Path
 
 try:
-    from PyQt6.QtGui import QFont, QPainter, QPalette
+    from PyQt6.QtGui import QFont, QPainter, QPalette, QPen
     from PyQt6.QtCore import QAbstractTableModel, QEvent, QModelIndex, QRect, QTimer, Qt, pyqtSignal
     from PyQt6.QtWidgets import (QAbstractItemView, QApplication, QHeaderView, QStyle,
         QStyledItemDelegate, QStyleOptionButton, QStyleOptionViewItem, QTableView)
 except ImportError:  # pragma: no cover
-    from PyQt5.QtGui import QFont, QPainter, QPalette
+    from PyQt5.QtGui import QFont, QPainter, QPalette, QPen
     from PyQt5.QtCore import QAbstractTableModel, QEvent, QModelIndex, QRect, QTimer, Qt, pyqtSignal
     from PyQt5.QtWidgets import (QAbstractItemView, QApplication, QHeaderView, QStyle,
         QStyledItemDelegate, QStyleOptionButton, QStyleOptionViewItem, QTableView)
@@ -29,8 +29,9 @@ class ResultEntry:
 
 class BirdIDResultsModel(QAbstractTableModel):
     HEADERS = ("照片预览", "状态", "操作", "候选", "中文鸟名", "置信度", "英文鸟名", "拼音", "学名",
-               "稀有度", "保护等级", "说明", "地理筛选提示", "定位 / 检测信息")
+               "稀有度", "保护等级", "说明", "地理筛选提示", "定位 / 检测信息", "分组")
     ACTION_COLUMN = 2
+    GROUP_COLUMN = 14
     STATUS = {"success": "已确认", "candidate": "待确定", "skipped": "跳过", "failed": "失败", "cancelled": "取消"}
 
     def __init__(self, parent=None, *, thumbnails=None):
@@ -84,6 +85,11 @@ class BirdIDResultsModel(QAbstractTableModel):
         candidates = result.response.get("results", [])
         candidate = candidates[number] if candidates else {}
         col = index.column()
+        if col == self.GROUP_COLUMN:
+            if role in (Qt.ItemDataRole.ToolTipRole, Qt.ItemDataRole.AccessibleTextRole):
+                count = len(candidates)
+                return f"{result.source}\n同一张照片 · {count} 个候选" if count else result.source
+            return None
         if role == Qt.ItemDataRole.FontRole and candidate and number == entry.candidate_indices[0] and col in (4, 5):
             font = QFont()
             font.setBold(True)
@@ -232,6 +238,11 @@ class BirdIDResultsTable(QTableView):
         self.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
         for column, width in enumerate((180, 100, 100, 60, 120, 90, 200, 150, 200, 100, 100, 300, 240, 280)):
             self.setColumnWidth(column, width)
+        # 逻辑列追加、视觉移到最前，保留照片/采纳等既有列的索引和行为。
+        group_column = self.results.GROUP_COLUMN
+        self.setColumnWidth(group_column, 48)
+        self.horizontalHeader().setSectionResizeMode(group_column, QHeaderView.ResizeMode.Fixed)
+        self.horizontalHeader().moveSection(self.horizontalHeader().visualIndex(group_column), 0)
         self.setItemDelegateForColumn(0, PhotoPreviewDelegate(self))
         if thumbnails is not None:
             thumbnails.changed.connect(self._preview_ready)
@@ -241,6 +252,38 @@ class BirdIDResultsTable(QTableView):
         delegate = AdoptDelegate(self)
         delegate.requested.connect(self._request)
         self.setItemDelegateForColumn(self.results.ACTION_COLUMN, delegate)
+
+    def paintEvent(self, event):
+        super().paintEvent(event)
+        column = self.results.GROUP_COLUMN
+        if self.isColumnHidden(column):
+            return
+        left = self.columnViewportPosition(column)
+        width = self.columnWidth(column) - 1
+        strip = QRect(left, 0, width, self.viewport().height())
+        if not strip.intersects(self.viewport().rect()):
+            return
+        # 在表格网格线之后统一画括线，跨行不断线，选中某个候选也不割裂分组。
+        painter = QPainter(self.viewport())
+        painter.setClipRect(strip.intersected(self.viewport().rect()))
+        painter.fillRect(strip, self.palette().brush(QPalette.ColorRole.Base))
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setPen(QPen(self.palette().color(QPalette.ColorRole.Text), 2))
+        spine, arm = left + 14, left + width - 10
+        painted = set()
+        for row in self._visible_rows():
+            entry, _ = self.results.rows[row]
+            if entry.first_row not in painted:
+                painted.add(entry.first_row)
+                last = entry.first_row + entry.row_count - 1
+                top = self.rowViewportPosition(entry.first_row) + 12
+                bottom = self.rowViewportPosition(last) + self.rowHeight(last) - 13
+                painter.drawLine(spine, top, spine, bottom)
+                painter.drawLine(spine, top, arm, top)
+                painter.drawLine(spine, bottom, arm, bottom)
+            center = self.rowViewportPosition(row) + self.rowHeight(row) // 2
+            painter.drawLine(spine, center, arm, center)
+        painter.end()
 
     def _request(self, row):
         if self.results.can_adopt(row):
