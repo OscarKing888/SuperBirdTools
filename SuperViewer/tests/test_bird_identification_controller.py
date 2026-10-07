@@ -162,7 +162,7 @@ def test_saved_result_queued_before_new_edit_does_not_clobber_ui(env, monkeypatc
     assert wait_for(lambda: not controller.busy)
 
 
-@pytest.mark.parametrize('operation', ['bird_id', 'pinyin'])
+@pytest.mark.parametrize('operation', ['bird_id', 'pinyin', 'location'])
 @pytest.mark.parametrize('mode', ['list', 'thumbnail'])
 def test_real_window_result_refresh_preserves_preview_and_comment_draft(tmp_path, monkeypatch, mode, operation):
     import importlib
@@ -193,7 +193,7 @@ def test_real_window_result_refresh_preserves_preview_and_comment_draft(tmp_path
     monkeypatch.setattr(BirdIDClient, 'health', lambda _: {})
     monkeypatch.setattr(BirdIDClient, 'recognize', lambda *_: {
         'success': True, 'results': [{'cn_name': '白头鹎', 'en_name': 'Light-vented Bulbul', 'confidence': 93, 'gbif_rarity_100': 80, 'iucn_category': 'NT'}]})
-    if operation == 'pinyin':
+    if operation in ('pinyin', 'location'):
         assert PhotoMetaDataXMP().write_title(source, '白头鹎')
     window = main.MainWindow(initial_received_files=['skip-restore'])
     window.show()
@@ -212,12 +212,20 @@ def test_real_window_result_refresh_preserves_preview_and_comment_draft(tmp_path
         if operation == 'bird_id':
             controller = window._bird_id
             assert controller.start_for_paths([source], options=BirdIDOptions())
+        elif operation == 'location':
+            controller = window._shooting_location
+            assert controller.start([source], '崇明东滩')
         else:
             controller = window._bird_pinyin
             panel = window.image_info_panel
             assert not panel.pinyin_update_button.isHidden()
             panel.pinyin_update_button.click()
         assert wait_for(lambda: not controller.busy)
+        if operation == 'location':
+            assert window.image_info_panel.location_edit.text() == '崇明东滩'
+            window.image_info_panel.location_edit.setText('云南高黎贡山')
+            window.image_info_panel.location_edit.editingFinished.emit()
+            assert PhotoMetaDataXMP().read(source)['shooting_location'] == '云南高黎贡山'
         if operation == 'pinyin':
             assert window.image_info_panel.basic_rows['拼音'].text() == 'bái tóu bēi'
             assert window.image_info_panel.pinyin_update_button.isHidden()

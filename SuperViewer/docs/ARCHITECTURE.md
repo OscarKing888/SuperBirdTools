@@ -163,6 +163,14 @@ RAW 完整解码可能保留内嵌 JPEG 裁掉的传感器边缘。共享 [`raw_
 
 EXIF 页直接列出 ExifTool 从 RAW 及其他图像读取的已知标签，包含相机 MakerNote。若有对焦距离，`_camera_focus_distance_from_exiftool()` 将其提到优先区，Canon 的上下界保留各自标签和原值；Sony 仅有 ExifTool 合成距离时会明确标为估算。没有距离时不生成占位值。超焦距计算及 ExifTool 的合成超焦距均不显示。
 
+### 拍摄地点
+
+图片信息页的“拍摄地点”输入框显示并编辑独立文本，回车或失焦保存，留空清除；支持原生文本复制粘贴。照片列表和缩略图的右键“拍摄地点”菜单提供单张/多选修改、复制单张地点和向所选照片粘贴剪贴板文本。
+
+共享 [`shooting_location.py`](../../app_common/shooting_location.py) 定义 `XMP-superpicky:shooting_location`、读取优先级与 `write_shooting_location()`；仅通过 `PhotoMetaDataXMP` 写同名 XMP，不读取/推导/更改 GPS，不复用 City/State/Country 等分析字段，不写原图或 report.db。`MetadataLoader._parse_rec()` 将地点传入浏览器缓存，重新加载目录后仍可显示。核心写入函数可供脚本批处理调用；当前入口集中于 GUI 编辑和剪贴板，不另设 CLI 命令。
+
+[`ShootingLocationController`](../superviewer/shooting_location_controller.py) 注册菜单并管理后台批次：按实际侧车去重，有界结果队列、定时分批刷新、取消保留已写结果、退出等待真实 `QThread.finished`。复用 `MetadataResultSync` 校验侧车指纹并同步同侧车照片；本地字段覆盖保护编辑结果免受晚到旧批次影响。刷新只改地点，不重选照片，不覆盖备注、文件名和地点草稿。读写/清空、中文、GPS 保留、部分失败和 Qt 生命周期回归见共享 [test_shooting_location.py](../../app_common/tests/test_shooting_location.py)、[test_shooting_location_ui.py](../tests/test_shooting_location_ui.py) 和 [实窗回归](../tests/test_bird_identification_controller.py)。
+
 ### 写入层
 
 - 备注入口是 `MainWindow._save_photo_comment_from_info_panel()`；标题及 EXIF 表入口是 `_save_exif_value()`。原始照片和 RAW 不承接这些用户元数据编辑。

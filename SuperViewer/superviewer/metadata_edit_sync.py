@@ -11,6 +11,7 @@ from app_common.exif_io.photo_meta import (
     _xmp_sidecar_write_key,
 )
 from app_common.file_browser import _browser_core as display
+from app_common.shooting_location import LOCATION_TAG, location_updates, shooting_location
 
 
 _DISPLAY_FIELDS = {
@@ -47,7 +48,9 @@ def sync_saved_xmp_edit(file_list, path: str, tag_key: str) -> None:
     updates = {
         key: next((value for name, value in fresh.items() if name.lower() == key.lower()), ""),
     }
-    if _is_xmp_title_key(key):
+    if key.lower() == LOCATION_TAG.lower():
+        updates.update(location_updates(shooting_location(fresh)))
+    elif _is_xmp_title_key(key):
         value = fresh.get("XMP-dc:Title", "")
         updates.update(title=value, bird_species_cn=value)
     elif _is_xmp_description_key(key):

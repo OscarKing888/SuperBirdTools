@@ -25,6 +25,7 @@ from app_common.file_browser._browser_core import (
     _metadata_value_from_candidates,
 )
 from app_common.bird_pinyin import bird_name, stored_pinyin
+from app_common.shooting_location import shooting_location
 from app_common.bird_rarity import rarity_metadata, IUCN_LABELS
 from .rarity_badge import RarityBadge
 from app_common.bird_sharpness_fields import bird_sharpness_from_meta
@@ -261,7 +262,11 @@ class ImageInfoTabPanel_ImageInfo(ImageInfoTabPanel):
         *,
         available_tag_tree_provider: Callable[[], list[TagTreeNode]] | None = None,
         pinyin_update_callback: Callable[[str], None] | None = None,
+        location_save_callback: Callable[[str, str], bool] | None = None,
     ) -> None:
+        self._location_save_callback = location_save_callback
+        self._current_location = ""
+        self._location_path = ""
         self._pinyin_update_callback = pinyin_update_callback
         self._available_tags_provider = available_tags_provider
         self._available_tag_tree_provider = available_tag_tree_provider
@@ -356,6 +361,15 @@ class ImageInfoTabPanel_ImageInfo(ImageInfoTabPanel):
         self.filename_edit.editingFinished.connect(self._commit_filename_edit)
         layout.addWidget(self.filename_edit)
 
+        location_row = QHBoxLayout()
+        location_row.addWidget(QLabel("拍摄地点"))
+        self.location_edit = QLineEdit()
+        self.location_edit.setPlaceholderText("输入拍摄地点")
+        self.location_edit.setAccessibleName("拍摄地点")
+        self.location_edit.editingFinished.connect(self._commit_location_edit)
+        location_row.addWidget(self.location_edit, stretch=1)
+        layout.addLayout(location_row)
+
         self._add_separator(layout)
         layout.addWidget(self._section_title("标签"))
         self.tags_container = QWidget(content)
@@ -389,6 +403,7 @@ class ImageInfoTabPanel_ImageInfo(ImageInfoTabPanel):
             "QLineEdit { padding: 8px 10px; font-size: 14px; "
             "border: 1px solid %s; border-radius: 7px; }" % theme.input_border
         )
+        self.location_edit.setStyleSheet(self.filename_edit.styleSheet())
         for label in self._section_title_labels:
             label.setStyleSheet(
                 "color: %s; font-size: 13px; font-weight: 600;" % theme.section_title
@@ -425,6 +440,11 @@ class ImageInfoTabPanel_ImageInfo(ImageInfoTabPanel):
         can_write = has_file and self._writes_allowed(path)
         self.comment_edit.setEnabled(can_write)
         self.filename_edit.setEnabled(can_write)
+        self.location_edit.setEnabled(can_write and self._location_save_callback is not None)
+        self._location_path = path if has_file else ""
+        self._current_location = shooting_location(metadata)
+        self.location_edit.setText(self._current_location)
+        self.location_edit.setToolTip("自定义拍摄地点；回车或离开输入框保存，留空可清除。")
         disabled_tip = "" if can_write else self._write_disabled_tooltip("编辑图片信息", path)
         self.comment_edit.setToolTip(disabled_tip if has_file and not can_write else comment)
         self.filename_edit.setToolTip(disabled_tip if has_file and not can_write else path if has_file else "")
@@ -485,6 +505,11 @@ class ImageInfoTabPanel_ImageInfo(ImageInfoTabPanel):
         if not path or not os.path.isfile(path):
             return
         metadata = self._load_metadata(path)
+        location = shooting_location(metadata)
+        has_location_draft = self.location_edit.text().strip() != self._current_location
+        self._current_location = location
+        if not has_location_draft and self.location_edit.text() != location:
+            self.location_edit.setText(location)
         comment = _metadata_comment(metadata)
         has_comment_draft = self.comment_edit.toPlainText().strip() != self._current_comment
         self._current_comment = comment
@@ -677,6 +702,26 @@ class ImageInfoTabPanel_ImageInfo(ImageInfoTabPanel):
             QMessageBox.warning(self, "TAG", f"保存标签失败：\n{exc}")
             return
         self.refresh_current_photo()
+
+    def _commit_location_edit(self) -> None:
+        path = self.current_photo_path()
+        # 非活动页可能已切换逻辑照片，不能把上一张的草稿写到新照片。
+        if not path or path != self._location_path or self._location_save_callback is None:
+            return
+        text = self.location_edit.text().strip()
+        if text == self._current_location:
+            return
+        try:
+            if not self._writes_allowed(path):
+                raise PermissionError(self._write_disabled_tooltip("保存拍摄地点", path))
+            if not self._location_save_callback(path, text):
+                raise OSError("拍摄地点保存失败。")
+        except Exception as exc:
+            QMessageBox.warning(self, "拍摄地点保存失败", str(exc))
+            return
+        self._current_location = text
+        # 只更新地点，保留备注/文件名草稿和当前预览。
+        self.location_edit.setText(text)
 
     def _commit_comment_edit(self) -> None:
         if self._updating_comment:
