@@ -7,8 +7,10 @@ from PyQt6.QtGui import QColor, QPainter, QPen
 from PyQt6.QtWidgets import (
     QDialog, QDialogButtonBox, QDoubleSpinBox, QFormLayout, QGridLayout,
     QHBoxLayout, QLabel, QLineEdit, QListWidget, QListWidgetItem, QMessageBox,
-    QPushButton, QTabWidget, QVBoxLayout, QWidget,
+    QPushButton, QStyle, QVBoxLayout, QWidget,
 )
+
+from app_common.sidebar_tabs import SidebarTabWidget
 
 from birdstamp.overlays.safe_area_options import current_options, default_options, save_options
 
@@ -45,15 +47,30 @@ class UserOptionsDialog(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowTitle('用户选项')
-        self.resize(760, 520)
+        self.resize(920, 660)
         self.options = deepcopy(current_options())
         self._loading = False
         self.current_id = None
         outer = QVBoxLayout(self)
-        tabs = QTabWidget()
-        outer.addWidget(tabs)
-        page = QWidget()
-        tabs.addTab(page, '安全区')
+        self.tabs = SidebarTabWidget(self)
+        outer.addWidget(self.tabs, 1)
+        self.safe_area_page = self._build_safe_area_page()
+        self.tabs.addTab(self.safe_area_page,
+                         self.style().standardIcon(QStyle.StandardPixmap.SP_FileDialogDetailedView),
+                         '安全区')
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+        buttons.button(QDialogButtonBox.StandardButton.Ok).setText('确定')
+        buttons.button(QDialogButtonBox.StandardButton.Cancel).setText('取消')
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        outer.addWidget(buttons)
+        self.name_edit.textChanged.connect(self._edit)
+        self.groups.currentRowChanged.connect(self._load_row)
+        self._refresh_groups()
+
+    def _build_safe_area_page(self):
+        """安全区控件集中在独立页面，后续选项通过 tabs.addTab 追加。"""
+        page = QWidget(self.tabs)
         page_layout = QVBoxLayout(page)
         hint = QLabel('每组分别设置横屏、竖屏的遮挡边距，单位为画幅百分比。0% 表示该边不预留。\n'
                       '模板裁切中的安全框列表随组配置更新；布局避让保持原有字号和图像大小。')
@@ -109,15 +126,7 @@ class UserOptionsDialog(QDialog):
         note = QLabel('左右之和、上下之和均须小于 100%。\n绿色为可用安全区，灰色为预留遮挡区。')
         note.setWordWrap(True)
         right.addWidget(note)
-        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
-        buttons.button(QDialogButtonBox.StandardButton.Ok).setText('确定')
-        buttons.button(QDialogButtonBox.StandardButton.Cancel).setText('取消')
-        buttons.accepted.connect(self.accept)
-        buttons.rejected.connect(self.reject)
-        outer.addWidget(buttons)
-        self.name_edit.textChanged.connect(self._edit)
-        self.groups.currentRowChanged.connect(self._load_row)
-        self._refresh_groups()
+        return page
 
     def _refresh_groups(self, selected=None):
         self.groups.blockSignals(True)

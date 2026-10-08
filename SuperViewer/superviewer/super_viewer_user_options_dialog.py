@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import os
 
+from app_common.sidebar_tabs import SidebarTabWidget
 from app_common.superviewer_user_options import (
     BIRD_SHARPNESS_PARAM_KEYS,
     KEY_NAVIGATION_FPS_OPTIONS,
@@ -34,40 +35,21 @@ from .qt_compat import (
     QPushButton,
     QScrollArea,
     QSpinBox,
-    QTabWidget,
     QWidget,
     QVBoxLayout,
 )
 
 
 try:
-    from PyQt6.QtCore import Qt, QSize
+    from PyQt6.QtCore import Qt
     from PyQt6.QtGui import QPalette
-    from PyQt6.QtWidgets import QTabBar, QStyle, QStyleOptionTab, QStylePainter
+    from PyQt6.QtWidgets import QStyle
 except ImportError:  # pragma: no cover - PyQt5 fallback
-    from PyQt5.QtCore import Qt, QSize
+    from PyQt5.QtCore import Qt
     from PyQt5.QtGui import QPalette
-    from PyQt5.QtWidgets import QTabBar, QStyle, QStyleOptionTab, QStylePainter
+    from PyQt5.QtWidgets import QStyle
 
 _TOOLTIP_ROLE = getattr(getattr(Qt, "ItemDataRole", Qt), "ToolTipRole")
-
-
-class _SidebarTabBar(QTabBar):
-    """West-side tabs with horizontal, keyboard-accessible labels."""
-    def tabSizeHint(self, index):
-        icon_width = self.iconSize().width() + 8 if not self.tabIcon(index).isNull() else 0
-        return QSize(max(132, self.fontMetrics().horizontalAdvance(self.tabText(index)) + icon_width + 28),
-                     max(40, self.fontMetrics().height() + 20))
-
-    def paintEvent(self, event):
-        painter = QStylePainter(self)
-        controls = getattr(QStyle, "ControlElement", QStyle)
-        for index in range(self.count()):
-            option = QStyleOptionTab()
-            self.initStyleOption(option, index)
-            painter.drawControl(controls.CE_TabBarTabShape, option)
-            option.shape = getattr(QTabBar, "Shape", QTabBar).RoundedNorth
-            painter.drawControl(controls.CE_TabBarTabLabel, option)
 
 
 class SuperViewerUserOptionsDialog(QDialog):
@@ -166,10 +148,7 @@ class SuperViewerUserOptionsDialog(QDialog):
         grid.addWidget(self._chk_perf_probes, row, 1)
         grid.addWidget(QLabel("默认关闭"), row, 2)
 
-        tabs = QTabWidget(self)
-        tabs.setTabBar(_SidebarTabBar(tabs))
-        tabs.setTabPosition(getattr(QTabWidget, "TabPosition", QTabWidget).West)
-        tabs.setIconSize(QSize(20, 20))
+        tabs = SidebarTabWidget(self)
         self.tabs = tabs
         standard_icons = getattr(QStyle, "StandardPixmap", QStyle)
         general = QWidget(tabs)
