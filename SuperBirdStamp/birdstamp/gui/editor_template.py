@@ -152,6 +152,8 @@ def _iter_seed_template_directories() -> list[Path]:
 
     app_root = get_config_path().parents[1]
     _add(app_root / "config" / "templates")
+    # 配置与程序目录独立；源码运行也要从只读资源目录补齐内置模板。
+    _add(resolve_bundled_path("config", "templates"))
 
     if getattr(sys, "frozen", False):
         meipass = getattr(sys, "_MEIPASS", None)

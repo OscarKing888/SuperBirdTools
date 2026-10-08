@@ -132,10 +132,7 @@ def resolve_bundled_path(*parts: str) -> Path:
 
 
 def get_user_data_dir() -> Path:
-    """返回用户可写的数据目录，打包后避免写入 app bundle 内部。"""
-    if not getattr(sys, "frozen", False):
-        return get_app_dir()
-
+    """源码版和打包版共用平台用户目录，避免配置随安装位置或版本分离。"""
     system_name = platform.system().lower()
     if system_name == "windows":
         base = (
