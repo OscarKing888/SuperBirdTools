@@ -338,3 +338,7 @@ Windows 合并构建由 [`stage_windows_exiftool.py`](../../build_tools/stage_wi
 ### 视口显示选项归属
 
 [PreviewViewportPanel](../birdstamp/gui/editor_preview_viewport.py) 复用共享 [ViewportOverlayTools](../../app_common/preview_toolbar.py)，将原主工具栏显示选项移入每侧：裁切遮罩/透明度、焦点框、鸟体框、构图线/线宽均独立；构图菜单一级列出类型单选，下方的滑动条与输入框同步设置 1–32 px 整数线宽。来源、原图/成片、焦点居中、适应、缩放也统一为图标。主工具栏只保留编辑工具、A/B 和视野同步。`_build_preview_overlay_options(controls)` 接受指定侧控件；无参数沿用 B 以兼容编辑与模板管线，A 显式传入自己的选项。工作区通过 `a_overlays` 保存 A，旧字段保持 B，旧工作区初始化两侧相同后各自调整。详细布局见 [AB_PREVIEW_LAYOUT.md](ux/AB_PREVIEW_LAYOUT.md)，回归见 [test_editor_viewport_toolbar.py](../tests/test_editor_viewport_toolbar.py)。纯交互控件无独立 CLI 参数。
+
+### 用户选项页面扩展
+
+[user_options_dialog.py](../birdstamp/gui/user_options_dialog.py) 与 SuperViewer 共用 [SidebarTabWidget](../../app_common/sidebar_tabs.py)：左侧纵向 Tab 导航、横排文字和图标，窗口默认 920×660。现有安全区编辑器由 `_build_safe_area_page()` 构建，保留组管理、横竖屏边距和预览；确定/取消按钮位于页面外。后续设置以独立 QWidget 页面通过 `tabs.addTab(page, icon, label)` 接入，沿用 Qt 的切页及键盘导航。安全区校验、保存失败留在窗口及取消不落盘行为不变；此布局调整无新增 CLI 参数。回归沿用 [test_safe_area_user_options.py](../tests/test_safe_area_user_options.py)。
