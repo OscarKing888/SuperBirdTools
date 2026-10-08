@@ -29,6 +29,7 @@ def test_toolbar_undo_redo_preserves_original_tags_and_survives_menu_rebuild(tmp
     monkeypatch.setattr(paths_settings, "_get_user_state_dir", lambda: str(settings / "state"))
     monkeypatch.setattr(main, "_get_app_dir", lambda: str(settings))
     monkeypatch.setattr(superviewer_user_options, "_get_app_dir", lambda: str(settings))
+    monkeypatch.setattr(superviewer_user_options, "get_user_config_dir", lambda: str(settings))
     monkeypatch.setenv("APPDATA", str(settings / "appdata"))
     monkeypatch.setenv("LOCALAPPDATA", str(settings / "cache"))
     config = tmp_path / "tags.cfg"

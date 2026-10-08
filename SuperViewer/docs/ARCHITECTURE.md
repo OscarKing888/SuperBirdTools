@@ -26,6 +26,8 @@
 
 应用身份由根 [app_metadata.json](../../app_metadata.json) 经 [load_app_identity](../../app_identity.py) 读取，包入口导出 `APP_INFO` / `__version__`，窗口标题和 Qt 应用名使用同一对象。源码配置保存主次版本，`load_app_identity()` 自动追加 HEAD 前 8 位；打包时所有 spec 经 [prepare_build_metadata](../../build_tools/set_build_version.py) 收集 `build/version/app_metadata.json` 的完整版本，包内无需 Git，且构建不修改源码配置。应用自己的 [about.cfg](../about.cfg) 仅管理 About 内容与图片，共享 [config.py](../../app_common/about_dialog/config.py) 处理覆盖和路径，[AboutDialog](../../app_common/about_dialog/dialog.py) 负责屏幕边界、自适应换行和滚动。只读启动检查 [about_diagnostics.py](../../about_diagnostics.py) 通过 `entry.py --check-about` 调用应用实际配置入口，不构造主窗口或恢复工作区。
 
+源码版和打包版的可写配置统一存放在用户状态目录的 `Config` 子目录：macOS 为 `~/Library/Application Support/SuperViewer/Config`，Windows 为 `%APPDATA%/SuperViewer/Config`（无 APPDATA 时沿用 home 回退），其他系统为 `~/.superviewer/Config`。[`paths_settings.py`](../superviewer/paths_settings.py) 管理 `super_viewer.cfg`；共享 [`superviewer_user_options.py`](../../app_common/superviewer_user_options.py) 管理 `SuperViewerUser.cfg` 和平台路径解析。已有用户配置优先，缺失时兼容读取旧程序目录/内置配置，保存只写用户目录；不覆盖或删除旧文件。最近目录、归档与降噪历史保持原用户状态路径。只读 About、图标和照片目录内的标签配置仍按原资源/目录作用域解析。回归见 [test_config_paths.py](../tests/test_config_paths.py) 和 [test_superviewer_config_paths.py](../../app_common/tests/test_superviewer_config_paths.py)。
+
 ## 2. 目录选择到可见列表
 
 共享 `DirectoryBrowserWidget._on_dir_context_menu()` 提供“复制完整路径”，取右键节点的绝对路径写入剪贴板，不触发目录选择；空白处和占位节点不显示菜单。宿主通过 `add_context_menu_extender(callback(menu, path))` 追加目录动作（如鸟清晰度检测、计算连拍信息），文件列表/缩略图菜单对应 `FileListPanel.add_file_context_menu_extender(callback(menu, paths))`；扩展回调异常只记日志，不影响菜单。

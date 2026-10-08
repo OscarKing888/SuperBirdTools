@@ -177,6 +177,7 @@ def test_real_window_archive_updates_list_and_clears_moved_preview(tmp_path, mon
     monkeypatch.setattr(ui.paths_settings, '_get_user_state_dir', lambda: str(settings / 'state'))
     monkeypatch.setattr(main, '_get_app_dir', lambda: str(settings))
     monkeypatch.setattr(superviewer_user_options, '_get_app_dir', lambda: str(settings))
+    monkeypatch.setattr(superviewer_user_options, 'get_user_config_dir', lambda: str(settings))
     monkeypatch.setattr(superviewer_user_options, '_RUNTIME_OPTIONS', {
         **superviewer_user_options.get_runtime_user_options(),
         'thumbnail_loader_workers': 1, 'metadata_loader_workers': 1, 'persistent_thumb_workers': 1})

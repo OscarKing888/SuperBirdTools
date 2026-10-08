@@ -153,6 +153,7 @@ def test_toolbar_persists_option_and_keeps_grid_export(tmp_path, monkeypatch):
     monkeypatch.setattr(paths_settings, "_get_app_dir", lambda: str(tmp_path))
     monkeypatch.setattr(paths_settings, "_get_user_state_dir", lambda: str(tmp_path / "state"))
     monkeypatch.setattr(superviewer_user_options, "_get_app_dir", lambda: str(tmp_path))
+    monkeypatch.setattr(superviewer_user_options, "get_user_config_dir", lambda: str(tmp_path))
     monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "cache"))
     assert not paths_settings.load_auto_focus_center_from_settings()
     window = MainWindow(initial_received_files=["skip-restore"])

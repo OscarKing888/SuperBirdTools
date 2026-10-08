@@ -178,6 +178,7 @@ def test_real_window_result_refresh_preserves_preview_and_comment_draft(tmp_path
     monkeypatch.setattr(paths_settings, '_get_user_state_dir', lambda: str(settings / 'state'))
     monkeypatch.setattr(main, '_get_app_dir', lambda: str(settings))
     monkeypatch.setattr(superviewer_user_options, '_get_app_dir', lambda: str(settings))
+    monkeypatch.setattr(superviewer_user_options, 'get_user_config_dir', lambda: str(settings))
     monkeypatch.setattr(superviewer_user_options, '_RUNTIME_OPTIONS', {
         **superviewer_user_options.get_runtime_user_options(), 'thumbnail_loader_workers': 1,
         'metadata_loader_workers': 1, 'persistent_thumb_workers': 1,
