@@ -27,6 +27,10 @@ class CaptureTimeCancelled(RuntimeError):
     pass
 
 
+class MissingRawError(ValueError):
+    """扫描成功，但没有同名 RAW；GUI 可保留选择以便换目录重试。"""
+
+
 @dataclass
 class CaptureTimeResult:
     source: str
@@ -34,6 +38,7 @@ class CaptureTimeResult:
     updates: dict = field(default_factory=dict)
     saved_fingerprint: tuple | None = None
     raw_source: str = ''
+    missing_raw: bool = False
 
 
 def _check_cancelled(cancelled):
@@ -68,7 +73,7 @@ def index_raw_files(directory, *, cancelled=lambda: False):
 def matching_raw(path, index):
     matches = index.get(name_key(path), [])
     if not matches:
-        raise ValueError('未找到同名 RAW')
+        raise MissingRawError('未找到同名 RAW')
     if len(matches) != 1:
         raise ValueError('找到多个同名 RAW，无法确定：' + '；'.join(matches))
     return matches[0]
@@ -203,7 +208,8 @@ def update_capture_times(paths, directory, *, cancelled=lambda: False):
             return
         except Exception as exc:
             for photo, _ in group:
-                yield CaptureTimeResult(photo, str(exc), raw_source=raw)
+                yield CaptureTimeResult(photo, str(exc), raw_source=raw,
+                                        missing_raw=isinstance(exc, MissingRawError))
 
 
 def main(argv=None):

@@ -191,6 +191,11 @@ def test_real_window_result_refresh_preserves_preview_and_comment_draft(tmp_path
     photo = library / '实测.jpg'
     Image.new('RGB', (24, 18), 'blue').save(photo)
     source = str(photo)
+    capture_paths = [source]
+    if operation == 'capture_time':
+        missing = library / '未找到原片.jpg'
+        Image.new('RGB', (24, 18), 'green').save(missing)
+        capture_paths.append(str(missing))
     monkeypatch.setattr(BirdIDClient, 'health', lambda _: {})
     monkeypatch.setattr(BirdIDClient, 'recognize', lambda *_: {
         'success': True, 'results': [{'cn_name': '白头鹎', 'en_name': 'Light-vented Bulbul', 'confidence': 93, 'gbif_rarity_100': 80, 'iucn_category': 'NT'},
@@ -204,7 +209,7 @@ def test_real_window_result_refresh_preserves_preview_and_comment_draft(tmp_path
         files._set_view_mode(files._MODE_LIST if mode == 'list' else files._MODE_THUMB)
         files.load_directory(str(library))
         assert wait_for(lambda: source in files._all_files)
-        files.set_pending_selection([source], source)
+        files.set_pending_selection(capture_paths, source)
         assert wait_for(lambda: window.preview_panel.source_pixmap_for_path(source) is not None)
         assert wait_for(lambda: files._metadata_loader is None and files._photo_tag_loader is None and window._focus_loader is None)
         cache_key = window.preview_panel.source_pixmap_for_path(source).cacheKey()
@@ -221,7 +226,7 @@ def test_real_window_result_refresh_preserves_preview_and_comment_draft(tmp_path
             (raws / (photo.stem + '.ARW')).write_bytes(b'raw')
             monkeypatch.setattr(capture_time_update, 'read_raw_capture_time', lambda *a, **k: '2025-08-19T09:10:11.045+08:00')
             controller = window._capture_time
-            assert controller.start([source], str(raws))
+            assert controller.start(capture_paths, str(raws))
         elif operation == 'catalog':
             from SuperViewer.superviewer.bird_catalog import BirdCatalogClient
             bird = dict(bird_id=2, version_id=10, version_name='IOC 14.2', cn_name='白头鹎',
@@ -256,6 +261,16 @@ def test_real_window_result_refresh_preserves_preview_and_comment_draft(tmp_path
             panel.pinyin_update_button.click()
         assert wait_for(lambda: not controller.busy)
         if operation == 'capture_time':
+            assert controller._report is not None and controller._succeeded == 1
+            assert files._active_view_selected_paths() == [str(missing)]
+            assert not reselections
+            assert window.preview_panel.source_pixmap_for_path(source).cacheKey() == cache_key
+            assert window.image_info_panel.comment_edit.toPlainText() == '用户未保存的备注'
+            # 下一轮直接处理保留下来的选择，全部成功后选择为空。
+            (raws / (missing.stem + '.ARW')).write_bytes(b'raw')
+            assert controller.start(files._active_view_selected_paths(), str(raws))
+            assert wait_for(lambda: not controller.busy)
+            assert files._active_view_selected_paths() == []
             assert controller._report is None and controller._succeeded == 1
             assert '2025' in window.image_info_panel.basic_rows['拍摄时间'].text()
             assert files.cached_photo_metadata_for_path(source)['date_time_original'] == '2025-08-19T09:10:11.045+08:00'

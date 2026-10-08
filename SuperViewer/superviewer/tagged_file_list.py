@@ -34,9 +34,11 @@ from .rarity_file_table import RarityFileTableModel, RarityBadgeDelegate
 from .thumbnail_metadata import BirdThumbnailModel, BirdThumbnailDelegate
 
 try:
-    from PyQt6.QtCore import QSignalBlocker
+    from PyQt6.QtCore import QItemSelectionModel, QSignalBlocker
+    _DeselectRows = QItemSelectionModel.SelectionFlag.Deselect | QItemSelectionModel.SelectionFlag.Rows
 except ImportError:
-    from PyQt5.QtCore import QSignalBlocker
+    from PyQt5.QtCore import QItemSelectionModel, QSignalBlocker
+    _DeselectRows = QItemSelectionModel.Deselect | QItemSelectionModel.Rows
 
 
 _log = get_logger("superviewer.tagged_file_list")
@@ -264,6 +266,36 @@ class SuperViewerTaggedFileListPanel(FileListPanel):
             self._selected_display_path = normalized
             self._update_selection_status()
         return True
+
+    def deselect_display_paths_silently(self, paths: Iterable[str]) -> None:
+        """按显示路径取消两种视图的选择，保留当前预览及编辑草稿。"""
+        normalized = {os.path.normpath(path) for path in paths if path}
+        if not normalized:
+            return
+        with ExitStack() as blockers:
+            for view, index_for_path in (
+                (self._tree_widget, self._tree_index_for_path),
+                (self._list_widget, self._thumb_index_for_path),
+            ):
+                model = view.selectionModel()
+                if model is None:
+                    continue
+                blockers.enter_context(QSignalBlocker(view))
+                blockers.enter_context(QSignalBlocker(model))
+                for path in normalized:
+                    index = index_for_path(path)
+                    if index.isValid():
+                        model.select(index, _DeselectRows)
+                view.viewport().update()
+            if self._pending_selection_paths:
+                keys = {os.path.normcase(path) for path in normalized}
+                self._pending_selection_paths = [
+                    path for path in self._pending_selection_paths
+                    if os.path.normcase(os.path.normpath(path)) not in keys
+                ] or None
+                if os.path.normcase(self._pending_selection_current_path) in keys:
+                    self._pending_selection_current_path = next(iter(self._pending_selection_paths or ()), '')
+            self._update_selection_status()
 
     def __init__(
         self,

@@ -112,6 +112,7 @@ def test_failure_never_overwrites_latest_data(env, monkeypatch, failure):
     before = sidecar.read_bytes()
     results = list(core.update_capture_times([str(photo)], raws, cancelled=lambda: cancelled))
     assert not any(r.updates for r in results)
+    assert all(r.missing_raw == (failure == 'missing_raw') for r in results)
     if failure == 'sidecar_changed':
         assert store.read(str(photo))['Title'] == '用户刚刚编辑'
     else:
@@ -151,6 +152,7 @@ def test_unsupported_missing_and_inaccessible_directory_are_reported(env, monkey
     monkeypatch.setattr(core, 'index_raw_files', fail)
     result, = core.update_capture_times([str(photo)], raws)
     assert '目录拒绝访问' in result.message
+    assert not result.missing_raw
 
 
 def test_exiftool_reads_embedded_raw_time_not_sidecar(tmp_path):

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import os
 import queue
 import threading
 import time
@@ -111,6 +112,10 @@ class CaptureTimeController(QObject):
             self._report.deleteLater()
             self._report = None
         self._succeeded, self._failures, self._finished_received = 0, [], False
+        self._display_paths_by_source = {}
+        for display, source in aliases:
+            key = os.path.normcase(os.path.abspath(source or display))
+            self._display_paths_by_source.setdefault(key, []).append(display)
         self._worker = worker = CaptureTimeWorker(aliases, directory)
         worker.finished.connect(lambda w=worker: self._finished(w))
         self._timer.start()
@@ -136,6 +141,14 @@ class CaptureTimeController(QObject):
         self._failures.extend(r for r in batch if not r.updates)
         if not self._shutdown_requested:
             self._sync.sync(batch, [(d, s) for d, s in worker.aliases if s])
+            # 仅本轮已返回结果的照片取消选择；未匹配 RAW 的保留，便于换目录重试。
+            deselected = []
+            for result in batch:
+                if not result.missing_raw:
+                    key = os.path.normcase(os.path.abspath(result.source))
+                    deselected.extend(self._display_paths_by_source.get(key, ()))
+            if deselected:
+                self._files.deselect_display_paths_silently(deselected)
         if self._finished_received and worker.results.empty():
             self._timer.stop()
             self._worker = None

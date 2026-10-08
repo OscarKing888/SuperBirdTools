@@ -32,6 +32,7 @@ class Files(QObject):
     def __init__(self, paths):
         super().__init__()
         self._all_files, self.updates, self.sources = paths, [], {}
+        self.selected = list(paths)
         self.allowed = True
 
     def add_file_context_menu_extender(self, callback):
@@ -46,6 +47,9 @@ class Files(QObject):
     def sync_metadata_edits_for_paths(self, updates):
         self.updates.append(updates)
         self.file_selected.emit(next(iter(updates)))
+
+    def deselect_display_paths_silently(self, paths):
+        self.selected = [path for path in self.selected if path not in paths]
 
 
 @pytest.fixture
@@ -90,6 +94,7 @@ def test_menu_formats_choose_directory_all_success_without_popup(env, monkeypatc
     assert wait_for(lambda: not controller.busy)
     assert asked and controller._succeeded == 3 and not controller._failures
     assert controller._report is None and files.updates and not selected
+    assert files.selected == []
     assert all(PhotoMetaDataXMP().read(p)['date_time_original'] == '2025-08-19T09:10:11.045+08:00' for p in paths)
 
 
@@ -105,6 +110,25 @@ def test_failure_report_lists_missing_raw_and_corrupt_sidecar(env):
     assert paths[0] in text and '未找到同名 RAW' in text
     assert paths[1] in text and 'XMP 损坏' in text
     assert paths[2] not in text
+    assert files.selected == [paths[0]]
+
+
+def test_missing_raw_selection_can_retry_with_another_directory_and_resolved_alias(env, tmp_path):
+    controller, files, paths, raws = env
+    display = str(tmp_path / '旧路径' / Path(paths[0]).name)
+    files.sources[display] = paths[0]
+    files._all_files = files.selected = [display, *paths[1:]]
+    raw = raws / (Path(paths[0]).stem + '.ARW')
+    retry = tmp_path / '另一个原片目录'
+    retry.mkdir()
+    raw.rename(retry / raw.name)
+    assert controller.start(files.selected, str(raws))
+    assert wait_for(lambda: not controller.busy)
+    assert files.selected == [display]
+    assert controller.start(files.selected, str(retry))
+    assert wait_for(lambda: not controller.busy)
+    assert files.selected == []
+    assert controller._succeeded == 1 and controller._report is None
 
 
 def test_cancel_directory_and_disabled_writes(env, monkeypatch):
@@ -112,6 +136,7 @@ def test_cancel_directory_and_disabled_writes(env, monkeypatch):
     monkeypatch.setattr(ui.QFileDialog, 'getExistingDirectory', lambda *a: '')
     controller.choose_directory(paths)
     assert not controller.busy and controller._report is None
+    assert files.selected == paths
     files.allowed = False
     menu = QMenu()
     files.extender(menu, paths)
@@ -126,6 +151,7 @@ def test_unresolved_source_reported_without_aborting_other_photos(env):
     assert wait_for(lambda: not controller.busy)
     assert controller._succeeded == 2
     assert paths[0] in controller._report.details.toPlainText()
+    assert files.selected == []
 
 
 def test_shutdown_preserves_commits_and_waits_for_actual_finished(env, monkeypatch):
@@ -151,4 +177,5 @@ def test_shutdown_preserves_commits_and_waits_for_actual_finished(env, monkeypat
     assert wait_for(controller.is_shutdown_done)
     assert controller._succeeded == 1 and controller._report is None
     assert not files.updates
+    assert files.selected == paths
     assert PhotoMetaDataXMP().read(paths[0])['date_time_original'] == '2025-08-19T09:10:11.045+08:00'
