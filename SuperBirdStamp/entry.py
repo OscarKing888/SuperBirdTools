@@ -48,7 +48,7 @@ def main() -> None:
         raise SystemExit(check_about("SuperBirdStamp", sys.argv[2:]))
     if len(sys.argv) > 1 and sys.argv[1] == "--check-runtime":
         from birdstamp.runtime_diagnostics import main as check_runtime
-        raise SystemExit(check_runtime())
+        raise SystemExit(check_runtime(sys.argv[2:]))
     from SuperBirdUpdater.runtime import admit_startup
     admit_startup("SuperBirdStamp")
     try:

@@ -66,5 +66,18 @@ def _resource_dir() -> Path:
     return Path(sys.executable).resolve().parent
 
 
+def _configure_windows_exiftool() -> None:
+    """Use the stable installed tool, not MERGE's temporary extraction tree."""
+    if not sys.platform.startswith("win"):
+        return
+    if any(os.environ.get(name, "").strip() for name in ("EXIFTOOL_EXE", "EXIFTOOL_PATH")):
+        return
+    tool = (Path(sys.executable).resolve().parent / "_internal" / "app_common"
+            / "exif_io" / "exiftools_win" / "exiftool.exe")
+    if tool.is_file():
+        os.environ["EXIFTOOL_EXE"] = str(tool)
+
+
 if getattr(sys, "frozen", False):
     os.chdir(_resource_dir())
+    _configure_windows_exiftool()

@@ -56,7 +56,7 @@ def build_entry(tmp_path):
     script = repo / script_name
     shutil.copy2(REPO_ROOT / script_name, script)
     for name in ("set_build_version", "download_denoise_model", "download_models", "hardlink_dedupe",
-                 "generate_update_manifest", "build_stub"):
+                 "generate_update_manifest", "stage_windows_exiftool", "build_stub"):
         stub = repo / "build_tools" / f"{name}.py"
         stub.parent.mkdir(exist_ok=True)
         stub.write_text(STUB, encoding="utf-8")
@@ -115,6 +115,8 @@ def test_build_modes_keep_apps_and_control_release_artifacts(build_entry, apps_o
     if os.name != "nt":
         assert "hardlink_dedupe" in stages
         assert (dist / "SuperBirdStamp-mac.zip").exists() == (not apps_only)
+    else:
+        assert stages.index("merged") < stages.index("stage_windows_exiftool") < stages.index("SuperBirdUpdater")
     if apps_only and clean:
         assert not (dist / "updates").exists()
         assert not (dist / "installed-update.json").exists()
@@ -146,6 +148,16 @@ def test_release_generation_failure_is_not_reported_as_success(build_entry):
     assert "[OK] outputs:" not in result.stdout
 
 
+@pytest.mark.skipif(os.name != "nt", reason="Windows ExifTool staging")
+@pytest.mark.parametrize("apps_only", [False, True])
+def test_exiftool_failure_stops_before_release(build_entry, apps_only):
+    _, run = build_entry
+    result, calls = run(*(["--apps-only"] if apps_only else []), fail="stage_windows_exiftool")
+    assert result.returncode != 0
+    assert calls[-1]["stage"] == "stage_windows_exiftool"
+    assert "[OK] outputs:" not in result.stdout
+
+
 posix_only = pytest.mark.skipif(os.name == "nt", reason="build_all_no_zip.sh is the macOS entry")
 # The SuperViewer PyInstaller run: its own script on macOS, the merged spec on Windows.
 VIEWER_STAGE = "merged" if os.name == "nt" else "SuperViewer"
@@ -172,7 +184,8 @@ def test_release_builds_never_bundle_all_models(build_entry):
 def test_missing_models_stop_the_build_before_any_app(build_entry):
     _, run = build_entry
     result, calls = run("--apps-only", "--bundle-all-models", fail="download_models")
-    assert result.returncode != 0 and "download_models.sh" in result.stderr
+    downloader = "download_models.bat" if os.name == "nt" else "download_models.sh"
+    assert result.returncode != 0 and downloader in result.stderr
     assert [c["stage"] for c in calls][-1] == "download_models" and "[OK] outputs:" not in result.stdout
 
 

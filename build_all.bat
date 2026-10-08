@@ -122,6 +122,14 @@ set "BUILD_EXIT_CODE=%ERRORLEVEL%"
 
 :after_build
 if not "%BUILD_EXIT_CODE%"=="0" exit /b %BUILD_EXIT_CODE%
+rem External ExifTool needs its complete private tree, even after MERGE deduplication.
+rem Validate the installed copies before manifests/ZIPs can publish this build.
+if defined PYTHON_EXE (
+  "%PYTHON_EXE%" "%ROOT_DIR%build_tools\stage_windows_exiftool.py" --dist "%DIST_ROOT%"
+) else (
+  %PYTHON_LAUNCHER% "%ROOT_DIR%build_tools\stage_windows_exiftool.py" --dist "%DIST_ROOT%"
+)
+if errorlevel 1 exit /b 1
 if defined PYTHON_EXE (
   "%PYTHON_EXE%" -m PyInstaller --noconfirm --distpath "%DIST_ROOT%" --workpath "%BUILD_ROOT%\SuperBirdUpdater" "%ROOT_DIR%SuperBirdUpdater\SuperBirdUpdater.spec"
 ) else (
