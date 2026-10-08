@@ -224,6 +224,10 @@ class _BirdStampExporterMixin:
             except Exception:
                 pass
 
+        action_bar = getattr(self, "export_action_bar", None)
+        if action_bar is not None:
+            action_bar.sync()
+
     def _set_image_export_progress(
         self,
         current: int,

@@ -1092,6 +1092,7 @@ class BirdStampEditorWindow(
         root_layout.addWidget(splitter)
 
         left_scroll = QScrollArea()
+        self.left_scroll = left_scroll
         left_scroll.setObjectName("EditorLeftScrollArea")
         left_scroll.setWidgetResizable(True)
         left_scroll.setFrameShape(QFrame.Shape.NoFrame)
@@ -1124,7 +1125,14 @@ class BirdStampEditorWindow(
 
         right_panel = self._setup_ui_preview_panel()
 
-        splitter.addWidget(left_scroll)
+        from .editor_compact_panels import ExportActionBar
+        left_container = QWidget()
+        left_container_layout = QVBoxLayout(left_container)
+        left_container_layout.setContentsMargins(0, 0, 0, 0)
+        left_container_layout.addWidget(left_scroll, 1)
+        self.export_action_bar = ExportActionBar(self)
+        left_container_layout.addWidget(self.export_action_bar)
+        splitter.addWidget(left_container)
         splitter.addWidget(right_panel)
         splitter.setStretchFactor(0, 0)
         splitter.setStretchFactor(1, 1)
@@ -1418,10 +1426,8 @@ class BirdStampEditorWindow(
         self._set_pipeline_stage_order(normalize_pipeline_stage_order(None), save=False, mark_dirty=False)
         export_root.addWidget(pipeline_group)
 
-        export_stage_group = QGroupBox("导出 Stage")
-        export_stage_form = QFormLayout(export_stage_group)
-        _configure_form_layout(export_stage_form)
         export_stage_widget = QWidget()
+        self.export_stage_widget = export_stage_widget
         export_stage_layout = QHBoxLayout(export_stage_widget)
         export_stage_layout.setContentsMargins(0, 0, 0, 0)
         export_stage_layout.setSpacing(10)
@@ -1439,9 +1445,7 @@ class BirdStampEditorWindow(
             self.export_stage_buttons[stage.stage_id] = radio
             export_stage_layout.addWidget(radio)
         export_stage_layout.addStretch(1)
-        export_stage_form.addRow("输出", export_stage_widget)
         self._set_selected_export_stage_id(DEFAULT_EXPORT_STAGE_ID, save=False)
-        export_root.addWidget(export_stage_group)
 
         image_export_group = QGroupBox("图片导出")
         self.image_export_group = image_export_group
@@ -1487,7 +1491,8 @@ class BirdStampEditorWindow(
         image_export_form.addRow("输出格式", output_format_widget)
         self._set_selected_output_suffix("png", save=False)
 
-        export_btn_row = QHBoxLayout()
+        self.image_export_actions = QWidget()
+        export_btn_row = QHBoxLayout(self.image_export_actions)
         export_btn_row.setContentsMargins(0, 0, 0, 0)
         export_btn_row.setSpacing(6)
         self.export_current_btn = QPushButton("导出当前")
@@ -1496,7 +1501,6 @@ class BirdStampEditorWindow(
         self.export_batch_btn = QPushButton("批量导出")
         self.export_batch_btn.clicked.connect(self.export_all)
         export_btn_row.addWidget(self.export_batch_btn)
-        image_export_form.addRow("", export_btn_row)
         image_export_layout.addLayout(image_export_form)
 
         self.gif_export_panel = GifExportPanel()
@@ -1512,7 +1516,6 @@ class BirdStampEditorWindow(
         self.image_export_progress.setTextVisible(True)
         self.image_export_progress.setFormat("图片导出 0/0")
         self.image_export_progress.hide()
-        image_export_layout.addWidget(self.image_export_progress)
         export_root.addWidget(image_export_group)
 
         self.video_export_panel = VideoExportPanel()
@@ -1539,6 +1542,7 @@ class BirdStampEditorWindow(
         export_root.addStretch(1)
 
         export_section = CollapsibleSection("导出", expanded=True)
+        self._export_section = export_section
         self.export_tabs = CurrentPageTabWidget()
         self.export_tabs.addTab(export_content, "导出设置")
         self.export_tabs.addTab(self.dejitter_page, "去抖动")
@@ -5417,6 +5421,7 @@ class BirdStampEditorWindow(
             self.current_path = path
             previous_source = self.current_source_image
             self.current_source_image = None
+            self._update_overlay_summary()
             if previous_source is not None:
                 previous_source.close()
             self.current_source_full_size = None

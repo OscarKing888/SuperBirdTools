@@ -225,7 +225,8 @@ class VideoExportPanel(QGroupBox):
         )
         form.addRow("帧缓存", self.preserve_temp_files_check)
 
-        button_row = QHBoxLayout()
+        self.export_actions = QWidget()
+        button_row = QHBoxLayout(self.export_actions)
         button_row.setContentsMargins(0, 0, 0, 0)
         button_row.setSpacing(6)
 
@@ -247,7 +248,7 @@ class VideoExportPanel(QGroupBox):
 
         self.cancel_button.hide()
 
-        form.addRow("", button_row)
+        form.addRow("", self.export_actions)
         root.addLayout(form)
 
         self.hint_label = QLabel(
