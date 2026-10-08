@@ -91,6 +91,13 @@ flowchart LR
 - 例外：图像来源 `image_source` 的库 / CLI 默认是 RAW 解码，而 SuperViewer 用户选项（设置 → 鸟清晰度 → 图像来源）默认 **相机内嵌 JPEG**，所以 SuperViewer 默认写入的版本带 `-jpeg` 后缀（见第 3 节、第 13 节）。计算过程窗口按用户选项的图像来源打开，窗口顶部可切换，「保存为默认设置」连同当前来源一起保存。
 - 模型推理（YOLO / 关键点 / SAM）在 `BirdSharpnessModels` 的锁内串行执行，RAW 解码、预处理和 σ 计算并行。
 
+另有结果消费者：[逐只鸟种识别](bird_identification.md#逐只识别)在 `BirdIDWorker` 后台逐张调用同一个
+`BirdSharpnessAnalyzer.analyze()`，复用最终排除假鸟后的 `birds`，不修改本文件所述算法、评分或清晰度 XMP。
+该调用把 `max_birds`、`min_bird_side` 设为 0，其余参数沿用 Viewer 清晰度设置；独立送识别门槛
+为鸟框宽高各至少 64 px（可调），裁图外扩默认 0%（可调 0–50%），鸟种确认阈值默认 50%。
+这些门槛在完整清晰度结果之后应用，只影响鸟种服务请求；无鸟时焦点/全图回退区域不送识别。
+结果及来源信息分别写 `birdid_individuals` / `birdid_individuals_info`，细节和坐标约定见上述说明。
+
 ### 2.1 分阶段计时（单张与批量）
 
 代码：[timing.py](../bird_sharpness/timing.py)（无 Qt、无第三方依赖）、`BirdSharpnessAnalyzer.analyze()`、`BirdSharpnessAction.execute()`。

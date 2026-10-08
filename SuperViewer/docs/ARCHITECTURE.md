@@ -334,6 +334,18 @@ CLI 与 GUI 共用核心：在仓库根使用共享 `.venv` 执行 `python -m Su
 
 服务接口及返回字段限制、使用和验证见 [识鸟说明](../../docs/bird_identification.md)。
 
+“逐只识别”由同一 `BirdIDController` / `BirdIDWorker` 管理设置、任务和关闭生命周期。
+无 Qt 核心 [`per_bird_identification.py`](../superviewer/per_bird_identification.py) 调用现有
+`BirdSharpnessAnalyzer.analyze()` 的最终 `birds`，按原尺寸最小宽高过滤，逐只临时 JPEG 调用服务，
+将鸟名、置信度、原图区域及失败状态一次保存至 XMP 的 `birdid_individuals` 列表；
+`birdid_individuals_info` 记录来源/坐标系/参数，CLI 共用该核心。共享 `MetadataLoader._parse_rec`
+保留这两个字段，`MetadataResultSync` 局部更新图片信息而不重选照片。
+[`per_bird_identification_ui.py`](../superviewer/per_bird_identification_ui.py) 将保存结果呈现在图片信息底部，
+复用从 Debug 窗口抽出的 [`TraceBirdList`](../superviewer/bird_result_list.py)；
+`IndividualBirdHover` 校验 A/B 源图身份，`IndividualBirdOverlayMixin` 单独绘制悬停框，
+用视口实际 RAW camera crop 映射，退出悬停/切图/播放清除且不参与导出。
+相关回归：`test_per_bird_identification.py`、`test_per_bird_identification_ui.py`、`test_bird_identification_controller.py`。
+
 手动指定入口由 `BirdIDController` 持有的 [`BirdCatalogController`](../superviewer/bird_catalog_controller.py) 注册照片右键菜单，并纳入同一退出等待。无 Qt [`bird_catalog.py`](../superviewer/bird_catalog.py) 复用本机 HTTP 传输，独立调用 `/birds/search` 分页列表与 `/birds/detail` 身份绑定详情；CLI 复用协议校验和 `apply_bird()`。目录请求有代次、取消和单一待处理请求，真实 `QThread.finished` 后交接，旧搜索/详情不能启用当前选择的保存按钮。批量写入采用有界队列及定时分批 `MetadataResultSync`，网络请求前记录照片/侧车指纹，详情变化和晚到本地编辑均拒绝提交；写入只走 `PhotoMetaDataXMP` 原子事务。手动指定清除旧置信度，保留历史识别候选、用户备注和标签，保存独立的学名/各类拼音/简介/目录来源字段。回归见 [核心协议及 XMP](../tests/test_bird_catalog.py)、[Qt 生命周期](../tests/test_bird_catalog_controller.py) 与 `test_bird_identification_controller.py` 的列表/缩略图真实窗口验证。
 
 手动指定窗口初始聚焦过滤框，URL 同行置右；双击列表鸟名和应用按钮共用保存流程。双击等待详情时以请求代次及鸟种/版本 ID 绑定待应用动作，过滤、换鸟或关窗会使其失效。保存进度及异常直接显示在原窗口，全部提交并完成缓存同步后自动关闭，不再创建独立进度/成功弹窗；部分失败保留窗口供查看原因。

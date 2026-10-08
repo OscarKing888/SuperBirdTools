@@ -101,6 +101,11 @@ DSC05639（睡觉、被枝叶挡住的鸟）实测：YOLO（yolo11l-seg）全图
 
 图像由 [trace.py](../bird_sharpness/trace.py) 的 `AnalysisTracer` 生成：分析器把实际使用的掩膜和 `EdgeSelection` 交给它，所见即所算；不传 tracer 时零开销。显示图做了仅用于观看的亮度拉伸，不影响测量。窗口：[bird_sharpness_trace_view.py](../SuperViewer/superviewer/bird_sharpness_trace_view.py)。
 
+Debug 鸟列表控件已抽至 [`bird_result_list.py`](../SuperViewer/superviewer/bird_result_list.py)，与图片信息底部的
+[逐只鸟种识别](bird_identification.md#逐只识别)列表共用。逐只识别调用同一分析器，使用最终 `birds` 的编号和
+原尺寸框裁图；该调用取消数量/长边过滤，再以独立最小宽高（默认各 64 px）过滤送识别对象。
+它不修改清晰度流程和用户默认参数，也不写清晰度评分，仅保存鸟种与区域列表。
+
 CLI 导出同样的过程：
 
 ```bash

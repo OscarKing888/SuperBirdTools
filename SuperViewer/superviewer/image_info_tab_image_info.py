@@ -386,6 +386,11 @@ class ImageInfoTabPanel_ImageInfo(ImageInfoTabPanel):
         for label in _BASIC_INFO_ROWS:
             self._add_basic_row(layout, label)
 
+        self._add_separator(layout)
+        layout.addWidget(self._section_title("逐只识别"))
+        from .per_bird_identification_ui import IndividualBirdsPanel
+        self.individual_birds = IndividualBirdsPanel(content)
+        layout.addWidget(self.individual_birds)
         layout.addStretch(1)
         scroll.setWidget(content)
 
@@ -480,6 +485,7 @@ class ImageInfoTabPanel_ImageInfo(ImageInfoTabPanel):
         basic_t0 = _time.perf_counter()
         info = self._load_basic_info(path if has_file else "", metadata=metadata)
         self._set_basic_info(info)
+        self.individual_birds.set_metadata(path if has_file else "", metadata)
         basic_ms = (_time.perf_counter() - basic_t0) * 1000.0
         perf_log(
             _log,
@@ -525,6 +531,7 @@ class ImageInfoTabPanel_ImageInfo(ImageInfoTabPanel):
             finally:
                 self._updating_comment = False
         self._set_basic_info(self._load_basic_info(path, metadata=metadata))
+        self.individual_birds.set_metadata(path, metadata)
 
     def resizeEvent(self, event) -> None:  # type: ignore[override]
         super().resizeEvent(event)

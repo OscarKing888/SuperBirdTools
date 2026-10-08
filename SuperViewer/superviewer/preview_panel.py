@@ -29,6 +29,7 @@ from app_common.preview_canvas import (
     normalize_preview_composition_grid_mode,
 )
 from app_common.superviewer_user_options import get_keep_view_on_switch
+from .individual_bird_overlay import IndividualBirdOverlayMixin
 from .bird_body_overlay import BirdBodyOverlayMixin, map_bird_overlay
 
 from .focus_preview_loader import _load_preview_pixmap_for_canvas
@@ -57,7 +58,7 @@ _PREVIEW_NOTE_KEY = "superviewer_preview_note"
 _DENOISED_PATH_KEY = "superviewer_denoised_path"
 
 
-class ViewerPreviewCanvas(BirdBodyOverlayMixin, _FocusCenteredPreviewCanvas):
+class ViewerPreviewCanvas(IndividualBirdOverlayMixin, BirdBodyOverlayMixin, _FocusCenteredPreviewCanvas):
     """Expose viewport changes for optional A/B linking without changing loading policy."""
 
     viewport_interacted = pyqtSignal()
@@ -1145,6 +1146,9 @@ class PreviewPanel(QWidget):
         """One camera-frame box, or several (flock, main bird first)."""
         self._source_bird_box = bird_box
         self._canvas.set_bird_box(map_bird_overlay(bird_box, self._raw_focus_crop_box, map_camera_focus_box))
+
+    def set_individual_bird_highlight(self, box, color="#00c8ff") -> None:
+        self._canvas.set_individual_highlight(map_camera_focus_box(box, self._raw_focus_crop_box), color)
 
     def set_show_bird_box(self, enabled: bool) -> None:
         self._canvas.set_show_bird_box(enabled)
