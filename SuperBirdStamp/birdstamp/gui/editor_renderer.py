@@ -702,9 +702,11 @@ class _BirdStampRendererMixin:
         stage_enabled_getter = getattr(self, "_current_pipeline_stage_enabled_map", None)
         stage_enabled = stage_enabled_getter() if callable(stage_enabled_getter) else {}
         padding = self._crop_padding_state_for_render()
+        from birdstamp.overlays.safe_area_options import preset_for
+        safe_area_preset = preset_for(self._selected_platform_safe_area())
         return (
             f"{base}|{template_name}|{draw_overlay}|{r}|{cm}|"
-            f"{max_edge}|{stage_order}|{stage_enabled}|{self._selected_text_scale()}|{self._selected_platform_safe_area()}|"
+            f"{max_edge}|{stage_order}|{stage_enabled}|{self._selected_text_scale()}|{self._selected_platform_safe_area()}|{safe_area_preset}|"
             f"{padding['top']}_{padding['bottom']}_{padding['left']}_{padding['right']}|{padding['fill']}"
         )
 

@@ -8,7 +8,7 @@ from PyQt6.QtWidgets import QApplication
 import pytest
 
 from birdstamp import config
-from birdstamp.overlays.safe_area import PLATFORMS, fit_layers, guide_box, normalize_options, safe_rect, layout_rect
+from birdstamp.overlays.safe_area import fit_layers, guide_box, normalize_options, safe_rect, layout_rect
 from birdstamp.overlays.model import new_item
 from birdstamp.overlays.assets import import_image
 from birdstamp.overlays.render import build_scene, compose_scene, Layer
@@ -22,7 +22,18 @@ from birdstamp.export_stage import VideoFrameJob, render_video_frame, source_fra
 from birdstamp.export_stage import core
 from birdstamp.workspace import read_workspace_json, write_workspace_json
 
+from birdstamp.overlays import safe_area_options
+
+PLATFORMS = tuple(editor_options.PLATFORM_SAFE_AREA['labels'])
 _APP = QApplication.instance() or QApplication([])
+
+
+@pytest.fixture(autouse=True)
+def isolated_options(tmp_path, monkeypatch):
+    monkeypatch.setattr(config, 'get_user_data_dir', lambda: tmp_path/'safe-user')
+    safe_area_options.reload_options()
+    yield
+    safe_area_options._read_options.cache_clear()
 
 
 @pytest.fixture
@@ -59,8 +70,8 @@ def test_safe_layout_preserves_content_size_with_rotation_and_large_background(p
                 assert new.pixels.tobytes() == old.pixels.tobytes()
             assert new.rotation == old.rotation
             for x, y in new.corners():
-                assert rect[0] <= x <= rect[2]
-                assert rect[1] <= y <= rect[3]
+                assert rect[0]-1e-9 <= x <= rect[2]+1e-9
+                assert rect[1]-1e-9 <= y <= rect[3]+1e-9
         with Image.new('RGB', size) as base:
             rendered = compose_scene(base, fitted)
         box = rendered.getbbox()
@@ -146,7 +157,7 @@ def test_config_normalization_stage_parameter_and_frame_cache(monkeypatch):
     descriptor = next(d for d in build_default_image_proc_pipeline().ui_descriptors() if d.stage_id == 'template_crop')
     option = next(o for o in descriptor.parameter_options if o.key == 'platform_safe_area')
     assert option.default == 'off' and len(option.choices) == 4
-    raw = {'platform_safe_area': {'labels': {'douyin': '抖音全屏'}, 'presets': {'douyin': {'portrait': [.1, .1, .2, .2]}}}}
+    raw = {'platform_safe_area': {'labels': {'douyin': '抖音全屏'}, 'presets': {'douyin': {'portrait': [.1, .1, .2, .2], 'landscape': [.1, .1, .2, .2]}}}}
     monkeypatch.setattr(editor_options, '_load_builtin_editor_options_raw', lambda: raw)
     options = editor_options.load_editor_options()['platform_safe_area']
     assert options['labels']['douyin'] == '抖音全屏'
@@ -162,6 +173,7 @@ def test_config_normalization_stage_parameter_and_frame_cache(monkeypatch):
     active = source_frame_signature_for_job(job)
     assert active != baseline
     monkeypatch.setattr(editor_options, 'PLATFORM_SAFE_AREA', options)
+    safe_area_options.reload_options()
     assert source_frame_signature_for_job(job) != active
     assert core._clone_render_settings(job.settings)['platform_safe_area'] == 'douyin'
 
@@ -251,7 +263,7 @@ def test_guide_ui_only_and_crop_mapping(tmp_path, monkeypatch):
     before = canvas.render_source_pixmap_with_overlays().toImage()
     crop = (.2, .1, .8, .9)
     box = guide_box((600, 800), 'xiaohongshu', crop)
-    assert crop[0] < box[0] < box[2] < crop[2] and crop[1] < box[1] < box[3] < crop[3]
+    assert crop[0] == box[0] < box[2] == crop[2] and crop[1] < box[1] < box[3] < crop[3]
     canvas.apply_overlay_state(EditorPreviewOverlayState(platform_safe_area_box=box, platform_safe_area='xiaohongshu'))
     canvas.show()
     _APP.processEvents()
@@ -316,14 +328,14 @@ def test_nested_row_wraps_and_retains_bottom_right_anchor(platform):
         dict(id='column', children=['row', 'd'], direction='down', gap=.01, align='end',
              x=.99, y=.99, anchor_x=1, anchor_y=1)])
     with Image.new('RGBA', (20, 20), 'white') as pixels:
-        layers = {key: Layer(dict(id=key), pixels, (900, 900), (260, 70)) for key in 'abcd'}
+        layers = {key: Layer(dict(id=key), pixels, (900, 900), (280, 70)) for key in 'abcd'}
         arrange(doc, layers, (800, 1000), rect=rect)
         a, b, c, d = (bounds([layers[key]]) for key in 'abcd')
         assert a[3] == b[3]  # 第一行
         assert c[1] >= a[3] and c[2] == b[2]  # 第二行沿右边对齐
         assert d[1] > c[3] and d[2] == c[2]  # 外层列仍然生效
-        assert bounds(list(layers.values()))[2:] == pytest.approx(rect[2:])
-        assert all(layer.size == (260, 70) and layer.effective_scale == 1 for layer in layers.values())
+        assert bounds(list(layers.values()))[2:] == pytest.approx((min(792, rect[2]), min(990, rect[3])))
+        assert all(layer.size == (280, 70) and layer.effective_scale == 1 for layer in layers.values())
 
 
 def test_impossible_size_remains_visible_at_original_scale():
@@ -339,11 +351,11 @@ def test_impossible_size_remains_visible_at_original_scale():
 def test_xiaohongshu_current_screenshot_has_bottom_controls_not_right_rail():
     # 用户截图 945x2048，头像约 y=1635；留少许余量，将底边定在 79%。
     left, top, right, bottom = safe_rect((945, 2048), 'xiaohongshu')
-    assert left/945 == pytest.approx(.03)
-    assert (945-right)/945 == pytest.approx(.03)
+    assert left == 0
+    assert right == 945
     assert 1590 < bottom < 1635
     assert top/2048 == pytest.approx(.12)
-    defaults = normalize_options(None)
+    defaults = safe_area_options.default_options()
     assert editor_options.PLATFORM_SAFE_AREA['presets']['xiaohongshu'] == defaults['presets']['xiaohongshu']
 
 

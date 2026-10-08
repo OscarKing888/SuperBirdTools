@@ -4,62 +4,71 @@ from __future__ import annotations
 from dataclasses import replace
 from math import isfinite
 
-PLATFORMS = ('off', 'xiaohongshu', 'bilibili', 'douyin')
-LABELS = ('关闭（非全屏）', '小红书', 'B站', '抖音')
-# 项目保守预设，不是平台保证。顺序为左、上、右、下占画幅比例。
-# 可通过 editor_options.json 调整；横屏与竖屏分别预留工具栏/互动区。
-DEFAULT_PRESETS = {
-    'xiaohongshu': {'portrait': (.03, .12, .03, .21), 'landscape': (.03, .08, .03, .20)},
-    'bilibili': {'portrait': (.06, .10, .16, .20), 'landscape': (.05, .12, .05, .14)},
-    'douyin': {'portrait': (.06, .12, .18, .24), 'landscape': (.06, .10, .12, .18)},
-}
-
 
 def normalize_platform(value):
-    value = str(value or 'off').strip().lower()
-    return value if value in PLATFORMS else 'off'
+    from .safe_area_options import current_options
+    value = str(value or 'off').strip()
+    labels = current_options()['labels']
+    return value if value in labels else value.lower() if value.lower() in labels else 'off'
 
 
-def normalize_options(raw):
+def normalize_options(raw, *, strict=False):
+    """规范化任意命名组；平台名及默认边距仅来自配置，不在算法里固定。"""
+    if strict and (not isinstance(raw, dict) or not isinstance(raw.get('labels'), dict)
+                   or not isinstance(raw.get('presets'), dict)):
+        raise ValueError('安全区配置必须包含组名 labels 和边距 presets。')
     raw = raw if isinstance(raw, dict) else {}
     labels = raw.get('labels') if isinstance(raw.get('labels'), dict) else {}
     presets = raw.get('presets') if isinstance(raw.get('presets'), dict) else {}
-    result = {'labels': {key: str(labels.get(key) or label) for key, label in zip(PLATFORMS, LABELS)},
-              'presets': {}}
-    for platform, defaults in DEFAULT_PRESETS.items():
-        settings = presets.get(platform)
-        settings = settings if isinstance(settings, dict) else {}
-        result['presets'][platform] = {}
-        for orientation, fallback in defaults.items():
-            try:
-                values = tuple(float(v) for v in settings.get(orientation, fallback))
-                valid = (len(values) == 4 and all(isfinite(v) and 0 <= v < .45 for v in values)
-                         and values[0] + values[2] < .8 and values[1] + values[3] < .8)
-            except (TypeError, ValueError):
-                valid = False
-            result['presets'][platform][orientation] = values if valid else fallback
+    result = {'labels': {'off': '关闭（非全屏）'}, 'presets': {}}
+    names = {'off', result['labels']['off'].casefold()}
+    for key, settings in presets.items():
+        key = str(key).strip()
+        name = str(labels.get(key) or '').strip()
+        try:
+            if not key or key == 'off' or not name or name.casefold() in names:
+                raise ValueError('组名不能为空或重复，且不能使用保留标识 off。')
+            margins = {}
+            for orientation in ('portrait', 'landscape'):
+                values = tuple(float(v) for v in settings[orientation])
+                if (len(values) != 4 or not all(isfinite(v) and 0 <= v < 1 for v in values)
+                        or values[0]+values[2] >= 1 or values[1]+values[3] >= 1):
+                    raise ValueError('边距需在 0%～100% 之间，左右及上下之和必须小于 100%。')
+                margins[orientation] = values
+        except (TypeError, ValueError, KeyError) as exc:
+            if strict:
+                raise ValueError(f'安全区「{name or key}」配置无效：{exc}') from exc
+            continue
+        names.add(name.casefold())
+        result['labels'][key] = name
+        result['presets'][key] = margins
     return result
 
 
 def safe_rect(size, platform, *, presets=None):
     """返回逻辑画幅内的 l/t/r/b；按实际宽高选方向，任意比例和分辨率均适用。"""
-    platform = normalize_platform(platform)
+    platform = str(platform or 'off').strip()
     width, height = size
     if platform == 'off' or min(width, height) <= 0:
         return None
     if presets is None:
-        from birdstamp.gui.editor_options import PLATFORM_SAFE_AREA
-        presets = PLATFORM_SAFE_AREA['presets']
+        from .safe_area_options import current_options
+        presets = current_options()['presets']
+    if platform not in presets:
+        return None
     orientation = 'landscape' if width >= height else 'portrait'
     left, top, right, bottom = presets[platform][orientation]
     return left * width, top * height, (1-right) * width, (1-bottom) * height
 
 
-def layout_rect(rect):
+def layout_rect(rect, size=None):
     """留一个逻辑像素吸收旋转和合成取整，不改变任何图层大小。"""
     left, top, right, bottom = rect
     inset = min(1., (right-left)/4, (bottom-top)/4)
-    return left+inset, top+inset, right-inset, bottom-inset
+    # 0% 的边保持画幅边界，不暗中追加左右（或上下）留边。
+    return (left+(inset if left != 0 else 0), top+(inset if top != 0 else 0),
+            right-(inset if size is None or right != size[0] else 0),
+            bottom-(inset if size is None or bottom != size[1] else 0))
 
 
 def clamp_start(start, extent, low, high, anchor=.5):

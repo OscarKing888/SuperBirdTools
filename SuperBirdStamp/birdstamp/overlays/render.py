@@ -77,7 +77,7 @@ def build_scene(payload, size, *, raw_metadata=None, metadata_context=None, phot
     doc = document(payload)
     from .safe_area import safe_rect, layout_rect, arrange_free_layers, fit_background
     area = safe_rect(size, platform_safe_area)
-    area = layout_rect(area) if area else None
+    area = layout_rect(area, size) if area else None
     if area:
         # 安全布局仅测量实际输出的元素，隐藏类别不留下间距。
         enabled = {'badge': draw_text, 'text': draw_text, 'image': draw_images, 'background': draw_banner}

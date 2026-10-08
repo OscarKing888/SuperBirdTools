@@ -197,15 +197,17 @@ def render(
     draw_text: bool = typer.Option(True, "--draw-text/--no-draw-text", help="Draw text fields."),
     draw_images: bool = typer.Option(True, "--draw-images/--no-draw-images", help="Draw image overlays."),
     text_scale: float = typer.Option(1.0, "--text-scale", min=0.25, max=3.0, help="Text scale multiplier after automatic canvas scaling."),
-    platform_safe_area: str = typer.Option('off', '--platform-safe-area', help='Fullscreen overlay safe area: off|xiaohongshu|bilibili|douyin.'),
+    platform_safe_area: str = typer.Option('off', '--platform-safe-area', help='Fullscreen safe area group ID or name from User Options; off disables it.'),
     log_level: str = typer.Option("info", "--log-level"),
 ) -> None:
     """Render BirdStamp banner overlay onto images using a JSON template."""
     _setup_logging(log_level)
-    from birdstamp.overlays.safe_area import PLATFORMS, normalize_platform
-    if str(platform_safe_area).strip().lower() not in PLATFORMS:
-        raise typer.BadParameter('Choose off, xiaohongshu, bilibili or douyin.', param_hint='--platform-safe-area')
-    platform_safe_area = normalize_platform(platform_safe_area)
+    from birdstamp.overlays.safe_area_options import current_options, resolve_choice
+    choice = resolve_choice(platform_safe_area)
+    if choice is None:
+        names = ', '.join(current_options()['labels'].values())
+        raise typer.BadParameter(f'Choose a configured safe area group: {names}', param_hint='--platform-safe-area')
+    platform_safe_area = choice
     cfg = load_config()
 
     fmt_str = output_format or str(cfg.get("output_format", "jpeg"))

@@ -24,7 +24,7 @@ class ImageProcTemplateCropStage(ImageProcStage):
     enabled_by_default = True
 
     def parameter_options(self) -> tuple[ImageProcOptionSpec, ...]:
-        from birdstamp.gui.editor_options import PLATFORM_SAFE_AREA
+        from birdstamp.overlays.safe_area_options import current_options
         return (
             ImageProcOptionSpec(
                 key="template_name",
@@ -58,9 +58,9 @@ class ImageProcTemplateCropStage(ImageProcStage):
             ImageProcOptionSpec(key="crop_padding_right", label="右留边", value_type="int", default=0),
             ImageProcOptionSpec(key="crop_padding_fill", label="留边颜色", value_type="color", default="#FFFFFF"),
             ImageProcOptionSpec(
-                key="platform_safe_area", label="平台安全框", value_type="choice", default="off",
+                key="platform_safe_area", label="安全框组", value_type="choice", default="off",
                 choices=tuple(ImageProcOptionChoice(label, value)
-                              for value, label in PLATFORM_SAFE_AREA['labels'].items()),
+                              for value, label in current_options()['labels'].items()),
                 description="全屏图在平台安全框内重新对齐布局、收紧间距及换行，不自动缩小；非全屏关闭。",
             ),
             ImageProcOptionSpec(key="dejitter_reference_enabled", label="参考区去抖动", value_type="bool",

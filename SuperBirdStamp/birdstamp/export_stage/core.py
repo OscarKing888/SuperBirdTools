@@ -554,8 +554,8 @@ def source_frame_signature_for_job(
     render_settings.pop(EXPORT_STAGE_ID_KEY, None)
     platform = render_settings['platform_safe_area']
     if platform != 'off':
-        from birdstamp.gui.editor_options import PLATFORM_SAFE_AREA
-        render_settings['_platform_safe_area_preset'] = PLATFORM_SAFE_AREA['presets'][platform]
+        from birdstamp.overlays.safe_area_options import preset_for
+        render_settings['_platform_safe_area_preset'] = preset_for(platform)
     if dejitter_reference_active(render_settings):
         source = render_settings.get(DEJITTER_REFERENCE_SOURCE_KEY)
         if source:
