@@ -144,11 +144,34 @@ def _add_with_icons(menu, callback, args, kinds):
     added = [a for a in menu.actions() if a not in before and not a.isSeparator()]
     for action, kind in zip(added, kinds):
         _icon(action, kind)
+    return added
+
+
+def _prepend_clipboard_actions(menu, panel, paths, primary):
+    """扩展完成后置顶常用操作，避免扩展的 insertAction 抢占顶部。"""
+    anchor = menu.actions()[0] if menu.actions() else None
+    copy, cut, paste = _add_with_icons(
+        menu, panel._add_file_clipboard_menu_actions, (paths,), ("copy", "cut", "paste"),
+    )
+    header = [copy, paste, cut, menu.addSeparator()]
+    header.extend(_add_with_icons(
+        menu, panel._add_species_menu_actions, (primary, paths), ("copy", "paste"),
+    ))
+    header.append(menu.addSeparator())
+    for action in header:
+        menu.removeAction(action)
+        menu.insertAction(anchor, action)
 
 
 def build_file_context_menu(panel, paths, primary, *, log_prefix):
     """仅组装视图，复用共享动作的路径解析、快捷键、权限与信号绑定。"""
     menu = QMenu(panel)
+    # 仅调整此菜单树的留白，颜色与选中/禁用状态继续跟随系统主题。
+    menu.setStyleSheet(
+        "QMenu { padding: 4px 6px; }"
+        "QMenu::item { padding: 6px 20px 6px 8px; }"
+        "QMenu::separator { margin: 4px 10px; }"
+    )
     _add_with_icons(menu, panel._add_rating_menu_actions, (paths,), ("star",))
     _add_with_icons(menu, panel._add_photo_tag_menu_actions, (paths,), ("tag",))
     menu.addSeparator()
@@ -168,15 +191,10 @@ def build_file_context_menu(panel, paths, primary, *, log_prefix):
             target.removeAction(separator)
             separator.deleteLater()
 
-    bird_menu = groups["bird"]
-    if bird_menu.actions():
-        bird_menu.addSeparator()
-    panel._add_species_menu_actions(bird_menu, primary, paths)
     for sub in groups.values():
         sub.menuAction().setVisible(bool(sub.actions()))
 
     menu.addSeparator()
-    _add_with_icons(menu, panel._add_file_clipboard_menu_actions, (paths,), ("copy", "cut", "paste"))
     send_menu = _submenu(menu, "发送到", "send")
     panel._add_send_to_external_app_actions(send_menu, paths)
     locate_menu = _submenu(menu, "定位文件", "folder")
@@ -190,4 +208,5 @@ def build_file_context_menu(panel, paths, primary, *, log_prefix):
     panel._add_browse_preview_menu_action(locate_menu, primary)
     menu.addSeparator()
     _add_with_icons(menu, panel._add_delete_menu_action, (paths,), ("delete",))
+    _prepend_clipboard_actions(menu, panel, paths, primary)
     return menu
