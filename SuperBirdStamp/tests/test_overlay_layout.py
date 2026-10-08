@@ -374,6 +374,7 @@ def test_template_dialog_persists_layout_and_undo(tmp_path, monkeypatch):
     image = Image.new('RGB', (1000, 600))
     dialog = TemplateManagerDialog(folder, image)
     try:
+        dialog._reload_template_list('test')
         dialog.overlay_panel.commit(payload())
         assert template.load_template_payload(path)['overlay_layouts'] == document(payload())['overlay_layouts']
         dialog.overlay_panel.select('bird')

@@ -112,6 +112,8 @@ A/B 的布局与显隐约定见 [A/B 预览工具栏布局](ux/AB_PREVIEW_LAYOUT
 
 “字段/占位符”、Overlay 字体和旧模板字段/字体选择器统一复用共享 [app_common/filterable_combo.py](../../app_common/filterable_combo.py) 的 `FilterableComboBox`；BirdStamp 原模块仅保留兼容导入。顶部搜索条按中文显示名、字段名及来源进行不区分大小写的多词过滤，支持清除、方向键、回车选择和 Esc 取消。搜索不修改叠加层，明确选择才提交可撤销的字段变化，手动输入自定义占位符仍可用。过滤弹窗使用可获得原生键盘焦点的无边框工具窗口，避免 macOS 上仅 `focusWidget` 改变、`QWindow.focusObject` 仍落在原组合框的问题；组件统一处理窗口失活、外部点击、Esc、父控件隐藏和延迟销毁，弹窗位置限制在所在屏幕内。纯 UI 行为不新增 CLI 参数。共用组件回归见 [test_filterable_combo.py](../../app_common/tests/test_filterable_combo.py)，模板集成回归见 [test_overlay_field_search.py](../tests/test_overlay_field_search.py)。
 
+模板管理器通过 [OverlayPanel](../birdstamp/gui/overlay_panel.py) 的 `property_columns=True` 将「内容 / 布局 / 效果」横向并列分组，长控件按可用列宽换到标签下方；窗口较小时沿用外层滚动区域。照片编辑侧栏继续使用紧凑 Tab 布局。两种显示共用属性绑定、按图层类型显隐及撤销历史，图像和背景不显示文字效果组；纯界面布局无新增 CLI 参数。
+
 模板文本的描边和阴影由 [render/text_effects.py](../birdstamp/render/text_effects.py) 的 `normalize_text_effects` / `styled_text_layer` 规范化及绘制。每项保存独立开关、颜色、描边宽度、阴影不透明度/偏移/柔化；旧模板缺省关闭，新增文本项的默认值读取 `editor_options.json` 的 `text_effects`。效果尺寸随实际字号缩放，排版避让包含效果边界；预览按导出逻辑画幅绘制后缩放，图片/GIF/视频和 CLI `render --template` 沿用同一模板渲染入口，源帧缓存版本随渲染变化更新。回归见 [test_overlay_text_effects.py](../tests/test_overlay_text_effects.py)。
 
 [color_editor.py](../birdstamp/gui/color_editor.py) 的 `ColorEditor` 统一文本、描边、阴影、Banner、渐变端点及外圈填充的预设/色值/可点击色块；调色板和屏幕吸色使用图标按钮。`AdvancedColorDialog` 提供高级选色和命名调色板，`PaletteStore` 原子保存到用户配置目录的 `color_palettes.json`，所有入口跨会话复用（最多 32 个色板，每板 16 色）。文本和 Banner 支持透明度；渐变和阴影的不透明度仍由各自参数管理。回归见 [test_color_editor.py](../tests/test_color_editor.py)。
