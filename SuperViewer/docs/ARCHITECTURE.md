@@ -30,6 +30,8 @@
 
 ## 2. 目录选择到可见列表
 
+目录标题栏的“包含子目录”复选框默认开启，状态通过 [`paths_settings.py`](../superviewer/paths_settings.py) 的 `include_subdirectories` 保存到用户配置。`MainWindow._on_include_subdirectories_changed()` 更新共享 `FileListPanel.set_include_subdirectories()` 后，沿用目录切换流程取消旧扫描、清空旧预览并刷新当前目录。关闭时，普通扫描、report.db 范围筛选、旧路径补充、空报告回退和视频枚举都只保留当前目录；文本/评级/标签过滤及刷新继续遵守该范围。共享目录组件仅在宿主显式传入 `include_subdirectories` 时显示此控件，BirdStamp 保持原有界面与默认扫描行为。此项为浏览界面偏好，无新增 CLI。
+
 共享 `DirectoryBrowserWidget._on_dir_context_menu()` 提供“复制完整路径”，取右键节点的绝对路径写入剪贴板，不触发目录选择；空白处和占位节点不显示菜单。宿主通过 `add_context_menu_extender(callback(menu, path))` 追加目录动作（如鸟清晰度检测、计算连拍信息），文件列表/缩略图菜单对应 `FileListPanel.add_file_context_menu_extender(callback(menu, paths))`；扩展回调异常只记日志，不影响菜单。
 
 Viewer 的列表/缩略图由 [`file_context_menu.build_file_context_menu()`](../superviewer/file_context_menu.py) 组装分组菜单：顶部依次为复制、粘贴、剪切，分隔线后紧接复制/粘贴鸟名，再用分隔线与“珍禽入册”、星级和标签区分；“鸟种信息”“拍摄信息”“分析与处理”收纳控制器动作；“发送到”“定位文件”收纳外部应用与路径操作，删除独立置底。控制器用 `@file_menu_group("bird", order=10)` 声明分组和组内顺序（另外两组为 `capture` / `process`），进度/停止入口随所属功能归组；未声明的扩展仍在主菜单，空组隐藏。动作仍使用共享浏览器和控制器原有实现，保留多选、实际源路径、快捷键及禁用状态；不改变 BirdStamp 菜单。菜单及子菜单增加条目上下留白与分隔线间距；样式仅作用于此菜单树，保留主题配色。常用入口用随主题/状态绘制的 Qt 线条图标，无额外图片资源；现有 `collect_submodules("superviewer")` 收集新模块。此变更仅涉及菜单呈现，无 CLI 或算法流程变化。

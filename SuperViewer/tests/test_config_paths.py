@@ -43,3 +43,14 @@ def test_packaged_settings_still_read_bundled_defaults(tmp_path, monkeypatch):
     monkeypatch.setattr(settings, "_get_app_dir", lambda: str(tmp_path / "app"))
     monkeypatch.setattr(settings, "_get_user_state_dir", lambda: str(tmp_path / "user"))
     assert settings._load_settings() == {"label": "内置配置"}
+
+
+def test_directory_scope_defaults_on_and_roundtrips(tmp_path, monkeypatch):
+    monkeypatch.setattr(settings, "_get_app_dir", lambda: str(tmp_path / "app"))
+    monkeypatch.setattr(settings, "_get_user_state_dir", lambda: str(tmp_path / "user"))
+    assert settings.load_include_subdirectories_from_settings() is True
+    settings._save_settings({"label": "中文配置"})
+    for enabled in (False, True):
+        settings.save_include_subdirectories_to_settings(enabled)
+        assert settings.load_include_subdirectories_from_settings() is enabled
+        assert settings._load_settings()["label"] == "中文配置"

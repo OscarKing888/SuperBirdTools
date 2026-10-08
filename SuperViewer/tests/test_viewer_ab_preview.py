@@ -83,7 +83,7 @@ def test_splitter_contracts_and_restores_and_directory_clear(window, tmp_path, m
     sizes[2] -= 80
     window._main_splitter.setSizes(sizes)
     assert window._main_splitter.sizes()[1] > 260
-    monkeypatch.setattr(window._file_list, "load_directory", lambda _path: None)
+    monkeypatch.setattr(window._file_list, "load_directory", lambda _path, **kwargs: None)
     window._on_directory_selected(str(tmp_path))
     assert window.preview_a.current_path() is None
     assert window.preview_panel.current_path() is None

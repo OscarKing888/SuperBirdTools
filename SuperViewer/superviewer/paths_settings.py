@@ -223,6 +223,17 @@ def load_auto_focus_center_from_settings() -> bool:
     return _load_settings().get("preview_auto_focus_center", False) is True
 
 
+def load_include_subdirectories_from_settings() -> bool:
+    """旧配置没有此项时保持默认递归显示。"""
+    return _load_settings().get("include_subdirectories", True) is not False
+
+
+def save_include_subdirectories_to_settings(enabled: bool) -> None:
+    data = _load_settings()
+    data["include_subdirectories"] = bool(enabled)
+    _save_settings(data)
+
+
 def save_auto_focus_center_to_settings(enabled: bool) -> None:
     data = _load_settings()
     data["preview_auto_focus_center"] = bool(enabled)

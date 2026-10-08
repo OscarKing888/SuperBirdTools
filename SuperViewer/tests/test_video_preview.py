@@ -177,7 +177,7 @@ def test_main_window_video_info_directory_switch_and_screenshot(window, clip, tm
     assert window.image_info_panel.current_photo_path() == ''
     window.preview_panel.video_view.toggle_play()
     wait_until(lambda: window.preview_panel.video_view._position > 100)
-    monkeypatch.setattr(window._file_list, 'load_directory', lambda path: None)
+    monkeypatch.setattr(window._file_list, 'load_directory', lambda path, **kwargs: None)
     window._on_directory_selected(str(tmp_path))
     assert window.preview_panel.video_view.player.source().isEmpty()
     assert window.preview_panel.current_path() is None
