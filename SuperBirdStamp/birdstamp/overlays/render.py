@@ -71,7 +71,7 @@ def _text_layer(t, field, size, photo_info, raw_metadata, text_scale):
 
 
 def build_scene(payload, size, *, raw_metadata=None, metadata_context=None, photo_info=None,
-                text_scale=1.0, draw_text=True, draw_images=True, draw_banner=True):
+                text_scale=1.0, draw_text=True, draw_images=True, draw_banner=True, platform_safe_area='off'):
     from birdstamp.gui import editor_template as t
     from birdstamp.render.text_scale import normalize_text_scale
     doc = document(payload)
@@ -185,7 +185,8 @@ def build_scene(payload, size, *, raw_metadata=None, metadata_context=None, phot
                 result.append(layer)
             else:
                 layer.pixels.close()
-        return Scene(size,result)
+        from .safe_area import safe_rect, fit_layers
+        return Scene(size, fit_layers(result, safe_rect(size, platform_safe_area)))
     except Exception:
         for layer in layers.values():
             layer.pixels.close()

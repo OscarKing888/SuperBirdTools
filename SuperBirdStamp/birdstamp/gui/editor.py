@@ -1277,6 +1277,16 @@ class BirdStampEditorWindow(
             self.ratio_combo.addItem(label, ratio)
         self.ratio_combo.currentIndexChanged.connect(self._on_ratio_changed)
 
+        self.platform_safe_area_combo = QComboBox()
+        for value, label in editor_options.PLATFORM_SAFE_AREA['labels'].items():
+            self.platform_safe_area_combo.addItem(label, value)
+        self.platform_safe_area_combo.setAccessibleName("平台安全框")
+        self.platform_safe_area_combo.setToolTip(
+            "全屏发布时选择平台，按输出横竖屏及比例整体移动叠加；放不下时等比缩小。\n"
+            "非全屏图选择关闭。安全框为保守参考预设，平台界面可能随设备和版本变化。"
+        )
+        self.platform_safe_area_combo.currentIndexChanged.connect(self._on_output_settings_changed)
+
         self.center_mode_widget = QWidget()
         center_mode_layout = QHBoxLayout(self.center_mode_widget)
         center_mode_layout.setContentsMargins(0, 0, 0, 0)
@@ -1305,7 +1315,7 @@ class BirdStampEditorWindow(
             "<b>重置为模板值</b><br>"
             "将「裁切比例」「裁切中心」以及当前模板<br>"
             "记录的裁剪框默认值恢复为<br>"
-            "当前所选模板中存储的默认值。<br>"
+            "当前所选模板中存储的默认值，并关闭平台安全框。<br>"
             "<i>适合撤销手动调整、快速回到模板初始状态。</i>"
         )
         self.reset_override_btn.clicked.connect(self._reset_template_overrides)
@@ -1314,7 +1324,7 @@ class BirdStampEditorWindow(
             "<b>全部应用</b><br>"
             "将当前「模板裁切」中的所有设置<br>"
             "批量覆盖到已加载的每张照片，<br>"
-            "包括裁切比例、中心模式以及<br>"
+            "包括裁切比例、中心模式、平台安全框以及<br>"
             "当前照片上调整过的裁剪框和文本缩放。<br>"
             "<i>仅影响本次会话的照片列表，不修改模板文件。</i>"
         )
@@ -1654,6 +1664,7 @@ class BirdStampEditorWindow(
         template_form.addRow("说明", template_hint)
         template_form.addRow("裁切比例", self.ratio_combo)
         template_form.addRow("裁切中心", self.center_mode_widget)
+        template_form.addRow("平台安全框", self.platform_safe_area_combo)
         template_form.addRow("留边", self.crop_padding_editor)
 
         self.dejitter_page = self._build_dejitter_page()
@@ -3444,6 +3455,9 @@ class BirdStampEditorWindow(
         self._apply_template_ratio_to_main_output()
         self._apply_template_output_settings_to_main_output()
         self._apply_template_crop_padding_to_main_output()
+        self.platform_safe_area_combo.blockSignals(True)
+        self.platform_safe_area_combo.setCurrentIndex(self.platform_safe_area_combo.findData('off'))
+        self.platform_safe_area_combo.blockSignals(False)
         self._invalidate_original_mode_cache()
         self._pending_preview_fit_reset = True
         if self.current_path:

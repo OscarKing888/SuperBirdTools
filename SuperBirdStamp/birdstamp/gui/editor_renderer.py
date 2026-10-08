@@ -24,6 +24,7 @@ from app_common.preview_canvas import (
 from birdstamp.decoders.image_decoder import decode_image, decode_image_for_preview, read_decoded_image_size
 from birdstamp.decoders.preview_source import PREVIEW_SOURCE_MESSAGE_KEY, PREVIEW_SOURCE_MODE_KEY
 from birdstamp.render.text_scale import normalize_text_scale
+from birdstamp.overlays.safe_area import normalize_platform, guide_box
 from birdstamp.overlays.model import clone_override, effective_payload
 from birdstamp import perf as birdstamp_perf
 from birdstamp.crop_resolution import CropPixelContext
@@ -619,6 +620,8 @@ class _BirdStampRendererMixin:
             bird_box=preview_bird_box,
             crop_effect_box=state.crop_effect_box,
             reference_regions=state.reference_regions,
+            platform_safe_area_box=state.platform_safe_area_box,
+            platform_safe_area=state.platform_safe_area,
         )
         self._refresh_preview_label(preserve_view=True)
 
@@ -701,7 +704,7 @@ class _BirdStampRendererMixin:
         padding = self._crop_padding_state_for_render()
         return (
             f"{base}|{template_name}|{draw_overlay}|{r}|{cm}|"
-            f"{max_edge}|{stage_order}|{stage_enabled}|{self._selected_text_scale()}|"
+            f"{max_edge}|{stage_order}|{stage_enabled}|{self._selected_text_scale()}|{self._selected_platform_safe_area()}|"
             f"{padding['top']}_{padding['bottom']}_{padding['left']}_{padding['right']}|{padding['fill']}"
         )
 
@@ -985,6 +988,10 @@ class _BirdStampRendererMixin:
         slider = getattr(self, "text_scale_slider", None)
         return normalize_text_scale(slider.value() / 100.0 if slider is not None else None)
 
+    def _selected_platform_safe_area(self) -> str:
+        combo = getattr(self, 'platform_safe_area_combo', None)
+        return normalize_platform(combo.currentData() if combo is not None else None)
+
     def _build_current_render_settings(self) -> dict[str, Any]:
         template_name = str(self.template_combo.currentText() or "default").strip() or "default"
         template_payload = _normalize_template_payload(self.current_template_payload, fallback_name=template_name)
@@ -1016,6 +1023,7 @@ class _BirdStampRendererMixin:
             "draw_text": bool(self.draw_text_check.isChecked()),
             "draw_images": bool(self.draw_images_check.isChecked()) if hasattr(self,"draw_images_check") else True,
             "text_scale": self._selected_text_scale(),
+            "platform_safe_area": self._selected_platform_safe_area(),
             "draw_focus": bool(self.draw_focus_check.isChecked()),
             STAGE_TEMPLATE_CROP_ENABLED_KEY: _stage_enabled(STAGE_TEMPLATE_CROP_ID),
             STAGE_RESIZE_LIMIT_ENABLED_KEY: _stage_enabled(STAGE_RESIZE_LIMIT_ID),
@@ -1125,6 +1133,7 @@ class _BirdStampRendererMixin:
             "draw_text": _parse_bool_value(settings.get("draw_text"), True),
             "draw_images": _parse_bool_value(settings.get("draw_images"), True),
             "text_scale": normalize_text_scale(settings.get("text_scale")),
+            "platform_safe_area": normalize_platform(settings.get("platform_safe_area")),
             "draw_focus": _parse_bool_value(settings.get("draw_focus"), False),
             STAGE_TEMPLATE_CROP_ENABLED_KEY: _parse_bool_value(settings.get(STAGE_TEMPLATE_CROP_ENABLED_KEY), True),
             STAGE_RESIZE_LIMIT_ENABLED_KEY: _parse_bool_value(settings.get(STAGE_RESIZE_LIMIT_ENABLED_KEY), True),
@@ -1164,6 +1173,7 @@ class _BirdStampRendererMixin:
         settings["overlay_override"] = clone_override(raw.get("overlay_override") if isinstance(raw, dict) else None)
         # 旧照片未记录倍率时使用 100%，避免继承上一张照片的倍率。
         settings["text_scale"] = normalize_text_scale(raw.get("text_scale") if isinstance(raw, dict) else None)
+        settings["platform_safe_area"] = normalize_platform(raw.get("platform_safe_area") if isinstance(raw, dict) else None)
         if not isinstance(raw, dict):
             return settings
 
@@ -1296,6 +1306,9 @@ class _BirdStampRendererMixin:
         text_scale_slider = getattr(self, "text_scale_slider", None)
         if text_scale_slider is not None:
             widgets_to_block.append(text_scale_slider)
+        safe_area_combo = getattr(self, 'platform_safe_area_combo', None)
+        if safe_area_combo is not None:
+            widgets_to_block.append(safe_area_combo)
         center_buttons = getattr(self, "center_mode_buttons", {}) or {}
         if isinstance(center_buttons, dict):
             widgets_to_block.extend(center_buttons.values())
@@ -1329,6 +1342,8 @@ class _BirdStampRendererMixin:
             if text_scale_slider is not None:
                 text_scale_slider.setValue(round(normalized["text_scale"] * 100))
                 self.text_scale_value_label.setText(f"{text_scale_slider.value()}%")
+            if safe_area_combo is not None:
+                safe_area_combo.setCurrentIndex(safe_area_combo.findData(normalized['platform_safe_area']))
             self._apply_crop_padding_state_from_settings(normalized)
         finally:
             for w in reversed(widgets_to_block):
@@ -1482,6 +1497,7 @@ class _BirdStampRendererMixin:
             draw_text=_parse_bool_value(settings.get("draw_text"), True),
             draw_images=_parse_bool_value(settings.get("draw_images"), True),
             text_scale=normalize_text_scale(settings.get("text_scale")),
+            platform_safe_area=normalize_platform(settings.get("platform_safe_area")),
             layout_size=layout_size,
             scene_callback=(lambda _region, scene: self._capture_overlay_scene(
                 preview_base, scene, crop_box, settings, raw_metadata,
@@ -1656,6 +1672,7 @@ class _BirdStampRendererMixin:
                 draw_text=_parse_bool_value(settings.get("draw_text"), True),
                 draw_images=_parse_bool_value(settings.get("draw_images"), True),
                 text_scale=normalize_text_scale(settings.get("text_scale")),
+                platform_safe_area=normalize_platform(settings.get("platform_safe_area")),
             )
 
         return self._render_focus_box_for_image(
@@ -1784,6 +1801,9 @@ class _BirdStampRendererMixin:
                 focus_box=None if focus_stage_draws else preview_focus_box,
                 bird_box=preview_bird_box,
                 crop_effect_box=crop_box,
+                platform_safe_area_box=(guide_box(self._preview_crop_size, settings.get('platform_safe_area'), crop_box)
+                                        if self._preview_crop_size and self._should_draw_template_overlay(settings) else None),
+                platform_safe_area=normalize_platform(settings.get('platform_safe_area')),
             )
 
             with birdstamp_perf.span("render_preview.pil_to_qpixmap"):

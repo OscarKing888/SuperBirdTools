@@ -65,6 +65,7 @@ class ImageProcTemplateOverlayStage(ImageProcStage):
             draw_text=core._parse_bool_value(settings.get("draw_text"), True),
             draw_images=core._parse_bool_value(settings.get("draw_images"), True),
             text_scale=normalize_text_scale(settings.get("text_scale")),
+            platform_safe_area=settings.get("platform_safe_area", "off"),
         )
         context.photo_info = photo_info
         context.metadata_context = metadata_context

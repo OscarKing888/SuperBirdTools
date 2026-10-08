@@ -29,6 +29,7 @@ from app_common.file_browser._work_action import WorkerAction
 from app_common.file_browser._work_pool import BrowserWorkPool
 from app_common.file_browser._work_policy import WorkKind
 from birdstamp.render.text_scale import normalize_text_scale
+from birdstamp.overlays.safe_area import normalize_platform
 from birdstamp import image_dejitter as _dejitter
 from birdstamp.config import get_app_dir, get_app_resource_dir, get_user_data_dir, resolve_bundled_path
 from birdstamp.decoders.image_decoder import decode_image
@@ -551,6 +552,10 @@ def source_frame_signature_for_job(
     # The terminal exporter never changes source pixels.  Omitting it lets an
     # image, GIF and video share the same rendered-frame identity.
     render_settings.pop(EXPORT_STAGE_ID_KEY, None)
+    platform = render_settings['platform_safe_area']
+    if platform != 'off':
+        from birdstamp.gui.editor_options import PLATFORM_SAFE_AREA
+        render_settings['_platform_safe_area_preset'] = PLATFORM_SAFE_AREA['presets'][platform]
     if dejitter_reference_active(render_settings):
         source = render_settings.get(DEJITTER_REFERENCE_SOURCE_KEY)
         if source:
@@ -733,6 +738,7 @@ def _clone_render_settings(settings: dict[str, Any]) -> dict[str, Any]:
         "draw_text": _parse_bool_value(settings.get("draw_text"), True),
         "draw_images": _parse_bool_value(settings.get("draw_images"), True),
         "text_scale": normalize_text_scale(settings.get("text_scale")),
+        "platform_safe_area": normalize_platform(settings.get("platform_safe_area")),
         "draw_focus": _parse_bool_value(settings.get("draw_focus"), False),
         STAGE_TEMPLATE_CROP_ENABLED_KEY: _resolve_stage_enabled(
             settings,

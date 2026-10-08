@@ -61,6 +61,8 @@ class EditorPreviewOverlayState(PreviewOverlayState):
     crop_polygon: tuple = ()
     intersection_box: "NormalizedBox | None" = None
     union_box: "NormalizedBox | None" = None
+    platform_safe_area_box: "NormalizedBox | None" = None
+    platform_safe_area: str = 'off'
 
 
 @dataclass(slots=True)
@@ -110,6 +112,8 @@ class EditorPreviewCanvas(CropResolutionOverlayMixin, FocusCenteredPreviewCanvas
         self._drag_start_pos: "QPointF | None" = None
         self._has_pan: bool = False
         self._video_safe_frame_size: tuple[int, int] | None = None
+        self._platform_safe_area_box = None
+        self._platform_safe_area = 'off'
         self._reference_regions: tuple["NormalizedBox", ...] = ()
         self._reference_diagnostics: tuple = ()
         self._subject_points: tuple = ()
@@ -179,6 +183,7 @@ class EditorPreviewCanvas(CropResolutionOverlayMixin, FocusCenteredPreviewCanvas
         super().paintEvent(event)
         self._paint_crop_resolution_ui()
         self._paint_video_safe_frame_ui()
+        self._paint_platform_safe_area_ui()
         self._drag_probe.add_paint(elapsed_ms(start))
 
     def set_video_safe_frame_size(self, size: tuple[int, int] | None) -> None:
@@ -186,6 +191,27 @@ class EditorPreviewCanvas(CropResolutionOverlayMixin, FocusCenteredPreviewCanvas
             return
         self._video_safe_frame_size = size
         self.update()
+
+    def _paint_platform_safe_area_ui(self) -> None:
+        """平台参考框只绘制到窗口，不进入图片、GIF、视频或叠加导出。"""
+        box = self._platform_safe_area_box
+        draw = self._display_rect()
+        if box is None or draw is None:
+            return
+        rect = QRectF(draw.left()+box[0]*draw.width(), draw.top()+box[1]*draw.height(),
+                      (box[2]-box[0])*draw.width(), (box[3]-box[1])*draw.height())
+        from .editor_options import PLATFORM_SAFE_AREA
+        label = PLATFORM_SAFE_AREA['labels'].get(self._platform_safe_area, '')
+        painter = QPainter(self)
+        try:
+            painter.setClipRect(self.contentsRect())
+            color = QColor('#6EDCB8')
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.setPen(QPen(color, 2, Qt.PenStyle.DashLine))
+            painter.drawRect(rect)
+            self._draw_crop_resolution_label(painter, rect, f'{label} · 叠加安全框', color, bottom=True)
+        finally:
+            painter.end()
 
     def _video_safe_frame_rect(self, draw_rect: QRectF) -> QRectF | None:
         if self._video_safe_frame_size is None:
@@ -380,6 +406,11 @@ class EditorPreviewCanvas(CropResolutionOverlayMixin, FocusCenteredPreviewCanvas
         changed = super()._apply_overlay_state_data(state)
         if not isinstance(state, EditorPreviewOverlayState):
             return changed
+        for name in ('platform_safe_area_box', 'platform_safe_area'):
+            value = getattr(state, name)
+            if getattr(self, '_'+name) != value:
+                setattr(self, '_'+name, value)
+                changed = True
         if self._set_bird_box_no_update(state.bird_box):
             changed = True
         if self._set_crop_effect_box_no_update(state.crop_effect_box):

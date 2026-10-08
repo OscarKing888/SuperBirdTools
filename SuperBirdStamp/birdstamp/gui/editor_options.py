@@ -12,6 +12,7 @@ from birdstamp.overlays.model import number as _overlay_number
 from birdstamp.image_dejitter.matching_options import normalize_matching_settings
 from birdstamp.render.text_effects import normalize_text_effects
 from birdstamp.render.text_scale import TEXT_SCALE_DEFAULT, TEXT_SCALE_MIN, TEXT_SCALE_MAX
+from birdstamp.overlays.safe_area import normalize_options as normalize_safe_area_options
 
 # Sentinel for "no crop" and "free aspect ratio" crop modes.
 RATIO_NO_CROP = "no_crop"
@@ -375,6 +376,7 @@ def load_editor_options() -> dict[str, Any]:
         "crop_resolution_snap": normalize_snap_options(raw.get("crop_resolution_snap")),
         "dejitter_reference_strength": max(0, min(100, _dejitter_strength(raw.get("dejitter_reference_strength")))),
         "text_scale_slider": _normalize_text_scale_slider(raw.get("text_scale_slider")),
+        "platform_safe_area": normalize_safe_area_options(raw.get("platform_safe_area")),
         "style_options": style_options,
         "ratio_options": ratio_options,
         "template_preview_ratio_options": _normalize_ratio_options(raw.get("template_preview_ratio_options", raw.get("ratio_options"))),
@@ -445,6 +447,7 @@ DEJITTER_AUTO_REGION_COUNT = _bounded_preview_option("dejitter_auto_region_count
 DEJITTER_DISK_CACHE_BYTES = _bounded_preview_option("dejitter_disk_cache_mb", 512, 128, 4096) * 1024 * 1024
 DEJITTER_PREVIEW_CACHE_BYTES = _bounded_preview_option("dejitter_preview_cache_mb", 64, 8, 256) * 1024 * 1024
 TEXT_SCALE_SLIDER: dict[str, int] = _EDITOR_OPTIONS["text_scale_slider"]
+PLATFORM_SAFE_AREA: dict = _EDITOR_OPTIONS["platform_safe_area"]
 STYLE_OPTIONS: tuple[str, ...] = _EDITOR_OPTIONS["style_options"]
 RATIO_OPTIONS: list[tuple[str, float | None | str]] = _EDITOR_OPTIONS["ratio_options"]
 MAX_LONG_EDGE_OPTIONS: list[int] = _EDITOR_OPTIONS["max_long_edge_options"]

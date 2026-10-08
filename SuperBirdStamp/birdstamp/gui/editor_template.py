@@ -953,8 +953,10 @@ def _render_legacy_template_overlay(
 def render_template_overlay(image, *, raw_metadata, metadata_context, photo_info=None,
                             template_payload, auto_scale_font=True, draw_banner=True,
                             draw_text=True, draw_images=True, text_scale=1.0, layout_size=None,
-                            scene_callback=None):
-    if 'overlays' not in template_payload and scene_callback is None:
+                            scene_callback=None, platform_safe_area='off'):
+    from birdstamp.overlays.safe_area import normalize_platform
+    platform_safe_area = normalize_platform(platform_safe_area)
+    if 'overlays' not in template_payload and scene_callback is None and platform_safe_area == 'off':
         return _render_legacy_template_overlay(image, raw_metadata=raw_metadata,
             metadata_context=metadata_context, photo_info=photo_info, template_payload=template_payload,
             auto_scale_font=auto_scale_font, draw_banner=draw_banner, draw_text=draw_text,
@@ -962,7 +964,8 @@ def render_template_overlay(image, *, raw_metadata, metadata_context, photo_info
     from birdstamp.overlays.render import build_scene, compose_scene
     scene = build_scene(template_payload, layout_size or image.size, raw_metadata=raw_metadata,
                         metadata_context=metadata_context, photo_info=photo_info, text_scale=text_scale,
-                        draw_text=draw_text, draw_images=draw_images, draw_banner=draw_banner)
+                        draw_text=draw_text, draw_images=draw_images, draw_banner=draw_banner,
+                        platform_safe_area=platform_safe_area)
     try:
         result = compose_scene(image, scene)
         if scene_callback is not None:
@@ -1007,6 +1010,7 @@ def render_template_overlay_in_crop_region(
     draw_images: bool = True,
     scene_callback=None,
     text_scale: float = 1.0,
+    platform_safe_area: str = 'off',
     layout_size: tuple[int, int] | None = None,
 ) -> Image.Image:
     kw = dict(
@@ -1019,6 +1023,7 @@ def render_template_overlay_in_crop_region(
         draw_images=draw_images,
         scene_callback=scene_callback,
         text_scale=text_scale,
+        platform_safe_area=platform_safe_area,
         layout_size=layout_size,
     )
     if not crop_box_has_effect(crop_box):

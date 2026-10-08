@@ -24,6 +24,7 @@ class ImageProcTemplateCropStage(ImageProcStage):
     enabled_by_default = True
 
     def parameter_options(self) -> tuple[ImageProcOptionSpec, ...]:
+        from birdstamp.gui.editor_options import PLATFORM_SAFE_AREA
         return (
             ImageProcOptionSpec(
                 key="template_name",
@@ -56,6 +57,12 @@ class ImageProcTemplateCropStage(ImageProcStage):
             ImageProcOptionSpec(key="crop_padding_left", label="左留边", value_type="int", default=0),
             ImageProcOptionSpec(key="crop_padding_right", label="右留边", value_type="int", default=0),
             ImageProcOptionSpec(key="crop_padding_fill", label="留边颜色", value_type="color", default="#FFFFFF"),
+            ImageProcOptionSpec(
+                key="platform_safe_area", label="平台安全框", value_type="choice", default="off",
+                choices=tuple(ImageProcOptionChoice(label, value)
+                              for value, label in PLATFORM_SAFE_AREA['labels'].items()),
+                description="全屏图按平台安全框整体移动叠加，放不下时等比缩小；非全屏关闭。",
+            ),
             ImageProcOptionSpec(key="dejitter_reference_enabled", label="参考区去抖动", value_type="bool",
                                 default=False, description="导出前按源图参考区预计算裁切位移。"),
             ImageProcOptionSpec(key="dejitter_reference_strength", label="参考区补偿强度", value_type="int",
