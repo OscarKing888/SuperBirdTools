@@ -6,12 +6,12 @@ import uuid
 from PyQt6.QtCore import Qt, QRectF
 from PyQt6.QtGui import QColor, QImage, QPainter, QPainterPath, QPen
 from PyQt6.QtWidgets import (
-    QCheckBox, QFileDialog, QDialog, QDialogButtonBox, QDoubleSpinBox, QFormLayout, QGridLayout, QGroupBox, QLayout,
+    QCheckBox, QFileDialog, QDoubleSpinBox, QFormLayout, QGridLayout, QGroupBox,
     QHBoxLayout, QLabel, QLineEdit, QListWidget, QListWidgetItem, QMessageBox,
-    QPushButton, QScrollArea, QSizePolicy, QStyle, QVBoxLayout, QWidget,
+    QPushButton, QSizePolicy, QStyle, QVBoxLayout, QWidget,
 )
 
-from app_common.sidebar_tabs import SidebarTabWidget
+from app_common.settings_dialog import SettingsDialog
 
 from birdstamp.overlays.safe_area_options import current_options, default_options, save_options
 from .safe_area_reference import ReferenceImageLoader
@@ -80,45 +80,27 @@ class SafeAreaPreview(QWidget):
             painter.end()
 
 
-class UserOptionsDialog(QDialog):
+class UserOptionsDialog(SettingsDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setWindowTitle('用户选项')
-        self.resize(920, 660)
         self.options = deepcopy(current_options())
         self.reference_loader = ReferenceImageLoader(self)
         self.reference_loader.ready.connect(self._reference_ready)
         self.destroyed.connect(self.reference_loader.close)
         self._loading = False
         self.current_id = None
-        outer = QVBoxLayout(self)
-        self.tabs = SidebarTabWidget(self)
-        outer.addWidget(self.tabs, 1)
         self.safe_area_page = self._build_safe_area_page()
-        self.safe_area_scroll = QScrollArea(self.tabs)
-        self.safe_area_scroll.setWidgetResizable(True)
-        self.safe_area_scroll.setFrameShape(QScrollArea.Shape.NoFrame)
-        self.safe_area_scroll.setWidget(self.safe_area_page)
-        self.tabs.addTab(self.safe_area_scroll,
-                         self.style().standardIcon(QStyle.StandardPixmap.SP_FileDialogDetailedView),
-                         '安全区')
-        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
-        buttons.button(QDialogButtonBox.StandardButton.Ok).setText('确定')
-        buttons.button(QDialogButtonBox.StandardButton.Cancel).setText('取消')
-        buttons.accepted.connect(self.accept)
-        buttons.rejected.connect(self.reject)
-        outer.addWidget(buttons)
+        self.safe_area_scroll = self.add_page(
+            self.safe_area_page, '安全区',
+            self.style().standardIcon(QStyle.StandardPixmap.SP_FileDialogDetailedView))
         self.name_edit.textChanged.connect(self._edit)
         self.groups.currentRowChanged.connect(self._load_row)
         self._refresh_groups()
 
     def _build_safe_area_page(self):
-        """安全区控件集中在独立页面，后续选项通过 tabs.addTab 追加。"""
+        """安全区控件集中在独立页面，后续选项通过 add_page 追加。"""
         page = QWidget(self.tabs)
         page_layout = QVBoxLayout(page)
-        page_layout.setContentsMargins(16, 16, 16, 16)
-        page_layout.setSpacing(12)
-        page_layout.setSizeConstraint(QLayout.SizeConstraint.SetMinimumSize)
         title = QLabel('安全区设置')
         font = title.font()
         font.setBold(True)
@@ -240,7 +222,6 @@ class UserOptionsDialog(QDialog):
         legend.setAlignment(Qt.AlignmentFlag.AlignCenter)
         preview_layout.addWidget(legend)
         right.addWidget(preview_box)
-        page_layout.addStretch(1)
         return page
 
     def _refresh_groups(self, selected=None):

@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import os
 
-from app_common.sidebar_tabs import SidebarTabWidget
+from app_common.settings_dialog import SettingsDialog
 from app_common.superviewer_user_options import (
     BIRD_SHARPNESS_PARAM_KEYS,
     KEY_NAVIGATION_FPS_OPTIONS,
@@ -25,15 +25,12 @@ from .file_context_menu import menu_icon
 from .qt_compat import (
     QCheckBox,
     QComboBox,
-    QDialog,
-    QDialogButtonBox,
     QGridLayout,
     QLabel,
     QLineEdit,
     QFileDialog,
     QMessageBox,
     QPushButton,
-    QScrollArea,
     QSpinBox,
     QWidget,
     QVBoxLayout,
@@ -52,12 +49,9 @@ except ImportError:  # pragma: no cover - PyQt5 fallback
 _TOOLTIP_ROLE = getattr(getattr(Qt, "ItemDataRole", Qt), "ToolTipRole")
 
 
-class SuperViewerUserOptionsDialog(QDialog):
+class SuperViewerUserOptionsDialog(SettingsDialog):
     def __init__(self, parent=None, options: dict | None = None) -> None:
         super().__init__(parent)
-        self.setWindowTitle("用户选项")
-        self.setModal(True)
-        self.resize(920, 660)
 
         opts = normalize_user_options(options or get_runtime_user_options())
         cpu_count = max(1, os.cpu_count() or 1)
@@ -65,15 +59,10 @@ class SuperViewerUserOptionsDialog(QDialog):
         metadata_default = max(1, min(8, cpu_count // 4 or 1))
         persistent_default = max(1, cpu_count - metadata_default)
 
-        layout = QVBoxLayout(self)
-
-        info = QLabel(
+        self.set_description(
             f"配置文件将保存在用户配置目录：{get_user_options_path()}\n"
             f"文件名：{USER_OPTIONS_FILENAME}"
         )
-        info.setWordWrap(True)
-        info.setStyleSheet("color: #aaa; font-size: 12px;")
-        layout.addWidget(info)
 
         grid = QGridLayout()
         grid.setHorizontalSpacing(10)
@@ -148,20 +137,17 @@ class SuperViewerUserOptionsDialog(QDialog):
         grid.addWidget(self._chk_perf_probes, row, 1)
         grid.addWidget(QLabel("默认关闭"), row, 2)
 
-        tabs = SidebarTabWidget(self)
-        self.tabs = tabs
+        tabs = self.tabs
         standard_icons = getattr(QStyle, "StandardPixmap", QStyle)
         general = QWidget(tabs)
         general_layout = QVBoxLayout(general)
         general_layout.addLayout(grid)
-        tabs.addTab(general, self.style().standardIcon(standard_icons.SP_ComputerIcon), "浏览与性能")
-        layout.addWidget(tabs)
+        self.add_page(general, "浏览与性能", self.style().standardIcon(standard_icons.SP_ComputerIcon))
 
         note = QLabel("缩略视图会根据当前缩略图大小自动匹配最合适的一档预览图。")
         note.setWordWrap(True)
         note.setStyleSheet("color: #aaa; font-size: 12px;")
         general_layout.addWidget(note)
-        general_layout.addStretch(1)
 
         denoise = QWidget(tabs)
         denoise_layout = QVBoxLayout(denoise)
@@ -214,26 +200,21 @@ class SuperViewerUserOptionsDialog(QDialog):
                              "在照片或目录右键菜单中开始降噪；新的设置用于下一批任务。", denoise)
         denoise_note.setWordWrap(True)
         denoise_layout.addWidget(denoise_note)
-        denoise_layout.addStretch(1)
-        tabs.addTab(denoise, menu_icon("denoise"), "批量降噪")
+        self.add_page(denoise, "批量降噪", menu_icon("denoise"))
 
         self._initial_archive_options = load_archive_options()
         self._archive_form = ArchiveOptionsForm(tabs, options=self._initial_archive_options)
         archive_page = QWidget(tabs)
         archive_layout = QVBoxLayout(archive_page)
         archive_layout.addWidget(self._archive_form)
-        archive_layout.addStretch(1)
-        tabs.addTab(archive_page, archive_icon(), "珍禽入册")
+        self.add_page(archive_page, "珍禽入册", archive_icon())
 
         from .rarity_badge import RarityBadgesForm, ConservationBadgesForm
         self._rarity_badges_form = RarityBadgesForm(opts, tabs)
         self._conservation_badges_form = ConservationBadgesForm(opts, tabs)
         for form, label, icon in ((self._rarity_badges_form, "稀有度徽章", "star"),
                                  (self._conservation_badges_form, "保护等级徽章", "shield")):
-            scroll = QScrollArea(tabs)
-            scroll.setWidgetResizable(True)
-            scroll.setWidget(form)
-            tabs.addTab(scroll, menu_icon(icon), label)
+            self.add_page(form, label, menu_icon(icon))
 
         sharpness = QWidget(tabs)
         sharpness_layout = QVBoxLayout(sharpness)
@@ -259,26 +240,9 @@ class SuperViewerUserOptionsDialog(QDialog):
         sharpness_note.setWordWrap(True)
         sharpness_note.setForegroundRole(getattr(QPalette, "ColorRole", QPalette).PlaceholderText)
         sharpness_layout.addWidget(sharpness_note)
-        sharpness_layout.addStretch(1)
-        sharpness_scroll = QScrollArea(tabs)
-        sharpness_scroll.setWidget(sharpness)
-        sharpness_scroll.setWidgetResizable(True)
-        sharpness = sharpness_scroll
-        tabs.addTab(sharpness, menu_icon("process"), "鸟清晰度")
+        self.add_page(sharpness, "鸟清晰度", menu_icon("process"))
         self._combo_denoise_mode.currentIndexChanged.connect(self._update_denoise_mode)
         self._update_denoise_mode()
-
-        buttons = QDialogButtonBox(
-            (
-                QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
-                if hasattr(QDialogButtonBox.StandardButton, "Ok")
-                else QDialogButtonBox.Ok | QDialogButtonBox.Cancel
-            ),
-            parent=self,
-        )
-        buttons.accepted.connect(self.accept)
-        buttons.rejected.connect(self.reject)
-        layout.addWidget(buttons)
 
     def _choose_denoise_directory(self) -> None:
         path = QFileDialog.getExistingDirectory(self, "选择降噪输出目录", self._edit_denoise_directory.text())
