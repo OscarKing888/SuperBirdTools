@@ -181,3 +181,29 @@ def test_move_buttons_numbering_append_and_workspace_round_trip(window, tmp_path
     assert not window._workspace_restore_in_progress()
     assert window._list_photo_paths() == expected
     _assert_numbers(window, [101, 102, 103, 104])
+
+
+def test_list_remove_action_updates_workspace_and_preserves_sources(window, tmp_path):
+    paths = _add_photos(window, tmp_path, ("翠鸟甲.png", "翠鸟乙.png", "白鹭.png"))
+    sidecar = paths[0].with_suffix(".xmp")
+    sidecar.write_text("中文侧车内容", encoding="utf-8")
+    window.photo_start_number_spin.setValue(21)
+    window.photo_list.setCurrentItem(window.photo_list.topLevelItem(0))
+    window.photo_list.topLevelItem(1).setSelected(True)
+    for path in paths:
+        window.raw_metadata_cache[path_key(path)] = {"Title": "翠鸟"}
+    window.photo_list.remove_selected_action.trigger()
+    assert window.photo_list.topLevelItemCount() == 1
+    assert window.photo_list.topLevelItem(0).text(PHOTO_COL_NAME) == "白鹭.png"
+    _assert_numbers(window, [21])
+    assert all(path.exists() for path in paths)
+    assert sidecar.read_text(encoding="utf-8") == "中文侧车内容"
+    assert all(path_key(path) not in window.raw_metadata_cache for path in paths[:2])
+    payload = window._collect_workspace_payload(tmp_path / "test.birdstamp-workspace.json")
+    assert len(payload["photos"]) == 1
+    window.photo_list.setCurrentItem(window.photo_list.topLevelItem(0))
+    window.photo_list.remove_selected_action.trigger()
+    assert window.photo_list.topLevelItemCount() == 0
+    assert window.current_path == window.placeholder_path
+    assert window.current_path not in paths
+    assert not window._collect_workspace_payload(tmp_path / "empty.birdstamp-workspace.json")["photos"]

@@ -155,3 +155,95 @@ def test_photo_list_header_sorting_keeps_active_column() -> None:
     finally:
         widget.deleteLater()
         app.processEvents()
+
+
+@pytest.mark.parametrize("clicked_row,expected", [(0, ["a.jpg", "b.jpg"]), (2, ["c.jpg"])])
+def test_remove_context_menu_preserves_or_replaces_selection(tmp_path, monkeypatch, clicked_row, expected):
+    from birdstamp.gui import editor_photo_list
+
+    widget = PhotoListWidget()
+    widget.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
+    requests = []
+    widget.removeSelectedRequested.connect(
+        lambda: requests.append([item.text(PHOTO_COL_NAME) for item in widget.selectedItems()])
+    )
+    try:
+        for seq, name in enumerate(("a.jpg", "b.jpg", "c.jpg"), 1):
+            item = _make_item(seq, name, (0, seq))
+            item.setData(PHOTO_COL_ROW, PHOTO_LIST_PATH_ROLE, str(tmp_path / name))
+            widget.addTopLevelItem(item)
+        widget.resize(600, 300)
+        widget.show()
+        _APP.processEvents()
+        widget.setCurrentItem(widget.topLevelItem(0))
+        widget.topLevelItem(1).setSelected(True)
+
+        def choose_remove(menu, pos):
+            action = next(action for action in menu.actions() if action.text() == "删除所选")
+            assert action.shortcuts()
+            action.trigger()
+
+        monkeypatch.setattr(editor_photo_list, "_exec_menu", choose_remove)
+        pos = widget._tree_widget.visualItemRect(widget.topLevelItem(clicked_row)).center()
+        widget._on_photo_context_menu(pos)
+        assert requests == [expected]
+        widget._tree_widget.clearSelection()
+        widget.remove_selected_action.trigger()
+        assert requests == [expected]
+    finally:
+        widget.close()
+        widget.deleteLater()
+        _APP.processEvents()
+
+
+@pytest.mark.parametrize("platform", ["darwin", "win32"])
+def test_remove_shortcuts_only_affect_focused_photo_list(monkeypatch, platform):
+    from types import SimpleNamespace
+    from PyQt6.QtCore import QEvent
+    from PyQt6.QtGui import QKeyEvent
+    from PyQt6.QtTest import QTest
+    from PyQt6.QtWidgets import QLineEdit, QVBoxLayout, QWidget
+    from birdstamp.gui import editor_photo_list
+
+    monkeypatch.setattr(editor_photo_list, "sys", SimpleNamespace(platform=platform))
+    host = QWidget()
+    layout = QVBoxLayout(host)
+    widget = PhotoListWidget()
+    edit = QLineEdit("abc")
+    layout.addWidget(widget)
+    layout.addWidget(edit)
+    item = _make_item(1, "a.jpg", (0, 1))
+    widget.addTopLevelItem(item)
+    widget.setCurrentItem(item)
+    requests = []
+    widget.removeSelectedRequested.connect(lambda: requests.append(True))
+    try:
+        host.show()
+        host.activateWindow()
+        widget._tree_widget.setFocus()
+        _APP.processEvents()
+        assert widget._tree_widget.hasFocus()
+        QTest.keyClick(widget._tree_widget, Qt.Key.Key_Delete)
+        assert len(requests) == 1
+        QTest.keyClick(widget._tree_widget, Qt.Key.Key_Backspace)
+        expected_count = 2 if platform == "darwin" else 1
+        assert len(requests) == expected_count
+        _APP.sendEvent(widget._tree_widget, QKeyEvent(
+            QEvent.Type.KeyPress, Qt.Key.Key_Delete, Qt.KeyboardModifier.NoModifier, "", True,
+        ))
+        assert len(requests) == expected_count
+        edit.setFocus()
+        edit.setCursorPosition(1)
+        QTest.keyClick(edit, Qt.Key.Key_Delete)
+        assert edit.text() == "ac"
+        QTest.keyClick(edit, Qt.Key.Key_Backspace)
+        assert edit.text() == "c"
+        assert len(requests) == expected_count
+        widget._tree_widget.setFocus()
+        widget._tree_widget.clearSelection()
+        QTest.keyClick(widget._tree_widget, Qt.Key.Key_Delete)
+        assert len(requests) == expected_count
+    finally:
+        host.close()
+        host.deleteLater()
+        _APP.processEvents()

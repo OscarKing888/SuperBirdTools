@@ -78,6 +78,8 @@ A/B 的布局与显隐约定见 [A/B 预览工具栏布局](ux/AB_PREVIEW_LAYOUT
 
 `BirdStampEditorWindow.closeEvent` 在视频导出仍运行时拒绝关闭并提示先停止；其他工作采用协作停止。元数据加载器通过独立 ExifTool 会话和取消回调中断批量读取，关闭请求会在后台终止 ExifTool 子进程。只要预览、检测、元数据（包括待结束的旧加载器）、发现线程或 ExifTool 清理仍在运行，窗口忽略本次关闭并通过定时器重试，不阻塞 GUI 等待。全部结束后才关闭工作区自动保存并接受关闭。修改这条路径时，应测试“业务完成信号已发出但线程尚未返回”的窗口期。
 
+照片列表右键“删除所选”和列表获得焦点时的 `Delete`（macOS 另支持 `Backspace`）共用 `PhotoListWidget.remove_selected_action`，通过 `removeSelectedRequested` 交给 `BirdStampEditorWindow._remove_selected_photos`。支持多选，右键未选中行先切换选区；仅从工作区列表移除，保留原图和 XMP，并沿用缓存清理、编号刷新与自动保存。快捷键不拦截文本输入，也不随长按重复触发。此功能仅管理 GUI 工作区，无独立 CLI 参数。回归见 [test_editor_photo_list_sort.py](../tests/test_editor_photo_list_sort.py) 与 [test_photo_start_number.py](../tests/test_photo_start_number.py)。
+
 ## 3. 元数据与模板 provider
 
 “拍摄地点” `location` 使用共享 [shooting_location.py](../../app_common/shooting_location.py) 的 `XMP-superpicky:shooting_location` 文本，与 Viewer 编辑字段一致。[meta/normalize.py](../birdstamp/meta/normalize.py) 供模板、Overlay 预览/导出和 CLI 共用；不再拼接存储分析结果的 City/State/Country，也不以 GPS 代替地点，坐标仍由 `gps_text` 提供。自动字段路由固定读取已合并 XMP 的规范地点，清空侧车属性后不能回退到旧照片快照；空值沿用既有缺失字段显示规则。真实中文写入、修改/清空、原图及清晰度保留、Overlay 绘制回归见 [test_template_shooting_location.py](../tests/test_template_shooting_location.py)。

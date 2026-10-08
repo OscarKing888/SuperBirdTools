@@ -1247,6 +1247,8 @@ class BirdStampEditorWindow(
         photos_layout.addWidget(self.receive_progress)
 
         self.photo_list = PhotoListWidget()
+        self.photo_list.removeSelectedRequested.connect(self._remove_selected_photos)
+        remove_btn.setToolTip(self.photo_list.remove_selected_action.toolTip())
         self.photo_list.set_start_number(self.photo_start_number_spin.value())
         self.photo_start_number_spin.valueChanged.connect(self._on_photo_start_number_changed)
         self.photo_list.rowNumbersChanged.connect(self._on_photo_row_numbers_changed)
