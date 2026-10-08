@@ -222,10 +222,11 @@ def snap_candidate(doc, layers, moving, threshold, gap):
     for key, subset in candidates.items():
         b = bounds(subset)
         for axis, direction in ((0, 'row'), (1, 'down')):
-            # 沿行的左右边插入成员；跨轴只在整组边界建立嵌套，避免拆散行。
+            # 列中的单项允许左右组合成一行，join 会在原列位置嵌套新行。
+            # 已有行的上下组合仍以整行为目标，避免拆散同一行。
             if key in parents:
                 parent = groups[parents[key]]
-                if (parent['direction'] == 'row') != (axis == 0):
+                if parent['direction'] == 'row' and axis == 1:
                     continue
             cross = 1-axis
             cross_distance = min(abs(a[cross]-b[cross]), abs(a[cross+2]-b[cross+2]),
@@ -237,8 +238,13 @@ def snap_candidate(doc, layers, moving, threshold, gap):
                 if distance > threshold[axis]:
                     continue
                 score = distance/threshold[axis] + cross_distance/threshold[cross]
-                # 同样接近时优先整组，减少嵌套深度。
-                score += 0 if key in groups else .01
+                # 单项拖到列中某一行旁时，列外框不能抢走同距离的行目标。
+                # 沿已有行/列插入和拖动整组仍优先整组，减少嵌套深度。
+                if (direction == 'row' and key in groups
+                        and groups[key]['direction'] != 'row' and moving.item['id'] not in groups):
+                    score += .02
+                else:
+                    score += 0 if key in groups else .01
                 if best is None or score < best[0]:
                     best = (score, Snap(key, direction, before, b))
     return best[1] if best else None
