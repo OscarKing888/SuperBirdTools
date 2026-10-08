@@ -1,5 +1,6 @@
 """自动组合的动态尺寸、持久化、导出及真实 Qt 拖拽回归。"""
 from copy import deepcopy
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -143,8 +144,35 @@ def test_snap_joins_rows_into_column_and_rejects_remote_or_locked():
         scene.close()
 
 
+@pytest.mark.parametrize('before', [True, False])
+def test_snap_extends_existing_row_in_column_and_respects_lock(before):
+    doc = payload()
+    doc['overlays'].append(text('moving', '新元素', x=.8, y=.2))
+    scene = build_scene(doc, (1000, 600))
+    try:
+        l, t, r, b = bounds(scene.layers[:2])
+        moving = scene.layers[-1]
+        moving = replace(moving, center=((l-moving.size[0]/2-6 if before else r+moving.size[0]/2+6),
+                                         (t+b)/2))
+        layers = scene.layers[:-1]+[moving]
+        snap = snap_candidate(doc, layers, moving, (12, 12), 6)
+        assert snap is not None and snap.target == 'row'
+        joined = document(join(doc, 'moving', snap, Scene(scene.size, layers)))
+        row, column = ancestors(joined, 'moving')
+        assert row['children'] == (['moving', 'bird', 'badge'] if before else ['bird', 'badge', 'moving'])
+        assert column['children'] == ['row', 'camera']
+        # 锁定目标行中的成员后，不允许吸附导致它重新排版。
+        doc['overlays'][0]['locked'] = True
+        layers[0].item['locked'] = True
+        assert snap_candidate(doc, layers, moving, (12, 12), 6) is None
+    finally:
+        scene.close()
+
+
 @pytest.fixture
-def edit_session():
+def edit_session(tmp_path, monkeypatch):
+    from birdstamp import config
+    monkeypatch.setattr(config, 'get_user_data_dir', lambda: tmp_path/'user')
     doc = dict(overlays=[text('a', '白鹭', x=.2, y=.5), text('b', 'B', x=.7, y=.5)])
     panel = OverlayPanel(); panel.set_document(doc, 'photo:layout')
     canvas = EditorPreviewCanvas(); canvas.resize(1000, 600)
@@ -193,6 +221,48 @@ def test_drag_preview_commit_undo_detach_and_group_controls(edit_session):
     panel._detach_layout()
     assert not ancestors(panel.doc, 'b')
     assert boxes(session.scene)['b'] == pytest.approx(b['b'])
+
+
+@pytest.mark.parametrize('direction', ['down', 'up'])
+@pytest.mark.parametrize('before', [True, False])
+@pytest.mark.parametrize('target', ['top', 'middle', 'bottom'])
+def test_drag_beside_column_member_creates_nested_row(edit_session, direction, before, target):
+    panel, session, canvas = edit_session
+    children = ['top', 'middle', 'bottom']
+    doc = dict(overlays=[text(key, '白鹭') for key in children]
+               + [text('moving', '徽章', x=.8, y=.3)],
+               overlay_layouts=[group('column', children, direction)])
+    doc['overlay_layouts'][0].update(x=.4, y=.8)
+    panel.commit(doc)
+    panel.select('moving')
+    original = deepcopy(panel.doc)
+    target_layer = next(v for v in session.scene.layers if v.item['id'] == target)
+    moving = session.selected_layer()
+    gap = .006*min(session.scene.size)
+    offset = (target_layer.size[0]+moving.size[0])/2+gap
+    start = session.to_widget(moving.center)
+    end = session.to_widget((target_layer.center[0]+(-offset if before else offset),
+                             target_layer.center[1]))
+    session.press(mouse(QEvent.Type.MouseButtonPress, start))
+    session.move(mouse(QEvent.Type.MouseMove, end))
+    assert session.drag['snap'] is not None
+    assert session.drag['snap'].target == target
+    assert session.drag['snap'].direction == 'row'
+    assert session.drag['snap'].before == before
+    assert panel.doc == original
+    session.release(mouse(QEvent.Type.MouseButtonRelease, end))
+    row, column = ancestors(panel.doc, 'moving')
+    assert row['direction'] == 'row'
+    assert row['children'] == (['moving', target] if before else [target, 'moving'])
+    assert column == dict(original['overlay_layouts'][0],
+                          children=[row['id'] if key == target else key for key in children])
+    b = boxes(session.scene)
+    left, right = ('moving', target) if before else (target, 'moving')
+    assert b[right][0]-b[left][2] == pytest.approx(gap)
+    assert (b['moving'][1]+b['moving'][3])/2 == pytest.approx((b[target][1]+b[target][3])/2)
+    committed = deepcopy(panel.doc)
+    panel.undo(); assert panel.doc == original
+    panel.redo(); assert panel.doc == committed
 
 
 def test_drag_cancel_and_ctrl_group_move(edit_session):

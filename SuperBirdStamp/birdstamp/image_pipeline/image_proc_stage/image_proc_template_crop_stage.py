@@ -61,7 +61,7 @@ class ImageProcTemplateCropStage(ImageProcStage):
                 key="platform_safe_area", label="平台安全框", value_type="choice", default="off",
                 choices=tuple(ImageProcOptionChoice(label, value)
                               for value, label in PLATFORM_SAFE_AREA['labels'].items()),
-                description="全屏图按平台安全框整体移动叠加，放不下时等比缩小；非全屏关闭。",
+                description="全屏图在平台安全框内重新对齐布局、收紧间距及换行，不自动缩小；非全屏关闭。",
             ),
             ImageProcOptionSpec(key="dejitter_reference_enabled", label="参考区去抖动", value_type="bool",
                                 default=False, description="导出前按源图参考区预计算裁切位移。"),

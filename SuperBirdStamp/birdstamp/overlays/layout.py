@@ -87,10 +87,12 @@ def bounds(layers):
             max(p[0] for p in points), max(p[1] for p in points))
 
 
-def arrange(doc, layers, size):
-    """以旋转后的完整效果边界排版，隐藏/空字段不占位置或间距。"""
+def arrange(doc, layers, size, *, rect=None):
+    """以完整效果边界排版；安全区只收紧间距/换行/移位，不缩放内容。"""
+    from .safe_area import clamp_start
     groups, parents = indexes(doc)
-    measured = {}
+    measured, positions = {}, {}
+    available = (rect[2]-rect[0], rect[3]-rect[1]) if rect else None
 
     def measure(key):
         if key not in groups:
@@ -99,18 +101,53 @@ def arrange(doc, layers, size):
                 return None
             l, t, r, b = bounds([layer])
             measured[key] = (r-l, b-t)
-        else:
-            node = groups[key]
-            sizes = [measure(child) for child in node['children']]
-            sizes = [s for s in sizes if s is not None]
-            if not sizes:
-                return None
-            axis = 0 if node['direction'] == 'row' else 1
+            return measured[key]
+        node = groups[key]
+        children = [child for child in node['children'] if measure(child) is not None]
+        if not children:
+            return None
+        if node['direction'] == 'up':
+            children.reverse()
+        axis = 0 if node['direction'] == 'row' else 1
+        gap = node['gap'] * min(size)
+        total = sum(measured[child][axis] for child in children)
+        if available and len(children) > 1:
+            gap = min(gap, max(0., (available[axis]-total)/(len(children)-1)))
+        lines = [children]
+        if available and axis == 0 and total > available[0]:
+            # 行内容本身过宽：恢复正常间距后按成员换行，不拆开文字/嵌套组合。
             gap = node['gap'] * min(size)
-            result = [0., 0.]
-            result[axis] = sum(s[axis] for s in sizes) + gap*(len(sizes)-1)
-            result[1-axis] = max(s[1-axis] for s in sizes)
-            measured[key] = tuple(result)
+            lines, line, used = [], [], 0.
+            for child in children:
+                width = measured[child][0]
+                if line and used+gap+width > available[0]:
+                    lines.append(line)
+                    line, used = [], 0.
+                used += (gap if line else 0.)+width
+                line.append(child)
+            lines.append(line)
+        extents = [(sum(measured[c][axis] for c in line)+gap*(len(line)-1),
+                    max(measured[c][1-axis] for c in line)) for line in lines]
+        line_gap = node['gap']*min(size) if len(lines) > 1 else 0.
+        if available and len(lines) > 1:
+            line_gap = min(line_gap, max(0., (available[1]-sum(e[1] for e in extents))/(len(lines)-1)))
+        result = [0., 0.]
+        result[axis] = max(e[0] for e in extents)
+        result[1-axis] = sum(e[1] for e in extents)+line_gap*(len(lines)-1)
+        measured[key] = tuple(result)
+        positions[key] = []
+        cross_offset = 0.
+        align = {'start': 0, 'center': .5, 'end': 1}[node['align']]
+        for line, extent in zip(lines, extents):
+            # 换行后的短行沿原固定边对齐。
+            offset = (result[axis]-extent[0])*node['anchor_x'] if len(lines) > 1 else 0.
+            for child in line:
+                pos = [0., 0.]
+                pos[axis] = offset
+                pos[1-axis] = cross_offset+(extent[1]-measured[child][1-axis])*align
+                positions[key].append((child, pos))
+                offset += measured[child][axis]+gap
+            cross_offset += extent[1]+line_gap
         return measured[key]
 
     def place(key, left, top):
@@ -118,26 +155,20 @@ def arrange(doc, layers, size):
             w, h = measured[key]
             layers[key] = replace(layers[key], center=(left+w/2, top+h/2))
             return
-        node = groups[key]
-        axis = 0 if node['direction'] == 'row' else 1
-        children = [c for c in node['children'] if c in measured]
-        if node['direction'] == 'up':
-            children.reverse()
-        offset = 0.
-        for child in children:
-            pos = [left, top]
-            pos[axis] += offset
-            pos[1-axis] += (measured[key][1-axis]-measured[child][1-axis]) * {'start': 0, 'center': .5, 'end': 1}[node['align']]
-            place(child, *pos)
-            offset += measured[child][axis] + node['gap']*min(size)
+        for child, pos in positions[key]:
+            place(child, left+pos[0], top+pos[1])
 
     for key, node in groups.items():
         if key in parents:
             continue
         extent = measure(key)
         if extent:
-            place(key, node['x']*size[0]-node['anchor_x']*extent[0],
-                  node['y']*size[1]-node['anchor_y']*extent[1])
+            pos = [node['x']*size[0]-node['anchor_x']*extent[0],
+                   node['y']*size[1]-node['anchor_y']*extent[1]]
+            if rect:
+                for axis, anchor in enumerate((node['anchor_x'], node['anchor_y'])):
+                    pos[axis] = clamp_start(pos[axis], extent[axis], rect[axis], rect[axis+2], anchor)
+            place(key, *pos)
     return layers
 
 
@@ -191,10 +222,11 @@ def snap_candidate(doc, layers, moving, threshold, gap):
     for key, subset in candidates.items():
         b = bounds(subset)
         for axis, direction in ((0, 'row'), (1, 'down')):
-            # 沿行的左右边插入成员；跨轴只在整组边界建立嵌套，避免拆散行。
+            # 列中的单项允许左右组合成一行，join 会在原列位置嵌套新行。
+            # 已有行的上下组合仍以整行为目标，避免拆散同一行。
             if key in parents:
                 parent = groups[parents[key]]
-                if (parent['direction'] == 'row') != (axis == 0):
+                if parent['direction'] == 'row' and axis == 1:
                     continue
             cross = 1-axis
             cross_distance = min(abs(a[cross]-b[cross]), abs(a[cross+2]-b[cross+2]),
@@ -206,8 +238,13 @@ def snap_candidate(doc, layers, moving, threshold, gap):
                 if distance > threshold[axis]:
                     continue
                 score = distance/threshold[axis] + cross_distance/threshold[cross]
-                # 同样接近时优先整组，减少嵌套深度。
-                score += 0 if key in groups else .01
+                # 单项拖到列中某一行旁时，列外框不能抢走同距离的行目标。
+                # 沿已有行/列插入和拖动整组仍优先整组，减少嵌套深度。
+                if (direction == 'row' and key in groups
+                        and groups[key]['direction'] != 'row' and moving.item['id'] not in groups):
+                    score += .02
+                else:
+                    score += 0 if key in groups else .01
                 if best is None or score < best[0]:
                     best = (score, Snap(key, direction, before, b))
     return best[1] if best else None

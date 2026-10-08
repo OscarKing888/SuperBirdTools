@@ -75,6 +75,14 @@ def build_scene(payload, size, *, raw_metadata=None, metadata_context=None, phot
     from birdstamp.gui import editor_template as t
     from birdstamp.render.text_scale import normalize_text_scale
     doc = document(payload)
+    from .safe_area import safe_rect, layout_rect, arrange_free_layers, fit_background
+    area = safe_rect(size, platform_safe_area)
+    area = layout_rect(area) if area else None
+    if area:
+        # 安全布局仅测量实际输出的元素，隐藏类别不留下间距。
+        enabled = {'badge': draw_text, 'text': draw_text, 'image': draw_images, 'background': draw_banner}
+        for item in doc['overlays']:
+            item['visible'] = item['visible'] and enabled[item['type']] and item['opacity'] > 0
     raw_metadata = raw_metadata or {}
     photo_info = t.ensure_photo_info(photo_info or raw_metadata.get('SourceFile') or '.', raw_metadata=raw_metadata)
     text_scale = normalize_text_scale(text_scale)
@@ -139,7 +147,10 @@ def build_scene(payload, size, *, raw_metadata=None, metadata_context=None, phot
                 else:
                     center = (item['x']*size[0],item['y']*size[1])
                 layers[item['id']] = Layer(item,pixels,center,(w,h),item['rotation'])
-        arrange(doc, layers, size)
+        arrange(doc, layers, size, rect=area)
+        if area:
+            free = [layer for key, layer in layers.items() if key not in grouped]
+            layers.update(arrange_free_layers(free, area, size))
         text_layers = [v for v in layers.values() if v.item['type']=='text']
         for item in doc['overlays']:
             if item['type']!='background' or not item['visible']:
@@ -161,6 +172,10 @@ def build_scene(payload, size, *, raw_metadata=None, metadata_context=None, phot
                 l,top,r,b = rect
                 w,h = r-l,b-top
                 center = ((l+r)/2,(top+b)/2)
+            if area and item['layout_mode'] != 'manual' and gradient:
+                # 渐变跟随安全区底边，背景宽度独立收边，内容尺寸保持不变。
+                w, h = area[2]-area[0], min(h, area[3]-area[1])
+                center = ((area[0]+area[2])/2, area[3]-h/2)
             if gradient:
                 height = max(2,round(h))
                 top = ImageColor.getrgb(item.get('banner_gradient_top_color','#000000'))[:3]
@@ -174,7 +189,8 @@ def build_scene(payload, size, *, raw_metadata=None, metadata_context=None, phot
                 if not color:
                     continue
                 pixels = Image.new('RGBA',(1,1),color)
-            layers[item['id']] = Layer(item,pixels,center,(w,h),item['rotation'])
+            layer = Layer(item,pixels,center,(w,h),item['rotation'])
+            layers[item['id']] = fit_background(layer, area) if area else layer
         result = []
         for item in doc['overlays']:
             layer = layers.pop(item['id'],None)
@@ -185,8 +201,7 @@ def build_scene(payload, size, *, raw_metadata=None, metadata_context=None, phot
                 result.append(layer)
             else:
                 layer.pixels.close()
-        from .safe_area import safe_rect, fit_layers
-        return Scene(size, fit_layers(result, safe_rect(size, platform_safe_area)))
+        return Scene(size, result)
     except Exception:
         for layer in layers.values():
             layer.pixels.close()
