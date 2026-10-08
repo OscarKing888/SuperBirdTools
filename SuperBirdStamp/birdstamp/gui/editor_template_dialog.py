@@ -610,7 +610,7 @@ class TemplateManagerDialog(QDialog):
         # 保留旧属性适配入口，界面统一使用模板/实例共用的叠加层编辑器。
         fields_group.setParent(panel); fields_group.hide()
         field_edit_group.setParent(panel); field_edit_group.hide()
-        self.overlay_panel = OverlayPanel(panel, property_columns=True)
+        self.overlay_panel = OverlayPanel(panel)
         self.overlay_panel.changed.connect(self._on_overlay_document_changed)
         self.overlay_panel.activateRequested.connect(self._activate_overlay_edit)
         layout.addWidget(self.overlay_panel, alignment=Qt.AlignmentFlag.AlignTop)

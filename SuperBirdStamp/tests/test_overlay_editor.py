@@ -106,7 +106,7 @@ def test_layer_selection_and_edit_preserve_scroll_position(tmp_path, monkeypatch
     from birdstamp.overlays.model import new_item
 
     monkeypatch.setattr(config, 'get_user_data_dir', lambda: tmp_path / 'user')
-    panel = OverlayPanel(property_columns=True)
+    panel = OverlayPanel()
     layers = [new_item('text') for _ in range(40)]
     panel.set_document(dict(overlay_version=1, overlays=layers), 'template:scroll')
     panel.resize(950, 1100)
