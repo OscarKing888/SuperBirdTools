@@ -61,7 +61,7 @@ from birdstamp.gui import editor_core, editor_options, editor_template, editor_u
 from birdstamp.gui.color_editor import ColorEditor
 from birdstamp.gui.overlay_panel import OverlayPanel
 from birdstamp.gui.template_preview_format import preview_format_overridden, template_preview_settings
-from birdstamp.gui.filterable_combo import FilterableComboBox as _FilterableComboBox
+from app_common.filterable_combo import FilterableComboBox as _FilterableComboBox
 from birdstamp.gui.overlay_edit import OverlaySession, EDIT_MODE_OVERLAY
 from birdstamp.overlays.model import with_document
 from birdstamp.render.text_effects import normalize_text_effects, TEXT_EFFECT_RANGES

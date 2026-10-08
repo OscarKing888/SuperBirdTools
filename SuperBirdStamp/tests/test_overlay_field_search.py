@@ -7,6 +7,7 @@ from PyQt6.QtWidgets import QApplication, QComboBox
 from birdstamp import config
 from birdstamp.gui.overlay_panel import OverlayPanel
 from birdstamp.gui.filterable_combo import FilterableComboBox
+from app_common.filterable_combo import FilterableComboBox as SharedFilterableComboBox
 from birdstamp.gui.editor_template_dialog import _FilterableComboBox
 
 _APP = QApplication.instance() or QApplication([])
@@ -78,6 +79,8 @@ def test_custom_placeholder_still_editable_without_inserting_empty_payload(panel
     combo = panel.metadata
     assert isinstance(combo, FilterableComboBox)
     assert _FilterableComboBox is FilterableComboBox
+    assert FilterableComboBox is SharedFilterableComboBox
+    assert isinstance(panel.font, SharedFilterableComboBox)
     assert combo.insertPolicy() == QComboBox.InsertPolicy.NoInsert
     count = combo.count()
     combo.setEditText('custom_bird_field')
@@ -100,3 +103,55 @@ def test_mouse_can_choose_first_field_after_custom_placeholder(panel):
     item = results.item(0)
     QTest.mouseClick(results.viewport(), Qt.MouseButton.LeftButton, pos=results.visualItemRect(item).center())
     assert panel.selected()['text_source'] == {'type': 'auto', 'key': 'bird_species_cn'}
+
+
+def test_template_manager_popup_receives_native_keyboard_without_editing_field(tmp_path, monkeypatch):
+    import time
+    from PIL import Image
+    from PyQt6.QtWidgets import QStyle, QStyleOptionComboBox
+    from birdstamp.gui.editor_template import default_template_payload, save_template_payload
+    from birdstamp.gui.editor_template_dialog import TemplateManagerDialog
+
+    monkeypatch.setattr(config, 'get_user_data_dir', lambda: tmp_path / 'user')
+    monkeypatch.setattr(TemplateManagerDialog, '_load_preview_source', lambda self: None)
+    folder = tmp_path / 'templates'
+    folder.mkdir()
+    save_template_payload(folder / 'test.json', default_template_payload())
+    dialog = TemplateManagerDialog(folder, Image.new('RGB', (800, 450)))
+    try:
+        dialog.show()
+        dialog.activateWindow()
+        _APP.processEvents()
+        panel = dialog.overlay_panel
+        panel.add('text', metadata=True)
+        panel.focus_content()
+        _APP.processEvents()
+        combo = panel.metadata
+        before = deepcopy(panel.doc)
+        text_before = combo.currentText()
+        option = QStyleOptionComboBox()
+        combo.initStyleOption(option)
+        arrow = combo.style().subControlRect(
+            QStyle.ComplexControl.CC_ComboBox, option, QStyle.SubControl.SC_ComboBoxArrow, combo)
+        QTest.mouseClick(combo, Qt.MouseButton.LeftButton, pos=arrow.center())
+        search = combo._filter_popup_filter
+        deadline = time.monotonic() + 2
+        while time.monotonic() < deadline:
+            if _APP.focusWindow() is not None and _APP.focusWindow().focusObject() is search:
+                break
+            _APP.processEvents()
+            QTest.qWait(5)
+        assert search is not None and _APP.focusWindow().focusObject() is search
+        for key in (Qt.Key.Key_I, Qt.Key.Key_S, Qt.Key.Key_O):
+            QTest.keyClick(_APP.focusWindow(), key)
+        assert search.text() == 'iso'
+        assert combo.currentText() == text_before
+        assert panel.doc == before
+        assert combo._filter_popup_list.count() > 0
+        QTest.keyClick(_APP.focusWindow(), Qt.Key.Key_Escape)
+        assert combo._filter_popup is None
+    finally:
+        dialog.overlay_panel.metadata.hidePopup()
+        dialog.close()
+        dialog.deleteLater()
+        QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)

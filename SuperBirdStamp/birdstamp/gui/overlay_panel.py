@@ -13,7 +13,7 @@ from birdstamp.overlays.model import document, new_item
 from birdstamp.overlays.assets import import_image
 from birdstamp.render.text_effects import DEFAULT_TEXT_EFFECTS, TEXT_EFFECT_RANGES
 from .color_editor import ColorEditor
-from .filterable_combo import FilterableComboBox
+from app_common.filterable_combo import FilterableComboBox
 from .percent_editor import PercentEditor
 from .editor_utils import get_template_context_field_options, template_font_choices
 
@@ -134,7 +134,8 @@ class OverlayPanel(QWidget):
         self.metadata.lineEdit().editingFinished.connect(self._metadata_typed)
         self._row('text_source','字段/占位符',self.metadata,('text','badge'))
         self._spin('font_size','基础字号',8,300,kinds=('text','badge'))
-        self.font=QComboBox(); self.font.addItem('自动（系统默认）','auto')
+        self.font=FilterableComboBox(); self.font.addItem('自动（系统默认）','auto')
+        self.font.setFilterPlaceholderText('过滤字体，如：微软雅黑 / PingFang / Arial')
         self.font.activated.connect(lambda i:self.edit('font_type',self.font.itemData(i)))
         self._row('font_type','字体',self.font,('text','badge'))
         choose=QPushButton('加载字体列表'); choose.clicked.connect(self._load_fonts)
