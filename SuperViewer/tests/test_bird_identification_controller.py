@@ -318,15 +318,17 @@ def test_table_candidates_buttons_and_background_adoption(env, monkeypatch, adop
     selected = []
     files.file_selected.connect(selected.append)
     target = model.index(1, model.ACTION_COLUMN)
+    entry = model.rows[target.row()][0]
     QTest.mouseClick(table.viewport(), Qt.MouseButton.LeftButton, pos=table.visualRect(target).center())
     assert wait_for(lambda: not controller.busy)
     assert PhotoMetaDataXMP().read(paths[0])['Title'] == '红耳鹎'
     assert 'Title' not in PhotoMetaDataXMP().read(paths[1])
-    assert model.index(1, model.ACTION_COLUMN).data() == '已采纳'
-    assert not model.can_adopt(1) and model.can_adopt(0)
+    assert model.rows[0][0].result.source == paths[1]  # Remaining unconfirmed group is now first.
+    assert model.index(entry.first_row + 1, model.ACTION_COLUMN).data() == '已采纳'
+    assert not model.can_adopt(entry.first_row + 1) and model.can_adopt(entry.first_row)
     assert controller._counts['success'] == 1 and controller._counts['candidate'] == 1
     assert not selected
-    table.setCurrentIndex(model.index(0, model.ACTION_COLUMN))
+    table.setCurrentIndex(model.index(entry.first_row, model.ACTION_COLUMN))
     QTest.keyClick(table, getattr(Qt.Key, adoption_key))
     assert wait_for(lambda: not controller.busy)
     assert PhotoMetaDataXMP().read(paths[0])['Title'] == '白头鹎'

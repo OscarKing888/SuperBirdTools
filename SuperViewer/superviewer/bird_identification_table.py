@@ -5,12 +5,12 @@ import json
 from pathlib import Path
 
 try:
-    from PyQt6.QtGui import QFont, QPainter, QPalette, QPen
+    from PyQt6.QtGui import QColor, QFont, QPainter, QPalette, QPen
     from PyQt6.QtCore import QAbstractTableModel, QEvent, QModelIndex, QRect, QTimer, Qt, pyqtSignal
     from PyQt6.QtWidgets import (QAbstractItemView, QApplication, QHeaderView, QStyle,
         QStyledItemDelegate, QStyleOptionButton, QStyleOptionViewItem, QTableView)
 except ImportError:  # pragma: no cover
-    from PyQt5.QtGui import QFont, QPainter, QPalette, QPen
+    from PyQt5.QtGui import QColor, QFont, QPainter, QPalette, QPen
     from PyQt5.QtCore import QAbstractTableModel, QEvent, QModelIndex, QRect, QTimer, Qt, pyqtSignal
     from PyQt5.QtWidgets import (QAbstractItemView, QApplication, QHeaderView, QStyle,
         QStyledItemDelegate, QStyleOptionButton, QStyleOptionViewItem, QTableView)
@@ -25,6 +25,12 @@ class ResultEntry:
     error: str = ""
     stale: bool = False
     pending_index: int | None = None
+    sequence: int = 0
+
+    @property
+    def needs_confirmation(self):
+        return not self.stale and (self.result.status == "candidate" or bool(self.error)
+                                   or self.result.candidates_missing)
 
 
 class BirdIDResultsModel(QAbstractTableModel):
@@ -38,7 +44,18 @@ class BirdIDResultsModel(QAbstractTableModel):
         super().__init__(parent)
         self.thumbnails = thumbnails
         self.rows = []
+        self.entries = []
         self.pending = False
+
+    @staticmethod
+    def _entry_key(entry):
+        return (not entry.needs_confirmation, entry.sequence)
+
+    def _reindex_entries(self):
+        row = 0
+        for entry in self.entries:
+            entry.first_row = row
+            row += entry.row_count
 
     def rowCount(self, parent=QModelIndex()):
         return 0 if parent.isValid() else len(self.rows)
@@ -54,9 +71,14 @@ class BirdIDResultsModel(QAbstractTableModel):
         count = max(1, len(result.response.get("results", [])))
         candidates = result.response.get("results", [])
         order = tuple(sorted(range(len(candidates)), key=lambda i: -float(candidates[i]['confidence']))) or (0,)
-        entry = ResultEntry(result, len(self.rows), count, order)
+        entry = ResultEntry(result, 0, count, order, sequence=len(self.entries))
+        position = next((i for i, existing in enumerate(self.entries)
+                         if self._entry_key(existing) > self._entry_key(entry)), len(self.entries))
+        entry.first_row = sum(existing.row_count for existing in self.entries[:position])
         self.beginInsertRows(QModelIndex(), entry.first_row, entry.first_row + count - 1)
-        self.rows.extend((entry, i) for i in order)
+        self.entries.insert(position, entry)
+        self.rows[entry.first_row:entry.first_row] = [(entry, i) for i in order]
+        self._reindex_entries()
         self.endInsertRows()
         return entry
 
@@ -69,6 +91,20 @@ class BirdIDResultsModel(QAbstractTableModel):
                 and (index != result.accepted_index or result.candidates_missing))
 
     def refresh_entry(self, entry):
+        ordered = sorted(self.entries, key=self._entry_key)
+        position = ordered.index(entry)
+        target = sum(existing.row_count for existing in ordered[:position])
+        first, count = entry.first_row, entry.row_count
+        if target != first:
+            # Qt move notifications preserve selection/persistent indices by candidate identity.
+            destination = target + count if target > first else target
+            self.beginMoveRows(QModelIndex(), first, first + count - 1, QModelIndex(), destination)
+            block = self.rows[first:first + count]
+            del self.rows[first:first + count]
+            self.rows[target:target] = block
+            self.entries = ordered
+            self._reindex_entries()
+            self.endMoveRows()
         self.dataChanged.emit(self.index(entry.first_row, 0),
                               self.index(entry.first_row + entry.row_count - 1, len(self.HEADERS) - 1))
 
@@ -196,7 +232,23 @@ class AdoptDelegate(QStyledItemDelegate):
         button.palette = option.palette
         button.state = QStyle.StateFlag.State_Raised
         if index.model().can_adopt(index.row()):
-            button.state |= QStyle.StateFlag.State_Enabled
+            # Native Windows/macOS styles may ignore a button palette; paint the
+            # enabled action explicitly so it remains green even on a selected row.
+            painter.save()
+            painter.setClipRect(option.rect)
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(QColor("#166534" if option.state & QStyle.StateFlag.State_MouseOver else "#15803D"))
+            painter.drawRoundedRect(button.rect, 5, 5)
+            if option.state & QStyle.StateFlag.State_HasFocus:
+                painter.setBrush(Qt.BrushStyle.NoBrush)
+                painter.setPen(QPen(QColor("#FFFFFF"), 1, Qt.PenStyle.DotLine))
+                painter.drawRoundedRect(button.rect.adjusted(3, 3, -3, -3), 3, 3)
+            painter.setFont(option.font)
+            painter.setPen(QColor("#FFFFFF"))
+            painter.drawText(button.rect, Qt.AlignmentFlag.AlignCenter, button.text)
+            painter.restore()
+            return
         if option.state & QStyle.StateFlag.State_HasFocus:
             button.state |= QStyle.StateFlag.State_HasFocus
         style.drawControl(QStyle.ControlElement.CE_PushButton, button, painter, option.widget)
@@ -226,6 +278,7 @@ class BirdIDResultsTable(QTableView):
         self._preview_timer.timeout.connect(self._update_previews)
         self.results = BirdIDResultsModel(self, thumbnails=thumbnails)
         self.setModel(self.results)
+        self.results.rowsMoved.connect(self._schedule_previews)
         self.setAccessibleName("识鸟结果表格")
         self.setAlternatingRowColors(True)
         self.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
@@ -292,10 +345,14 @@ class BirdIDResultsTable(QTableView):
         # 用户向上查看旧结果时，不被新结果强制拉回底部。
         bar = self.verticalScrollBar()
         follow = bar.value() == bar.maximum()
+        was_empty = not self.results.rows
         entry = self.results.append_result(result)
         if follow:
-            self.scrollToBottom()
-        if entry.first_row == 0:
+            if self.results.entries[0].needs_confirmation:
+                self.scrollTo(self.results.index(0, 0), QAbstractItemView.ScrollHint.PositionAtTop)
+            else:
+                self.scrollToBottom()
+        if was_empty:
             chosen = result.accepted_index if result.accepted_index is not None else entry.candidate_indices[0]
             self.setCurrentIndex(self.results.index(entry.first_row + entry.candidate_indices.index(chosen),
                                                     self.results.ACTION_COLUMN))
