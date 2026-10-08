@@ -3,7 +3,7 @@
   "platform_safe_area": {
     "labels": {"off": "关闭（非全屏）", "xiaohongshu": "小红书", "bilibili": "B站", "douyin": "抖音"},
     "presets": {
-      "xiaohongshu": {"portrait": [0.06, 0.12, 0.16, 0.22], "landscape": [0.06, 0.08, 0.10, 0.16]},
+      "xiaohongshu": {"portrait": [0.03, 0.12, 0.03, 0.21], "landscape": [0.03, 0.08, 0.03, 0.20]},
       "bilibili": {"portrait": [0.06, 0.10, 0.16, 0.20], "landscape": [0.05, 0.12, 0.05, 0.14]},
       "douyin": {"portrait": [0.06, 0.12, 0.18, 0.24], "landscape": [0.06, 0.10, 0.12, 0.18]}
     }

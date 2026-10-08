@@ -1282,8 +1282,8 @@ class BirdStampEditorWindow(
             self.platform_safe_area_combo.addItem(label, value)
         self.platform_safe_area_combo.setAccessibleName("平台安全框")
         self.platform_safe_area_combo.setToolTip(
-            "全屏发布时选择平台，按输出横竖屏及比例整体移动叠加；放不下时等比缩小。\n"
-            "非全屏图选择关闭。安全框为保守参考预设，平台界面可能随设备和版本变化。"
+            "全屏发布时选择平台，按安全区重新对齐布局、收紧间距，行过宽时换行；不自动缩小。\n"
+            "非全屏图选择关闭。内容仍超出时可调整统一缩放。安全框为参考预设，随设备和版本可能变化。"
         )
         self.platform_safe_area_combo.currentIndexChanged.connect(self._on_output_settings_changed)
 
