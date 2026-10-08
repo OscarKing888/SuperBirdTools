@@ -1,11 +1,12 @@
 """主编辑器叠加层实例的绑定；配置优先级由无窗口模型处理。"""
 from copy import deepcopy
 from pathlib import Path
-from PyQt6.QtWidgets import QGridLayout,QPushButton,QFileDialog,QMessageBox,QScrollArea
+from PyQt6.QtWidgets import QGridLayout,QPushButton,QFileDialog,QMessageBox,QLabel
 from birdstamp.overlays.model import document, effective_payload
 from .overlay_panel import OverlayPanel
 from .overlay_edit import OverlaySession, EDIT_MODE_OVERLAY
 from .editor_utils import path_key
+from .editor_compact_panels import OverlayEditorDock
 
 
 class _BirdStampOverlaysMixin:
@@ -14,12 +15,32 @@ class _BirdStampOverlaysMixin:
         self.overlay_panel.setEnabled(False)
         self.overlay_panel.changed.connect(self._overlay_document_changed)
         self.overlay_panel.activateRequested.connect(self._activate_overlay_edit)
-        form.addRow(self.overlay_panel)
+        self.overlay_summary = QLabel('请选择照片')
+        self.overlay_summary.setWordWrap(True)
+        form.addRow(self.overlay_summary)
+        self.overlay_editor_button = QPushButton('编辑叠加层…')
+        self.overlay_editor_button.clicked.connect(self._activate_overlay_edit)
+        form.addRow(self.overlay_editor_button)
         row=QGridLayout()
         for index,(label,slot) in enumerate([('恢复模板',self._restore_overlay_template),('应用到选中',lambda:self._apply_overlays(False)),
                            ('应用到全部',lambda:self._apply_overlays(True)),('另存模板',self._save_overlay_template)]):
             button=QPushButton(label); button.clicked.connect(slot); row.addWidget(button,index//2,index%2)
-        form.addRow(row)
+        self.overlay_dock = OverlayEditorDock(self, self.overlay_panel, row)
+        self.overlay_panel.selectionChanged.connect(self._update_overlay_summary)
+
+    def _update_overlay_summary(self, *_args):
+        following = '跟随模板' if self.overlay_panel.following else '当前照片已自定义'
+        count = len(self.overlay_panel.doc['overlays'])
+        self.overlay_summary.setText(f'{following} · {count} 个图层' if self.current_path else '请选择照片')
+        selected = self.overlay_panel.selected()
+        name = selected.get('name', '') if selected else '未选择图层'
+        if not self.overlay_panel.isEnabled():
+            name = '正在加载叠加层…' if self.current_path else ''
+            self.overlay_summary.setText(name or '请选择照片')
+        filename = self.current_path.name if self.current_path else '请选择照片'
+        self.overlay_dock.context_label.setText(f'{filename}\n{name}')
+        self.overlay_dock.context_label.setToolTip(str(self.current_path or ''))
+        self.overlay_editor_button.setEnabled(self.overlay_panel.isEnabled())
 
     def _overlay_session(self):
         canvas=self.preview_label.canvas
@@ -36,10 +57,12 @@ class _BirdStampOverlaysMixin:
         payload=self._resolve_template_payload_for_render(settings)
         context='photo:'+path_key(self.current_path) if self.current_path else 'placeholder'
         self.overlay_panel.set_document(payload,context,following=settings.get('overlay_override') is None)
+        self._update_overlay_summary()
         self._overlay_session()
 
     def _overlay_document_changed(self,doc):
         self._overlay_override=None if self.overlay_panel.following else deepcopy(doc)
+        self._update_overlay_summary()
         self._on_output_settings_changed()
         self._overlay_commit_preview()
 
@@ -48,12 +71,8 @@ class _BirdStampOverlaysMixin:
         self.render_preview()
 
     def _reveal_overlay_panel(self):
-        parent=self.overlay_panel.parentWidget()
-        while parent is not None:
-            if isinstance(parent,QScrollArea):
-                parent.ensureWidgetVisible(self.overlay_panel.add_button,0,10)
-                break
-            parent=parent.parentWidget()
+        self._update_overlay_summary()
+        self.overlay_dock.reveal()
 
     def _activate_overlay_edit(self):
         if self.current_path is None or self.current_source_image is None:
