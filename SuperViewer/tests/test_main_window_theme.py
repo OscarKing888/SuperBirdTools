@@ -48,6 +48,7 @@ def test_main_window_theme_preserves_real_preview_selection_and_unsaved_comment(
     monkeypatch.setattr(paths_settings, "_get_user_state_dir", lambda: str(settings_dir / "state"))
     monkeypatch.setattr(main, "_get_app_dir", lambda: str(settings_dir))
     monkeypatch.setattr(superviewer_user_options, "_get_app_dir", lambda: str(settings_dir))
+    monkeypatch.setattr(superviewer_user_options, "get_user_config_dir", lambda: str(settings_dir))
     monkeypatch.setattr(superviewer_user_options, "_RUNTIME_OPTIONS", {
         **superviewer_user_options.get_runtime_user_options(),
         "thumbnail_loader_workers": 1, "metadata_loader_workers": 1,
@@ -77,7 +78,10 @@ def test_main_window_theme_preserves_real_preview_selection_and_unsaved_comment(
     monkeypatch.setattr(window.image_info_panel, "_metadata_provider", record_read("info", window.image_info_panel._metadata_provider))
     window.show()
     try:
-        assert window._dir_browser.select_directory(str(library))
+        # macOS 临时目录不在默认 home/外接卷根下，为测试库显式添加根节点。
+        browser = window._dir_browser
+        browser._tree.addTopLevelItem(browser._make_item(str(library), "测试照片"))
+        assert browser.select_directory(str(library))
         panel = window._file_list
         thumbnails = panel._view_mode == panel._MODE_THUMB
         index_for_path = panel._thumb_index_for_path if thumbnails else panel._tree_index_for_path

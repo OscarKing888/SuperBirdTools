@@ -44,6 +44,7 @@ def window(tmp_path, monkeypatch):
     monkeypatch.setattr(paths_settings, "_get_user_state_dir", lambda: str(settings / "state"))
     monkeypatch.setattr(main, "_get_app_dir", lambda: str(settings))
     monkeypatch.setattr(superviewer_user_options, "_get_app_dir", lambda: str(settings))
+    monkeypatch.setattr(superviewer_user_options, "get_user_config_dir", lambda: str(settings))
     monkeypatch.setenv("LOCALAPPDATA", str(settings / "cache"))
     cfg = tmp_path / "tags.cfg"
     cfg.write_text("飞行\n", encoding="utf-8")

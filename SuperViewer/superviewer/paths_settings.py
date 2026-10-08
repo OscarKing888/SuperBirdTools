@@ -9,6 +9,8 @@ import os
 import re
 import sys
 
+from app_common.superviewer_user_options import get_user_state_dir
+
 from . import APP_INFO
 
 
@@ -81,16 +83,8 @@ def _get_app_icon_path() -> str | None:
 
 
 def _get_user_state_dir() -> str:
-    """
-    返回存放用户级状态文件的目录。
-    Windows 优先用 %APPDATA%，macOS 用 ~/Library/Application Support，其他回退到用户 home。
-    """
-    if sys.platform.startswith("win"):
-        base_dir = os.environ.get("APPDATA") or os.path.expanduser("~")
-        return os.path.join(base_dir, USER_STATE_DIRNAME)
-    if sys.platform == "darwin":
-        return os.path.join(os.path.expanduser("~"), "Library", "Application Support", USER_STATE_DIRNAME)
-    return os.path.join(os.path.expanduser("~"), f".{USER_STATE_DIRNAME.lower()}")
+    """返回与用户选项共用的状态根目录，源码版和打包版保持一致。"""
+    return get_user_state_dir()
 
 
 def _get_last_selected_directory_file_path() -> str:
@@ -149,9 +143,8 @@ def save_last_folder_to_file(path: str) -> None:
 
 
 def _get_config_path() -> str:
-    """返回 super_viewer.cfg 的完整路径，与当前运行的主程序同目录。"""
-    app_dir = _get_app_dir()
-    return os.path.join(app_dir, CONFIG_FILENAME)
+    """返回用户目录中的可写配置路径，程序资源只用作读取回退。"""
+    return os.path.join(_get_user_state_dir(), "Config", CONFIG_FILENAME)
 
 
 def _get_config_resource_path() -> str:
@@ -168,8 +161,8 @@ def _get_about_config_resource_path() -> str:
 
 
 def _load_settings() -> dict:
-    """读取 EXIF.cfg，失败返回空字典。"""
-    candidates = [_get_config_path()]
+    """优先读取用户配置，兼容旧程序目录及内置配置。"""
+    candidates = [_get_config_path(), os.path.join(_get_app_dir(), CONFIG_FILENAME)]
     if getattr(sys, "frozen", False):
         meipass = getattr(sys, "_MEIPASS", None)
         if meipass:
@@ -194,11 +187,12 @@ def _load_settings() -> dict:
 
 
 def _save_settings(data: dict) -> None:
-    """写入 EXIF.cfg（UTF-8）。"""
+    """将 super_viewer.cfg 写入用户配置目录（UTF-8）。"""
     path = _get_config_path()
     try:
         data = dict(data or {})
         data.pop("last_selected_directory", None)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
         with open(path, "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
     except Exception:

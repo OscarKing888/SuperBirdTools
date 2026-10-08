@@ -50,7 +50,7 @@ def badge_mapping_kind(item):
 
 
 def palette_paths(*, frozen=None, executable=None, source_root=None):
-    """只查找当前安装旁的 Viewer 配置，不扫描磁盘或导入 Viewer/Qt。"""
+    """优先读取统一用户配置，兼容当前安装旁的旧配置，不导入 Viewer/Qt。"""
     from app_common.superviewer_user_options import get_user_options_path, USER_OPTIONS_FILENAME
     frozen = getattr(sys, 'frozen', False) if frozen is None else frozen
     if not frozen:
@@ -66,7 +66,7 @@ def palette_paths(*, frozen=None, executable=None, source_root=None):
             paths = [exe.parent.parent / 'SuperViewer' / USER_OPTIONS_FILENAME,
                      exe.parent / 'SuperViewer' / USER_OPTIONS_FILENAME,
                      exe.parent / USER_OPTIONS_FILENAME]
-    paths.append(Path(get_user_options_path()))
+    paths.insert(0, Path(get_user_options_path()))
     return list(dict.fromkeys(paths))
 
 

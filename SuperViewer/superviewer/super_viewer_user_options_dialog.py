@@ -86,7 +86,7 @@ class SuperViewerUserOptionsDialog(QDialog):
         layout = QVBoxLayout(self)
 
         info = QLabel(
-            f"配置文件将保存在程序目录：{get_user_options_path()}\n"
+            f"配置文件将保存在用户配置目录：{get_user_options_path()}\n"
             f"文件名：{USER_OPTIONS_FILENAME}"
         )
         info.setWordWrap(True)

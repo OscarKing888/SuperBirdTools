@@ -91,12 +91,15 @@ def test_generic_metadata_and_literal_colors():
     assert content(item,{'gbif_rarity_100':90}) == ('白鹭\n拍摄于秋天','#123456','#FEDCBA')
 
 
-def test_palette_paths_for_source_windows_and_macos(tmp_path):
+def test_palette_paths_for_source_windows_and_macos(tmp_path, monkeypatch):
     # 恢复真实路径函数，验证不同平台的安装布局，无需对应系统运行。
     paths = _palette_paths
-    assert paths(frozen=False,source_root=tmp_path)[0] == tmp_path/'SuperViewer/SuperViewerUser.cfg'
-    assert paths(frozen=True,executable=tmp_path/'SuperBirdStamp/SuperBirdStamp.exe')[0] == tmp_path/'SuperViewer/SuperViewerUser.cfg'
-    assert paths(frozen=True,executable=tmp_path/'SuperBirdStamp.app/Contents/MacOS/SuperBirdStamp')[0] == tmp_path/'SuperViewer.app/Contents/MacOS/SuperViewerUser.cfg'
+    from app_common import superviewer_user_options as options
+    user = tmp_path/'user/Config/SuperViewerUser.cfg'
+    monkeypatch.setattr(options, 'get_user_options_path', lambda: str(user))
+    assert paths(frozen=False,source_root=tmp_path)[:2] == [user, tmp_path/'SuperViewer/SuperViewerUser.cfg']
+    assert paths(frozen=True,executable=tmp_path/'SuperBirdStamp/SuperBirdStamp.exe')[:2] == [user, tmp_path/'SuperViewer/SuperViewerUser.cfg']
+    assert paths(frozen=True,executable=tmp_path/'SuperBirdStamp.app/Contents/MacOS/SuperBirdStamp')[:2] == [user, tmp_path/'SuperViewer.app/Contents/MacOS/SuperViewerUser.cfg']
 
 
 def test_invalid_palette_falls_back(isolated_config,monkeypatch):
@@ -106,6 +109,18 @@ def test_invalid_palette_falls_back(isolated_config,monkeypatch):
     assert badge.load_badge_palette()==METADATA_BADGE_DEFAULT_OPTIONS
     isolated_config.write_text('{"rarity_badge_epic_background":"invalid"}',encoding='utf-8')
     assert badge.load_badge_palette()==METADATA_BADGE_DEFAULT_OPTIONS
+
+
+def test_user_palette_takes_priority_over_legacy_installation(tmp_path, monkeypatch):
+    from app_common import superviewer_user_options as options
+    user = tmp_path/'user/Config/SuperViewerUser.cfg'
+    legacy = tmp_path/'SuperViewer/SuperViewerUser.cfg'
+    for path, title in ((user, '用户配色'), (legacy, '旧安装配色')):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps({'rarity_badge_legendary_text': title}), encoding='utf-8')
+    monkeypatch.setattr(options, 'get_user_options_path', lambda: str(user))
+    monkeypatch.setattr(badge, 'palette_paths', lambda: _palette_paths(frozen=False, source_root=tmp_path))
+    assert badge.load_badge_palette()['rarity_badge_legendary_text'] == '用户配色'
 
 
 @pytest.mark.parametrize('code', ['LC','NT','VU','EN','CR','CR(PE)','CR(PEW)','EW','EX','DD','NE','', 'invalid'])
@@ -279,6 +294,8 @@ def test_template_manager_badge_save_and_scene(tmp_path,monkeypatch):
     with Image.new('RGB',(800,450)) as source:
         dialog=TemplateManagerDialog(folder,source)
         try:
+            # 用户目录会补齐内置模板，明确选择本次测试要编辑的模板。
+            dialog._reload_template_list('test')
             dialog.overlay_panel.add('badge')
             saved=template.load_template_payload(folder/'test.json')
             assert saved['overlays'][-1]['type']=='badge'

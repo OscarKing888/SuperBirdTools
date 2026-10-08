@@ -75,6 +75,7 @@ def test_badge_zero_unknown_custom_plain_text_and_theme_refresh(monkeypatch):
 
 def test_options_dialog_badge_edit_color_picker_save_restore(tmp_path, monkeypatch):
     monkeypatch.setattr(options, '_get_app_dir', lambda: str(tmp_path))
+    monkeypatch.setattr(options, 'get_user_config_dir', lambda: str(tmp_path))
     monkeypatch.setattr(options, '_RUNTIME_OPTIONS', dict(options.normalize_user_options({})))
     dialog = SuperViewerUserOptionsDialog(options=options.normalize_user_options({}))
     try:
@@ -100,6 +101,7 @@ def test_options_dialog_badge_edit_color_picker_save_restore(tmp_path, monkeypat
 
 def test_conservation_options_sidebar_persistence_and_reset(tmp_path, monkeypatch):
     monkeypatch.setattr(options, '_get_app_dir', lambda: str(tmp_path))
+    monkeypatch.setattr(options, 'get_user_config_dir', lambda: str(tmp_path))
     dialog = SuperViewerUserOptionsDialog(options=options.normalize_user_options({}))
     try:
         assert dialog.tabs.tabPosition() == QTabWidget.TabPosition.West
