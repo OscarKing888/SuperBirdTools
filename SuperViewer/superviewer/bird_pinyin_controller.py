@@ -10,6 +10,7 @@ import queue
 import threading
 import time
 
+from .file_context_menu import file_menu_group
 from .bird_identification import collect_paths
 from .bird_identification_controller import BirdIDProgressDialog
 from .bird_pinyin_update import PinyinUpdater
@@ -91,6 +92,7 @@ class PinyinController(QObject):
         menu.addAction("查看拼音更新进度", self.show_progress)
         menu.addAction("停止更新拼音", self.stop)
 
+    @file_menu_group("bird", order=40)
     def extend_file_menu(self, menu, paths):
         if self.busy:
             self._busy_menu(menu)

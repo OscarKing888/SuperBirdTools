@@ -22,6 +22,7 @@ from app_common.log import get_logger
 
 from bird_sharpness.timing import TimingStats
 
+from .file_context_menu import file_menu_group
 from .bird_sharpness_progress import BirdSharpnessProgressDialog, WorkerLane, WorkerLoad
 from .qt_compat import QThread, pyqtSignal
 
@@ -374,6 +375,7 @@ class BirdSharpnessController(QObject):
                 )
             )
 
+    @file_menu_group("process")
     def extend_file_menu(self, menu, paths: list[str]) -> None:
         if paths:
             trace_act = menu.addAction("查看清晰度计算过程…")

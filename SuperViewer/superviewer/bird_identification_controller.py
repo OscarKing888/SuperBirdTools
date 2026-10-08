@@ -8,6 +8,7 @@ import traceback
 from pathlib import Path
 
 from app_common.log import get_logger
+from .file_context_menu import file_menu_group
 from .bird_identification import BirdIDClient, BirdIDOptions, collect_paths, identify_file, adopt_candidate
 from .qt_compat import QThread, pyqtSignal
 
@@ -197,6 +198,7 @@ class BirdIDController(QObject):
         menu.addAction("查看识鸟进度", self.show_progress)
         menu.addAction("停止识鸟", self.stop)
 
+    @file_menu_group("bird", order=10)
     def extend_file_menu(self, menu, paths):
         if self.busy:
             self._busy_menu(menu)

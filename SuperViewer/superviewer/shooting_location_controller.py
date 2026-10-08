@@ -13,6 +13,7 @@ import time
 from app_common.exif_io.photo_meta import PhotoMetaDataXMP, xmp_sidecar_write_lock
 from app_common.image_formats import SUPPORTED_IMAGE_EXTENSIONS
 from app_common.shooting_location import shooting_location, write_shooting_location
+from .file_context_menu import file_menu_group
 from .bird_identification import _fingerprint
 from .bird_identification_controller import BirdIDProgressDialog
 from .metadata_result_sync import MetadataResultSync
@@ -76,6 +77,7 @@ class ShootingLocationController(QObject):
     def busy(self):
         return self._worker is not None
 
+    @file_menu_group("capture")
     def extend_file_menu(self, menu, paths):
         photos = [p for p in paths if Path(p).suffix.lower() in SUPPORTED_IMAGE_EXTENSIONS]
         if not photos:

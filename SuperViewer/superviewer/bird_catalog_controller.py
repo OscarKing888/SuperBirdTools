@@ -8,6 +8,7 @@ import time
 
 from app_common.bird_rarity import IUCN_LABELS
 from app_common.image_formats import SUPPORTED_IMAGE_EXTENSIONS
+from .file_context_menu import file_menu_group
 from .bird_catalog import BirdCatalogClient, apply_bird, snapshot
 from .bird_identification import BirdIDOptions, collect_paths
 from .metadata_result_sync import MetadataResultSync
@@ -188,6 +189,7 @@ class BirdCatalogController(QObject):
         check = getattr(self._files, '_file_writes_allowed', None)
         return not callable(check) or check('手动指定鸟名')
 
+    @file_menu_group("bird", order=20)
     def extend_file_menu(self, menu, paths):
         photos = [p for p in paths if Path(p).suffix.lower() in SUPPORTED_IMAGE_EXTENSIONS]
         if photos:

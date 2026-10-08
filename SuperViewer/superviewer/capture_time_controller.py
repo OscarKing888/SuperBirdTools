@@ -8,6 +8,7 @@ import threading
 import time
 
 from app_common.exif_io.exiftool_runner import exiftool_worker_session, exiftool_read_request
+from .file_context_menu import file_menu_group
 from .capture_time_update import TARGET_EXTENSIONS, CaptureTimeResult, update_capture_times
 from .metadata_result_sync import MetadataResultSync
 from .qt_compat import QThread
@@ -79,6 +80,7 @@ class CaptureTimeController(QObject):
     def busy(self):
         return self._worker is not None
 
+    @file_menu_group("capture")
     def extend_file_menu(self, menu, paths):
         photos = [p for p in paths if Path(p).suffix.lower() in TARGET_EXTENSIONS]
         if not photos:

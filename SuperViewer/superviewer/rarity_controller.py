@@ -12,6 +12,7 @@ import time
 from app_common.bird_rarity import RARITY_LEVELS, rarity_metadata, rarity_score
 from app_common.exif_io.photo_meta import PhotoMetaDataXMP
 from app_common.image_formats import SUPPORTED_IMAGE_EXTENSIONS
+from .file_context_menu import file_menu_group
 from .bird_identification_controller import BirdIDProgressDialog
 from .metadata_result_sync import MetadataResultSync
 from .rarity_badge import rarity_badge_style
@@ -60,6 +61,7 @@ class RarityController(QObject):
     def busy(self):
         return self._worker is not None
 
+    @file_menu_group("bird", order=30)
     def extend_file_menu(self, menu, paths):
         photos = [p for p in paths if Path(p).suffix.lower() in SUPPORTED_IMAGE_EXTENSIONS]
         if not photos:
