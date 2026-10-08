@@ -14,6 +14,7 @@ from app_common.log import get_logger
 from app_common.superviewer_user_options import get_runtime_user_options
 from image_denoise.types import DenoiseCancelled, DenoiseOptions
 
+from .file_context_menu import file_menu_group
 from .qt_compat import (QComboBox, QDialog, QFileDialog, QHBoxLayout, QLabel, QMessageBox,
                         QPushButton, QTextEdit, QThread, QVBoxLayout, pyqtSignal)
 
@@ -235,6 +236,7 @@ class DenoiseController(QObject):
             self._dialog.raise_()
             self._dialog.activateWindow()
 
+    @file_menu_group("process")
     def extend_file_menu(self, menu, paths):
         if self.busy:
             self._busy_menu(menu)

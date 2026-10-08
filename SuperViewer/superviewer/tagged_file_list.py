@@ -17,6 +17,7 @@ from app_common.log import get_logger
 from app_common.qt_theme import is_theme_change_event, scheme_from_palette
 from app_common.toggle_button import TOGGLE_CHECKED_STYLE
 
+from .file_context_menu import build_file_context_menu
 from .photo_tags import (
     PhotoTagConfig,
     PhotoTagSidecarStore,
@@ -771,8 +772,23 @@ class SuperViewerTaggedFileListPanel(FileListPanel):
             self._start_photo_tag_cache_loader_if_needed(self._all_files, reason="tag_filter")
         super()._refresh_filter_scope()
 
-    def _add_species_menu_actions(self, menu, primary_path: str | None, paths: list[str]) -> None:
-        super()._add_species_menu_actions(menu, primary_path, paths)
+    def _show_file_context_menu(
+        self, viewport, pos, *, paths: list[str], primary_path: str | None, log_prefix: str,
+    ) -> None:
+        menu_paths = self._unique_norm_paths(paths)
+        if primary_path:
+            primary_norm = os.path.normpath(primary_path)
+            if primary_norm and primary_norm not in menu_paths:
+                menu_paths.insert(0, primary_norm)
+        if not menu_paths:
+            self._show_empty_file_context_menu(viewport, pos)
+            return
+        primary = os.path.normpath(primary_path) if primary_path else menu_paths[0]
+        menu = build_file_context_menu(self, menu_paths, primary, log_prefix=log_prefix)
+        try:
+            _exec_menu(menu, viewport.mapToGlobal(pos))
+        finally:
+            menu.deleteLater()
 
     def _install_tag_filter_bar(self) -> None:
         if not getattr(self, "_create_filter_bar", True):
