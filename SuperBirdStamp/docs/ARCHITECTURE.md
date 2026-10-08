@@ -112,7 +112,7 @@ A/B 的布局与显隐约定见 [A/B 预览工具栏布局](ux/AB_PREVIEW_LAYOUT
 
 “字段/占位符”下拉框复用 [filterable_combo.py](../birdstamp/gui/filterable_combo.py) 的 `FilterableComboBox`，与旧模板字段/字体选择器使用同一实现；顶部搜索条按中文显示名、字段名及来源进行不区分大小写的多词过滤，支持清除、方向键、回车选择和 Esc 取消。搜索不修改叠加层，明确选择才提交可撤销的字段变化，手动输入自定义占位符仍可用。回归见 [test_overlay_field_search.py](../tests/test_overlay_field_search.py)。
 
-模板管理器通过 [OverlayPanel](../birdstamp/gui/overlay_panel.py) 的 `property_columns=True` 将「内容 / 布局 / 效果」横向并列分组，长控件按可用列宽换到标签下方；窗口较小时沿用外层滚动区域。照片编辑侧栏继续使用紧凑 Tab 布局。两种显示共用属性绑定、按图层类型显隐及撤销历史，图像和背景不显示文字效果组；纯界面布局无新增 CLI 参数。
+模板管理器通过 [OverlayPanel](../birdstamp/gui/overlay_panel.py) 的 `property_columns=True` 将「内容 / 布局 / 效果」横向并列分组，长控件按可用列宽换到标签下方；窗口较小时沿用外层滚动区域。叠加层列表高度为 280–360 个逻辑像素；点击选择和编辑刷新保持滚动位置，从预览选择其他图层仍自动显示目标行。照片编辑侧栏继续使用紧凑 Tab 布局。两种显示共用属性绑定、按图层类型显隐及撤销历史，图像和背景不显示文字效果组；纯界面布局无新增 CLI 参数。
 
 模板文本的描边和阴影由 [render/text_effects.py](../birdstamp/render/text_effects.py) 的 `normalize_text_effects` / `styled_text_layer` 规范化及绘制。每项保存独立开关、颜色、描边宽度、阴影不透明度/偏移/柔化；旧模板缺省关闭，新增文本项的默认值读取 `editor_options.json` 的 `text_effects`。效果尺寸随实际字号缩放，排版避让包含效果边界；预览按导出逻辑画幅绘制后缩放，图片/GIF/视频和 CLI `render --template` 沿用同一模板渲染入口，源帧缓存版本随渲染变化更新。回归见 [test_overlay_text_effects.py](../tests/test_overlay_text_effects.py)。
 

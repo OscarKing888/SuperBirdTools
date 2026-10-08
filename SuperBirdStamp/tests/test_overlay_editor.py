@@ -101,6 +101,49 @@ def test_pending_text_survives_list_selection_and_new_layer(overlay_doc):
     panel.close(); panel.deleteLater()
 
 
+@pytest.mark.parametrize('pending_text', [False, True])
+def test_layer_selection_and_edit_preserve_scroll_position(tmp_path, monkeypatch, pending_text):
+    from birdstamp.overlays.model import new_item
+
+    monkeypatch.setattr(config, 'get_user_data_dir', lambda: tmp_path / 'user')
+    panel = OverlayPanel(property_columns=True)
+    layers = [new_item('text') for _ in range(40)]
+    panel.set_document(dict(overlay_version=1, overlays=layers), 'template:scroll')
+    panel.resize(950, 1100)
+    panel.show()
+    try:
+        panel.select(layers[-1]['id'])
+        _APP.processEvents()
+        scroll = panel.list.verticalScrollBar()
+        scroll.setValue(12)
+        row = panel.list.itemAt(30, panel.list.viewport().height() // 2)
+        item_id = row.data(Qt.ItemDataRole.UserRole)
+        click_point = panel.list.visualItemRect(row).center()
+        position = scroll.value()
+        if pending_text:
+            panel.text.setPlainText('切换前尚未保存的中文')
+        QTest.mouseClick(panel.list.viewport(), Qt.MouseButton.LeftButton, pos=click_point)
+        _APP.processEvents()
+        assert panel.selected_id == item_id
+        assert panel.list.currentItem().data(Qt.ItemDataRole.UserRole) == item_id
+        assert scroll.value() == position
+        if pending_text:
+            assert panel.doc['overlays'][-1]['text'] == '切换前尚未保存的中文'
+        panel.edit('name', '改名后保持位置')
+        _APP.processEvents()
+        assert scroll.value() == position
+        assert panel.list.currentItem().text() == '改名后保持位置'
+        # 从预览选择屏幕外的图层，仍须让新选中项进入可见区域。
+        panel.select(layers[0]['id'])
+        _APP.processEvents()
+        assert panel.list.viewport().rect().intersects(
+            panel.list.visualItemRect(panel.list.currentItem()))
+    finally:
+        panel.close()
+        panel.deleteLater()
+        QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+
+
 def test_canvas_drag_rotate_cancel_and_scale(overlay_doc):
     panel=OverlayPanel(); panel.set_document(overlay_doc,'photo:one')
     canvas=EditorPreviewCanvas(); canvas.resize(800,450)

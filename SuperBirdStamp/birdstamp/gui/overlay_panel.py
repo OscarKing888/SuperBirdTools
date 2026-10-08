@@ -82,8 +82,8 @@ class OverlayPanel(QWidget):
             else: self.duplicate_button=button
         layout.addLayout(row)
         self.list = QListWidget()
-        self.list.setMinimumHeight(105)
-        self.list.setMaximumHeight(140)
+        self.list.setMinimumHeight(280 if property_columns else 105)
+        self.list.setMaximumHeight(360 if property_columns else 140)
         self.list.setDragDropMode(QAbstractItemView.DragDropMode.InternalMove)
         self.list.currentItemChanged.connect(self._selected)
         self.list.itemChanged.connect(self._visibility_changed)
@@ -392,14 +392,22 @@ class OverlayPanel(QWidget):
         if self._updating: return
         # 提交待保存文字会重建列表，先取出 id，避免访问已被 Qt 删除的行。
         item_id=current.data(Qt.ItemDataRole.UserRole) if current else ''
+        scroll_position = self.list.verticalScrollBar().value()
         self.flush_text()
         self._end_percent_drag()
         self.selected_id=item_id
-        self._refresh(); self.selectionChanged.emit(self.selected_id)
+        self._refresh()
+        # 待保存文字也可能刷新旧选中项；点击后仍保持用户看到的列表位置。
+        self.list.verticalScrollBar().setValue(scroll_position)
+        self.selectionChanged.emit(self.selected_id)
 
     def _refresh(self):
+        current = self.list.currentItem()
+        keep_scroll = current is not None and current.data(Qt.ItemDataRole.UserRole) == self.selected_id
+        scroll_position = self.list.verticalScrollBar().value()
         self._updating=True
         self.list.clear()
+        selected_row = None
         from birdstamp.overlays.layout import ancestors
         for item in reversed(self.doc['overlays']):
             marks=('🔒 ' if item['locked'] else '')+('隐藏 · ' if not item['visible'] else '')
@@ -409,7 +417,13 @@ class OverlayPanel(QWidget):
             row.setCheckState(Qt.CheckState.Checked if item['visible'] else Qt.CheckState.Unchecked)
             if item['locked']: row.setFlags(row.flags() & ~Qt.ItemFlag.ItemIsDragEnabled)
             self.list.addItem(row)
-            if item['id']==self.selected_id: self.list.setCurrentItem(row)
+            if item['id']==self.selected_id: selected_row = row
+        # 全部行就绪后再选择，避免按尚未完整的列表高度自动滚动。
+        if selected_row is not None:
+            self.list.setCurrentItem(selected_row)
+        self.list.doItemsLayout()
+        if keep_scroll:
+            self.list.verticalScrollBar().setValue(scroll_position)
         self.scope.setText('跟随模板' if self.following else '叠加层 · 当前照片独立配置' if self.context.startswith('photo:') else '模板叠加层')
         undo,redo=self._history.get(self.context,([],[]))
         self.undo_button.setEnabled(bool(undo)); self.redo_button.setEnabled(bool(redo))
