@@ -162,7 +162,7 @@ def test_saved_result_queued_before_new_edit_does_not_clobber_ui(env, monkeypatc
     assert wait_for(lambda: not controller.busy)
 
 
-@pytest.mark.parametrize('operation', ['bird_id', 'pinyin', 'location', 'rarity'])
+@pytest.mark.parametrize('operation', ['bird_id', 'pinyin', 'location', 'rarity', 'catalog'])
 @pytest.mark.parametrize('mode', ['list', 'thumbnail'])
 def test_real_window_result_refresh_preserves_preview_and_comment_draft(tmp_path, monkeypatch, mode, operation):
     import importlib
@@ -214,6 +214,21 @@ def test_real_window_result_refresh_preserves_preview_and_comment_draft(tmp_path
         if operation == 'bird_id':
             controller = window._bird_id
             assert controller.start_for_paths([source], options=BirdIDOptions())
+        elif operation == 'catalog':
+            from SuperViewer.superviewer.bird_catalog import BirdCatalogClient
+            bird = dict(bird_id=2, version_id=10, version_name='IOC 14.2', cn_name='白头鹎',
+                        en_name='Light-vented Bulbul', scientific_name='Pycnonotus sinensis',
+                        pinyin_name='bái tóu bēi', pinyin_plain='bai tou bei', abbreviation='BTB',
+                        gbif_rarity_100=80, iucn_category='NT', china_protection_level=None, description='中文简介')
+            monkeypatch.setattr(BirdCatalogClient, 'search', lambda *a, **k: dict(
+                success=True, results=[bird], total=1, offset=0, limit=100, version_id=10))
+            monkeypatch.setattr(BirdCatalogClient, 'detail', lambda *a, **k: dict(bird))
+            controller = window._bird_id._catalog
+            assert controller.open([source])
+            assert wait_for(lambda: not controller.busy)
+            controller._dialog.list.setCurrentRow(0)
+            assert wait_for(lambda: controller._selected is not None)
+            assert controller.apply()
         elif operation == 'rarity':
             from SuperViewer.superviewer.rarity_controller import QMenu
             controller = window._rarity_edit
@@ -232,6 +247,10 @@ def test_real_window_result_refresh_preserves_preview_and_comment_draft(tmp_path
             assert not panel.pinyin_update_button.isHidden()
             panel.pinyin_update_button.click()
         assert wait_for(lambda: not controller.busy)
+        if operation == 'catalog':
+            assert window.image_info_panel.basic_rows['拼音'].text() == 'bái tóu bēi'
+            assert window.image_info_panel.basic_rows['保护等级'].text() == 'NT · 近危'
+            assert rarity_metadata(files.cached_photo_metadata_for_path(source))[0] == 80
         if operation == 'rarity':
             assert window.image_info_panel.basic_rows['稀有度'].text() == '传奇'
             assert rarity_metadata(PhotoMetaDataXMP().read(source))[0] == 75

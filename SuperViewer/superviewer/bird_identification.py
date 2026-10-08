@@ -219,6 +219,12 @@ def candidate_fields(response, best, *, confirmed):
     if confirmed:
         values.update(bird_species_cn=best.get("cn_name", ""), bird_species_en=best.get("en_name", ""),
                       birdid_confidence=confidence, alt_species_cn="", alt_species_en="", alt_confidence="")
+        # 改用识别候选后不能残留手动目录中另一鸟种的辅助信息。
+        values.update(scientific_name=best.get("scientific_name", ""),
+                      bird_species_description=best.get("description", ""),
+                      pinyin_plain="", bird_species_abbreviation="", china_protection_level="",
+                      bird_species_source="recognition", bird_catalog_id="", bird_catalog_version="",
+                      bird_catalog_response="")
     else:
         values.update(alt_species_cn=best.get("cn_name", ""), alt_species_en=best.get("en_name", ""), alt_confidence=confidence)
     if confirmed and best.get("pinyin_name", "").strip():

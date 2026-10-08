@@ -42,6 +42,29 @@ SuperViewer 不载入 SuperPicky 的 Python 包或模型，不自动启动/关�
 目录扫描排除隐藏目录和目录符号链接，不递归时只处理该层。
 同目录同名 RAW/JPEG 共用 XMP，批次内只识别一次，优先 RAW；进度按唯一侧车数量计数。
 
+## 手动搜索并指定鸟名
+
+先启动已更新的 SuperPicky BirdID 服务，在照片列表或缩略图选中一张/多张照片，右键 **手动指定鸟名…**。窗口先显示鸟名列表；输入中文、英文、学名、带/不带声调拼音或缩写进行过滤，支持分页。选中一个鸟种后再向服务查询详情，显示英文、学名、拼音、全球稀有度、IUCN 与简介，点击 **应用到所选 N 张照片的 XMP** 保存。
+
+沿用识鸟设置中的本机服务地址，也可在搜索窗口编辑。服务需要新增的 `GET /birds/search` 和 `GET /birds/detail` 路由；旧版服务会提示 HTTP 404，需要升级并重启。现有 `POST /recognize` 协议不变。搜索每页 100 条，以返回的版本 ID 继续翻页；详情绑定 `bird_id` 和 `version_id`，不会用同名的另一条记录代替。
+
+- 鸟名、带声调拼音、稀有度和 IUCN 沿用下表 XMP 字段及兼容映射；稀有度来自全球参考库，与识鸟时按拍摄国家获取的分数可能不同。
+- 另存 `XMP-superpicky:scientific_name`、`pinyin_plain`、`bird_species_abbreviation`、`bird_species_description`、`china_protection_level`；简介不会覆盖照片备注。
+- `bird_species_source=manual` 标记手动指定；`bird_catalog_id`、`bird_catalog_version` 记录来源，完整详情存入 `bird_catalog_response` JSON 文本。没有模型置信度，清空旧 `birdid_confidence` 和待确定字段；原识别响应和候选列表保留，仍可用“选择候选鸟名…”重新采纳。
+- 之后重新识别并确认或采纳识别候选时，学名和简介改为该候选的信息，来源改为 `recognition`，清除目录来源及识别服务未提供的无声调拼音/缩写/国家保护等级，避免保留另一鸟种的资料。
+- 未知拼音/等级清除对应旧值，来源标记避免旧 report.db 回填其它鸟种的数据。**IUCN 不等于中国国家一、二级保护等级**；目前服务没有国家保护等级资料，该项显示未知，不推算。
+- 同名 RAW/JPEG 共用侧车只保存一次；后台写入、逐项报告失败，保存后同步当前照片列表和信息面板，保留预览视角与未提交备注。网络请求期间照片或 XMP 已变化则跳过该项。应用前再次核对详情，资料变化须重新选择；取消保留已提交结果。
+
+核心可通过 CLI 使用（Windows 换为根 `.venv\Scripts\python.exe`）：
+
+```bash
+.venv/bin/python3 -m SuperViewer.superviewer.bird_catalog --query 白头鹎
+.venv/bin/python3 -m SuperViewer.superviewer.bird_catalog --bird-id 126247 --version-id 10
+.venv/bin/python3 -m SuperViewer.superviewer.bird_catalog --bird-id 126247 --version-id 10 /path/to/photo.ARW
+```
+
+ID 示例来自当前库，调用方应使用列表响应中的实际 ID。
+
 ## 服务返回与 XMP 字段
 
 请求 `top_k=3`、`use_yolo=true`、`use_gps=true`；国家/省州和地理过滤设置沿用
