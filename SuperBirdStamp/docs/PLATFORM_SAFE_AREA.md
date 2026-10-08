@@ -36,6 +36,14 @@
 
 非法用户配置在加载时记录文件路径和错误并回退内置配置；界面保存时拒绝非法值，写入失败保留原文件。旧工作区或未知组 ID 按关闭处理，不继承上一张照片的选择。运行时使用内存快照，渲染/绘制热路径不重复读配置文件。
 
+## 参考图对照
+
+「安全区预览」可分别选择竖屏、横屏参考图（例如平台界面截图），也可清除或用「显示参考图」临时隐藏。图片按自身比例完整显示，不拉伸、不裁切；虚线内保留原图，框外用半透明遮罩标出预留范围。调节边距时即刻更新对照。
+
+参考图按安全区组的稳定 ID 分别记忆，路径存入用户选项的 `platform_safe_area.reference_images`，结构为 `组 ID → portrait / landscape → 文件路径`。点击确定后缓存路径，下次打开自动读取；取消不改变已保存路径。复制组同时复制参考路径，删除组清理相应记录，重命名继续沿用原路径。文件移动、删除或损坏时显示读取失败提示并退回纯色示意，保留路径以便重新选择。
+
+参考图只用于用户选项中的对照，不写入模板或照片、GIF、视频的导出结果，也不改变导出缓存签名。后台复用图像预览解码器（含方向校正），长边最多 1400 像素；一次只运行一个任务，两种方向各保留最新请求。切组/换图使用版本校验丢弃迟到结果，绘制不读取文件，关闭窗口时终止待处理任务并等当前线程退出。
+
 ## CLI 与实现
 
 CLI 使用同一绘制核心，例如在仓库根目录运行：
@@ -46,7 +54,7 @@ PYTHONPATH=SuperBirdStamp .venv/bin/python3 -m birdstamp render photo.png --temp
 
 CLI 需将 `SuperBirdStamp` 加入 `PYTHONPATH`（例如 macOS 用 `PYTHONPATH=SuperBirdStamp .venv/bin/python3 -m birdstamp ...`）。Windows 使用 `.venv\Scripts\python.exe` 与相应 `PYTHONPATH`。可传 `off`、配置组的稳定 ID（内置 `xiaohongshu`、`bilibili`、`douyin`）或显示组名，例如 `--platform-safe-area "我的全屏图"`。
 
-命名组持久化及运行时快照在 [safe_area_options.py](../birdstamp/overlays/safe_area_options.py)，选项界面在 [user_options_dialog.py](../birdstamp/gui/user_options_dialog.py)，回归见 [test_safe_area_user_options.py](../tests/test_safe_area_user_options.py)。预设变化参与预览和导出的缓存签名。
+命名组持久化及运行时快照在 [safe_area_options.py](../birdstamp/overlays/safe_area_options.py)，选项界面在 [user_options_dialog.py](../birdstamp/gui/user_options_dialog.py)，回归见 [test_safe_area_user_options.py](../tests/test_safe_area_user_options.py) 与 [test_safe_area_reference.py](../tests/test_safe_area_reference.py)。预设变化参与预览和导出的缓存签名。
 
 无 Qt 几何与预设规范化在 [overlays/safe_area.py](../birdstamp/overlays/safe_area.py)；[build_scene](../birdstamp/overlays/render.py) 调用 [layout.arrange](../birdstamp/overlays/layout.py) 的可选安全区约束完成布局，再生成背景，不新增独立处理阶段。参数由 `ImageProcTemplateCropStage` 描述，实际叠加由 `ImageProcTemplateOverlayStage` 执行。旧 fields/Banner 模板只在开启安全框时通过既有图层适配器渲染，关闭沿用原绘制路径。
 

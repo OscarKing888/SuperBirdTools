@@ -42,6 +42,18 @@ def normalize_options(raw, *, strict=False):
         names.add(name.casefold())
         result['labels'][key] = name
         result['presets'][key] = margins
+    references = raw.get('reference_images')
+    if isinstance(references, dict):
+        cleaned = {}
+        for key, paths in references.items():
+            if key not in result['presets'] or not isinstance(paths, dict):
+                continue
+            paths = {orientation: value.strip() for orientation in ('portrait', 'landscape')
+                     if isinstance((value := paths.get(orientation)), str) and value.strip()}
+            if paths:
+                cleaned[key] = paths
+        if cleaned:
+            result['reference_images'] = cleaned
     return result
 
 
