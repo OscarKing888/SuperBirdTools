@@ -171,7 +171,7 @@ EXIF 页直接列出 ExifTool 从 RAW 及其他图像读取的已知标签，包
 
 ### 从 RAW 更新拍摄时间
 
-照片列表/缩略图右键“从同名 RAW 更新拍摄时间…”仅处理所选 PNG/JPG/JPEG，选择 RAW 目录后递归匹配同名文件（忽略扩展名、大小写，Unicode NFC）。缺少匹配、存在多个匹配、时间无效或写入失败均逐文件记录；全部成功无弹框，部分失败显示可复制的文件路径及原因。操作与 CLI 用法见 [拍摄时间更新](capture_time_update.md)。
+照片列表/缩略图右键“从同名 RAW 更新拍摄时间…”仅处理所选 PNG/JPG/JPEG，选择 RAW 目录后递归扫描所有层级的子目录（含隐藏目录，跳过符号链接），匹配同名文件（忽略扩展名、大小写，Unicode NFC）。缺少匹配、存在多个匹配、时间无效或写入失败均逐文件记录；全部成功无弹框，部分失败显示可复制的文件路径及原因。操作与 CLI 用法见 [拍摄时间更新](capture_time_update.md)。
 
 无 Qt 核心 [`capture_time_update.py`](../superviewer/capture_time_update.py) 扫描一次目录，直接读取 RAW 内嵌 EXIF 原始拍摄时间（缺失时回退数字化时间），保留亚秒与时区，通过 `PhotoMetaDataXMP` 原子写同名 XMP 的标准时间和 `date_time_original` 私有字段。同侧车去重，保护损坏侧车和扫描/读取期间发生的并发修改。原图、RAW 和 report.db 保持只读。[`CaptureTimeController`](../superviewer/capture_time_controller.py) 管理后台线程、有界结果队列、定时分批 `MetadataResultSync` 及真实线程退出等待；更新列表/信息页。每批结果按 `CaptureTimeResult.missing_raw` 保留未找到 RAW 的选择，通过 [`deselect_display_paths_silently()`](../superviewer/tagged_file_list.py) 取消本轮其他已返回结果项的选择（含成功项），不重载预览或覆盖编辑草稿；其他失败仍展示报告。回归见 [核心读写](../tests/test_capture_time_update.py)、[菜单及生命周期](../tests/test_capture_time_controller.py) 与 `test_bird_identification_controller.py` 的列表/缩略图实窗验证。
 

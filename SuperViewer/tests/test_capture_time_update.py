@@ -65,6 +65,48 @@ def test_recursive_case_insensitive_exact_names_and_ambiguity(tmp_path):
         core.matching_raw('dsc001.png', core.index_raw_files(tmp_path))
 
 
+@pytest.mark.parametrize('relative_dir', ['2025/观鸟/原片', '.归档/2025/.原片'])
+def test_nested_raw_updates_capture_time_and_preserves_chinese_metadata(env, monkeypatch, relative_dir):
+    photo, raw, raws = env
+    nested = raws / relative_dir
+    nested.mkdir(parents=True)
+    raw = raw.rename(nested / raw.name)
+    store = PhotoMetaDataXMP()
+    assert store.write_title(str(photo), '白头鹎')
+    before, raw_before = photo.read_bytes(), raw.read_bytes()
+    reads = []
+    def read(path, **kwargs):
+        reads.append(path)
+        return STAMP
+    monkeypatch.setattr(core, 'read_raw_capture_time', read)
+
+    result, = core.update_capture_times([str(photo)], raws)
+
+    assert result.updates, result.message
+    assert result.raw_source == str(raw) and reads == [str(raw)]
+    metadata = store.read(str(photo))
+    assert metadata['date_time_original'] == metadata['XMP-exif:DateTimeOriginal'] == STAMP
+    assert metadata['Title'] == '白头鹎'
+    assert photo.read_bytes() == before and raw.read_bytes() == raw_before
+
+
+def test_hidden_nested_duplicate_raw_preserves_existing_sidecar(env):
+    photo, raw, raws = env
+    nested = raws / '.归档' / '备份'
+    nested.mkdir(parents=True)
+    (nested / raw.name).write_bytes(b'raw backup')
+    store = PhotoMetaDataXMP()
+    assert store.write_title(str(photo), '原有标题')
+    before = photo.with_suffix('.xmp').read_bytes()
+
+    result, = core.update_capture_times([str(photo)], raws)
+
+    assert not result.updates and not result.missing_raw
+    assert '多个同名 RAW' in result.message
+    assert str(raw) in result.message and str(nested / raw.name) in result.message
+    assert photo.with_suffix('.xmp').read_bytes() == before
+
+
 def test_shared_png_jpeg_sidecar_written_once(env, monkeypatch):
     photo, raw, raws = env
     png = photo.with_suffix('.png')

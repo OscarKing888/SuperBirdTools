@@ -77,6 +77,12 @@ def env(tmp_path, monkeypatch):
 
 def test_menu_formats_choose_directory_all_success_without_popup(env, monkeypatch):
     controller, files, paths, raws = env
+    # 从共同根目录选择，RAW 分散在不同层级及隐藏目录时也应全部更新。
+    for path, relative in zip(paths, ('2025/观鸟', '.归档/原片', '2026/十月/鸟片')):
+        nested = raws / relative
+        nested.mkdir(parents=True)
+        raw = raws / (Path(path).stem + '.ARW')
+        raw.rename(nested / raw.name)
     empty = QMenu()
     files.extender(empty, ['file.ARW', 'file.webp', 'file.hif'])
     assert not empty.actions()

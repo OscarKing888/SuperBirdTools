@@ -52,7 +52,7 @@ def name_key(path):
 
 
 def index_raw_files(directory, *, cancelled=lambda: False):
-    """递归扫描一次；跳过目录符号链接，扫描错误不能伪装成未找到。"""
+    """递归扫描所有子目录（含隐藏目录）；跳过符号链接，扫描错误不能伪装成未找到。"""
     root = Path(directory).absolute()
     if not root.is_dir():
         raise ValueError(f'RAW 目录不存在：{root}')
@@ -61,7 +61,7 @@ def index_raw_files(directory, *, cancelled=lambda: False):
         raise OSError(f'无法扫描 RAW 目录：{error}') from error
     for parent, dirs, names in os.walk(root, onerror=on_error, followlinks=False):
         _check_cancelled(cancelled)
-        dirs[:] = sorted(d for d in dirs if not d.startswith('.') and not Path(parent, d).is_symlink())
+        dirs[:] = sorted(d for d in dirs if not Path(parent, d).is_symlink())
         for name in sorted(names):
             _check_cancelled(cancelled)
             path = Path(parent, name)
