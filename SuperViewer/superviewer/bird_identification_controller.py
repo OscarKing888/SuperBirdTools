@@ -175,6 +175,8 @@ class BirdIDController(QObject):
         from .bird_identification_thumbnails import BirdIDThumbnails
         self._thumbnails = BirdIDThumbnails(self)
         self._options = BirdIDOptions()
+        from .bird_catalog_controller import BirdCatalogController
+        self._catalog = BirdCatalogController(window, file_list, lambda: self._options)
         self._counts = Counter()
         self._failure = ""
         self._stopped = False
@@ -379,8 +381,9 @@ class BirdIDController(QObject):
 
     def request_shutdown(self):
         self._shutdown_requested = True
+        self._catalog.request_shutdown()
         self._thumbnails.request_shutdown()
         self.stop()
 
     def is_shutdown_done(self):
-        return not self.busy and self._thumbnails.is_shutdown_done()
+        return not self.busy and self._thumbnails.is_shutdown_done() and self._catalog.is_shutdown_done()
