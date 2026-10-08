@@ -22,6 +22,8 @@ main = importlib.import_module("SuperViewer.main")
 @pytest.mark.parametrize("mode", [FileListPanel._MODE_LIST, FileListPanel._MODE_THUMB])
 def test_paste_bird_name_keeps_new_pinyin_when_old_batch_arrives(tmp_path, mode):
     from app_common.bird_pinyin import stored_pinyin
+    from app_common.bird_rarity import rarity_metadata
+    from app_common.shooting_location import shooting_location
 
     photo = tmp_path / "中文鸟名.jpg"
     Image.new("RGB", (8, 6)).save(photo)
@@ -30,15 +32,21 @@ def test_paste_bird_name_keeps_new_pinyin_when_old_batch_arrives(tmp_path, mode)
     config.write_text("飞行\n", encoding="utf-8")
     files = SuperViewerTaggedFileListPanel(tag_config_path=config)
     files._view_mode = mode
-    files._copied_species_payload = {"bird_species_cn": "白头鹎"}
+    files._copied_species_payload = {
+        "bird_species_cn": "白头鹎", "bird_species_en": "Light-vented Bulbul",
+        "gbif_rarity_100": 0, "iucn_category": "LC", "shooting_location": "深圳湾",
+    }
     try:
         files._paste_species_to_paths([path])
         files._on_metadata_batch_ready({path: {
             "title": "家燕", "pinyin_name": "jiā yàn",
             "pinyin_name_source": "家燕", "iso": "800",
+            "gbif_rarity_100": 80, "iucn_category": "EN", "shooting_location": "旧地点",
         }})
         assert stored_pinyin(files.cached_photo_metadata_for_path(path)) == "bái tóu bēi"
         assert files._meta_cache[path]["iso"] == "800"
+        assert rarity_metadata(files.cached_photo_metadata_for_path(path)) == (0, "LC")
+        assert shooting_location(files.cached_photo_metadata_for_path(path)) == "深圳湾"
         assert stored_pinyin(PhotoMetaDataXMP().read(path)) == "bái tóu bēi"
     finally:
         files.shutdown()

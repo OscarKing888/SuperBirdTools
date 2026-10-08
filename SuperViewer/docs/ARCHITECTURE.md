@@ -384,7 +384,7 @@ Qt 测试在窗口构造前隔离 `paths_settings` 的应用/用户状态目录�
 
 ## 鸟名拼音
 
-共享文件列表的“粘贴鸟名”会按新鸟名查询同一带声调词表，将标题、鸟名、拼音及来源标记一次写入 XMP；未收录名称清除旧拼音及别名。成功后通过 `sync_metadata_edits_for_paths()` 更新列表缓存并保护本地修改，避免晚到批次恢复旧拼音。回归见共享 `test_file_browser_species_pinyin.py` 和 Viewer `test_main_window_metadata_sync.py`。
+共享文件列表的“复制鸟名 / 粘贴鸟名”通过 [`bird_species_copy.py`](../../app_common/bird_species_copy.py) 保存中英文鸟名、拼音、稀有度、IUCN 保护等级和拍摄地点的复制时快照；点击复制时读取实际源图的 XMP，优先于列表缓存和只读报告，同一鸟名才沿用低优先级来源的鸟种字段。系统剪贴板仍提供纯文本鸟名。粘贴单张或多张时，将这些字段、标准兼容字段与来源/缺失标记一次写入各照片的 XMP；优先保留源照片已保存拼音，缺失时查带声调词表，未知名称清除旧拼音及别名。源照片没有的关联信息清空目标旧值，0 分稀有度保留；不复制相机参数、照片评分、备注或识别候选/置信度。成功后通过 `sync_metadata_edits_for_paths()` 更新列表缓存并保护本地修改，避免晚到批次恢复旧值。核心不依赖 Qt；复制快照属于列表交互，不新增 CLI。模块由现有 `collect_submodules("app_common")` 收集。回归见共享 `test_file_browser_species_pinyin.py` 和 Viewer `test_main_window_metadata_sync.py`。
 
 照片信息的“拼音”行只显示已保存的拼音；已有鸟名但没有可用拼音时显示“更新拼音”按钮。照片右键支持单张/多选，目录右键支持当前目录及递归目录。[`PinyinController`](../superviewer/bird_pinyin_controller.py) 使用独立线程、本批有界结果队列与定时分批刷新；取消后保留已写结果，关闭时等待线程真正结束。
 

@@ -40,6 +40,8 @@ Hot-received photos switch the B preview from result view to source/edit view be
 
 [PhotoListWidget](../birdstamp/gui/editor_photo_list.py) 是共享 `FileListPanel` 的编辑器适配层，内部保留 `QTreeWidget` 和既有列表 API。它未开启 SuperViewer 的应用定时器连续播放行为。普通编辑页由 `SequenceTransport.eventFilter` 接管照片列表左右键及播放列表方向键，按当前照片顺序切换；照片列表首次上下键仍沿用原生选择。长按复用 BirdStamp 的缓存预览节拍，首尾边界松键后可立即反向切换，回归见 [test_sequence_preview_keys.py](../tests/test_sequence_preview_keys.py)。导入发现结果通过队列和定时器分批加入 UI，避免一次插入大量行。
 
+共享鸟名复制粘贴由 [`bird_species_copy`](../../app_common/bird_species_copy.py) 生成中英文名、拼音、稀有度、保护等级和拍摄地点快照，经 `PhotoMetaDataXMP` 一次写入各目标侧车；源照片缺失的关联字段清除目标旧值，不更改原图、报告或照片评分。字段映射与验证见 [Viewer 鸟名拼音](../../SuperViewer/docs/ARCHITECTURE.md#鸟名拼音)。
+
 照片列表的“上移 / 下移”工具按钮支持连续和不连续多选；[photo_order.moved_photo_rows](../birdstamp/photo_order.py) 计算一步移动，保持所选照片相对顺序并在首尾停止。`PhotoListWidget.move_selected` 将当前可见顺序更新到独立的 `PHOTO_LIST_SEQUENCE_ROLE` 排序键，切回顺序升序，保留当前照片和多选状态；显示编号仍由起始编号派生。工作区沿用既有 `photos[].sequence` 与排序状态保存/恢复，新导入照片接在末尾；点击其他表头可重新按该列排序。`BirdStampEditorWindow._on_photo_manual_order_changed` 使依赖顺序的参考区跟踪及成片缓存失效，更新播放条并安排自动保存。此操作属于编辑器会话交互，不新增 CLI 参数；回归见 [test_editor_photo_list_sort.py](../tests/test_editor_photo_list_sort.py) 和 [test_photo_start_number.py](../tests/test_photo_start_number.py)。
 
 | 后台工作 | 所有者、接收与结束条件 |
