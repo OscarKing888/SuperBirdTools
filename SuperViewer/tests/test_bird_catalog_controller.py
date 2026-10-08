@@ -75,8 +75,6 @@ def env(tmp_path, monkeypatch):
     if state['gate']:
         state['gate'].set()
     assert wait_for(controller.is_shutdown_done)
-    if controller._progress:
-        controller._progress.close()
     window.close()
     window.deleteLater()
     _APP.processEvents()
@@ -109,6 +107,8 @@ def test_menu_search_detail_batch_save_and_no_reselection(env):
     dialog.apply.click()
     assert wait_for(lambda: controller._apply_worker is None)
     assert controller._counts['success'] == 3
+    assert not dialog.isVisible()
+    assert dialog.result() == dialog.DialogCode.Accepted
     assert files.updates and not selected
     for path in paths:
         assert PhotoMetaDataXMP().read(path)['Title'] == bird['cn_name']
@@ -187,6 +187,8 @@ def test_partial_failure_shared_sidecar_and_write_gate(env):
     assert controller.apply()
     assert wait_for(lambda: controller._apply_worker is None)
     assert controller._counts['success'] == 2 and controller._counts['failed'] == 1
+    assert controller._dialog.isVisible()
+    assert '失败 1' in controller._dialog.status.text()
     merged = {p: m for batch in files.updates for p, m in batch.items()}
     assert raw in merged and paths[0] in merged
 
@@ -229,3 +231,71 @@ def test_shutdown_during_save_keeps_committed_results(env, monkeypatch):
     assert controller._counts['success'] == 1
     assert PhotoMetaDataXMP().read(paths[0])['Title'] == bird['cn_name']
     assert not files.updates
+
+
+def test_filter_initial_focus_and_url_on_right(env):
+    controller, files, paths, bird, state = env
+    assert controller.open(paths)
+    dialog = controller._dialog
+    assert wait_for(lambda: dialog.query.hasFocus())
+    assert dialog.query.geometry().top() == dialog.url.geometry().top()
+    assert dialog.query.geometry().right() < dialog.url.geometry().left()
+
+
+@pytest.mark.parametrize('details_ready', [False, True])
+def test_double_click_saves_then_closes_without_progress_popup(env, monkeypatch, details_ready):
+    from PyQt6.QtCore import Qt
+    from PyQt6.QtTest import QTest
+    controller, files, paths, bird, state = env
+    assert controller.open(paths)
+    assert wait_for(lambda: controller._query_worker is None)
+    dialog = controller._dialog
+    gate, started = threading.Event(), threading.Event()
+    def detail(*args, **kwargs):
+        started.set()
+        assert gate.wait(5)
+        return dict(bird)
+    if details_ready:
+        gate.set()
+    monkeypatch.setattr(ui.BirdCatalogClient, 'detail', detail)
+    point = dialog.list.visualItemRect(dialog.list.item(0)).center()
+    QTest.mouseClick(dialog.list.viewport(), Qt.MouseButton.LeftButton, pos=point)
+    assert started.wait(3)
+    if details_ready:
+        assert wait_for(lambda: controller._selected is not None)
+    try:
+        QTest.mouseDClick(dialog.list.viewport(), Qt.MouseButton.LeftButton, pos=point)
+        if not details_ready:
+            assert controller._apply_after_detail is not None
+            assert not Path(paths[0]).with_suffix('.xmp').exists()
+    finally:
+        gate.set()
+    assert wait_for(lambda: not controller.busy and not dialog.isVisible())
+    assert controller._counts['success'] == 3
+    assert not any(w.isVisible() and w.windowTitle() == '保存手动鸟名' for w in _APP.topLevelWidgets())
+    assert PhotoMetaDataXMP().read(paths[0])['Title'] == bird['cn_name']
+
+
+@pytest.mark.parametrize('dismiss', [False, True])
+def test_double_click_waiting_for_details_cannot_apply_after_invalidation(env, monkeypatch, dismiss):
+    controller, files, paths, bird, state = env
+    assert controller.open(paths)
+    assert wait_for(lambda: controller._query_worker is None)
+    gate, started = threading.Event(), threading.Event()
+    def detail(*args, **kwargs):
+        started.set()
+        assert gate.wait(5)
+        return dict(bird)
+    monkeypatch.setattr(ui.BirdCatalogClient, 'detail', detail)
+    controller.activate(bird)
+    assert started.wait(3)
+    try:
+        if dismiss:
+            controller._dialog.close()
+        else:
+            controller._dialog.query.setText('another bird')
+        assert controller._apply_after_detail is None
+    finally:
+        gate.set()
+    assert wait_for(lambda: not controller.busy)
+    assert not any(Path(path).with_suffix('.xmp').exists() for path in paths)

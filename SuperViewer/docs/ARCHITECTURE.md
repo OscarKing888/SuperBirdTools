@@ -326,6 +326,8 @@ CLI 与 GUI 共用核心：在仓库根使用共享 `.venv` 执行 `python -m Su
 
 手动指定入口由 `BirdIDController` 持有的 [`BirdCatalogController`](../superviewer/bird_catalog_controller.py) 注册照片右键菜单，并纳入同一退出等待。无 Qt [`bird_catalog.py`](../superviewer/bird_catalog.py) 复用本机 HTTP 传输，独立调用 `/birds/search` 分页列表与 `/birds/detail` 身份绑定详情；CLI 复用协议校验和 `apply_bird()`。目录请求有代次、取消和单一待处理请求，真实 `QThread.finished` 后交接，旧搜索/详情不能启用当前选择的保存按钮。批量写入采用有界队列及定时分批 `MetadataResultSync`，网络请求前记录照片/侧车指纹，详情变化和晚到本地编辑均拒绝提交；写入只走 `PhotoMetaDataXMP` 原子事务。手动指定清除旧置信度，保留历史识别候选、用户备注和标签，保存独立的学名/各类拼音/简介/目录来源字段。回归见 [核心协议及 XMP](../tests/test_bird_catalog.py)、[Qt 生命周期](../tests/test_bird_catalog_controller.py) 与 `test_bird_identification_controller.py` 的列表/缩略图真实窗口验证。
 
+手动指定窗口初始聚焦过滤框，URL 同行置右；双击列表鸟名和应用按钮共用保存流程。双击等待详情时以请求代次及鸟种/版本 ID 绑定待应用动作，过滤、换鸟或关窗会使其失效。保存进度及异常直接显示在原窗口，全部提交并完成缓存同步后自动关闭，不再创建独立进度/成功弹窗；部分失败保留窗口供查看原因。
+
 ## 10. 扩展与验证步骤
 
 1. 从上表定位控件入口和状态所有者，阅读对应测试；涉及共享实现时同时检查 BirdStamp 调用。约定源图路径、显示路径、缓存路径，明确是否需要写 XMP。
