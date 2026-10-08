@@ -34,7 +34,7 @@
 
 共享 `DirectoryBrowserWidget._on_dir_context_menu()` 提供“复制完整路径”，取右键节点的绝对路径写入剪贴板，不触发目录选择；空白处和占位节点不显示菜单。宿主通过 `add_context_menu_extender(callback(menu, path))` 追加目录动作（如鸟清晰度检测、计算连拍信息），文件列表/缩略图菜单对应 `FileListPanel.add_file_context_menu_extender(callback(menu, paths))`；扩展回调异常只记日志，不影响菜单。
 
-Viewer 的列表/缩略图由 [`file_context_menu.build_file_context_menu()`](../superviewer/file_context_menu.py) 组装分组菜单：顶部依次为复制、粘贴、剪切，分隔线后紧接复制/粘贴鸟名，再用分隔线与“珍禽入册”、星级和标签区分；“鸟种信息”“拍摄信息”“分析与处理”收纳控制器动作；“发送到”“定位文件”收纳外部应用与路径操作，删除独立置底。控制器用 `@file_menu_group("bird", order=10)` 声明分组和组内顺序（另外两组为 `capture` / `process`），进度/停止入口随所属功能归组；未声明的扩展仍在主菜单，空组隐藏。动作仍使用共享浏览器和控制器原有实现，保留多选、实际源路径、快捷键及禁用状态；不改变 BirdStamp 菜单。菜单及子菜单增加条目上下留白与分隔线间距；样式仅作用于此菜单树，保留主题配色。常用入口用随主题/状态绘制的 Qt 线条图标，无额外图片资源；现有 `collect_submodules("superviewer")` 收集新模块。此变更仅涉及菜单呈现，无 CLI 或算法流程变化。
+Viewer 的列表/缩略图由 [`file_context_menu.build_file_context_menu()`](../superviewer/file_context_menu.py) 组装分组菜单：顶部依次为复制、粘贴、剪切，分隔线后紧接复制/粘贴鸟名，再用分隔线与“珍禽入册”、星级和标签区分；“鸟种信息”“拍摄信息”“分析与处理”收纳控制器动作；“发送到”“定位文件”收纳外部应用与路径操作，删除独立置底。控制器用 `@file_menu_group("bird", order=10)` 声明分组和组内顺序（另外两组为 `capture` / `process`），进度/停止入口随所属功能归组；未声明的扩展仍在主菜单，空组隐藏。动作仍使用共享浏览器和控制器原有实现，保留多选、实际源路径、快捷键及禁用状态；不改变 BirdStamp 菜单。复制/粘贴鸟名快捷键为 macOS `⌘⇧C` / `⌘⇧V`、Windows `Ctrl+Shift+C` / `Ctrl+Shift+V`，菜单显示与 `tagged_file_list._install_species_shortcuts()` 共用 `species_shortcut_sequence()`；仅照片列表/缩略图自身有焦点时启用，过滤框和行编辑器不触发，关闭后及无选择时不操作。复制优先当前选中的照片，粘贴复用原有快照/XMP 流程作用于全部选中照片，禁用按键自动重复。回归见 [`test_species_shortcuts.py`](../tests/test_species_shortcuts.py)。菜单及子菜单增加条目上下留白与分隔线间距；样式仅作用于此菜单树，保留主题配色。常用入口用随主题/状态绘制的 Qt 线条图标，无额外图片资源；现有 `collect_submodules("superviewer")` 收集新模块。此变更仅涉及菜单呈现，无 CLI 或算法流程变化。
 
 ```mermaid
 flowchart TD
@@ -335,6 +335,18 @@ CLI 与 GUI 共用核心：在仓库根使用共享 `.venv` 执行 `python -m Su
 结果表以照片组为单位将待确定、可重试的采纳失败和需补存候选置顶，同一优先级保持结果到达顺序，组内保持置信度降序。采纳成功或结果过期时使用 Qt 行移动通知重排整组，维护 `first_row`、候选原始索引及持久选区，避免按钮指向另一张照片；新增置顶组不抢走已有选择。可用的“采纳 / 采纳并补存”按钮绘制绿色填充、白字和键盘焦点虚线，悬停加深；已采纳、保存中和过期等禁用状态沿用中性样式，行选中色与主题不会覆盖绿色。排序为 UI 行为，不改变 XMP 或服务结果顺序。回归见 [表格排序与绘制](../tests/test_bird_identification_table.py) 及识鸟控制器的后台采纳测试。
 
 服务接口及返回字段限制、使用和验证见 [识鸟说明](../../docs/bird_identification.md)。
+
+“逐只识别”由同一 `BirdIDController` / `BirdIDWorker` 管理设置、任务和关闭生命周期。
+无 Qt 核心 [`per_bird_identification.py`](../superviewer/per_bird_identification.py) 调用现有
+`BirdSharpnessAnalyzer.analyze()` 的最终 `birds`，按原尺寸最小宽高过滤，逐只临时 JPEG 调用服务，
+将鸟名、置信度、原图区域及失败状态一次保存至 XMP 的 `birdid_individuals` 列表；
+`birdid_individuals_info` 记录来源/坐标系/参数，CLI 共用该核心。共享 `MetadataLoader._parse_rec`
+保留这两个字段，`MetadataResultSync` 局部更新图片信息而不重选照片。
+[`per_bird_identification_ui.py`](../superviewer/per_bird_identification_ui.py) 将保存结果呈现在图片信息底部，
+复用从 Debug 窗口抽出的 [`TraceBirdList`](../superviewer/bird_result_list.py)；
+`IndividualBirdHover` 校验 A/B 源图身份，`IndividualBirdOverlayMixin` 单独绘制悬停框，
+用视口实际 RAW camera crop 映射，退出悬停/切图/播放清除且不参与导出。
+相关回归：`test_per_bird_identification.py`、`test_per_bird_identification_ui.py`、`test_bird_identification_controller.py`。
 
 手动指定入口由 `BirdIDController` 持有的 [`BirdCatalogController`](../superviewer/bird_catalog_controller.py) 注册照片右键菜单，并纳入同一退出等待。无 Qt [`bird_catalog.py`](../superviewer/bird_catalog.py) 复用本机 HTTP 传输，独立调用 `/birds/search` 分页列表与 `/birds/detail` 身份绑定详情；CLI 复用协议校验和 `apply_bird()`。目录请求有代次、取消和单一待处理请求，真实 `QThread.finished` 后交接，旧搜索/详情不能启用当前选择的保存按钮。批量写入采用有界队列及定时分批 `MetadataResultSync`，网络请求前记录照片/侧车指纹，详情变化和晚到本地编辑均拒绝提交；写入只走 `PhotoMetaDataXMP` 原子事务。手动指定清除旧置信度，保留历史识别候选、用户备注和标签，保存独立的学名/各类拼音/简介/目录来源字段。回归见 [核心协议及 XMP](../tests/test_bird_catalog.py)、[Qt 生命周期](../tests/test_bird_catalog_controller.py) 与 `test_bird_identification_controller.py` 的列表/缩略图真实窗口验证。
 

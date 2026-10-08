@@ -141,6 +141,7 @@ try:
     from .superviewer.bird_archive_ui import BirdArchiveController, archive_action
     from .superviewer.denoise_controller import DenoiseController
     from .superviewer.bird_identification_controller import BirdIDController
+    from .superviewer.per_bird_identification_ui import IndividualBirdHover
     from .superviewer.bird_pinyin_controller import PinyinController
     from .superviewer.shooting_location_controller import ShootingLocationController
     from .superviewer.capture_time_controller import CaptureTimeController
@@ -234,6 +235,7 @@ except ImportError:
     from superviewer.bird_archive_ui import BirdArchiveController, archive_action
     from superviewer.denoise_controller import DenoiseController
     from superviewer.bird_identification_controller import BirdIDController
+    from superviewer.per_bird_identification_ui import IndividualBirdHover
     from superviewer.bird_pinyin_controller import PinyinController
     from superviewer.shooting_location_controller import ShootingLocationController
     from superviewer.capture_time_controller import CaptureTimeController
@@ -539,6 +541,9 @@ class MainWindow(QMainWindow):
             parent=self.image_info_tabs,
             pinyin_update_callback=lambda path: self._bird_pinyin.start_for_paths([path]),
         )
+        self._individual_bird_hover = IndividualBirdHover(
+            self.image_info_panel, (self.preview_a, self.preview_panel), self)
+        self._file_list.playback_state_changed.connect(lambda active: self._individual_bird_hover.clear() if active else None)
         self.tags_info_panel = ImageInfoTabPanel_Tags(
             self._file_list.available_photo_tags,
             self._file_list.photo_tags_for_path,

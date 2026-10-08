@@ -37,10 +37,63 @@ SuperViewer 不载入 SuperPicky 的 Python 包或模型，不自动启动/关�
   保存失败显示原因并允许重试；停止/关闭时保留已经提交的结果。
   批量中单张失败继续处理其它照片；服务连接检查失败则结束整批。
 
-所有文件来自共享图片扩展名集合；实际解码能力由服务端决定，不支持/损坏的照片按单张失败报告。
+整图识别的文件来自共享图片扩展名集合；实际解码能力由服务端决定，不支持/损坏的照片按单张失败报告。
 请求使用解析后的原文件绝对路径，RAW/HEIF 由服务解码，不提交 Viewer 临时缩略图。
 目录扫描排除隐藏目录和目录符号链接，不递归时只处理该层。
 同目录同名 RAW/JPEG 共用 XMP，批次内只识别一次，优先 RAW；进度按唯一侧车数量计数。
+
+## 逐只识别
+
+照片列表/缩略图右键 **逐只识别…**，支持单张和多选；目录树的识鸟子菜单也有当前目录/含子目录入口。
+设置窗口显示当前清晰度参数，并提供以下会话内设置：
+
+| 设置 | 默认值 | 含义 |
+| --- | --- | --- |
+| 鸟框最小宽度/高度 | 各 64 px | 宽或高任一低于门槛则不请求服务；恰好 64 × 64 会识别 |
+| 裁图每边外扩 | 0% | 按鸟框宽高分别外扩 0–50%，裁到图像边界；保存区域仍是原鸟框 |
+| 鸟种确认阈值 | 50%（与整图识别共用） | 较低分结果仍保存并显示“待确定” |
+| 跳过已有记录 | 关闭 | 仅检查逐只列表，不因整图已有鸟名而跳过 |
+
+后台调用 `BirdSharpnessAnalyzer.analyze()`，直接使用其最终保留的 `birds`，包含小鸟补检、无鸟复检、
+增强找鸟及假鸟排除的结果。模型、图像来源及其它分析参数沿用“设置 → 鸟清晰度”；本次调用设置
+`max_birds=0`、`min_bird_side=0`，完整分析后再按上表过滤送识别的框，不改变清晰度算法和用户默认设置。
+因此会执行清晰度计算，但不会写回清晰度评分。无鸟时的焦点/全图评分区域不会被当作鸟送识别。
+
+像素仅解码一次；使用所选来源的原尺寸、已按 EXIF/LibRaw 旋转的图像裁切 JPEG（质量 95，4:4:4）。
+RAW 的相机 JPEG 来源沿用全尺寸内嵌图/RAW 回退规则；降噪来源查找当前降噪设置的已有成片，缺失按照片失败。
+尺寸门槛按这份图像的像素计算，不按缩略图像素计算。每只裁图调用现有 `POST /recognize`，
+`top_k=3, use_yolo=false, use_gps=false`：鸟体已定位，裁图没有 GPS；服务自己的地区设置仍由服务决定。
+每次请求后删除临时 JPEG，目录在异常/取消时也清理，原始照片不写入。
+
+结果以 UTF-8 JSON 存在同名 XMP 内：
+
+- `XMP-superpicky:birdid_individuals`：数组；每项包含零起始 `index`、`cn_name`、`en_name`、
+  `confidence`（鸟种 0–100）、`detection_confidence`（鸟体检测 0–1）、`status`、
+  `box_px`（未外扩鸟框）、`box`（相机画幅归一化框）、`crop_px`（实际送识别的外扩裁框），
+  成功请求另存完整 `response`。状态为 `confirmed/candidate/skipped/failed`；过滤/失败项保留区域及原因。
+- `XMP-superpicky:birdid_individuals_info`：schema=1，坐标系 `oriented_camera_normalized_xyxy`，
+  图像宽高、实际来源、RAW camera crop、源文件大小/mtime/扩展名、分析版本/参数及本次识别设置。
+
+`box_px` / `crop_px` 均为所选来源中 `[left, top, right, bottom]`，右/下界不包含；
+`box` 经 RAW 相机裁切逆映射，便于相机 JPEG、全 RAW 和同侧车 JPEG 之间定位。
+RAW 相机默认裁切外的鸟可能带超出 0–1 的值；绘制时按各视口实际像素几何映射并裁到可见范围。
+重新识别替换本照片列表，成功的无鸟结果保存空列表。单只失败继续其它鸟并保存部分结果；全部可识别鸟失败、
+取消、XMP 损坏或原图/侧车在请求期间变化均保留旧列表。整图鸟名、候选、标题、备注、评分保持原样。
+
+“图片信息”最下方的“逐只识别”区域复用清晰度 Debug 的 `TraceBirdList`，显示同色编号、
+鸟名、鸟种置信度、检测置信度及原尺寸框大小。悬停时仅在同源 A/B 视口高亮对应区域，
+不依赖“显示鸟体”开关；移出、隐藏列表、切图或开始长按播放时清除。RAW 异步升级后重新映射。
+此临时高亮不参与叠加导出。读取来自后台元数据缓存，悬停不会触发解码、检测或 XMP I/O。
+
+CLI（默认使用相机 JPEG，Windows 换为根 `.venv\\Scripts\\python.exe`）：
+
+```bash
+.venv/bin/python3 -m SuperViewer.superviewer.per_bird_identification /path/to/photos --recursive --min-width 64 --min-height 64 --padding 0 --threshold 50
+```
+
+CLI 的其它清晰度参数使用库默认值，支持 `--source raw/jpeg`；GUI 使用当前 Viewer 参数。
+核心与界面回归为 `test_per_bird_identification.py`、`test_per_bird_identification_ui.py`，
+主窗口/关闭时序另见 `test_bird_identification_controller.py`；测试使用离线模型和服务替身。
 
 ## 手动搜索并指定鸟名
 

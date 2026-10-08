@@ -1,0 +1,132 @@
+"""真实 Qt 结果列表、悬停绘制、A/B 和 RAW 升级的身份/几何验证。"""
+import json
+from types import SimpleNamespace
+
+from PIL import Image
+import pytest
+from PyQt6.QtCore import QEvent, QRectF
+from PyQt6.QtGui import QColor, QPainter, QPixmap
+from PyQt6.QtWidgets import QApplication
+
+from app_common.raw_preview_geometry import RAW_FOCUS_CROP_KEY, map_camera_focus_box
+from SuperViewer.superviewer.bird_identification import BirdIDOptions
+from SuperViewer.superviewer.per_bird_identification import PerBirdOptions, FIELD, INFO_FIELD
+from SuperViewer.superviewer.per_bird_identification_ui import (
+    IndividualBirdsPanel, IndividualBirdHover, PerBirdSettingsDialog)
+from SuperViewer.superviewer.preview_panel import PreviewPanel
+
+_APP = QApplication.instance() or QApplication([])
+
+
+def metadata():
+    return {FIELD: json.dumps([{"index": 0, "cn_name": "白鹭", "en_name": "Egret", "confidence": 95,
+             "detection_confidence": .8, "status": "confirmed", "box": [.2, .3, .7, .8],
+             "box_px": [20, 30, 70, 80]}]),
+            INFO_FIELD: json.dumps({"schema": 1, "coordinate_space": "oriented_camera_normalized_xyxy"})}
+
+
+def test_settings_defaults_and_adjustments():
+    dialog = PerBirdSettingsDialog(None, BirdIDOptions(), PerBirdOptions(), {"image_source": "jpeg"})
+    try:
+        assert dialog.width.value() == dialog.height.value() == 64
+        dialog.width.setValue(128)
+        dialog.height.setValue(96)
+        dialog.padding.setValue(10)
+        dialog.threshold.setValue(80)
+        assert dialog.per_bird_options() == PerBirdOptions(128, 96, 10)
+        assert dialog.options().threshold == 80
+    finally:
+        dialog.close()
+
+
+def test_hover_ab_raw_upgrade_leave_switch_and_playback(tmp_path, monkeypatch):
+    path, other = str(tmp_path / '鸟.ARW'), str(tmp_path / 'other.jpg')
+    left, right = PreviewPanel(), PreviewPanel()
+    birds = IndividualBirdsPanel()
+    hover = IndividualBirdHover(SimpleNamespace(individual_birds=birds), (left, right))
+    pix = QPixmap(100, 100)
+    pix.fill(QColor('black'))
+    try:
+        left.set_quick_pixmap(path, pix)
+        right.set_quick_pixmap(other, pix)
+        birds.set_metadata(path, metadata())
+        birds.show()
+        _APP.processEvents()
+        # 真正的 Enter / Leave 事件走共用 TraceBirdList.eventFilter。
+        cell = birds.birds.cells[0][2]
+        _APP.sendEvent(cell, QEvent(QEvent.Type.Enter))
+        assert '白鹭' in cell.text() and '95.0%' in cell.text()
+        assert left.canvas._individual_highlight[0] == (.2, .3, .7, .8)
+        assert right.canvas._individual_highlight is None
+        crop = (.1, .2, .9, .8)
+        image = pix.toImage()
+        image.setText(RAW_FOCUS_CROP_KEY, json.dumps(crop))
+        left._on_full_preview_loaded(left._preview_request_token, path, image, 1)
+        assert left.canvas._individual_highlight[0] == pytest.approx(map_camera_focus_box((.2, .3, .7, .8), crop))
+        _APP.sendEvent(cell, QEvent(QEvent.Type.Leave))
+        assert left.canvas._individual_highlight is None
+        _APP.sendEvent(cell, QEvent(QEvent.Type.Enter))
+        left.set_quick_pixmap(other, pix)
+        assert left.canvas._individual_highlight is None
+        left.set_quick_pixmap(path, pix)
+        left.set_navigation_playback_active(True)
+        hover.highlight(path, birds.birds.rows[0])
+        assert left.canvas._individual_highlight is None
+        left.set_navigation_playback_active(False)
+        hover.highlight(path, birds.birds.rows[0])
+        birds.hide()
+        assert left.canvas._individual_highlight is None
+        # report.db 的临时 JPEG 显示路径仍映射到实际 RAW；悬停不探测磁盘。
+        temporary = str(tmp_path / 'cached.jpg')
+        left.set_quick_pixmap(temporary, pix)
+        left.set_source_identity(path)
+        right.set_quick_pixmap(path, pix)
+        monkeypatch.setattr('os.path.isfile', lambda *_: pytest.fail('hover must not probe files'))
+        hover.highlight(temporary, birds.birds.rows[0])
+        assert left.canvas._individual_highlight is not None
+        assert right.canvas._individual_highlight is not None
+    finally:
+        for widget in (birds, left, right): widget.close()
+
+
+def test_highlight_draws_without_bird_toggle_and_is_excluded_from_export():
+    panel = PreviewPanel()
+    pix = QPixmap(100, 100)
+    pix.fill(QColor('black'))
+    try:
+        panel.set_quick_pixmap('bird.jpg', pix)
+        panel.set_individual_bird_highlight((.2, .2, .8, .8), '#00c8ff')
+        rendered = pix.copy()
+        painter = QPainter(rendered)
+        panel.canvas._paint_overlay_layers(painter, QRectF(0, 0, 100, 100), rendered.rect())
+        painter.end()
+        assert rendered.toImage().pixelColor(50, 50).blue() > 0
+        assert rendered.toImage().pixelColor(5, 5) == QColor('black')
+        assert panel.canvas.render_source_pixmap_with_overlays().toImage().pixelColor(50, 50) == QColor('black')
+        assert panel.canvas._individual_highlight is not None
+        # 原有构图网格仍参与导出。
+        panel.set_composition_grid_mode('thirds')
+        grid = panel.canvas.render_source_pixmap_with_overlays().toImage()
+        assert any(grid.pixelColor(x, 20) != QColor('black') for x in range(30, 36))
+    finally:
+        panel.close()
+
+
+def test_info_panel_reloads_saved_list_without_resetting_drafts(tmp_path):
+    from SuperViewer.superviewer.image_info_tab_image_info import ImageInfoTabPanel_ImageInfo
+    path = str(tmp_path / '鸟.jpg')
+    Image.new('RGB', (100, 100)).save(path)
+    data = {}
+    panel = ImageInfoTabPanel_ImageInfo(lambda: [], lambda _: set(), lambda *_: None,
+        lambda *_: '', metadata_provider=lambda _: data)
+    try:
+        panel.on_photo_selected(path)
+        panel.comment_edit.setPlainText('正在输入')
+        data.update(metadata())
+        panel.refresh_metadata_fields()
+        assert len(panel.individual_birds.birds.rows) == 1
+        assert panel.comment_edit.toPlainText() == '正在输入'
+        panel.on_photo_selected('')
+        assert panel.individual_birds.birds.rows == []
+    finally:
+        panel.close()
