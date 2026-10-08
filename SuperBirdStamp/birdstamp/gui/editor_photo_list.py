@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from PyQt6.QtCore import QEvent, QObject, QSignalBlocker, Qt, pyqtSignal
+from PyQt6.QtGui import QAction, QKeySequence
 from PyQt6.QtWidgets import (
     QAbstractItemView,
     QHeaderView,
@@ -138,6 +139,7 @@ class PhotoListWidget(FileListPanel):
     itemSelectionChanged = pyqtSignal()
     rowNumbersChanged = pyqtSignal()
     manualOrderChanged = pyqtSignal()
+    removeSelectedRequested = pyqtSignal()
 
     def __init__(self) -> None:
         self._start_number = 1
@@ -214,6 +216,23 @@ class PhotoListWidget(FileListPanel):
 
         self._tree_widget.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self._tree_widget.customContextMenuRequested.connect(self._on_photo_context_menu)
+
+        # 菜单与快捷键共用列表移除请求，由编辑器维护缓存和工作区状态。
+        self.remove_selected_action = QAction("删除所选", self._tree_widget)
+        shortcuts = [QKeySequence(Qt.Key.Key_Delete)]
+        if sys.platform == "darwin":
+            shortcuts.insert(0, QKeySequence(Qt.Key.Key_Backspace))
+        self.remove_selected_action.setShortcuts(shortcuts)
+        # 仅列表自身获得焦点时生效，不拦截输入框中的删除键。
+        self.remove_selected_action.setShortcutContext(Qt.ShortcutContext.WidgetShortcut)
+        self.remove_selected_action.setAutoRepeat(False)
+        self.remove_selected_action.setToolTip("从照片列表移除所选项，保留原始照片和 XMP 文件。")
+        self.remove_selected_action.triggered.connect(self._request_remove_selected)
+        self._tree_widget.addAction(self.remove_selected_action)
+
+    def _request_remove_selected(self) -> None:
+        if self.selectedItems():
+            self.removeSelectedRequested.emit()
 
     def _hide_non_tree_ui(self) -> None:
         # 隐藏已知控件
@@ -487,6 +506,9 @@ class PhotoListWidget(FileListPanel):
         if reveal_path:
             act_reveal = menu.addAction(label)
             act_reveal.triggered.connect(lambda checked=False, p=reveal_path: reveal_in_file_manager(p))
+
+        menu.addSeparator()
+        menu.addAction(self.remove_selected_action)
 
         _exec_menu(menu, viewport.mapToGlobal(pos))
 
