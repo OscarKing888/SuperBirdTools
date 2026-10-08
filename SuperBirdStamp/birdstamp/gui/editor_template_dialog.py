@@ -472,10 +472,21 @@ class TemplateManagerDialog(QDialog):
             self._refresh_preview_label()
 
     def closeEvent(self, event):
+        self._finish_overlay_preview()
+        super().closeEvent(event)
+
+    def done(self, result):
+        # Esc/accept/reject 不一定经过 closeEvent，也必须提交文字并停止待执行预览。
+        self._finish_overlay_preview()
+        super().done(result)
+
+    def _finish_overlay_preview(self):
         self.overlay_panel.flush_text()
+        timer = getattr(self, "_preview_refresh_timer", None)
+        if timer is not None:
+            timer.stop()
         self.overlay_session.cancel()
         self.overlay_session.clear()
-        super().closeEvent(event)
 
     def _load_preview_source(self) -> None:
         """加载 images/default.jpg 原图及完整 EXIF 作为预览图源，与主界面保持一致。
@@ -1768,7 +1779,11 @@ class TemplateManagerDialog(QDialog):
             self._save_current_template()
         except Exception as exc:
             QMessageBox.warning(self, "模板保存失败", str(exc))
-        self._refresh_preview()
+        # 参数立即保存，连续输入只绘制最终状态；旧几何不能继续参与画布命中。
+        self.overlay_session.cancel()
+        self.overlay_session.clear()
+        self.preview_label.canvas.update()
+        self._schedule_preview_refresh()
 
     def _activate_overlay_edit(self):
         self.overlay_edit_check.setChecked(True)
@@ -1964,6 +1979,7 @@ class TemplateManagerDialog(QDialog):
         self._preview_display_cache = (full_source, display)
         return display
 
+    @_template_context.template_render_context()
     def _refresh_preview(self) -> None:
         if hasattr(self,"overlay_session") and self.overlay_session.drag:
             return
