@@ -14,13 +14,13 @@ try:
     from PyQt6.QtGui import QAction, QColor, QIcon, QPainter, QPainterPath, QPen, QPixmap
     from PyQt6.QtWidgets import (QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFileDialog,
         QFormLayout, QHBoxLayout, QLabel, QLineEdit, QMessageBox, QProgressBar, QPushButton,
-        QTextEdit, QVBoxLayout)
+        QTextEdit, QVBoxLayout, QWidget)
 except ImportError:  # pragma: no cover
     from PyQt5.QtCore import QObject, QPointF, Qt, QThread, pyqtSignal
     from PyQt5.QtGui import QColor, QIcon, QPainter, QPainterPath, QPen, QPixmap
     from PyQt5.QtWidgets import (QAction, QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFileDialog,
         QFormLayout, QHBoxLayout, QLabel, QLineEdit, QMessageBox, QProgressBar, QPushButton,
-        QTextEdit, QVBoxLayout)
+        QTextEdit, QVBoxLayout, QWidget)
 
 from app_common.log import get_logger
 from . import paths_settings
@@ -95,13 +95,11 @@ def save_archive_options(options: ArchiveOptions) -> None:
             os.unlink(temporary)
 
 
-class ArchiveDialog(QDialog):
+class ArchiveOptionsForm(QWidget):
+    """用户选项页和入册确认窗口共用的归档设置表单，不直接写配置。"""
     def __init__(self, parent=None, *, count=0, options=None):
         super().__init__(parent)
         options = options or load_archive_options()
-        self.setWindowTitle("珍禽入册" if count else "珍禽入册 · 归档设置")
-        self.setWindowIcon(archive_icon())
-        self.setMinimumWidth(560)
         layout = QVBoxLayout(self)
         title = QLabel("珍禽入册 · 以鸟为目，以影成册", self)
         font = title.font()
@@ -137,12 +135,6 @@ class ArchiveDialog(QDialog):
                       "没有鸟名的照片跳过，拍摄日期缺失时标为“日期未知”。", self)
         hint.setWordWrap(True)
         layout.addWidget(hint)
-        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel, self)
-        buttons.button(QDialogButtonBox.StandardButton.Ok).setText("开始入册" if count else "保存设置")
-        buttons.button(QDialogButtonBox.StandardButton.Cancel).setText("取消")
-        buttons.accepted.connect(self.accept)
-        buttons.rejected.connect(self.reject)
-        layout.addWidget(buttons)
 
     def _browse(self):
         path = QFileDialog.getExistingDirectory(self, "选择归档根目录", self.directory.text())
@@ -152,8 +144,28 @@ class ArchiveDialog(QDialog):
     def selected_options(self):
         return ArchiveOptions(self.directory.text().strip(), self.mode.currentData(), self.date_prefix.isChecked())
 
+
+class ArchiveDialog(QDialog):
+    def __init__(self, parent=None, *, count=0, options=None):
+        super().__init__(parent)
+        self.setWindowTitle("珍禽入册" if count else "珍禽入册 · 归档设置")
+        self.setWindowIcon(archive_icon())
+        self.setMinimumWidth(560)
+        layout = QVBoxLayout(self)
+        self.form = ArchiveOptionsForm(self, count=count, options=options)
+        layout.addWidget(self.form)
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel, self)
+        buttons.button(QDialogButtonBox.StandardButton.Ok).setText("开始入册" if count else "保存设置")
+        buttons.button(QDialogButtonBox.StandardButton.Cancel).setText("取消")
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+
+    def selected_options(self):
+        return self.form.selected_options()
+
     def accept(self):
-        if not self.directory.text().strip():
+        if not self.selected_options().directory:
             QMessageBox.information(self, "珍禽入册", "请先选择归档目录。")
             return
         try:
@@ -249,9 +261,6 @@ class BirdArchiveController(QObject):
         menu.insertAction(first, action)
         menu.insertSeparator(first)
         action.triggered.connect(lambda _checked=False, p=tuple(paths): self.start_for_paths(p))
-
-    def configure(self):
-        ArchiveDialog(self._main).exec()
 
     def start_selected(self):
         return self.start_for_paths(self._files._active_view_selected_paths())
