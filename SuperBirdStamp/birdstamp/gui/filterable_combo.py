@@ -2,8 +2,8 @@
 from __future__ import annotations
 
 from typing import Any
-from PyQt6.QtCore import QEvent, Qt, pyqtSignal
-from PyQt6.QtWidgets import QComboBox, QFrame, QLineEdit, QListWidget, QListWidgetItem, QVBoxLayout, QWidget
+from PyQt6.QtCore import QEvent, Qt, QTimer, pyqtSignal
+from PyQt6.QtWidgets import QApplication, QComboBox, QFrame, QLineEdit, QListWidget, QListWidgetItem, QVBoxLayout, QWidget
 
 
 class FilterableComboBox(QComboBox):
@@ -50,6 +50,7 @@ class FilterableComboBox(QComboBox):
         filter_edit.setPlaceholderText(self._filter_placeholder_text)
         filter_edit.setObjectName("filterableComboFilterEdit")
         layout.addWidget(filter_edit)
+        popup.setFocusProxy(filter_edit)
 
         list_widget = QListWidget(popup)
         list_widget.setUniformItemSizes(True)
@@ -143,6 +144,21 @@ class FilterableComboBox(QComboBox):
         popup.move(self.mapToGlobal(self.rect().bottomLeft()))
         popup.show()
         filter_edit.setFocus(Qt.FocusReason.PopupFocusReason)
+        # 等本次点击和窗口激活完成后再交接焦点，避免 macOS/Windows 将焦点留在组合框。
+        focus_timer = QTimer(popup)
+        focus_timer.setSingleShot(True)
+        focus_timer.timeout.connect(lambda: self._focus_filter_popup(popup))
+        focus_timer.start(0)
+
+    def _focus_filter_popup(self, popup: QFrame) -> None:
+        # 已关闭或被替换的弹窗不能抢走其他控件的焦点。
+        if (
+            self._filter_popup is popup
+            and popup.isVisible()
+            and QApplication.activePopupWidget() is popup
+            and self._filter_popup_filter is not None
+        ):
+            self._filter_popup_filter.setFocus(Qt.FocusReason.PopupFocusReason)
 
     def _clear_filter_popup_refs(self, popup: QFrame) -> None:
         if self._filter_popup is not popup:
