@@ -17,7 +17,7 @@ from app_common.log import get_logger
 from app_common.qt_theme import is_theme_change_event, scheme_from_palette
 from app_common.toggle_button import TOGGLE_CHECKED_STYLE
 
-from .file_context_menu import build_file_context_menu
+from .file_context_menu import build_file_context_menu, species_shortcut_sequence
 from .photo_tags import (
     PhotoTagConfig,
     PhotoTagSidecarStore,
@@ -35,10 +35,12 @@ from .rarity_file_table import RarityFileTableModel, RarityBadgeDelegate
 from .thumbnail_metadata import BirdThumbnailModel, BirdThumbnailDelegate
 
 try:
-    from PyQt6.QtCore import QItemSelectionModel, QSignalBlocker
+    from PyQt6.QtCore import QItemSelectionModel, QSignalBlocker, Qt
+    from PyQt6.QtGui import QShortcut
     _DeselectRows = QItemSelectionModel.SelectionFlag.Deselect | QItemSelectionModel.SelectionFlag.Rows
 except ImportError:
-    from PyQt5.QtCore import QItemSelectionModel, QSignalBlocker
+    from PyQt5.QtCore import QItemSelectionModel, QSignalBlocker, Qt
+    from PyQt5.QtWidgets import QShortcut
     _DeselectRows = QItemSelectionModel.Deselect | QItemSelectionModel.Rows
 
 
@@ -351,9 +353,34 @@ class SuperViewerTaggedFileListPanel(FileListPanel):
         self.tag_library = TagLibraryController(self)
         self._load_tag_config_if_changed(force=True)
         self._install_tag_filter_bar()
+        self._install_species_shortcuts()
         if self._filter_edit is not None:
             self._filter_edit.setPlaceholderText("过滤文件名/备注/标签…")
             self._filter_edit.setToolTip("空格分隔多个关键词；每个关键词可匹配文件名、备注或照片标签，需全部命中。")
+
+    def _install_species_shortcuts(self) -> None:
+        self._species_shortcuts = []
+        for view in (self._tree_widget, self._list_widget):
+            for kind in ("copy", "paste"):
+                shortcut = QShortcut(species_shortcut_sequence(kind), view)
+                # 限定照片视图自身，编辑鸟名/备注/过滤文本时保留编辑器的按键行为。
+                shortcut.setContext(Qt.ShortcutContext.WidgetShortcut)
+                shortcut.setAutoRepeat(False)
+                shortcut.activated.connect(lambda k=kind: self._trigger_species_shortcut(k))
+                self._species_shortcuts.append(shortcut)
+
+    def _trigger_species_shortcut(self, kind: str) -> None:
+        if self._tag_shutdown_requested:
+            return
+        paths = self._active_view_selected_paths()
+        if not paths:
+            return
+        if kind == "copy":
+            current = self._active_view_current_path()
+            self._copy_species_from_path(current if current in paths else paths[0])
+        elif self._report_root_dir or self._current_dir:
+            # 复用菜单的快照、XMP 写入及权限检查，支持粘贴到多选照片。
+            self._paste_species_to_paths(paths)
 
     def apply_user_options(self) -> None:
         super().apply_user_options()

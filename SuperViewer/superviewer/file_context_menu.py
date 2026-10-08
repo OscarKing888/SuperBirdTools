@@ -4,15 +4,16 @@ from __future__ import annotations
 import sys
 
 from app_common.file_utils import reveal_in_file_manager
+from app_common.file_browser._browser_core import _apply_context_menu_shortcut
 from app_common.log import get_logger
 
 try:
     from PyQt6.QtCore import QLineF, QPointF, QRectF, Qt
-    from PyQt6.QtGui import QIcon, QIconEngine, QPainter, QPalette, QPen, QPixmap, QPolygonF
+    from PyQt6.QtGui import QIcon, QIconEngine, QKeySequence, QPainter, QPalette, QPen, QPixmap, QPolygonF
     from PyQt6.QtWidgets import QApplication, QMenu
 except ImportError:  # pragma: no cover
     from PyQt5.QtCore import QLineF, QPointF, QRectF, Qt
-    from PyQt5.QtGui import QIcon, QIconEngine, QPainter, QPalette, QPen, QPixmap, QPolygonF
+    from PyQt5.QtGui import QIcon, QIconEngine, QKeySequence, QPainter, QPalette, QPen, QPixmap, QPolygonF
     from PyQt5.QtWidgets import QApplication, QMenu
 
 _log = get_logger("superviewer.file_context_menu")
@@ -147,6 +148,11 @@ def _add_with_icons(menu, callback, args, kinds):
     return added
 
 
+def species_shortcut_sequence(kind):
+    """Qt 的 Ctrl 在 macOS 映射为 Command；菜单和实际快捷键共用定义。"""
+    return QKeySequence({"copy": "Ctrl+Shift+C", "paste": "Ctrl+Shift+V"}[kind])
+
+
 def _prepend_clipboard_actions(menu, panel, paths, primary):
     """扩展完成后置顶常用操作，避免扩展的 insertAction 抢占顶部。"""
     anchor = menu.actions()[0] if menu.actions() else None
@@ -154,9 +160,12 @@ def _prepend_clipboard_actions(menu, panel, paths, primary):
         menu, panel._add_file_clipboard_menu_actions, (paths,), ("copy", "cut", "paste"),
     )
     header = [copy, paste, cut, menu.addSeparator()]
-    header.extend(_add_with_icons(
+    species_actions = _add_with_icons(
         menu, panel._add_species_menu_actions, (primary, paths), ("copy", "paste"),
-    ))
+    )
+    for action, kind in zip(species_actions, ("copy", "paste")):
+        _apply_context_menu_shortcut(action, species_shortcut_sequence(kind))
+    header.extend(species_actions)
     header.append(menu.addSeparator())
     for action in header:
         menu.removeAction(action)
