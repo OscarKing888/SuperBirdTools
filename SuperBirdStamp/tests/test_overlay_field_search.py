@@ -121,7 +121,11 @@ def test_template_manager_popup_receives_native_keyboard_without_editing_field(t
     try:
         dialog.show()
         dialog.activateWindow()
-        _APP.processEvents()
+        deadline = time.monotonic() + 2
+        while _APP.focusWindow() is not dialog.windowHandle() and time.monotonic() < deadline:
+            _APP.processEvents()
+            QTest.qWait(5)
+        assert _APP.focusWindow() is dialog.windowHandle()
         panel = dialog.overlay_panel
         panel.add('text', metadata=True)
         panel.focus_content()
