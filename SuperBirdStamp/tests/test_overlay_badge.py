@@ -16,6 +16,7 @@ from birdstamp.gui.overlay_panel import OverlayPanel
 from birdstamp.export_stage import VideoFrameJob, render_video_frame, source_frame_signature_for_job
 from birdstamp.workspace import read_workspace_json, write_workspace_json
 from app_common.bird_rarity import RARITY_DEFAULT_OPTIONS
+from app_common.metadata_badges import METADATA_BADGE_DEFAULT_OPTIONS, metadata_badge_style
 
 _palette_paths = badge.palette_paths
 
@@ -102,9 +103,54 @@ def test_invalid_palette_falls_back(isolated_config,monkeypatch):
     from app_common import superviewer_user_options as options
     monkeypatch.setattr(options,'get_runtime_user_options',lambda:dict(RARITY_DEFAULT_OPTIONS))
     isolated_config.write_text('{',encoding='utf-8')
-    assert badge.load_badge_palette()==RARITY_DEFAULT_OPTIONS
+    assert badge.load_badge_palette()==METADATA_BADGE_DEFAULT_OPTIONS
     isolated_config.write_text('{"rarity_badge_epic_background":"invalid"}',encoding='utf-8')
-    assert badge.load_badge_palette()==RARITY_DEFAULT_OPTIONS
+    assert badge.load_badge_palette()==METADATA_BADGE_DEFAULT_OPTIONS
+
+
+@pytest.mark.parametrize('code', ['LC','NT','VU','EN','CR','CR(PE)','CR(PEW)','EW','EX','DD','NE','', 'invalid'])
+def test_iucn_auto_mapping_matches_shared_information_badges(code):
+    item = new_item('badge')
+    item['text_source'] = {'type':'auto','key':'iucn_category'}
+    assert content(item, {'XMP-superpicky:iucn_category':code}) == metadata_badge_style('iucn', code)
+
+
+def test_iucn_compatibility_null_stale_and_custom_modes(isolated_config):
+    item = new_item('badge')
+    item.update(text_source={'type':'auto','key':'iucn_category'}, badge_background='#123456',color='#FEDCBA')
+    palette = dict(METADATA_BADGE_DEFAULT_OPTIONS, iucn_badge_en_text='重点保护',
+                   iucn_badge_en_background='#ABCDEF', iucn_badge_en_foreground='#123ABC')
+    isolated_config.write_text(json.dumps(palette,ensure_ascii=False),encoding='utf-8')
+    for raw in ({'XMP-iptcCore:IntellectualGenre':'EN'}, {'report.iucn_category':'EN'}):
+        assert content(item,raw) == ('重点保护','#ABCDEF','#123ABC')
+    raw = {'title':'白鹭','birdid_rarity_source':'白鹭', 'birdid_rarity_missing':'iucn_category',
+           'report.iucn_category':'EN'}
+    assert content(item,raw)[0] == '未知'
+    raw.update(title='苍鹭',iucn_category='EN',birdid_rarity_missing='')
+    assert content(item,raw)[0] == '未知'
+    raw = {'iucn_category':'EN'}
+    item['badge_text_format']='raw'
+    assert content(item,raw) == ('EN','#ABCDEF','#123ABC')
+    item['badge_color_mode']='custom'
+    assert content(item,raw) == ('EN','#123456','#FEDCBA')
+
+
+def test_iucn_palette_changes_invalidate_export_and_paint(isolated_config):
+    item = new_item('badge')
+    item.update(text_source={'type':'auto','key':'iucn_category'},font_size=100)
+    raw = {'iucn_category':'EN'}
+    payload = dict(overlays=[item],ratio='no_crop')
+    job = VideoFrameJob(Path('bird.jpg'),dict(template_payload=payload),raw,{})
+    previous = source_frame_signature_for_job(job)
+    isolated_config.write_text(json.dumps(dict(METADATA_BADGE_DEFAULT_OPTIONS,
+        iucn_badge_en_background='#123456')),encoding='utf-8')
+    assert source_frame_signature_for_job(job) != previous
+    scene = build_scene(payload,(900,600),raw_metadata=raw,photo_info=photo(raw))
+    try:
+        pixels = scene.layers[0].pixels
+        assert (18,52,86,255) in {rgba for _, rgba in pixels.getcolors(pixels.width*pixels.height)}
+    finally:
+        scene.close()
 
 
 def test_rounded_pixels_transparency_and_geometry():
@@ -131,11 +177,14 @@ def test_rounded_pixels_transparency_and_geometry():
 @pytest.mark.parametrize('size',[(1600,900),(900,1600)])
 @pytest.mark.parametrize('mode',['auto','custom'])
 @pytest.mark.parametrize('shape',['rounded_rect','circle'])
-def test_preview_matches_image_gif_video_pipeline(size,mode,shape):
+@pytest.mark.parametrize('kind',['rarity','iucn'])
+def test_preview_matches_image_gif_video_pipeline(size,mode,shape,kind):
     item = new_item('badge'); item.update(font_size=100, rotation=23,opacity=75,
         badge_shape=shape,badge_color_mode=mode,badge_background='#339966',color='#FFFFFF',shadow_enabled=True)
+    if kind == 'iucn':
+        item['text_source'] = {'type':'auto','key':'iucn_category'}
     payload = dict(overlays=[item],ratio='no_crop')
-    raw = {'gbif_rarity_100':60}
+    raw = {'gbif_rarity_100':60} if kind == 'rarity' else {'iucn_category':'EN'}
     settings = dict(template_payload=payload,ratio='no_crop',draw_banner=False,draw_images=False)
     with Image.new('RGB',size,'#182030') as source:
         result = render_video_frame(VideoFrameJob(Path('bird.jpg'),settings,raw,{},photo_info=photo(raw),source_image=source))
@@ -188,6 +237,10 @@ def test_panel_add_fields_custom_switch_undo_and_lock():
         assert not panel.widgets['color'].isEnabled() and panel.selected()['color']=='#ABCDEF'
         panel.undo(); assert panel.selected()['badge_color_mode']=='custom'
         panel.redo(); assert panel.selected()['badge_color_mode']=='auto'
+        index=next(i for i in range(panel.metadata.count()) if panel.metadata.itemData(i)==('auto','iucn_category'))
+        panel.metadata.setCurrentIndex(index); panel.metadata.activated.emit(index)
+        assert not panel.widgets['color'].isEnabled() and not panel.widgets['badge_background'].isEnabled()
+        assert panel.selected()['text_source']['key']=='iucn_category'
         index=next(i for i in range(panel.metadata.count()) if panel.metadata.itemData(i)==('auto','iso'))
         panel.metadata.setCurrentIndex(index); panel.metadata.activated.emit(index)
         assert panel.widgets['color'].isEnabled()

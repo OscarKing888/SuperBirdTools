@@ -27,7 +27,7 @@ from app_common.file_browser._browser_core import (
 from app_common.bird_pinyin import bird_name, stored_pinyin
 from app_common.shooting_location import shooting_location
 from app_common.bird_rarity import rarity_metadata, IUCN_LABELS
-from .rarity_badge import RarityBadge
+from .rarity_badge import RarityBadge, ConservationBadge, MetadataBadge
 from app_common.bird_sharpness_fields import bird_sharpness_from_meta
 from app_common.log import get_logger
 from app_common.perf_probe import perf_log
@@ -551,9 +551,11 @@ class ImageInfoTabPanel_ImageInfo(ImageInfoTabPanel):
         label = QLabel(label_text)
         label.setFixedWidth(64)
         self._basic_label_widgets.append(label)
-        value = RarityBadge(self) if label_text == "稀有度" else QLabel("-")
-        value.setWordWrap(True)
-        value.setStyleSheet("color: %s; font-size: 13px;" % self._theme_colors.value_text)
+        badge_class = {"稀有度": RarityBadge, "保护等级": ConservationBadge}.get(label_text)
+        value = badge_class(self) if badge_class else QLabel("-")
+        value.setWordWrap(not bool(badge_class))
+        if not badge_class:
+            value.setStyleSheet("color: %s; font-size: 13px;" % self._theme_colors.value_text)
         row.addWidget(label)
         if label_text == "稀有度":
             row.addWidget(value)
@@ -563,6 +565,9 @@ class ImageInfoTabPanel_ImageInfo(ImageInfoTabPanel):
             self.rarity_edit_button.setToolTip("一键选择稀有度档位，或输入 0–100 分")
             self.rarity_edit_button.clicked.connect(self._edit_rarity)
             row.addWidget(self.rarity_edit_button)
+        elif badge_class:
+            row.addWidget(value)
+            row.addStretch(1)
         else:
             row.addWidget(value, stretch=1)
         if label_text == "拼音":
@@ -950,13 +955,15 @@ class ImageInfoTabPanel_ImageInfo(ImageInfoTabPanel):
             value = str(info.get(key) or "-")
             if key == "稀有度":
                 label.set_score(value)
+            elif key == "保护等级":
+                label.set_category(value)
             else:
                 label.setText(value)
                 label.setToolTip(value if key == "文件夹" else "")
             self._apply_basic_row_style(key, value, label)
 
     def _apply_basic_row_style(self, key: str, value: str, label: QLabel) -> None:
-        if key == "稀有度":
+        if isinstance(label, MetadataBadge):
             label.refresh_style()
         elif key == "对焦" and value and value != "-":
             label.setStyleSheet(f"color: {_focus_status_text_color(value)}; font-size: 13px;")

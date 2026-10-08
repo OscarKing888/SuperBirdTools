@@ -1,4 +1,4 @@
-"""徽章形状、数据解析、共享稀有度配色及 Pillow 绘制（无 Qt）。"""
+"""徽章形状、数据解析、共享元数据配色及 Pillow 绘制（无 Qt）。"""
 from __future__ import annotations
 
 from functools import lru_cache
@@ -9,9 +9,10 @@ from pathlib import Path
 import sys
 
 from PIL import Image, ImageColor, ImageDraw
-from app_common.bird_rarity import (
-    RARITY_FIELD, RARITY_SOURCE_FIELD, RARITY_COMPAT_FIELDS,
-    normalize_rarity_options, rarity_level, rarity_metadata,
+from app_common.bird_rarity import RARITY_SOURCE_FIELD
+from app_common.metadata_badges import (
+    BADGE_DEFINITIONS, badge_kind_for_field, metadata_badge_style, metadata_badge_value,
+    normalize_metadata_badge_options,
 )
 from .model import number
 
@@ -39,11 +40,13 @@ def normalize_badge(raw):
 
 
 def is_rarity_badge(item):
+    return badge_mapping_kind(item) == 'rarity'
+
+
+def badge_mapping_kind(item):
     if item.get('text_mode') != 'metadata':
-        return False
-    key = str(item.get('text_source', {}).get('key', '')).strip().strip('{}')
-    return key in (RARITY_FIELD, 'report.' + RARITY_FIELD, 'XMP-superpicky:' + RARITY_FIELD,
-                   RARITY_COMPAT_FIELDS[RARITY_FIELD], 'XMP-Iptc4xmpExt:Event')
+        return None
+    return badge_kind_for_field(item.get('text_source', {}).get('key', ''))
 
 
 def palette_paths(*, frozen=None, executable=None, source_root=None):
@@ -71,9 +74,9 @@ def palette_paths(*, frozen=None, executable=None, source_root=None):
 def _read_palette(path, mtime_ns, size):
     # 时间戳/大小参与 key；每次绘制只做 stat，文件变化才重新解析 UTF-8。
     try:
-        return normalize_rarity_options(json.loads(Path(path).read_text(encoding='utf-8')))
+        return normalize_metadata_badge_options(json.loads(Path(path).read_text(encoding='utf-8')))
     except (OSError, ValueError) as exc:
-        logging.getLogger(__name__).warning('读取稀有度徽章配色失败 %s: %s', path, exc)
+        logging.getLogger(__name__).warning('读取元数据徽章配色失败 %s: %s', path, exc)
         return None
 
 
@@ -87,11 +90,11 @@ def load_badge_palette():
         if palette is not None:
             return dict(palette)
     from app_common.superviewer_user_options import get_runtime_user_options
-    return normalize_rarity_options(get_runtime_user_options())
+    return normalize_metadata_badge_options(get_runtime_user_options())
 
 
 def badge_content(t, item, photo_info, raw_metadata, palette):
-    """普通字段沿用 provider 优先级；稀有度只对明确选中的字段做等级映射。"""
+    """Configured fields share the Viewer mapping; other providers retain their values."""
     if item['text_mode'] == 'literal':
         text = item['text']
     else:
@@ -99,24 +102,24 @@ def badge_content(t, item, photo_info, raw_metadata, palette):
         provider = t.build_template_context_provider(source['type'], source['key'], display_label=item['name'])
         text = t._resolve_template_field_text(provider, photo_info)
     background, foreground = item['badge_background'], item['color']
-    if is_rarity_badge(item):
-        score = text
+    kind = badge_mapping_kind(item)
+    if kind:
+        value = text
         source = item['text_source']
-        # 自动 GBIF 字段复用 Viewer 的兼容 XMP 和失效标记，避免旧鸟种等级回填。
-        if source['type'] == 'auto' and source['key'].strip().strip('{}') == RARITY_FIELD:
+        definition = BADGE_DEFINITIONS[kind]
+        # Automatic canonical fields honor saved null/stale markers, just like Viewer.
+        if source['type'] == 'auto' and source['key'].strip().strip('{}').strip() == definition.field:
             from birdstamp.gui.template_context import _metadata_with_xmp_priority
             metadata = _metadata_with_xmp_priority(photo_info)
-            keys = (RARITY_FIELD, 'report.' + RARITY_FIELD, 'XMP-superpicky:' + RARITY_FIELD,
-                    RARITY_SOURCE_FIELD, 'XMP-superpicky:' + RARITY_SOURCE_FIELD,
-                    RARITY_COMPAT_FIELDS[RARITY_FIELD], 'XMP-Iptc4xmpExt:Event')
+            keys = (*definition.aliases, RARITY_SOURCE_FIELD, 'XMP-superpicky:' + RARITY_SOURCE_FIELD)
             if any(key in metadata for key in keys):
-                score = rarity_metadata(metadata)[0]
-                text = f'{score:g}' if score is not None else '未知'
-        prefix = f'rarity_badge_{rarity_level(score)}_'
+                value = metadata_badge_value(kind, metadata)
+                text = (f'{value:g}' if isinstance(value, (int, float)) else str(value)) if value is not None and value != '' else '未知'
+        label, mapped_background, mapped_foreground = metadata_badge_style(kind, value, palette)
         if item['badge_text_format'] == 'auto':
-            text = palette[prefix + 'text']
+            text = label
         if item['badge_color_mode'] == 'auto':
-            background, foreground = palette[prefix + 'background'], palette[prefix + 'foreground']
+            background, foreground = mapped_background, mapped_foreground
     return text, background, foreground
 
 

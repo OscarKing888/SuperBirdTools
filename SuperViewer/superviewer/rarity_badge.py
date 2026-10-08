@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
-"""信息页稀有度徽章与用户选项编辑器。"""
-from app_common.bird_rarity import RARITY_LEVELS, RARITY_DEFAULT_OPTIONS, normalize_rarity_options, rarity_level, rarity_score
+"""信息页元数据徽章与共享用户选项编辑器；保留稀有度调用接口。"""
+from app_common.bird_rarity import normalize_badge_options, rarity_score
+from app_common.metadata_badges import BADGE_DEFINITIONS, metadata_badge_style
 from app_common.superviewer_user_options import get_runtime_user_options
 from .qt_compat import QLabel, QWidget, QPushButton, QLineEdit, QGridLayout, QVBoxLayout, QSizePolicy
 try:
@@ -15,9 +16,7 @@ except ImportError:  # pragma: no cover
 
 def rarity_badge_style(score, options=None, *, level=None):
     """信息页和列表徽章共用名称与颜色。"""
-    options = normalize_rarity_options(get_runtime_user_options() if options is None else options)
-    key = f"rarity_badge_{level or rarity_level(score)}_"
-    return tuple(options[key + field] for field in ("text", "background", "foreground"))
+    return metadata_badge_style("rarity", score, get_runtime_user_options() if options is None else options, level=level)
 
 
 def rarity_badge_tooltip(score):
@@ -26,29 +25,45 @@ def rarity_badge_tooltip(score):
             f"GBIF 稀有度：{score:g}/100，越高越稀有。\n档位分界：8、25、50、75；与 IUCN 保护等级独立。")
 
 
-class RarityBadge(QLabel):
-    def __init__(self, parent=None):
+class MetadataBadge(QLabel):
+    def __init__(self, parent=None, *, kind="rarity"):
         super().__init__(parent)
-        self._score = None
+        self.kind = kind
+        self._value = None
         self.setTextFormat(getattr(Qt, "TextFormat", Qt).PlainText)
-        self.setWordWrap(True)
+        self.setWordWrap(False)
         self.setMinimumWidth(60)
         self.setAlignment(getattr(Qt, "AlignmentFlag", Qt).AlignCenter)
         policy = getattr(QSizePolicy, "Policy", QSizePolicy)
         self.setSizePolicy(policy.Maximum, policy.Preferred)
         self.refresh_style()
 
-    def set_score(self, score):
-        self._score = rarity_score(score)
-        self.setToolTip(rarity_badge_tooltip(self._score))
+    def set_value(self, value):
+        self._value = value
+        self.setToolTip(rarity_badge_tooltip(value) if self.kind == "rarity" else
+                       f"IUCN 保护等级：{value}" if value and value != "-" else "暂无 IUCN 保护等级数据")
         self.refresh_style()
 
     def refresh_style(self, options=None, *, level=None):
-        text, background, foreground = rarity_badge_style(self._score, options, level=level)
+        text, background, foreground = metadata_badge_style(
+            self.kind, self._value, get_runtime_user_options() if options is None else options, level=level)
         self.setText(text)
         self.setStyleSheet(f"QLabel {{ background-color: {background}; "
                            f"color: {foreground}; border-radius: 6px; "
                            "padding: 3px 9px; font-size: 13px; font-weight: 600; }")
+
+
+class RarityBadge(MetadataBadge):
+    def set_score(self, score):
+        self.set_value(rarity_score(score))
+
+
+class ConservationBadge(MetadataBadge):
+    def __init__(self, parent=None):
+        super().__init__(parent, kind="iucn")
+
+    def set_category(self, category):
+        self.set_value(str(category or "").split(" · ", 1)[0])
 
 
 class _ColorButton(QPushButton):
@@ -72,24 +87,26 @@ class _ColorButton(QPushButton):
             self._changed()
 
 
-class RarityBadgesForm(QWidget):
-    def __init__(self, options, parent=None):
+class MetadataBadgesForm(QWidget):
+    def __init__(self, options, parent=None, *, kind="rarity"):
         super().__init__(parent)
-        opts = normalize_rarity_options(options)
+        self.definition = BADGE_DEFINITIONS[kind]
+        opts = normalize_badge_options(options, self.definition.defaults)
         layout = QVBoxLayout(self)
-        note = QLabel("按 GBIF 稀有度分数显示徽章，分数越高越稀有。\n"
-                      "每档名称、背景色和文字色均可修改，默认文字为白色。\n"
-                      "IUCN 保护等级独立显示；缺失数据不会显示为普通或无危。", self)
+        note = QLabel(("按 GBIF 稀有度分数显示徽章，分数越高越稀有。\n" if kind == "rarity" else
+                       "IUCN 保护等级默认采用 Cornell / eBird 保护状态配色。\n") +
+                      "名称、背景色和文字色用于图片信息及 Overlay 自动映射。\n"
+                      "缺失数据独立显示为未知，不视为普通、无危或未评估。", self)
         note.setWordWrap(True)
         layout.addWidget(note)
         grid = QGridLayout()
         grid.setColumnStretch(1, 1)
         grid.setColumnMinimumWidth(4, 70)
-        for col, title in enumerate(("分数范围", "显示名称", "背景色", "文字色", "预览")):
+        for col, title in enumerate(("分数范围" if kind == "rarity" else "等级", "显示名称", "背景色", "文字色", "预览")):
             grid.addWidget(QLabel(title, self), 0, col)
         self.edits, self.colors, self.previews = {}, {}, {}
-        for row, (level, interval, _text, _bg) in enumerate(RARITY_LEVELS, 1):
-            prefix = f"rarity_badge_{level}_"
+        for row, (level, interval, *_rest) in enumerate(self.definition.levels, 1):
+            prefix = f"{self.definition.prefix}_{level}_"
             grid.addWidget(QLabel(interval, self), row, 0)
             edit = QLineEdit(opts[prefix + "text"], self)
             edit.setMaxLength(32)
@@ -100,8 +117,7 @@ class RarityBadgesForm(QWidget):
                 button = _ColorButton(opts[prefix + field], self._refresh_previews, self)
                 self.colors[(level, field)] = button
                 grid.addWidget(button, row, col)
-            preview = RarityBadge(self)
-            preview.setMaximumWidth(110)
+            preview = MetadataBadge(self, kind=kind)
             self.previews[level] = preview
             grid.addWidget(preview, row, 4)
         for edit in self.edits.values():
@@ -114,10 +130,11 @@ class RarityBadgesForm(QWidget):
         self._refresh_previews()
 
     def selected_options(self):
-        return normalize_rarity_options({
-            **{f"rarity_badge_{level}_text": edit.text() for level, edit in self.edits.items()},
-            **{f"rarity_badge_{level}_{field}": button.color for (level, field), button in self.colors.items()},
-        })
+        prefix = self.definition.prefix
+        return normalize_badge_options({
+            **{f"{prefix}_{level}_text": edit.text() for level, edit in self.edits.items()},
+            **{f"{prefix}_{level}_{field}": button.color for (level, field), button in self.colors.items()},
+        }, self.definition.defaults)
 
     def _refresh_previews(self, *_args):
         options = self.selected_options()
@@ -126,7 +143,16 @@ class RarityBadgesForm(QWidget):
 
     def reset_defaults(self):
         for level, edit in self.edits.items():
-            edit.setText(RARITY_DEFAULT_OPTIONS[f"rarity_badge_{level}_text"])
+            edit.setText(self.definition.defaults[f"{self.definition.prefix}_{level}_text"])
         for (level, field), button in self.colors.items():
-            button.set_color(RARITY_DEFAULT_OPTIONS[f"rarity_badge_{level}_{field}"])
+            button.set_color(self.definition.defaults[f"{self.definition.prefix}_{level}_{field}"])
         self._refresh_previews()
+
+
+class RarityBadgesForm(MetadataBadgesForm):
+    pass
+
+
+class ConservationBadgesForm(MetadataBadgesForm):
+    def __init__(self, options, parent=None):
+        super().__init__(options, parent, kind="iucn")

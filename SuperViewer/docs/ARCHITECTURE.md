@@ -372,7 +372,9 @@ Qt 测试在窗口构造前隔离 `paths_settings` 的应用/用户状态目录�
 
 识鸟核心 [`bird_identification.py`](../superviewer/bird_identification.py) 校验服务候选的 `gbif_rarity_100`（0–100，保留 0）和可空 `iucn_category`。已确认结果通过 `PhotoMetaDataXMP` 一次原子写入私有原始字段和 SuperPicky 兼容字段（`XMP-iptcExt:Event`、`XMP-iptcCore:IntellectualGenre`）；空值清除过期数据，`birdid_rarity_source` 绑定鸟名，`birdid_rarity_missing` 标记缺失字段以阻止旧报告回填空值。低置信度只保留在完整响应中。
 
-共享 [`bird_rarity.py`](../../app_common/bird_rarity.py) 定义档位（8/25/50/75）、字段读取优先级、名称/颜色默认值及配置校验。`MetadataLoader._parse_rec` 携带等级与来源，支持重新打开目录。照片信息的 [`RarityBadge`](../superviewer/rarity_badge.py) 只读缓存，显示紧凑徽章和分数提示；IUCN 独立显示。“用户选项 → 稀有度徽章”的 `RarityBadgesForm` 提供名称、背景/文字颜色、即时预览与恢复默认，通过共享 `superviewer_user_options` 保存到 `SuperViewerUser.cfg`，当前信息面板局部刷新并保留备注草稿。
+共享 [`bird_rarity.py`](../../app_common/bird_rarity.py) 定义档位（8/25/50/75）、字段读取优先级及配置校验。无 Qt 的 [`metadata_badges.py`](../../app_common/metadata_badges.py) 通过 `BadgeDefinition` 注册字段及兼容别名、等级规则、元数据读取器、配置前缀和默认名称/颜色；`metadata_badge_style()` 为 Qt 信息页、稀有度列表列与 BirdStamp Overlay 提供同一映射。原 `rarity_badge_*` 配置兼容，新增 `iucn_badge_*`（text/background/foreground）。IUCN 默认颜色取自 [Cornell Lab Lichen 的保护状态徽章样式](https://birdsoftheworld.org/static/themes/base/public/dist/lichen-d2bf811f236a56ef92f98fa42e8be82b.css)；LC/NT/VU/EN/NE 使用深色文字，CR/EW/EX/DD 使用白字，CR(PE)/CR(PEW) 沿用 CR 红色并可独立配置，缺失/无效数据单独显示未知，不等同于 LC 或 NE。
+
+`MetadataLoader._parse_rec` 携带等级与来源，支持重新打开目录。照片信息的 [`MetadataBadge`、`RarityBadge`、`ConservationBadge`](../superviewer/rarity_badge.py) 只读缓存，稀有度和保护等级均显示紧凑彩色徽章；初始化及主题更新保留徽章样式，不启动元数据读取。“用户选项”的标签页在左侧竖排、文字保持横排，徽章配置页可滚动；`MetadataBadgesForm` 共享名称、背景/文字颜色、即时预览与恢复默认，提供“稀有度徽章”和“保护等级徽章”两页。通过共享 `superviewer_user_options` 保存到 `SuperViewerUser.cfg`，保存后当前信息面板局部刷新并保留备注草稿。扩展映射只需向共享注册表添加定义；打包沿用现有 `collect_submodules("app_common")`。回归见 `app_common/tests/test_metadata_badges.py`、`test_rarity_badge.py` 和 BirdStamp `test_overlay_badge.py`。
 
 列表模式在鸟名后显示“稀有度”列，由 [`RarityFileTableModel` / `RarityBadgeDelegate`](../superviewer/rarity_file_table.py) 扩展共享模型并绘制圆角徽章，复用信息页的名称、颜色和分数提示；缺失、无效或鸟名过期的数据留空，0 分仍显示普通。只读取已有元数据，沿用增量刷新，不创建逐行控件或触发缩略图/EXIF 工作。逻辑列追加以保留原列索引，表头调整视觉顺序，默认宽 88 px 且可拖动。排序使用原始数值，列表和缩略图共用模型的 `sort_key_for_path()`；配置更新仅通知此列刷新。共享默认模型及 BirdStamp 不增加此列。
 

@@ -1,8 +1,9 @@
 """真实 Qt 徽章、配置预览与保存；测试不打开原生窗口。"""
-from PyQt6.QtWidgets import QApplication
+from PyQt6.QtWidgets import QApplication, QTabWidget, QScrollArea
 from PyQt6.QtGui import QColor
 from app_common import superviewer_user_options as options
 from app_common.bird_rarity import RARITY_DEFAULT_OPTIONS
+from app_common.metadata_badges import IUCN_DEFAULT_OPTIONS
 from SuperViewer.superviewer import rarity_badge as ui
 from SuperViewer.superviewer.super_viewer_user_options_dialog import SuperViewerUserOptionsDialog
 
@@ -94,4 +95,68 @@ def test_options_dialog_badge_edit_color_picker_save_restore(tmp_path, monkeypat
     finally:
         dialog.close()
         dialog.deleteLater()
+        _APP.processEvents()
+
+
+def test_conservation_options_sidebar_persistence_and_reset(tmp_path, monkeypatch):
+    monkeypatch.setattr(options, '_get_app_dir', lambda: str(tmp_path))
+    dialog = SuperViewerUserOptionsDialog(options=options.normalize_user_options({}))
+    try:
+        assert dialog.tabs.tabPosition() == QTabWidget.TabPosition.West
+        assert dialog.tabs.tabBar().tabSizeHint(0).width() > dialog.tabs.tabBar().tabSizeHint(0).height()
+        form = dialog._conservation_badges_form
+        form.edits['en'].setText('重点保护')
+        form.colors[('en','background')].set_color('#123456')
+        form._refresh_previews()
+        assert form.previews['en'].text() == '重点保护'
+        assert '#123456' in form.previews['en'].styleSheet()
+        options.save_user_options(dialog.selected_options())
+        loaded = options.load_user_options()
+        assert loaded['iucn_badge_en_text'] == '重点保护'
+        assert loaded['iucn_badge_en_background'] == '#123456'
+        assert loaded['rarity_badge_legendary_background'] == RARITY_DEFAULT_OPTIONS['rarity_badge_legendary_background']
+        pages = [dialog.tabs.widget(i) for i in range(dialog.tabs.count())]
+        scroll = next(page for page in pages if isinstance(page,QScrollArea) and page.widget() is form)
+        assert scroll.widgetResizable()
+        form.reset_defaults()
+        assert form.selected_options() == IUCN_DEFAULT_OPTIONS
+    finally:
+        dialog.close()
+        dialog.deleteLater()
+        _APP.processEvents()
+
+
+def test_information_badges_paint_colors_and_keep_drafts_on_theme_and_config(tmp_path, monkeypatch):
+    from SuperViewer.superviewer.image_info_tab_image_info import ImageInfoTabPanel_ImageInfo
+    monkeypatch.setattr(options, '_RUNTIME_OPTIONS', options.normalize_user_options({
+        'rarity_badge_epic_background':'#123456', 'iucn_badge_en_background':'#ABCDEF',
+    }))
+    reads = []
+    panel = ImageInfoTabPanel_ImageInfo(lambda: [],lambda _path: [],lambda *_args: None,
+        lambda path,_name:path,metadata_provider=lambda path: reads.append(path) or {})
+    try:
+        # Both rows are colored badges even before the first photo arrives.
+        for key in ('稀有度','保护等级'):
+            assert isinstance(panel.basic_rows[key],ui.MetadataBadge)
+            assert 'background-color' in panel.basic_rows[key].styleSheet()
+        panel._set_basic_info({'稀有度':'50','保护等级':'EN · 濒危'})
+        panel.comment_edit.setPlainText('未保存的备注')
+        panel.filename_edit.setText('未保存的文件名')
+        panel.apply_theme()
+        for key,expected in (('稀有度','#123456'),('保护等级','#abcdef')):
+            label = panel.basic_rows[key]
+            label.resize(label.sizeHint())
+            rendered = label.grab().toImage()
+            assert expected in {rendered.pixelColor(x,y).name()
+                                for x in range(rendered.width()) for y in range(rendered.height())}
+        options.apply_runtime_user_options({'iucn_badge_en_text':'保护物种','iucn_badge_en_background':'#654321'})
+        panel.apply_theme()
+        assert panel.basic_rows['保护等级'].text() == '保护物种'
+        assert '#654321' in panel.basic_rows['保护等级'].styleSheet()
+        assert panel.comment_edit.toPlainText() == '未保存的备注'
+        assert panel.filename_edit.text() == '未保存的文件名'
+        assert reads == []
+    finally:
+        panel.close()
+        panel.deleteLater()
         _APP.processEvents()

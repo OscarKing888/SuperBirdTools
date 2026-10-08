@@ -142,12 +142,12 @@ class OverlayPanel(QWidget):
         self._combo('style','样式',[('常规','normal'),('粗体','bold'),('斜体','italic'),('粗斜体','bold_italic')],kinds=('text','badge'))
         self._combo('badge_shape','Badge 形状',[('圆角矩形','rounded_rect'),('圆形','circle')],kinds=('badge',))
         self._combo('badge_color_mode','Badge 配色',[
-            ('自动（稀有度跟随徽章设置）','auto'),('自定义颜色','custom')],kinds=('badge',))
+            ('自动（跟随元数据徽章设置）','auto'),('自定义颜色','custom')],kinds=('badge',))
         self.widgets['badge_color_mode'].setToolTip(
-            'GBIF 稀有度自动采用 SuperViewer 稀有度徽章的背景色和文字色；其他字段使用自定义颜色。'
+            '稀有度和 IUCN 保护等级采用用户选项中对应徽章的背景色和文字色；其他字段使用自定义颜色。'
             '切换配色模式会保留自定义颜色。')
         self._combo('badge_text_format','Badge 内容',[
-            ('自动（稀有度显示等级名称）','auto'),('原始字段值','raw')],kinds=('badge',))
+            ('自动（显示配置的等级名称）','auto'),('原始字段值','raw')],kinds=('badge',))
         self._color('badge_background','Badge 背景色',('badge',))
         self._color('color','文字颜色',('text','badge'))
         self._percent('badge_padding_x','水平内边距（字号 %）',0,200,factor=100,kinds=('badge',))
@@ -430,9 +430,9 @@ class OverlayPanel(QWidget):
                 if key=='badge_radius': widget.setEnabled(not item['locked'] and item.get('badge_shape')!='circle')
                 if key=='tint_color': widget.setEnabled(not item['locked'] and item.get('tint_enabled',False))
                 if key in ('color','badge_background') and item['type']=='badge':
-                    from birdstamp.overlays.badge import is_rarity_badge
+                    from birdstamp.overlays.badge import badge_mapping_kind
                     widget.setEnabled(not item['locked'] and not (
-                        item['badge_color_mode']=='auto' and is_rarity_badge(item)))
+                        item['badge_color_mode']=='auto' and badge_mapping_kind(item)))
                 value=item.get(key)
                 if isinstance(widget,QCheckBox): widget.setChecked(bool(value))
                 elif isinstance(widget,(QDoubleSpinBox,PercentEditor)): widget.setValue(float(value or 0)*widget.property('factor'))

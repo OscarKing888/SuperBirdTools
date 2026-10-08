@@ -38,13 +38,32 @@ from .qt_compat import (
 
 
 try:
-    from PyQt6.QtCore import Qt
+    from PyQt6.QtCore import Qt, QSize
     from PyQt6.QtGui import QPalette
+    from PyQt6.QtWidgets import QTabBar, QStyle, QStyleOptionTab, QStylePainter
 except ImportError:  # pragma: no cover - PyQt5 fallback
-    from PyQt5.QtCore import Qt
+    from PyQt5.QtCore import Qt, QSize
     from PyQt5.QtGui import QPalette
+    from PyQt5.QtWidgets import QTabBar, QStyle, QStyleOptionTab, QStylePainter
 
 _TOOLTIP_ROLE = getattr(getattr(Qt, "ItemDataRole", Qt), "ToolTipRole")
+
+
+class _SidebarTabBar(QTabBar):
+    """West-side tabs with horizontal, keyboard-accessible labels."""
+    def tabSizeHint(self, index):
+        return QSize(max(132, self.fontMetrics().horizontalAdvance(self.tabText(index)) + 28),
+                     max(40, self.fontMetrics().height() + 20))
+
+    def paintEvent(self, event):
+        painter = QStylePainter(self)
+        controls = getattr(QStyle, "ControlElement", QStyle)
+        for index in range(self.count()):
+            option = QStyleOptionTab()
+            self.initStyleOption(option, index)
+            painter.drawControl(controls.CE_TabBarTabShape, option)
+            option.shape = getattr(QTabBar, "Shape", QTabBar).RoundedNorth
+            painter.drawControl(controls.CE_TabBarTabLabel, option)
 
 
 class SuperViewerUserOptionsDialog(QDialog):
@@ -52,7 +71,7 @@ class SuperViewerUserOptionsDialog(QDialog):
         super().__init__(parent)
         self.setWindowTitle("用户选项")
         self.setModal(True)
-        self.resize(650, 600)
+        self.resize(920, 660)
 
         opts = normalize_user_options(options or get_runtime_user_options())
         cpu_count = max(1, os.cpu_count() or 1)
@@ -144,6 +163,9 @@ class SuperViewerUserOptionsDialog(QDialog):
         grid.addWidget(QLabel("默认关闭"), row, 2)
 
         tabs = QTabWidget(self)
+        tabs.setTabBar(_SidebarTabBar(tabs))
+        tabs.setTabPosition(getattr(QTabWidget, "TabPosition", QTabWidget).West)
+        self.tabs = tabs
         general = QWidget(tabs)
         general_layout = QVBoxLayout(general)
         general_layout.addLayout(grid)
@@ -210,9 +232,15 @@ class SuperViewerUserOptionsDialog(QDialog):
         denoise_layout.addStretch(1)
         tabs.addTab(denoise, "批量降噪")
 
-        from .rarity_badge import RarityBadgesForm
+        from .rarity_badge import RarityBadgesForm, ConservationBadgesForm
         self._rarity_badges_form = RarityBadgesForm(opts, tabs)
-        tabs.addTab(self._rarity_badges_form, "稀有度徽章")
+        self._conservation_badges_form = ConservationBadgesForm(opts, tabs)
+        for form, label in ((self._rarity_badges_form, "稀有度徽章"),
+                            (self._conservation_badges_form, "保护等级徽章")):
+            scroll = QScrollArea(tabs)
+            scroll.setWidgetResizable(True)
+            scroll.setWidget(form)
+            tabs.addTab(scroll, label)
 
         sharpness = QWidget(tabs)
         sharpness_layout = QVBoxLayout(sharpness)
@@ -296,5 +324,6 @@ class SuperViewerUserOptionsDialog(QDialog):
             "denoise_device": str(self._combo_denoise_device.currentData()),
             "denoise_workers": self._spin_denoise_workers.value(),
             **self._rarity_badges_form.selected_options(),
+            **self._conservation_badges_form.selected_options(),
             **bird_sharpness_params_to_options(self._bird_sharpness_form.params()),
         }

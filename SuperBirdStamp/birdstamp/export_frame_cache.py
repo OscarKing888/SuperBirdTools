@@ -225,7 +225,7 @@ def build_source_frame_signature(
     }
     # 跟随配色是外部渲染输入，设置变化后不能复用旧徽章帧（含文件模板）。
     from birdstamp.overlays.badge import load_badge_palette
-    payload["rarity_badge_palette"] = load_badge_palette()
+    payload["metadata_badge_palette"] = load_badge_palette()
     return hash_payload(payload)
 
 
