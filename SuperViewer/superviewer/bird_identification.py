@@ -126,6 +126,12 @@ class BirdIDClient:
             "image_path": os.path.abspath(path), "top_k": 3, "use_yolo": True, "use_gps": True,
         })
 
+    def recognize_crop(self, path: str):
+        """裁图已由清晰度算法定位，不让服务再次选择另一只鸟；裁图不含 GPS。"""
+        return self._request("/recognize", {
+            "image_path": os.path.abspath(path), "top_k": 3, "use_yolo": False, "use_gps": False,
+        })
+
 
 @dataclass
 class BirdIDResult:

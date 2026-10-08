@@ -77,7 +77,8 @@ def test_menus_resolved_source_and_cache_update_without_reselection(env):
     assert '3 张' in multi.actions()[0].text()
     directory = QMenu()
     controller.extend_directory_menu(directory, str(Path(paths[0]).parent))
-    assert [a.text() for a in directory.actions()[0].menu().actions()] == ['识别当前目录…', '识别目录及子目录…']
+    assert [a.text() for a in directory.actions()[0].menu().actions()] == [
+        '识别当前目录…', '识别目录及子目录…', '逐只识别当前目录…', '逐只识别目录及子目录…']
     files.sources['stale-report.jpg'] = paths[0]
     files._all_files = ['stale-report.jpg', *paths]
     selected, refreshed = [], []
@@ -105,6 +106,32 @@ def test_batch_continues_after_error_and_counts_candidates(env, monkeypatch):
     assert controller._dialog.details.model().index(1, 1).data() == '待确定'
     assert not Path(paths[0]).with_suffix('.xmp').exists()
     assert PhotoMetaDataXMP().read(paths[1])['alt_species_cn'] == '候选翠鸟'
+
+
+def test_per_bird_menu_worker_shutdown_owns_thread_and_no_late_write(env, monkeypatch):
+    from SuperViewer.tests.test_per_bird_identification import Analyzer, response
+    controller, files, paths, state = env
+    monkeypatch.setattr(ui, 'make_analyzer', lambda *a, **k: Analyzer([(0, 0, 100, 100)]))
+    menu = QMenu()
+    controller.extend_file_menu(menu, paths[:1])
+    assert '逐只识别…' in [a.text() for a in menu.actions()]
+    state['gate'] = threading.Event()
+    def recognize(client, path):
+        state['started'].set()
+        assert state['gate'].wait(5)
+        return response()
+    monkeypatch.setattr(BirdIDClient, 'recognize_crop', recognize)
+    assert controller.start_for_paths(paths, options=BirdIDOptions(), per_bird=True)
+    assert state['started'].wait(3)
+    worker = controller._worker
+    controller.request_shutdown()
+    assert controller.busy and not controller.is_shutdown_done()
+    controller._finished(object())
+    assert controller._worker is worker
+    state['gate'].set()
+    assert wait_for(controller.is_shutdown_done)
+    assert not files.updates
+    assert all(not Path(p).with_suffix('.xmp').exists() for p in paths)
 
 
 def test_cancel_keeps_thread_owned_rejects_stale_callbacks_and_prevents_write(env):
@@ -162,7 +189,7 @@ def test_saved_result_queued_before_new_edit_does_not_clobber_ui(env, monkeypatc
     assert wait_for(lambda: not controller.busy)
 
 
-@pytest.mark.parametrize('operation', ['bird_id', 'pinyin', 'location', 'rarity', 'catalog', 'capture_time'])
+@pytest.mark.parametrize('operation', ['bird_id', 'per_bird', 'pinyin', 'location', 'rarity', 'catalog', 'capture_time'])
 @pytest.mark.parametrize('mode', ['list', 'thumbnail'])
 def test_real_window_result_refresh_preserves_preview_and_comment_draft(tmp_path, monkeypatch, mode, operation):
     import importlib
@@ -190,7 +217,7 @@ def test_real_window_result_refresh_preserves_preview_and_comment_draft(tmp_path
     tags.write_text('鸟类\n    白头鹎\n', encoding='utf-8')
     monkeypatch.setattr(main, 'SuperViewerTaggedFileListPanel', lambda: SuperViewerTaggedFileListPanel(tag_config_path=tags))
     photo = library / '实测.jpg'
-    Image.new('RGB', (24, 18), 'blue').save(photo)
+    Image.new('RGB', (320, 240) if operation == 'per_bird' else (24, 18), 'blue').save(photo)
     source = str(photo)
     capture_paths = [source]
     if operation == 'capture_time':
@@ -201,8 +228,12 @@ def test_real_window_result_refresh_preserves_preview_and_comment_draft(tmp_path
     monkeypatch.setattr(BirdIDClient, 'recognize', lambda *_: {
         'success': True, 'results': [{'cn_name': '白头鹎', 'en_name': 'Light-vented Bulbul', 'confidence': 93, 'gbif_rarity_100': 80, 'iucn_category': 'NT'},
         {'cn_name': '红耳鹎', 'en_name': 'Red-whiskered Bulbul', 'confidence': 40, 'gbif_rarity_100': 10, 'iucn_category': 'LC'}]})
-    if operation in ('pinyin', 'location', 'rarity', 'capture_time'):
+    if operation in ('pinyin', 'location', 'rarity', 'capture_time', 'per_bird'):
         assert PhotoMetaDataXMP().write_title(source, '白头鹎')
+    if operation == 'per_bird':
+        from SuperViewer.tests.test_per_bird_identification import Analyzer, response
+        monkeypatch.setattr(ui, 'make_analyzer', lambda *a, **k: Analyzer([(0, 0, 100, 100), (160, 80, 320, 240)]))
+        monkeypatch.setattr(BirdIDClient, 'recognize_crop', lambda *_: response('苍鹭'))
     window = main.MainWindow(initial_received_files=['skip-restore'])
     window.show()
     try:
@@ -220,6 +251,9 @@ def test_real_window_result_refresh_preserves_preview_and_comment_draft(tmp_path
         if operation == 'bird_id':
             controller = window._bird_id
             assert controller.start_for_paths([source], options=BirdIDOptions())
+        elif operation == 'per_bird':
+            controller = window._bird_id
+            assert controller.start_for_paths([source], options=BirdIDOptions(), per_bird=True)
         elif operation == 'capture_time':
             from SuperViewer.superviewer import capture_time_update
             raws = tmp_path / 'raws'
@@ -261,6 +295,15 @@ def test_real_window_result_refresh_preserves_preview_and_comment_draft(tmp_path
             assert not panel.pinyin_update_button.isHidden()
             panel.pinyin_update_button.click()
         assert wait_for(lambda: not controller.busy)
+        if operation == 'per_bird':
+            from SuperViewer.superviewer.per_bird_identification import read_individuals
+            assert len(read_individuals(files.cached_photo_metadata_for_path(source))) == 2
+            birds = window.image_info_panel.individual_birds.birds
+            assert len(birds.rows) == 2 and '苍鹭' in birds.rows[0].value
+            birds._set_hovered(0)
+            assert window.preview_panel.canvas._individual_highlight is not None
+            birds._set_hovered(None)
+            assert window.preview_panel.canvas._individual_highlight is None
         if operation == 'capture_time':
             assert controller._report is not None and controller._succeeded == 1
             assert files._active_view_selected_paths() == [str(missing)]

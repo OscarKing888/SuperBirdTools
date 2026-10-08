@@ -112,6 +112,8 @@ try:
         _get_resource_path,
         load_auto_focus_center_from_settings,
         save_auto_focus_center_to_settings,
+        load_include_subdirectories_from_settings,
+        save_include_subdirectories_to_settings,
         load_main_splitter_state_from_settings,
         load_last_selected_directory_from_settings,
         save_main_splitter_state_to_settings,
@@ -139,6 +141,7 @@ try:
     from .superviewer.bird_archive_ui import BirdArchiveController, archive_action
     from .superviewer.denoise_controller import DenoiseController
     from .superviewer.bird_identification_controller import BirdIDController
+    from .superviewer.per_bird_identification_ui import IndividualBirdHover
     from .superviewer.bird_pinyin_controller import PinyinController
     from .superviewer.shooting_location_controller import ShootingLocationController
     from .superviewer.capture_time_controller import CaptureTimeController
@@ -203,6 +206,8 @@ except ImportError:
         _get_resource_path,
         load_auto_focus_center_from_settings,
         save_auto_focus_center_to_settings,
+        load_include_subdirectories_from_settings,
+        save_include_subdirectories_to_settings,
         load_main_splitter_state_from_settings,
         load_last_selected_directory_from_settings,
         save_main_splitter_state_to_settings,
@@ -230,6 +235,7 @@ except ImportError:
     from superviewer.bird_archive_ui import BirdArchiveController, archive_action
     from superviewer.denoise_controller import DenoiseController
     from superviewer.bird_identification_controller import BirdIDController
+    from superviewer.per_bird_identification_ui import IndividualBirdHover
     from superviewer.bird_pinyin_controller import PinyinController
     from superviewer.shooting_location_controller import ShootingLocationController
     from superviewer.capture_time_controller import CaptureTimeController
@@ -363,12 +369,14 @@ class MainWindow(QMainWindow):
         self._main_splitter = splitter
 
         # ── 面板 1：目录浏览器 ──
-        self._dir_browser = DirectoryBrowserWidget()
+        include_subdirectories = load_include_subdirectories_from_settings()
+        self._dir_browser = DirectoryBrowserWidget(include_subdirectories=include_subdirectories)
         self._dir_browser.setMinimumWidth(140)
         splitter.addWidget(self._dir_browser)
 
         # ── 面板 2：图像文件列表 ──
         self._file_list = SuperViewerTaggedFileListPanel()
+        self._file_list.set_include_subdirectories(include_subdirectories)
         self._tag_history_actions.set_panel(self._file_list)
         self._file_list.setMinimumWidth(520)
         splitter.addWidget(self._file_list)
@@ -380,6 +388,7 @@ class MainWindow(QMainWindow):
 
         # 连接目录选择 → 文件列表加载
         self._dir_browser.directory_selected.connect(self._on_directory_selected)
+        self._dir_browser.include_subdirectories_changed.connect(self._on_include_subdirectories_changed)
         # 鸟清晰度检测：目录树 / 文件列表右键菜单 → 后台检测 → 写 XMP → 刷新列表与缩略图
         self._bird_sharpness = BirdSharpnessController(self, self._file_list, self._dir_browser)
         self._bird_archive = BirdArchiveController(self, self._file_list)
@@ -532,6 +541,9 @@ class MainWindow(QMainWindow):
             parent=self.image_info_tabs,
             pinyin_update_callback=lambda path: self._bird_pinyin.start_for_paths([path]),
         )
+        self._individual_bird_hover = IndividualBirdHover(
+            self.image_info_panel, (self.preview_a, self.preview_panel), self)
+        self._file_list.playback_state_changed.connect(lambda active: self._individual_bird_hover.clear() if active else None)
         self.tags_info_panel = ImageInfoTabPanel_Tags(
             self._file_list.available_photo_tags,
             self._file_list.photo_tags_for_path,
@@ -601,7 +613,15 @@ class MainWindow(QMainWindow):
         colors = panel_theme_colors(scheme)
         self.file_label.setStyleSheet("color: %s; font-size: 12px;" % colors.secondary_text)
 
-    def _on_directory_selected(self, path: str):
+    def _on_include_subdirectories_changed(self, enabled: bool) -> None:
+        """范围改变后重新加载当前列表，沿用目录切换的取消与预览清理流程。"""
+        save_include_subdirectories_to_settings(enabled)
+        self._file_list.set_include_subdirectories(enabled)
+        path = self._file_list.get_current_dir()
+        if path:
+            self._on_directory_selected(path, force_reload=True)
+
+    def _on_directory_selected(self, path: str, *, force_reload: bool = False):
         """目录树选中目录后，保存路径到设置与 .last_folder.txt，并刷新文件列表。"""
         self._bird_body.clear_panel(self.preview_a)
         self._bird_body.clear_panel(self.preview_panel)
@@ -618,7 +638,7 @@ class MainWindow(QMainWindow):
         self.file_label.setToolTip('')
         self._stop_focus_loader()
         save_last_selected_directory_to_settings(path)
-        self._file_list.load_directory(path)
+        self._file_list.load_directory(path, force_reload=force_reload)
 
     def _restore_last_selected_directory(self) -> None:
         """启动时从 .last_folder.txt 或设置恢复并展开上次选中的目录。"""

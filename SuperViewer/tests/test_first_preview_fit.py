@@ -86,7 +86,10 @@ def test_directory_switch_resets_each_ab_first_image(window, tmp_path, monkeypat
     Image.new('RGB', (1600, 1000)).save(second)
     monkeypatch.setattr(main, 'save_last_selected_directory_to_settings', lambda path: None)
     directories = []
-    monkeypatch.setattr(window._file_list, 'load_directory', directories.append)
+    def load_directory(path, *, force_reload=False):
+        assert force_reload is False
+        directories.append(path)
+    monkeypatch.setattr(window._file_list, 'load_directory', load_directory)
     window._on_file_selected_from_list(str(first))
     window.ab_preview.enabled.setChecked(True)
     for panel in (window.preview_a, window.preview_panel):
