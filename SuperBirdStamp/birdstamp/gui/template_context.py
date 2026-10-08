@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from collections import defaultdict
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass, field, replace
 from datetime import datetime
 from fractions import Fraction
@@ -52,6 +54,20 @@ NormalizedCropBox = tuple[float, float, float, float]
 
 _REPORT_DB_ROW_RESOLVER: Optional[Callable[[Path], Optional[Dict[str, Any]]]] = None
 _PHOTO_INFO_CROP_BOX_UNSET = object()
+
+# 只在一次渲染内复用解析结果；退出后丢弃，下一帧仍按原规则读取 XMP/文件/report。
+_RENDER_CONTEXT_CACHE: ContextVar[dict | None] = ContextVar("template_render_context_cache", default=None)
+
+
+@contextmanager
+def template_render_context():
+    """为一次同步模板渲染提供有界缓存，不改变 provider 优先级或补读策略。"""
+    token = _RENDER_CONTEXT_CACHE.set({"providers": [], "lookups": []})
+    try:
+        yield
+    finally:
+        _RENDER_CONTEXT_CACHE.reset(token)
+
 
 _BASE_TEMPLATE_CONTEXT: TemplateContext = {
     "bird": "",
@@ -149,7 +165,21 @@ def _cache_snapshot_context(builder):
     @wraps(builder)
     def cached(cls, photo_info, *args):
         if not photo_info.metadata_is_snapshot:
-            return builder(cls, photo_info, *args)
+            cache = _RENDER_CONTEXT_CACHE.get()
+            if cache is None:
+                return builder(cls, photo_info, *args)
+            entries = cache["providers"]
+            # EXIF 的完整元数据与仅侧车元数据必须分开缓存。
+            # 同名短标签的回退依赖插入顺序，不能仅按 dict 等值比较。
+            argument_key = tuple(tuple(arg.items()) if isinstance(arg, dict) else arg for arg in args)
+            key = (cls, builder.__name__, photo_info, argument_key)
+            for previous, result in entries:
+                if previous[:2] == key[:2] and previous[2] is photo_info and previous[3] == argument_key:
+                    return result
+            result = builder(cls, photo_info, *args)
+            entries.append((key, result))
+            del entries[:-16]
+            return result
         key = (cls.provider_id, builder.__name__)
         if key not in photo_info._snapshot_contexts:
             photo_info._snapshot_contexts[key] = builder(cls, photo_info, *args)
@@ -288,6 +318,11 @@ def _photo_raw_metadata(photo_info: PhotoInfo) -> Dict[str, Any]:
 
 
 def _normalize_lookup(raw: Dict[str, Any]) -> Dict[str, Any]:
+    cache = _RENDER_CONTEXT_CACHE.get()
+    entries = cache["lookups"] if cache is not None else []
+    for previous, lookup in entries:
+        if previous == raw and tuple(previous) == tuple(raw):
+            return lookup
     lookup: Dict[str, Any] = {}
     normalized_items: list[tuple[str, Any]] = []
     for key, value in raw.items():
@@ -299,6 +334,9 @@ def _normalize_lookup(raw: Dict[str, Any]) -> Dict[str, Any]:
     for key_text, value in normalized_items:
         if ":" in key_text:
             lookup.setdefault(key_text.split(":")[-1], value)
+    if cache is not None:
+        entries.append((dict(raw), lookup))
+        del entries[:-8]
     return lookup
 
 

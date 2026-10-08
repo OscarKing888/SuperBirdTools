@@ -144,6 +144,8 @@ def test_template_manager_new_layers_save_roundtrip(tmp_path,monkeypatch):
     assert dlg.overlay_edit_check.isChecked()
     payload=load_template_payload(folder/'test.json')
     assert payload['overlays'][-1]['text']=='自定义中文\n第二行'
+    # 保存仍同步，预览会合并连续参数修改。
+    dlg._refresh_preview()
     assert dlg.overlay_session.scene is not None
     dlg.overlay_panel.undo()
     assert load_template_payload(folder/'test.json')['overlays'][-1]['text']=='自定义文本'
