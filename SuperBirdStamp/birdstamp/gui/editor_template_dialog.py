@@ -595,6 +595,7 @@ class TemplateManagerDialog(QDialog):
         layout = QVBoxLayout(panel)
         layout.setContentsMargins(8, 8, 8, 8)
         layout.setSpacing(8)
+        layout.setAlignment(Qt.AlignmentFlag.AlignTop)
 
         with stat_span("tmpl_build_header_group"):
             header_group = self._build_header_group()
@@ -603,21 +604,17 @@ class TemplateManagerDialog(QDialog):
         with stat_span("tmpl_build_field_edit_group"):
             field_edit_group = self._build_field_edit_group()
 
-        self._editor_group_splitter = QSplitter(Qt.Orientation.Vertical)
-        self._editor_group_splitter.setChildrenCollapsible(False)
-        self._editor_group_splitter.addWidget(header_group)
+        # 分组按内容高度从顶部连续排列，余量留在底部，避免切换图层时拉散间距。
+        header_group.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
+        layout.addWidget(header_group, alignment=Qt.AlignmentFlag.AlignTop)
         # 保留旧属性适配入口，界面统一使用模板/实例共用的叠加层编辑器。
         fields_group.setParent(panel); fields_group.hide()
         field_edit_group.setParent(panel); field_edit_group.hide()
         self.overlay_panel = OverlayPanel(panel, property_columns=True)
         self.overlay_panel.changed.connect(self._on_overlay_document_changed)
         self.overlay_panel.activateRequested.connect(self._activate_overlay_edit)
-        self._editor_group_splitter.addWidget(self.overlay_panel)
-        self._editor_group_splitter.setStretchFactor(0, 2)
-        self._editor_group_splitter.setStretchFactor(1, 2)
-        self._editor_group_splitter.setStretchFactor(1, 4)
-        self._editor_group_splitter.setSizes([240, 620])
-        layout.addWidget(self._editor_group_splitter, stretch=1)
+        layout.addWidget(self.overlay_panel, alignment=Qt.AlignmentFlag.AlignTop)
+        layout.addStretch(1)
         return panel
 
     def _build_preview_panel(self) -> QWidget:
@@ -1165,7 +1162,6 @@ class TemplateManagerDialog(QDialog):
         self.overlay_panel.set_document(payload, "template:"+str(path))
         for row in range(5, self._header_form.rowCount()):
             self._header_form.setRowVisible(row, False)
-        self._header_form.parentWidget().setMaximumHeight(self._header_form.sizeHint().height()+40)
         self._refresh_preview()
 
     # ------------------------------------------------------------------

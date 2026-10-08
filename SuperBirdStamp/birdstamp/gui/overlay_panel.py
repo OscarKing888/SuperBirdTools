@@ -60,6 +60,9 @@ class OverlayPanel(QWidget):
         self._text_timer.timeout.connect(lambda: self.edit('text', self.text.toPlainText()))
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0,0,0,0)
+        if property_columns:
+            layout.setAlignment(Qt.AlignmentFlag.AlignTop)
+            self.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
         self.scope = QLabel('叠加层')
         self.scope.setWordWrap(True)
         layout.addWidget(self.scope)
@@ -82,8 +85,11 @@ class OverlayPanel(QWidget):
             else: self.duplicate_button=button
         layout.addLayout(row)
         self.list = QListWidget()
-        self.list.setMinimumHeight(280 if property_columns else 105)
-        self.list.setMaximumHeight(360 if property_columns else 140)
+        if property_columns:
+            self.list.setFixedHeight(280)
+        else:
+            self.list.setMinimumHeight(105)
+            self.list.setMaximumHeight(140)
         self.list.setDragDropMode(QAbstractItemView.DragDropMode.InternalMove)
         self.list.currentItemChanged.connect(self._selected)
         self.list.itemChanged.connect(self._visibility_changed)
