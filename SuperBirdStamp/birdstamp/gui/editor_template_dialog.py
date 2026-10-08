@@ -437,7 +437,7 @@ class TemplateManagerDialog(QDialog):
 
         super().__init__(parent)
         self.setWindowTitle("模板管理")
-        self.resize(1180, 780)
+        self.resize(1600, 860)
         self.setMinimumSize(640, 500)
 
         self.template_dir = template_dir
@@ -547,10 +547,10 @@ class TemplateManagerDialog(QDialog):
         splitter.addWidget(editor_scroll)
         splitter.addWidget(preview_panel)
         splitter.setStretchFactor(0, 1)
-        splitter.setStretchFactor(1, 3)
-        splitter.setStretchFactor(2, 6)
+        splitter.setStretchFactor(1, 6)
+        splitter.setStretchFactor(2, 3)
         left_panel.setMaximumWidth(200)
-        splitter.setSizes([160, 420, 640])
+        splitter.setSizes([160, 920, 500])
         splitter.setChildrenCollapsible(False)
 
     def _build_template_list_panel(self) -> QWidget:
@@ -609,7 +609,7 @@ class TemplateManagerDialog(QDialog):
         # 保留旧属性适配入口，界面统一使用模板/实例共用的叠加层编辑器。
         fields_group.setParent(panel); fields_group.hide()
         field_edit_group.setParent(panel); field_edit_group.hide()
-        self.overlay_panel = OverlayPanel(panel)
+        self.overlay_panel = OverlayPanel(panel, property_columns=True)
         self.overlay_panel.changed.connect(self._on_overlay_document_changed)
         self.overlay_panel.activateRequested.connect(self._activate_overlay_edit)
         self._editor_group_splitter.addWidget(self.overlay_panel)

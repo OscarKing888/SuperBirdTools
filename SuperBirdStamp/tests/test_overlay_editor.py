@@ -139,6 +139,7 @@ def test_template_manager_new_layers_save_roundtrip(tmp_path,monkeypatch):
     folder=tmp_path/'templates'; folder.mkdir()
     save_template_payload(folder/'test.json',default_template_payload())
     dlg=TemplateManagerDialog(folder,Image.new('RGB',(800,450)))
+    dlg._reload_template_list('test')
     dlg.overlay_panel.add('text')
     dlg.overlay_panel.edit('text','自定义中文\n第二行')
     assert dlg.overlay_edit_check.isChecked()

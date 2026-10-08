@@ -42,8 +42,9 @@ class OverlayPanel(QWidget):
     selectionChanged = pyqtSignal(str)
     activateRequested = pyqtSignal()
 
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, *, property_columns=False):
         super().__init__(parent)
+        self._property_columns = property_columns
         self.doc = document({'fields': []})
         self.context = ''
         self.following = False
@@ -181,23 +182,37 @@ class OverlayPanel(QWidget):
         self._refresh()
 
     def _organize_properties(self):
-        self.tabs=QTabWidget()
+        self.tabs = None if self._property_columns else QTabWidget()
+        self.property_groups = {}
+        columns = QWidget() if self._property_columns else None
+        if columns is not None:
+            column_layout = QHBoxLayout(columns)
+            column_layout.setContentsMargins(0, 0, 0, 0)
+            column_layout.setSpacing(8)
         self.forms={}
         forms={}
-        for name in ('内容','位置','效果'):
-            page=QWidget(); forms[name]=QFormLayout(page)
+        for name in ('内容','布局','效果'):
+            page = QGroupBox(name) if self._property_columns else QWidget()
+            self.property_groups[name] = page
+            forms[name]=QFormLayout(page)
             forms[name].setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)
-            self.tabs.addTab(page,name)
+            if self._property_columns:
+                # 窄列中的颜色等复合控件可换到标签下方，保持完整可用。
+                forms[name].setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapLongRows)
+                forms[name].setFormAlignment(Qt.AlignmentFlag.AlignTop)
+                column_layout.addWidget(page, 1)
+            else:
+                self.tabs.addTab(page,name)
         geometry={'layout_mode','align_horizontal','align_vertical','x_offset_pct','y_offset_pct','x','y','scale','width','height','rotation','opacity'}
         for key,widget in self.widgets.items():
             if key in ('name','visible','locked'): continue
             row=self.form.takeRow(widget)
-            group='位置' if key in geometry else '效果' if key.startswith(('stroke_','shadow_')) else '内容'
+            group='布局' if key in geometry else '效果' if key.startswith(('stroke_','shadow_')) else '内容'
             forms[group].addRow(row.labelItem.widget(),widget)
             self.forms[key]=forms[group]
-        for widget,group in ((self.reset_layout_button,'位置'),(self.font_button,'内容'),(self.replace_image_button,'内容')):
+        for widget,group in ((self.reset_layout_button,'布局'),(self.font_button,'内容'),(self.replace_image_button,'内容')):
             self.form.takeRow(widget); forms[group].addRow(widget)
-        self.form.addRow(self.tabs)
+        self.form.addRow(columns if columns is not None else self.tabs)
         self.setMinimumWidth(0)
 
     def _build_layout_controls(self):
@@ -239,7 +254,6 @@ class OverlayPanel(QWidget):
         self.advanced_geometry = QCheckBox('精确位置 / 兼容设置')
         self.advanced_geometry.toggled.connect(lambda _: self._properties())
         self.forms['layout_mode'].insertRow(1, self.advanced_geometry)
-        self.tabs.setTabText(1, '布局')
 
     def _layout_properties(self):
         from birdstamp.overlays.layout import indexes, members
@@ -453,7 +467,10 @@ class OverlayPanel(QWidget):
             self.font_button.setVisible(item['type'] in ('text','badge'))
             self.replace_image_button.setVisible(item['type']=='image')
             self.replace_image_button.setEnabled(not item['locked'])
-            self.tabs.setTabVisible(2,item['type'] in ('text','badge'))
+            if self.tabs is not None:
+                self.tabs.setTabVisible(2,item['type'] in ('text','badge'))
+            else:
+                self.property_groups['效果'].setVisible(item['type'] in ('text','badge'))
             self.reset_layout_button.setVisible(self.advanced_geometry.isChecked() and not chain)
             self.reset_layout_button.setEnabled(not item['locked'])
         self._updating=False
@@ -519,7 +536,10 @@ class OverlayPanel(QWidget):
         doc=deepcopy(self.doc)
         if asset: doc['overlay_assets'][asset[0]]=asset[1]
         doc['overlays'].append(item); self.selected_id=item['id']
-        self.commit(doc); self.tabs.setCurrentIndex(0); self.activateRequested.emit(); self.selectionChanged.emit(self.selected_id)
+        self.commit(doc)
+        if self.tabs is not None:
+            self.tabs.setCurrentIndex(0)
+        self.activateRequested.emit(); self.selectionChanged.emit(self.selected_id)
 
     def delete(self):
         self.flush_text()
@@ -576,7 +596,8 @@ class OverlayPanel(QWidget):
     def focus_content(self):
         item=self.selected()
         if not item or item['type'] not in ('text','badge') or item['locked']: return
-        self.tabs.setCurrentIndex(0)
+        if self.tabs is not None:
+            self.tabs.setCurrentIndex(0)
         widget=self.text if item['text_mode']=='literal' else self.metadata
         parent=self.parentWidget()
         while parent is not None:
