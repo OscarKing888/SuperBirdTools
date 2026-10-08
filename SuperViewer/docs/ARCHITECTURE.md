@@ -165,6 +165,12 @@ RAW 完整解码可能保留内嵌 JPEG 裁掉的传感器边缘。共享 [`raw_
 
 EXIF 页直接列出 ExifTool 从 RAW 及其他图像读取的已知标签，包含相机 MakerNote。若有对焦距离，`_camera_focus_distance_from_exiftool()` 将其提到优先区，Canon 的上下界保留各自标签和原值；Sony 仅有 ExifTool 合成距离时会明确标为估算。没有距离时不生成占位值。超焦距计算及 ExifTool 的合成超焦距均不显示。
 
+### 从 RAW 更新拍摄时间
+
+照片列表/缩略图右键“从同名 RAW 更新拍摄时间…”仅处理所选 PNG/JPG/JPEG，选择 RAW 目录后递归匹配同名文件（忽略扩展名、大小写，Unicode NFC）。缺少匹配、存在多个匹配、时间无效或写入失败均逐文件记录；全部成功无弹框，部分失败显示可复制的文件路径及原因。操作与 CLI 用法见 [拍摄时间更新](capture_time_update.md)。
+
+无 Qt 核心 [`capture_time_update.py`](../superviewer/capture_time_update.py) 扫描一次目录，直接读取 RAW 内嵌 EXIF 原始拍摄时间（缺失时回退数字化时间），保留亚秒与时区，通过 `PhotoMetaDataXMP` 原子写同名 XMP 的标准时间和 `date_time_original` 私有字段。同侧车去重，保护损坏侧车和扫描/读取期间发生的并发修改。原图、RAW 和 report.db 保持只读。[`CaptureTimeController`](../superviewer/capture_time_controller.py) 管理后台线程、有界结果队列、定时分批 `MetadataResultSync` 及真实线程退出等待；更新列表/信息页，不重选或重载预览。回归见 [核心读写](../tests/test_capture_time_update.py)、[菜单及生命周期](../tests/test_capture_time_controller.py) 与 `test_bird_identification_controller.py` 的列表/缩略图实窗验证。
+
 ### 拍摄地点
 
 图片信息页的“拍摄地点”输入框显示并编辑独立文本，回车或失焦保存，留空清除；支持原生文本复制粘贴。照片列表和缩略图的右键“拍摄地点”菜单提供单张/多选修改、复制单张地点和向所选照片粘贴剪贴板文本。

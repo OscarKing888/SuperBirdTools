@@ -141,6 +141,7 @@ try:
     from .superviewer.bird_identification_controller import BirdIDController
     from .superviewer.bird_pinyin_controller import PinyinController
     from .superviewer.shooting_location_controller import ShootingLocationController
+    from .superviewer.capture_time_controller import CaptureTimeController
     from .superviewer.rarity_controller import RarityController
     from .superviewer.burst_info_controller import BurstInfoController
     from .superviewer.preview_key_router import PreviewKeyRouter
@@ -231,6 +232,7 @@ except ImportError:
     from superviewer.bird_identification_controller import BirdIDController
     from superviewer.bird_pinyin_controller import PinyinController
     from superviewer.shooting_location_controller import ShootingLocationController
+    from superviewer.capture_time_controller import CaptureTimeController
     from superviewer.rarity_controller import RarityController
     from superviewer.burst_info_controller import BurstInfoController
     from superviewer.preview_key_router import PreviewKeyRouter
@@ -383,6 +385,7 @@ class MainWindow(QMainWindow):
         self._bird_archive = BirdArchiveController(self, self._file_list)
         self._bird_pinyin = PinyinController(self, self._file_list, self._dir_browser)
         self._shooting_location = ShootingLocationController(self, self._file_list)
+        self._capture_time = CaptureTimeController(self, self._file_list)
         self._rarity_edit = RarityController(self, self._file_list)
         self._bird_id = BirdIDController(self, self._file_list, self._dir_browser)
         self._denoise = DenoiseController(self, self._file_list, self._dir_browser)
@@ -1670,6 +1673,10 @@ class MainWindow(QMainWindow):
             except Exception:
                 pass
             try:
+                self._capture_time.request_shutdown()
+            except Exception:
+                pass
+            try:
                 self._bird_pinyin.request_shutdown()
             except Exception:
                 pass
@@ -1715,6 +1722,7 @@ class MainWindow(QMainWindow):
         archive_done = self._bird_archive.is_shutdown_done()
         bird_pinyin_done = self._bird_pinyin.is_shutdown_done()
         shooting_location_done = self._shooting_location.is_shutdown_done()
+        capture_time_done = self._capture_time.is_shutdown_done()
         rarity_edit_done = self._rarity_edit.is_shutdown_done()
         bird_id_done = self._bird_id.is_shutdown_done()
         denoise_done = self._denoise.is_shutdown_done()
@@ -1722,12 +1730,12 @@ class MainWindow(QMainWindow):
         burst_info_done = self._burst_info.is_shutdown_done()
         pending_state = (
             focus_done, tabs_done, preview_done, exiftool_done, directory_scans_done, bird_sharpness_done,
-            burst_info_done, denoise_done, bird_body_done, archive_done, bird_id_done, bird_pinyin_done, shooting_location_done, rarity_edit_done,
+            burst_info_done, denoise_done, bird_body_done, archive_done, bird_id_done, bird_pinyin_done, shooting_location_done, rarity_edit_done, capture_time_done,
         )
         if not all(pending_state):
             if pending_state != self._shutdown_pending_state:
                 _log.info(
-                    "[shutdown] waiting focus=%s image_info=%s preview=%s exiftool=%s directory_scans_and_pool=%s bird_sharpness=%s burst_info=%s denoise=%s bird_body=%s archive=%s bird_id=%s bird_pinyin=%s shooting_location=%s rarity_edit=%s",
+                    "[shutdown] waiting focus=%s image_info=%s preview=%s exiftool=%s directory_scans_and_pool=%s bird_sharpness=%s burst_info=%s denoise=%s bird_body=%s archive=%s bird_id=%s bird_pinyin=%s shooting_location=%s rarity_edit=%s capture_time=%s",
                     focus_done,
                     tabs_done,
                     preview_done,
@@ -1742,6 +1750,7 @@ class MainWindow(QMainWindow):
                     bird_pinyin_done,
                     shooting_location_done,
                     rarity_edit_done,
+                    capture_time_done,
                 )
                 self._shutdown_pending_state = pending_state
             event.ignore()
