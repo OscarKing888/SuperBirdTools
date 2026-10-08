@@ -1,64 +1,9 @@
-"""编辑器的叠加侧栏与固定导出区，只负责控件布局，不持有渲染设置。"""
+"""编辑器的固定导出区，只负责控件布局，不持有渲染设置。"""
 from PyQt6.QtCore import QPoint, Qt
 from PyQt6.QtWidgets import (
-    QDockWidget, QFormLayout, QFrame, QHBoxLayout, QLabel, QPushButton, QScrollArea,
+    QFrame, QHBoxLayout, QLabel, QPushButton,
     QSizePolicy, QStackedWidget, QVBoxLayout, QWidget,
 )
-
-
-class OverlayEditorDock(QDockWidget):
-    """可停靠、可浮动的叠加编辑器；关闭只收起并提交待输入文字。"""
-
-    def __init__(self, editor, panel, actions):
-        super().__init__('叠加层编辑', editor)
-        self.setObjectName('BirdStampOverlayEditorDock')
-        self.setAllowedAreas(Qt.DockWidgetArea.RightDockWidgetArea)
-        self.panel = panel
-        # 颜色等复合控件较宽时换行，窄侧栏和 Windows 高 DPI 下无需横向滚动。
-        for form in {panel.form, *panel.forms.values(), panel.layout_box.layout()}:
-            form.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapLongRows)
-        content = QWidget()
-        layout = QVBoxLayout(content)
-        self.context_label = QLabel('请选择照片')
-        self.context_label.setWordWrap(True)
-        self.context_label.setTextFormat(Qt.TextFormat.PlainText)
-        self.context_label.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
-        layout.addWidget(self.context_label)
-        layout.addWidget(panel)
-        layout.addLayout(actions)
-        layout.addStretch(1)
-        self.scroll = QScrollArea()
-        self.scroll.setWidgetResizable(True)
-        self.scroll.setFrameShape(QFrame.Shape.NoFrame)
-        self.scroll.setWidget(content)
-        self.setWidget(self.scroll)
-        self.setMinimumWidth(340)
-        editor.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self)
-        self.hide()
-        self._opened = False
-
-    def reveal(self):
-        if not self._opened:
-            self._opened = True
-            editor = self.parentWidget()
-            # 小窗口避免挤窄照片；原生 Dock 标题栏仍允许用户拖回右侧停靠。
-            sidebar_width = editor.left_scroll.width()
-            if editor.width() - sidebar_width < 840:
-                self.setFloating(True)
-                screen = editor.screen().availableGeometry()
-                width, height = min(420, screen.width()), min(720, screen.height() - 60)
-                origin = editor.frameGeometry().topRight()
-                x = max(screen.left(), min(origin.x() - width, screen.right() - width + 1))
-                y = max(screen.top() + 30, min(origin.y() + 40, screen.bottom() - height + 1))
-                self.setGeometry(x, y, width, height)
-            else:
-                editor.resizeDocks([self], [400], Qt.Orientation.Horizontal)
-        self.show()
-        self.raise_()
-
-    def closeEvent(self, event):
-        self.panel.flush_text()
-        super().closeEvent(event)
 
 
 class ExportActionBar(QFrame):

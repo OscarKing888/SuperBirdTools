@@ -61,7 +61,7 @@ def test_group_ownership_and_default_experimental_gate(window):
     assert window.dejitter_method_group.isAncestorOf(window.dejitter_subject_controls)
     assert window.dejitter_method_group.isAncestorOf(panel.target_button)
     assert window.dejitter_analysis_group.isAncestorOf(window.dejitter_preprocess_btn)
-    assert window.dejitter_export_group.isAncestorOf(window.dejitter_export_btn)
+    assert window.export_action_bar.isAncestorOf(window.dejitter_export_btn)
 
 
 def test_failed_preflight_shows_frame_and_reason_in_analysis(window,monkeypatch):
