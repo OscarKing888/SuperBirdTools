@@ -5,9 +5,9 @@ import uuid
 from PyQt6.QtCore import Qt, QRectF
 from PyQt6.QtGui import QColor, QPainter, QPen
 from PyQt6.QtWidgets import (
-    QDialog, QDialogButtonBox, QDoubleSpinBox, QFormLayout, QGridLayout,
+    QDialog, QDialogButtonBox, QDoubleSpinBox, QFormLayout, QGridLayout, QGroupBox, QLayout,
     QHBoxLayout, QLabel, QLineEdit, QListWidget, QListWidgetItem, QMessageBox,
-    QPushButton, QStyle, QVBoxLayout, QWidget,
+    QPushButton, QScrollArea, QSizePolicy, QStyle, QVBoxLayout, QWidget,
 )
 
 from app_common.sidebar_tabs import SidebarTabWidget
@@ -19,15 +19,19 @@ class SafeAreaPreview(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.margins = None
-        self.setMinimumSize(250, 180)
+        self.setMinimumWidth(280)
+        self.setFixedHeight(172)
 
     def paintEvent(self, event):
         painter = QPainter(self)
         try:
             for index, orientation in enumerate(('portrait', 'landscape')):
                 region = QRectF(index*self.width()/2, 0, self.width()/2, self.height())
-                width, height = (70., 124.) if index == 0 else (144., 81.)
-                frame = QRectF(region.center().x()-width/2, region.center().y()-height/2-8, width, height)
+                width, height = (72., 128.) if index == 0 else (144., 81.)
+                # 预览保持等比，标题紧贴对应画幅，不再随剩余窗口高度分离。
+                scale = min(1., (region.width()-24)/width)
+                width, height = width*scale, height*scale
+                frame = QRectF(region.center().x()-width/2, 30+(128-height)/2, width, height)
                 painter.fillRect(frame, QColor('#5D646C'))
                 if self.margins:
                     left, top, right, bottom = self.margins[orientation]
@@ -37,7 +41,7 @@ class SafeAreaPreview(QWidget):
                     painter.setPen(QPen(QColor('#248E72'), 2, Qt.PenStyle.DashLine))
                     painter.drawRect(safe)
                 painter.setPen(self.palette().text().color())
-                painter.drawText(QRectF(region.left(), self.height()-24, region.width(), 22),
+                painter.drawText(QRectF(region.left(), 2, region.width(), 22),
                                  Qt.AlignmentFlag.AlignCenter, '竖屏' if index == 0 else '横屏')
         finally:
             painter.end()
@@ -55,7 +59,11 @@ class UserOptionsDialog(QDialog):
         self.tabs = SidebarTabWidget(self)
         outer.addWidget(self.tabs, 1)
         self.safe_area_page = self._build_safe_area_page()
-        self.tabs.addTab(self.safe_area_page,
+        self.safe_area_scroll = QScrollArea(self.tabs)
+        self.safe_area_scroll.setWidgetResizable(True)
+        self.safe_area_scroll.setFrameShape(QScrollArea.Shape.NoFrame)
+        self.safe_area_scroll.setWidget(self.safe_area_page)
+        self.tabs.addTab(self.safe_area_scroll,
                          self.style().standardIcon(QStyle.StandardPixmap.SP_FileDialogDetailedView),
                          '安全区')
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
@@ -72,18 +80,34 @@ class UserOptionsDialog(QDialog):
         """安全区控件集中在独立页面，后续选项通过 tabs.addTab 追加。"""
         page = QWidget(self.tabs)
         page_layout = QVBoxLayout(page)
-        hint = QLabel('每组分别设置横屏、竖屏的遮挡边距，单位为画幅百分比。0% 表示该边不预留。\n'
-                      '模板裁切中的安全框列表随组配置更新；布局避让保持原有字号和图像大小。')
+        page_layout.setContentsMargins(16, 16, 16, 16)
+        page_layout.setSpacing(12)
+        page_layout.setSizeConstraint(QLayout.SizeConstraint.SetMinimumSize)
+        title = QLabel('安全区设置')
+        font = title.font()
+        font.setBold(True)
+        title.setFont(font)
+        page_layout.addWidget(title)
+        hint = QLabel('选择或新增一组安全区，分别设置横屏、竖屏的遮挡边距。')
         hint.setWordWrap(True)
         page_layout.addWidget(hint)
+
         body = QHBoxLayout()
+        body.setSpacing(16)
         page_layout.addLayout(body)
-        left = QVBoxLayout()
-        body.addLayout(left, 1)
+        group_box = QGroupBox('安全区组', page)
+        group_box.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Maximum)
+        left = QVBoxLayout(group_box)
+        left.setContentsMargins(12, 24, 12, 12)
+        left.setSpacing(8)
         self.groups = QListWidget()
         self.groups.setAccessibleName('安全区组')
+        self.groups.setMinimumWidth(150)
+        self.groups.setMaximumWidth(220)
+        self.groups.setFixedHeight(220)
         left.addWidget(self.groups)
         actions = QHBoxLayout()
+        actions.setSpacing(4)
         left.addLayout(actions)
         for label, method in (('新增', self.add_group), ('复制', self.copy_group), ('删除', self.remove_group)):
             button = QPushButton(label)
@@ -93,19 +117,32 @@ class UserOptionsDialog(QDialog):
         reset.setToolTip('恢复内置组名和边距，点击确定后保存；取消可放弃本次修改。')
         reset.clicked.connect(self.reset_groups)
         left.addWidget(reset)
+        body.addWidget(group_box, 0, Qt.AlignmentFlag.AlignTop)
+
         self.form_widget = QWidget()
-        body.addWidget(self.form_widget, 2)
+        body.addWidget(self.form_widget, 1, Qt.AlignmentFlag.AlignTop)
         right = QVBoxLayout(self.form_widget)
+        right.setContentsMargins(0, 0, 0, 0)
+        right.setSpacing(12)
         form = QFormLayout()
+        form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)
         right.addLayout(form)
         self.name_edit = QLineEdit()
         self.name_edit.setMaxLength(80)
         self.name_edit.setAccessibleName('安全区组名')
         form.addRow('组名', self.name_edit)
+
+        margins_box = QGroupBox('遮挡边距（画幅百分比）')
+        margins_layout = QVBoxLayout(margins_box)
+        margins_layout.setContentsMargins(12, 24, 12, 12)
+        margins_layout.setSpacing(10)
         grid = QGridLayout()
-        right.addLayout(grid)
+        grid.setHorizontalSpacing(8)
+        grid.setVerticalSpacing(8)
+        margins_layout.addLayout(grid)
         for column, name in enumerate(('左', '上', '右', '下'), start=1):
-            grid.addWidget(QLabel(name), 0, column)
+            grid.addWidget(QLabel(name), 0, column, Qt.AlignmentFlag.AlignHCenter)
+            grid.setColumnStretch(column, 1)
         self.margin_spins = {}
         for row, (orientation, label) in enumerate((('portrait', '竖屏'), ('landscape', '横屏')), start=1):
             grid.addWidget(QLabel(label), row, 0)
@@ -116,16 +153,29 @@ class UserOptionsDialog(QDialog):
                 spin.setDecimals(1)
                 spin.setSingleStep(.5)
                 spin.setSuffix('%')
+                spin.setMinimumWidth(spin.sizeHint().width())
                 spin.setAccessibleName(f'{label}{side}边距')
                 spin.valueChanged.connect(self._edit)
                 grid.addWidget(spin, row, column)
                 spins.append(spin)
             self.margin_spins[orientation] = spins
-        self.preview = SafeAreaPreview()
-        right.addWidget(self.preview, 1)
-        note = QLabel('左右之和、上下之和均须小于 100%。\n绿色为可用安全区，灰色为预留遮挡区。')
+        note = QLabel('0% 表示不预留；左右之和、上下之和均须小于 100%。')
         note.setWordWrap(True)
-        right.addWidget(note)
+        margins_layout.addWidget(note)
+        right.addWidget(margins_box)
+
+        preview_box = QGroupBox('安全区预览')
+        preview_layout = QVBoxLayout(preview_box)
+        preview_layout.setContentsMargins(12, 24, 12, 12)
+        preview_layout.setSpacing(4)
+        self.preview = SafeAreaPreview()
+        preview_layout.addWidget(self.preview)
+        legend = QLabel('绿色：可用安全区　灰色：预留遮挡区')
+        legend.setWordWrap(True)
+        legend.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        preview_layout.addWidget(legend)
+        right.addWidget(preview_box)
+        page_layout.addStretch(1)
         return page
 
     def _refresh_groups(self, selected=None):

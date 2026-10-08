@@ -341,4 +341,4 @@ Windows 合并构建由 [`stage_windows_exiftool.py`](../../build_tools/stage_wi
 
 ### 用户选项页面扩展
 
-[user_options_dialog.py](../birdstamp/gui/user_options_dialog.py) 与 SuperViewer 共用 [SidebarTabWidget](../../app_common/sidebar_tabs.py)：左侧纵向 Tab 导航、横排文字和图标，窗口默认 920×660。现有安全区编辑器由 `_build_safe_area_page()` 构建，保留组管理、横竖屏边距和预览；确定/取消按钮位于页面外。后续设置以独立 QWidget 页面通过 `tabs.addTab(page, icon, label)` 接入，沿用 Qt 的切页及键盘导航。安全区校验、保存失败留在窗口及取消不落盘行为不变；此布局调整无新增 CLI 参数。回归沿用 [test_safe_area_user_options.py](../tests/test_safe_area_user_options.py)。
+[user_options_dialog.py](../birdstamp/gui/user_options_dialog.py) 与 SuperViewer 共用 [SidebarTabWidget](../../app_common/sidebar_tabs.py)：左侧纵向 Tab 导航、横排文字和图标，窗口默认 920×660。现有安全区编辑器由 `_build_safe_area_page()` 构建：左侧为有限高度的组列表及紧邻的管理按钮，右侧按组名、边距矩阵、预览分区；预览图与横竖屏标题保持固定间距，不随窗口高度拉散。页面使用 QScrollArea 容纳小窗口或较大字体，确定/取消按钮始终位于滚动区域外。后续设置以独立 QWidget 页面通过 `tabs.addTab(page, icon, label)` 接入，沿用 Qt 的切页及键盘导航。安全区校验、保存失败留在窗口及取消不落盘行为不变；此布局调整无新增 CLI 参数。回归沿用 [test_safe_area_user_options.py](../tests/test_safe_area_user_options.py)。
