@@ -200,8 +200,8 @@ class EditorPreviewCanvas(CropResolutionOverlayMixin, FocusCenteredPreviewCanvas
             return
         rect = QRectF(draw.left()+box[0]*draw.width(), draw.top()+box[1]*draw.height(),
                       (box[2]-box[0])*draw.width(), (box[3]-box[1])*draw.height())
-        from .editor_options import PLATFORM_SAFE_AREA
-        label = PLATFORM_SAFE_AREA['labels'].get(self._platform_safe_area, '')
+        from birdstamp.overlays.safe_area_options import current_options
+        label = current_options()['labels'].get(self._platform_safe_area, '')
         painter = QPainter(self)
         try:
             painter.setClipRect(self.contentsRect())

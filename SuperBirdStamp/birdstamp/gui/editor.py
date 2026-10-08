@@ -1278,9 +1278,8 @@ class BirdStampEditorWindow(
         self.ratio_combo.currentIndexChanged.connect(self._on_ratio_changed)
 
         self.platform_safe_area_combo = QComboBox()
-        for value, label in editor_options.PLATFORM_SAFE_AREA['labels'].items():
-            self.platform_safe_area_combo.addItem(label, value)
-        self.platform_safe_area_combo.setAccessibleName("平台安全框")
+        self._refresh_safe_area_choices()
+        self.platform_safe_area_combo.setAccessibleName("安全框组")
         self.platform_safe_area_combo.setToolTip(
             "全屏发布时选择平台，按安全区重新对齐布局、收紧间距，行过宽时换行；不自动缩小。\n"
             "非全屏图选择关闭。内容仍超出时可调整统一缩放。安全框为参考预设，随设备和版本可能变化。"
@@ -1664,7 +1663,15 @@ class BirdStampEditorWindow(
         template_form.addRow("说明", template_hint)
         template_form.addRow("裁切比例", self.ratio_combo)
         template_form.addRow("裁切中心", self.center_mode_widget)
-        template_form.addRow("平台安全框", self.platform_safe_area_combo)
+        safe_area_row = QWidget()
+        safe_area_layout = QHBoxLayout(safe_area_row)
+        safe_area_layout.setContentsMargins(0, 0, 0, 0)
+        safe_area_layout.addWidget(self.platform_safe_area_combo, 1)
+        self.safe_area_options_button = QPushButton("配置…")
+        self.safe_area_options_button.setToolTip("在用户选项中管理安全区组名与横竖屏边距")
+        self.safe_area_options_button.clicked.connect(self._open_user_options)
+        safe_area_layout.addWidget(self.safe_area_options_button)
+        template_form.addRow("安全框组", safe_area_row)
         template_form.addRow("留边", self.crop_padding_editor)
 
         self.dejitter_page = self._build_dejitter_page()
@@ -2221,6 +2228,9 @@ class BirdStampEditorWindow(
         file_menu.addAction(self.action_save_workspace_as)
 
         settings_menu = menu_bar.addMenu("设置")
+        self.user_options_action = settings_menu.addAction("用户选项…")
+        self.user_options_action.triggered.connect(self._open_user_options)
+        settings_menu.addSeparator()
         perf_probe_act = QAction("性能探针日志", self)
         perf_probe_act.setCheckable(True)
         perf_probe_act.setChecked(bool(get_runtime_user_options().get(KEY_PERF_PROBES_ENABLED, 0)))
@@ -2230,6 +2240,31 @@ class BirdStampEditorWindow(
         perf_probe_act.triggered.connect(self._set_perf_probes_enabled)
         self._perf_probe_action = perf_probe_act
         settings_menu.addAction(perf_probe_act)
+
+    def _refresh_safe_area_choices(self) -> None:
+        from birdstamp.overlays.safe_area_options import current_options
+        combo = self.platform_safe_area_combo
+        selected = combo.currentData() or 'off'
+        blocked = combo.blockSignals(True)
+        try:
+            combo.clear()
+            for key, name in current_options()['labels'].items():
+                combo.addItem(name, key)
+            index = combo.findData(selected)
+            combo.setCurrentIndex(index if index >= 0 else combo.findData('off'))
+        finally:
+            combo.blockSignals(blocked)
+
+    def _open_user_options(self, *_args) -> None:
+        from .user_options_dialog import UserOptionsDialog
+        dialog = UserOptionsDialog(self)
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            self._refresh_safe_area_choices()
+            self._mark_all_photo_exports_dirty()
+            self._invalidate_original_mode_cache()
+            self._on_output_settings_changed()
+            self._set_status("安全区用户选项已保存，预览和后续导出使用新配置。")
+        dialog.deleteLater()
 
     def _sync_perf_probe_action(self) -> None:
         action = getattr(self, "_perf_probe_action", None)
