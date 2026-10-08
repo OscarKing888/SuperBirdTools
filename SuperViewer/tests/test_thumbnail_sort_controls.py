@@ -43,6 +43,37 @@ def _paths_in_tree(panel) -> list[str]:
     return [panel._tree_path_from_index(model.index(row, 0)) for row in range(model.rowCount())]
 
 
+def test_thumbnail_identity_grid_incremental_metadata_and_hover(panel, tmp_path, monkeypatch):
+    from PyQt6.QtCore import QEvent, QPoint
+    from PyQt6.QtGui import QHelpEvent
+    from SuperViewer.superviewer.thumbnail_metadata import BirdThumbnailDelegate, _BirdDetailsRole
+    from app_common.file_browser._browser_core import _MetaSpeciesCnRole
+
+    path = str(tmp_path / "白鹭.jpg")
+    panel._current_dir = str(tmp_path)
+    panel._all_files = [path]
+    panel._meta_cache = {path: {"title": "白鹭", "gbif_rarity_100": 0}}
+    panel._rebuild_views()
+    index = panel._thumb_list_model.index(0, 0)
+    assert index.data(_MetaSpeciesCnRole) == "白鹭"
+    panel._on_metadata_batch_ready({path: {"title": "黑脸琵鹭", "gbif_rarity_100": 80,
+                                          "iucn_category": "EN", "shooting_location": "深圳湾"}})
+    panel._apply_meta_batch_tick()
+    assert index.data(_BirdDetailsRole).score == 80
+    assert index.data(_MetaSpeciesCnRole) == "黑脸琵鹭"
+    for size in (128, 256):
+        panel._thumb_size = size
+        panel._update_thumb_display()
+        assert panel._list_widget.gridSize() == BirdThumbnailDelegate.grid_size(size)
+        assert panel._list_widget.iconSize().width() == size
+    shown = []
+    monkeypatch.setattr(panel_module.QToolTip, "showText", lambda _pos, text, _widget: shown.append(text))
+    monkeypatch.setattr(panel, "_find_thumb_index_for_tooltip", lambda _pos: index)
+    event = QHelpEvent(QEvent.Type.ToolTip, QPoint(10, 10), QPoint(10, 10))
+    assert panel.eventFilter(panel._list_widget.viewport(), event)
+    assert "黑脸琵鹭" in shown[0] and "深圳湾" in shown[0] and "GBIF 80/100" in shown[0]
+
+
 def test_sort_toolbar_is_viewer_opt_in_and_only_shown_in_thumbnail_mode(panel) -> None:
     assert FileListPanel.show_thumbnail_sort_controls is False
     shared = FileListPanel(create_filter_bar=False)

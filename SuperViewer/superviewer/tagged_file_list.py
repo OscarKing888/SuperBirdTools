@@ -31,6 +31,7 @@ from .photo_tag_commands import ClearPhotoTagsCommand, SetPhotoTagCommand
 from .tag_menu import add_filterable_tag_actions
 from .ui_theme import PanelThemeColors, panel_theme_colors
 from .rarity_file_table import RarityFileTableModel, RarityBadgeDelegate
+from .thumbnail_metadata import BirdThumbnailModel, BirdThumbnailDelegate
 
 try:
     from PyQt6.QtCore import QSignalBlocker
@@ -230,6 +231,8 @@ class SuperViewerTaggedFileListPanel(FileListPanel):
     use_unified_worker_pool = True
     show_thumbnail_sort_controls = True
     file_table_model_class = RarityFileTableModel
+    thumbnail_model_class = BirdThumbnailModel
+    thumbnail_delegate_class = BirdThumbnailDelegate
     video_playback_stop_requested = pyqtSignal()
     playback_state_changed = pyqtSignal(bool)
     use_preview_cache = True
@@ -322,6 +325,7 @@ class SuperViewerTaggedFileListPanel(FileListPanel):
     def apply_user_options(self) -> None:
         super().apply_user_options()
         self._file_table_model.refresh_badges()
+        self._list_widget.viewport().update()
 
     def changeEvent(self, event) -> None:
         super().changeEvent(event)
