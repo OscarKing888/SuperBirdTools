@@ -8,10 +8,11 @@ from PyQt6.QtWidgets import QApplication
 import pytest
 
 from birdstamp import config
-from birdstamp.overlays.safe_area import PLATFORMS, fit_layers, guide_box, normalize_options, safe_rect
+from birdstamp.overlays.safe_area import PLATFORMS, fit_layers, guide_box, normalize_options, safe_rect, layout_rect
 from birdstamp.overlays.model import new_item
 from birdstamp.overlays.assets import import_image
-from birdstamp.overlays.render import build_scene, compose_scene
+from birdstamp.overlays.render import build_scene, compose_scene, Layer
+from birdstamp.overlays.layout import arrange, bounds
 from birdstamp.gui import editor_options, editor_template as template
 from birdstamp.gui.editor import BirdStampEditorWindow
 from birdstamp.gui.editor_renderer import _BirdStampRendererMixin
@@ -42,7 +43,7 @@ def payload(tmp_path):
 @pytest.mark.parametrize('platform', PLATFORMS[1:])
 @pytest.mark.parametrize('size', [(960, 540), (540, 960), (600, 800), (800, 600), (700, 700)])
 @pytest.mark.parametrize('oversized', [False, True])
-def test_all_layers_fit_as_one_group_with_rotation_and_effects(payload, platform, size, oversized):
+def test_safe_layout_preserves_content_size_with_rotation_and_large_background(payload, platform, size, oversized):
     if oversized:
         payload['overlays'][0].update(width=1.4, height=1.2)
     before = deepcopy(payload)
@@ -51,18 +52,15 @@ def test_all_layers_fit_as_one_group_with_rotation_and_effects(payload, platform
     try:
         rect = safe_rect(size, platform)
         assert len(original.layers) == len(fitted.layers) == 3
-        scale = fitted.layers[0].size[0] / original.layers[0].size[0]
-        assert 0 < scale <= 1
-        if oversized:
-            assert scale < 1
         for old, new in zip(original.layers, fitted.layers):
-            assert new.size == pytest.approx(tuple(v*scale for v in old.size))
+            if old.item['type'] != 'background':
+                assert new.size == old.size
+                assert new.effective_scale == old.effective_scale
+                assert new.pixels.tobytes() == old.pixels.tobytes()
             assert new.rotation == old.rotation
             for x, y in new.corners():
                 assert rect[0] <= x <= rect[2]
                 assert rect[1] <= y <= rect[3]
-            delta = tuple(new.center[i]-fitted.layers[0].center[i] for i in (0, 1))
-            assert delta == pytest.approx(tuple((old.center[i]-original.layers[0].center[i])*scale for i in (0, 1)))
         with Image.new('RGB', size) as base:
             rendered = compose_scene(base, fitted)
         box = rendered.getbbox()
@@ -101,6 +99,8 @@ def test_preview_matches_image_gif_video_frame_pipeline(payload, platform, crop)
     settings = dict(template_payload=payload, ratio='no_crop', max_long_edge=1000, platform_safe_area=platform)
     box = (.3, 0, .7, 1) if crop else None
     if crop:
+        payload['overlay_layouts'] = [dict(id='info', children=[payload['overlays'][1]['id'], payload['overlays'][2]['id']],
+            direction='row', gap=.08, align='end', x=.95, y=.95, anchor_x=1, anchor_y=1)]
         settings.update(ratio='free', center_mode='custom', crop_box=box)
     renderer = _BirdStampRendererMixin()
     renderer.template_paths = {}
@@ -281,3 +281,97 @@ def test_cli_safe_area(payload, tmp_path, monkeypatch):
     with Image.open(next((tmp_path/'output').glob('*.png'))) as image:
         assert image.getbbox()[3] <= safe_rect(image.size, 'douyin')[3] + 1
     assert CliRunner().invoke(cli.app, args + ['invalid']).exit_code != 0
+
+
+@pytest.mark.parametrize('direction', ['row', 'up', 'down'])
+@pytest.mark.parametrize('align', ['start', 'center', 'end'])
+def test_layout_compacts_gaps_without_changing_leaf_size(direction, align):
+    doc = dict(overlay_layouts=[dict(id='group', children=['a', 'b'], direction=direction,
+        gap=.3, align=align, x=.95, y=.95, anchor_x=1, anchor_y=1)])
+    with Image.new('RGBA', (20, 20), 'white') as pixels:
+        layers = {key: Layer(dict(id=key), pixels, (900, 900), size)
+                  for key, size in [('a', (240, 140)), ('b', (200, 100))]}
+        before = {key: layer.size for key, layer in layers.items()}
+        rect = (100, 100, 600, 400)
+        arrange(doc, layers, (1000, 1000), rect=rect)
+        assert {key: layer.size for key, layer in layers.items()} == before
+        a, b = (bounds([layers[key]]) for key in ('a', 'b'))
+        if direction == 'row':
+            assert b[0]-a[2] == pytest.approx(60)
+        elif direction == 'down':
+            assert b[1]-a[3] == pytest.approx(60)
+        else:
+            assert a[1]-b[3] == pytest.approx(60)
+        box = bounds(list(layers.values()))
+        assert box[0] >= rect[0] and box[1] >= rect[1]
+        assert box[2:] == pytest.approx(rect[2:])
+
+
+@pytest.mark.parametrize('platform', PLATFORMS[1:])
+def test_nested_row_wraps_and_retains_bottom_right_anchor(platform):
+    rect = layout_rect(safe_rect((800, 1000), platform))
+    doc = dict(overlay_layouts=[
+        dict(id='row', children=['a', 'b', 'c'], direction='row', gap=.02, align='end',
+             x=.5, y=.5, anchor_x=1, anchor_y=1),
+        dict(id='column', children=['row', 'd'], direction='down', gap=.01, align='end',
+             x=.99, y=.99, anchor_x=1, anchor_y=1)])
+    with Image.new('RGBA', (20, 20), 'white') as pixels:
+        layers = {key: Layer(dict(id=key), pixels, (900, 900), (260, 70)) for key in 'abcd'}
+        arrange(doc, layers, (800, 1000), rect=rect)
+        a, b, c, d = (bounds([layers[key]]) for key in 'abcd')
+        assert a[3] == b[3]  # 第一行
+        assert c[1] >= a[3] and c[2] == b[2]  # 第二行沿右边对齐
+        assert d[1] > c[3] and d[2] == c[2]  # 外层列仍然生效
+        assert bounds(list(layers.values()))[2:] == pytest.approx(rect[2:])
+        assert all(layer.size == (260, 70) and layer.effective_scale == 1 for layer in layers.values())
+
+
+def test_impossible_size_remains_visible_at_original_scale():
+    with Image.new('RGBA', (20, 20), 'white') as pixels:
+        layer = Layer(dict(id='huge'), pixels, (500, 500), (1000, 800), effective_scale=2)
+        fitted = fit_layers([layer], (100, 100, 500, 500), anchor=(0, 1))[0]
+        assert fitted.size == layer.size and fitted.effective_scale == 2
+        box = bounds([fitted])
+        assert box[0] == 100 and box[3] == 500
+        assert box[2] > 500 and box[1] < 100
+
+
+def test_xiaohongshu_current_screenshot_has_bottom_controls_not_right_rail():
+    # 用户截图 945x2048，头像约 y=1635；留少许余量，将底边定在 79%。
+    left, top, right, bottom = safe_rect((945, 2048), 'xiaohongshu')
+    assert left/945 == pytest.approx(.03)
+    assert (945-right)/945 == pytest.approx(.03)
+    assert 1590 < bottom < 1635
+    assert top/2048 == pytest.approx(.12)
+    defaults = normalize_options(None)
+    assert editor_options.PLATFORM_SAFE_AREA['presets']['xiaohongshu'] == defaults['presets']['xiaohongshu']
+
+
+def test_number_and_full_width_gradient_do_not_shrink_bottom_layout(payload, tmp_path):
+    name = payload['overlays'][2]
+    name.update(id='name', text='苍鹭 Grey Heron', font_size=55, rotation=0)
+    caption = dict(name, id='caption', text='上海南汇东滩湿地', font_size=45)
+    number = dict(name, id='number', text='8', font_size=60, x=.96, y=.02)
+    background = payload['overlays'][0]
+    background.update(layout_mode='auto', banner_background_style='gradient_bottom')
+    payload['overlays'] = [background, name, caption, number]
+    payload['overlay_layouts'] = [dict(id='details', direction='down', children=['name', 'caption'],
+        gap=.01, align='start', x=.05, y=.97, anchor_x=0, anchor_y=1)]
+    original = build_scene(payload, (900, 1600), text_scale=1.3)
+    active = build_scene(payload, (900, 1600), text_scale=1.3, platform_safe_area='xiaohongshu')
+    try:
+        before, after = ({v.item['id']: v for v in scene.layers} for scene in (original, active))
+        for key in ('name', 'caption', 'number'):
+            assert after[key].size == before[key].size
+            assert after[key].effective_scale == before[key].effective_scale
+        assert after['name'].center[0] == before['name'].center[0]
+        assert after['number'].center[1] < after['name'].center[1]
+        rect = safe_rect(active.size, 'xiaohongshu')
+        assert bounds(active.layers)[3] <= rect[3]
+        assert after[background['id']].size[0] > 840  # 不再把横幅缩成中间窄块。
+        with Image.new('RGB', active.size, '#567080') as image:
+            rendered = compose_scene(image, active)
+            rendered.save(tmp_path/'layout-safe-preview.png')
+            rendered.close()
+    finally:
+        original.close(); active.close()
