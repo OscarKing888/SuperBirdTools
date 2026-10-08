@@ -93,6 +93,12 @@ class _MenuIcon(QIconEngine):
         elif kind == "process":
             ellipse(3, 3, 13, 13); line(15, 15, 22, 22)
             line(6, 12, 9, 8); line(9, 8, 12, 11); line(12, 11, 14, 6)
+        elif kind == "denoise":
+            polygon([(9, 2), (11, 8), (17, 10), (11, 12), (9, 18), (7, 12), (1, 10), (7, 8)])
+            line(19, 14, 19, 22); line(15, 18, 23, 18)
+        elif kind == "shield":
+            polygon([(12, 2), (21, 6), (19, 16), (12, 22), (5, 16), (3, 6)])
+            line(7, 11, 11, 15); line(11, 15, 17, 8)
         elif kind == "send":
             polygon([(2, 3), (22, 12), (2, 21), (6, 12)])
             line(6, 12, 22, 12)
@@ -115,8 +121,13 @@ class _MenuIcon(QIconEngine):
         return pixmap
 
 
+def menu_icon(kind):
+    """菜单和设置导航共用的主题自适应图标。"""
+    return QIcon(_MenuIcon(kind))
+
+
 def _icon(action, kind):
-    action.setIcon(QIcon(_MenuIcon(kind)))
+    action.setIcon(menu_icon(kind))
     # macOS 默认可隐藏菜单图标；显式启用这些用于辨认功能的图标。
     action.setIconVisibleInMenu(True)
 

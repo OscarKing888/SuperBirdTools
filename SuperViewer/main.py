@@ -812,9 +812,6 @@ class MainWindow(QMainWindow):
         user_options_act = QAction("用户选项...", self)
         user_options_act.triggered.connect(self._open_user_options_dialog)
         settings_menu.addAction(user_options_act)
-        archive_settings = archive_action(self, "珍禽入册 · 归档设置…")
-        archive_settings.triggered.connect(lambda: self._bird_archive.configure())
-        settings_menu.addAction(archive_settings)
         perf_probe_act = QAction("性能探针日志", self)
         perf_probe_act.setCheckable(True)
         perf_probe_act.setChecked(bool(get_runtime_user_options().get(KEY_PERF_PROBES_ENABLED, 0)))
@@ -862,10 +859,15 @@ class MainWindow(QMainWindow):
         self._file_list.apply_user_options()
         for panel in (self.preview_panel, self.preview_a):
             panel.set_keep_view_on_switch(bool(normalized.get("keep_view_on_switch", 1)))
+        try:
+            dialog.save_archive_options()
+        except OSError as exc:
+            QMessageBox.critical(self, "保存失败", f"常规用户选项已保存，但珍禽入册设置保存失败：\n{exc}")
+            return
         QMessageBox.information(
             self,
             "已保存",
-            f"用户选项已保存到：\n{get_user_options_path()}",
+            "用户选项已保存。",
         )
 
     def _sync_perf_probe_action(self) -> None:

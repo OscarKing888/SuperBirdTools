@@ -300,7 +300,7 @@ Qt 进度回调只更新界面/初始需求提示，实际任务完成和需求�
 
 ## 珍禽入册（鸟名归档）
 
-[`BirdArchiveController`](../superviewer/bird_archive_ui.py) 通过文件菜单 extender 在列表和缩略图右键菜单顶部插入加粗、金色鸟章的“珍禽入册”，主菜单“文件”和“设置”提供入册与归档设置入口。`ArchiveDialog` 明确显示移动/复制方式、目标目录及拍摄时间前缀；配置原子写入用户状态目录 `bird_archive.json`，不写仓库内的运行配置。控制器只在 GUI 线程快照实际源路径和报告行，`ArchiveWorker` 承担元数据读取与磁盘操作，持有至真正 `QThread.finished`；停止/关闭完成当前照片组后不再开启下一组。成功移动清除对应 A/B 旧路径预览和编辑目标，批次结束按实际源路径建立只读报告 tombstone、清除路径绑定的标签历史，并刷新当前目录。
+[`BirdArchiveController`](../superviewer/bird_archive_ui.py) 通过文件菜单 extender 在列表和缩略图右键菜单顶部插入加粗、金色鸟章的“珍禽入册”，主菜单“文件”提供入册入口，归档设置统一放在“设置 → 用户选项 → 珍禽入册”页；用户选项左侧各 Tab 均带图标，珍禽入册沿用金色鸟章。`ArchiveOptionsForm` 由用户选项页和 `ArchiveDialog` 共用，明确显示移动/复制方式、目标目录及拍摄时间前缀；取消用户选项不写配置，确认时仅保存有修改的归档设置（未配置目录不阻止保存其他选项），实际入册仍要求选择目录。配置原子写入用户状态目录 `bird_archive.json`，不写仓库内的运行配置。控制器只在 GUI 线程快照实际源路径和报告行，`ArchiveWorker` 承担元数据读取与磁盘操作，持有至真正 `QThread.finished`；停止/关闭完成当前照片组后不再开启下一组。成功移动清除对应 A/B 旧路径预览和编辑目标，批次结束按实际源路径建立只读报告 tombstone、清除路径绑定的标签历史，并刷新当前目录。
 
 无 Qt 核心 [`bird_archive.py`](../superviewer/bird_archive.py) 的 `archive_photos()` / `ArchiveSession` 按源目录和同 stem 分组：鸟名以 XMP 为先、报告次之、内嵌元数据保底；缺鸟名跳过，损坏 XMP 报错。默认文件名 `YYYYMMDD_HHMMSS_原文件名`，缺拍摄时间明确标记“日期未知”，可关闭前缀。鸟名和文件名经过 Windows 非法字符/设备名处理，目录与冲突索引使用 Unicode NFC 与大小写无关比较，照片及 XMP/其他扩展名占用同一 stem 时整组追加 `_002` 等序号。`archive_format_directory()` 复用共享 `image_formats`，在鸟名目录下将 RAW 和 HIF/HEIF/HEIC 放入 `RAW`、PSD 放入 `PSD`、PNG/JPG/JPEG 放入 `Export`；其他受支持格式保留鸟名目录。子目录按需创建，已有大小写不同的同名目录复用，目录不能通过符号链接逃出所属鸟名目录。旧版平铺照片可以再次入册完成分类，已经位于对应格式目录的照片不会重复入册。同组 RAW/JPEG/PSD 在所有目标格式目录中共同分配一个 stem，任一目录有冲突便整组加相同序号；每个目录各有一份同名 XMP。未选择的兄弟照片不移动，并保留它需要的源 XMP。
 

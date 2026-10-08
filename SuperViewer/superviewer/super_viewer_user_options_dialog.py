@@ -18,6 +18,9 @@ from app_common.superviewer_user_options import (
     valid_denoise_subdir,
 )
 
+from .bird_archive_ui import ArchiveOptionsForm, archive_icon, load_archive_options, save_archive_options
+from .file_context_menu import menu_icon
+
 from .qt_compat import (
     QCheckBox,
     QComboBox,
@@ -52,7 +55,8 @@ _TOOLTIP_ROLE = getattr(getattr(Qt, "ItemDataRole", Qt), "ToolTipRole")
 class _SidebarTabBar(QTabBar):
     """West-side tabs with horizontal, keyboard-accessible labels."""
     def tabSizeHint(self, index):
-        return QSize(max(132, self.fontMetrics().horizontalAdvance(self.tabText(index)) + 28),
+        icon_width = self.iconSize().width() + 8 if not self.tabIcon(index).isNull() else 0
+        return QSize(max(132, self.fontMetrics().horizontalAdvance(self.tabText(index)) + icon_width + 28),
                      max(40, self.fontMetrics().height() + 20))
 
     def paintEvent(self, event):
@@ -165,11 +169,13 @@ class SuperViewerUserOptionsDialog(QDialog):
         tabs = QTabWidget(self)
         tabs.setTabBar(_SidebarTabBar(tabs))
         tabs.setTabPosition(getattr(QTabWidget, "TabPosition", QTabWidget).West)
+        tabs.setIconSize(QSize(20, 20))
         self.tabs = tabs
+        standard_icons = getattr(QStyle, "StandardPixmap", QStyle)
         general = QWidget(tabs)
         general_layout = QVBoxLayout(general)
         general_layout.addLayout(grid)
-        tabs.addTab(general, "浏览与性能")
+        tabs.addTab(general, self.style().standardIcon(standard_icons.SP_ComputerIcon), "浏览与性能")
         layout.addWidget(tabs)
 
         note = QLabel("缩略视图会根据当前缩略图大小自动匹配最合适的一档预览图。")
@@ -230,17 +236,25 @@ class SuperViewerUserOptionsDialog(QDialog):
         denoise_note.setWordWrap(True)
         denoise_layout.addWidget(denoise_note)
         denoise_layout.addStretch(1)
-        tabs.addTab(denoise, "批量降噪")
+        tabs.addTab(denoise, menu_icon("denoise"), "批量降噪")
+
+        self._initial_archive_options = load_archive_options()
+        self._archive_form = ArchiveOptionsForm(tabs, options=self._initial_archive_options)
+        archive_page = QWidget(tabs)
+        archive_layout = QVBoxLayout(archive_page)
+        archive_layout.addWidget(self._archive_form)
+        archive_layout.addStretch(1)
+        tabs.addTab(archive_page, archive_icon(), "珍禽入册")
 
         from .rarity_badge import RarityBadgesForm, ConservationBadgesForm
         self._rarity_badges_form = RarityBadgesForm(opts, tabs)
         self._conservation_badges_form = ConservationBadgesForm(opts, tabs)
-        for form, label in ((self._rarity_badges_form, "稀有度徽章"),
-                            (self._conservation_badges_form, "保护等级徽章")):
+        for form, label, icon in ((self._rarity_badges_form, "稀有度徽章", "star"),
+                                 (self._conservation_badges_form, "保护等级徽章", "shield")):
             scroll = QScrollArea(tabs)
             scroll.setWidgetResizable(True)
             scroll.setWidget(form)
-            tabs.addTab(scroll, label)
+            tabs.addTab(scroll, menu_icon(icon), label)
 
         sharpness = QWidget(tabs)
         sharpness_layout = QVBoxLayout(sharpness)
@@ -271,7 +285,7 @@ class SuperViewerUserOptionsDialog(QDialog):
         sharpness_scroll.setWidget(sharpness)
         sharpness_scroll.setWidgetResizable(True)
         sharpness = sharpness_scroll
-        tabs.addTab(sharpness, "鸟清晰度")
+        tabs.addTab(sharpness, menu_icon("process"), "鸟清晰度")
         self._combo_denoise_mode.currentIndexChanged.connect(self._update_denoise_mode)
         self._update_denoise_mode()
 
@@ -306,6 +320,13 @@ class SuperViewerUserOptionsDialog(QDialog):
             QMessageBox.information(self, "批量降噪", "请选择固定输出目录。")
             return
         super().accept()
+
+    def save_archive_options(self) -> None:
+        """仅在确认且归档设置有修改时写入原有配置文件。"""
+        options = self._archive_form.selected_options()
+        if options != self._initial_archive_options:
+            save_archive_options(options)
+            self._initial_archive_options = options
 
     def selected_options(self) -> dict[str, int | str]:
         return {
