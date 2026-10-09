@@ -29,6 +29,7 @@ def panel(tmp_path,monkeypatch):
     ('x','text',62.5,.625),('y','text',-25,-.25),('scale','text',175,1.75),
     ('width','image',55.5,.555),('height','background',38.75,.3875),
     ('opacity','image',66.75,66.75),('shadow_opacity','text',35.5,35.5),
+    ('stroke_opacity','text',42.25,42.25),
     ('banner_gradient_top_opacity_pct','background',28.25,28.25),
     ('banner_gradient_bottom_opacity_pct','background',65.75,65.75),
     ('banner_gradient_height_pct','background',45.5,45.5),
@@ -36,6 +37,7 @@ def panel(tmp_path,monkeypatch):
 def test_all_percent_parameters_support_slider_numeric_and_undo(panel,key,kind,value,expected):
     item=next(i for i in panel.doc['overlays'] if i['type']==kind)
     if key.endswith('_offset_pct'): item['layout_mode']='auto'
+    if key in ('stroke_opacity', 'shadow_opacity'): item[key.split('_')[0] + '_enabled'] = True
     panel.select(item['id'])
     before=deepcopy(panel.doc)
     editor=panel.widgets[key]
@@ -51,6 +53,41 @@ def test_all_percent_parameters_support_slider_numeric_and_undo(panel,key,kind,v
     assert editor.slider.value()==round(value*100)
     panel.edit('locked',True)
     assert not editor.slider.isEnabled() and not editor.spin.isEnabled()
+
+
+@pytest.mark.parametrize('kind', ['text', 'badge'])
+def test_effect_controls_follow_toggles_selection_lock_and_undo(panel, kind):
+    panel.add(kind)
+    selected_id = panel.selected_id
+    for prefix in ('stroke', 'shadow'):
+        toggle = panel.widgets[prefix + '_enabled']
+        toggle.setChecked(False)
+        controls = [(key, widget) for key, widget in panel.widgets.items()
+                    if key.startswith(prefix + '_') and not key.endswith('_enabled')]
+        assert toggle.isEnabled()
+        assert all(not widget.isEnabled() for _, widget in controls)
+        color = panel.widgets[prefix + '_color']
+        assert not color.palette_button.isEnabled() and not color.picker_button.isEnabled()
+        toggle.click()
+        assert all(widget.isEnabled() for _, widget in controls)
+        panel.widgets[prefix + '_opacity'].spin.setValue(37.25)
+        toggle.click()
+        assert all(not widget.isEnabled() for _, widget in controls)
+        panel.undo()
+        assert toggle.isChecked() and all(widget.isEnabled() for _, widget in controls)
+        assert panel.selected()[prefix + '_opacity'] == 37.25
+        panel.redo()
+        assert not toggle.isChecked()
+        panel.select(panel.doc['overlays'][0]['id'])
+        panel.select(selected_id)
+        assert all(not widget.isEnabled() for _, widget in controls)
+        toggle.click()
+    panel.edit('locked', True)
+    assert all(not widget.isEnabled() for key, widget in panel.widgets.items()
+               if key.startswith(('stroke_', 'shadow_')))
+    panel.undo()
+    assert panel.widgets['stroke_opacity'].isEnabled()
+    assert panel.widgets['shadow_opacity'].isEnabled()
 
 
 def test_large_values_expand_slider_without_changing_saved_value(panel):
