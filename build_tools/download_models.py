@@ -41,7 +41,7 @@ def resolve_names(names: List[str]) -> List[model_catalog.CatalogModel]:
     if not names:
         return [*model_catalog.DETECTORS, *model_catalog.SAM_MODELS]
     out, unknown = [], []
-    for name in names:
+    for name in (part.strip() for value in names for part in value.split(",")):
         name = name if name.endswith(".pt") else f"{name}.pt"
         model = model_catalog.catalog_model(name)
         (out if model is not None else unknown).append(model or name)
@@ -98,7 +98,7 @@ def fetch(model: model_catalog.CatalogModel, dest: Path, *, force: bool = False,
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(
         description="把鸟清晰度检测模型（YOLO / SAM）和降噪模型下载到 workspace，build 与打包时不再下载。")
-    parser.add_argument("models", nargs="*", help="只下载这些模型（如 yolo11x-seg.pt sam2.1_b）；默认全部")
+    parser.add_argument("models", nargs="*", help="只下载这些模型（空格或逗号分隔，如 yolo11x-seg.pt sam2.1_b）；默认全部")
     parser.add_argument("--dest", type=Path, default=workspace_model_dir(), help="目标目录（默认 SuperViewer/models）")
     parser.add_argument("--no-denoise", action="store_true", help="不处理 NAFNet 降噪模型")
     parser.add_argument("--force", action="store_true", help="已校验通过的也重新下载")

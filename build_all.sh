@@ -9,7 +9,7 @@ APPS_ONLY=0
 SKIP_DEDUPE=0
 TARGET_ARCH=""
 CONSOLE=0
-BUNDLE_ALL_MODELS=0
+BUNDLE_MODELS=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -18,7 +18,12 @@ while [[ $# -gt 0 ]]; do
     --skip-dedupe) SKIP_DEDUPE=1; shift ;;
     --arch) TARGET_ARCH="${2:-}"; shift 2 ;;
     --console) CONSOLE=1; shift ;;
-    --bundle-all-models) BUNDLE_ALL_MODELS=1; shift ;;
+    --bundle-all-models) BUNDLE_MODELS=all; shift ;;
+    --bundle-models)
+      if [[ -z "${2:-}" || "${2:-}" == --* ]]; then
+        echo "--bundle-models requires comma-separated model names" >&2; exit 1
+      fi
+      BUNDLE_MODELS="$2"; shift 2 ;;
     *) echo "Unknown option: $1" >&2; exit 1 ;;
   esac
 done
@@ -65,15 +70,18 @@ echo "[build_all] python=${BUILD_PYTHON}"
 echo "[build_all] dist=${DIST_ROOT}"
 echo "[build_all] build=${BUILD_ROOT}"
 
-if [[ $BUNDLE_ALL_MODELS -eq 1 ]]; then
-  # Bundle every bird sharpness model into SuperViewer (~3.45 GB) from the workspace;
-  # never download during a build: verify size + SHA-256 first, stop if anything is missing.
-  echo "[build_all] Bundling all models from SuperViewer/models; verifying..."
-  if ! "$BUILD_PYTHON" "$ROOT_DIR/build_tools/download_models.py" --check-only --no-denoise; then
+if [[ -n "$BUNDLE_MODELS" ]]; then
+  # 仅离线校验本次所选模型的大小与 SHA-256，缺失时在构建前停止。
+  echo "[build_all] Bundling models from SuperViewer/models: ${BUNDLE_MODELS}; verifying..."
+  MODEL_ARGS=(--check-only --no-denoise)
+  if [[ "$BUNDLE_MODELS" != all ]]; then
+    MODEL_ARGS+=("$BUNDLE_MODELS")
+  fi
+  if ! "$BUILD_PYTHON" "$ROOT_DIR/build_tools/download_models.py" "${MODEL_ARGS[@]}"; then
     echo "[build_all] Models missing or incomplete; run ./download_models.sh first." >&2
     exit 1
   fi
-  export SUPERBIRDTOOLS_BUNDLE_MODELS=all
+  export SUPERBIRDTOOLS_BUNDLE_MODELS="$BUNDLE_MODELS"
 else
   unset SUPERBIRDTOOLS_BUNDLE_MODELS
 fi

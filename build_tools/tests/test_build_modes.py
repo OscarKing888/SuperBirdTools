@@ -190,7 +190,7 @@ def test_missing_models_stop_the_build_before_any_app(build_entry):
 
 
 @posix_only
-def test_no_zip_entry_builds_apps_with_every_model(build_entry):
+def test_no_zip_entry_builds_apps_with_selected_models(build_entry):
     repo, run = build_entry
     shutil.copy2(REPO_ROOT / "build_all_no_zip.sh", repo / "build_all_no_zip.sh")
     env = os.environ.copy()
@@ -201,7 +201,9 @@ def test_no_zip_entry_builds_apps_with_every_model(build_entry):
     calls = [json.loads(line) for line in probe.read_text(encoding="utf-8").splitlines()]
     stages = [c["stage"] for c in calls]
     assert "download_models" in stages and "generate_update_manifest" not in stages
-    assert next(c for c in calls if c["stage"] == "SuperViewer")["bundle"] == "all"
+    assert next(c for c in calls if c["stage"] == "SuperViewer")["bundle"] == "yolo11l-seg.pt,sam2.1_b.pt"
+    assert next(c for c in calls if c["stage"] == "download_models")["args"] == [
+        "--check-only", "--no-denoise", "yolo11l-seg.pt,sam2.1_b.pt"]
 
 
 def _entry_env(repo):
@@ -210,3 +212,25 @@ def _entry_env(repo):
                 SUPERBIRDTOOLS_DIST_ROOT=str(repo / "dist"), SUPERBIRDTOOLS_BUILD_ROOT=str(repo / "build"),
                 SBT_BUILD_PROBE=str(repo / "calls.jsonl"), SBT_BUILD_STUB=str(repo / "build_tools" / "build_stub.py"),
                 SBT_FAIL_STAGE="")
+
+
+@pytest.mark.parametrize("fail", ["", "download_models"])
+def test_selected_models_are_verified_before_build(build_entry, fail):
+    _, run = build_entry
+    names = "yolo11l-seg.pt,sam2.1_b.pt"
+    result, calls = run("--apps-only", "--bundle-models", names, fail=fail)
+    check = next(c for c in calls if c["stage"] == "download_models")
+    assert check["args"] == ["--check-only", "--no-denoise", names]
+    if fail:
+        assert result.returncode != 0
+        assert calls[-1] == check and VIEWER_STAGE not in [c["stage"] for c in calls]
+    else:
+        assert result.returncode == 0, result.stdout + result.stderr
+        viewer = next(c for c in calls if c["stage"] == VIEWER_STAGE)
+        assert viewer["bundle"] == names and calls.index(check) < calls.index(viewer)
+
+
+def test_bundle_models_requires_a_value(build_entry):
+    _, run = build_entry
+    result, calls = run("--bundle-models")
+    assert result.returncode != 0 and not calls

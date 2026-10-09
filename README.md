@@ -150,14 +150,14 @@ build_all.bat
 bash build_all.sh --apps-only
 ```
 
-macOS 也可直接使用免 ZIP 入口，支持传入 `--clean` 等原有参数。它还会把全部 43 个鸟清晰度模型（YOLO / SAM，约 3.45 GB）打进 SuperViewer，用于本机实验和对比；模型须先下载到 workspace，build 前会逐个校验大小与 SHA-256，缺失或损坏时直接停止、不会联网下载：
+macOS 也可直接使用免 ZIP 入口，支持传入 `--clean` 等原有参数。它在原有 `yolo11n.pt` 和 NAFNet 基础模型之外，仅额外打包 `yolo11l-seg.pt` 与 `sam2.1_b.pt`（约 218 MB）；模型须先下载到 workspace，build 前会逐个校验大小与 SHA-256，缺失或损坏时直接停止、不会联网下载：
 
 ```bash
-./download_models.sh        # 首次，或模型清单变化后
+./download_models.sh yolo11l-seg.pt sam2.1_b.pt  # 首次准备这两个额外模型
 bash build_all_no_zip.sh
 ```
 
-`build_all.sh` 和 Windows 的 `build_all.bat` 都可以用 `--bundle-all-models` 打包全部模型（如 `download_models.bat` 后 `build_all.bat --apps-only --bundle-all-models`）；发布构建不带此参数，安装包和更新分卷保持只有 `yolo11n.pt` 与降噪模型。
+`build_all.sh` 和 Windows 的 `build_all.bat` 均支持 `--bundle-models yolo11l-seg.pt,sam2.1_b.pt` 指定额外模型，也可以用 `--bundle-all-models` 打包全部模型（如 `download_models.bat` 后 `build_all.bat --apps-only --bundle-all-models`）；发布构建不带此参数，安装包和更新分卷保持只有 `yolo11n.pt` 与降噪模型。
 
 ```bat
 build_all.bat --apps-only

@@ -7,9 +7,8 @@ from pathlib import Path
 
 MODEL_NAME = "yolo11n.pt"
 MIN_MODEL_BYTES = 100_000
-# "all": also bundle every bird sharpness catalog model (YOLO / SAM, ~3.45 GB) from the
-# workspace SuperViewer/models (download_models.sh). Set by build_all.sh --bundle-all-models,
-# which build_all_no_zip.sh always passes; release builds leave it unset.
+# "all" 或逗号分隔的模型名：从 workspace 额外打包所选 YOLO / SAM 模型。
+# build_all.sh / build_all.bat 设置，发布构建默认不设置。
 BUNDLE_MODELS_ENV = "SUPERBIRDTOOLS_BUNDLE_MODELS"
 
 
@@ -24,25 +23,24 @@ def development_model_path(repo_root: Path) -> Path:
 
 
 def bundled_catalog_models(repo_root: Path, mode: str | None = None) -> list:
-    """``(path, "models")`` for every catalog model when ``mode`` (default: the
-    ``BUNDLE_MODELS_ENV`` variable) is ``"all"``; never downloads. Sizes are checked
-    here (build_all.sh verifies SHA-256 before PyInstaller runs); a missing or
-    incomplete model stops the build before Analysis."""
+    """离线收集选定模型；构建入口先校验 SHA-256，此处再检查文件大小。"""
     mode = os.environ.get(BUNDLE_MODELS_ENV, "") if mode is None else mode
-    if mode.strip().lower() != "all":
+    mode = mode.strip()
+    if not mode:
         return []
-    from bird_sharpness.model_catalog import DETECTORS, SAM_MODELS
+    from build_tools.download_models import resolve_names
 
+    models = resolve_names([] if mode.lower() == "all" else [mode])
     directory = Path(repo_root) / "SuperViewer" / "models"
     datas, missing = [], []
-    for model in (*DETECTORS, *SAM_MODELS):
+    for model in models:
         path = directory / model.name
         if path.is_file() and path.stat().st_size == model.size_bytes:
             datas.append((str(path), "models"))
         else:
             missing.append(model.name)
     if missing:
-        raise FileNotFoundError(f"打包全部模型时缺少或不完整：{'、'.join(missing)}；请先运行 ./download_models.sh")
+        raise FileNotFoundError(f"打包所选模型时缺少或不完整：{'、'.join(missing)}；请先运行 ./download_models.sh")
     return datas
 
 

@@ -58,3 +58,12 @@ def test_dry_run_check_only_and_download(monkeypatch, tmp_path, capsys) -> None:
     assert dm.main(["yolo11n.pt", "yolo11s.pt", "--dest", str(tmp_path)]) == 0
     assert fetched == [("yolo11s.pt", tmp_path.resolve())]  # the verified one is skipped
     assert "完成：2 个模型均已校验" in capsys.readouterr().out
+
+
+def test_comma_separated_selection_is_checked_offline(monkeypatch, tmp_path):
+    names = ["yolo11l-seg.pt", "sam2.1_b.pt"]
+    checked = []
+    monkeypatch.setattr(model_catalog, "verify", lambda path, name=None: checked.append(path.name) or True)
+    monkeypatch.setattr(model_catalog, "download", lambda *a, **k: pytest.fail("unexpected download"))
+    assert dm.main([",".join(names), "--dest", str(tmp_path), "--check-only", "--no-denoise"]) == 0
+    assert checked == names

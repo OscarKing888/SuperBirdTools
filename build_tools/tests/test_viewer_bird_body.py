@@ -119,3 +119,25 @@ def test_every_viewer_spec_enforces_bird_resources(spec):
     assert "collect_viewer_bird_body(" in source
     assert "bird_datas" in source and "bird_binaries" in source and "bird_hiddenimports" in source
     assert 'collect_submodules("superviewer")' in source
+
+
+def test_selected_models_do_not_require_or_collect_unselected_models(tmp_path, monkeypatch, model):
+    from bird_sharpness.model_catalog import catalog_model
+
+    monkeypatch.setattr(assets.importlib.util, "find_spec", lambda module: SimpleNamespace())
+    names = ("yolo11l-seg.pt", "sam2.1_b.pt")
+    monkeypatch.setenv(assets.BUNDLE_MODELS_ENV, ",".join(names))
+    directory = tmp_path / "SuperViewer" / "models"
+    directory.mkdir(parents=True)
+    for name in names:
+        with (directory / name).open("wb") as stream:
+            stream.truncate(catalog_model(name).size_bytes)
+    # 工作目录里即使存在其他模型，也不收集它们。
+    (directory / "yolo11x-seg.pt").write_bytes(b"unselected")
+    datas, _, _ = assets.collect_viewer_bird_body(tmp_path, ultralytics_assets=([], [], []))
+    assert datas == [(str(model), "models"), *((str(directory / name), "models") for name in names)]
+    (directory / names[1]).write_bytes(b"broken")
+    with pytest.raises(FileNotFoundError, match=names[1]):
+        assets.bundled_catalog_models(tmp_path)
+    with pytest.raises(ValueError, match="nosuch"):
+        assets.bundled_catalog_models(tmp_path, "nosuch")

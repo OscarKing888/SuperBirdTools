@@ -15,7 +15,7 @@ if defined SUPERBIRDTOOLS_BUILD_ROOT (
 
 set "CLEAN=0"
 set "APPS_ONLY=0"
-set "BUNDLE_ALL_MODELS=0"
+set "BUNDLE_MODELS="
 :parse_args
 if "%~1"=="" goto args_done
 if /I "%~1"=="--clean" (
@@ -29,7 +29,17 @@ if /I "%~1"=="--apps-only" (
   goto parse_args
 )
 if /I "%~1"=="--bundle-all-models" (
-  set "BUNDLE_ALL_MODELS=1"
+  set "BUNDLE_MODELS=all"
+  shift
+  goto parse_args
+)
+if /I "%~1"=="--bundle-models" (
+  if "%~2"=="" (
+    echo --bundle-models requires comma-separated model names >&2
+    exit /b 1
+  )
+  set "BUNDLE_MODELS=%~2"
+  shift
   shift
   goto parse_args
 )
@@ -37,14 +47,10 @@ echo Unknown option: %~1
 exit /b 1
 
 :args_done
-rem --bundle-all-models: also bundle every bird sharpness model (~3.45 GB) from the workspace
-rem SuperViewer\models into SuperViewer (build_tools\viewer_bird_body.py). Verified before
-rem PyInstaller; never downloaded during a build. Release builds always clear the variable.
-if "%BUNDLE_ALL_MODELS%"=="1" (
-  set "SUPERBIRDTOOLS_BUNDLE_MODELS=all"
-) else (
-  set "SUPERBIRDTOOLS_BUNDLE_MODELS="
-)
+rem Bundle only the requested catalog models; release builds clear inherited settings.
+set "SUPERBIRDTOOLS_BUNDLE_MODELS=%BUNDLE_MODELS%"
+set MODEL_ARGS="%BUNDLE_MODELS%"
+if "%BUNDLE_MODELS%"=="all" set "MODEL_ARGS="
 set "PYINSTALLER_ARGS=--noconfirm"
 if "%CLEAN%"=="1" (
   set "PYINSTALLER_ARGS=--noconfirm --clean"
@@ -91,9 +97,9 @@ echo [INFO] Using Python: %PYTHON_EXE%
 if errorlevel 1 exit /b 1
 "%PYTHON_EXE%" "%ROOT_DIR%build_tools\download_denoise_model.py"
 if errorlevel 1 exit /b 1
-if "%BUNDLE_ALL_MODELS%"=="1" (
-  echo [INFO] Bundling all models from SuperViewer\models; verifying...
-  "%PYTHON_EXE%" "%ROOT_DIR%build_tools\download_models.py" --check-only --no-denoise
+if defined BUNDLE_MODELS (
+  echo [INFO] Bundling selected models from SuperViewer\models; verifying...
+  "%PYTHON_EXE%" "%ROOT_DIR%build_tools\download_models.py" --check-only --no-denoise %MODEL_ARGS%
   if errorlevel 1 goto models_missing
 )
 "%PYTHON_EXE%" -m PyInstaller %PYINSTALLER_ARGS% ^
@@ -109,9 +115,9 @@ echo [INFO] Using Python launcher: %PYTHON_LAUNCHER%
 if errorlevel 1 exit /b 1
 %PYTHON_LAUNCHER% "%ROOT_DIR%build_tools\download_denoise_model.py"
 if errorlevel 1 exit /b 1
-if "%BUNDLE_ALL_MODELS%"=="1" (
-  echo [INFO] Bundling all models from SuperViewer\models; verifying...
-  %PYTHON_LAUNCHER% "%ROOT_DIR%build_tools\download_models.py" --check-only --no-denoise
+if defined BUNDLE_MODELS (
+  echo [INFO] Bundling selected models from SuperViewer\models; verifying...
+  %PYTHON_LAUNCHER% "%ROOT_DIR%build_tools\download_models.py" --check-only --no-denoise %MODEL_ARGS%
   if errorlevel 1 goto models_missing
 )
 %PYTHON_LAUNCHER% -m PyInstaller %PYINSTALLER_ARGS% ^
