@@ -543,6 +543,7 @@ class MainWindow(QMainWindow):
         )
         self._individual_bird_hover = IndividualBirdHover(
             self.image_info_panel, (self.preview_a, self.preview_panel), self)
+        self._bird_id.primary_bird.bind(self.image_info_panel.individual_birds)
         self._file_list.playback_state_changed.connect(lambda active: self._individual_bird_hover.clear() if active else None)
         self.tags_info_panel = ImageInfoTabPanel_Tags(
             self._file_list.available_photo_tags,

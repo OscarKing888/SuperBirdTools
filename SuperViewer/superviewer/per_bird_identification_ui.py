@@ -8,16 +8,17 @@ from dataclasses import replace
 from .bird_result_list import TraceBirdList
 from .bird_identification import BirdIDOptions
 from .per_bird_identification import PerBirdOptions, read_individuals, individual_species_metadata
+from .per_bird_primary import individual_record_snapshot, can_set_primary
 from .rarity_badge import RarityBadge, ConservationBadge, MetadataBadge, rarity_badge_style
 from .qt_compat import QLabel, QVBoxLayout, QHBoxLayout, QWidget, pyqtSignal
 try:
     from PyQt6.QtCore import QObject, Qt
     from PyQt6.QtWidgets import (QCheckBox, QDialog, QDialogButtonBox, QDoubleSpinBox,
-                                QFormLayout, QLineEdit, QSpinBox, QScrollArea, QTabWidget)
+                                QFormLayout, QLineEdit, QSpinBox, QScrollArea, QTabWidget, QMenu)
 except ImportError:  # pragma: no cover
     from PyQt5.QtCore import QObject, Qt
     from PyQt5.QtWidgets import (QCheckBox, QDialog, QDialogButtonBox, QDoubleSpinBox,
-                                QFormLayout, QLineEdit, QSpinBox, QScrollArea, QTabWidget)
+                                QFormLayout, QLineEdit, QSpinBox, QScrollArea, QTabWidget, QMenu)
 
 
 class PerBirdSettingsDialog(QDialog):
@@ -111,11 +112,14 @@ class PerBirdSettingsDialog(QDialog):
 
 class IndividualBirdsPanel(QWidget):
     hovered = pyqtSignal(str, object)
+    primary_requested = pyqtSignal(str, int, object)
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self.path = ""
         self._items = []
+        self._record_snapshot = (None, None)
+        self.primary_allowed = lambda: False
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         self.empty = QLabel("暂无逐只识别结果（照片右键 → 逐只识别…）", self)
@@ -128,6 +132,7 @@ class IndividualBirdsPanel(QWidget):
 
     def set_metadata(self, path, metadata):
         items = read_individuals(metadata)
+        self._record_snapshot = individual_record_snapshot(metadata)
         if self.path == path and items == self._items:
             self.refresh_badges()
             return
@@ -172,7 +177,21 @@ class IndividualBirdsPanel(QWidget):
                 rows.append(TraceBirdRow(f"鸟 #{n + 1}", value, color,
                                          tuple(item["box"]), n))
         self.birds.set_rows(rows, details=details)
+        for row, cells in enumerate(self.birds.cells):
+            label = cells[2]
+            label.setContextMenuPolicy(getattr(Qt, 'ContextMenuPolicy', Qt).CustomContextMenu)
+            label.customContextMenuRequested.connect(lambda pos, r=row, w=label: self._primary_menu(r, w, pos))
         self.empty.setVisible(not rows)
+
+    def _primary_menu(self, row, label, pos):
+        item = self._items[row]
+        path, expected, index = self.path, self._record_snapshot, item['index']
+        menu = QMenu(self)
+        action = menu.addAction('设为本照片主要鸟名')
+        action.setEnabled(bool(path) and can_set_primary(item) and self.primary_allowed())
+        action.triggered.connect(lambda: self.primary_requested.emit(path, index, expected))
+        menu.exec(label.mapToGlobal(pos))
+        menu.deleteLater()
 
     def refresh_badges(self):
         for badge in self.birds.findChildren(MetadataBadge):
