@@ -58,4 +58,3 @@ class ViewerPreviewCanvas(PreviewCanvas):
         super().mouseMoveEvent(event)
         if dragging:
             self.viewport_interacted.emit()
-
