@@ -19,6 +19,8 @@ reach 4x the noise level, and a visible head without any is "clearly blurred"; v
 below ``metrics.SIGMA_FLOOR_PX`` (0.5 px) are rejected as line-like). Calibrated on a Sony ILCE-1M2 ISO 2500-3200 burst
 (LibRaw LINEAR demosaic, analysis at full output resolution); sigma is in pixels
 of that resolution, so the same thresholds describe what a 100% view shows.
+Version 16 preserves separate bird silhouettes inside overlapping detection boxes;
+the blur measurement and score thresholds are unchanged.
 """
 
 from __future__ import annotations
@@ -36,7 +38,7 @@ from app_common.bird_sharpness_fields import (
     VERDICT_USABLE,
 )
 
-ALGORITHM_VERSION = "sbt-blur-v15"
+ALGORITHM_VERSION = "sbt-blur-v16"
 
 # (sigma_px, score) anchors, sigma ascending / score descending.
 SCORE_ANCHORS: Tuple[Tuple[float, float], ...] = (

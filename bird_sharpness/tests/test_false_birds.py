@@ -4,9 +4,11 @@ from __future__ import annotations
 from dataclasses import replace
 
 import pytest
+import numpy as np
+import cv2
 
 from app_common import bird_sharpness_fields as bsf
-from bird_sharpness.analyzer import BirdSharpnessAnalyzer, dedupe_detections
+from bird_sharpness.analyzer import BirdSharpnessAnalyzer, dedupe_detections, detection_mask_overlap
 from bird_sharpness.models import BirdDetection
 from bird_sharpness.trace import C_WEAK, AnalysisTracer, hex_color
 
@@ -78,6 +80,82 @@ def test_whole_bird_and_its_part_are_one_bird_in_either_order() -> None:
         assert [d.box for d in kept] == [first]
     apart = dedupe_detections([BirdDetection(0.7, whole), BirdDetection(0.4, (390, 100, 700, 400))])
     assert len(apart) == 2  # two birds touching are still two birds
+
+
+def _nested_flock():
+    # DSC00462：小鸟整个框位于大鸟的框内，但鸟体轮廓完全分离。
+    large = np.zeros((120, 200), np.uint8)
+    large[10:45, 30:185] = 1
+    large[45:110, 165:175] = 1
+    small = np.zeros_like(large)
+    small[65:105, 70:100] = 1
+    return (BirdDetection(.95, (30, 10, 185, 110), large),
+            BirdDetection(.90, (70, 65, 100, 105), small))
+
+
+@pytest.mark.parametrize('reverse', [False, True])
+def test_contained_boxes_with_separate_silhouettes_are_two_birds(reverse):
+    birds = list(_nested_flock())
+    if reverse:
+        birds.reverse()
+    assert detection_mask_overlap(*birds) == 0
+    kept = dedupe_detections(birds)
+    assert len(kept) == 2 and all(a is b for a, b in zip(kept, birds))
+
+
+@pytest.mark.parametrize('different_resolution', [False, True])
+def test_flock_masks_align_across_passes_and_true_duplicate_is_still_removed(different_resolution):
+    large, small = _nested_flock()
+    duplicate = replace(small, confidence=.7, mask=small.mask.copy())
+    if different_resolution:
+        duplicate.mask = cv2.resize(duplicate.mask, None, fx=2, fy=2, interpolation=cv2.INTER_NEAREST)
+    before = [b.mask.copy() for b in (large, small, duplicate)]
+    assert detection_mask_overlap(small, duplicate) == 1
+    kept = dedupe_detections([large, small, duplicate])
+    assert len(kept) == 2 and kept[0] is large and kept[1] is small
+    assert all(np.array_equal(old, b.mask) for old, b in zip(before, (large, small, duplicate)))
+
+
+@pytest.mark.parametrize('overlap, expected_count', [(6, 2), (7, 1)])
+@pytest.mark.parametrize('reverse', [False, True])
+def test_silhouette_containment_threshold_uses_smaller_mask(overlap, expected_count, reverse):
+    # 小掩膜有 10 个像素：即使大掩膜远大于它，交集达 70% 仍是重复。
+    large = np.zeros((20, 20), np.uint8)
+    large[:10, :10] = 1
+    small = np.zeros_like(large)
+    small[9, 10-overlap:20-overlap] = 1
+    birds = [BirdDetection(.9, (0, 0, 20, 20), large),
+             BirdDetection(.8, (0, 0, 20, 20), small)]
+    if reverse:
+        birds.reverse()
+    assert detection_mask_overlap(*birds) == pytest.approx(overlap / 10)
+    kept = dedupe_detections(birds)
+    assert len(kept) == expected_count and kept[0] is birds[0]
+
+
+@pytest.mark.parametrize('mask', [None, np.zeros((120, 200), np.uint8), np.zeros((0, 0)), np.zeros((2, 3, 4))])
+def test_unavailable_masks_keep_box_duplicate_fallback(mask):
+    large, small = _nested_flock()
+    small.mask = mask
+    assert detection_mask_overlap(large, small) is None
+    assert len(dedupe_detections([large, small])) == 1
+
+
+def test_separate_nested_birds_reach_measurement_and_final_result(monkeypatch):
+    from bird_sharpness.image_source import AnalysisImage
+    from bird_sharpness.params import AnalysisParams
+    large, small = _nested_flock()
+    gray = np.full((120, 200), .2, np.float32)
+    gray[(large.mask | small.mask).astype(bool)] = .8
+    image = AnalysisImage(np.repeat((gray * 255).astype(np.uint8)[..., None], 3, axis=2), gray, False)
+    models = _StubModels([], full_w=200, keypoints=False)
+    monkeypatch.setattr(models, 'detect_birds', lambda *args, **kw: [large, small])
+    tracer = AnalysisTracer()
+    result = BirdSharpnessAnalyzer(models, focus_provider=_no_focus,
+                                  params=AnalysisParams()).analyze('flock.png', image_loader=lambda _: image, tracer=tracer)
+    assert result.ok and result.bird_count == 2
+    assert [b['box'] for b in result.birds] == [large.box, small.box]
+    assert len(tracer.trace.birds) == 2
 
 
 # A whole bird and a raised "wing" whose box is about half inside it (DSC05008: 65 %).

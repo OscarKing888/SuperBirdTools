@@ -317,13 +317,13 @@ def test_bird_limit_option_reaches_the_analyzer_and_the_options_dialog():
         assert controller.analyzer().max_birds == 0  # default: every bird
         assert controller.analyzer().edge_estimator == "standard"
         # default image source: the camera's embedded JPEG, tagged so it never passes for a RAW result
-        assert controller.analyzer().tile_options.mf_center and controller.analyzer().version.endswith("v15-jpeg")
+        assert controller.analyzer().tile_options.mf_center and controller.analyzer().version.endswith("v16-jpeg")
         opts.apply_runtime_user_options({key: 6, est: "dense", opts.KEY_BIRD_SHARPNESS_MF_TILE: 128,
                                          opts.KEY_BIRD_SHARPNESS_IMAGE_SOURCE: "raw"})
         assert controller.analyzer().max_birds == 6  # picked up at the next job start
         assert controller.analyzer().edge_estimator == "dense"
         assert controller.analyzer().tile_options.mf_tile == 128
-        assert controller.analyzer().version.endswith("v15-dense-mf50-128-10")  # RAW decode: no source tag
+        assert controller.analyzer().version.endswith("v16-dense-mf50-128-10")  # RAW decode: no source tag
         dialog = SuperViewerUserOptionsDialog(options={key: 6, est: "dense"})
         try:
             assert dialog._spin_bird_sharpness_max_birds.value() == 6
