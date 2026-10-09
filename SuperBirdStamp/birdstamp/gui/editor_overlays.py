@@ -6,7 +6,7 @@ from birdstamp.overlays.model import document, effective_payload
 from .overlay_panel import OverlayPanel
 from .overlay_edit import OverlaySession, EDIT_MODE_OVERLAY
 from .editor_utils import path_key
-from .overlay_editor_dialog import OverlayEditorDialog
+from .overlay_editor_dock import OverlayEditorDock
 
 
 class _BirdStampOverlaysMixin:
@@ -25,7 +25,7 @@ class _BirdStampOverlaysMixin:
         for index,(label,slot) in enumerate([('恢复模板',self._restore_overlay_template),('应用到选中',lambda:self._apply_overlays(False)),
                            ('应用到全部',lambda:self._apply_overlays(True)),('另存模板',self._save_overlay_template)]):
             button=QPushButton(label); button.clicked.connect(slot); row.addWidget(button,index//2,index%2)
-        self.overlay_dialog = OverlayEditorDialog(self, self.overlay_panel, row)
+        self.overlay_dock = OverlayEditorDock(self, self.overlay_panel, row)
         self.overlay_panel.selectionChanged.connect(self._update_overlay_summary)
 
     def _update_overlay_summary(self, *_args):
@@ -38,8 +38,8 @@ class _BirdStampOverlaysMixin:
             name = '正在加载叠加层…' if self.current_path else ''
             self.overlay_summary.setText(name or '请选择照片')
         filename = self.current_path.name if self.current_path else '请选择照片'
-        self.overlay_dialog.context_label.setText(f'{filename}\n{name}')
-        self.overlay_dialog.context_label.setToolTip(str(self.current_path or ''))
+        self.overlay_dock.context_label.setText(f'{filename}\n{name}')
+        self.overlay_dock.context_label.setToolTip(str(self.current_path or ''))
         self.overlay_editor_button.setEnabled(self.overlay_panel.isEnabled())
 
     def _overlay_session(self):
@@ -72,7 +72,7 @@ class _BirdStampOverlaysMixin:
 
     def _reveal_overlay_panel(self):
         self._update_overlay_summary()
-        self.overlay_dialog.reveal()
+        self.overlay_dock.reveal()
 
     def _activate_overlay_edit(self):
         if self.current_path is None or self.current_source_image is None:

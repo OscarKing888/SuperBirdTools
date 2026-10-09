@@ -108,7 +108,7 @@ A/B 的布局与显隐约定见 [A/B 预览工具栏布局](ux/AB_PREVIEW_LAYOUT
 
 模板管理器修改叠加层参数时立即保存，预览通过 `_schedule_preview_refresh` 的 120 ms 单次定时器合并连续输入；等待期间清除旧命中场景，切换模板立即绘制最新模板，关闭及 Esc/确认退出提交待输入文字并取消定时器。[template_context.template_render_context](../birdstamp/gui/template_context.py) 在每次 `_refresh_preview` 内复用 provider 上下文（最多 16 项）和元数据查找表（最多 8 项），退出即清空。完整元数据与仅侧车元数据、同名字段的命名空间插入顺序保持独立，下一帧沿用完整读取与 XMP 优先级规则；不跨帧缓存照片数据。此改动属于 GUI 调度，不增加 CLI 参数。回归见 [test_template_preview_performance.py](../tests/test_template_preview_performance.py)。
 
-主窗口通过 [overlay_editor_dialog.py](../birdstamp/gui/overlay_editor_dialog.py) 的 `OverlayEditorDialog` 承载完整叠加编辑器及批量应用／另存模板操作。它是可移动、可缩放的非模态工具窗口，打开时靠近左侧设置区并限制在所在屏幕可用范围内，主预览不因打开窗口而重新分栏。编辑区独立滚动，当前照片／图层标题与底部操作保持可见；关闭按钮、系统关闭和 Esc 均先提交待输入文字再隐藏，保留模型及撤销历史。主设置区仅显示输出类别开关、文本缩放、状态摘要和编辑入口。这是 GUI 布局行为，无新增 CLI 参数。
+主窗口通过 [overlay_editor_dock.py](../birdstamp/gui/overlay_editor_dock.py) 的 `OverlayEditorDock` 承载完整叠加编辑器及批量应用／另存模板操作。外层 splitter 保留左侧设置区，右侧嵌入式 `QMainWindow` 以预览为 central widget、叠加面板为左侧 Dock，确保默认顺序为设置→叠加编辑→预览。原生标题栏支持拖动、浮动、重新停靠，底部也提供显式切换按钮；首次打开分配约 45% 预览侧空间给编辑器，Qt 保留预览最小尺寸，后续保留会话内宽度及浮动状态，关闭后预览收回空间。浮动窗口限制在所在屏幕可用范围内。编辑区独立纵向滚动，`OverlayPanel` 的三组属性单独横向滚动，避免撑宽列表和常用操作；当前照片／图层标题与底部操作保持可见。关闭和面板内 Esc 均先提交待输入文字再隐藏，保留模型及撤销历史；画布 Esc 仍处理画布自己的编辑退出。主设置区仅显示输出类别开关、文本缩放、状态摘要和编辑入口。这是 GUI 布局行为，无新增 CLI 参数。
 
 [editor_compact_panels.py](../birdstamp/gui/editor_compact_panels.py) 的 `ExportActionBar` 位于左侧主滚动区外，复用原导出类型选择器、图片／GIF 按钮、视频生成／中断按钮容器，以及去抖动导出按钮和图片／去抖动进度控件。`_refresh_image_export_action_states` 和导出页签切换同步当前按钮页；业务信号、忙碌禁用与工作区导出参数仍由既有模块管理。「导出设置…」展开设置区并滚到当前输出类型的参数顶部。布局、收起保留中文输入、视频取消和模式切换回归见 [test_editor_compact_panels.py](../tests/test_editor_compact_panels.py)。
 

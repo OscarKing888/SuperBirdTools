@@ -5,10 +5,10 @@ from copy import deepcopy
 from collections import OrderedDict
 from pathlib import Path
 import uuid
-from PyQt6.QtCore import Qt, pyqtSignal, QObject, QRunnable, QThreadPool, pyqtSlot, QTimer
+from PyQt6.QtCore import Qt, QSize, QEvent, pyqtSignal, QObject, QRunnable, QThreadPool, pyqtSlot, QTimer
 from PyQt6.QtWidgets import (QWidget,QVBoxLayout,QHBoxLayout,QFormLayout,QListWidget,QListWidgetItem,
     QAbstractItemView,QPushButton,QToolButton,QMenu,QLabel,QLineEdit,QPlainTextEdit,QComboBox,
-    QCheckBox,QDoubleSpinBox,QFileDialog,QMessageBox,QGroupBox,QSizePolicy,QScrollArea)
+    QCheckBox,QDoubleSpinBox,QFileDialog,QMessageBox,QGroupBox,QSizePolicy,QScrollArea,QFrame,QLayout)
 from birdstamp.overlays.model import document, new_item
 from birdstamp.overlays.assets import import_image
 from birdstamp.render.text_effects import DEFAULT_TEXT_EFFECTS, TEXT_EFFECT_RANGES
@@ -37,6 +37,51 @@ class _Import(QRunnable):
         self.signals.done.emit(self.context, result, error)
 
 
+class _PropertyColumnsScroll(QScrollArea):
+    """三列属性只横向滚动，纵向高度交给外层编辑区，避免图层工具栏被撑宽。"""
+    def __init__(self, columns):
+        super().__init__()
+        self.setFrameShape(QFrame.Shape.NoFrame)
+        self.setWidgetResizable(True)
+        self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.setWidget(columns)
+
+    def sizeHint(self):
+        columns = self.widget()
+        minimum = columns.minimumSizeHint()
+        width = max(self.viewport().width(), minimum.width())
+        height = columns.layout().totalHeightForWidth(width)
+        if height < 0:
+            height = minimum.height()
+        # 预留横向滚动条高度，切换图层或字体后也不裁掉最后一个属性。
+        return QSize(minimum.width(), height + self.horizontalScrollBar().sizeHint().height())
+
+    def minimumSizeHint(self):
+        return QSize(0, self.sizeHint().height())
+
+    def _sync_height(self):
+        height = self.sizeHint().height()
+        if self.minimumHeight() != height:
+            self.setFixedHeight(height)
+            # 切换图层后的高度变化需要使外层布局缓存失效，避免属性或提示相互覆盖。
+            parent = self.parentWidget()
+            while parent is not None and not isinstance(parent, QScrollArea):
+                if parent.layout() is not None:
+                    parent.layout().invalidate()
+                parent.updateGeometry()
+                parent = parent.parentWidget()
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._sync_height()
+
+    def eventFilter(self, watched, event):
+        result = super().eventFilter(watched, event)
+        if watched is self.widget() and event.type() in (QEvent.Type.LayoutRequest, QEvent.Type.Resize):
+            self._sync_height()
+        return result
+
+
 class OverlayPanel(QWidget):
     changed = pyqtSignal(object)
     selectionChanged = pyqtSignal(str)
@@ -58,9 +103,11 @@ class OverlayPanel(QWidget):
         self._text_timer.setInterval(350)
         self._text_timer.timeout.connect(lambda: self.edit('text', self.text.toPlainText()))
         layout = QVBoxLayout(self)
+        layout.setSizeConstraint(QLayout.SizeConstraint.SetMinimumSize)
         layout.setContentsMargins(0,0,0,0)
         layout.setAlignment(Qt.AlignmentFlag.AlignTop)
-        self.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
+        # 窄 Dock 中提示文字会换行，必须允许高度随宽度增长，不能固定为 sizeHint。
+        self.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Minimum)
         self.scope = QLabel('叠加层')
         self.scope.setWordWrap(True)
         layout.addWidget(self.scope)
@@ -78,7 +125,7 @@ class OverlayPanel(QWidget):
         self.add_button.setMenu(menu)
         row.addWidget(self.add_button)
         for label, slot in [('复制',self.duplicate),('删除',self.delete)]:
-            button=QPushButton(label); button.clicked.connect(slot); row.addWidget(button)
+            button=QToolButton(); button.setText(label); button.clicked.connect(slot); row.addWidget(button)
             if label=='删除': self.delete_button=button
             else: self.duplicate_button=button
         layout.addLayout(row)
@@ -90,14 +137,18 @@ class OverlayPanel(QWidget):
         self.list.model().rowsMoved.connect(self._reorder)
         layout.addWidget(self.list)
         row=QHBoxLayout()
-        self.undo_button=QPushButton('撤销'); self.undo_button.clicked.connect(self.undo)
-        self.redo_button=QPushButton('重做'); self.redo_button.clicked.connect(self.redo)
+        self.undo_button=QToolButton(); self.undo_button.setText('撤销'); self.undo_button.clicked.connect(self.undo)
+        self.redo_button=QToolButton(); self.redo_button.setText('重做'); self.redo_button.clicked.connect(self.redo)
         row.addWidget(self.undo_button); row.addWidget(self.redo_button)
         self.edit_button=QPushButton('在预览中编辑'); self.edit_button.clicked.connect(self.activateRequested)
         row.addWidget(self.edit_button)
         layout.addLayout(row)
         self.properties=QGroupBox('叠加层属性')
-        self.form=QFormLayout(self.properties)
+        property_layout = QVBoxLayout(self.properties)
+        header = QWidget()
+        self.form=QFormLayout(header)
+        self.form.setContentsMargins(0, 0, 0, 0)
+        property_layout.addWidget(header)
         self.form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)
         layout.addWidget(self.properties)
         self.widgets={}
@@ -208,7 +259,8 @@ class OverlayPanel(QWidget):
             self.forms[key]=forms[group]
         for widget,group in ((self.reset_layout_button,'布局'),(self.font_button,'内容'),(self.replace_image_button,'内容')):
             self.form.takeRow(widget); forms[group].addRow(widget)
-        self.form.addRow(columns)
+        self.property_scroll = _PropertyColumnsScroll(columns)
+        self.properties.layout().addWidget(self.property_scroll)
         self.setMinimumWidth(0)
 
     def _build_layout_controls(self):
@@ -603,13 +655,15 @@ class OverlayPanel(QWidget):
         item=self.selected()
         if not item or item['type'] not in ('text','badge') or item['locked']: return
         widget=self.text if item['text_mode']=='literal' else self.metadata
-        parent=self.parentWidget()
+        widget.setFocus()
+        parent=widget.parentWidget()
         while parent is not None:
             if isinstance(parent,QScrollArea):
-                parent.ensureWidgetVisible(widget,0,10)
-                break
+                center = widget.mapTo(parent.widget(), widget.rect().center())
+                parent.ensureVisible(center.x(), center.y(),
+                                     min(widget.width() // 2, parent.viewport().width() // 2),
+                                     min(widget.height() // 2 + 10, parent.viewport().height() // 2))
             parent=parent.parentWidget()
-        widget.setFocus()
 
     def import_file(self, *, replace_id=None):
         from app_common.image_formats import SUPPORTED_IMAGE_EXTENSIONS

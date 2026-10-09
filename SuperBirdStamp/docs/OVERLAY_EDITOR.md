@@ -1,6 +1,6 @@
 # 叠加层编辑
 
-主窗口「模板叠加」区域保留文字／背景／图像开关、文本缩放、图层数量和跟随模板状态。点击「编辑叠加层…」或预览工具栏的叠加编辑工具，打开靠近左侧设置面板的浮动窗口，可以移动、缩放，并同时操作主窗口预览。窗口不会停靠或挤缩预览；打开位置限制在当前屏幕内。顶部显示当前照片和所选图层，中间编辑区独立滚动，底部保留恢复模板、批量应用、另存模板和关闭操作。系统关闭、关闭按钮或 Esc 都只收起窗口并提交待输入文字，保留修改与撤销历史。
+主窗口「模板叠加」区域保留文字／背景／图像开关、文本缩放、图层数量和跟随模板状态。点击「编辑叠加层…」或预览工具栏的叠加编辑工具，默认在左侧设置区与预览之间打开可停靠面板。可拖动分隔线调整宽度，拖动／双击标题栏或点击「浮动／停靠」切换独立窗口；同一会话再次打开保留停靠或浮动状态，关闭后预览收回空间。顶部显示当前照片和所选图层，编辑区独立滚动，底部保留恢复模板、批量应用、另存模板和关闭操作。内容／布局／效果继续共用模板管理器的并列分组；窄面板仅属性分组横向滚动，图层列表与增删、撤销操作保持在可见宽度内。关闭或在面板内按 Esc 都只收起并提交待输入文字，保留修改与撤销历史。
 
 模板管理和实例编辑直接复用同一个 `OverlayPanel`，图层列表与「内容／布局／效果」并列分组布局完全一致。点击「新增叠加层」添加自定义文本、元数据文本、Badge（徽章）、静态图像或背景。图片会内嵌到配置，原素材移动后仍可使用；相同素材在一个工作区中只保存一份。
 
@@ -73,7 +73,7 @@ A/B 下只编辑 B 的当前照片；进入编辑会停止播放，显示 B 的�
 - `birdstamp/overlays/layout.py`：`overlay_layouts` 树的规范化、真实边界布局、邻边吸附、组合/移出及独立位置保留。节点保存有序 `children`、`direction`（row/down/up）、`gap`（短边比例）、`align`、锚点位置与固定边；重复归属和循环嵌套会拒绝加载。空组合随删除清理，单成员组合保留原锚点。
 - `birdstamp/overlays/render.py`：逻辑画幅布局、旋转命中几何和 Pillow 合成，不依赖窗口状态。
 - `gui/overlay_panel.py`、`gui/overlay_edit.py`、`gui/editor_overlays.py`：共用属性编辑、手势会话和主窗口绑定。拖动只更新有界预览，松手后提交配置；切图清理旧场景，异步素材导入按上下文代次接收。
-- `gui/overlay_editor_dialog.py`：`OverlayEditorDialog` 管理实例编辑的非模态浮动窗口，复用 `OverlayPanel` 的完整布局；`gui/editor_compact_panels.py` 的 `ExportActionBar` 承载固定导出入口。两者不持有渲染参数，回归见 `tests/test_editor_compact_panels.py`。
+- `gui/overlay_editor_dock.py`：`OverlayEditorDock` 通过预览侧嵌入式 `QMainWindow` 管理中间停靠／浮动及尺寸，复用 `OverlayPanel` 的完整布局；`gui/editor_compact_panels.py` 的 `ExportActionBar` 承载固定导出入口。两者不持有渲染参数，回归见 `tests/test_editor_compact_panels.py`。
 - `render_template_overlay()`、模板叠加管线阶段、图片/GIF/视频均使用同一核心。CLI `render --template 模板.json` 支持新格式，`--no-draw-images` 可单独关闭图像图层。
 
 Badge 默认值（`overlay_badge`）、新建字号、图片默认宽度、吸附距离、旋转步长和交互预览尺寸从 `config/editor_options.json` 读取。回归入口为 `tests/test_overlay_badge.py`、`tests/test_overlay_layers.py` 和 `tests/test_overlay_editor.py`，并继续覆盖旧模板、文字效果、裁切坐标、工作区及预览模式测试。

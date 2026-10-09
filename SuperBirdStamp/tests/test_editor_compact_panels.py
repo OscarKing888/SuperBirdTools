@@ -1,8 +1,8 @@
-"""固定导出入口与浮动叠加窗口的交互回归；沿用隔离配置的真实窗口。"""
+"""固定导出入口与停靠叠加面板的交互回归；沿用隔离配置的真实窗口。"""
 import pytest
 from PyQt6.QtCore import QPoint, Qt
 from PyQt6.QtTest import QTest
-from PyQt6.QtWidgets import QDialog, QDockWidget, QScrollArea, QTabWidget
+from PyQt6.QtWidgets import QDockWidget, QScrollArea, QTabWidget
 from PIL import Image
 
 from test_overlay_editor import window, _APP
@@ -22,7 +22,7 @@ def test_export_actions_stay_visible_when_scrolled_and_collapsed(window):
     window.show()
     settle()
     bar = window.export_action_bar
-    assert window.overlay_dialog.isHidden()
+    assert window.overlay_dock.isHidden()
     assert not window.left_scroll.isAncestorOf(window.overlay_panel)
     assert not window.left_scroll.isAncestorOf(bar)
     origin = window.export_current_btn.mapTo(window, QPoint())
@@ -83,7 +83,8 @@ def test_export_modes_busy_and_video_cancel_use_original_actions(window):
 
 
 @pytest.mark.parametrize("close_method", ["close", "escape"])
-def test_overlay_dialog_close_commits_text_and_preserves_history(window, overlay_doc, tmp_path, close_method):
+@pytest.mark.parametrize("floating", [False, True])
+def test_overlay_dock_close_commits_text_and_preserves_history(window, overlay_doc, tmp_path, close_method, floating):
     # 不启动解码或检测，仅使用真实编辑器模型检查浮动/收起的编辑生命周期。
     window.current_path = tmp_path / '中文照片.png'
     window.overlay_panel.setEnabled(True)
@@ -94,16 +95,20 @@ def test_overlay_dialog_close_commits_text_and_preserves_history(window, overlay
     settle()
     window._reveal_overlay_panel()
     settle()
-    dialog = window.overlay_dialog
-    assert dialog.isVisible() and isinstance(dialog, QDialog)
-    assert not dialog.isModal()
+    dialog = window.overlay_dock
+    dialog.setFloating(floating)
+    settle()
+    assert dialog.isVisible() and isinstance(dialog, QDockWidget)
     assert '中文照片.png' in dialog.context_label.text()
     assert dialog.findChild(QScrollArea) is not window.left_scroll
     before = window.overlay_panel.doc.copy()
     window.overlay_panel.text.setPlainText('收起时保留的中文')
     assert window.overlay_panel._text_timer.isActive()
     if close_method == "escape":
-        QTest.keyClick(dialog, Qt.Key.Key_Escape)
+        _APP.setActiveWindow(dialog if floating else window)
+        window.overlay_panel.text.setFocus()
+        settle()
+        QTest.keyClick(window.overlay_panel.text, Qt.Key.Key_Escape)
     else:
         dialog.close()
     assert dialog.isHidden()
@@ -116,26 +121,69 @@ def test_overlay_dialog_close_commits_text_and_preserves_history(window, overlay
     assert '跟随模板' in window.overlay_summary.text()
 
 
-@pytest.mark.parametrize('width', [1120, 1800])
-def test_editor_floats_near_left_without_resizing_preview(window, width):
+@pytest.mark.parametrize('width', [1120, 1420, 1800])
+def test_editor_docks_between_settings_and_preview_and_returns_space(window, overlay_doc, width):
+    window.overlay_panel.setEnabled(True)
+    window.overlay_panel.set_document(overlay_doc, 'test:size')
+    window.overlay_panel.select(overlay_doc['overlays'][1]['id'])
     window.resize(width, 900)
     window.show()
     settle()
+    size = window.size()
     canvas_size = window.preview_label.size()
-    origin = window.left_scroll.mapToGlobal(QPoint(12, 12))
     window._reveal_overlay_panel()
     settle()
-    dialog = window.overlay_dialog
-    assert dialog.isVisible() and dialog.isWindow() and not dialog.isModal()
-    assert not window.findChildren(QDockWidget)
-    assert window.preview_label.size() == canvas_size
-    bounds = dialog.screen().availableGeometry()
-    expected_x = max(bounds.left() + 12, min(origin.x(), bounds.right() - 12 - dialog.width() + 1))
-    assert abs(dialog.x() - expected_x) <= 4
-    assert bounds.contains(dialog.frameGeometry())
+    dock = window.overlay_dock
+    preview = dock.host.centralWidget()
+    assert dock.isVisible() and not dock.isFloating()
+    assert dock.host.dockWidgetArea(dock) == Qt.DockWidgetArea.LeftDockWidgetArea
+    assert window.left_scroll.mapTo(window, window.left_scroll.rect().topRight()).x() < dock.mapTo(window, QPoint()).x()
+    assert dock.mapTo(window, dock.rect().topRight()).x() < preview.mapTo(window, QPoint()).x()
+    assert window.size() == size
+    assert dock.scroll.horizontalScrollBar().maximum() == 0
+    panel = window.overlay_panel
+    for control in (panel.add_button, panel.duplicate_button, panel.delete_button,
+                    panel.undo_button, panel.redo_button, panel.edit_button):
+        rect = control.rect().translated(control.mapTo(dock.scroll.viewport(), QPoint()))
+        assert rect.left() >= 0 and rect.right() < dock.scroll.viewport().width()
+    assert window.preview_label.width() >= 280
     assert window.export_current_btn.isVisible()
-    dialog.close()
+    dock.close()
+    settle()
+    assert window.preview_label.width() >= canvas_size.width()
     assert window.export_current_btn.isVisible()
+
+
+def test_float_redock_and_reopen_keep_width_and_document(window, overlay_doc):
+    window.resize(1800, 900)
+    window.overlay_panel.setEnabled(True)
+    window.overlay_panel.set_document(overlay_doc, 'test:dock')
+    window.show()
+    window._reveal_overlay_panel()
+    settle()
+    dock = window.overlay_dock
+    dock.host.resizeDocks([dock], [450], Qt.Orientation.Horizontal)
+    settle()
+    dock_width = dock.width()
+    dock.float_button.click()
+    settle()
+    assert dock.isFloating()
+    assert dock.screen().availableGeometry().contains(dock.frameGeometry())
+    assert dock.float_button.text() == '停靠'
+    dock.close()
+    window._reveal_overlay_panel()
+    settle()
+    assert dock.isFloating()  # 本次会话保留用户选择，重新打开不强行停靠。
+    dock.float_button.click()
+    settle()
+    assert not dock.isFloating()
+    assert abs(dock.width() - dock_width) <= 4
+    assert window.overlay_panel.doc == overlay_doc
+    dock.close()
+    window._reveal_overlay_panel()
+    settle()
+    assert not dock.isFloating()
+    assert abs(dock.width() - dock_width) <= 4
 
 
 def test_template_and_photo_share_parallel_property_groups(window, overlay_doc, tmp_path, monkeypatch):
@@ -161,3 +209,46 @@ def test_template_and_photo_share_parallel_property_groups(window, overlay_doc, 
         manager.close()
         manager.deleteLater()
         settle()
+
+
+def test_focus_content_reveals_both_scroll_axes(window, overlay_doc):
+    window.resize(1120, 720)
+    panel = window.overlay_panel
+    panel.setEnabled(True)
+    panel.set_document(overlay_doc, 'test:focus')
+    panel.select(overlay_doc['overlays'][1]['id'])
+    window.show()
+    window._reveal_overlay_panel()
+    settle()
+    horizontal = panel.property_scroll.horizontalScrollBar()
+    assert horizontal.maximum() > 0
+    horizontal.setValue(horizontal.maximum())
+    window.overlay_dock.scroll.verticalScrollBar().setValue(0)
+    panel.focus_content()
+    settle()
+    for scroll in (panel.property_scroll, window.overlay_dock.scroll):
+        assert scroll.viewport().rect().contains(panel.text.mapTo(scroll.viewport(), panel.text.rect().center()))
+    # 横向分组完整承载属性高度，不创建第二套纵向滚动。
+    assert panel.property_scroll.verticalScrollBar().maximum() == 0
+
+
+def test_property_height_tracks_layer_type_and_expanded_geometry(window, overlay_doc):
+    panel = window.overlay_panel
+    panel.setEnabled(True)
+    panel.set_document(overlay_doc, 'test:height')
+    window.resize(1420, 900)
+    window.show()
+    window._reveal_overlay_panel()
+    for index in (1, 0, 1):
+        panel.select(overlay_doc['overlays'][index]['id'])
+        for expanded in (True, False):
+            panel.advanced_geometry.setChecked(expanded)
+            settle()
+            scroll = panel.property_scroll
+            assert scroll.verticalScrollBar().maximum() == 0
+            assert scroll.widget().height() <= scroll.viewport().height()
+            assert panel.properties.rect().contains(scroll.geometry())
+            layout = panel.layout()
+            property_index = layout.indexOf(panel.properties)
+            following = layout.itemAt(property_index + 1).widget()
+            assert following.y() > panel.properties.geometry().bottom()

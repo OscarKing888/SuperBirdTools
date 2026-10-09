@@ -1133,7 +1133,7 @@ class BirdStampEditorWindow(
         self.export_action_bar = ExportActionBar(self)
         left_container_layout.addWidget(self.export_action_bar)
         splitter.addWidget(left_container)
-        splitter.addWidget(right_panel)
+        splitter.addWidget(self.overlay_dock.create_host(right_panel))
         splitter.setStretchFactor(0, 0)
         splitter.setStretchFactor(1, 1)
         splitter.setSizes([600, 920])
