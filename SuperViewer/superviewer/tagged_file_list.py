@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import threading
+from contextlib import ExitStack
 import time as _time
 from pathlib import Path
 from typing import Iterable
@@ -31,6 +32,12 @@ from .photo_tags import (
 from .qt_compat import QCheckBox, QHBoxLayout, QLabel, QMenu, QMessageBox, QThread, QTimer, QToolButton, pyqtSignal
 from .tag_commands import ClearPhotoTagsCommand, SetPhotoTagCommand
 from .tag_menu import add_filterable_tag_actions
+
+
+try:
+    from PyQt6.QtCore import QSignalBlocker
+except ImportError:
+    from PyQt5.QtCore import QSignalBlocker
 
 
 _log = get_logger("superviewer.tagged_file_list")
@@ -217,6 +224,30 @@ class SuperViewerTaggedFileListPanel(FileListPanel):
     enable_in_memory_fast_preview = True
     skip_uncached_fast_preview = True
     command_history_changed = pyqtSignal()
+
+    def select_display_path_silently(self, path: str) -> bool:
+        """Reflect an A/B viewport activation in both views without loading a photo."""
+        normalized = os.path.normpath(path) if path else ""
+        if not normalized:
+            return False
+        tree_index = self._tree_index_for_path(normalized)
+        thumb_index = self._thumb_index_for_path(normalized)
+        if not tree_index.isValid() and not thumb_index.isValid():
+            return False
+        with ExitStack() as blockers:
+            for view in (self._tree_widget, self._list_widget):
+                blockers.enter_context(QSignalBlocker(view))
+                model = view.selectionModel()
+                if model is not None:
+                    blockers.enter_context(QSignalBlocker(model))
+            for view, index in ((self._tree_widget, tree_index),
+                                (self._list_widget, thumb_index)):
+                if index.isValid():
+                    view.clearSelection()
+                    view.setCurrentIndex(index)
+            self._selected_display_path = normalized
+            self._update_selection_status()
+        return True
 
     def __init__(
         self,

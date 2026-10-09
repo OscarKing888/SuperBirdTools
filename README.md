@@ -1,6 +1,6 @@
 # SuperBirdTools — Image Manager 分支
 
-当前 `img_mgr` 分支只运行和构建 **SuperViewer**。图像浏览、筛选、标签和预览由 `SuperViewer/` 实现；根级 `app_common/` 使用独立的 `res_mgr` 代码线提供文件列表、解码、元数据和文件操作。这里的规则与主分支不同，移植时应按功能适配。
+当前 `img_mgr` 分支只运行和构建 **SuperViewer**。图像浏览、筛选、标签和预览由 `SuperViewer/` 实现；根级 `app_common/` 使用独立的 `img_mgr` 代码线提供文件列表、解码、元数据和文件操作。这里的规则与主分支不同，移植时应按功能适配。
 
 ## 开发入口
 
@@ -29,14 +29,14 @@ python init_dev.py
 
 macOS 对应解释器为 `.venv/bin/python3`。
 
-[.gitmodules](.gitmodules) 声明 `app_common` 的上游和 `res_mgr` 分支。检查代码前同时查看两个工作树：
+[.gitmodules](.gitmodules) 声明 `app_common` 的上游和 `img_mgr` 分支。检查代码前同时查看两个工作树：
 
 ```powershell
 git status --short
 git -C app_common status --short
 ```
 
-带有 `app_common` gitlink 的检出可用 `git submodule update --init --recursive` 初始化。当前分支也可能以独立嵌套仓库提供 `app_common/`；没有 gitlink 时，该命令不会创建依赖。缺少目录时按 `.gitmodules` 中的上游检出 `res_mgr` 到该位置，保留现有目录和本地修改，不为移植顺带改变仓库结构。
+带有 `app_common` gitlink 的检出可用 `git submodule update --init --recursive` 初始化。当前分支也可能以独立嵌套仓库提供 `app_common/`；没有 gitlink 时，该命令不会创建依赖。缺少目录时按 `.gitmodules` 中的上游检出 `img_mgr` 到该位置，保留现有目录和本地修改，不为移植顺带改变仓库结构。
 
 ## 运行
 

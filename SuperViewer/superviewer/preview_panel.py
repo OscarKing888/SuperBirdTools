@@ -25,6 +25,8 @@ from app_common.preview_canvas import (
 )
 from app_common.superviewer_user_options import get_keep_view_on_switch
 
+from .ab_preview_canvas import ViewerPreviewCanvas
+
 from .focus_preview_loader import (
     _get_orientation_from_file,
     _load_preview_pixmap_for_canvas,
@@ -407,7 +409,7 @@ class PreviewPanel(QWidget):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(4)
-        self._canvas = PreviewCanvas(self, placeholder_text="未选择图片")
+        self._canvas = ViewerPreviewCanvas(self, placeholder_text="未选择图片")
         if hasattr(self._canvas, "set_keep_view_on_switch"):
             self._canvas.set_keep_view_on_switch(self._keep_view_on_switch)
         if hasattr(self._canvas, "display_scale_percent_changed"):

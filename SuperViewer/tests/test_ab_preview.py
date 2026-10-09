@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import time
 
+import pytest
 from PIL import Image
 from PyQt6.QtCore import QEvent
 from PyQt6.QtGui import QImage
@@ -32,7 +33,7 @@ def test_independent_sides_active_list_target_filter_and_close(tmp_path):
         panel.set_display_paths([str(photo) for photo in photos])
         panel.set_current_list_path(str(photos[1]))
         panel.set_enabled(True)
-        assert panel.path_for_side("A") == os.path.normpath(str(photos[0]))
+        assert panel.path_for_side("A") == os.path.normpath(str(photos[1]))
         assert panel.path_for_side("B") == os.path.normpath(str(photos[1]))
 
         panel.set_active_side("A")
@@ -84,13 +85,14 @@ def test_ab_committed_selection_skips_quick_preview(tmp_path, monkeypatch):
         _APP.processEvents()
 
 
-def test_ab_rejects_reduced_or_stale_decode(tmp_path):
+def test_explicit_full_only_mode_rejects_reduced_or_stale_decode(tmp_path):
     photo = tmp_path / "原尺寸.png"
     Image.new("RGB", (64, 48), "blue").save(photo)
     panel = ABPreviewPanel()
     try:
         panel.set_enabled(True)
         preview = panel.preview_for_side("A")
+        preview.set_full_only_mode(True)
         preview._current_path = str(photo)
         preview._preview_request_token += 1
         token = preview._preview_request_token
@@ -111,12 +113,13 @@ def test_ab_rejects_reduced_or_stale_decode(tmp_path):
         _APP.processEvents()
 
 
-def test_ab_heif_waits_for_owned_full_decoder_without_quick_image(tmp_path, monkeypatch):
+def test_ab_heif_waits_for_owned_full_decoder_without_sync_thumbnail_decode(tmp_path, monkeypatch):
     photo = tmp_path / "原片.heic"
     photo.write_bytes(b"decoder stub")
-    monkeypatch.setattr(preview_panel, "_load_quick_preview_pixmap",
+    monkeypatch.setattr(preview_panel, "_read_thumb_from_disk_cache", lambda *args, **kwargs: None)
+    monkeypatch.setattr(preview_panel, "_load_thumbnail_image",
                         lambda *_args, **_kwargs: (_ for _ in ()).throw(
-                            AssertionError("HEIF A/B must not request a quick image")))
+                            AssertionError("HEIF cache miss must not synchronously decode")))
     monkeypatch.setattr(preview_panel, "_source_dimensions", lambda _path: (64, 48))
 
     def decode(_path):

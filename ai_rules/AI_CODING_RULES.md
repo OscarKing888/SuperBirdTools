@@ -1,6 +1,6 @@
 # Super Viewer AI Coding Rules
 
-This document is the cross-tool coding baseline for the current single-Viewer `img_mgr` / `res_mgr` checkout. [AGENTS.md](../AGENTS.md) is the authoritative branch behavior and validation contract. Use the [Viewer architecture map](../SuperViewer/docs/ARCHITECTURE.md) to locate implementations and tests; do not import the other branch's application, metadata or preview assumptions.
+This document is the cross-tool coding baseline for the current single-Viewer `img_mgr` checkout (root and `app_common`). [AGENTS.md](../AGENTS.md) is the authoritative branch behavior and validation contract. Use the [Viewer architecture map](../SuperViewer/docs/ARCHITECTURE.md) to locate implementations and tests; do not import the other branch's application, metadata or preview assumptions.
 
 ## 1) File Encoding and Text Safety
 

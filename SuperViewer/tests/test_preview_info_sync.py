@@ -112,7 +112,7 @@ def test_ab_window_routes_list_to_active_side_and_keeps_info_on_list_selection(w
     window.preview_compare.set_display_paths(paths)
     window._on_file_selected_from_list(paths[1])
     window.preview_compare.set_enabled(True)
-    assert window.preview_compare.path_for_side("A") == paths[0]
+    assert window.preview_compare.path_for_side("A") == paths[1]
     assert window.preview_compare.path_for_side("B") == paths[1]
 
     window.preview_compare.set_active_side("A")
@@ -125,7 +125,8 @@ def test_ab_window_routes_list_to_active_side_and_keeps_info_on_list_selection(w
     window.preview_compare.set_side_path("B", paths[0])
     assert window._current_exif_path == paths[2]
     window._on_file_fast_preview_requested(paths[1])
-    assert window.preview_compare.path_for_side("A") == paths[2]
+    assert window.preview_compare.path_for_side("A") == paths[1]
+    assert window.preview_compare.preview_for_side("A")._fast_preview_only
     window.preview_compare.set_enabled(False)
     assert window.preview_panel is window.preview_compare.preview_for_side("A")
 
@@ -150,13 +151,15 @@ def test_ab_retains_both_images_when_directory_auto_selects_first(window, tmp_pa
     window.preview_compare.set_enabled(True)
     window.preview_compare.set_side_path("A", str(a))
     window.preview_compare.set_side_path("B", str(b))
+    window._on_ab_choice_changed(str(b))
 
     window._file_list.load_directory(str(second))
     deadline = time.monotonic() + 5
-    while window._current_exif_path != str(next_photo) and time.monotonic() < deadline:
+    while window._file_list._filtered_files != [str(next_photo)] and time.monotonic() < deadline:
         _APP.processEvents()
         time.sleep(.002)
-    assert window._current_exif_path == str(next_photo)
+    assert window._file_list._filtered_files == [str(next_photo)]
+    assert window._current_exif_path == str(b)
     assert window.preview_compare.path_for_side("A") == str(a)
     assert window.preview_compare.path_for_side("B") == str(b)
     assert window.preview_compare._selectors["A"].itemText(0).startswith("[筛选外]")

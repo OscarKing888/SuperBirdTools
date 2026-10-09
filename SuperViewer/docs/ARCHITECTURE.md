@@ -1,6 +1,6 @@
 # SuperViewer 架构与开发定位
 
-本文描述当前 `img_mgr` 应用和 `res_mgr` 共享库的实际连接方式。分支行为约束以 [AGENTS.md](../../AGENTS.md) 为准；环境和单应用构建入口见 [根目录 README](../../README.md)。修改功能时先找到下表中的入口，再追到拥有数据或线程的模块，避免直接在窗口回调中重复实现解码、侧车或文件操作。
+本文描述当前 `img_mgr` 应用和 `img_mgr` 共享库的实际连接方式。分支行为约束以 [AGENTS.md](../../AGENTS.md) 为准；环境和单应用构建入口见 [根目录 README](../../README.md)。修改功能时先找到下表中的入口，再追到拥有数据或线程的模块，避免直接在窗口回调中重复实现解码、侧车或文件操作。
 
 ## 启动和模块边界
 
@@ -124,6 +124,16 @@ set_photo_tag_for_paths / clear_photo_tags_for_paths
 共享 `_rating_writes_allowed()` 动态调用 `self.rating_writes_allowed()`；Viewer 子类覆盖该方法并返回 `sidecar_writes_allowed()`，因此公开评级/Pick 入口也使用侧车权限，JSON 保存路径再次检查同一权限。保留这些现有调用路由，不能绕过公开入口，也不要因某项写入被禁用而停止复制、预览、定位和筛选。
 
 ## 预览策略和线程所有权
+
+### A/B 图片对照
+
+[`ABPreviewPanel`](../superviewer/ab_preview.py) 拥有两个独立的 `PreviewPanel`。首次开启时以当前图片初始化 A 侧；点击画布、选图框或本侧工具栏激活该侧，列表选择及长按方向键的快速预览只更新活动侧。两侧均沿用本分支普通预览策略：已知尺寸不超过 `40 * 1024 * 1024` 像素且无旧解码器持有者时可同步加载；其余走有界快速预览和后台解码。RAW 内嵌预览与完整分辨率导出仍分开处理。早期的 `set_full_only_mode()` 接口保留，AB 默认不再强制清空并重新加载原图。
+
+每侧提供独立的适应窗口、缩放和构图线菜单。全局“同步缩放/移动”由 [`ABViewLink`](../superviewer/ab_view_link.py) 管理：开启时记录两侧各自的缩放和中心位置，之后传递相对缩放倍数及归一化中心位移，不把两侧强制对齐到同一视野。[`ViewerPreviewCanvas`](../superviewer/ab_preview_canvas.py) 继承共享画布，只暴露交互和内容变更信号；组合线绘制、叠加导出仍归 `app_common.preview_canvas` 所有。后台清晰图到达和窗口尺寸变化时恢复各侧自己的联动状态。
+
+激活侧通过 `select_display_path_silently()` 同步列表高亮，不发出二次选图信号；信息页跟随活动侧源图，相同图片不会重建未保存草稿。目录或筛选变化保留已固定的两侧图片，自动选中第一项时也保持活动侧信息一致。共享列表的延迟滚动只调整可见位置，不恢复过期选择（适配主分支 `72e5a78`）。选图下拉框仅在范围改变时重建，快速切图使用路径索引更新当前项。
+
+对照交互来自主分支 `82b6d32` 及其相对视野联动实现，按图片管理分支的 JSON、权限和解码所有权契约适配。关闭仍等待两个预览各自的真实线程完成。专项覆盖见 [`test_ab_preview.py`](../tests/test_ab_preview.py)、[`test_ab_view_link.py`](../tests/test_ab_view_link.py)、[`test_preview_info_sync.py`](../tests/test_preview_info_sync.py) 和共享 [`test_file_browser_thumbnail_filter_sync.py`](../../app_common/tests/test_file_browser_thumbnail_filter_sync.py)。
 
 `PreviewPanel.set_image(path, *, load_full=True, quick_size=None)` 是已选图片的入口。源图片路径、用于快显的缓存图片和导出源像素是三个不同概念；元数据、EXIF 和文件动作始终使用源路径语义。
 

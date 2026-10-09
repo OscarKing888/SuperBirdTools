@@ -792,10 +792,13 @@ class MainWindow(QMainWindow):
         overlay_row.addWidget(self.combo_preview_scale)
         self.preview_compare = ABPreviewPanel(left_widget)
         overlay_row.addWidget(self.preview_compare.toggle_button)
+        overlay_row.addWidget(self.preview_compare.link_button)
         overlay_row.addStretch(1)
         left_layout.addLayout(overlay_row)
         self.preview_panel = self.preview_compare.active_preview
         self.preview_compare.active_preview_changed.connect(self._on_active_preview_changed)
+        self.preview_compare.active_path_changed.connect(self._on_ab_choice_changed)
+        self.preview_compare.comparison_toggled.connect(self._on_ab_toggled)
         self.preview_compare.full_preview_ready.connect(self._on_full_preview_ready)
         self.preview_compare.display_scale_percent_changed.connect(self._sync_preview_scale_combo)
         self.preview_compare.set_composition_grid_mode(self.combo_preview_grid.currentData())
@@ -905,17 +908,18 @@ class MainWindow(QMainWindow):
 
     def _on_file_selected_from_list(self, path: str):
         """文件列表中选中图像文件，触发预览和元信息刷新（等同于拖放）。"""
+        if (self.preview_compare.is_enabled()
+                and getattr(self._file_list, "_emitting_automatic_selection", False)):
+            return
         t0 = _time.perf_counter()
         probe_t0 = perf_counter()
         perf_log(_log, "[PERF][image_switch][main] START source=%r", path)
         self._sync_directory_browser_to_file_selection(path)
         preview_t0 = _time.perf_counter()
-        if not (self.preview_compare.is_enabled()
-                and getattr(self._file_list, "_emitting_automatic_selection", False)):
-            self.preview_compare.set_current_list_path(path)
+        self.preview_compare.set_current_list_path(path)
         preview_ms = (_time.perf_counter() - preview_t0) * 1000.0
         info_t0 = _time.perf_counter()
-        self.on_image_loaded(path)
+        self._on_ab_path_changed(path)
         info_ms = (_time.perf_counter() - info_t0) * 1000.0
         perf_log(
             _log,
@@ -936,8 +940,6 @@ class MainWindow(QMainWindow):
 
     def _on_file_fast_preview_requested(self, path: str):
         """连续方向键长按时直接预览原始文件，不再切到 report 派生预览图。"""
-        if self.preview_compare.is_enabled():
-            return
         t0 = _time.perf_counter()
         probe_t0 = perf_counter()
         perf_log(_log, "[PERF][fast_preview][main] START source=%r", path)
@@ -961,8 +963,6 @@ class MainWindow(QMainWindow):
 
     def _on_file_fast_preview_pixmap_requested(self, path: str, pixmap, quick_size: int) -> None:
         """直接复用缩略图视图已经解码的帧，避免写盘后再读取。"""
-        if self.preview_compare.is_enabled():
-            return
         if not isinstance(pixmap, QPixmap) or pixmap.isNull():
             return
         self.preview_compare.set_quick_pixmap_for_list(path, pixmap, quick_size=quick_size)
@@ -1164,8 +1164,49 @@ class MainWindow(QMainWindow):
         sync_preview_scale_preset_combo(self.combo_preview_scale, scale_percent)
 
     def _on_active_preview_changed(self, preview: PreviewPanel) -> None:
+        self._file_list.stop_key_navigation_playback(commit=False)
         self.preview_panel = preview
         self._sync_preview_scale_combo(preview.current_display_scale_percent())
+        for combo, value in ((self.combo_preview_grid, preview._composition_grid_mode),
+                             (self.combo_preview_grid_line_width, preview._composition_grid_line_width)):
+            blocked = combo.blockSignals(True)
+            combo.setCurrentIndex(combo.findData(value))
+            combo.blockSignals(blocked)
+        self._on_ab_choice_changed(preview.current_path() or "")
+
+    def _on_ab_choice_changed(self, path: str) -> None:
+        if path:
+            self._file_list.select_display_path_silently(path)
+        self._on_ab_path_changed(path)
+
+    def _on_ab_path_changed(self, path: str) -> None:
+        if path != self._current_exif_path:
+            self.on_image_loaded(path)
+
+    def _on_ab_toggled(self, enabled: bool) -> None:
+        self._file_list.stop_key_navigation_playback(commit=False)
+        for control in (self.combo_preview_grid, self.combo_preview_grid_line_width, self.combo_preview_scale):
+            control.setVisible(not enabled)
+        if enabled:
+            self._ab_pre_sizes = list(self._main_splitter.sizes())
+            self._ab_pre_list_minimum = self._file_list.minimumWidth()
+            self._file_list.setMinimumWidth(min(260, self._ab_pre_list_minimum))
+            sizes = list(self._ab_pre_sizes)
+            if len(sizes) == 4:
+                released = max(0, sizes[1] - 260)
+                sizes[1] -= released
+                sizes[2] += released
+                self._main_splitter.setSizes(sizes)
+        elif getattr(self, "_ab_pre_sizes", None):
+            self._file_list.setMinimumWidth(self._ab_pre_list_minimum)
+            sizes = self._ab_pre_sizes
+            self._main_splitter.setSizes(sizes)
+            QTimer.singleShot(0, lambda: self._restore_ab_splitter_sizes(sizes))
+            self._ab_pre_sizes = None
+
+    def _restore_ab_splitter_sizes(self, sizes: list[int]) -> None:
+        if not self._shutdown_requested and not self.preview_compare.is_enabled():
+            self._main_splitter.setSizes(sizes)
 
     @staticmethod
     def _same_filesystem_key(path_a: str | os.PathLike, path_b: str | os.PathLike) -> bool:

@@ -5,9 +5,12 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
+from app_common.preview_canvas import configure_preview_scale_preset_combo, sync_preview_scale_preset_combo
+
+from .ab_view_link import ABViewLink
 from .preview_panel import PreviewPanel
 from .qt_compat import (
-    QComboBox, QEvent, QHBoxLayout, QSplitter, QToolButton, QVBoxLayout,
+    QComboBox, QEvent, QHBoxLayout, QMenu, QSplitter, QToolButton, QVBoxLayout,
     QWidget, Qt, pyqtSignal,
 )
 
@@ -22,6 +25,8 @@ class ABPreviewPanel(QWidget):
     active_preview_changed = pyqtSignal(object)
     display_scale_percent_changed = pyqtSignal(object)
     full_preview_ready = pyqtSignal(str)
+    active_path_changed = pyqtSignal(str)
+    comparison_toggled = pyqtSignal(bool)
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
@@ -29,6 +34,8 @@ class ABPreviewPanel(QWidget):
         self._active_side = "B"
         self._paths: dict[str, str] = {"A": "", "B": ""}
         self._display_paths: list[str] = []
+        self._display_index: dict[str, int] = {}
+        self._selector_outside_paths: dict[str, str] = {}
         self._current_list_path = ""
         self._shutdown_requested = False
 
@@ -37,6 +44,11 @@ class ABPreviewPanel(QWidget):
         self.toggle_button.setCheckable(True)
         self.toggle_button.setToolTip("左右比较两张图片；文件列表切换当前活动侧。")
         self.toggle_button.toggled.connect(self.set_enabled)
+        self.link_button = QToolButton(self)
+        self.link_button.setText("同步缩放/移动")
+        self.link_button.setCheckable(True)
+        self.link_button.setToolTip("保留两侧当前相对视野，之后同步缩放和平移变化。")
+        self.link_button.hide()
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -50,6 +62,9 @@ class ABPreviewPanel(QWidget):
         self._selectors: dict[str, QComboBox] = {}
         self._buttons: dict[str, QToolButton] = {}
         self._previews: dict[str, PreviewPanel] = {}
+        self._scales: dict[str, QComboBox] = {}
+        self._fits: dict[str, QToolButton] = {}
+        self._toolbars: dict[str, QWidget] = {}
         self._canvas_sides: dict[object, str] = {}
         self._selector_sides: dict[object, str] = {}
         for side in ("A", "B"):
@@ -75,6 +90,24 @@ class ABPreviewPanel(QWidget):
             row.addWidget(selector, 1)
             column.addWidget(header)
             preview = PreviewPanel(panel)
+            toolbar = QWidget(panel)
+            tools = QHBoxLayout(toolbar)
+            tools.setContentsMargins(2, 0, 2, 0)
+            fit = QToolButton(panel)
+            fit.setText("适应窗口")
+            fit.clicked.connect(preview.canvas.fit_to_window)
+            scale = QComboBox(panel)
+            configure_preview_scale_preset_combo(scale, fixed_width=96)
+            scale.activated.connect(lambda index, s=side: self._zoom(s, index))
+            tools.addWidget(fit)
+            tools.addWidget(scale)
+            grid = self._create_grid_button(preview, toolbar)
+            tools.addWidget(grid)
+            tools.addStretch(1)
+            column.addWidget(toolbar)
+            self._toolbars[side] = toolbar
+            self._scales[side] = scale
+            self._fits[side] = fit
             preview.canvas.installEventFilter(self)
             self._canvas_sides[preview.canvas] = side
             preview.display_scale_percent_changed.connect(
@@ -87,7 +120,44 @@ class ABPreviewPanel(QWidget):
             self._selectors[side] = selector
             self._buttons[side] = button
             self._previews[side] = preview
+            for widget in (panel, header, fit, scale, grid, preview, preview.canvas):
+                widget.installEventFilter(self)
+                self._canvas_sides[widget] = side
+        self.view_link = ABViewLink(self)
         self._update_layout()
+
+    @staticmethod
+    def _create_grid_button(preview: PreviewPanel, parent: QWidget) -> QToolButton:
+        button = QToolButton(parent)
+        button.setText("构图线")
+        button.setToolTip("仅设置本侧预览及叠加导出的构图线")
+        menu = QMenu(button)
+        modes = (("none", "不显示"), ("thirds", "均分九宫格"),
+                 ("golden_thirds", "黄金分割九宫格"), ("square", "方格网格"),
+                 ("diag_square", "对角线 + 方格"), ("crosshair", "中心十字线"))
+        mode_actions = []
+        for mode, label in modes:
+            action = menu.addAction(label)
+            action.setCheckable(True)
+            action.triggered.connect(lambda _checked=False, mode=mode: preview.set_composition_grid_mode(mode))
+            mode_actions.append((action, mode))
+        widths = menu.addMenu("线宽")
+        width_actions = []
+        for width in (1, 2, 3, 4):
+            action = widths.addAction(f"{width} px")
+            action.setCheckable(True)
+            action.triggered.connect(lambda _checked=False, width=width: preview.set_composition_grid_line_width(width))
+            width_actions.append((action, width))
+        def sync():
+            for action, mode in mode_actions:
+                action.setChecked(mode == preview._composition_grid_mode)
+            for action, width in width_actions:
+                action.setChecked(width == preview._composition_grid_line_width)
+        menu.aboutToShow.connect(sync)
+        widths.aboutToShow.connect(sync)
+        button.setMenu(menu)
+        button.setPopupMode(getattr(getattr(QToolButton, "ToolButtonPopupMode", QToolButton), "InstantPopup"))
+        return button
 
     @property
     def active_preview(self) -> PreviewPanel:
@@ -107,14 +177,14 @@ class ABPreviewPanel(QWidget):
 
     def eventFilter(self, watched, event):  # type: ignore[override]
         press = getattr(getattr(QEvent, "Type", QEvent), "MouseButtonPress")
-        if event.type() == press:
+        if event.type() in (press, getattr(getattr(QEvent, "Type", QEvent), "FocusIn")):
             side = self._canvas_sides.get(watched) or self._selector_sides.get(watched)
-            if side:
+            if side and self._enabled:
                 self.set_active_side(side)
         return super().eventFilter(watched, event)
 
     def set_active_side(self, side: str) -> None:
-        if side not in self._previews or self._shutdown_requested:
+        if side not in self._previews or self._shutdown_requested or not self._enabled:
             return
         changed = side != self._active_side
         self._active_side = side
@@ -136,28 +206,26 @@ class ABPreviewPanel(QWidget):
             if not self._paths["B"] and self._current_list_path:
                 self._paths["B"] = self._current_list_path
             if not self._paths["A"]:
-                self._paths["A"] = next(iter(self._display_paths), "")
+                self._paths["A"] = self._current_list_path or next(iter(self._display_paths), "")
             for side, preview in self._previews.items():
-                # A normal single-view result has not passed A/B source-size
-                # validation, even when it reports itself as fully loaded.
-                preview.clear_image()
-                preview.set_full_only_mode(True)
-                if self._paths[side]:
+                if self._paths[side] and not preview.current_path():
                     preview.set_image(self._paths[side], load_full=True)
         else:
-            for preview in self._previews.values():
-                preview.set_full_only_mode(False)
             inactive = "A" if self._active_side == "B" else "B"
             self._previews[inactive].clear_image()
         self._update_layout()
         self._rebuild_selectors()
+        self.view_link.toggle(self.link_button.isChecked())
+        self.comparison_toggled.emit(enabled)
         self.active_preview_changed.emit(self.active_preview)
         self.display_scale_percent_changed.emit(self.active_preview.current_display_scale_percent())
 
     def _update_layout(self) -> None:
+        self.link_button.setVisible(self._enabled)
         for side in ("A", "B"):
             self._widgets[side].setVisible(self._enabled or side == self._active_side)
             self._headers[side].setVisible(self._enabled)
+            self._toolbars[side].setVisible(self._enabled)
         if self._enabled:
             self.splitter.setSizes([500, 500])
         self._update_active_style()
@@ -177,17 +245,23 @@ class ABPreviewPanel(QWidget):
             if key and key not in seen:
                 seen.add(key)
                 display.append(os.path.normpath(path))
+        if display == self._display_paths:
+            return
         self._display_paths = display
+        self._display_index = {_key(path): index for index, path in enumerate(display)}
         self._rebuild_selectors()
 
     def _rebuild_selectors(self) -> None:
-        available = {_key(path) for path in self._display_paths}
+        if not self._enabled:
+            return
         for side, selector in self._selectors.items():
             selected = self._paths[side]
             selector.blockSignals(True)
             try:
                 selector.clear()
-                if selected and _key(selected) not in available:
+                self._selector_outside_paths[side] = ""
+                if selected and _key(selected) not in self._display_index:
+                    self._selector_outside_paths[side] = selected
                     selector.addItem(f"[筛选外] {Path(selected).name}", selected)
                     selector.setItemData(0, selected, getattr(getattr(Qt, "ItemDataRole", Qt), "ToolTipRole"))
                 for path in self._display_paths:
@@ -199,11 +273,34 @@ class ABPreviewPanel(QWidget):
             finally:
                 selector.blockSignals(False)
 
+    def _sync_selector(self, side: str) -> None:
+        """Selection changes are O(1); only a changed directory rebuilds the choices."""
+        if not self._enabled:
+            return
+        selector = self._selectors[side]
+        selected = self._paths[side]
+        index = self._display_index.get(_key(selected))
+        blocked = selector.blockSignals(True)
+        try:
+            if self._selector_outside_paths.get(side):
+                selector.removeItem(0)
+            self._selector_outside_paths[side] = ""
+            if selected and index is None:
+                selector.insertItem(0, f"[筛选外] {Path(selected).name}", selected)
+                selector.setItemData(0, selected, getattr(getattr(Qt, "ItemDataRole", Qt), "ToolTipRole"))
+                self._selector_outside_paths[side] = selected
+                index = 0
+            selector.setCurrentIndex(index if index is not None else -1)
+            selector.setEnabled(selector.count() > 0)
+        finally:
+            selector.blockSignals(blocked)
+
     def _choose(self, side: str) -> None:
         self.set_active_side(side)
         path = self._selectors[side].currentData()
         if path:
             self.set_side_path(side, str(path))
+            self.active_path_changed.emit(str(path))
 
     def set_side_path(self, side: str, path: str, *, load_full: bool = True) -> None:
         if self._shutdown_requested or side not in self._previews:
@@ -215,7 +312,7 @@ class ABPreviewPanel(QWidget):
             preview.set_image(normalized, load_full=load_full)
         else:
             preview.clear_image()
-        self._rebuild_selectors()
+        self._sync_selector(side)
 
     def set_current_list_path(self, path: str, *, load_full: bool = True) -> None:
         self._current_list_path = os.path.normpath(path) if path else ""
@@ -225,7 +322,7 @@ class ABPreviewPanel(QWidget):
         self._current_list_path = os.path.normpath(path) if path else ""
         self._paths[self._active_side] = self._current_list_path
         self.active_preview.set_quick_pixmap(path, pixmap, quick_size=quick_size)
-        self._rebuild_selectors()
+        self._sync_selector(self._active_side)
 
     def source_pixmap_for_path(self, path: str):
         for preview in self._previews.values():
@@ -247,8 +344,17 @@ class ABPreviewPanel(QWidget):
             preview.set_keep_view_on_switch(enabled)
 
     def _on_scale_changed(self, side: str, value: object) -> None:
+        sync_preview_scale_preset_combo(self._scales[side], value)
+        self._fits[side].setEnabled(value is not None)
+        self._scales[side].setEnabled(value is not None)
         if side == self._active_side:
             self.display_scale_percent_changed.emit(value)
+
+    def _zoom(self, side: str, index: int) -> None:
+        self.set_active_side(side)
+        value = self._scales[side].itemData(index)
+        if value is not None:
+            self._previews[side].set_display_scale_percent(value, preserve_view=True)
 
     def request_shutdown(self) -> None:
         self._shutdown_requested = True
