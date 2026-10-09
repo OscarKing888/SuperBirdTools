@@ -1,0 +1,4 @@
+interface:
+  display_name: "SuperBird UI 设计规范"
+  short_description: "两款应用统一 Qt 组件选型，先设计布局与状态，再实现并验证交互"
+  default_prompt: "使用 $superbird-ui-design 为这次 SuperBirdTools UI 修改先做组件选型与布局设计，再实现和验证。"

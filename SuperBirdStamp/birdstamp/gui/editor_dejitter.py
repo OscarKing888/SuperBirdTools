@@ -5,8 +5,10 @@ from pathlib import Path
 from time import monotonic
 
 from app_common.raw_preview_geometry import RAW_FOCUS_CROP_KEY
+from app_common.collapsible_section import CollapsibleSection
+
 from PyQt6.QtGui import QPixmap
-from PyQt6.QtWidgets import QTabBar, QCheckBox, QComboBox, QFileDialog, QListWidget, QGroupBox, QHBoxLayout, QLabel, QProgressBar, QPushButton, QSizePolicy, QSlider, QSpinBox, QVBoxLayout, QWidget
+from PyQt6.QtWidgets import QTabBar, QCheckBox, QComboBox, QFileDialog, QListWidget, QHBoxLayout, QLabel, QProgressBar, QPushButton, QSizePolicy, QSlider, QSpinBox, QVBoxLayout, QWidget
 from PyQt6.QtCore import Qt, QTimer
 
 from app_common.toggle_button import ToggleToolButton
@@ -182,18 +184,18 @@ class _BirdStampDejitterMixin:
         self.dejitter_hud.toggle.clicked.connect(self._schedule_workspace_autosave)
 
         # 1. 方式：决定后续该框什么、是否需要目标鸟，必须放在最前。
-        self.dejitter_method_group = QGroupBox('1. 方式')
-        method = QVBoxLayout(self.dejitter_method_group)
-        method.setContentsMargins(10, 24, 10, 12)
+        self.dejitter_method_group = CollapsibleSection('1. 方式')
+        method = QVBoxLayout(self.dejitter_method_group.body)
+        method.setContentsMargins(0, 0, 0, 0)
         self.dejitter_subject_controls = SubjectControls(editor_options.DEJITTER_SUBJECT_DEFAULTS)
         self.dejitter_subject_controls.changed.connect(self._on_dejitter_method_changed)
         method.addWidget(self.dejitter_subject_controls)
         layout.addWidget(self.dejitter_method_group)
 
-        reference = QGroupBox('2. 选区')
+        reference = CollapsibleSection('2. 选区')
         self.dejitter_selection_group = reference
-        form = QVBoxLayout(reference)
-        form.setContentsMargins(10, 24, 10, 12)
+        form = QVBoxLayout(reference.body)
+        form.setContentsMargins(0, 0, 0, 0)
         self.dejitter_reference_check = QCheckBox('启用参考区去抖动', reference)
         self.dejitter_reference_check.setToolTip('框选后自动启用；独立处理原图，不读取模板裁切。')
         self.dejitter_reference_check.hide()
@@ -263,11 +265,10 @@ class _BirdStampDejitterMixin:
         layout.addWidget(reference)
 
         # 按操作顺序分组；不常调的匹配参数折叠，标题显示当前取值摘要。
-        self.dejitter_analysis_group = QGroupBox('3. 分析')
-        analysis = QVBoxLayout(self.dejitter_analysis_group)
-        analysis.setContentsMargins(10, 24, 10, 12)
+        self.dejitter_analysis_group = CollapsibleSection('3. 分析')
+        analysis = QVBoxLayout(self.dejitter_analysis_group.body)
+        analysis.setContentsMargins(0, 0, 0, 0)
         layout.addWidget(self.dejitter_analysis_group)
-        from .editor_collapsible import CollapsibleSection
         self.dejitter_matching_section = CollapsibleSection('匹配参数', expanded=False)
         self.dejitter_matching_section.toggled.connect(self._schedule_workspace_autosave)
         matching = QWidget()

@@ -16,6 +16,8 @@ import sys
 from typing import Any
 
 from PIL import Image
+from app_common.collapsible_section import CollapsibleSection
+
 from PyQt6.QtCore import Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import QColor, QImage, QIntValidator, QLinearGradient, QPainter, QPixmap
 from PyQt6.QtWidgets import (
@@ -26,7 +28,6 @@ from PyQt6.QtWidgets import (
     QDoubleSpinBox,
     QFormLayout,
     QGridLayout,
-    QGroupBox,
     QHBoxLayout,
     QInputDialog,
     QLabel,
@@ -737,8 +738,8 @@ class TemplateManagerDialog(QDialog):
         preview_toolbar.addStretch(1)
         layout.addLayout(preview_toolbar)
 
-        preview_group = QGroupBox("预览")
-        preview_layout = QVBoxLayout(preview_group)
+        preview_group = CollapsibleSection("预览")
+        preview_layout = QVBoxLayout(preview_group.body)
         self.preview_label = PreviewWithStatusBar(
             canvas=EditorPreviewCanvas(placeholder_text="暂无预览"),
         )
@@ -757,10 +758,10 @@ class TemplateManagerDialog(QDialog):
         layout.addWidget(preview_group, stretch=1)
         return panel
 
-    def _build_header_group(self) -> QGroupBox:
-        """当前模板 GroupBox：裁切参数 + Banner 颜色/样式/渐变。"""
-        group = QGroupBox("当前模板")
-        form = QFormLayout(group)
+    def _build_header_group(self) -> CollapsibleSection:
+        """当前模板折叠组：裁切参数 + Banner 颜色/样式/渐变。"""
+        group = CollapsibleSection("当前模板")
+        form = QFormLayout(group.body)
         _configure_form_layout(form)
 
         self.template_name_edit = QLineEdit()
@@ -846,10 +847,10 @@ class TemplateManagerDialog(QDialog):
         self._banner_color_row_widget = self.banner_color_editor
         return self.banner_color_editor
 
-    def _build_fields_group(self) -> QGroupBox:
-        """文本项 GroupBox：列表 + 新增/删除按钮。"""
-        group = QGroupBox("文本项")
-        layout = QVBoxLayout(group)
+    def _build_fields_group(self) -> CollapsibleSection:
+        """文本项折叠组：列表 + 新增/删除按钮。"""
+        group = CollapsibleSection("文本项")
+        layout = QVBoxLayout(group.body)
 
         self.field_list = QListWidget()
         self.field_list.currentItemChanged.connect(self._on_field_selected)
@@ -867,10 +868,10 @@ class TemplateManagerDialog(QDialog):
         layout.addLayout(buttons)
         return group
 
-    def _build_field_edit_group(self) -> QGroupBox:
-        """文本项编辑 GroupBox：所有文本项属性控件。"""
-        group = QGroupBox("文本项编辑")
-        form = QFormLayout(group)
+    def _build_field_edit_group(self) -> CollapsibleSection:
+        """文本项编辑折叠组：所有文本项属性控件。"""
+        group = CollapsibleSection("文本项编辑")
+        form = QFormLayout(group.body)
         _configure_form_layout(form)
 
         self._field_fallback_combo = _FilterableComboBox()

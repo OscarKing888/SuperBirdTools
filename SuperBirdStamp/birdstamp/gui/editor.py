@@ -2322,44 +2322,12 @@ class BirdStampEditorWindow(
             QWidget {{
                 font-size: 13px;
             }}
-            QGroupBox {{
-                border: 1px solid {border_color.name()};
-                border-radius: 10px;
-                /* 标题跨在边框上，内外各留半行；em 随字体/DPI 缩放，避免内容遮住标题。 */
-                margin-top: 0.5em;
-                padding-top: 0.5em;
-                background: {base_color.name()};
-            }}
-            QGroupBox::title {{
-                subcontrol-origin: margin;
-                subcontrol-position: top left;
-                left: 10px;
-                padding: 0 4px;
-                font-weight: 600;
-            }}
             QScrollArea#EditorLeftScrollArea {{
                 background: transparent;
                 border: none;
             }}
             QWidget#EditorLeftPanel {{
                 background: transparent;
-            }}
-            QFrame#CollapsibleSection {{
-                border: 1px solid {border_color.name()};
-                border-radius: 8px;
-                background: {base_color.name()};
-            }}
-            QToolButton#CollapsibleHeaderButton {{
-                font-weight: 600;
-                border: none;
-                background: transparent;
-                color: {text_color.name()};
-                padding: 0;
-            }}
-            QFrame#CollapsibleContentFrame {{
-                border: none;
-                background: transparent;
-                padding: 0;
             }}
             QLineEdit {{
                 border: 1px solid {border_color.name()};

@@ -224,6 +224,8 @@ These areas have repeatedly regressed during feature work. Treat them as protect
 
 ## 14) GUI Consistency Rules
 
+- Before visible UI work, follow the root AGENTS `Unified UI Design And Components` contract, [UI component registry](../docs/ui-style.md), and [superbird-ui-design](../.agents/skills/superbird-ui-design/SKILL.md): design hierarchy, components and state/scroll ownership before implementation.
+
 - Keep GUI code aligned with MVC / MVVM-style boundaries:
   - View classes may format and present state, but should not own business rules for metadata, report resolution, path repair, or focus extraction.
   - Controller/ViewModel logic should be testable without requiring full widget interaction.

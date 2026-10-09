@@ -208,6 +208,15 @@ Follow [ai_rules/AI_CODING_RULES.md](ai_rules/AI_CODING_RULES.md) as the cross-t
 ## New Feature: GUI Options
 - Keep new GUI options feature reading from `SuperBirdStamp/config/editor_options.json` via `birdstamp.config.resolve_bundled_path("config", "editor_options.json")`.
 
+## Unified UI Design And Components
+
+- Before adding, restyling or reorganizing visible UI in SuperViewer, SuperBirdStamp or `app_common`, follow [superbird-ui-design](.agents/skills/superbird-ui-design/SKILL.md) and the shared [UI component registry](docs/ui-style.md). First record the page/layout/container/content/control classification, selected components, default visibility, scroll/stretch ownership, actions and state semantics; provide a small layout sketch for new/reordered areas. Cross-window/shared-component migrations keep the design and coverage list under `docs/ui-design/` in the same commit. An authorized task does not require an extra design approval by default.
+- Named UI groups use `app_common.collapsible_section.CollapsibleSection`, replacing application-created `QGroupBox`. Put layouts on `group.body` (or reuse `set_content_widget`), never on the outer section. Do not alias the Qt class to bypass migration. Qt compatibility exports and third-party widgets are not application-created groups.
+- The shared component owns its compact solid triangle, keyboard/focus behavior, palette-based colors, one outer border and continuous title/body background. Do not duplicate its QSS in windows, draw header/body separators, or rely on a host application's stylesheet. Panels use the same margins and alignment for siblings; keep real hierarchy instead of nesting frames for decoration.
+- Expansion controls visibility only: preserve values, selection, enabled state, undo history, signal connections and worker ownership. Use a separate checkbox for business enable/disable; do not bind folding to rendering, metadata, saving or task start/stop. Existing advanced groups may start collapsed; new groups default expanded unless their design states otherwise. Preserve existing persisted fold fields; new fold state is session-only by default.
+- Navigation, preview surfaces and fixed action bars retain their own roles. Long settings scroll; the sole save/export/cancel entry must remain reachable. For a missing component, register its role/API/style owner in `docs/ui-style.md` before implementing it; keep the registry and application architecture links aligned in the same commit.
+- Validate real rendered geometry and interaction at small/normal sizes, enlarged fonts and light/dark themes, including keyboard and repeated collapse/expand with unchanged parameters. Run shared component and affected app tests using isolated offscreen configurations. Qt's Windows style on macOS is not Windows 64-bit validation.
+
 ## Unified Toggle Buttons
 
 - SuperViewer 星级/评级与标签过滤徽章保留紧凑外形，选中态复用 `app_common.toggle_button.TOGGLE_CHECKED_STYLE` 的蓝底白字；不要依赖系统 Highlight 色或单独复制颜色常量。

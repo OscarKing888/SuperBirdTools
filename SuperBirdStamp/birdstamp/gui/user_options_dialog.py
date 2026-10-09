@@ -3,10 +3,12 @@ from copy import deepcopy
 from pathlib import Path
 import uuid
 
+from app_common.collapsible_section import CollapsibleSection
+
 from PyQt6.QtCore import Qt, QRectF
 from PyQt6.QtGui import QColor, QImage, QPainter, QPainterPath, QPen
 from PyQt6.QtWidgets import (
-    QCheckBox, QFileDialog, QDoubleSpinBox, QFormLayout, QGridLayout, QGroupBox,
+    QCheckBox, QFileDialog, QDoubleSpinBox, QFormLayout, QGridLayout,
     QHBoxLayout, QLabel, QLineEdit, QListWidget, QListWidgetItem, QMessageBox,
     QPushButton, QSizePolicy, QStyle, QVBoxLayout, QWidget,
 )
@@ -113,10 +115,10 @@ class UserOptionsDialog(SettingsDialog):
         body = QHBoxLayout()
         body.setSpacing(16)
         page_layout.addLayout(body)
-        group_box = QGroupBox('安全区组', page)
+        group_box = CollapsibleSection('安全区组', page)
         group_box.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Maximum)
-        left = QVBoxLayout(group_box)
-        left.setContentsMargins(12, 24, 12, 12)
+        left = QVBoxLayout(group_box.body)
+        left.setContentsMargins(0, 0, 0, 0)
         left.setSpacing(8)
         self.groups = QListWidget()
         self.groups.setAccessibleName('安全区组')
@@ -150,9 +152,9 @@ class UserOptionsDialog(SettingsDialog):
         self.name_edit.setAccessibleName('安全区组名')
         form.addRow('组名', self.name_edit)
 
-        margins_box = QGroupBox('遮挡边距（画幅百分比）')
-        margins_layout = QVBoxLayout(margins_box)
-        margins_layout.setContentsMargins(12, 24, 12, 12)
+        margins_box = CollapsibleSection('遮挡边距（画幅百分比）')
+        margins_layout = QVBoxLayout(margins_box.body)
+        margins_layout.setContentsMargins(0, 0, 0, 0)
         margins_layout.setSpacing(10)
         grid = QGridLayout()
         grid.setHorizontalSpacing(8)
@@ -182,9 +184,9 @@ class UserOptionsDialog(SettingsDialog):
         margins_layout.addWidget(note)
         right.addWidget(margins_box)
 
-        preview_box = QGroupBox('安全区预览')
-        preview_layout = QVBoxLayout(preview_box)
-        preview_layout.setContentsMargins(12, 24, 12, 12)
+        preview_box = CollapsibleSection('安全区预览')
+        preview_layout = QVBoxLayout(preview_box.body)
+        preview_layout.setContentsMargins(0, 0, 0, 0)
         preview_layout.setSpacing(4)
         self.preview = SafeAreaPreview()
         preview_layout.addWidget(self.preview)
