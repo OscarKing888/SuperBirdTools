@@ -21,6 +21,15 @@ ENH_OFF, ENH_MANUAL, ENH_NOBIRD = "off", "manual", "nobird"
 ENH_MODES = (ENH_OFF, ENH_MANUAL, ENH_NOBIRD)
 SAM_SCOPE_RECHECKED, SAM_SCOPE_ALL = "rechecked", "all"
 SAM_SCOPES = (SAM_SCOPE_RECHECKED, SAM_SCOPE_ALL)
+FLOCK_MODES = ("auto", "always", "off")
+# name: (default, minimum, maximum, version tag)
+DETECTION_INTS = {
+    "detect_long_edge": (1024, 640, 4096, "detedge"),
+    "detect_imgsz": (640, 320, 2048, "deti"),
+    "detect_conf_percent": (25, 5, 95, "detc"),
+    "duplicate_box_percent": (70, 1, 100, "dupbox"),
+    "duplicate_mask_percent": (70, 1, 100, "dupmask"),
+}
 # Which pixels of a bird are measured: its outline (segmentation / SAM mask, else the box core)
 # or the whole box core regardless of masks.
 PIXELS_OUTLINE, PIXELS_BOX = "outline", "box"
@@ -103,6 +112,15 @@ class AnalysisParams:
     # version, so their results never pass for RAW ones.
     image_source: str = SOURCE_RAW
 
+    # 首遍副本/网络输入与置信度；复检和鸟群补检沿用此置信度。
+    detect_long_edge: int = 1024
+    detect_imgsz: int = 640
+    detect_conf_percent: int = 25
+    duplicate_box_percent: int = 70
+    duplicate_mask_percent: int = 70
+    flock_mode: str = "auto"
+    exclude_birds: bool = True  # 测量后排除弱且无眼的鸟，以及与有眼鸟重叠的无眼局部
+
     @classmethod
     def from_params(cls, params: Optional[dict]) -> "AnalysisParams":
         """From a flat dict (:meth:`as_params` names; unknown keys ignored, missing ones default)."""
@@ -116,7 +134,9 @@ class AnalysisParams:
                    p.get("detector", d.detector), p.get("sam_model", d.sam_model), p.get("sam_scope", d.sam_scope),
                    enh, TileOptions.from_params(p), p.get("bird_pixels", d.bird_pixels),
                    p.get("grey_fill", d.grey_fill), p.get("min_bird_side", d.min_bird_side),
-                   p.get("image_source", d.image_source)).normalized()
+                   p.get("image_source", d.image_source),
+                   **{name: p.get(name, spec[0]) for name, spec in DETECTION_INTS.items()},
+                   flock_mode=p.get("flock_mode", "auto"), exclude_birds=p.get("exclude_birds", True)).normalized()
 
     def normalized(self) -> "AnalysisParams":
         return AnalysisParams(
@@ -127,7 +147,12 @@ class AnalysisParams:
             self.enhanced.normalized(), self.tiles.normalized(),
             self.bird_pixels if self.bird_pixels in BIRD_PIXELS else PIXELS_OUTLINE, bool(self.grey_fill),
             _clamp(self.min_bird_side, 0, 4096, 0),
-            self.image_source if self.image_source in IMAGE_SOURCES else SOURCE_RAW)
+            self.image_source if self.image_source in IMAGE_SOURCES else SOURCE_RAW,
+            **{name: (_clamp(getattr(self, name), lo, hi, default) // 32 * 32 if name == "detect_imgsz"
+                      else _clamp(getattr(self, name), lo, hi, default))
+               for name, (default, lo, hi, tag) in DETECTION_INTS.items()},
+            flock_mode=self.flock_mode if self.flock_mode in FLOCK_MODES else "auto",
+            exclude_birds=bool(self.exclude_birds))
 
     def as_params(self) -> dict:
         o = self.normalized()
@@ -137,17 +162,41 @@ class AnalysisParams:
                 "enh_region_percent": e.region_percent, "enh_grid": e.grid, "enh_imgsz": e.imgsz,
                 "enh_min_conf_percent": e.min_conf_percent, "enh_lift": e.lift, **o.tiles.as_params(),
                 "bird_pixels": o.bird_pixels, "grey_fill": o.grey_fill, "min_bird_side": o.min_bird_side,
-                "image_source": o.image_source}
+                "image_source": o.image_source, **{name: getattr(o, name) for name in DETECTION_INTS},
+                "flock_mode": o.flock_mode, "exclude_birds": o.exclude_birds}
 
     def version_tags(self) -> List[str]:
         """Algorithm version suffixes for the non-default settings, in a fixed order."""
         o = self.normalized()
         tags = [] if o.edge_estimator == ESTIMATOR_STANDARD.key else [o.edge_estimator]
+        detection_tags = [f"{tag}{getattr(o, name)}" for name, (default, lo, hi, tag) in DETECTION_INTS.items()
+                          if getattr(o, name) != default]
+        detection_tags += ([] if o.flock_mode == "auto" else [f"flock-{o.flock_mode}"])
+        detection_tags += ([] if o.exclude_birds else ["keep-candidates"])
         for tag in (o.tiles.version_tag(), "" if o.detector == "auto" else o.detector[:-3], o.enhanced.version_tag(),
                     "" if not o.sam_model else f"{o.sam_model[:-3]}-{o.sam_scope}",
                     "" if o.bird_pixels == PIXELS_OUTLINE else o.bird_pixels, "grey" if o.grey_fill else "",
-                    f"min{o.min_bird_side}" if o.min_bird_side else "",
+                    f"min{o.min_bird_side}" if o.min_bird_side else "", *detection_tags,
                     "" if o.image_source == SOURCE_RAW else o.image_source):
             if tag:
                 tags.append(tag)
         return tags
+
+
+def add_detection_arguments(parser):
+    """Shared CLI controls for formal sharpness and per-bird identification."""
+    tips = {"detect_long_edge": "首遍副本长边上限（不放大原图）", "detect_imgsz": "首遍网络输入（32 的倍数）",
+            "detect_conf_percent": "检测置信度下限（百分比）", "duplicate_box_percent": "去重框重叠门槛（百分比）",
+            "duplicate_mask_percent": "去重掩膜重叠门槛（百分比）"}
+    for name, (default, low, high, tag) in DETECTION_INTS.items():
+        parser.add_argument("--" + name.replace("_", "-"), type=int, default=default,
+                            help=f"{tips[name]}，默认 {default}，范围 {low}–{high}")
+    parser.add_argument("--flock-mode", choices=FLOCK_MODES, default="auto",
+                        help="鸟群 2048 px 补检：auto 自动（含全图复检后）/ always 总是 / off 关闭")
+    parser.add_argument("--keep-bird-candidates", action="store_true",
+                        help="关闭测量后的假鸟/局部排除，保留弱且看不到眼的候选（仍去重）")
+
+
+def detection_params_from_args(args):
+    return {**{name: getattr(args, name) for name in DETECTION_INTS},
+            "flock_mode": args.flock_mode, "exclude_birds": not args.keep_bird_candidates}

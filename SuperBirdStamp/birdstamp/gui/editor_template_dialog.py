@@ -927,13 +927,14 @@ class TemplateManagerDialog(QDialog):
             color.colorChanged.connect(self._apply_field_changes)
             self.field_effect_widgets[f"{prefix}_color"] = color
             form.addRow(f"{caption}颜色", color)
-        for key, label in (("stroke_width", "描边宽度"), ("shadow_opacity", "阴影不透明度"),
+        for key, label in (("stroke_width", "描边宽度"), ("stroke_opacity", "描边不透明度"),
+                           ("shadow_opacity", "阴影不透明度"),
                            ("shadow_offset_x", "阴影 X 偏移"), ("shadow_offset_y", "阴影 Y 偏移"),
                            ("shadow_blur", "阴影柔化")):
             spin = QDoubleSpinBox()
             spin.setRange(*TEXT_EFFECT_RANGES[key])
             spin.setDecimals(1)
-            spin.setSuffix(" %" if key == "shadow_opacity" else " px")
+            spin.setSuffix(" %" if key.endswith("_opacity") else " px")
             spin.setToolTip("随文字缩放；数值以模板基础字号为基准")
             spin.valueChanged.connect(self._apply_field_changes)
             self.field_effect_widgets[key] = spin

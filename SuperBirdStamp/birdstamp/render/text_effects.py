@@ -5,12 +5,12 @@ import math
 from PIL import Image, ImageColor, ImageDraw, ImageFilter
 
 DEFAULT_TEXT_EFFECTS = {
-    'stroke_enabled': False, 'stroke_color': '#000000', 'stroke_width': 2.0,
+    'stroke_enabled': False, 'stroke_color': '#000000', 'stroke_opacity': 100.0, 'stroke_width': 2.0,
     'shadow_enabled': False, 'shadow_color': '#000000', 'shadow_opacity': 70.0,
     'shadow_offset_x': 3.0, 'shadow_offset_y': 3.0, 'shadow_blur': 3.0,
 }
 TEXT_EFFECT_RANGES = {
-    'stroke_width': (0.0, 20.0), 'shadow_opacity': (0.0, 100.0),
+    'stroke_width': (0.0, 20.0), 'stroke_opacity': (0.0, 100.0), 'shadow_opacity': (0.0, 100.0),
     'shadow_offset_x': (-100.0, 100.0), 'shadow_offset_y': (-100.0, 100.0),
     'shadow_blur': (0.0, 50.0),
 }
@@ -58,11 +58,13 @@ def styled_text_layer(text, box, *, font, color, style, effects, scale):
     ml, mt, mr, mb = margins
     layer = Image.new('RGBA', (max(1, right-left)+10+ml+mr, max(1, bottom-top)+10+mt+mb))
     draw = ImageDraw.Draw(layer)
+    stroke_color = (*ImageColor.getrgb(effects['stroke_color'])[:3],
+                    round(255 * effects.get('stroke_opacity', 100.0) / 100))
     offsets = [(0, 0), (1, 0), (0, 1)] if style in {'bold', 'bold_italic'} else [(0, 0)]
     # 先完整绘制所有描边，再绘制正文，避免粗体的第二笔覆盖前一笔正文。
     for ox, oy in offsets:
         draw.text((5+ml-left+ox, 5+mt-top+oy), text, font=font, fill=color,
-                  stroke_width=stroke, stroke_fill=effects['stroke_color'])
+                  stroke_width=stroke, stroke_fill=stroke_color)
     if stroke:
         for ox, oy in offsets:
             draw.text((5+ml-left+ox, 5+mt-top+oy), text, font=font, fill=color)

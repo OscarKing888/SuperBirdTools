@@ -202,6 +202,7 @@
     "stroke_enabled": false,
     "stroke_color": "#000000",
     "stroke_width": 2.0,
+    "stroke_opacity": 100.0,
     "shadow_enabled": false,
     "shadow_color": "#000000",
     "shadow_opacity": 70.0,

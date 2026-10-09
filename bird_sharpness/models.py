@@ -370,7 +370,8 @@ class BirdSharpnessModels:
         """Every bird in a small BGR image as :class:`BirdDetection`, strongest first.
 
         ``conf`` below :data:`BIRD_CONFIDENCE_MIN` returns weak candidates too (the
-        analyzer only uses them next to the camera focus point); ``imgsz`` is the
+        default analyzer only uses them next to the camera focus point; the configurable
+        detection confidence can explicitly admit them for the whole frame); ``imgsz`` is the
         network input size (Ultralytics default when ``None``).
         """
         found = self._predict(bgr_small, conf=conf, imgsz=imgsz, classes=[BIRD_CLASS_ID])

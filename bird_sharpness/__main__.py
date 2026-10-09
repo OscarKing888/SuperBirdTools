@@ -97,6 +97,8 @@ def main(argv: List[str] | None = None) -> int:
         "-j", "--workers", type=int, default=min(6, max(1, (os.cpu_count() or 2) // 2)),
         help="并行检测的照片数（模型推理串行，解码与计算并行；默认 CPU 核数的一半，最多 6）",
     )
+    from .params import add_detection_arguments, detection_params_from_args
+    add_detection_arguments(parser)
     args = parser.parse_args(argv)
     if args.list_models or args.download_model:
         from . import model_catalog
@@ -177,7 +179,7 @@ def main(argv: List[str] | None = None) -> int:
                             EnhancedSearch(args.enhanced, args.enh_region_percent, args.enh_grid, args.enh_imgsz,
                                            int(round(args.enh_min_conf * 100)), not args.no_enh_lift),
                             tiles, args.pixels, bool(args.grey_fill), max(0, args.min_bird_side),
-                            args.source).normalized()
+                            args.source, **detection_params_from_args(args)).normalized()
     from .models import BirdSharpnessModelError, find_model
 
     for name in (params.detector if params.detector != "auto" else "", params.sam_model):

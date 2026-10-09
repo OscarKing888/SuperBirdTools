@@ -218,7 +218,8 @@ def detection_mask_overlap(a: BirdDetection, b: BirdDetection) -> Optional[float
     return float(np.count_nonzero(masks[0] & masks[1]) / smaller)
 
 
-def dedupe_detections(detections: List[BirdDetection]) -> List[BirdDetection]:
+def dedupe_detections(detections: List[BirdDetection], *, box_threshold: float = DUPLICATE_CONTAINMENT,
+                      mask_threshold: float = DUPLICATE_CONTAINMENT) -> List[BirdDetection]:
     """Merge contained duplicates, retaining separate silhouettes of a flock.
 
     Segmentation often returns one bird twice: the whole bird and a part of it
@@ -231,10 +232,10 @@ def dedupe_detections(detections: List[BirdDetection]) -> List[BirdDetection]:
     flock pass: first-pass birds first; enhanced search: uncut whole birds first).
     """
     def duplicate(det, other):
-        if box_overlap(det.box, other.box) < DUPLICATE_CONTAINMENT:
+        if box_overlap(det.box, other.box) < box_threshold:
             return False
         overlap = detection_mask_overlap(det, other)
-        return overlap is None or overlap >= DUPLICATE_CONTAINMENT
+        return overlap is None or overlap >= mask_threshold
 
     kept: List[BirdDetection] = []
     for det in detections:
@@ -403,6 +404,8 @@ class Recheck:
     candidates: List[Tuple[float, Box]] = dc_field(default_factory=list)  # weak candidates touching focus
     windows: List[dict] = dc_field(default_factory=list)  # {"box", "detections": [(conf, box, accepted)]}
     accepted: List[BirdDetection] = dc_field(default_factory=list)  # detection-image coordinates
+
+    confidence_min: float = BIRD_CONFIDENCE_MIN
 
     @property
     def source(self) -> str:
@@ -788,6 +791,19 @@ class BirdSharpnessAnalyzer:
             tracer.result(result)
         return result
 
+    def _dedupe(self, detections):
+        return dedupe_detections(detections, box_threshold=self._params.duplicate_box_percent / 100,
+                                 mask_threshold=self._params.duplicate_mask_percent / 100)
+
+    def _flock_needed(self, image, detections, scale):
+        if self._params.flock_mode == "off":
+            return False
+        if self._params.flock_mode == "always":
+            return True
+        # 触发门槛固定按 1024 px 画幅换算，不随首遍副本大小漂移。
+        base_scale = min(1.0, DETECT_LONG_EDGE / max(image.rgb8.shape[:2]))
+        return has_small_birds([_scaled_detection(d, base_scale / scale) for d in detections])
+
     # ── pipeline ──────────────────────────────────────────────────────────
     def _analyze(self, path: str, on_stage: Callable[[str], None], cancelled, tracer=None,
                  image_loader=None, given: Optional["GivenBirds"] = None) -> BirdSharpnessResult:
@@ -802,11 +818,13 @@ class BirdSharpnessAnalyzer:
             tracer.decode(path, image, focus_px, decode_s=time.perf_counter() - t_decode)
         on_stage(STAGE_DETECT)
         H, W = image.gray.shape[:2]
-        small, scale = _resize_long_edge(image.rgb8, DETECT_LONG_EDGE)
+        small, scale = _resize_long_edge(image.rgb8, self._params.detect_long_edge)
+        initial_scale = scale
         small_bgr = cv2.cvtColor(small, cv2.COLOR_RGB2BGR)
-        detections = dedupe_detections(self.models.detect_birds(small_bgr, imgsz=DETECT_IMGSZ))
+        detections = self._dedupe(self.models.detect_birds(small_bgr, imgsz=self._params.detect_imgsz,
+                                                         conf=self._params.detect_conf_percent / 100))
         small_pass = None
-        if detections and has_small_birds(detections) and not cancelled():
+        if self._flock_needed(image, detections, scale) and not cancelled():
             detections, scale, small_pass = self._small_bird_pass(image, detections, scale)
         detections, ignored_small = self._drop_small(detections, scale)
         limit = int(self.max_birds or 0)
@@ -819,15 +837,30 @@ class BirdSharpnessAnalyzer:
             tracer.detect(detections, scale, has_masks=bool(getattr(self.models, "has_masks", True)),
                           has_keypoints=bool(getattr(self.models, "has_keypoints", True)), unmeasured=unmeasured,
                           limit=limit, small_pass=small_pass,
-                          detector=str(getattr(self.models, "detector_name", "") or ""), ignored_small=ignored_small)
+                          detector=str(getattr(self.models, "detector_name", "") or ""), ignored_small=ignored_small,
+                          params=self._params.as_params())
         if not detections and not cancelled():
             on_stage(STAGE_RECHECK)
             if focus_px is _UNSET:
                 focus_px = self._focus_box_px(path, image)
+            scale = initial_scale  # 补检可能升级坐标系；复检仍使用首遍 small_bgr。
             recheck = self._recheck(image, small_bgr, scale, focus_px, cancelled)
             detections, _ignored = self._drop_small(recheck.accepted, scale)
             if tracer is not None:
-                tracer.recheck(recheck)
+                tracer.recheck(recheck, scale_to_full=scale)
+            # 全图复检刚找到的小鸟同样需要鸟群补检；焦点弱证据仍只采纳一只。
+            if (small_pass is None and detections and recheck.source in (FOUND_FULL_LIFTED, FOUND_FULL_FINE)
+                    and self._flock_needed(image, detections, scale) and not cancelled()):
+                detections, scale, small_pass = self._small_bird_pass(image, detections, scale)
+                detections, ignored_small = self._drop_small(detections, scale)
+                unmeasured = max(0, len(detections) - limit) if limit > 0 else 0
+                detections = self._limit(prefer_focus_birds(detections, focus_px, scale))
+                if tracer is not None and small_pass is not None:
+                    tracer.detect(detections, scale, has_masks=bool(getattr(self.models, "has_masks", True)),
+                                  has_keypoints=bool(getattr(self.models, "has_keypoints", True)),
+                                  small_pass=small_pass, unmeasured=unmeasured, limit=limit,
+                                  ignored_small=ignored_small, params=self._params.as_params(),
+                                  detector=str(getattr(self.models, "detector_name", "") or ""))
         manual_known: List[bool] = []
 
         def manual() -> bool:  # looked up once, only when needed
@@ -840,6 +873,7 @@ class BirdSharpnessAnalyzer:
             on_stage(STAGE_RECHECK)
             if focus_px is _UNSET:
                 focus_px = self._focus_box_px(path, image)
+            scale = initial_scale
             found = self._enhanced_search(image, small_bgr, scale, focus_px, cancelled)
             found.manual = manual_known[0] if manual_known else None
             detections, _ignored = self._drop_small(found.accepted, scale)
@@ -848,7 +882,7 @@ class BirdSharpnessAnalyzer:
         on_stage(STAGE_MEASURE)
         if detections:
             birds = [self._measure_bird(image, det, scale, index=i, tracer=tracer) for i, det in enumerate(detections)]
-            excluded = excluded_birds(birds)
+            excluded = excluded_birds(birds) if self._params.exclude_birds else {}
             kept = [b for i, b in enumerate(birds) if i not in excluded]
             if tracer is not None:
                 tracer.mark_best(birds.index(max(kept, key=BirdMeasurement.rank)), excluded=excluded)
@@ -878,7 +912,7 @@ class BirdSharpnessAnalyzer:
                           ignored_small=ignored_small)
         on_stage(STAGE_MEASURE)
         birds = [self._measure_bird(image, det, 1.0, index=i, tracer=tracer) for i, det in enumerate(detections)]
-        excluded = excluded_birds(birds)
+        excluded = excluded_birds(birds) if self._params.exclude_birds else {}
         kept = [b for i, b in enumerate(birds) if i not in excluded]
         if tracer is not None:
             tracer.mark_best(birds.index(max(kept, key=BirdMeasurement.rank)), excluded=excluded)
@@ -891,35 +925,37 @@ class BirdSharpnessAnalyzer:
         First-pass birds stay exactly as they were (so their measurements do not
         change); the high-resolution pass only adds the birds it missed.
         """
-        fine, fine_scale = _resize_long_edge(image.rgb8, SMALL_DETECT_LONG_EDGE)
-        if fine_scale <= scale:
+        fine, fine_scale = _resize_long_edge(image.rgb8, max(SMALL_DETECT_LONG_EDGE, self._params.detect_long_edge))
+        if fine_scale <= scale and self._params.detect_imgsz >= SMALL_DETECT_IMGSZ:
             return first, scale, None
         found = [replace(d, source=FOUND_FULL_SMALL) for d in
-                 self.models.detect_birds(cv2.cvtColor(fine, cv2.COLOR_RGB2BGR), imgsz=SMALL_DETECT_IMGSZ)]
+                 self.models.detect_birds(cv2.cvtColor(fine, cv2.COLOR_RGB2BGR), imgsz=SMALL_DETECT_IMGSZ,
+                                          conf=self._params.detect_conf_percent / 100)]
         factor = fine_scale / scale
         kept = [_scaled_detection(d, factor) for d in first]
-        merged = dedupe_detections([*kept, *found])
+        merged = self._dedupe([*kept, *found])
         return merged, fine_scale, (len(first), len(found), len(merged) - len(first))
 
     def _recheck(self, image: AnalysisImage, small_bgr, scale: float, focus_px: Optional[Box],
                  cancelled) -> Recheck:
         """Second look when the first pass found no bird (see the FOCUS_* notes above)."""
         H, W = image.gray.shape[:2]
-        check = Recheck(None if focus_px is None else tuple(focus_px))
+        check = Recheck(None if focus_px is None else tuple(focus_px),
+                        confidence_min=self._params.detect_conf_percent / 100)
         lifted, gamma = lift_midtones(small_bgr, bgr=True)
         if gamma < LIFT_DARK_GAMMA:
             check.lift_gamma = gamma
-            found = self.models.detect_birds(lifted, imgsz=DETECT_IMGSZ)
+            found = self.models.detect_birds(lifted, imgsz=self._params.detect_imgsz, conf=check.confidence_min)
             if found:
                 check.accepted = [_focus_part(replace(d, source=FOUND_FULL_LIFTED), focus_px, scale)
-                                  for d in self._limit(dedupe_detections(found))]
+                                  for d in self._limit(self._dedupe(found))]
                 return check
             if cancelled():
                 return check
         candidates = self.models.detect_birds(small_bgr, conf=FOCUS_CANDIDATE_CONFIDENCE, imgsz=RECHECK_IMGSZ)
-        confident = [replace(d, source=FOUND_FULL_FINE) for d in candidates if d.confidence >= BIRD_CONFIDENCE_MIN]
+        confident = [replace(d, source=FOUND_FULL_FINE) for d in candidates if d.confidence >= check.confidence_min]
         if confident:
-            check.accepted = self._limit(dedupe_detections(confident))
+            check.accepted = self._limit(self._dedupe(confident))
             return check
         if focus_px is None:
             return check
@@ -948,7 +984,7 @@ class BirdSharpnessAnalyzer:
             x1, y1, x2, y2 = win
             crop = cv2.cvtColor(np.ascontiguousarray(image.rgb8[y1:y2, x1:x2]), cv2.COLOR_RGB2BGR)
             found = []
-            for det in self.models.detect_birds(crop, conf=BIRD_CONFIDENCE_MIN, imgsz=FOCUS_ZOOM_IMGSZ):
+            for det in self.models.detect_birds(crop, conf=check.confidence_min, imgsz=FOCUS_ZOOM_IMGSZ):
                 box = (det.box[0] + x1, det.box[1] + y1, det.box[2] + x1, det.box[3] + y1)
                 ok = (box_overlap(box, focus_px) >= FOCUS_ZOOM_OVERLAP
                       and any(box_iou(box, a) >= FOCUS_ZOOM_AGREEMENT_IOU for a in anchors))
@@ -1005,7 +1041,7 @@ class BirdSharpnessAnalyzer:
         # confidence can be the higher one.
         accepted.sort(key=lambda item: (item[0], -_area(item[1].box), -item[1].confidence))
         found.accepted = [_focus_part(d, focus_px, scale)
-                          for d in self._limit(dedupe_detections([d for _cut, d in accepted]))]
+                          for d in self._limit(self._dedupe([d for _cut, d in accepted]))]
         return found
 
     def find_missed_bird(self, path: str, *, cancelled: Callable[[], bool] = lambda: False) -> Optional[MissedBird]:
@@ -1019,7 +1055,7 @@ class BirdSharpnessAnalyzer:
         if cancelled():
             return None
         H, W = image.gray.shape[:2]
-        small, scale = _resize_long_edge(image.rgb8, DETECT_LONG_EDGE)
+        small, scale = _resize_long_edge(image.rgb8, self._params.detect_long_edge)
         focus_px = self._focus_box_px(path, image)
         check = self._recheck(image, cv2.cvtColor(small, cv2.COLOR_RGB2BGR), scale, focus_px, cancelled)
         if not check.accepted or cancelled():
