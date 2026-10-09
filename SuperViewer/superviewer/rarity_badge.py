@@ -3,15 +3,15 @@
 from app_common.bird_rarity import normalize_badge_options, rarity_score
 from app_common.metadata_badges import BADGE_DEFINITIONS, metadata_badge_style
 from app_common.superviewer_user_options import get_runtime_user_options
-from .qt_compat import QLabel, QWidget, QPushButton, QLineEdit, QGridLayout, QVBoxLayout, QSizePolicy
+from .qt_compat import QLabel, QWidget, QPushButton, QLineEdit, QGridLayout, QHBoxLayout, QVBoxLayout, QSizePolicy
 try:
     from PyQt6.QtCore import Qt
     from PyQt6.QtGui import QColor
-    from PyQt6.QtWidgets import QColorDialog
+    from PyQt6.QtWidgets import QColorDialog, QInputDialog
 except ImportError:  # pragma: no cover
     from PyQt5.QtCore import Qt
     from PyQt5.QtGui import QColor
-    from PyQt5.QtWidgets import QColorDialog
+    from PyQt5.QtWidgets import QColorDialog, QInputDialog
 
 
 def rarity_badge_style(score, options=None, *, level=None):
@@ -93,26 +93,40 @@ class MetadataBadgesForm(QWidget):
         self.definition = BADGE_DEFINITIONS[kind]
         opts = normalize_badge_options(options, self.definition.defaults)
         layout = QVBoxLayout(self)
+        example = "传奇 → SSR" if kind == "rarity" else "EN · 濒危 → 重点保护"
         note = QLabel(("按 GBIF 稀有度分数显示徽章，分数越高越稀有。\n" if kind == "rarity" else
                        "IUCN 保护等级默认采用 Cornell / eBird 保护状态配色。\n") +
-                      "名称、背景色和文字色用于图片信息及 Overlay 自动映射。\n"
+                      f"点击「编辑」修改显示文本（例如：{example}），或直接在输入框中修改。\n"
+                      "修改后点击本窗口底部「确定」保存；「取消」放弃本次修改。\n"
+                      "显示文本、背景色和文字色用于图片信息及 Overlay 自动映射。\n"
                       "缺失数据独立显示为未知，不视为普通、无危或未评估。", self)
         note.setWordWrap(True)
         layout.addWidget(note)
         grid = QGridLayout()
         grid.setColumnStretch(1, 1)
         grid.setColumnMinimumWidth(4, 70)
-        for col, title in enumerate(("分数范围" if kind == "rarity" else "等级", "显示名称", "背景色", "文字色", "预览")):
+        for col, title in enumerate(("分数范围" if kind == "rarity" else "等级", "显示文本", "背景色", "文字色", "预览")):
             grid.addWidget(QLabel(title, self), 0, col)
         self.edits, self.colors, self.previews = {}, {}, {}
+        self.edit_buttons = {}
         for row, (level, interval, *_rest) in enumerate(self.definition.levels, 1):
             prefix = f"{self.definition.prefix}_{level}_"
             grid.addWidget(QLabel(interval, self), row, 0)
             edit = QLineEdit(opts[prefix + "text"], self)
             edit.setMaxLength(32)
             edit.setMinimumWidth(70)
+            edit.setAccessibleName(f"{interval} 显示文本")
+            edit.setToolTip("可直接输入，最多 32 个字符；留空恢复该等级默认文本。")
             self.edits[level] = edit
-            grid.addWidget(edit, row, 1)
+            text_row = QHBoxLayout()
+            text_row.addWidget(edit, 1)
+            edit_button = QPushButton("编辑", self)
+            edit_button.setAutoDefault(False)
+            edit_button.setAccessibleName(f"编辑 {interval} 显示文本")
+            edit_button.clicked.connect(lambda _checked=False, key=level: self._edit_text(key))
+            self.edit_buttons[level] = edit_button
+            text_row.addWidget(edit_button)
+            grid.addLayout(text_row, row, 1)
             for col, field in ((2, "background"), (3, "foreground")):
                 button = _ColorButton(opts[prefix + field], self._refresh_previews, self)
                 self.colors[(level, field)] = button
@@ -128,6 +142,27 @@ class MetadataBadgesForm(QWidget):
         layout.addWidget(reset)
         layout.addStretch(1)
         self._refresh_previews()
+
+    def _edit_text(self, level):
+        """明确的文字编辑入口；只更新表单草稿，设置页确认后统一保存。"""
+        interval = next(item[1] for item in self.definition.levels if item[0] == level)
+        dialog = QInputDialog(self)
+        dialog.setWindowTitle("编辑显示文本")
+        dialog.setLabelText(f"{interval}\n显示文本（最多 32 个字符，留空恢复默认）：")
+        dialog.setTextValue(self.edits[level].text())
+        dialog.setOkButtonText("应用")
+        dialog.setCancelButtonText("取消")
+        editor = dialog.findChild(QLineEdit)
+        editor.setMaxLength(32)
+        editor.selectAll()
+        try:
+            accepted = getattr(QInputDialog, "DialogCode", QInputDialog).Accepted
+            if dialog.exec() == accepted:
+                text = dialog.textValue().strip()
+                default = self.definition.defaults[f"{self.definition.prefix}_{level}_text"]
+                self.edits[level].setText(text or default)
+        finally:
+            dialog.deleteLater()
 
     def selected_options(self):
         prefix = self.definition.prefix

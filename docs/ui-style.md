@@ -40,6 +40,7 @@ L0 应用外壳：主窗口、菜单、状态栏
 | L4 照片、元数据、标签列表 | 现有共享浏览器、模型与委托 | 分组调整不重建模型，不触发缩略图/EXIF 读取 |
 | L4 图片/视频预览 | 已有 `PreviewCanvas` / `PreviewWithStatusBar` | 不改像素来源、坐标、缩放/平移和 A/B 语义；模板原有预览分组可折叠 |
 | L5 输入字段 | 原生编辑器、项目 `ColorEditor` / `PercentEditor` 等 | 复用范围、校验和信号；UI 不持有新的业务副本 |
+| L4 徽章配置表单 | Viewer [`MetadataBadgesForm`](../SuperViewer/superviewer/rarity_badge.py) | 显示文本输入框旁提供“编辑”按钮，使用原生 `QInputDialog`；应用更新草稿及预览，设置页确定后统一保存，取消不写配置 |
 | L5 面板布尔选项 | `QCheckBox` | 启用/禁用与展开/收起分开；折叠不取消功能 |
 | L5 工具栏显示开关 | [`ToggleToolButton`](../app_common/toggle_button.py) | 蓝底白字选中态；与根规范一致。折叠标题是 disclosure，不使用蓝色开关样式 |
 | L5 动作 | `QPushButton` / `QToolButton`、已有菜单动作 | 主次动作位置一致，保留忙碌、取消及键盘行为 |
