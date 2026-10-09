@@ -2,7 +2,7 @@
 
 本文按代码的实际执行顺序，用流程图说明一张照片从入队到写入 XMP 的每个环节。算法的背景、标定数据和取舍理由见 [bird_sharpness.md](bird_sharpness.md)；本文只讲“先做什么、再做什么、什么条件走哪条分支”。所有阈值都标注了代码位置，以代码为准。
 
-版本：`sbt-blur-v15`（[scoring.py](../bird_sharpness/scoring.py) `ALGORITHM_VERSION`），非默认参数和 RAW 以外的图像来源会追加后缀（见文末；SuperViewer 默认测相机内嵌 JPEG，即 `sbt-blur-v15-jpeg`）。
+版本：`sbt-blur-v16`（[scoring.py](../bird_sharpness/scoring.py) `ALGORITHM_VERSION`），非默认参数和 RAW 以外的图像来源会追加后缀（见文末；SuperViewer 默认测相机内嵌 JPEG，即 `sbt-blur-v16-jpeg`）。
 
 ## 目录
 
@@ -34,7 +34,7 @@ flowchart TD
     B -->|是| Z0["skipped，不计算"]
     B -->|否| C["① 解码全分辨率<br/>stage = decode"]
     C --> D["② 首遍识别<br/>1024 px 副本，网络输入 640 px，conf ≥ 0.25<br/>stage = detect"]
-    D --> D1["去重：一框 ≥ 70% 落在另一框内视为同一只"]
+    D --> D1["去重：框重叠 ≥ 70%；有有效分割掩膜时<br/>还须掩膜重叠 ≥ 70% 才视为同一只"]
     D1 --> D2{"有鸟框短边 < 64 px？"}
     D2 -->|是| D3["鸟群补检：2048 px 副本 / 2048 px 输入<br/>只补首遍漏掉的鸟"]
     D2 -->|否| DS
@@ -158,12 +158,12 @@ flowchart TD
 
 ## 4. 鸟体识别：首遍、鸟群补检、去重与限数
 
-代码：`_analyze()`、`dedupe_detections()`、`_small_bird_pass()`、`prefer_focus_birds()`、`_limit()`。
+代码：`_analyze()`、`dedupe_detections()`、`detection_mask_overlap()`、`_small_bird_pass()`、`prefer_focus_birds()`、`_limit()`。
 
 ```mermaid
 flowchart TD
     A["rgb8 缩到长边 1024 px<br/>DETECT_LONG_EDGE"] --> B["YOLO detect_birds<br/>imgsz 640（DETECT_IMGSZ），conf ≥ 0.25（BIRD_CONFIDENCE_MIN）"]
-    B --> C["按置信度降序<br/>去重 dedupe_detections：<br/>两框任一有 ≥ 70% 面积落在另一框内 → 只留强的"]
+    B --> C["按置信度 × 框面积降序<br/>去重 dedupe_detections：框交集 / 较小框 ≥ 70%<br/>且两者有有效掩膜时，掩膜交集 / 较小掩膜也须 ≥ 70%<br/>无有效掩膜时只判断框；重复只留排序靠前的"]
     C --> D{"有任一鸟框短边 < 64 px？<br/>（1024 px 副本像素，FLOCK_BIRD_SIDE）"}
     D -->|是| E["鸟群补检 _small_bird_pass：<br/>rgb8 缩到 2048 px，imgsz 2048<br/>新鸟 found_by = full_small"]
     E --> F["首遍鸟按比例放到 2048 坐标系（掩膜不动，测量结果不变）<br/>+ 补检鸟 → 再次去重"]
@@ -178,8 +178,10 @@ flowchart TD
     J -->|检测模型 yolo11n 等| L["无掩膜；测量时用框内核（四边各内缩 8%）"]
 ```
 
+- v16 起分割模型去重同时检查鸟框与鸟体掩膜：框重叠达 70% 后，若两者都有有效掩膜，掩膜重叠也须达 70% 才合并；轮廓分离的前后两只鸟保留。无掩膜、空掩膜或非二维掩膜退回鸟框规则。鸟群补检中的不同分辨率全帧掩膜按最近邻缩到较小分辨率比较，不修改原掩膜或测量像素。去重保留输入顺序：首遍为置信度 × 框面积，补检时首遍优先，增强搜索时未切断的整鸟优先。
+- `DSC00462.png` 实测：首遍产生 9 个候选；旧规则误删置信度 0.903 的小鸟（框有 97.2% 落在大鸟框内，掩膜重叠为 0），只剩 7 只。v16 保留小鸟，仍剔除掩膜重叠 98.6% 的真重复，最终 8 只。实验管线显示原始结果（截图置信度下限 0.10），正式流程仍为 0.25，并保留后续假鸟/局部排除；不把实验的 12 个候选全部算作独立鸟。
 - 检测模型由 `AnalysisParams.detector` 决定（`auto` = 内置选择：分割模型优先）。
-- 首遍网络输入保持 640 px 不变：这样有鸟的照片结果不随新增逻辑改变。
+- 首遍网络输入保持 640 px 不变；v16 改变候选去重判断，不调整 YOLO 输入、置信度门槛或清晰度评分。
 
 ---
 
@@ -531,7 +533,7 @@ flowchart TD
 | --- | --- | --- | --- |
 | `DETECT_LONG_EDGE` / `DETECT_IMGSZ` | 1024 / 640 | analyzer.py | 首遍识别 |
 | `BIRD_CONFIDENCE_MIN` | 0.25 | models.py | 采纳为鸟的置信度 |
-| `DUPLICATE_CONTAINMENT` | 0.70 | analyzer.py | 去重 |
+| `DUPLICATE_CONTAINMENT` | 0.70 | analyzer.py | 去重：框交集 / 较小框；两者有有效掩膜时还须掩膜交集 / 较小掩膜同样达标 |
 | `FLOCK_BIRD_SIDE` / `SMALL_DETECT_LONG_EDGE` | 64 / 2048 | analyzer.py | 鸟群补检触发与分辨率 |
 | `LIFT_MEDIAN_TARGET` / `LIFT_GAMMA_MIN` / `LIFT_DARK_GAMMA` | 100 / 0.35 / 0.9 | analyzer.py | 暗部提亮 |
 | `RECHECK_IMGSZ` | 1024 | analyzer.py | 复检网络输入 |

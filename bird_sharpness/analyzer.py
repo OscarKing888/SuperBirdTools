@@ -193,17 +193,52 @@ class BirdSharpnessResult:
 DUPLICATE_CONTAINMENT = 0.7
 
 
+def detection_mask_overlap(a: BirdDetection, b: BirdDetection) -> Optional[float]:
+    """Intersection / smaller silhouette, or None without two usable masks.
+
+    Masks cover the same whole frame, but the flock pass keeps first-pass masks
+    at their original resolution. Compare at the smaller resolution without
+    mutating either detection or changing the pixels used for measurement.
+    """
+    if a.mask is None or b.mask is None:
+        return None
+    ma, mb = np.asarray(a.mask), np.asarray(b.mask)
+    if ma.ndim != 2 or mb.ndim != 2 or not ma.size or not mb.size:
+        return None
+    shape = (min(ma.shape[0], mb.shape[0]), min(ma.shape[1], mb.shape[1]))
+    masks = []
+    for mask in (ma, mb):
+        mask = (mask > 0).astype(np.uint8)
+        if mask.shape != shape:
+            mask = cv2.resize(mask, (shape[1], shape[0]), interpolation=cv2.INTER_NEAREST)
+        masks.append(mask.astype(bool))
+    smaller = min(np.count_nonzero(masks[0]), np.count_nonzero(masks[1]))
+    if not smaller:
+        return None
+    return float(np.count_nonzero(masks[0] & masks[1]) / smaller)
+
+
 def dedupe_detections(detections: List[BirdDetection]) -> List[BirdDetection]:
-    """Drop a detection when one of the two boxes lies mostly inside the other.
+    """Merge contained duplicates, retaining separate silhouettes of a flock.
 
     Segmentation often returns one bird twice: the whole bird and a part of it
     (DSC04512: whole bird + upper half), in either confidence order; both would
     measure the same head and inflate the bird count. In the 2026-10-02 set this
-    was 24 of 28 "multi-bird" frames. ``detections`` must be strongest first.
+    was 24 of 28 "multi-bird" frames. With segmentation, also require silhouette
+    containment: DSC00462's small bird is inside the large bird's box but shares
+    none of its pixels. Without usable masks retain the box-only fallback.
+    Input order determines priority (normal detection: confidence x box area;
+    flock pass: first-pass birds first; enhanced search: uncut whole birds first).
     """
+    def duplicate(det, other):
+        if box_overlap(det.box, other.box) < DUPLICATE_CONTAINMENT:
+            return False
+        overlap = detection_mask_overlap(det, other)
+        return overlap is None or overlap >= DUPLICATE_CONTAINMENT
+
     kept: List[BirdDetection] = []
     for det in detections:
-        if not any(box_overlap(det.box, other.box) >= DUPLICATE_CONTAINMENT for other in kept):
+        if not any(duplicate(det, other) for other in kept):
             kept.append(det)
     return kept
 
