@@ -253,8 +253,7 @@ def test_hover_center_is_local_even_when_ab_views_are_linked(window, tmp_path):
     ab.linked.setChecked(True)
     a, b = ab.a_preview.canvas, ab.b_preview.canvas
     old_b, zoom = b.viewport_state(), a._zoom
-    assert not ab.a_panel.bird_hover_center.isChecked() and not ab.b_panel.bird_hover_center.isChecked()
-    ab.a_panel.bird_hover_center.setChecked(True)
+    assert not hasattr(ab.a_panel, "bird_hover_center") and not hasattr(ab.b_panel, "bird_hover_center")
     ab.a_preview.set_individual_bird_highlight((.6, .2, .8, .4))
     assert a._view_center_ratio() == pytest.approx((.7, .3))
     assert a._zoom == zoom and b.viewport_state() == old_b

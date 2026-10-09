@@ -1149,12 +1149,7 @@ class PreviewPanel(QWidget):
         self._source_bird_box = bird_box
         self._canvas.set_bird_box(map_bird_overlay(bird_box, self._raw_focus_crop_box, map_camera_focus_box))
 
-    def set_individual_bird_auto_center(self, enabled: bool) -> None:
-        if self._navigation_playback_active:
-            self._canvas.set_individual_highlight(None)
-        self._canvas.set_individual_auto_center(enabled)
-
-    def set_individual_bird_highlight(self, box, color="#00c8ff") -> None:
+    def set_individual_bird_highlight(self, box, color="#FF0000") -> None:
         self._canvas.set_individual_highlight(map_camera_focus_box(box, self._raw_focus_crop_box), color)
 
     def set_show_bird_box(self, enabled: bool) -> None:

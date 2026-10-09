@@ -5,11 +5,11 @@ from .qt_compat import QWidget, QLabel, pyqtSignal
 try:
     from PyQt6.QtCore import QEvent, Qt
     from PyQt6.QtGui import QPalette
-    from PyQt6.QtWidgets import QGridLayout
+    from PyQt6.QtWidgets import QGridLayout, QVBoxLayout
 except ImportError:  # pragma: no cover
     from PyQt5.QtCore import QEvent, Qt
     from PyQt5.QtGui import QPalette
-    from PyQt5.QtWidgets import QGridLayout
+    from PyQt5.QtWidgets import QGridLayout, QVBoxLayout
 
 _Qt = getattr(Qt, "AlignmentFlag", Qt)
 _ROLE = getattr(QPalette, "ColorRole", QPalette)
@@ -38,14 +38,16 @@ class TraceBirdList(QWidget):
         self.cells: List[tuple] = []  # per row: (swatch, label, value)
         self._detail_cells = []
         self._detail_children = set()
+        self._name_only_hover = False
         self._row_of: dict = {}  # cell widget -> row index (stale widgets of old rows are absent)
         self.hovered_row: Optional[int] = None
         self.setVisible(False)
 
-    def set_rows(self, rows, *, details=None) -> None:
-        """可选第四列放扩展信息；子控件共享本行悬停，Debug 的三列接口不变。"""
+    def set_rows(self, rows, *, details=None, name_only_hover=False) -> None:
+        """扩展信息可放第四列；逐只模式仅首行鸟名触发悬停，Debug 保留整行。"""
         self._set_hovered(None)
         self._clear_rows()
+        self._name_only_hover = name_only_hover
         self.rows, self.cells, self._row_of = list(rows), [], {}
         self._detail_cells = list(details or [])
         self._detail_children = set()
@@ -57,21 +59,37 @@ class TraceBirdList(QWidget):
             label.setTextFormat(getattr(Qt, "TextFormat", Qt).PlainText)
             label.setForegroundRole(_ROLE.PlaceholderText)
             label.setContentsMargins(0, 3, 12, 3)
-            value = QLabel(row.value, self)
+            name, _, secondary = row.value.partition('\n')
+            value = QLabel(name if name_only_hover else row.value, self)
             value.setTextFormat(getattr(Qt, "TextFormat", Qt).PlainText)
             value.setWordWrap(True)
             value.setContentsMargins(0, 3, 0, 3)
             for c, widget in enumerate((swatch, label, value)):
                 widget.setAlignment(_Qt.AlignLeft | _Qt.AlignTop)  # cells fill the row: the tint covers it whole
-                self.grid.addWidget(widget, r, c)
-                widget.installEventFilter(self)
-                self._row_of[widget] = r
+                if c == 2 and name_only_hover:
+                    container = QWidget(self)
+                    layout = QVBoxLayout(container)
+                    layout.setContentsMargins(0, 0, 0, 0)
+                    layout.setSpacing(0)
+                    layout.addWidget(value)
+                    if secondary:
+                        subtitle = QLabel(secondary, container)
+                        subtitle.setTextFormat(getattr(Qt, 'TextFormat', Qt).PlainText)
+                        subtitle.setWordWrap(True)
+                        layout.addWidget(subtitle)
+                    layout.addStretch(1)
+                    self.grid.addWidget(container, r, c)
+                else:
+                    self.grid.addWidget(widget, r, c)
+                if not name_only_hover or c == 2:
+                    widget.installEventFilter(self)
+                    self._row_of[widget] = r
             self.cells.append((swatch, label, value))
             if r < len(self._detail_cells):
                 detail = self._detail_cells[r]
                 detail.setObjectName("birdRowDetails")
                 self.grid.addWidget(detail, r, 3)
-                for child in [detail, *detail.findChildren(QWidget)]:
+                for child in ([] if name_only_hover else [detail, *detail.findChildren(QWidget)]):
                     child.installEventFilter(self)
                     self._row_of[child] = r
                     if child is not detail:
@@ -95,16 +113,16 @@ class TraceBirdList(QWidget):
         if r == self.hovered_row:
             return
         if self.hovered_row is not None and self.hovered_row < len(self.cells):
-            for widget in self.cells[self.hovered_row]:
+            for widget in (self.cells[self.hovered_row][2:] if self._name_only_hover else self.cells[self.hovered_row]):
                 widget.setStyleSheet("")
-            if self.hovered_row < len(self._detail_cells):
+            if not self._name_only_hover and self.hovered_row < len(self._detail_cells):
                 self._detail_cells[self.hovered_row].setStyleSheet("")
         self.hovered_row = r
         if r is not None:
             tint = self.palette().color(_ROLE.Highlight)
-            for widget in self.cells[r]:
+            for widget in (self.cells[r][2:] if self._name_only_hover else self.cells[r]):
                 widget.setStyleSheet(f"background: rgba({tint.red()}, {tint.green()}, {tint.blue()}, 90);")
-            if r < len(self._detail_cells):
+            if not self._name_only_hover and r < len(self._detail_cells):
                 # 仅染父容器，不能覆盖徽章自身的保护等级/稀有度颜色。
                 self._detail_cells[r].setStyleSheet(
                     f"QWidget#birdRowDetails {{ background: rgba({tint.red()}, {tint.green()}, {tint.blue()}, 90); }}")

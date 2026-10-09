@@ -12,10 +12,9 @@ except ImportError:  # pragma: no cover
 class IndividualBirdOverlayMixin:
     def __init__(self, *args, **kwargs):
         self._individual_highlight = None
-        self._individual_auto_center = False
         super().__init__(*args, **kwargs)
 
-    def set_individual_highlight(self, box, color="#00c8ff"):
+    def set_individual_highlight(self, box, color="#FF0000"):
         box = _valid_box(box)
         value = (box, color) if box else None
         if value != self._individual_highlight:
@@ -24,12 +23,8 @@ class IndividualBirdOverlayMixin:
         if value is not None:
             self._center_individual_bird()
 
-    def set_individual_auto_center(self, enabled):
-        self._individual_auto_center = bool(enabled)
-        self._center_individual_bird()
-
     def _individual_center(self):
-        if not self._individual_auto_center or self._individual_highlight is None or self._source_pixmap is None:
+        if self._individual_highlight is None or self._source_pixmap is None:
             return None
         (left, top, right, bottom), _color = self._individual_highlight
         return ((left + right) / 2, (top + bottom) / 2)
@@ -81,9 +76,6 @@ class IndividualBirdOverlayMixin:
         painter.save()
         try:
             painter.setClipRect(draw_rect.intersected(QRectF(content_rect)))
-            tint = QColor(color)
-            tint.setAlpha(45)
-            painter.fillRect(rect, tint)
             painter.setPen(QPen(QColor(color), 3))
             painter.setBrush(getattr(Qt, "BrushStyle", Qt).NoBrush)
             painter.drawRect(rect)

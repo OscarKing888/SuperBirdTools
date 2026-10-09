@@ -62,17 +62,17 @@ def test_badges_columns_and_hover_share_row(monkeypatch):
         assert '白鹭' in name.text() and '检测' not in name.text()
         assert detail.geometry().left() >= name.geometry().right()
         styles = rarity.styleSheet(), conservation.styleSheet()
-        for widget in (rarity, conservation, detail):
+        _APP.sendEvent(name, QEvent(QEvent.Type.Leave))
+        for widget in (rarity, conservation, detail, *panel.birds.cells[0][:2],
+                       *name.parentWidget().findChildren(type(name))):
+            if widget is name:
+                continue
             _APP.sendEvent(widget, QEvent(QEvent.Type.Enter))
-            assert events[-1].bird == 0
-            assert panel.birds.hovered_row == 0
+            assert panel.birds.hovered_row is None
             _APP.sendEvent(widget, QEvent(QEvent.Type.Leave))
-            if widget is not detail:
-                assert panel.birds.hovered_row == 0  # 进入同一信息列的留白仍保持悬停。
-                _APP.sendEvent(detail, QEvent(QEvent.Type.Leave))
-            assert events[-1] is None
         assert styles == (rarity.styleSheet(), conservation.styleSheet())
-        _APP.sendEvent(rarity, QEvent(QEvent.Type.Enter))
+        _APP.sendEvent(name, QEvent(QEvent.Type.Enter))
+        assert events[-1].bird == 0
         monkeypatch.setattr('SuperViewer.superviewer.rarity_badge.get_runtime_user_options',
                             lambda: {'rarity_badge_common_background': '#123456'})
         panel.set_metadata('鸟.jpg', saved)
@@ -136,9 +136,13 @@ def test_hover_ab_raw_upgrade_leave_switch_and_playback(tmp_path, monkeypatch):
         # 真正的 Enter / Leave 事件走共用 TraceBirdList.eventFilter。
         cell = birds.birds.cells[0][2]
         _APP.sendEvent(cell, QEvent(QEvent.Type.Enter))
-        assert '白鹭' in cell.text() and '95.0%' in cell.text()
+        assert cell.text() == '白鹭'
         assert left.canvas._individual_highlight[0] == (.2, .3, .7, .8)
-        assert left.canvas._individual_highlight[1] == '#6B7280'
+        assert left.canvas._individual_highlight[1] == '#FF0000'
+        monkeypatch.setattr('SuperViewer.superviewer.per_bird_identification_ui.get_runtime_user_options',
+                            lambda: {'bird_hover_color': '#00FF00'})
+        birds.refresh_badges()
+        assert left.canvas._individual_highlight[1] == '#00FF00'
         assert right.canvas._individual_highlight is None
         crop = (.1, .2, .9, .8)
         image = pix.toImage()
@@ -177,12 +181,13 @@ def test_highlight_draws_without_bird_toggle_and_is_excluded_from_export():
     pix.fill(QColor('black'))
     try:
         panel.set_quick_pixmap('bird.jpg', pix)
-        panel.set_individual_bird_highlight((.2, .2, .8, .8), '#00c8ff')
+        panel.set_individual_bird_highlight((.2, .2, .8, .8))
         rendered = pix.copy()
         painter = QPainter(rendered)
         panel.canvas._paint_overlay_layers(painter, QRectF(0, 0, 100, 100), rendered.rect())
         painter.end()
-        assert rendered.toImage().pixelColor(50, 50).blue() > 0
+        assert rendered.toImage().pixelColor(50, 50) == QColor('black')
+        assert rendered.toImage().pixelColor(20, 50) == QColor('#FF0000')
         assert rendered.toImage().pixelColor(5, 5) == QColor('black')
         assert panel.canvas.render_source_pixmap_with_overlays().toImage().pixelColor(50, 50) == QColor('black')
         assert panel.canvas._individual_highlight is not None
@@ -269,8 +274,9 @@ def test_hover_center_moves_only_matching_photo_and_preserves_scale(percent, tmp
         row = birds.birds.rows[0]
         before = left.canvas.viewport_state()
         hover.highlight(path, row)
-        assert left.canvas.viewport_state() == before  # 默认关闭。
-        toolbar.bird_hover_center.setChecked(True)
+        assert left.canvas._view_center_ratio() == pytest.approx((.45, .55))
+        assert left.canvas._zoom == before[0]
+        assert not hasattr(toolbar, "bird_hover_center")
         # 只重用已缓存鸟框，不应加载图片或查询元数据。
         monkeypatch.setattr(left, 'set_image', lambda *a, **kw: pytest.fail('hover must not load'))
         before_right = right.canvas.viewport_state()
@@ -291,12 +297,7 @@ def test_hover_center_moves_only_matching_photo_and_preserves_scale(percent, tmp
         hover.clear()
         assert left.canvas._individual_highlight is None
         assert left.canvas._view_center_ratio() == pytest.approx((.92, .07))
-        toolbar.bird_hover_center.setChecked(False)
-        state = left.canvas.viewport_state()
-        hover.highlight(path, row)
-        assert left.canvas.viewport_state() == state
         left.set_navigation_playback_active(True)
-        toolbar.bird_hover_center.setChecked(True)
         hover.refresh()
         assert left.canvas._individual_highlight is None
     finally:
@@ -314,7 +315,6 @@ def test_hover_center_reapplies_raw_mapping_after_upgrade_without_zoom_change(tm
         panel.set_quick_pixmap(path, pix, quick_size=2048)
         panel.set_keep_view_on_switch(False)
         panel.set_display_scale_percent(200)
-        panel.set_individual_bird_auto_center(True)
         birds.set_metadata(path, metadata())
         hover.highlight(path, birds.birds.rows[0])
         zoom = panel.canvas._zoom

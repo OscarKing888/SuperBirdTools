@@ -66,7 +66,7 @@ class ConservationBadge(MetadataBadge):
         self.set_value(str(category or "").split(" · ", 1)[0])
 
 
-class _ColorButton(QPushButton):
+class ColorButton(QPushButton):
     def __init__(self, color, changed, parent):
         super().__init__(parent)
         self._changed = changed
@@ -128,7 +128,7 @@ class MetadataBadgesForm(QWidget):
             text_row.addWidget(edit_button)
             grid.addLayout(text_row, row, 1)
             for col, field in ((2, "background"), (3, "foreground")):
-                button = _ColorButton(opts[prefix + field], self._refresh_previews, self)
+                button = ColorButton(opts[prefix + field], self._refresh_previews, self)
                 self.colors[(level, field)] = button
                 grid.addWidget(button, row, col)
             preview = MetadataBadge(self, kind=kind)

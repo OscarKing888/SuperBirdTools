@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import replace
+from app_common.superviewer_user_options import KEY_BIRD_HOVER_COLOR, get_runtime_user_options
 
 from .bird_result_list import TraceBirdList
 from .bird_identification import BirdIDOptions
@@ -177,7 +178,7 @@ class IndividualBirdsPanel(QWidget):
                 color = rarity_badge_style(species['gbif_rarity_100'])[1]
                 rows.append(TraceBirdRow(f"鸟 #{n + 1}", value, color,
                                          tuple(item["box"]), n))
-        self.birds.set_rows(rows, details=details)
+        self.birds.set_rows(rows, details=details, name_only_hover=True)
         for row, cells in enumerate(self.birds.cells):
             label = cells[2]
             label.setContextMenuPolicy(getattr(Qt, 'ContextMenuPolicy', Qt).CustomContextMenu)
@@ -197,15 +198,15 @@ class IndividualBirdsPanel(QWidget):
     def refresh_badges(self):
         for badge in self.birds.findChildren(MetadataBadge):
             badge.refresh_style()
-        # 用户修改稀有度配色后，色块和正在悬停的预览框也同步刷新。
+        # 色块仍跟随稀有度；预览框采用独立的用户颜色。
         for index, (item, row) in enumerate(zip(self._items, self.birds.rows)):
             color = rarity_badge_style(individual_species_metadata(item)['gbif_rarity_100'])[1]
             if color != row.color:
                 row = replace(row, color=color)
                 self.birds.rows[index] = row
                 self.birds.cells[index][0].setText(f'<span style="color:{color}">■</span>')
-                if self.birds.hovered_row == index:
-                    self.hovered.emit(self.path, row)
+        if self.birds.hovered_row is not None:
+            self.hovered.emit(self.path, self.birds.rows[self.birds.hovered_row])
 
 
 class IndividualBirdHover(QObject):
@@ -234,8 +235,9 @@ class IndividualBirdHover(QObject):
 
     def refresh(self, *_):
         key = lambda p: os.path.normcase(os.path.abspath(p)) if p else ""
+        color = get_runtime_user_options()[KEY_BIRD_HOVER_COLOR]
         for panel in self.panels:
             valid = self.row is not None and key(panel.source_identity_path()) == key(self.source)
             valid = valid and not panel._navigation_playback_active
             panel.set_individual_bird_highlight(self.row.box if valid else None,
-                                              self.row.color if valid else "#00c8ff")
+                                              color)

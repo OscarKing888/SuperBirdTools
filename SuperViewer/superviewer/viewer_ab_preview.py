@@ -72,12 +72,6 @@ class ViewerViewportPanel(QWidget):
         self.overlays = overlays if overlays is not None else ViewportOverlayTools()
         row.addWidget(self.overlays)
         row.addWidget(self.center)
-        self.bird_hover_center = ToggleToolButton("悬停居中", self.toolbar)
-        self.bird_hover_center.setChecked(False)
-        self.bird_hover_center.setToolTip("悬停逐只识别列表时，将对应鸟体移到预览中心，保持当前缩放比例；仅影响本侧视口。")
-        self.bird_hover_center.setAccessibleName("悬停鸟体自动居中")
-        self.bird_hover_center.toggled.connect(preview.set_individual_bird_auto_center)
-        row.addWidget(self.bird_hover_center)
         self.fit = ToggleToolButton("适应窗口")
         self.fit.setCheckable(False)
         iconize(self.fit, "fit", "适应窗口")
@@ -160,7 +154,6 @@ class ViewerViewportPanel(QWidget):
         self.zoom_button.setEnabled(available)
         self.overlays.setEnabled(not is_video(path))
         self.center.setEnabled(available)
-        self.bird_hover_center.setEnabled(available)
 
     def _cycle_preview_source(self):
         raw = Path(self.preview.source_identity_path()).suffix.lower() in RAW_EXTENSIONS

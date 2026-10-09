@@ -59,7 +59,16 @@ def test_real_options_pages_resize_and_cancel_without_writes(tmp_path, monkeypat
                 assert dialog.buttons.geometry().bottom() < dialog.height()
         if dialog_class is SuperViewerUserOptionsDialog:
             dialog._spin_thumb_loader_workers.setValue(3)
+            from PyQt6.QtCore import Qt
+            from PyQt6.QtGui import QColor
+            from PyQt6.QtTest import QTest
+            from PyQt6.QtWidgets import QColorDialog
+            monkeypatch.setattr(QColorDialog, 'getColor', lambda *a: QColor('#12AB34'))
+            dialog.tabs.setCurrentIndex(0)
+            dialog._bird_hover_color.setFocus()
+            QTest.keyClick(dialog._bird_hover_color, Qt.Key.Key_Space)
             before = dialog.selected_options()
+            assert before['bird_hover_color'] == '#12AB34'
             assert before['thumbnail_loader_workers'] == 3
             for group in dialog.findChildren(CollapsibleSection):
                 state = group.is_expanded()

@@ -11,6 +11,7 @@ from app_common.superviewer_user_options import (
     BIRD_SHARPNESS_PARAM_KEYS,
     KEY_NAVIGATION_FPS_OPTIONS,
     KEY_PERF_PROBES_ENABLED,
+    KEY_BIRD_HOVER_COLOR,
     PERSISTENT_THUMB_SIZE_LEVELS,
     USER_OPTIONS_FILENAME,
     get_runtime_user_options,
@@ -139,6 +140,15 @@ class SuperViewerUserOptionsDialog(SettingsDialog):
         self._chk_keep_view.setToolTip("预览图更换时保持当前缩放比例和视图中心（不自动复位为适窗）。")
         grid.addWidget(self._chk_keep_view, row, 1)
         grid.addWidget(QLabel("默认开启"), row, 2)
+
+        row += 1
+        from .rarity_badge import ColorButton
+        self._bird_hover_color = ColorButton(opts[KEY_BIRD_HOVER_COLOR], lambda: None, self)
+        self._bird_hover_color.setAccessibleName("鸟名悬停框颜色")
+        self._bird_hover_color.setToolTip("悬停逐只识别的鸟名时，自动居中并绘制空心框；保持当前缩放比例。")
+        grid.addWidget(QLabel("鸟名悬停框颜色"), row, 0)
+        grid.addWidget(self._bird_hover_color, row, 1)
+        grid.addWidget(QLabel("默认红色"), row, 2)
 
         grid = grid_group("诊断")
         row = 0
@@ -305,6 +315,7 @@ class SuperViewerUserOptionsDialog(SettingsDialog):
             "key_navigation_fps": int(self._combo_key_navigation_fps.currentData()),
             "keep_view_on_switch": int(self._chk_keep_view.isChecked()),
             KEY_PERF_PROBES_ENABLED: int(self._chk_perf_probes.isChecked()),
+            KEY_BIRD_HOVER_COLOR: self._bird_hover_color.color,
             "denoise_output_mode": str(self._combo_denoise_mode.currentData()),
             "denoise_subdir": self._edit_denoise_subdir.text().strip(),
             "denoise_output_directory": self._edit_denoise_directory.text().strip(),
