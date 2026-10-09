@@ -163,3 +163,86 @@ def test_detection_override_is_independent_and_can_return_to_global():
         assert make_analyzer(params, options=dialog.per_bird_options()).params.detect_conf_percent == 25
     finally:
         dialog.close()
+
+
+@pytest.mark.parametrize('percent', [50, 200])
+def test_hover_center_moves_only_matching_photo_and_preserves_scale(percent, tmp_path, monkeypatch):
+    from SuperViewer.superviewer.viewer_ab_preview import ViewerViewportPanel
+    path, other = str(tmp_path / '群鸟.jpg'), str(tmp_path / '另一张.jpg')
+    left, right = PreviewPanel(), PreviewPanel()
+    from SuperViewer.superviewer.video_preview import MediaPreviewPanel
+    left.close()
+    left = MediaPreviewPanel()
+    toolbar = ViewerViewportPanel('A', left)
+    birds = IndividualBirdsPanel()
+    hover = IndividualBirdHover(SimpleNamespace(individual_birds=birds), (left, right))
+    pix = QPixmap(1200, 800); pix.fill(QColor('black'))
+    for panel, photo in ((left, path), (right, other)):
+        panel.resize(600, 420); panel.show()
+        panel.set_quick_pixmap(photo, pix)
+        panel.set_display_scale_percent(percent)
+    _APP.processEvents()
+    try:
+        birds.set_metadata(path, metadata()); birds.show(); _APP.processEvents()
+        row = birds.birds.rows[0]
+        before = left.canvas.viewport_state()
+        hover.highlight(path, row)
+        assert left.canvas.viewport_state() == before  # 默认关闭。
+        toolbar.bird_hover_center.setChecked(True)
+        # 只重用已缓存鸟框，不应加载图片或查询元数据。
+        monkeypatch.setattr(left, 'set_image', lambda *a, **kw: pytest.fail('hover must not load'))
+        before_right = right.canvas.viewport_state()
+        scale, zoom = left.current_display_scale_percent(), left.canvas._zoom
+        # 边缘鸟需要允许留白，不能用常规拖动边界把居中截断。
+        from dataclasses import replace
+        edge = replace(row, box=(.86, .02, .98, .12))
+        hover.highlight(path, edge)
+        assert left.canvas._view_center_ratio() == pytest.approx((.92, .07))
+        assert left.current_display_scale_percent() == pytest.approx(scale)
+        assert left.canvas._zoom == zoom
+        assert right.canvas.viewport_state() == before_right
+        # 焦点刷新不能抢走悬停定位，缩放仍不变。
+        left.set_auto_focus_center(True)
+        left.set_focus_box((.1, .6, .2, .7))
+        assert left.canvas._view_center_ratio() == pytest.approx((.92, .07))
+        assert left.current_display_scale_percent() == pytest.approx(scale)
+        hover.clear()
+        assert left.canvas._individual_highlight is None
+        assert left.canvas._view_center_ratio() == pytest.approx((.92, .07))
+        toolbar.bird_hover_center.setChecked(False)
+        state = left.canvas.viewport_state()
+        hover.highlight(path, row)
+        assert left.canvas.viewport_state() == state
+        left.set_navigation_playback_active(True)
+        toolbar.bird_hover_center.setChecked(True)
+        hover.refresh()
+        assert left.canvas._individual_highlight is None
+    finally:
+        for widget in (birds, toolbar, right): widget.close()
+        left.shutdown(); right.shutdown()
+
+
+def test_hover_center_reapplies_raw_mapping_after_upgrade_without_zoom_change(tmp_path):
+    path = str(tmp_path / '鸟.ARW')
+    panel = PreviewPanel(); panel.resize(640, 480); panel.show(); _APP.processEvents()
+    birds = IndividualBirdsPanel()
+    hover = IndividualBirdHover(SimpleNamespace(individual_birds=birds), (panel,))
+    try:
+        pix = QPixmap(1200, 800); pix.fill(QColor('black'))
+        panel.set_quick_pixmap(path, pix, quick_size=2048)
+        panel.set_keep_view_on_switch(False)
+        panel.set_display_scale_percent(200)
+        panel.set_individual_bird_auto_center(True)
+        birds.set_metadata(path, metadata())
+        hover.highlight(path, birds.birds.rows[0])
+        zoom = panel.canvas._zoom
+        crop = (.1, .2, .9, .8)
+        image = pix.toImage(); image.setText(RAW_FOCUS_CROP_KEY, json.dumps(crop))
+        panel._on_full_preview_loaded(panel._preview_request_token, path, image, 1)
+        mapped = map_camera_focus_box((.2, .3, .7, .8), crop)
+        assert panel.canvas._view_center_ratio() == pytest.approx(((mapped[0]+mapped[2])/2, (mapped[1]+mapped[3])/2))
+        assert panel.canvas._zoom == zoom
+        panel.clear_image()
+        assert panel.canvas._individual_highlight is None
+    finally:
+        panel.shutdown(); panel.close(); birds.close()

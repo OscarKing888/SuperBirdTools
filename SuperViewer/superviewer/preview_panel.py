@@ -63,6 +63,7 @@ class ViewerPreviewCanvas(IndividualBirdOverlayMixin, BirdBodyOverlayMixin, _Foc
 
     viewport_interacted = pyqtSignal()
     viewport_content_changed = pyqtSignal()
+    individual_centered = pyqtSignal()  # 仅本视口平移；A/B 同步只更新基准，不传播移动。
 
     def fit_to_window(self) -> None:
         pixmap = self._source_pixmap
@@ -616,6 +617,7 @@ class PreviewPanel(QWidget):
         layout.setSpacing(4)
         self._canvas = ViewerPreviewCanvas(self, placeholder_text="未选择图片")
         self._canvas.viewport_interacted.connect(self._cancel_first_image_fit)
+        self._canvas.individual_centered.connect(self._cancel_first_image_fit)
         if hasattr(self._canvas, "set_keep_view_on_switch"):
             self._canvas.set_keep_view_on_switch(self._keep_view_on_switch)
         if hasattr(self._canvas, "display_scale_percent_changed"):
@@ -1146,6 +1148,11 @@ class PreviewPanel(QWidget):
         """One camera-frame box, or several (flock, main bird first)."""
         self._source_bird_box = bird_box
         self._canvas.set_bird_box(map_bird_overlay(bird_box, self._raw_focus_crop_box, map_camera_focus_box))
+
+    def set_individual_bird_auto_center(self, enabled: bool) -> None:
+        if self._navigation_playback_active:
+            self._canvas.set_individual_highlight(None)
+        self._canvas.set_individual_auto_center(enabled)
 
     def set_individual_bird_highlight(self, box, color="#00c8ff") -> None:
         self._canvas.set_individual_highlight(map_camera_focus_box(box, self._raw_focus_crop_box), color)

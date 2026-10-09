@@ -238,3 +238,28 @@ def test_active_a_uses_normal_loading_policy_without_touching_b(window, tmp_path
         assert not window.preview_a._full_preview_loaded
         assert window.preview_a._full_preview_timer.isActive()
         window.preview_a._full_preview_timer.stop()
+
+
+def test_hover_center_is_local_even_when_ab_views_are_linked(window, tmp_path):
+    import pytest
+    first, second = tmp_path / '鸟群A.jpg', tmp_path / '鸟群B.jpg'
+    for path in (first, second):
+        Image.new('RGB', (1200, 800), 'gray').save(path)
+    window.show(); window._on_file_selected_from_list(str(first))
+    ab = window.ab_preview; ab.enabled.setChecked(True)
+    ab.activate('a'); window._on_file_selected_from_list(str(second))
+    for panel in (ab.a_preview, ab.b_preview):
+        panel.set_display_scale_percent(200)
+    ab.linked.setChecked(True)
+    a, b = ab.a_preview.canvas, ab.b_preview.canvas
+    old_b, zoom = b.viewport_state(), a._zoom
+    assert not ab.a_panel.bird_hover_center.isChecked() and not ab.b_panel.bird_hover_center.isChecked()
+    ab.a_panel.bird_hover_center.setChecked(True)
+    ab.a_preview.set_individual_bird_highlight((.6, .2, .8, .4))
+    assert a._view_center_ratio() == pytest.approx((.7, .3))
+    assert a._zoom == zoom and b.viewport_state() == old_b
+    assert ab.view_link.states[a] == a.viewport_state()
+    ab.a_preview.set_individual_bird_highlight(None)
+    a.apply_viewport_state((zoom, (.72, .32)))
+    a.viewport_interacted.emit()
+    assert b._view_center_ratio() == pytest.approx((old_b[1][0] + .02, old_b[1][1] + .02))
