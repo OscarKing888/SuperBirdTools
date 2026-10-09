@@ -39,7 +39,7 @@ def test_settings_defaults_and_adjustments():
         dialog.close()
 
 
-def test_badges_columns_and_hover_share_row():
+def test_badges_columns_and_hover_share_row(monkeypatch):
     from SuperViewer.superviewer.rarity_badge import RarityBadge, ConservationBadge
     panel = IndividualBirdsPanel()
     saved = metadata()
@@ -55,6 +55,8 @@ def test_badges_columns_and_hover_share_row():
         rarity = panel.findChild(RarityBadge)
         conservation = panel.findChild(ConservationBadge)
         assert rarity.text() == '普通' and conservation.text() == 'EN · 濒危'
+        assert panel.birds.rows[0].color == '#64748B'
+        assert '#64748B' in panel.birds.cells[0][0].text()
         name = panel.birds.cells[0][2]
         detail = panel.birds.grid.itemAtPosition(0, 3).widget()
         assert '白鹭' in name.text() and '检测' not in name.text()
@@ -70,6 +72,12 @@ def test_badges_columns_and_hover_share_row():
                 _APP.sendEvent(detail, QEvent(QEvent.Type.Leave))
             assert events[-1] is None
         assert styles == (rarity.styleSheet(), conservation.styleSheet())
+        _APP.sendEvent(rarity, QEvent(QEvent.Type.Enter))
+        monkeypatch.setattr('SuperViewer.superviewer.rarity_badge.get_runtime_user_options',
+                            lambda: {'rarity_badge_common_background': '#123456'})
+        panel.set_metadata('鸟.jpg', saved)
+        assert events[-1].color == '#123456'
+        assert '#123456' in rarity.styleSheet() and '#123456' in panel.birds.cells[0][0].text()
         # 全图元数据不得为缺失的逐只数据提供徽章。
         missing = metadata()
         missing.update(gbif_rarity_100=90, iucn_category='CR')
@@ -77,6 +85,7 @@ def test_badges_columns_and_hover_share_row():
         badges = panel.birds._detail_cells[0]
         assert badges.findChild(RarityBadge).text() == '未知'
         assert badges.findChild(ConservationBadge).text() == '未知'
+        assert panel.birds.rows[0].color == '#6B7280'
     finally:
         panel.close()
 
@@ -99,6 +108,7 @@ def test_hover_ab_raw_upgrade_leave_switch_and_playback(tmp_path, monkeypatch):
         _APP.sendEvent(cell, QEvent(QEvent.Type.Enter))
         assert '白鹭' in cell.text() and '95.0%' in cell.text()
         assert left.canvas._individual_highlight[0] == (.2, .3, .7, .8)
+        assert left.canvas._individual_highlight[1] == '#6B7280'
         assert right.canvas._individual_highlight is None
         crop = (.1, .2, .9, .8)
         image = pix.toImage()

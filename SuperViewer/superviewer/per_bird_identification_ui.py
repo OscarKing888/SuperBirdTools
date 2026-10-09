@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import os
+from dataclasses import replace
 
 from .bird_result_list import TraceBirdList
 from .bird_identification import BirdIDOptions
 from .per_bird_identification import PerBirdOptions, read_individuals, individual_species_metadata
-from .rarity_badge import RarityBadge, ConservationBadge, MetadataBadge
+from .rarity_badge import RarityBadge, ConservationBadge, MetadataBadge, rarity_badge_style
 from .qt_compat import QLabel, QVBoxLayout, QHBoxLayout, QWidget, pyqtSignal
 try:
     from PyQt6.QtCore import QObject, Qt
@@ -134,7 +135,7 @@ class IndividualBirdsPanel(QWidget):
         self.path, self._items = path, items
         rows, details = [], []
         if items:
-            from bird_sharpness.trace import BIRD_COLORS, TraceBirdRow, hex_color
+            from bird_sharpness.trace import TraceBirdRow
             for item in items:
                 n = item["index"]
                 x0, y0, x1, y1 = item["box_px"]
@@ -167,7 +168,8 @@ class IndividualBirdsPanel(QWidget):
                 layout.addWidget(label)
                 layout.addStretch(1)
                 details.append(detail)
-                rows.append(TraceBirdRow(f"鸟 #{n + 1}", value, hex_color(BIRD_COLORS[n % len(BIRD_COLORS)]),
+                color = rarity_badge_style(species['gbif_rarity_100'])[1]
+                rows.append(TraceBirdRow(f"鸟 #{n + 1}", value, color,
                                          tuple(item["box"]), n))
         self.birds.set_rows(rows, details=details)
         self.empty.setVisible(not rows)
@@ -175,6 +177,15 @@ class IndividualBirdsPanel(QWidget):
     def refresh_badges(self):
         for badge in self.birds.findChildren(MetadataBadge):
             badge.refresh_style()
+        # 用户修改稀有度配色后，色块和正在悬停的预览框也同步刷新。
+        for index, (item, row) in enumerate(zip(self._items, self.birds.rows)):
+            color = rarity_badge_style(individual_species_metadata(item)['gbif_rarity_100'])[1]
+            if color != row.color:
+                row = replace(row, color=color)
+                self.birds.rows[index] = row
+                self.birds.cells[index][0].setText(f'<span style="color:{color}">■</span>')
+                if self.birds.hovered_row == index:
+                    self.hovered.emit(self.path, row)
 
 
 class IndividualBirdHover(QObject):
