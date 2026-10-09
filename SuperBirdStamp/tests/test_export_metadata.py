@@ -1,6 +1,8 @@
 """真实 EXIF 写入/读回、中文保留、统一出口与 sidecar 配对。"""
 from pathlib import Path
+from io import BytesIO
 import json
+import struct
 import threading
 from types import SimpleNamespace
 
@@ -8,7 +10,7 @@ import pytest
 from PIL import Image, ImageOps
 
 from app_common.exif_io import get_exiftool_executable_path
-from app_common.exif_io.exiftool_runner import run_exiftool
+from app_common.exif_io.exiftool_runner import run_exiftool, run_exiftool_once
 from birdstamp import export_metadata
 from birdstamp.export_metadata import save_export_image
 from test_dejitter_tab import sequence
@@ -73,6 +75,59 @@ def test_tiff_exif_is_copied_to_png(tmp_path):
         exiftool('-overwrite_original', '-ISO=320', '-Make=NIKON', '-Model=Z9', str(source))
         save_export_image(image, tmp_path / 'out.png', source_path=source, format='PNG')
     assert metadata(tmp_path / 'out.png')['ExifIFD:ISO'] == 320
+
+
+@pytest.mark.parametrize('suffix,format', [('png', 'PNG'), ('jpg', 'JPEG')])
+@pytest.mark.parametrize('endian', ['<', '>'])
+def test_truncated_ifd1_is_rebuilt_without_losing_original_metadata(
+        original, tmp_path, suffix, format, endian):
+    source = tmp_path / '缩略图目录损坏.jpg'
+    with Image.open(original) as photo:
+        exif = photo.getexif()
+        exif.endian = endian
+        exif[271] = 'Unknown camera'
+        exif[65001] = b'private EXIF payload'
+        exif.get_ifd(34665)[37500] = b'opaque maker note payload\0\x01\x02'
+        # 切换 TIFF 字节序时同步编码 Unicode 注释，避免样本本身产生乱码。
+        exif.get_ifd(34665)[37510] = b'UNICODE\0' + '小勺子，原始拍摄信息。'.encode(
+            'utf-16-le' if endian == '<' else 'utf-16-be')
+        payload = bytearray(exif.tobytes())
+        # 只破坏缩略图 IFD1：声明两条记录，实际只剩六字节，复现 Truncated IFD1。
+        base = 6  # Exif\0\0 前缀之后才是 TIFF 偏移原点。
+        ifd0 = base + struct.unpack_from(endian + 'I', payload, base + 4)[0]
+        count = struct.unpack_from(endian + 'H', payload, ifd0)[0]
+        struct.pack_into(endian + 'I', payload, ifd0 + 2 + count * 12, len(payload) - base)
+        payload.extend(struct.pack(endian + 'H', 2) + b'\0' * 6)
+        photo.save(source, exif=bytes(payload))
+    before = source.read_bytes()
+    target = tmp_path / f'修复导出.{suffix}'
+    with Image.new('RGB', (320, 240), '#6395bd') as rendered:
+        save_export_image(rendered, target, source_path=source, format=format)
+    expected, actual = metadata(source), metadata(target)
+    for tag in ('IFD0:Make', 'IFD0:Model', 'ExifIFD:ISO', 'ExifIFD:ExposureTime',
+                'ExifIFD:DateTimeOriginal', 'ExifIFD:UserComment',
+                'GPS:GPSLatitude', 'GPS:GPSLongitude'):
+        assert actual[tag] == expected[tag], tag
+    assert actual['ExifIFD:UserComment'] == '小勺子，原始拍摄信息。'
+    assert actual['IFD0:Orientation'] == actual['IFD1:Orientation'] == 1
+    assert actual['ExifIFD:ExifImageWidth'] == 320
+    assert actual['ExifIFD:ExifImageHeight'] == 240
+    assert actual['IFD1:ImageWidth'] == 160 and actual['IFD1:ImageHeight'] == 120
+    assert 'IFD1' not in actual.get('ExifTool:Warning', '')
+    with Image.open(target) as exported:
+        assert exported.size == (320, 240)
+        assert exported.getexif()[65001] == b'private EXIF payload'
+        assert exported.getexif().get_ifd(34665)[37500] == b'opaque maker note payload\0\x01\x02'
+    result = run_exiftool_once(
+        [get_exiftool_executable_path(), '-b', '-ThumbnailImage', str(target)],
+        capture_output=True, timeout=30,
+    )
+    assert result.returncode == 0, result.stderr
+    with Image.open(BytesIO(result.stdout)) as thumbnail:
+        assert thumbnail.size == (160, 120)
+        assert thumbnail.getpixel((80, 60)) == pytest.approx((99, 149, 189), abs=3)
+    assert source.read_bytes() == before
+    assert not list(tmp_path.glob('.birdstamp-export-*'))
 
 
 def test_metadata_failure_keeps_existing_output_and_cleans_temporary(original, tmp_path, monkeypatch):

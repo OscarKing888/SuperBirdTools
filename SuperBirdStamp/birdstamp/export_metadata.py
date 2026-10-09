@@ -52,8 +52,10 @@ def copy_export_metadata(source: Path, target: Path, image: Image.Image) -> None
         width, height = image.size
         # 块复制与逐标签修改必须分成两次调用，否则 EXIF 块会覆盖新方向/尺寸。
         # 未识别的 MakerNotes 按原始块保留，允许 ExifTool 不解析其内部标签。
+        # 成片缩略图要重建整个 IFD1；只替换 ThumbnailImage 仍会解析原图的
+        # 损坏目录并报 Truncated IFD1，且可能留下原缩略图的旧布局标签。
         _run(executable, [
-            '-m', '-IFD0:Orientation#=1', '-XMP-tiff:Orientation#=1',
+            '-m', '-IFD1:all=', '-IFD0:Orientation#=1', '-XMP-tiff:Orientation#=1',
             f'-IFD0:ImageWidth={width}', f'-IFD0:ImageHeight={height}',
             f'-ExifIFD:ExifImageWidth={width}', f'-ExifIFD:ExifImageHeight={height}',
             f'-XMP-tiff:ImageWidth={width}', f'-XMP-tiff:ImageHeight={height}',
