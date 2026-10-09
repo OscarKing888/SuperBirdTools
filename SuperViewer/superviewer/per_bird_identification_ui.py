@@ -33,7 +33,8 @@ class PerBirdSettingsDialog(QDialog):
         layout = QVBoxLayout(page)
         label = QLabel("逐只裁图后交给 SuperPicky 识鸟；可在「前置检测」覆盖清晰度参数。\n"
                        "宽或高低于设置值的鸟框不送识别；尺寸按所选图像来源的原尺寸计算。\n"
-                       "裁图关闭服务端二次 YOLO 和 GPS 过滤；鸟种及区域保存到独立 XMP 列表。", self)
+                       "裁图关闭服务端二次 YOLO 和 GPS 过滤；鸟种及区域保存到独立 XMP 列表。\n"
+                       "多张照片按顺序排队，所有结果汇总在同一个表格窗口。", self)
         label.setWordWrap(True)
         layout.addWidget(label)
         from .bird_sharpness_params_form import params_summary

@@ -338,7 +338,9 @@ CLI 与 GUI 共用核心：在仓库根使用共享 `.venv` 执行 `python -m Su
 
 服务接口及返回字段限制、使用和验证见 [识鸟说明](../../docs/bird_identification.md)。
 
-“逐只识别”由同一 `BirdIDController` / `BirdIDWorker` 管理设置、任务和关闭生命周期。
+“逐只识别”由同一 `BirdIDController` / `BirdIDWorker` 管理设置、任务和关闭生命周期。多选及当前目录/递归目录一次入队，按照片顺序执行，复用一个 analyzer；SuperPicky 分类器的 `_CLASSIFIER_INFER_LOCK` 串行推理，因此不并发提交。
+结果经 32 项有界队列交付，控制器定时按 8 张/8 ms 预算增量刷新，真实 `QThread.finished` 后继续排空结果才释放 worker。停止/关闭不启动后续照片，已保存结果保留。
+[`PerBirdResultsTable / PerBirdResultsModel`](../superviewer/per_bird_results_table.py) 扩展原 `BirdIDResultsTable` 的模型注入与照片分组插入接口，复用预览委托、滚动和缩略图生命周期，每只鸟一行、编号保持检测身份；待确定或失败照片组置顶，隐藏整图候选采纳列。核心 `BirdIDResult.response["individuals"]` 携带本轮逐只记录（跳过时读已有列表），失败/取消标明未保存；空结果保留照片状态行。整批只开一个结果窗，顶部汇总照片及已保存鸟体状态。回归见 `test_per_bird_results_table.py`、`test_bird_identification_controller.py` 的多选/目录范围、有界交付与停止测试。
 设置窗口的「前置检测」复用 `AnalysisParamsForm`，通过 `PerBirdOptions.analysis_overrides` 独立覆盖模型、检测/去重/排除等参数（会话内保留，关闭覆盖即沿用全局）；`make_analyzer()` 统一合并并强制不限制鸟数/清晰度最小鸟框，参数随结果保存 XMP，不改全局设置。
 无 Qt 核心 [`per_bird_identification.py`](../superviewer/per_bird_identification.py) 调用现有
 `BirdSharpnessAnalyzer.analyze()` 的最终 `birds`，按原尺寸最小宽高过滤，逐只临时 JPEG 调用服务，

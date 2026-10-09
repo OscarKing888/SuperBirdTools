@@ -26,9 +26,12 @@ class ResultEntry:
     stale: bool = False
     pending_index: int | None = None
     sequence: int = 0
+    individuals: tuple = ()
 
     @property
     def needs_confirmation(self):
+        if self.individuals:
+            return any(item.get("status") in {"candidate", "failed"} for item in self.individuals)
         return not self.stale and (self.result.status == "candidate" or bool(self.error)
                                    or self.result.candidates_missing)
 
@@ -37,6 +40,7 @@ class BirdIDResultsModel(QAbstractTableModel):
     HEADERS = ("照片预览", "状态", "操作", "候选", "中文鸟名", "置信度", "英文鸟名", "拼音", "学名",
                "稀有度", "保护等级", "说明", "地理筛选提示", "定位 / 检测信息", "分组")
     ACTION_COLUMN = 2
+    INITIAL_COLUMN = 2
     GROUP_COLUMN = 14
     STATUS = {"success": "已确认", "candidate": "待确定", "skipped": "跳过", "failed": "失败", "cancelled": "取消"}
 
@@ -68,10 +72,13 @@ class BirdIDResultsModel(QAbstractTableModel):
             return self.HEADERS[section] if orientation == Qt.Orientation.Horizontal else section + 1
 
     def append_result(self, result):
-        count = max(1, len(result.response.get("results", [])))
         candidates = result.response.get("results", [])
         order = tuple(sorted(range(len(candidates)), key=lambda i: -float(candidates[i]['confidence']))) or (0,)
-        entry = ResultEntry(result, 0, count, order, sequence=len(self.entries))
+        return self._append_entry(result, order)
+
+    def _append_entry(self, result, order, *, individuals=()):
+        count = len(order)
+        entry = ResultEntry(result, 0, count, order, sequence=len(self.entries), individuals=individuals)
         position = next((i for i, existing in enumerate(self.entries)
                          if self._entry_key(existing) > self._entry_key(entry)), len(self.entries))
         entry.first_row = sum(existing.row_count for existing in self.entries[:position])
@@ -269,14 +276,14 @@ class AdoptDelegate(QStyledItemDelegate):
 class BirdIDResultsTable(QTableView):
     adopt_requested = pyqtSignal(object, int)
 
-    def __init__(self, parent=None, *, thumbnails=None):
+    def __init__(self, parent=None, *, thumbnails=None, model_type=BirdIDResultsModel):
         super().__init__(parent)
         self._thumbnails = thumbnails
         self._preview_timer = QTimer(self)
         self._preview_timer.setSingleShot(True)
         self._preview_timer.setInterval(0)
         self._preview_timer.timeout.connect(self._update_previews)
-        self.results = BirdIDResultsModel(self, thumbnails=thumbnails)
+        self.results = model_type(self, thumbnails=thumbnails)
         self.setModel(self.results)
         self.results.rowsMoved.connect(self._schedule_previews)
         self.setAccessibleName("识鸟结果表格")
@@ -355,7 +362,7 @@ class BirdIDResultsTable(QTableView):
         if was_empty:
             chosen = result.accepted_index if result.accepted_index is not None else entry.candidate_indices[0]
             self.setCurrentIndex(self.results.index(entry.first_row + entry.candidate_indices.index(chosen),
-                                                    self.results.ACTION_COLUMN))
+                                                    self.results.INITIAL_COLUMN))
         self._schedule_previews()
         return entry
 

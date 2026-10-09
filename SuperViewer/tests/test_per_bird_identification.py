@@ -234,9 +234,11 @@ def test_one_bird_failure_continues_and_all_failure_preserves(photo, monkeypatch
     result = core.identify_individuals(photo, client(monkeypatch, recognize), analyzer)
     assert result.status == "partial", result.message
     assert [b["status"] for b in core.read_individuals(result.updates)] == ["failed", "confirmed"]
+    assert result.response["individuals"] == core.read_individuals(result.updates)
     old = photo.with_suffix(".xmp").read_bytes()
     result = core.identify_individuals(photo, client(monkeypatch, lambda _: {"success": False, "error": "失败"}), analyzer)
     assert result.status == "failed" and photo.with_suffix(".xmp").read_bytes() == old
+    assert [bird["status"] for bird in result.response["individuals"]] == ["failed", "failed"]
 
 
 def test_no_birds_replaces_old_list_skip_and_corrupt_xmp(photo, monkeypatch):
@@ -245,8 +247,10 @@ def test_no_birds_replaces_old_list_skip_and_corrupt_xmp(photo, monkeypatch):
     analyzer = Analyzer([])
     result = core.identify_individuals(photo, client(monkeypatch, skip_existing=True), analyzer)
     assert result.status == "skipped" and analyzer.calls == 0
+    assert result.response["individuals"][0]["cn_name"] == "白鹭"
     result = core.identify_individuals(photo, obj, analyzer)
     assert result.status == "success" and json.loads(PhotoMetaDataXMP().read(str(photo))[core.FIELD]) == []
+    assert result.response["individuals"] == []
     photo.with_suffix(".xmp").write_text("<broken", encoding="utf-8")
     assert core.identify_individuals(photo, obj, analyzer).status == "failed"
     assert photo.with_suffix(".xmp").read_text() == "<broken"

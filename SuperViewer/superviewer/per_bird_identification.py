@@ -81,6 +81,7 @@ def identify_individuals(source, client, analyzer, options=PerBirdOptions(), *, 
     """每张照片一次提交。取消/过期/全失败保留旧列表，单只失败不阻止其它鸟。"""
     source = os.path.normpath(os.path.abspath(source))
     store = PhotoMetaDataXMP()
+    records = []
     try:
         options.validate()
         client.check_cancelled()
@@ -93,8 +94,11 @@ def identify_individuals(source, client, analyzer, options=PerBirdOptions(), *, 
             before = _fingerprint(source), _fingerprint(sidecar)
             if store._load_or_create_xmp_tree(sidecar) is None:
                 raise BirdIDError("已有 XMP 损坏，未写入逐只识别结果")
-            if client.options.skip_existing and FIELD in store.read(source):
-                return BirdIDResult(source, "skipped", "已有逐只识别记录")
+            if client.options.skip_existing:
+                metadata = store.read(source)
+                if FIELD in metadata:
+                    return BirdIDResult(source, "skipped", "已有逐只识别记录",
+                                        response={"individuals": read_individuals(metadata)})
         from PIL import Image
         from bird_sharpness.image_source import load_analysis_image
 
@@ -180,11 +184,11 @@ def identify_individuals(source, client, analyzer, options=PerBirdOptions(), *, 
         message = (f"找到 {len(records)} 只鸟，识别 {identified} 只，"
                    f"过滤 {sum(r['status'] == 'skipped' for r in records)} 只，失败 {failed} 只")
         return BirdIDResult(source, "partial" if failed else "success", message,
-                            updates={**values, **fields}, saved_fingerprint=saved, source_fingerprint=before[0])
+                            response={"individuals": records}, updates={**values, **fields}, saved_fingerprint=saved, source_fingerprint=before[0])
     except BirdIDCancelled:
-        return BirdIDResult(source, "cancelled", "已停止，此照片原列表保留")
+        return BirdIDResult(source, "cancelled", "已停止，此照片原列表保留", response={"individuals": records})
     except Exception as exc:
-        return BirdIDResult(source, "failed", f"[BirdID 逐只识别] {exc}")
+        return BirdIDResult(source, "failed", f"[BirdID 逐只识别] {exc}", response={"individuals": records})
 
 
 def read_individuals(metadata):

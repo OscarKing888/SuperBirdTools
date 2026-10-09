@@ -5,6 +5,8 @@ from __future__ import annotations
 from collections import Counter
 from dataclasses import dataclass
 import traceback
+import queue
+import time
 from pathlib import Path
 
 from app_common.log import get_logger
@@ -14,11 +16,11 @@ from .per_bird_identification import PerBirdOptions, identify_individuals, make_
 from .qt_compat import QThread, pyqtSignal
 
 try:
-    from PyQt6.QtCore import QObject
+    from PyQt6.QtCore import QObject, QTimer
     from PyQt6.QtWidgets import (QCheckBox, QDialog, QDialogButtonBox, QDoubleSpinBox,
         QFormLayout, QLabel, QLineEdit, QMessageBox, QProgressBar, QPushButton, QTextEdit, QVBoxLayout)
 except ImportError:  # pragma: no cover
-    from PyQt5.QtCore import QObject
+    from PyQt5.QtCore import QObject, QTimer
     from PyQt5.QtWidgets import (QCheckBox, QDialog, QDialogButtonBox, QDoubleSpinBox,
         QFormLayout, QLabel, QLineEdit, QMessageBox, QProgressBar, QPushButton, QTextEdit, QVBoxLayout)
 
@@ -76,9 +78,24 @@ class BirdIDWorker(QThread):
         self.client = BirdIDClient(options)
         self.per_bird_options = per_bird_options or PerBirdOptions()
         self.analysis_params = dict(analysis_params or {})
+        # 目录里大量跳过项也不能无限堆积 Qt 信号；界面按时间预算取结果。
+        self.results = queue.Queue(maxsize=32)
+        self.completed = False
 
     def stop(self):
         self.client.cancel()
+
+    def _publish(self, result):
+        if not self.job.per_bird:
+            self.result_ready.emit(result)
+            return
+        while True:
+            try:
+                self.results.put(result, timeout=.05)
+                return
+            except queue.Full:
+                # 取消时界面仍排空队列；已完成（可能已写 XMP）的结果不能丢失。
+                continue
 
     def run(self):
         try:
@@ -90,6 +107,8 @@ class BirdIDWorker(QThread):
             if not paths and not self.client.cancelled.is_set():
                 self.failed.emit("没有找到可识别的照片。")
             self.progress_changed.emit(0, len(paths))
+            if not paths or self.client.cancelled.is_set():
+                return
             analyzer = None
             if self.job.per_bird:
                 from .bird_sharpness_controller import _viewer_focus_box
@@ -104,7 +123,7 @@ class BirdIDWorker(QThread):
                     break
                 if self.job.per_bird:
                     result = identify_individuals(path, self.client, analyzer, self.per_bird_options,
-                                                  on_progress=self.status_changed.emit)
+                        on_progress=lambda text, n=index: self.status_changed.emit(f"[{n}/{len(paths)}] {text}"))
                 elif self.job.saved_candidates:
                     from .bird_identification_candidates import load_saved_candidates
                     self.status_changed.emit(f"正在读取候选：{Path(path).name}")
@@ -112,8 +131,9 @@ class BirdIDWorker(QThread):
                 else:
                     self.status_changed.emit(f"正在识别：{Path(path).name}")
                     result = identify_file(path, self.client)
-                self.result_ready.emit(result)
-                self.progress_changed.emit(index, len(paths))
+                self._publish(result)
+                if not self.job.per_bird:
+                    self.progress_changed.emit(index, len(paths))
         except Exception as exc:
             if not self.client.cancelled.is_set():
                 _log.error("[BirdID] batch failed: %s", traceback.format_exc())
@@ -139,10 +159,11 @@ class BirdIDAdoptWorker(QThread):
 class BirdIDProgressDialog(QDialog):
     cancel_requested = pyqtSignal()
 
-    def __init__(self, parent, *, results_table=False, thumbnails=None):
+    def __init__(self, parent, *, results_table=False, thumbnails=None, per_bird=False):
         super().__init__(parent)
         self.setWindowTitle("SuperPicky 识鸟进度")
-        self.setMinimumSize(600, 380)
+        # 逐只汇总有照片/鸟体两层统计，窄窗换行后仍需保留表格与底部动作空间。
+        self.setMinimumSize(600, 500 if per_bird else 380)
         self.running = True
         self.label = QLabel("准备识鸟…", self)
         self.label.setWordWrap(True)
@@ -151,7 +172,11 @@ class BirdIDProgressDialog(QDialog):
         self.summary = QLabel("", self)
         if results_table:
             from .bird_identification_table import BirdIDResultsTable
-            self.details = BirdIDResultsTable(self, thumbnails=thumbnails)
+            if per_bird:
+                from .per_bird_results_table import PerBirdResultsTable
+                self.details = PerBirdResultsTable(self, thumbnails=thumbnails)
+            else:
+                self.details = BirdIDResultsTable(self, thumbnails=thumbnails)
             self.resize(1180, 540)
         else:
             self.details = QTextEdit(self)
@@ -200,6 +225,10 @@ class BirdIDController(QObject):
         self._counts = Counter()
         self._failure = ""
         self._stopped = False
+        self._bird_counts = Counter()
+        self._result_timer = QTimer(self)
+        self._result_timer.setInterval(30)
+        self._result_timer.timeout.connect(self._drain_results)
         file_list.add_file_context_menu_extender(self.extend_file_menu)
         if dir_browser is not None:
             dir_browser.add_context_menu_extender(self.extend_directory_menu)
@@ -224,7 +253,8 @@ class BirdIDController(QObject):
         elif paths:
             label = "识别鸟种…" if len(paths) == 1 else f"批量识别鸟种…（{len(paths)} 张）"
             menu.addAction(label, lambda: self.start_for_paths(list(paths)))
-            menu.addAction("逐只识别…", lambda: self.start_for_paths(list(paths), per_bird=True))
+            label = "逐只识别…" if len(paths) == 1 else f"批量逐只识别…（{len(paths)} 张）"
+            menu.addAction(label, lambda: self.start_for_paths(list(paths), per_bird=True))
             menu.addAction("选择候选鸟名…", lambda: self.start_for_paths(list(paths), saved_candidates=True))
 
     def extend_directory_menu(self, menu, directory):
@@ -289,13 +319,17 @@ class BirdIDController(QObject):
             self._dialog.close()
             self._dialog.deleteLater()
         self._counts, self._failure, self._stopped = Counter(), "", False
+        self._bird_counts = Counter()
         self._thumbnails.configure(self._file_list)
         self._job = job
         worker = self._worker = (BirdIDWorker(job, options, per_bird_options=self._per_bird_options, analysis_params=params)
                                 if job.per_bird else BirdIDWorker(job, options))
-        dialog = self._dialog = BirdIDProgressDialog(self._main, results_table=not job.per_bird, thumbnails=self._thumbnails)
+        dialog = self._dialog = BirdIDProgressDialog(self._main, results_table=True,
+                                                     thumbnails=self._thumbnails, per_bird=job.per_bird)
         if job.per_bird:
-            dialog.setWindowTitle("逐只识别进度")
+            dialog.setWindowTitle("批量逐只识别 · 结果汇总")
+            dialog.label.setText("按照片顺序排队处理，结果将在此汇总。")
+            dialog.bar.setFormat("%v / %m 张（%p%）")
         else:
             dialog.details.adopt_requested.connect(lambda entry, index, d=dialog: self._adopt(d, entry, index))
         if job.saved_candidates:
@@ -307,6 +341,8 @@ class BirdIDController(QObject):
         worker.failed.connect(lambda text, w=worker: self._failed(w, text))
         worker.finished.connect(lambda w=worker: self._finished(w))
         dialog.show()
+        if job.per_bird:
+            self._result_timer.start()
         worker.start()
         return True
 
@@ -327,13 +363,10 @@ class BirdIDController(QObject):
             return
         self._counts[result.status] += 1
         _log.info("[BirdID] %s %r: %s", result.status, result.source, result.message)
+        self._dialog.details.append_result(result)
         if worker.job.per_bird:
-            # 使用纯文本，照片名和服务错误不能被 QTextEdit 当作 HTML。
-            cursor = self._dialog.details.textCursor()
-            cursor.movePosition(getattr(cursor, "MoveOperation", cursor).End)
-            cursor.insertText(f"{Path(result.source).name}：{result.message}\n")
-        else:
-            self._dialog.details.append_result(result)
+            self._bird_counts.update(item.get("status", "failed") for item in result.response.get("individuals", ())
+                                     if result.status in {"success", "partial"})
         self._update_summary()
         if result.updates:
             self._refresh_rows(result, worker.job)
@@ -342,6 +375,30 @@ class BirdIDController(QObject):
         labels = (("success", "已完成" if self._job.per_bird else "已确认"), ("candidate", "待确定"), ("partial", "部分失败"),
                   ("skipped", "跳过"), ("failed", "失败"), ("cancelled", "取消"))
         self._dialog.summary.setText("，".join(f"{label} {self._counts[key]}" for key, label in labels))
+        if self._job.per_bird:
+            self._dialog.summary.setText("照片：" + self._dialog.summary.text() + "\n本批保存鸟体：" +
+                "，".join(f"{label} {self._bird_counts[key]}" for key, label in
+                         (("confirmed", "已确认"), ("candidate", "待确定"), ("skipped", "已过滤"), ("failed", "失败"))))
+            self._dialog.summary.setWordWrap(True)
+
+    def _drain_results(self):
+        worker = self._worker
+        if worker is None or not worker.job.per_bird:
+            self._result_timer.stop()
+            return
+        deadline = time.monotonic() + .008
+        for _ in range(8):
+            try:
+                result = worker.results.get_nowait()
+            except queue.Empty:
+                break
+            self._result(worker, result)
+            if not self._shutdown_requested:
+                self._dialog.bar.setValue(sum(self._counts.values()))
+            if time.monotonic() >= deadline:
+                break
+        if worker.completed and worker.results.empty():
+            self._finished(worker)
 
     def _adopt(self, dialog, entry, index):
         if (self._shutdown_requested or dialog is not self._dialog or self._adopt_worker is not None
@@ -399,6 +456,11 @@ class BirdIDController(QObject):
     def _finished(self, worker):
         if worker is not self._worker:
             return
+        if worker.job.per_bird:
+            worker.completed = True
+            if not worker.results.empty():
+                return
+            self._result_timer.stop()
         self._worker = None
         worker.deleteLater()
         self._finish_dialog()

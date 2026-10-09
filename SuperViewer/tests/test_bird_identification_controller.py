@@ -617,3 +617,131 @@ def test_per_bird_worker_receives_selected_detection_override(env, monkeypatch):
     assert len(seen) == 1 and seen[0].detector == 'yolov8x-seg.pt'
     assert seen[0].detect_conf_percent == 10 and seen[0].duplicate_mask_percent == 85
     assert not seen[0].exclude_birds and controller._counts == {'success': 1}
+
+
+@pytest.mark.parametrize('scope', ['selection', 'directory', 'recursive'])
+def test_per_bird_batch_scope_serial_results_and_one_dialog(env, monkeypatch, tmp_path, scope):
+    from SuperViewer.tests.test_per_bird_identification import Analyzer, response
+    from SuperViewer.superviewer.bird_identification import BirdIDResult, collect_paths
+    from SuperViewer.superviewer.per_bird_results_table import PerBirdResultsTable
+    controller, files, paths, state = env
+    child = tmp_path / '子目录'
+    child.mkdir()
+    nested = child / '鸟片.jpg'
+    Image.new('RGB', (320, 240)).save(nested)
+    (tmp_path / '无关.txt').write_text('skip', encoding='utf-8')
+    monkeypatch.setattr(ui, 'make_analyzer', lambda *a, **k: Analyzer([(0, 0, 100, 100), (160, 80, 320, 240)]))
+    monkeypatch.setattr(BirdIDClient, 'recognize_crop', lambda *a: response('白鹭', 35))
+    actual, active, max_active = [], 0, 0
+    original = ui.identify_individuals
+    def identify(path, *args, **kwargs):
+        nonlocal active, max_active
+        active += 1
+        max_active = max(max_active, active)
+        actual.append(path)
+        try:
+            if path == paths[1]:
+                return BirdIDResult(path, 'failed', '测试单张失败，继续队列')
+            return original(path, *args, **kwargs)
+        finally:
+            active -= 1
+    monkeypatch.setattr(ui, 'identify_individuals', identify)
+    monkeypatch.setattr(ui.QMessageBox, 'information', lambda *a: pytest.fail('批量结果不得逐张弹窗'))
+    dialogs = []
+    original_dialog = ui.BirdIDProgressDialog
+    def dialog(*args, **kwargs):
+        value = original_dialog(*args, **kwargs)
+        dialogs.append(value)
+        return value
+    monkeypatch.setattr(ui, 'BirdIDProgressDialog', dialog)
+    if scope == 'selection':
+        assert controller.start_for_paths(paths + [paths[0]], options=BirdIDOptions(), per_bird=True)
+        expected = collect_paths(paths)
+    else:
+        job = ui.BirdIDJob((str(tmp_path),), recursive=scope == 'recursive', per_bird=True)
+        assert controller.start(job, options=BirdIDOptions())
+        expected = collect_paths([str(tmp_path)], recursive=scope == 'recursive')
+    assert wait_for(lambda: not controller.busy)
+    assert actual == expected and max_active == 1
+    assert len(dialogs) == 1 and isinstance(dialogs[0].details, PerBirdResultsTable)
+    model = dialogs[0].details.results
+    assert len(model.entries) == len(expected)
+    assert model.rowCount() == (len(expected) - 1) * 2 + 1
+    assert controller._counts == {'success': len(expected) - 1, 'failed': 1}
+    assert controller._bird_counts == {'candidate': (len(expected) - 1) * 2}
+    assert dialogs[0].bar.value() == len(expected) == dialogs[0].bar.maximum()
+    assert not dialogs[0].running and not controller._result_timer.isActive()
+    assert '白鹭' == model.index(0, 4).data()
+    assert all(PhotoMetaDataXMP().read(p)['birdid_individuals'] for p in expected if p != paths[1])
+    if scope != 'recursive':
+        assert not nested.with_suffix('.xmp').exists()
+
+
+def test_per_bird_bounded_delivery_finishes_only_after_results_drained(env, monkeypatch):
+    from SuperViewer.tests.test_per_bird_identification import Analyzer
+    from SuperViewer.superviewer.bird_identification import BirdIDResult
+    controller, files, paths, state = env
+    sources = [str(Path(paths[0]).parent / f'{i}.jpg') for i in range(75)]
+    monkeypatch.setattr(ui, 'collect_paths', lambda *a, **k: sources)
+    monkeypatch.setattr(ui, 'make_analyzer', lambda *a, **k: Analyzer([]))
+    calls = []
+    def identify(path, *a, **k):
+        calls.append(path)
+        return BirdIDResult(path, 'skipped', '已有逐只识别记录')
+    monkeypatch.setattr(ui, 'identify_individuals', identify)
+    assert controller.start_for_paths(paths, options=BirdIDOptions(), per_bird=True)
+    controller._result_timer.stop()
+    worker = controller._worker
+    deadline = time.monotonic() + 3
+    while not worker.results.full() and time.monotonic() < deadline:
+        time.sleep(.005)
+    assert worker.results.qsize() == 32 and len(calls) <= 33
+    controller._result_timer.start()
+    assert wait_for(lambda: not controller.busy)
+    assert len(controller._dialog.details.results.entries) == 75
+    assert controller._counts == {'skipped': 75}
+    assert controller._dialog.bar.value() == 75
+
+
+def test_per_bird_stop_between_photos_preserves_completed_results(env, monkeypatch):
+    from SuperViewer.tests.test_per_bird_identification import Analyzer, response
+    controller, files, paths, state = env
+    monkeypatch.setattr(ui, 'make_analyzer', lambda *a, **k: Analyzer([(0, 0, 100, 100)]))
+    monkeypatch.setattr(BirdIDClient, 'recognize_crop', lambda *a: response())
+    original = ui.identify_individuals
+    def identify(*a, **k):
+        result = original(*a, **k)
+        a[1].cancel()  # 第一张完成后停止，不得提交下一张。
+        return result
+    monkeypatch.setattr(ui, 'identify_individuals', identify)
+    assert controller.start_for_paths(paths, options=BirdIDOptions(), per_bird=True)
+    assert wait_for(lambda: not controller.busy)
+    assert controller._counts == {'success': 1}
+    assert len(controller._dialog.details.results.entries) == 1
+    assert Path(paths[0]).with_suffix('.xmp').exists()
+    assert all(not Path(p).with_suffix('.xmp').exists() for p in paths[1:])
+
+
+def test_per_bird_shutdown_drains_full_delivery_queue(env, monkeypatch):
+    from SuperViewer.tests.test_per_bird_identification import Analyzer
+    from SuperViewer.superviewer.bird_identification import BirdIDResult
+    controller, files, paths, state = env
+    monkeypatch.setattr(ui, 'collect_paths', lambda *a, **k: paths * 30)
+    monkeypatch.setattr(ui, 'make_analyzer', lambda *a, **k: Analyzer([]))
+    called = []
+    def identify(path, *a, **k):
+        called.append(path)
+        return BirdIDResult(path, 'success', '已完成')
+    monkeypatch.setattr(ui, 'identify_individuals', identify)
+    assert controller.start_for_paths(paths, options=BirdIDOptions(), per_bird=True)
+    controller._result_timer.stop()
+    worker = controller._worker
+    deadline = time.monotonic() + 3
+    while len(called) < 33 and time.monotonic() < deadline:
+        time.sleep(.005)
+    assert worker.results.full() and len(called) == 33
+    controller.request_shutdown()
+    assert controller.busy
+    controller._result_timer.start()
+    assert wait_for(controller.is_shutdown_done)
+    assert worker.results.empty() and len(called) == 33
