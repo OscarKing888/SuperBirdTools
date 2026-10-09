@@ -314,10 +314,9 @@ class _BirdStampDejitterMixin:
         self.dejitter_analysis_complete = _add_progress_completion_label(
             analysis, self.dejitter_analysis_progress, '去抖动分析完成')
 
-        self.dejitter_export_group = QGroupBox('4. 导出')
+        self.dejitter_export_group = QWidget(page)
         export = QVBoxLayout(self.dejitter_export_group)
-        export.setContentsMargins(10, 24, 10, 12)
-        layout.addWidget(self.dejitter_export_group)
+        export.setContentsMargins(8, 8, 8, 8)
         self.dejitter_export_intersection_check = QCheckBox('仅导出共同无黑边范围（交集）')
         self.dejitter_export_intersection_check.setChecked(editor_options.DEJITTER_EXPORT_INTERSECTION)
         self.dejitter_export_intersection_check.setToolTip('导出范围与预览交集框一致；不改变当前补边预览，不需要重新匹配。')

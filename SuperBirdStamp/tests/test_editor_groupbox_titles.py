@@ -15,6 +15,7 @@ from PyQt6.QtWidgets import (
 
 from birdstamp import config
 from birdstamp.gui.editor import BirdStampEditorWindow
+from birdstamp.gui.editor_collapsible import CollapsibleSection
 from birdstamp.gui.editor_template_dialog import TemplateManagerDialog
 
 
@@ -43,6 +44,16 @@ def _assert_titles_clear(root: QWidget, font_px: int) -> set[str]:
             if child.isVisible():
                 assert not title_rect.intersects(child.geometry()), message
         titles.add(group.title())
+    for section in root.findChildren(CollapsibleSection):
+        if not section.isVisible():
+            continue
+        header = section.header_button
+        assert header.font().pixelSize() == font_px
+        assert header.height() >= header.fontMetrics().height()
+        assert section.rect().contains(header.geometry())
+        if section.is_expanded():
+            assert section.content_frame.geometry().top() > header.geometry().bottom()
+        titles.add(section.title())
     return titles
 
 
@@ -94,7 +105,7 @@ def test_all_editor_group_titles_clear_content(tmp_path, monkeypatch, style_name
             window.export_tabs.setCurrentIndex(1)
             _APP.processEvents()
             titles.update(_assert_titles_clear(window, font_px))
-            assert {"处理管线", "图片导出", "GIF 选项", "视频导出", "1. 方式", "4. 导出", "叠加层属性"} <= titles
+            assert {"处理管线", "导出设置", "GIF 选项", "视频导出", "1. 方式", "叠加层属性"} <= titles
             assert window.export_action_bar.isVisible()
 
             # 模板管理器继承同一套样式；不允许只修主窗口里已知的两个分组。

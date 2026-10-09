@@ -11,7 +11,6 @@ from PyQt6.QtWidgets import (
     QCheckBox,
     QComboBox,
     QFormLayout,
-    QGroupBox,
     QHBoxLayout,
     QLabel,
     QPushButton,
@@ -23,6 +22,7 @@ from PyQt6.QtWidgets import (
 )
 
 from birdstamp.gui import editor_options
+from birdstamp.gui.editor_collapsible import CollapsibleSection
 from birdstamp.gui import editor_utils
 from birdstamp.gui.editor_repeat_fps import RepeatFpsEditor
 from app_common.exif_io import extract_many_with_xmp_priority
@@ -61,7 +61,7 @@ class VideoExportRequest:
     repeat_fps: list[float] = field(default_factory=list)
 
 
-class VideoExportPanel(QGroupBox):
+class VideoExportPanel(CollapsibleSection):
     """视频导出参数面板。"""
 
     exportRequested = pyqtSignal(object)
@@ -70,13 +70,13 @@ class VideoExportPanel(QGroupBox):
     frameSizeChanged = pyqtSignal(object)  # (width, height), or None for automatic size
 
     def __init__(self, parent: QWidget | None = None) -> None:
-        super().__init__("视频导出", parent)
+        super().__init__("视频导出", parent=parent)
         self._busy = False
         self._restoring_state = False
         self._build_ui()
 
     def _build_ui(self) -> None:
-        root = QVBoxLayout(self)
+        root = QVBoxLayout(self.body)
         root.setContentsMargins(8, 8, 8, 8)
         root.setSpacing(6)
 

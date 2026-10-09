@@ -3,7 +3,8 @@ from __future__ import annotations
 import os
 from typing import Callable
 
-from PyQt6.QtCore import QSize, Qt, QTimer, pyqtSignal
+from PyQt6.QtCore import QPointF, QRect, QSize, Qt, QTimer, pyqtSignal
+from PyQt6.QtGui import QPainter, QPalette, QPolygonF
 from PyQt6.QtWidgets import (
     QFrame,
     QGroupBox,
@@ -11,6 +12,7 @@ from PyQt6.QtWidgets import (
     QSizePolicy,
     QStyle,
     QStyleOptionTabWidgetFrame,
+    QStyleOptionFocusRect,
     QTabWidget,
     QToolButton,
     QVBoxLayout,
@@ -213,7 +215,47 @@ def refresh_layout_chain(widget: QWidget | None) -> None:
     inner.updateGeometry()
 
 
-class CollapsibleSection(QWidget):
+class _DisclosureButton(QToolButton):
+    """按逻辑像素绘制小实心三角，避免系统主题把箭头放大为粗折线。"""
+
+    def sizeHint(self) -> QSize:
+        metrics = self.fontMetrics()
+        return QSize(metrics.horizontalAdvance(self.text()) + 36, max(28, metrics.height() + 10))
+
+    def minimumSizeHint(self) -> QSize:
+        return QSize(36, self.sizeHint().height())
+
+    def paintEvent(self, event) -> None:
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        palette = self.palette()
+        group = QPalette.ColorGroup.Active if self.isEnabled() else QPalette.ColorGroup.Disabled
+        color = palette.color(group, QPalette.ColorRole.WindowText)
+        if self.isDown() or self.underMouse():
+            hover = palette.color(QPalette.ColorRole.Highlight)
+            hover.setAlpha(24 if self.isDown() else 12)
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(hover)
+            painter.drawRoundedRect(self.rect(), 5, 5)
+        cy = self.height() / 2
+        # 8×5 / 5×8 的实心三角，在高 DPI 下由 Qt 自动缩放。
+        points = ([(10, cy - 2), (18, cy - 2), (14, cy + 3)] if self.isChecked()
+                  else [(12, cy - 4), (17, cy), (12, cy + 4)])
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(color)
+        painter.drawPolygon(QPolygonF([QPointF(x, y) for x, y in points]))
+        painter.setPen(color)
+        text_rect = QRect(26, 0, max(0, self.width() - 34), self.height())
+        painter.drawText(text_rect, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+                         self.fontMetrics().elidedText(self.text(), Qt.TextElideMode.ElideRight, text_rect.width()))
+        if self.hasFocus():
+            option = QStyleOptionFocusRect()
+            option.initFrom(self)
+            option.rect = self.rect().adjusted(2, 2, -2, -2)
+            self.style().drawPrimitive(QStyle.PrimitiveElement.PE_FrameFocusRect, option, painter, self)
+
+
+class CollapsibleSection(QFrame):
     """可折叠的分组容器。"""
 
     toggled = pyqtSignal(bool)
@@ -226,6 +268,7 @@ class CollapsibleSection(QWidget):
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
+        self.setObjectName("CollapsibleSection")
         self._content_widget: QWidget | None = None
         self._expanded = bool(expanded)
 
@@ -233,11 +276,13 @@ class CollapsibleSection(QWidget):
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(0)
 
-        self.header_button = QToolButton(self)
+        self.header_button = _DisclosureButton(self)
         self.header_button.setObjectName("CollapsibleHeaderButton")
         self.header_button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
         self.header_button.setArrowType(Qt.ArrowType.DownArrow if self._expanded else Qt.ArrowType.RightArrow)
         self.header_button.setText(str(title or "").strip())
+        self.header_button.setAccessibleName(str(title or "").strip())
+        self.header_button.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self.header_button.setCheckable(True)
         self.header_button.setChecked(self._expanded)
         self.header_button.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
@@ -247,11 +292,25 @@ class CollapsibleSection(QWidget):
         self.content_frame = QFrame(self)
         self.content_frame.setObjectName("CollapsibleContentFrame")
         self.content_layout = QVBoxLayout(self.content_frame)
-        self.content_layout.setContentsMargins(0, 8, 0, 0)
+        self.content_layout.setContentsMargins(8, 0, 8, 8)
         self.content_layout.setSpacing(0)
         self.content_frame.setVisible(self._expanded)
         root.addWidget(self.content_frame)
+        self.set_content_widget(QWidget())
         self._apply_expanded_size_policy(self._expanded)
+
+    @property
+    def body(self) -> QWidget:
+        """表单直接放进正文；标题和正文共用容器背景。"""
+        return self._content_widget
+
+    def title(self) -> str:
+        return self.header_button.text()
+
+    def setTitle(self, title: str) -> None:
+        self.header_button.setText(title)
+        self.header_button.setAccessibleName(title)
+        self.header_button.updateGeometry()
 
     def _apply_expanded_size_policy(self, expanded: bool) -> None:
         if expanded:
@@ -301,4 +360,5 @@ class CollapsibleSection(QWidget):
         self.content_frame.setVisible(state)
         self._apply_expanded_size_policy(state)
         self.refresh_section_layout()
+        refresh_layout_chain(self)
         self.toggled.emit(state)

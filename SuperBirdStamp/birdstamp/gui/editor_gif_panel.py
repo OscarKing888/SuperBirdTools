@@ -7,7 +7,6 @@ from PyQt6.QtGui import QResizeEvent
 from PyQt6.QtWidgets import (
     QCheckBox,
     QFormLayout,
-    QGroupBox,
     QHBoxLayout,
     QLabel,
     QLayout,
@@ -19,6 +18,7 @@ from PyQt6.QtWidgets import (
 )
 
 from birdstamp.gui import editor_options
+from birdstamp.gui.editor_collapsible import CollapsibleSection
 from birdstamp.gui.editor_fps_combo import FpsComboBox
 from birdstamp.gui.editor_repeat_fps import REPEAT_FPS_MAX, REPEAT_FPS_MIN, REPEAT_PASS_LIMIT, RepeatFpsEditor
 
@@ -116,19 +116,19 @@ class GifExportRequest:
     repeat_fps: list[float] = field(default_factory=list)
 
 
-class GifExportPanel(QGroupBox):
+class GifExportPanel(CollapsibleSection):
     """GIF 导出参数面板。"""
 
     optionsChanged = pyqtSignal()
     autoFpsRequested = pyqtSignal()
 
     def __init__(self, parent: QWidget | None = None) -> None:
-        super().__init__("GIF 选项", parent)
+        super().__init__("GIF 选项", parent=parent)
         self._scale_checks: list[tuple[float, QCheckBox]] = []
         self._build_ui()
 
     def _build_ui(self) -> None:
-        root = QVBoxLayout(self)
+        root = QVBoxLayout(self.body)
         root.setContentsMargins(8, 8, 8, 8)
         root.setSpacing(6)
 

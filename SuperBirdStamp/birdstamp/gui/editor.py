@@ -44,7 +44,6 @@ from PyQt6.QtWidgets import (
     QFormLayout,
     QFrame,
     QGridLayout,
-    QGroupBox,
     QHBoxLayout,
     QInputDialog,
     QLabel,
@@ -1390,8 +1389,8 @@ class BirdStampEditorWindow(
         self.max_edge_combo.setCurrentIndex(0)
         self.max_edge_combo.currentIndexChanged.connect(self._on_output_settings_changed)
 
-        pipeline_group = QGroupBox("处理管线")
-        pipeline_layout = QVBoxLayout(pipeline_group)
+        pipeline_group = CollapsibleSection("处理管线")
+        pipeline_layout = QVBoxLayout(pipeline_group.body)
         pipeline_layout.setContentsMargins(8, 8, 8, 8)
         pipeline_layout.setSpacing(8)
 
@@ -1449,7 +1448,7 @@ class BirdStampEditorWindow(
         export_stage_layout.addStretch(1)
         self._set_selected_export_stage_id(DEFAULT_EXPORT_STAGE_ID, save=False)
 
-        image_export_group = QGroupBox("图片导出")
+        image_export_group = QWidget(self)
         self.image_export_group = image_export_group
         image_export_layout = QVBoxLayout(image_export_group)
         image_export_layout.setContentsMargins(8, 8, 8, 8)
@@ -1518,9 +1517,8 @@ class BirdStampEditorWindow(
         self.image_export_progress.setTextVisible(True)
         self.image_export_progress.setFormat("图片导出 0/0")
         self.image_export_progress.hide()
-        export_root.addWidget(image_export_group)
 
-        self.video_export_panel = VideoExportPanel()
+        self.video_export_panel = VideoExportPanel(self)
         self.video_export_panel.frameSizeChanged.connect(self._sync_video_safe_frame)
         self.video_export_panel.show_safe_frame_check.toggled.connect(
             lambda _checked: self._schedule_workspace_autosave()
@@ -1539,14 +1537,13 @@ class BirdStampEditorWindow(
                 )
             else:
                 self.video_export_panel.set_status_text(f"未找到 ffmpeg，目标: {preferred_ffmpeg_binary_path()}")
-        export_root.addWidget(self.video_export_panel)
         # 本页被拉高时多余空间留在底部，避免撑开「处理管线」把列表挤到中间。
         export_root.addStretch(1)
 
-        export_section = CollapsibleSection("导出", expanded=True)
+        export_section = CollapsibleSection("处理设置", expanded=True)
         self._export_section = export_section
         self.export_tabs = CurrentPageTabWidget()
-        self.export_tabs.addTab(export_content, "导出设置")
+        self.export_tabs.addTab(export_content, "图片处理")
         self.export_tabs.addTab(self.dejitter_page, "去抖动")
         self.export_tabs.currentChanged.connect(self._on_export_tab_changed)
         export_section.set_content_widget(self.export_tabs)
@@ -1641,10 +1638,10 @@ class BirdStampEditorWindow(
             for stage_id in normalize_pipeline_stage_order(None)
         }
 
-        self._pipeline_stage_option_groups: dict[str, QGroupBox] = {}
+        self._pipeline_stage_option_groups: dict[str, CollapsibleSection] = {}
 
-        template_group = QGroupBox()
-        template_form = QFormLayout(template_group)
+        template_group = CollapsibleSection("")
+        template_form = QFormLayout(template_group.body)
         _configure_form_layout(template_form)
         template_row_widget = QWidget()
         template_row_layout = QHBoxLayout(template_row_widget)
@@ -1683,14 +1680,14 @@ class BirdStampEditorWindow(
         self.dejitter_page = self._build_dejitter_page()
         self._pipeline_stage_option_groups["template_crop"] = template_group
 
-        resize_group = QGroupBox()
-        resize_form = QFormLayout(resize_group)
+        resize_group = CollapsibleSection("")
+        resize_form = QFormLayout(resize_group.body)
         _configure_form_layout(resize_form)
         resize_form.addRow("最大长边", self.max_edge_combo)
         self._pipeline_stage_option_groups["resize_limit"] = resize_group
 
-        overlay_group = QGroupBox()
-        overlay_form = QFormLayout(overlay_group)
+        overlay_group = CollapsibleSection("")
+        overlay_form = QFormLayout(overlay_group.body)
         _configure_form_layout(overlay_form)
         overlay_row_widget = QWidget()
         overlay_row_layout = QHBoxLayout(overlay_row_widget)
@@ -1711,8 +1708,8 @@ class BirdStampEditorWindow(
         self._build_overlay_panel(overlay_form)
         self._pipeline_stage_option_groups["template_overlay"] = overlay_group
 
-        focus_group = QGroupBox()
-        focus_form = QFormLayout(focus_group)
+        focus_group = CollapsibleSection("")
+        focus_form = QFormLayout(focus_group.body)
         _configure_form_layout(focus_form)
         focus_form.addRow("焦点框", self.draw_focus_check)
         self._pipeline_stage_option_groups["focus_overlay"] = focus_group
@@ -2347,25 +2344,22 @@ class BirdStampEditorWindow(
             QWidget#EditorLeftPanel {{
                 background: transparent;
             }}
-            QToolButton#CollapsibleHeaderButton {{
-                text-align: left;
-                font-weight: 600;
+            QFrame#CollapsibleSection {{
                 border: 1px solid {border_color.name()};
-                border-radius: 10px;
+                border-radius: 8px;
                 background: {base_color.name()};
-                color: {text_color.name()};
-                padding: 7px 10px;
             }}
-            QToolButton#CollapsibleHeaderButton:hover {{
-                background: {hover_color.name()};
+            QToolButton#CollapsibleHeaderButton {{
+                font-weight: 600;
+                border: none;
+                background: transparent;
+                color: {text_color.name()};
+                padding: 0;
             }}
             QFrame#CollapsibleContentFrame {{
-                border: 1px solid {border_color.name()};
-                border-top: none;
-                border-bottom-left-radius: 10px;
-                border-bottom-right-radius: 10px;
-                background: {base_color.name()};
-                padding: 8px;
+                border: none;
+                background: transparent;
+                padding: 0;
             }}
             QLineEdit {{
                 border: 1px solid {border_color.name()};
