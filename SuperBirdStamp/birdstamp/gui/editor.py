@@ -1448,7 +1448,7 @@ class BirdStampEditorWindow(
         export_stage_layout.addStretch(1)
         self._set_selected_export_stage_id(DEFAULT_EXPORT_STAGE_ID, save=False)
 
-        image_export_group = QWidget()
+        image_export_group = QWidget(self)
         self.image_export_group = image_export_group
         image_export_layout = QVBoxLayout(image_export_group)
         image_export_layout.setContentsMargins(8, 8, 8, 8)
@@ -1518,7 +1518,7 @@ class BirdStampEditorWindow(
         self.image_export_progress.setFormat("图片导出 0/0")
         self.image_export_progress.hide()
 
-        self.video_export_panel = VideoExportPanel()
+        self.video_export_panel = VideoExportPanel(self)
         self.video_export_panel.frameSizeChanged.connect(self._sync_video_safe_frame)
         self.video_export_panel.show_safe_frame_check.toggled.connect(
             lambda _checked: self._schedule_workspace_autosave()
