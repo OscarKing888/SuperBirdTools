@@ -337,6 +337,7 @@ CLI 与 GUI 共用核心：在仓库根使用共享 `.venv` 执行 `python -m Su
 服务接口及返回字段限制、使用和验证见 [识鸟说明](../../docs/bird_identification.md)。
 
 “逐只识别”由同一 `BirdIDController` / `BirdIDWorker` 管理设置、任务和关闭生命周期。
+设置窗口的「前置检测」复用 `AnalysisParamsForm`，通过 `PerBirdOptions.analysis_overrides` 独立覆盖模型、检测/去重/排除等参数（会话内保留，关闭覆盖即沿用全局）；`make_analyzer()` 统一合并并强制不限制鸟数/清晰度最小鸟框，参数随结果保存 XMP，不改全局设置。
 无 Qt 核心 [`per_bird_identification.py`](../superviewer/per_bird_identification.py) 调用现有
 `BirdSharpnessAnalyzer.analyze()` 的最终 `birds`，按原尺寸最小宽高过滤，逐只临时 JPEG 调用服务，
 将鸟名、置信度、原图区域及失败状态一次保存至 XMP 的 `birdid_individuals` 列表；

@@ -96,7 +96,7 @@ class BirdIDWorker(QThread):
                 from .denoise_controller import current_denoise_options
                 from image_denoise.preview import find_denoised_preview
                 denoise_options = current_denoise_options()
-                analyzer = make_analyzer(self.analysis_params,
+                analyzer = make_analyzer(self.analysis_params, options=self.per_bird_options,
                     denoised_lookup=lambda path: find_denoised_preview(path, denoise_options))
                 analyzer.focus_provider = _viewer_focus_box
             for index, path in enumerate(paths, 1):
