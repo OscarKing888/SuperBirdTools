@@ -90,6 +90,36 @@ def test_badges_columns_and_hover_share_row(monkeypatch):
         panel.close()
 
 
+def test_primary_context_menu_captures_photo_and_disables_unidentified(monkeypatch):
+    from PyQt6.QtCore import QPoint
+    from PyQt6.QtWidgets import QMenu
+    panel = IndividualBirdsPanel()
+    requested, enabled = [], []
+    panel.primary_allowed = lambda: True
+    panel.primary_requested.connect(lambda *args: requested.append(args))
+    original = metadata()
+    def execute(menu, pos):
+        action = menu.actions()[0]
+        assert action.text() == '设为本照片主要鸟名'
+        enabled.append(action.isEnabled())
+        if action.isEnabled():
+            panel.set_metadata('另一张.jpg', metadata())
+            action.trigger()
+    monkeypatch.setattr(QMenu, 'exec', execute)
+    try:
+        panel.set_metadata('原照片.ARW', original)
+        panel.birds.cells[0][2].customContextMenuRequested.emit(QPoint())
+        assert requested == [('原照片.ARW', 0, (original[FIELD], original[INFO_FIELD]))]
+        items = json.loads(original[FIELD])
+        items[0].update(status='failed', cn_name='', en_name='', confidence=None)
+        original[FIELD] = json.dumps(items)
+        panel.set_metadata('原照片.ARW', original)
+        panel.birds.cells[0][2].customContextMenuRequested.emit(QPoint())
+        assert enabled == [True, False] and len(requested) == 1
+    finally:
+        panel.close()
+
+
 def test_hover_ab_raw_upgrade_leave_switch_and_playback(tmp_path, monkeypatch):
     path, other = str(tmp_path / '鸟.ARW'), str(tmp_path / 'other.jpg')
     left, right = PreviewPanel(), PreviewPanel()
