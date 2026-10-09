@@ -2,6 +2,8 @@
 
 本文按运行中的数据流说明代码入口，供新增功能和排查问题时定位。行为约束以仓库 [AGENTS](../../AGENTS.md) 和 [AI_CODING_RULES](../../ai_rules/AI_CODING_RULES.md) 为准；安装与使用见 [README](../README.md)。共享浏览器、XMP 和画布位于 `app_common` 子模块，同时服务 BirdStamp，修改时需检查两端调用。
 
+删除后的选择由 `SuperViewerTaggedFileListPanel._reload_after_trash()` 恢复：当前图片成功删除后，按活动列表/缩略图的过滤及排序结果向前寻找未删除图片；没有前项则选剩余首项，删空则无选择。多选时跳过同批已删除项，当前图片未删除则保留。共享浏览器仅在成功删除后调用此扩展点，仍使用垃圾桶和 XMP 联动；Viewer 在清空旧模型后、异步扫描返回前设置待选路径，由原有选择机制同步预览和滚动。BirdStamp 保持默认重载行为。回归见 [`test_delete_selection.py`](../tests/test_delete_selection.py)，此交互无新增 CLI。
+
 ## 1. 启动与模块边界
 
 [`main.py`](../main.py) 的 `main()` 加载运行选项与应用身份，建立支持 macOS FileOpen 的 `QApplication`，处理已有实例转发，安装主题，再创建 `MainWindow`。`SingleInstanceReceiver` 和 FileOpen 回调最终进入 `_on_received_file_list()` / `_open_received_file_list()`；普通启动恢复上次目录。窗口组装、信号接线、文件操作及关闭协调由 `MainWindow` 负责。

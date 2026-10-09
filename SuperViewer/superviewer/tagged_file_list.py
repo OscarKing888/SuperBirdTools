@@ -509,6 +509,34 @@ class SuperViewerTaggedFileListPanel(FileListPanel):
         self._command_history.clear()
         return True
 
+    def _reload_after_trash(self, moved_paths: list[str]) -> None:
+        """Restore the nearest surviving predecessor in the displayed order."""
+        if self._view_mode == self._MODE_THUMB:
+            ordered = self._thumb_list_model.all_paths()
+        else:
+            model = self._tree_widget.model()
+            ordered = [
+                self._tree_path_from_index(model.index(row, 0))
+                for row in range(model.rowCount())
+            ]
+        removed = {os.path.normcase(os.path.normpath(path)) for path in moved_paths}
+        current = self._active_view_current_path()
+        target = ""
+        if current and os.path.normcase(current) not in removed:
+            target = current
+        else:
+            anchor = next((i for i, path in enumerate(ordered) if path == current), None)
+            if anchor is None:
+                anchor = next((i for i, path in enumerate(ordered)
+                               if os.path.normcase(path) in removed), 0)
+            candidates = list(reversed(ordered[:anchor])) + ordered[anchor:]
+            target = next((path for path in candidates
+                           if os.path.normcase(path) not in removed), "")
+        super()._reload_after_trash(moved_paths)
+        # load_directory clears/rebuilds the old model synchronously. Queue the
+        # target afterwards so that empty rebuild cannot consume the request.
+        self.set_pending_selection([target] if target else [], apply_immediately=False)
+
     def load_directory(
         self,
         path: str,
