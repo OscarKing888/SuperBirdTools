@@ -421,6 +421,7 @@ class ImageInfoTabPanel_ImageInfo(ImageInfoTabPanel):
             label.setStyleSheet("color: %s; font-size: 13px;" % theme.label_text)
         for key, label in self.basic_rows.items():
             self._apply_basic_row_style(key, label.text(), label)
+        self.individual_birds.refresh_badges()
         # Style existing and future chips through their container. Do not
         # rebuild them here: that rechecks files and can discard focused UI.
         self.tags_container.setStyleSheet(

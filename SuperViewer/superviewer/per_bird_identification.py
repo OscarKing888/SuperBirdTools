@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 from dataclasses import dataclass
+from datetime import datetime, timezone
 import json
 import math
 import os
@@ -12,11 +13,37 @@ from tempfile import TemporaryDirectory
 
 from app_common.exif_io.photo_meta import PhotoMetaDataXMP, xmp_sidecar_write_lock
 from app_common.image_formats import SUPPORTED_IMAGE_EXTENSIONS
+from app_common.bird_rarity import RARITY_FIELD, IUCN_FIELD, rarity_score
 from .bird_identification import (BirdIDCancelled, BirdIDClient, BirdIDError, BirdIDOptions,
                                   BirdIDResult, _fingerprint, collect_paths, parse_response)
 
 FIELD = "birdid_individuals"
 INFO_FIELD = "birdid_individuals_info"
+
+
+def species_snapshot(candidate):
+    """保存候选自身的鸟种属性；缺失值明确为 null，绝不借用整图的等级。"""
+    values = {key: candidate.get(key) if isinstance(candidate.get(key), str) else None
+              for key in ("scientific_name", "pinyin_name", "description", IUCN_FIELD,
+                          "china_protection_level")}
+    values[RARITY_FIELD] = rarity_score(candidate.get(RARITY_FIELD))
+    return values
+
+
+def individual_species_metadata(item):
+    """兼容旧 schema=1 的原始响应；只回填与本行鸟名、置信度相符的候选。"""
+    candidate = {}
+    if item.get("status") in {"confirmed", "candidate"}:
+        response = item.get("response")
+        results = response.get("results", []) if isinstance(response, dict) else []
+        if isinstance(results, list):
+            matches = [value for value in results if isinstance(value, dict)
+                       and all(value.get(k, "") == item.get(k, "") for k in ("cn_name", "en_name"))
+                       and value.get("confidence") == item.get("confidence")]
+            if len(matches) == 1:
+                candidate = matches[0]
+    # 显式 null 也有意义，不得从旧响应重新填回已清除的值。
+    return species_snapshot({**candidate, **item})
 
 
 @dataclass(frozen=True)
@@ -113,7 +140,9 @@ def identify_individuals(source, client, analyzer, options=PerBirdOptions(), *, 
                     best = parse_response(response)
                     record.update(cn_name=best.get("cn_name", ""), en_name=best.get("en_name", ""),
                                   confidence=float(best["confidence"]), response=response,
+                                  selected_candidate_index=response["results"].index(best),
                                   status="confirmed" if float(best["confidence"]) >= client.options.threshold else "candidate")
+                    record.update(species_snapshot(best))
                 except BirdIDCancelled:
                     raise
                 except Exception as exc:
@@ -126,6 +155,9 @@ def identify_individuals(source, client, analyzer, options=PerBirdOptions(), *, 
         if failed and not identified:
             raise BirdIDError(f"所有可识别鸟体均失败，原列表保留：{next(r['message'] for r in records if r['status'] == 'failed')}")
         info = {"schema": 1, "coordinate_space": "oriented_camera_normalized_xyxy",
+                "recognized_at": datetime.now(timezone.utc).isoformat(),
+                "recognition_request": {"service": "SuperPicky BirdID", "endpoint": "/recognize",
+                                        "top_k": 3, "use_yolo": False, "use_gps": False},
                 "image_size": [width, height], "camera_crop": image.camera_crop,
                 "image_source": image.source, "analysis_version": result.version,
                 "analysis_params": analyzer.params.as_params(),

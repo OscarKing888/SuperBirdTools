@@ -94,6 +94,34 @@ def test_padding_clipped_and_raw_camera_mapping(photo, monkeypatch):
     assert map_camera_focus_box(record["box"], analyzer.image.camera_crop) == pytest.approx([0, 0, .25, 100/240])
 
 
+def test_species_snapshot_selected_candidate_and_legacy_roundtrip(photo, monkeypatch):
+    selected = {"cn_name": "白鹭", "en_name": "Egret", "confidence": 40,
+                "scientific_name": "Egretta garzetta", "description": "白色鹭鸟",
+                "gbif_rarity_100": 0, "iucn_category": "LC", "pinyin_name": "bái lù"}
+    payload = {"success": True, "results": [response("苍鹭", 20)["results"][0], selected],
+               "model_version": "离线测试", "all_results": [selected]}
+    result = core.identify_individuals(photo, client(monkeypatch, lambda _: payload),
+                                      Analyzer([(0, 0, 100, 100)]))
+    assert result.status == 'success', result.message
+    meta = PhotoMetaDataXMP().read(str(photo))
+    item = core.read_individuals(meta)[0]
+    assert item['status'] == 'candidate' and item['selected_candidate_index'] == 1
+    assert item['response'] == payload
+    assert item['description'] == '白色鹭鸟'
+    assert item['gbif_rarity_100'] == 0 and item['iucn_category'] == 'LC'
+    assert item['china_protection_level'] is None
+    info = json.loads(meta[core.INFO_FIELD])
+    assert info['recognized_at'].endswith('+00:00')
+    assert info['recognition_request']['use_yolo'] is False
+    legacy = {k: v for k, v in item.items() if k not in core.species_snapshot(selected)}
+    assert core.individual_species_metadata(legacy) == core.species_snapshot(selected)
+    # 显式缺失不能回填；旧响应中另一鸟种的属性也不能串到本行。
+    legacy['gbif_rarity_100'] = None
+    assert core.individual_species_metadata(legacy)['gbif_rarity_100'] is None
+    legacy['cn_name'] = '其它鸟'
+    assert core.individual_species_metadata(legacy)['iucn_category'] is None
+
+
 def test_rotated_original_is_cropped_in_display_coordinates(photo, monkeypatch):
     from bird_sharpness.image_source import load_analysis_image
     exif = Image.Exif()

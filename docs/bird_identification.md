@@ -77,9 +77,16 @@ RAW 的相机 JPEG 来源沿用全尺寸内嵌图/RAW 回退规则；降噪来�
 - `XMP-superpicky:birdid_individuals`：数组；每项包含零起始 `index`、`cn_name`、`en_name`、
   `confidence`（鸟种 0–100）、`detection_confidence`（鸟体检测 0–1）、`status`、
   `box_px`（未外扩鸟框）、`box`（相机画幅归一化框）、`crop_px`（实际送识别的外扩裁框），
-  成功请求另存完整 `response`。状态为 `confirmed/candidate/skipped/failed`；过滤/失败项保留区域及原因。
+  成功请求另存完整 `response`（保留所有候选、服务返回的版本等字段）和零起始 `selected_candidate_index`
+  （对应 `response.results` 的原始顺序，与鸟体 `index` 无关）。所选候选同时保存
+  `scientific_name`、`pinyin_name`、`description`、`gbif_rarity_100`、`iucn_category`、
+  `china_protection_level` 快照；缺失明确为 null，0 分保留，不从整图鸟种回填。
+  状态为 `confirmed/candidate/skipped/failed`；过滤/失败项保留区域及原因。
 - `XMP-superpicky:birdid_individuals_info`：schema=1，坐标系 `oriented_camera_normalized_xyxy`，
-  图像宽高、实际来源、RAW camera crop、源文件大小/mtime/扩展名、分析版本/参数及本次识别设置。
+  图像宽高、实际来源、RAW camera crop、源文件大小/mtime/扩展名、分析版本/参数及本次识别设置，
+  另存 UTC `recognized_at` 和 `recognition_request`（服务名、接口、top_k、use_yolo/use_gps）。
+  这些字段是 schema=1 的兼容扩展；旧记录可从已保存响应中匹配同名、同置信度候选读取鸟种属性，
+  不需联网或重新识别，不会自动改写旧 XMP。无法匹配、响应损坏或明确 null 时显示未知。
 
 `box_px` / `crop_px` 均为所选来源中 `[left, top, right, bottom]`，右/下界不包含；
 `box` 经 RAW 相机裁切逆映射，便于相机 JPEG、全 RAW 和同侧车 JPEG 之间定位。
@@ -87,8 +94,10 @@ RAW 相机默认裁切外的鸟可能带超出 0–1 的值；绘制时按各视
 重新识别替换本照片列表，成功的无鸟结果保存空列表。单只失败继续其它鸟并保存部分结果；全部可识别鸟失败、
 取消、XMP 损坏或原图/侧车在请求期间变化均保留旧列表。整图鸟名、候选、标题、备注、评分保持原样。
 
-“图片信息”最下方的“逐只识别”区域复用清晰度 Debug 的 `TraceBirdList`，显示同色编号、
-鸟名、鸟种置信度、检测置信度及原尺寸框大小。悬停时仅在同源 A/B 视口高亮对应区域，
+“图片信息”最下方的“逐只识别”区域复用清晰度 Debug 的 `TraceBirdList`，分列显示同色编号、
+鸟名与鸟种置信度、稀有度/IUCN 徽章及检测置信度和原尺寸框大小。徽章复用图片信息的用户配色/名称，
+待确定鸟种的徽章也属于候选信息；缺失单独显示未知。当前识别接口不返回中国国家保护等级，
+该字段保留为 null；IUCN 徽章不代表国家保护等级。悬停文字、徽章或信息列时均在同源 A/B 视口高亮对应区域，
 不依赖“显示鸟体”开关；移出、隐藏列表、切图或开始长按播放时清除。RAW 异步升级后重新映射。
 此临时高亮不参与叠加导出。读取来自后台元数据缓存，悬停不会触发解码、检测或 XMP I/O。
 

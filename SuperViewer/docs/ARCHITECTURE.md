@@ -341,6 +341,10 @@ CLI 与 GUI 共用核心：在仓库根使用共享 `.venv` 执行 `python -m Su
 无 Qt 核心 [`per_bird_identification.py`](../superviewer/per_bird_identification.py) 调用现有
 `BirdSharpnessAnalyzer.analyze()` 的最终 `birds`，按原尺寸最小宽高过滤，逐只临时 JPEG 调用服务，
 将鸟名、置信度、原图区域及失败状态一次保存至 XMP 的 `birdid_individuals` 列表；
+每只另存所选候选索引、学名/拼音/说明/稀有度/IUCN/国家保护等级快照及完整服务响应。
+`individual_species_metadata()` 为旧记录从匹配候选恢复属性，不借用整图等级；
+`IndividualBirdsPanel` 按编号、鸟名/置信度、徽章/检测信息分列，复用 `rarity_badge` 用户样式，
+`TraceBirdList.set_rows(details=...)` 将扩展信息列及子控件纳入同一悬停行，清晰度 Debug 保留三列。
 `birdid_individuals_info` 记录来源/坐标系/参数，CLI 共用该核心。共享 `MetadataLoader._parse_rec`
 保留这两个字段，`MetadataResultSync` 局部更新图片信息而不重选照片。
 [`per_bird_identification_ui.py`](../superviewer/per_bird_identification_ui.py) 将保存结果呈现在图片信息底部，

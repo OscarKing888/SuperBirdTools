@@ -39,6 +39,48 @@ def test_settings_defaults_and_adjustments():
         dialog.close()
 
 
+def test_badges_columns_and_hover_share_row():
+    from SuperViewer.superviewer.rarity_badge import RarityBadge, ConservationBadge
+    panel = IndividualBirdsPanel()
+    saved = metadata()
+    items = json.loads(saved[FIELD])
+    items[0].update(gbif_rarity_100=0, iucn_category='EN')
+    saved[FIELD] = json.dumps(items)
+    events = []
+    panel.hovered.connect(lambda path, row: events.append(row))
+    try:
+        panel.set_metadata('鸟.jpg', saved)
+        panel.show()
+        _APP.processEvents()
+        rarity = panel.findChild(RarityBadge)
+        conservation = panel.findChild(ConservationBadge)
+        assert rarity.text() == '普通' and conservation.text() == 'EN · 濒危'
+        name = panel.birds.cells[0][2]
+        detail = panel.birds.grid.itemAtPosition(0, 3).widget()
+        assert '白鹭' in name.text() and '检测' not in name.text()
+        assert detail.geometry().left() >= name.geometry().right()
+        styles = rarity.styleSheet(), conservation.styleSheet()
+        for widget in (rarity, conservation, detail):
+            _APP.sendEvent(widget, QEvent(QEvent.Type.Enter))
+            assert events[-1].bird == 0
+            assert panel.birds.hovered_row == 0
+            _APP.sendEvent(widget, QEvent(QEvent.Type.Leave))
+            if widget is not detail:
+                assert panel.birds.hovered_row == 0  # 进入同一信息列的留白仍保持悬停。
+                _APP.sendEvent(detail, QEvent(QEvent.Type.Leave))
+            assert events[-1] is None
+        assert styles == (rarity.styleSheet(), conservation.styleSheet())
+        # 全图元数据不得为缺失的逐只数据提供徽章。
+        missing = metadata()
+        missing.update(gbif_rarity_100=90, iucn_category='CR')
+        panel.set_metadata('另一鸟.jpg', missing)
+        badges = panel.birds._detail_cells[0]
+        assert badges.findChild(RarityBadge).text() == '未知'
+        assert badges.findChild(ConservationBadge).text() == '未知'
+    finally:
+        panel.close()
+
+
 def test_hover_ab_raw_upgrade_leave_switch_and_playback(tmp_path, monkeypatch):
     path, other = str(tmp_path / '鸟.ARW'), str(tmp_path / 'other.jpg')
     left, right = PreviewPanel(), PreviewPanel()

@@ -36,14 +36,19 @@ class TraceBirdList(QWidget):
         self.grid.setVerticalSpacing(0)
         self.rows: List = []
         self.cells: List[tuple] = []  # per row: (swatch, label, value)
+        self._detail_cells = []
+        self._detail_children = set()
         self._row_of: dict = {}  # cell widget -> row index (stale widgets of old rows are absent)
         self.hovered_row: Optional[int] = None
         self.setVisible(False)
 
-    def set_rows(self, rows) -> None:
+    def set_rows(self, rows, *, details=None) -> None:
+        """可选第四列放扩展信息；子控件共享本行悬停，Debug 的三列接口不变。"""
         self._set_hovered(None)
         self._clear_rows()
         self.rows, self.cells, self._row_of = list(rows), [], {}
+        self._detail_cells = list(details or [])
+        self._detail_children = set()
         for r, row in enumerate(self.rows):
             swatch = QLabel(f'<span style="color:{row.color}">■</span>', self)
             swatch.setTextFormat(_RICH)
@@ -62,7 +67,17 @@ class TraceBirdList(QWidget):
                 widget.installEventFilter(self)
                 self._row_of[widget] = r
             self.cells.append((swatch, label, value))
+            if r < len(self._detail_cells):
+                detail = self._detail_cells[r]
+                detail.setObjectName("birdRowDetails")
+                self.grid.addWidget(detail, r, 3)
+                for child in [detail, *detail.findChildren(QWidget)]:
+                    child.installEventFilter(self)
+                    self._row_of[child] = r
+                    if child is not detail:
+                        self._detail_children.add(child)
         self.grid.setColumnStretch(2, 1)
+        self.grid.setColumnStretch(3, 1 if self._detail_cells else 0)
         self.setVisible(bool(self.rows))
 
     def _clear_rows(self):
@@ -82,11 +97,17 @@ class TraceBirdList(QWidget):
         if self.hovered_row is not None and self.hovered_row < len(self.cells):
             for widget in self.cells[self.hovered_row]:
                 widget.setStyleSheet("")
+            if self.hovered_row < len(self._detail_cells):
+                self._detail_cells[self.hovered_row].setStyleSheet("")
         self.hovered_row = r
         if r is not None:
             tint = self.palette().color(_ROLE.Highlight)
             for widget in self.cells[r]:
                 widget.setStyleSheet(f"background: rgba({tint.red()}, {tint.green()}, {tint.blue()}, 90);")
+            if r < len(self._detail_cells):
+                # 仅染父容器，不能覆盖徽章自身的保护等级/稀有度颜色。
+                self._detail_cells[r].setStyleSheet(
+                    f"QWidget#birdRowDetails {{ background: rgba({tint.red()}, {tint.green()}, {tint.blue()}, 90); }}")
         self.hovered.emit(None if r is None else self.rows[r])
 
     def eventFilter(self, obj, event) -> bool:  # noqa: N802 - Qt API
@@ -96,7 +117,7 @@ class TraceBirdList(QWidget):
             if r is not None:
                 if kind == _EVENT.Enter:
                     self._set_hovered(r)
-                elif self.hovered_row == r:
+                elif self.hovered_row == r and obj not in self._detail_children:
+                    # 子徽章移到容器留白时父控件不会重新 Enter；由父容器 Leave 清除。
                     self._set_hovered(None)
         return super().eventFilter(obj, event)
-

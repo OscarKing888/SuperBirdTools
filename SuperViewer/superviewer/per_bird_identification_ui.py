@@ -6,14 +6,15 @@ import os
 
 from .bird_result_list import TraceBirdList
 from .bird_identification import BirdIDOptions
-from .per_bird_identification import PerBirdOptions, read_individuals
-from .qt_compat import QLabel, QVBoxLayout, QWidget, pyqtSignal
+from .per_bird_identification import PerBirdOptions, read_individuals, individual_species_metadata
+from .rarity_badge import RarityBadge, ConservationBadge, MetadataBadge
+from .qt_compat import QLabel, QVBoxLayout, QHBoxLayout, QWidget, pyqtSignal
 try:
-    from PyQt6.QtCore import QObject
+    from PyQt6.QtCore import QObject, Qt
     from PyQt6.QtWidgets import (QCheckBox, QDialog, QDialogButtonBox, QDoubleSpinBox,
                                 QFormLayout, QLineEdit, QSpinBox, QScrollArea, QTabWidget)
 except ImportError:  # pragma: no cover
-    from PyQt5.QtCore import QObject
+    from PyQt5.QtCore import QObject, Qt
     from PyQt5.QtWidgets import (QCheckBox, QDialog, QDialogButtonBox, QDoubleSpinBox,
                                 QFormLayout, QLineEdit, QSpinBox, QScrollArea, QTabWidget)
 
@@ -127,10 +128,11 @@ class IndividualBirdsPanel(QWidget):
     def set_metadata(self, path, metadata):
         items = read_individuals(metadata)
         if self.path == path and items == self._items:
+            self.refresh_badges()
             return
         self.birds.set_rows([])  # 先清除旧照片的悬停状态。
         self.path, self._items = path, items
-        rows = []
+        rows, details = [], []
         if items:
             from bird_sharpness.trace import BIRD_COLORS, TraceBirdRow, hex_color
             for item in items:
@@ -139,14 +141,40 @@ class IndividualBirdsPanel(QWidget):
                 name = item["cn_name"] or item["en_name"] or "未识别"
                 score = item.get("confidence")
                 status = {"candidate": " · 待确定", "failed": " · 失败", "skipped": " · 已过滤"}.get(item.get("status"), "")
-                value = f"{name}" + (f" {score:.1f}%" if score is not None else "") + status
-                value += f"\n检测置信度 {item['detection_confidence']:.2f}，框 {x1-x0:g} × {y1-y0:g} px"
+                value = f"{name}\n" + (f"{score:.1f}%" if score is not None else "") + status
+                detail = QWidget(self.birds)
+                layout = QVBoxLayout(detail)
+                layout.setContentsMargins(8, 3, 0, 6)
+                layout.setSpacing(4)
+                badges = QHBoxLayout()
+                badges.setSpacing(4)
+                species = individual_species_metadata(item)
+                rarity, conservation = RarityBadge(detail), ConservationBadge(detail)
+                rarity.set_score(species['gbif_rarity_100'])
+                conservation.set_category(species['iucn_category'])
+                for badge in (rarity, conservation):
+                    if item.get('status') == 'candidate':
+                        badge.setToolTip(badge.toolTip() + '\n待确定候选鸟种的信息')
+                    badges.addWidget(badge)
+                badges.addStretch(1)
+                layout.addLayout(badges)
+                description = f"检测 {item['detection_confidence']:.2f} · {x1-x0:g} × {y1-y0:g} px"
                 if item.get("message"):
-                    value += "\n" + item["message"]
+                    description += "\n" + item["message"]
+                label = QLabel(description, detail)
+                label.setTextFormat(getattr(Qt, "TextFormat", Qt).PlainText)
+                label.setWordWrap(True)
+                layout.addWidget(label)
+                layout.addStretch(1)
+                details.append(detail)
                 rows.append(TraceBirdRow(f"鸟 #{n + 1}", value, hex_color(BIRD_COLORS[n % len(BIRD_COLORS)]),
                                          tuple(item["box"]), n))
-        self.birds.set_rows(rows)
+        self.birds.set_rows(rows, details=details)
         self.empty.setVisible(not rows)
+
+    def refresh_badges(self):
+        for badge in self.birds.findChildren(MetadataBadge):
+            badge.refresh_style()
 
 
 class IndividualBirdHover(QObject):
