@@ -130,3 +130,36 @@ def test_info_panel_reloads_saved_list_without_resetting_drafts(tmp_path):
         assert panel.individual_birds.birds.rows == []
     finally:
         panel.close()
+
+
+def test_detection_override_is_independent_and_can_return_to_global():
+    from SuperViewer.superviewer.per_bird_identification import make_analyzer
+    params = {'image_source': 'jpeg', 'detector': 'yolo11l-seg.pt', 'detect_conf_percent': 25}
+    dialog = PerBirdSettingsDialog(None, BirdIDOptions(), PerBirdOptions(), params)
+    try:
+        assert not dialog.override.isChecked()
+        dialog.override.setChecked(True)
+        form = dialog.analysis_form
+        form.detector.setCurrentIndex(form.detector.findData('yolov8x-seg.pt'))
+        form.detect_long_edge.setValue(2048)
+        form.detect_conf_percent.setValue(10)
+        form.duplicate_mask_percent.setValue(90)
+        form.flock_mode.setCurrentIndex(form.flock_mode.findData('off'))
+        form.exclude_birds.setChecked(False)
+        options = dialog.per_bird_options()
+        analyzer = make_analyzer(params, options=options)
+        assert analyzer.params.detector == 'yolov8x-seg.pt'
+        assert analyzer.params.detect_conf_percent == 10 and analyzer.params.duplicate_mask_percent == 90
+        assert analyzer.params.flock_mode == 'off' and not analyzer.params.exclude_birds
+        assert analyzer.params.max_birds == analyzer.params.min_bird_side == 0
+        assert params['detector'] == 'yolo11l-seg.pt' and params['detect_conf_percent'] == 25
+        restored = PerBirdSettingsDialog(None, BirdIDOptions(), options, params)
+        try:
+            assert restored.override.isChecked() and restored.analysis_form.detect_conf_percent.value() == 10
+        finally:
+            restored.close()
+        dialog.override.setChecked(False)
+        assert dialog.per_bird_options().analysis_overrides is None
+        assert make_analyzer(params, options=dialog.per_bird_options()).params.detect_conf_percent == 25
+    finally:
+        dialog.close()

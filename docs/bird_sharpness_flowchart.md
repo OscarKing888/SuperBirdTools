@@ -2,7 +2,7 @@
 
 本文按代码的实际执行顺序，用流程图说明一张照片从入队到写入 XMP 的每个环节。算法的背景、标定数据和取舍理由见 [bird_sharpness.md](bird_sharpness.md)；本文只讲“先做什么、再做什么、什么条件走哪条分支”。所有阈值都标注了代码位置，以代码为准。
 
-版本：`sbt-blur-v16`（[scoring.py](../bird_sharpness/scoring.py) `ALGORITHM_VERSION`），非默认参数和 RAW 以外的图像来源会追加后缀（见文末；SuperViewer 默认测相机内嵌 JPEG，即 `sbt-blur-v16-jpeg`）。
+版本：`sbt-blur-v17`（[scoring.py](../bird_sharpness/scoring.py) `ALGORITHM_VERSION`），非默认参数和 RAW 以外的图像来源会追加后缀（见文末；SuperViewer 默认测相机内嵌 JPEG，即 `sbt-blur-v17-jpeg`）。
 
 ## 目录
 
@@ -33,10 +33,10 @@ flowchart TD
     A["任务入队<br/>BirdSharpnessAction.execute()"] --> B{"跳过已检测？<br/>sidecar 已有同版本 verdict"}
     B -->|是| Z0["skipped，不计算"]
     B -->|否| C["① 解码全分辨率<br/>stage = decode"]
-    C --> D["② 首遍识别<br/>1024 px 副本，网络输入 640 px，conf ≥ 0.25<br/>stage = detect"]
-    D --> D1["去重：框重叠 ≥ 70%；有有效分割掩膜时<br/>还须掩膜重叠 ≥ 70% 才视为同一只"]
-    D1 --> D2{"有鸟框短边 < 64 px？"}
-    D2 -->|是| D3["鸟群补检：2048 px 副本 / 2048 px 输入<br/>只补首遍漏掉的鸟"]
+    C --> D["② 首遍识别<br/>副本 detect_long_edge，输入 detect_imgsz<br/>置信度 ≥ detect_conf_percent / 100（默认 1024 / 640 / 0.25）<br/>stage = detect"]
+    D --> D1["去重：框 ≥ duplicate_box_percent<br/>有有效掩膜时还须掩膜 ≥ duplicate_mask_percent（默认均 70%）"]
+    D1 --> D2{"flock_mode 为 always，或 auto 且有鸟框长边 < 64 px？<br/>框按 1024 px 画幅换算；off 跳过"}
+    D2 -->|是| D3["鸟群补检：副本 max(2048, detect_long_edge) / 输入 2048<br/>只补漏鸟；副本和网络均未升级则跳过"]
     D2 -->|否| DS
     D3 --> DS["忽略小鸟：min_bird_side > 0 时丢掉鸟框长边 < N px（全分辨率）的鸟<br/>复检 / 增强 / 模型链给定的鸟同样过滤"]
     DS --> D4{"设置了每张最多鸟数？"}
@@ -50,10 +50,15 @@ flowchart TD
     H -->|否| N
     I --> J{"有鸟？"}
     E -->|是| K
-    G -->|是| K
+    G -->|是| G2{"全图复检找到小鸟且本张尚未做鸟群补检？<br/>flock_mode 为 auto / always，未取消"}
+    G2 -->|是| G3["同一鸟群补检 → 去重 → 小尺寸过滤 → 焦点优先限数"]
+    G2 -->|否| K
+    G3 --> G4{"过滤后还有鸟？"}
+    G4 -->|是| K
+    G4 -->|否| H
     J -->|是| K["⑤ 逐只鸟测量 _measure_bird<br/>stage = measure"]
     J -->|否| N["⑦ 无鸟区域测量 _no_bird_result<br/>焦点窗口 → 手动对焦焦平面 → 全图分块"]
-    K --> L["⑥ 排除假鸟 / 鸟的局部 excluded_birds"]
+    K --> L["⑥ exclude_birds 开启时排除假鸟 / 鸟的局部<br/>关闭时全部候选参与取最好"]
     L --> M["取最好的一只：分数最高，其次 σ 最小，再次置信度<br/>region = bird"]
     N --> N1["verdict = no_bird<br/>region = focus / manual / full"]
     M --> P["⑧ 结果 BirdSharpnessResult<br/>verdict、score、sigma、region、birds…"]
@@ -93,7 +98,7 @@ flowchart LR
 
 另有结果消费者：[逐只鸟种识别](bird_identification.md#逐只识别)在 `BirdIDWorker` 后台逐张调用同一个
 `BirdSharpnessAnalyzer.analyze()`，复用最终排除假鸟后的 `birds`，不修改本文件所述算法、评分或清晰度 XMP。
-该调用把 `max_birds`、`min_bird_side` 设为 0，其余参数沿用 Viewer 清晰度设置；独立送识别门槛
+该调用把 `max_birds`、`min_bird_side` 设为 0，其余参数默认沿用 Viewer 清晰度设置；「前置检测」可通过 `PerBirdOptions.analysis_overrides` 独立覆盖（本会话记住，不改全局设置）。独立送识别门槛
 为鸟框宽高各至少 64 px（可调），裁图外扩默认 0%（可调 0–50%），鸟种确认阈值默认 50%。
 这些门槛在完整清晰度结果之后应用，只影响鸟种服务请求；无鸟时焦点/全图回退区域不送识别。
 结果及来源信息分别写 `birdid_individuals` / `birdid_individuals_info`，细节和坐标约定见上述说明。
@@ -162,11 +167,11 @@ flowchart TD
 
 ```mermaid
 flowchart TD
-    A["rgb8 缩到长边 1024 px<br/>DETECT_LONG_EDGE"] --> B["YOLO detect_birds<br/>imgsz 640（DETECT_IMGSZ），conf ≥ 0.25（BIRD_CONFIDENCE_MIN）"]
-    B --> C["按置信度 × 框面积降序<br/>去重 dedupe_detections：框交集 / 较小框 ≥ 70%<br/>且两者有有效掩膜时，掩膜交集 / 较小掩膜也须 ≥ 70%<br/>无有效掩膜时只判断框；重复只留排序靠前的"]
-    C --> D{"有任一鸟框短边 < 64 px？<br/>（1024 px 副本像素，FLOCK_BIRD_SIDE）"}
-    D -->|是| E["鸟群补检 _small_bird_pass：<br/>rgb8 缩到 2048 px，imgsz 2048<br/>新鸟 found_by = full_small"]
-    E --> F["首遍鸟按比例放到 2048 坐标系（掩膜不动，测量结果不变）<br/>+ 补检鸟 → 再次去重"]
+    A["rgb8 缩到 detect_long_edge（默认 1024 px）<br/>不放大原图"] --> B["YOLO detect_birds<br/>imgsz = detect_imgsz（默认 640）<br/>conf ≥ detect_conf_percent / 100（默认 0.25）"]
+    B --> C["按置信度 × 框面积降序<br/>去重 dedupe_detections：框交集 / 较小框 ≥ duplicate_box_percent（默认 70%）<br/>且两者有有效掩膜时，掩膜交集 / 较小掩膜也须 ≥ duplicate_mask_percent（默认 70%）<br/>无有效掩膜时只判断框；重复只留排序靠前的"]
+    C --> D{"flock_mode 为 always，或 auto 且有框长边 < 64 px？<br/>按 1024 px 画幅换算，FLOCK_BIRD_SIDE；off 跳过"}
+    D -->|是| E["鸟群补检 _small_bird_pass：<br/>rgb8 缩到 max(2048, detect_long_edge)，imgsz 2048<br/>同尺寸副本仍可升级网络；副本/网络都不升级时跳过<br/>新鸟 found_by = full_small"]
+    E --> F["补检前的鸟按比例放到补检坐标系（掩膜不动，测量结果不变）<br/>+ 补检鸟 → 再次去重"]
     D -->|否| H0
     F --> H0["_drop_small：min_bird_side > 0 时丢掉框长边 < N px 的鸟<br/>（识别步骤注明忽略只数；全部丢掉 → 走复检 / 无鸟分支）"]
     H0 --> G{"max_birds > 0 且鸟数超出？"}
@@ -181,7 +186,9 @@ flowchart TD
 - v16 起分割模型去重同时检查鸟框与鸟体掩膜：框重叠达 70% 后，若两者都有有效掩膜，掩膜重叠也须达 70% 才合并；轮廓分离的前后两只鸟保留。无掩膜、空掩膜或非二维掩膜退回鸟框规则。鸟群补检中的不同分辨率全帧掩膜按最近邻缩到较小分辨率比较，不修改原掩膜或测量像素。去重保留输入顺序：首遍为置信度 × 框面积，补检时首遍优先，增强搜索时未切断的整鸟优先。
 - `DSC00462.png` 实测：首遍产生 9 个候选；旧规则误删置信度 0.903 的小鸟（框有 97.2% 落在大鸟框内，掩膜重叠为 0），只剩 7 只。v16 保留小鸟，仍剔除掩膜重叠 98.6% 的真重复，最终 8 只。实验管线显示原始结果（截图置信度下限 0.10），正式流程仍为 0.25，并保留后续假鸟/局部排除；不把实验的 12 个候选全部算作独立鸟。
 - 检测模型由 `AnalysisParams.detector` 决定（`auto` = 内置选择：分割模型优先）。
-- 首遍网络输入保持 640 px 不变；v16 改变候选去重判断，不调整 YOLO 输入、置信度门槛或清晰度评分。
+- v17 开放副本长边、网络输入、置信度、去重阈值、鸟群补检模式和测量后排除开关。默认首遍仍为 1024 / 640 / 0.25；不调整清晰度评分。
+- v17 修复全图复检找到小鸟后遗漏鸟群补检：仅 `full_lifted` / `full_fine` 且本张尚未补检时按同一规则触发，`focus_weak` / `focus_zoom` 仍只采纳一只。补检/复检切换时按各自的副本恢复坐标比例，不把 2048 坐标比例套到 1024 副本上。强制补检允许首遍为零；关闭补检可对比实验的单遍候选。
+- `DSC03934.jpg` 实测：默认首遍为零、复检 7 个候选，旧流程最终 3 只；v17 默认补检后最终保留 50 个候选，均满足逐只识别默认的 64×64 门槛。YOLOv8x-seg 默认为 44；设副本 2048、输入 640、置信度 10%、补检 off、`exclude_birds=False` 则重现实验的 26 个候选。这些是检测结果，不保证每个候选都能正确识别鸟种。
 
 ---
 
@@ -193,12 +200,12 @@ flowchart TD
 flowchart TD
     A["首遍无鸟"] --> B["lift_midtones：按亮度中位数算 γ<br/>目标中位数 100，γ ≥ 0.35"]
     B --> C{"γ < 0.9（画面暗）？"}
-    C -->|是| D["提亮副本再识别<br/>imgsz 640，conf ≥ 0.25"]
+    C -->|是| D["提亮副本再识别<br/>imgsz = detect_imgsz，conf ≥ detect_conf_percent / 100"]
     D --> E{"有鸟？"}
     E -->|是| E1["采纳 found_by = full_lifted<br/>_focus_part 只留压在焦点框上的掩膜连通块"]
     C -->|否| F
     E -->|否| F["原副本再识别<br/>imgsz 1024（RECHECK_IMGSZ），conf ≥ 0.05 作为候选"]
-    F --> G{"有 conf ≥ 0.25 的候选？"}
+    F --> G{"有 conf ≥ detect_conf_percent / 100 的候选？"}
     G -->|是| G1["采纳 found_by = full_fine"]
     G -->|否| H{"有相机焦点框？"}
     H -->|否| Z["复检失败：无鸟"]
@@ -208,13 +215,14 @@ flowchart TD
     J -->|否| K{"anchors = overlap ≥ 0.2 的候选，有吗？"}
     K -->|否| Z
     K -->|是| L["规则二：以焦点为中心取方形窗口<br/>边长 = 长边 / 6、/ 4、/ 2.5 依次"]
-    L --> M["窗口裁切 → imgsz 640，conf ≥ 0.25"]
+    L --> M["窗口裁切 → imgsz 640，conf ≥ detect_conf_percent / 100"]
     M --> N{"放大后的鸟 overlap ≥ 0.2<br/>且与某 anchor 的 IoU ≥ 0.3？"}
     N -->|是| N1["采纳置信度最高者<br/>found_by = focus_zoom，坐标映射回全图"]
     N -->|否 且还有窗口| L
     N -->|否 且窗口用尽| Z
 ```
 
+- 全图复检采纳 `full_lifted` / `full_fine` 后回到第 4 节的鸟群补检判断（本张尚未补检时）；焦点弱候选 / 放大复检不触发自动鸟群补检。
 - 提亮图只用于识别，测量永远用原始像素。
 - 单凭放大结果不采信（放大后的暗叶子常被认成 0.3–0.8 的“鸟”），必须与一个弱候选位置一致。
 - SuperViewer 预览“显示鸟体”首遍无鸟时调用同一函数（`find_missed_bird()`）。
@@ -346,11 +354,16 @@ flowchart TD
 
 ## 8. 排除假鸟 / 局部，取最好的一只
 
+仅 `AnalysisParams.exclude_birds=True` 时执行排除；关闭时所有候选参与取最好的一只。
+
 代码：`excluded_birds()`、`BirdMeasurement.rank()`、`_bird_result()`。只有 ≥ 2 只鸟时才排除；没有关键点模型时（无可见度）不排除。
 
 ```mermaid
 flowchart TD
-    A["所有 BirdMeasurement"] --> B["对每只“看不到眼”（可见度 < 0.5）的鸟："]
+    A0["所有 BirdMeasurement"] --> P{"exclude_birds 开启且至少 2 只鸟？"}
+    P -->|否| I
+    P -->|是| A["检查局部和弱候选"]
+    A --> B["对每只“看不到眼”（可见度 < 0.5）的鸟："]
     B --> C{"其鸟框 ≥ 50% 落在某只“看得到眼”的鸟框内？"}
     C -->|是| D["排除：鸟的局部（翅膀 / 尾羽），标 并入 #n"]
     C -->|否| E
@@ -511,10 +524,16 @@ flowchart TD
 
 ## 13. 参数、版本后缀与关键阈值速查
 
-### 可调参数（`AnalysisParams`，三处入口共用）
+### 可调参数（`AnalysisParams`，用户选项 / Debug / CLI / 逐只识别覆盖共用）
 
 | 参数 | 默认 | 影响环节 | 版本后缀 |
 | --- | --- | --- | --- |
+| `detect_long_edge` | 1024（640–4096） | 首遍/复检副本上限，不放大原图 | `-detedge<N>` |
+| `detect_imgsz` | 640（320–2048，向下取 32 的倍数） | 首遍/提亮复检网络输入 | `-deti<N>` |
+| `detect_conf_percent` | 25（5–95） | 首遍、全图复检、焦点放大、鸟群补检采纳门槛；焦点弱证据/增强采纳门槛另计 | `-detc<N>` |
+| `duplicate_box_percent` / `duplicate_mask_percent` | 70 / 70（1–100） | 去重，两条件同时满足；无有效掩膜只检查框 | `-dupbox<N>` / `-dupmask<N>` |
+| `flock_mode` | auto | 小鸟时补检（含全图复检后）；always 总是；off 关闭 | `-flock-always` / `-flock-off` |
+| `exclude_birds` | True | 测量后假鸟和局部排除；关闭后给定鸟/普通检测均保留全部候选 | `-keep-candidates` |
 | `max_birds` | 0（不限） | 第 4 节限数 | 无 |
 | `edge_estimator` | standard | 第 10 节 min_kept / 分位 | `-dense` |
 | `detector` | auto | 第 4、5、6 节识别模型 | `-<模型名>` |
@@ -531,10 +550,10 @@ flowchart TD
 
 | 常量 | 值 | 位置 | 用途 |
 | --- | --- | --- | --- |
-| `DETECT_LONG_EDGE` / `DETECT_IMGSZ` | 1024 / 640 | analyzer.py | 首遍识别 |
-| `BIRD_CONFIDENCE_MIN` | 0.25 | models.py | 采纳为鸟的置信度 |
+| `DETECT_LONG_EDGE` / `DETECT_IMGSZ` | 1024 / 640 | analyzer.py | 首遍默认值；1024 也是鸟群触发尺寸的基准 |
+| `BIRD_CONFIDENCE_MIN` | 0.25 | models.py | 默认采纳置信度；正式流程按 detect_conf_percent |
 | `DUPLICATE_CONTAINMENT` | 0.70 | analyzer.py | 去重：框交集 / 较小框；两者有有效掩膜时还须掩膜交集 / 较小掩膜同样达标 |
-| `FLOCK_BIRD_SIDE` / `SMALL_DETECT_LONG_EDGE` | 64 / 2048 | analyzer.py | 鸟群补检触发与分辨率 |
+| `FLOCK_BIRD_SIDE` / `SMALL_DETECT_LONG_EDGE` | 64 / 2048 | analyzer.py | 自动补检触发：框长边 < 64（1024 画幅）；补检副本至少 2048 |
 | `LIFT_MEDIAN_TARGET` / `LIFT_GAMMA_MIN` / `LIFT_DARK_GAMMA` | 100 / 0.35 / 0.9 | analyzer.py | 暗部提亮 |
 | `RECHECK_IMGSZ` | 1024 | analyzer.py | 复检网络输入 |
 | `FOCUS_WEAK_CONFIDENCE` / `FOCUS_WEAK_OVERLAP` | 0.10 / 0.5 | analyzer.py | 复检规则一 |

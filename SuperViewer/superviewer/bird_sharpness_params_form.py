@@ -48,6 +48,8 @@ ESTIMATOR_CHOICES = (
      "至少 60 条最强边缘，取第 40 百分位。小鸟头部边缘少时判定更稳，整体不偏移；"
      "但在已标注照片上有 2/15 张在清晰与可用之间对调，结果仅供对比。"),
 )
+FLOCK_CHOICES = (("auto", "自动（发现小鸟时，包括全图复检后）"),
+                 ("always", "总是补检（密集鸟群，较慢）"), ("off", "关闭（只按常规输入识别）"))
 ENH_CHOICES = ((ENH_OFF, "关闭（默认）"), (ENH_MANUAL, "仅手动对焦的照片"), (ENH_NOBIRD, "所有没找到鸟的照片"))
 SAM_SCOPE_CHOICES = ((SAM_SCOPE_ALL, "全部鸟（默认；每只鸟都经 SAM 抠一次，鸟群较慢）"),
                      (SAM_SCOPE_RECHECKED, "仅复检/增强找到的鸟（更快）"))
@@ -153,7 +155,11 @@ def params_summary(params: dict) -> str:
     enh = ("关" if e.mode == ENH_OFF else
            f"{dict(ENH_CHOICES)[e.mode]} · 区域 {e.region_percent}% · {e.grid}×{e.grid} 窗口 · 输入 {e.imgsz} px"
            f" · 门槛 {e.min_conf_percent / 100:.2f}")
-    return f"图像 {source}；检测模型 {detector}；SAM 精修 {sam}；测量像素 {pixels}；增强找鸟 {enh}；分块 {tile_summary(params)}"
+    return (f"图像 {source}；检测模型 {detector}；输入 {p.detect_imgsz} px / 副本 {p.detect_long_edge} px"
+            f" / 置信度 {p.detect_conf_percent}%；鸟群补检 {dict(FLOCK_CHOICES)[p.flock_mode]}；"
+            f"去重 框 {p.duplicate_box_percent}% / 掩膜 {p.duplicate_mask_percent}%；"
+            f"假鸟排除 {'开' if p.exclude_birds else '关'}；SAM 精修 {sam}；测量像素 {pixels}；"
+            f"增强找鸟 {enh}；分块 {tile_summary(params)}")
 
 
 def missing_models(params: dict) -> list:
@@ -317,6 +323,23 @@ class AnalysisParamsForm(QWidget):
                                       ("SAM 精修范围", self.sam_scope), ("测量像素", self.pixels),
                                       (None, self.grey_fill)), expand_fields))
         layout.addLayout(status_row)
+        self.detect_long_edge = _spin(self, 640, 4096, 128, " px", "首遍送入 YOLO 前的副本长边上限（不放大原图）。实验管线使用 2048 px。")
+        self.detect_imgsz = _spin(self, 320, 2048, 32, " px", "首遍网络输入；越大越容易找小鸟，耗时和显存占用也更高。鸟群补检固定 2048 px。")
+        self.detect_conf_percent = _spin(self, 5, 95, 5, " %", "全图首遍、复检和鸟群补检的置信度下限；降低可找到更多鸟，也会增加误识别。")
+        self.duplicate_box_percent = _spin(self, 1, 100, 5, " %", "框交集 / 较小框达到此比例才判断重复。提高阈值会保留更多重叠框。")
+        self.duplicate_mask_percent = _spin(self, 1, 100, 5, " %", "两者有有效分割掩膜时，还须掩膜交集 / 较小掩膜达到此比例才合并；无掩膜时仅按框判断。")
+        self.flock_mode = QComboBox(self)
+        for key, label in FLOCK_CHOICES:
+            self.flock_mode.addItem(label, key)
+        _narrow(self.flock_mode)
+        self.exclude_birds = QCheckBox("测量后排除疑似假鸟 / 鸟的局部", self)
+        self.exclude_birds.setToolTip("排除低置信度且看不到眼的候选，以及框落在有眼鸟内的无眼局部。密集小鸟可能误排；关闭会保留这些候选，也可能保留树叶、翅膀等误识别。")
+        layout.addWidget(_heading("检测与去重", self))
+        layout.addLayout(_grid(self, (("首遍副本长边", self.detect_long_edge), ("首遍网络输入", self.detect_imgsz),
+                                     ("检测置信度下限", self.detect_conf_percent), ("鸟群高分辨率补检", self.flock_mode),
+                                     ("去重：框重叠门槛", self.duplicate_box_percent),
+                                     ("去重：掩膜重叠门槛", self.duplicate_mask_percent),
+                                     (None, self.exclude_birds)), expand_fields))
         self._fill_model_combos()
         for combo in (self.detector, self.sam_model):
             combo.currentIndexChanged.connect(self._update_models_status)
@@ -435,6 +458,10 @@ class AnalysisParamsForm(QWidget):
     def set_params(self, params: Optional[dict]) -> None:
         p = AnalysisParams.from_params(params)
         self.image_source.setCurrentIndex(max(0, self.image_source.findData(p.image_source)))
+        for name in ("detect_long_edge", "detect_imgsz", "detect_conf_percent", "duplicate_box_percent", "duplicate_mask_percent"):
+            getattr(self, name).setValue(getattr(p, name))
+        self.flock_mode.setCurrentIndex(max(0, self.flock_mode.findData(p.flock_mode)))
+        self.exclude_birds.setChecked(p.exclude_birds)
         self.max_birds.setValue(p.max_birds)
         self.min_bird_side.setValue(p.min_bird_side)
         self.estimator.setCurrentIndex(max(0, self.estimator.findData(p.edge_estimator)))
@@ -468,4 +495,6 @@ class AnalysisParamsForm(QWidget):
             "enh_mode": self.enh_mode.currentData() or ENH_OFF, "enh_region_percent": int(self.enh_region.value()),
             "enh_grid": int(self.enh_grid.value()), "enh_imgsz": int(self.enh_imgsz.value()),
             "enh_min_conf_percent": int(self.enh_conf.value()), "enh_lift": self.enh_lift.isChecked(),
+            **{name: getattr(self, name).value() for name in ("detect_long_edge", "detect_imgsz", "detect_conf_percent", "duplicate_box_percent", "duplicate_mask_percent")},
+            "flock_mode": self.flock_mode.currentData() or "auto", "exclude_birds": self.exclude_birds.isChecked(),
             **self.tiles.params()}).as_params()

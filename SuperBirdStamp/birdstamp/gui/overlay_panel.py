@@ -207,12 +207,12 @@ class OverlayPanel(QWidget):
         self._percent('badge_padding_y','垂直内边距（字号 %）',0,200,factor=100,kinds=('badge',))
         self._percent('badge_radius','圆角（高度 %）',0,50,factor=100,kinds=('badge',))
         for key,value in DEFAULT_TEXT_EFFECTS.items():
-            labels={'stroke_enabled':'描边','stroke_color':'描边颜色','stroke_width':'描边宽度',
+            labels={'stroke_enabled':'描边','stroke_color':'描边颜色','stroke_opacity':'描边不透明度 %','stroke_width':'描边宽度',
                     'shadow_enabled':'阴影','shadow_color':'阴影颜色','shadow_opacity':'阴影不透明度 %',
                     'shadow_offset_x':'阴影 X','shadow_offset_y':'阴影 Y','shadow_blur':'阴影柔化'}
             if isinstance(value,bool): self._check(key,labels[key],('text','badge'))
             elif isinstance(value,str): self._color(key,labels[key],('text','badge'))
-            elif key=='shadow_opacity': self._percent(key,labels[key],*TEXT_EFFECT_RANGES[key],kinds=('text','badge'))
+            elif key.endswith('_opacity'): self._percent(key,labels[key],*TEXT_EFFECT_RANGES[key],kinds=('text','badge'))
             else: self._spin(key,labels[key],*TEXT_EFFECT_RANGES[key],kinds=('text','badge'))
         self._combo('banner_background_style','背景样式',[('纯色','solid'),('渐变','gradient_bottom')],kinds=('background',))
         self._color('banner_color','背景颜色',('background',))
@@ -255,6 +255,12 @@ class OverlayPanel(QWidget):
             if key in ('name','visible','locked'): continue
             row=self.form.takeRow(widget)
             group='布局' if key in geometry else '效果' if key.startswith(('stroke_','shadow_')) else '内容'
+            if key == 'shadow_enabled':
+                # 描边和阴影独立分组，分割线跨越标签与控件两列。
+                separator = QFrame()
+                separator.setFrameShape(QFrame.Shape.HLine)
+                separator.setFrameShadow(QFrame.Shadow.Sunken)
+                forms[group].addRow(separator)
             forms[group].addRow(row.labelItem.widget(),widget)
             self.forms[key]=forms[group]
         for widget,group in ((self.reset_layout_button,'布局'),(self.font_button,'内容'),(self.replace_image_button,'内容')):
@@ -504,6 +510,11 @@ class OverlayPanel(QWidget):
                 if key=='text_source': show &= item.get('text_mode')=='metadata'
                 self.forms.get(key,self.form).setRowVisible(widget,show)
                 widget.setEnabled(not item['locked'] or key in ('locked','visible','name'))
+                if key.startswith(('stroke_', 'shadow_')):
+                    enabled = not item['locked'] and (
+                        key.endswith('_enabled') or item.get(key.split('_')[0] + '_enabled', False))
+                    widget.setEnabled(enabled)
+                    self.forms[key].labelForField(widget).setEnabled(enabled)
                 if key=='badge_radius': widget.setEnabled(not item['locked'] and item.get('badge_shape')!='circle')
                 if key=='tint_color': widget.setEnabled(not item['locked'] and item.get('tint_enabled',False))
                 if key in ('color','badge_background') and item['type']=='badge':
