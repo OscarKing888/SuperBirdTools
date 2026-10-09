@@ -597,3 +597,23 @@ def test_live_unsorted_candidates_default_to_highest_and_adopt_correct_row(env, 
     assert wait_for(lambda: not controller.busy)
     assert PhotoMetaDataXMP().read(paths[0])['Title'] == '黑短脚鹎'
     assert table.model().index(2, 2).data() == '已采纳'
+
+
+def test_per_bird_worker_receives_selected_detection_override(env, monkeypatch):
+    from SuperViewer.tests.test_per_bird_identification import Analyzer, response
+    from SuperViewer.superviewer.per_bird_identification import PerBirdOptions, make_analyzer
+    controller, files, paths, state = env
+    selected = PerBirdOptions(analysis_overrides={'detector': 'yolov8x-seg.pt', 'detect_conf_percent': 10,
+                                                 'duplicate_mask_percent': 85, 'exclude_birds': False})
+    controller._per_bird_options = selected
+    seen = []
+    def create(params, *, options, denoised_lookup):
+        seen.append(make_analyzer(params, options=options).params)
+        return Analyzer([(0, 0, 100, 100)])
+    monkeypatch.setattr(ui, 'make_analyzer', create)
+    monkeypatch.setattr(BirdIDClient, 'recognize_crop', lambda *a: response())
+    assert controller.start_for_paths(paths[:1], options=BirdIDOptions(), per_bird=True)
+    assert wait_for(lambda: not controller.busy)
+    assert len(seen) == 1 and seen[0].detector == 'yolov8x-seg.pt'
+    assert seen[0].detect_conf_percent == 10 and seen[0].duplicate_mask_percent == 85
+    assert not seen[0].exclude_birds and controller._counts == {'success': 1}

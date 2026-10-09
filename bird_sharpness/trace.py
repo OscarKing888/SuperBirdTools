@@ -439,9 +439,11 @@ class AnalysisTracer:
 
     def detect(self, detections, scale_to_full: float, *, has_masks: bool, has_keypoints: bool,
                unmeasured: int = 0, limit: int = 0, small_pass=None, detector: str = "",
-               ignored_small: int = 0) -> None:
+               ignored_small: int = 0, params=None) -> None:
         """``small_pass``: ``(first-pass birds, high-resolution birds, added)`` when the
         small-bird pass ran (see ``analyzer.FLOCK_BIRD_SIDE``)."""
+        from .params import AnalysisParams
+        p = AnalysisParams.from_params(params)
         img = _dim(self._overview, None, 0.55)
         lw = _line_w(img)
         H, W = self._image_shape
@@ -477,21 +479,23 @@ class AnalysisTracer:
 
             first, found, added = small_pass
             metrics.insert(3, ("小鸟高分辨率补检",
-                               f"首遍 {first} 只（有鸟框 < {A.FLOCK_BIRD_SIDE} px），{A.SMALL_DETECT_LONG_EDGE} px 再识别"
+                               f"补检前 {first} 只（鸟群补检：{p.flock_mode}），{max(A.SMALL_DETECT_LONG_EDGE, p.detect_long_edge)} px 再识别"
                                f"找到 {found} 只，合并后新增 {added} 只"))
         legend = [(hex_color(C_FOCUS), "相机焦点框")]  # bird colours are in the bird list
-        desc = ("在 1024 px 副本上找出全部鸟（置信度 ≥ 0.25）。每只鸟后续只用自己的像素单独计算一组清晰度，"
-                "最后取最好的一只。" + ("鸟很小（鸟群）：首遍在 1024 px 副本上看到的鸟太小、漏得多，"
-                                     "又在 2048 px 副本上用 2048 px 输入识别一次并合并。" if small_pass else "")
+        desc = (f"在最长 {p.detect_long_edge} px 副本上找鸟（网络 {p.detect_imgsz} px，置信度 ≥ {p.detect_conf_percent / 100:.2f}）。每只鸟后续只用自己的像素单独计算一组清晰度，"
+                "最后取最好的一只。" + ("已用 2048 px 网络输入做鸟群补检并合并。" if small_pass else "")
                 if detections else
-                "全图没有置信度 ≥ 0.25 的鸟：下一步复检伪装或被遮挡的鸟；仍没有时有焦点用焦点区域，没有焦点用全图。")
+                f"全图没有置信度 ≥ {p.detect_conf_percent / 100:.2f} 的鸟：下一步复检伪装或被遮挡的鸟；仍没有时有焦点用焦点区域，没有焦点用全图。")
         self.trace.common.append(TraceStep(STEP_DETECT, "鸟体识别", desc, img, "full", metrics, legend=legend,
                                            bird_rows=rows))
 
-    def recheck(self, check) -> None:
+    def recheck(self, check, *, scale_to_full=None) -> None:
         """Step for :meth:`BirdSharpnessAnalyzer._recheck` (first pass found no bird)."""
         from . import analyzer as A
         from .models import FOUND_FOCUS_WEAK, FOUND_FULL_FINE, FOUND_FULL_LIFTED
+
+        if scale_to_full is not None:
+            self._det_scale = scale_to_full
 
         img = _dim(self._overview, None, 0.55)
         lw = _line_w(img)
@@ -529,8 +533,8 @@ class AnalysisTracer:
                  f"γ {check.lift_gamma:.2f}：" + (f"找到 {len(check.accepted)} 只，直接采纳" if lifted else "仍没有鸟"))]
         if not lifted:
             rows.append((f"全图 {A.RECHECK_IMGSZ} px 输入再识别",
-                         f"找到 {len(check.accepted)} 只（置信度 ≥ {A.BIRD_CONFIDENCE_MIN:.2f}），直接采纳" if fine else
-                         "仍没有置信度 ≥ %.2f 的鸟" % A.BIRD_CONFIDENCE_MIN))
+                         f"找到 {len(check.accepted)} 只（置信度 ≥ {check.confidence_min:.2f}），直接采纳" if fine else
+                         "仍没有置信度 ≥ %.2f 的鸟" % check.confidence_min))
         fine = fine or lifted
         if not fine and check.focus_box is None:
             rows.append(("焦点处复检", "跳过（没有相机焦点）"))

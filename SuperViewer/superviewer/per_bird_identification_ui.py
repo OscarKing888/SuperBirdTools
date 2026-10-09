@@ -11,19 +11,24 @@ from .qt_compat import QLabel, QVBoxLayout, QWidget, pyqtSignal
 try:
     from PyQt6.QtCore import QObject
     from PyQt6.QtWidgets import (QCheckBox, QDialog, QDialogButtonBox, QDoubleSpinBox,
-                                QFormLayout, QLineEdit, QSpinBox)
+                                QFormLayout, QLineEdit, QSpinBox, QScrollArea, QTabWidget)
 except ImportError:  # pragma: no cover
     from PyQt5.QtCore import QObject
     from PyQt5.QtWidgets import (QCheckBox, QDialog, QDialogButtonBox, QDoubleSpinBox,
-                                QFormLayout, QLineEdit, QSpinBox)
+                                QFormLayout, QLineEdit, QSpinBox, QScrollArea, QTabWidget)
 
 
 class PerBirdSettingsDialog(QDialog):
     def __init__(self, parent, service, per_bird, params):
         super().__init__(parent)
         self.setWindowTitle("逐只识别")
-        layout = QVBoxLayout(self)
-        label = QLabel("复用当前清晰度检测参数，逐只裁图后交给 SuperPicky 识鸟。\n"
+        root = QVBoxLayout(self)
+        tabs = QTabWidget(self)
+        root.addWidget(tabs)
+        page = QWidget(tabs)
+        tabs.addTab(page, "识鸟与裁图")
+        layout = QVBoxLayout(page)
+        label = QLabel("逐只裁图后交给 SuperPicky 识鸟；可在「前置检测」覆盖清晰度参数。\n"
                        "宽或高低于设置值的鸟框不送识别；尺寸按所选图像来源的原尺寸计算。\n"
                        "裁图关闭服务端二次 YOLO 和 GPS 过滤；鸟种及区域保存到独立 XMP 列表。", self)
         label.setWordWrap(True)
@@ -56,18 +61,50 @@ class PerBirdSettingsDialog(QDialog):
             form.addRow(name, widget)
         form.addRow(self.skip)
         layout.addLayout(form)
+        layout.addStretch(1)
+        from .bird_sharpness_params_form import AnalysisParamsForm
+        detection = QWidget(tabs)
+        detection_layout = QVBoxLayout(detection)
+        self.override = QCheckBox("覆盖全局清晰度参数（仅本次逐只识别；本会话记住选择）", detection)
+        self.override.setChecked(per_bird.analysis_overrides is not None)
+        detection_layout.addWidget(self.override)
+        note = QLabel("可独立选择 YOLOv8 xlarge 分割等模型，并调整检测置信度、输入及去重。\n"
+                      "逐只模式不限制鸟数；最小裁图尺寸在「识鸟与裁图」中设置。", detection)
+        note.setWordWrap(True)
+        detection_layout.addWidget(note)
+        scroll = QScrollArea(detection)
+        scroll.setWidgetResizable(True)
+        self.analysis_form = AnalysisParamsForm(scroll)
+        self.analysis_form.set_params({**params, **(per_bird.analysis_overrides or {}), "max_birds": 0, "min_bird_side": 0})
+        self.analysis_form.max_birds.setEnabled(False)
+        self.analysis_form.min_bird_side.setEnabled(False)
+        self.analysis_form.setEnabled(self.override.isChecked())
+        self.override.toggled.connect(self.analysis_form.setEnabled)
+        scroll.setWidget(self.analysis_form)
+        detection_layout.addWidget(scroll)
+        tabs.addTab(detection, "前置检测")
+        self.resize(760, 700)
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel, self)
         buttons.button(QDialogButtonBox.StandardButton.Ok).setText("开始逐只识别")
         buttons.button(QDialogButtonBox.StandardButton.Cancel).setText("取消")
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
-        layout.addWidget(buttons)
+        root.addWidget(buttons)
+
+    def accept(self):
+        from .bird_sharpness_params_form import missing_models, download_models
+        if self.override.isChecked():
+            missing = missing_models(self.analysis_form.params())
+            if missing and not download_models(self, missing):
+                return
+        super().accept()
 
     def options(self):
         return BirdIDOptions(self.url.text().strip(), self.threshold.value(), self.skip.isChecked())
 
     def per_bird_options(self):
-        return PerBirdOptions(self.width.value(), self.height.value(), self.padding.value())
+        return PerBirdOptions(self.width.value(), self.height.value(), self.padding.value(),
+                              self.analysis_form.params() if self.override.isChecked() else None)
 
 
 class IndividualBirdsPanel(QWidget):

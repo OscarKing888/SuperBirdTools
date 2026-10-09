@@ -24,6 +24,7 @@ class PerBirdOptions:
     min_width: int = 64
     min_height: int = 64
     padding_percent: float = 0.0
+    analysis_overrides: dict | None = None
 
     def validate(self):
         for value in (self.min_width, self.min_height):
@@ -33,12 +34,12 @@ class PerBirdOptions:
             raise ValueError("裁图外扩比例须为 0–50%")
 
 
-def make_analyzer(params, *, denoised_lookup=None):
+def make_analyzer(params, *, options=PerBirdOptions(), denoised_lookup=None):
     from bird_sharpness.analyzer import BirdSharpnessAnalyzer
     from bird_sharpness.params import AnalysisParams
     # 逐只模式不受批量清晰度的数量上限影响；大小由本功能在原尺寸鸟框上过滤。
-    options = AnalysisParams.from_params({**params, "max_birds": 0, "min_bird_side": 0})
-    return BirdSharpnessAnalyzer(params=options, denoised_lookup=denoised_lookup)
+    analysis = AnalysisParams.from_params({**params, **(options.analysis_overrides or {}), "max_birds": 0, "min_bird_side": 0})
+    return BirdSharpnessAnalyzer(params=analysis, denoised_lookup=denoised_lookup)
 
 
 def camera_box(box, width, height, crop=None):
@@ -191,6 +192,9 @@ def main(argv=None):
     parser.add_argument("--padding", type=float, default=0)
     parser.add_argument("--source", choices=("raw", "jpeg"), default="jpeg")
     parser.add_argument("--skip-existing", action="store_true")
+    from bird_sharpness.params import add_detection_arguments, detection_params_from_args
+    parser.add_argument("--detector", default="auto", help="前置鸟体模型，如 yolov8x-seg.pt")
+    add_detection_arguments(parser)
     args = parser.parse_args(argv)
     options = PerBirdOptions(args.min_width, args.min_height, args.padding)
     options.validate()
@@ -198,7 +202,7 @@ def main(argv=None):
     failed = False
     try:
         client.health()
-        analyzer = make_analyzer({"image_source": args.source})
+        analyzer = make_analyzer({"image_source": args.source, "detector": args.detector, **detection_params_from_args(args)})
         for path in collect_paths(args.paths, recursive=args.recursive):
             result = identify_individuals(path, client, analyzer, options)
             print(json.dumps({"source": result.source, "status": result.status, "message": result.message}, ensure_ascii=False))

@@ -20,6 +20,7 @@ below ``metrics.SIGMA_FLOOR_PX`` (0.5 px) are rejected as line-like). Calibrated
 (LibRaw LINEAR demosaic, analysis at full output resolution); sigma is in pixels
 of that resolution, so the same thresholds describe what a 100% view shows.
 Version 16 preserves separate bird silhouettes inside overlapping detection boxes;
+version 17 also runs the flock pass after a whole-frame recheck finds small birds;
 the blur measurement and score thresholds are unchanged.
 """
 
@@ -38,7 +39,7 @@ from app_common.bird_sharpness_fields import (
     VERDICT_USABLE,
 )
 
-ALGORITHM_VERSION = "sbt-blur-v16"
+ALGORITHM_VERSION = "sbt-blur-v17"
 
 # (sigma_px, score) anchors, sigma ascending / score descending.
 SCORE_ANCHORS: Tuple[Tuple[float, float], ...] = (
