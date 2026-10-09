@@ -6,6 +6,8 @@
 
 ## 1. 启动与模块边界
 
+Windows 下，`main.py` 在导入任何 Qt 控件前调用 [`preload_windows_runtime()`](../superviewer/windows_runtime.py)，预加载系统 `System32` 的 MSVC 运行库并保留句柄，避免 Qt 附带的旧运行库导致随后在识鸟/清晰度工作线程加载 Torch 时出现 `c10.dll / WinError 1114`。包入口的提前导入及无父包的脚本入口都经过此处；Torch 仍按需加载，非 Windows 跳过。回归见 [`test_windows_runtime.py`](../tests/test_windows_runtime.py) 的独立进程 Qt → Torch/Ultralytics 工作线程检查。已经启动的旧进程须完全退出后重启。
+
 [`main.py`](../main.py) 的 `main()` 加载运行选项与应用身份，建立支持 macOS FileOpen 的 `QApplication`，处理已有实例转发，安装主题，再创建 `MainWindow`。`SingleInstanceReceiver` 和 FileOpen 回调最终进入 `_on_received_file_list()` / `_open_received_file_list()`；普通启动恢复上次目录。窗口组装、信号接线、文件操作及关闭协调由 `MainWindow` 负责。
 
 | 层 | 主要入口 | 职责 |

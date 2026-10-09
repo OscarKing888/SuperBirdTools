@@ -31,6 +31,15 @@ def _ensure_default_log_file_env() -> None:
 
 _ensure_default_log_file_env()
 
+# Must precede app_common widgets and every Qt import. This also covers the
+# eager SuperViewer package import used by `python -m SuperViewer.entry`.
+if __package__:
+    from .superviewer.windows_runtime import preload_windows_runtime
+else:
+    from superviewer.windows_runtime import preload_windows_runtime
+
+preload_windows_runtime()
+
 from app_common.toggle_button import ToggleToolButton
 from app_common.preview_toolbar import ViewportOverlayTools
 from app_common import show_about_dialog, load_about_images, load_about_info
