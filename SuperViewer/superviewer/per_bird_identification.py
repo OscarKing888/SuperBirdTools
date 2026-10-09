@@ -84,8 +84,10 @@ def identify_individuals(source, client, analyzer, options=PerBirdOptions(), *, 
     try:
         options.validate()
         client.check_cancelled()
-        if Path(source).suffix.lower() not in SUPPORTED_IMAGE_EXTENSIONS or not Path(source).is_file():
-            raise BirdIDError("不是存在的受支持照片")
+        if Path(source).suffix.lower() not in SUPPORTED_IMAGE_EXTENSIONS:
+            raise BirdIDError(f"不支持的照片格式：{source}")
+        if not Path(source).is_file():
+            raise BirdIDError(f"找不到照片原文件：{source}")
         sidecar = store.sidecar_path_for(source)
         with xmp_sidecar_write_lock(source):
             before = _fingerprint(source), _fingerprint(sidecar)

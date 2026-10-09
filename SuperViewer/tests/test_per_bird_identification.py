@@ -94,6 +94,63 @@ def test_padding_clipped_and_raw_camera_mapping(photo, monkeypatch):
     assert map_camera_focus_box(record["box"], analyzer.image.camera_crop) == pytest.approx([0, 0, .25, 100/240])
 
 
+@pytest.mark.parametrize("extension", [".HIF", ".HEIC", ".heif", ".png", ".tiff", ".jpg"])
+def test_source_formats_are_decoded_once_and_sent_as_jpg(tmp_path, monkeypatch, extension):
+    from bird_sharpness.image_source import load_embedded_jpeg
+
+    source = tmp_path / f"中文鸟片{extension}"
+    with Image.new("RGB", (320, 240), "red") as image:
+        if extension.lower() in {".hif", ".heic", ".heif"}:
+            pillow_heif = pytest.importorskip("pillow_heif")
+            pillow_heif.from_pillow(image).save(source, quality=95)
+        else:
+            image.save(source)
+    original = source.read_bytes()
+    analyzer = Analyzer([(0, 0, 80, 100), (160, 80, 320, 240)])
+    decoded, requested = [], []
+
+    def load(path):
+        decoded.append(path)
+        analyzer.image = load_embedded_jpeg(path)
+        return analyzer.image
+
+    def recognize(path):
+        requested.append(Path(path))
+        assert Path(path).suffix == ".jpg"
+        assert Path(path) != source
+        with Image.open(path) as crop:
+            assert crop.format == "JPEG" and crop.mode == "RGB"
+            assert crop.getpixel((5, 5))[0] > 240
+        return response()
+
+    monkeypatch.setattr(analyzer, "image_loader", lambda: load)
+    assert core.collect_paths([str(source)]) == [str(source)]
+    result = core.identify_individuals(source, client(monkeypatch, recognize), analyzer)
+    assert result.status == "success", result.message
+    assert decoded == [str(source)] and analyzer.calls == 1
+    assert len(requested) == 2
+    assert all(not path.parent.exists() for path in requested)
+    assert source.read_bytes() == original
+    metadata = PhotoMetaDataXMP().read(str(source))
+    assert [bird["cn_name"] for bird in core.read_individuals(metadata)] == ["白鹭", "白鹭"]
+    assert json.loads(metadata[core.INFO_FIELD])["source_extension"] == extension.lower()
+
+
+@pytest.mark.parametrize("filename, message", [
+    ("DSC09382.HIF", "找不到照片原文件"),
+    ("unsupported.txt", "不支持的照片格式"),
+])
+def test_invalid_source_reports_reason_and_full_path(tmp_path, monkeypatch, filename, message):
+    source = tmp_path / filename
+    if source.suffix == ".txt":
+        source.write_text("not a photo", encoding="utf-8")
+    analyzer = Analyzer([])
+    result = core.identify_individuals(source, client(monkeypatch), analyzer)
+    assert result.status == "failed"
+    assert message in result.message and str(source) in result.message
+    assert analyzer.calls == 0 and not source.with_suffix(".xmp").exists()
+
+
 def test_species_snapshot_selected_candidate_and_legacy_roundtrip(photo, monkeypatch):
     selected = {"cn_name": "白鹭", "en_name": "Egret", "confidence": 40,
                 "scientific_name": "Egretta garzetta", "description": "白色鹭鸟",
