@@ -799,6 +799,12 @@ class SuperViewerTaggedFileListPanel(FileListPanel):
             self._start_photo_tag_cache_loader_if_needed(self._all_files, reason="tag_filter")
         super()._refresh_filter_scope()
 
+    def _get_species_payload_for_path(self, path: str, *, read_sidecar: bool = False) -> dict | None:
+        # 打开菜单只读内存；点击复制或按快捷键时才读取源照片的最新快照。
+        return super()._get_species_payload_for_path(
+            path, read_sidecar=read_sidecar, allow_metadata_read=read_sidecar,
+        )
+
     def _show_file_context_menu(
         self, viewport, pos, *, paths: list[str], primary_path: str | None, log_prefix: str,
     ) -> None:
