@@ -108,9 +108,9 @@ A/B 的布局与显隐约定见 [A/B 预览工具栏布局](ux/AB_PREVIEW_LAYOUT
 
 模板管理器修改叠加层参数时立即保存，预览通过 `_schedule_preview_refresh` 的 120 ms 单次定时器合并连续输入；等待期间清除旧命中场景，切换模板立即绘制最新模板，关闭及 Esc/确认退出提交待输入文字并取消定时器。[template_context.template_render_context](../birdstamp/gui/template_context.py) 在每次 `_refresh_preview` 内复用 provider 上下文（最多 16 项）和元数据查找表（最多 8 项），退出即清空。完整元数据与仅侧车元数据、同名字段的命名空间插入顺序保持独立，下一帧沿用完整读取与 XMP 优先级规则；不跨帧缓存照片数据。此改动属于 GUI 调度，不增加 CLI 参数。回归见 [test_template_preview_performance.py](../tests/test_template_preview_performance.py)。
 
-主窗口通过 [editor_compact_panels.py](../birdstamp/gui/editor_compact_panels.py) 的 `OverlayEditorDock` 承载完整叠加编辑器及批量应用／另存模板操作。主设置区仅显示输出类别开关、文本缩放、状态摘要和编辑入口；进入叠加编辑时显示侧栏，宽屏首次停靠右侧，小窗口首次浮动。侧栏独立滚动，窄宽度属性行自动换行，关闭先提交待输入文字后隐藏，不销毁模型或历史；照片与图层标题跟随编辑上下文。模板管理器的共用编辑器布局不变。这是 GUI 布局行为，无新增 CLI 参数。
+主窗口通过 [overlay_editor_dialog.py](../birdstamp/gui/overlay_editor_dialog.py) 的 `OverlayEditorDialog` 承载完整叠加编辑器及批量应用／另存模板操作。它是可移动、可缩放的非模态工具窗口，打开时靠近左侧设置区并限制在所在屏幕可用范围内，主预览不因打开窗口而重新分栏。编辑区独立滚动，当前照片／图层标题与底部操作保持可见；关闭按钮、系统关闭和 Esc 均先提交待输入文字再隐藏，保留模型及撤销历史。主设置区仅显示输出类别开关、文本缩放、状态摘要和编辑入口。这是 GUI 布局行为，无新增 CLI 参数。
 
-同模块的 `ExportActionBar` 位于左侧主滚动区外，复用原导出类型选择器、图片／GIF 按钮、视频生成／中断按钮容器，以及去抖动导出按钮和图片／去抖动进度控件。`_refresh_image_export_action_states` 和导出页签切换同步当前按钮页；业务信号、忙碌禁用与工作区导出参数仍由既有模块管理。「导出设置…」展开设置区并滚到当前输出类型的参数顶部。布局、收起保留中文输入、视频取消和模式切换回归见 [test_editor_compact_panels.py](../tests/test_editor_compact_panels.py)。
+[editor_compact_panels.py](../birdstamp/gui/editor_compact_panels.py) 的 `ExportActionBar` 位于左侧主滚动区外，复用原导出类型选择器、图片／GIF 按钮、视频生成／中断按钮容器，以及去抖动导出按钮和图片／去抖动进度控件。`_refresh_image_export_action_states` 和导出页签切换同步当前按钮页；业务信号、忙碌禁用与工作区导出参数仍由既有模块管理。「导出设置…」展开设置区并滚到当前输出类型的参数顶部。布局、收起保留中文输入、视频取消和模式切换回归见 [test_editor_compact_panels.py](../tests/test_editor_compact_panels.py)。
 
 自动行/列组合由 [overlays/layout.py](../birdstamp/overlays/layout.py) 的 `normalize_layouts` / `arrange` / `snap_candidate` / `join` 提供无 Qt 核心。可选 `overlay_layouts` 保存独立于绘制顺序的树；`build_scene` 按真实内容与旋转/效果边界测量后递归布局，组合成员跳过旧字号避让，背景最后根据已排版文字计算。行/列可嵌套，空/隐藏项折叠，固定边控制动态生长。`OverlaySession` 在缓存图层上预览组合，松手才提交完整文档，Command/Ctrl 移动/组合整组，Alt 移出，取消不写入。`OverlayPanel` 提供所在/外层组合方向、间距、对齐和固定边，精确独立定位默认折叠；同一历史覆盖组合与内容。模板/照片/工作区与现有 CLI、图片/GIF/视频共享保存和渲染入口，源帧缓存版本为 16。操作与边界见 [OVERLAY_EDITOR.md](OVERLAY_EDITOR.md)，回归见 [test_overlay_layout.py](../tests/test_overlay_layout.py)。
 
@@ -118,7 +118,7 @@ A/B 的布局与显隐约定见 [A/B 预览工具栏布局](ux/AB_PREVIEW_LAYOUT
 
 “字段/占位符”、Overlay 字体和旧模板字段/字体选择器统一复用共享 [app_common/filterable_combo.py](../../app_common/filterable_combo.py) 的 `FilterableComboBox`；BirdStamp 原模块仅保留兼容导入。顶部搜索条按中文显示名、字段名及来源进行不区分大小写的多词过滤，支持清除、方向键、回车选择和 Esc 取消。搜索不修改叠加层，明确选择才提交可撤销的字段变化，手动输入自定义占位符仍可用。过滤弹窗使用可获得原生键盘焦点的无边框工具窗口，避免 macOS 上仅 `focusWidget` 改变、`QWindow.focusObject` 仍落在原组合框的问题；组件统一处理窗口失活、外部点击、Esc、父控件隐藏和延迟销毁，弹窗位置限制在所在屏幕内。纯 UI 行为不新增 CLI 参数。共用组件回归见 [test_filterable_combo.py](../../app_common/tests/test_filterable_combo.py)，模板集成回归见 [test_overlay_field_search.py](../tests/test_overlay_field_search.py)。
 
-模板管理器通过 [OverlayPanel](../birdstamp/gui/overlay_panel.py) 的 `property_columns=True` 将「内容 / 布局 / 效果」横向并列分组，长控件按可用列宽换到标签下方；窗口较小时沿用外层滚动区域。「当前模板」与「模板叠加层」按内容高度在顶部紧接排列，剩余空间留在底部，不使用纵向分割器分配高度；叠加层列表固定为 280 个逻辑像素，切换图层或调整窗口不会拉高列表或分组间距；点击选择和编辑刷新保持滚动位置，从预览选择其他图层仍自动显示目标行。照片编辑侧栏继续使用紧凑 Tab 布局。两种显示共用属性绑定、按图层类型显隐及撤销历史，图像和背景不显示文字效果组；纯界面布局无新增 CLI 参数。
+模板管理器与照片实例浮动编辑窗口直接使用同一个 [OverlayPanel](../birdstamp/gui/overlay_panel.py)，统一把「内容 / 布局 / 效果」横向并列分组，不再保留按宿主切换的 Tab 布局分支。属性绑定、组合布局、类型显隐、撤销历史和字段／字体选择均在组件内；图像和背景不显示文字效果组。长控件按可用列宽换到标签下方，窗口较小时沿用外层滚动区域。模板管理器的「当前模板」与「模板叠加层」按内容高度在顶部紧接排列，余量留在底部；共用叠加层列表固定为 280 个逻辑像素，切换图层或调整窗口不拉高列表或分组间距。点击选择和编辑刷新保持滚动位置，从预览选择其他图层仍自动显示目标行。布局一致性及实例浮动窗口位置、关闭保留输入回归见 [test_editor_compact_panels.py](../tests/test_editor_compact_panels.py)。纯界面布局无新增 CLI 参数。
 
 模板文本的描边和阴影由 [render/text_effects.py](../birdstamp/render/text_effects.py) 的 `normalize_text_effects` / `styled_text_layer` 规范化及绘制。每项保存独立开关、颜色、描边宽度、阴影不透明度/偏移/柔化；旧模板缺省关闭，新增文本项的默认值读取 `editor_options.json` 的 `text_effects`。效果尺寸随实际字号缩放，排版避让包含效果边界；预览按导出逻辑画幅绘制后缩放，图片/GIF/视频和 CLI `render --template` 沿用同一模板渲染入口，源帧缓存版本随渲染变化更新。回归见 [test_overlay_text_effects.py](../tests/test_overlay_text_effects.py)。
 

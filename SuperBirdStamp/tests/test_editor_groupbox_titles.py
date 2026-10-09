@@ -83,6 +83,7 @@ def test_all_editor_group_titles_clear_content(tmp_path, monkeypatch, style_name
             _APP.setPalette(palette)
             window._apply_system_adaptive_style()
             window.setStyleSheet(window.styleSheet() + f"\nQWidget {{ font-size: {font_px}px; }}")
+            window._reveal_overlay_panel()
             titles = set()
             window.export_tabs.setCurrentIndex(0)
             for stage_id in window.export_stage_buttons:
@@ -93,12 +94,13 @@ def test_all_editor_group_titles_clear_content(tmp_path, monkeypatch, style_name
             window.export_tabs.setCurrentIndex(1)
             _APP.processEvents()
             titles.update(_assert_titles_clear(window, font_px))
-            assert {"处理管线", "图片导出", "导出 Stage", "GIF 选项", "视频导出", "参考区对齐"} <= titles
+            assert {"处理管线", "图片导出", "GIF 选项", "视频导出", "1. 方式", "4. 导出", "叠加层属性"} <= titles
+            assert window.export_action_bar.isVisible()
 
             # 模板管理器继承同一套样式；不允许只修主窗口里已知的两个分组。
             dialog.show()
             _APP.processEvents()
-            assert {"当前模板", "文本项", "文本项编辑", "预览"} <= _assert_titles_clear(dialog, font_px)
+            assert {"当前模板", "叠加层属性", "内容", "布局", "预览"} <= _assert_titles_clear(dialog, font_px)
             dialog.hide()
     finally:
         if dialog is not None:
