@@ -6,19 +6,42 @@ import sys
 from app_common.file_utils import reveal_in_file_manager
 from app_common.file_browser._browser_core import _apply_context_menu_shortcut
 from app_common.log import get_logger
+from app_common.perf_probe import elapsed_ms, perf_counter, perf_log
 
 try:
     from PyQt6.QtCore import QLineF, QPointF, QRectF, Qt
     from PyQt6.QtGui import QIcon, QIconEngine, QKeySequence, QPainter, QPalette, QPen, QPixmap, QPolygonF
-    from PyQt6.QtWidgets import QApplication, QMenu
+    from PyQt6.QtWidgets import QApplication, QMenu, QProxyStyle, QStyle
 except ImportError:  # pragma: no cover
     from PyQt5.QtCore import QLineF, QPointF, QRectF, Qt
     from PyQt5.QtGui import QIcon, QIconEngine, QKeySequence, QPainter, QPalette, QPen, QPixmap, QPolygonF
-    from PyQt5.QtWidgets import QApplication, QMenu
+    from PyQt5.QtWidgets import QApplication, QMenu, QProxyStyle, QStyle
 
 _log = get_logger("superviewer.file_context_menu")
 _GROUPS = {"bird": ("鸟种信息", "bird"), "capture": ("拍摄信息", "camera"),
            "process": ("分析与处理", "process")}
+
+
+class _ContextMenuStyle(QProxyStyle):
+    def styleHint(self, hint, option=None, widget=None, returnData=None):
+        if hint == QStyle.StyleHint.SH_Menu_SubMenuPopupDelay:
+            return 100
+        return super().styleHint(hint, option, widget, returnData)
+
+
+def _style_context_menu(menu):
+    # 使用独立样式实例，由根菜单释放；不能把应用全局 style 的所有权交给代理。
+    style = _ContextMenuStyle(QApplication.style().objectName())
+    style.setParent(menu)
+    menu._context_menu_style = style
+    for child in [menu, *menu.findChildren(QMenu)]:
+        child.setStyle(style)
+    menu.setStyleSheet(
+        "QMenu { padding: 4px 6px; }"
+        "QMenu::item { padding: 6px 20px 6px 8px; }"
+        "QMenu::item:selected:enabled { background-color: palette(highlight); color: palette(highlighted-text); }"
+        "QMenu::separator { margin: 4px 10px; }"
+    )
 
 
 def file_menu_group(name, *, order=100):
@@ -35,17 +58,19 @@ def file_menu_group(name, *, order=100):
 
 class _MenuIcon(QIconEngine):
     """无字体/外部资源依赖，按系统主题、悬停和禁用状态绘制线条。"""
-    def __init__(self, kind):
+    def __init__(self, kind, *, highlight_active=False):
         super().__init__()
         self.kind = kind
+        self.highlight_active = highlight_active
 
     def clone(self):
-        return _MenuIcon(self.kind)
+        return _MenuIcon(self.kind, highlight_active=self.highlight_active)
 
     def paint(self, painter, rect, mode, state):
         palette = QApplication.palette()
         group = QPalette.ColorGroup.Disabled if mode == QIcon.Mode.Disabled else QPalette.ColorGroup.Active
-        role = QPalette.ColorRole.HighlightedText if mode == QIcon.Mode.Selected else QPalette.ColorRole.WindowText
+        selected = mode == QIcon.Mode.Selected or (self.highlight_active and mode == QIcon.Mode.Active)
+        role = QPalette.ColorRole.HighlightedText if selected else QPalette.ColorRole.WindowText
         painter.save()
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         painter.translate(rect.x(), rect.y())
@@ -128,7 +153,8 @@ def menu_icon(kind):
 
 
 def _icon(action, kind):
-    action.setIcon(menu_icon(kind))
+    # QMenu 用 Active 模式画高亮行图标；设置导航里的同款图标仍保留普通悬停色。
+    action.setIcon(QIcon(_MenuIcon(kind, highlight_active=True)))
     # macOS 默认可隐藏菜单图标；显式启用这些用于辨认功能的图标。
     action.setIconVisibleInMenu(True)
 
@@ -174,13 +200,8 @@ def _prepend_clipboard_actions(menu, panel, paths, primary):
 
 def build_file_context_menu(panel, paths, primary, *, log_prefix):
     """仅组装视图，复用共享动作的路径解析、快捷键、权限与信号绑定。"""
+    started = perf_counter()
     menu = QMenu(panel)
-    # 仅调整此菜单树的留白，颜色与选中/禁用状态继续跟随系统主题。
-    menu.setStyleSheet(
-        "QMenu { padding: 4px 6px; }"
-        "QMenu::item { padding: 6px 20px 6px 8px; }"
-        "QMenu::separator { margin: 4px 10px; }"
-    )
     _add_with_icons(menu, panel._add_rating_menu_actions, (paths,), ("star",))
     _add_with_icons(menu, panel._add_photo_tag_menu_actions, (paths,), ("tag",))
     menu.addSeparator()
@@ -218,4 +239,6 @@ def build_file_context_menu(panel, paths, primary, *, log_prefix):
     menu.addSeparator()
     _add_with_icons(menu, panel._add_delete_menu_action, (paths,), ("delete",))
     _prepend_clipboard_actions(menu, panel, paths, primary)
+    _style_context_menu(menu)
+    perf_log(_log, "[context-menu] paths=%s build_ms=%.1f", len(paths), elapsed_ms(started))
     return menu

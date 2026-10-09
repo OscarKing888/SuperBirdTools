@@ -3,15 +3,17 @@ import time
 
 from PIL import Image
 import pytest
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import QPoint, Qt
+from PyQt6.QtGui import QPalette
 from PyQt6.QtTest import QTest
-from PyQt6.QtWidgets import QApplication, QLineEdit
+from PyQt6.QtWidgets import QApplication, QLineEdit, QMenu, QStyle
 
 from app_common import superviewer_user_options
 from app_common.exif_io.photo_meta import PhotoMetaDataXMP
 from app_common.file_browser import FileListPanel, _panel as panel_module
 from SuperViewer.superviewer.file_context_menu import build_file_context_menu, species_shortcut_sequence
 from SuperViewer.superviewer.tagged_file_list import SuperViewerTaggedFileListPanel
+from SuperViewer.superviewer.ui_theme import build_palette
 
 _APP = QApplication.instance() or QApplication([])
 
@@ -131,3 +133,50 @@ def test_menu_displays_matching_shortcuts_and_keeps_disabled_paste(panel):
         assert copy.isEnabled() and not paste.isEnabled()
     finally:
         menu.deleteLater()
+
+
+def test_open_menu_without_cached_bird_name_never_waits_for_exif(panel, monkeypatch):
+    widget, _view, paths, _store = panel
+    widget._meta_cache.clear()
+    monkeypatch.setattr(panel_module, "read_batch_metadata", lambda *_a, **_k: pytest.fail("菜单不能同步查询 EXIF"))
+    menu = build_file_context_menu(widget, paths, paths[1], log_prefix="cold-menu-test")
+    try:
+        copy = next(a for a in menu.actions() if a.text().startswith("复制鸟名"))
+        assert copy.isEnabled()
+        # 菜单展示可以暂用文件名；实际点击仍必须取得源照片侧车中的最新鸟名。
+        copy.trigger()
+        assert QApplication.clipboard().text() == "白头鹎"
+    finally:
+        menu.deleteLater()
+
+
+@pytest.mark.parametrize("scheme", ["light", "dark"])
+def test_menu_selected_pixels_and_submenu_delay(panel, scheme):
+    widget, _view, paths, _store = panel
+    old_palette = QPalette(_APP.palette())
+    global_style = _APP.style()
+    _APP.setPalette(build_palette(scheme))
+    menu = build_file_context_menu(widget, paths, paths[0], log_prefix="hover-test")
+    try:
+        for child in [menu, *menu.findChildren(QMenu)]:
+            assert child.style().styleHint(QStyle.StyleHint.SH_Menu_SubMenuPopupDelay, None, child) == 100
+        menu.ensurePolished()
+        menu.resize(menu.sizeHint())
+        action = menu.actions()[0]
+        # 鼠标悬停和键盘导航共用 activeAction；直接设置以稳定验证实际绘制。
+        menu.setActiveAction(action)
+        rect = menu.actionGeometry(action)
+        # 在文本/图标之外采样实际渲染像素，不能只检查 selected 样式字符串。
+        sample = QPoint(rect.right() - 8, rect.center().y())
+        image = menu.grab().toImage()
+        dpr = image.devicePixelRatio()
+        actual = image.pixelColor(round(sample.x() * dpr), round(sample.y() * dpr))
+        assert actual == menu.palette().color(QPalette.ColorRole.Highlight)
+    finally:
+        for child in menu.findChildren(QMenu):
+            child.close()
+        menu.close()
+        menu.deleteLater()
+        _APP.processEvents()
+        _APP.setPalette(old_palette)
+        assert _APP.style() is global_style
