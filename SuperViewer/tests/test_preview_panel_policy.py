@@ -17,8 +17,11 @@ from SuperViewer.superviewer import preview_panel
 from SuperViewer.superviewer.qt_compat import QApplication, QColor, QImage, QPixmap
 
 
+_APP = QApplication.instance() or QApplication([])
+
+
 def _app() -> QApplication:
-    return QApplication.instance() or QApplication([])
+    return _APP
 
 
 def _process_events_until(app: QApplication, predicate, timeout: float = 3.0) -> bool:
@@ -800,3 +803,68 @@ def test_shutdown_drops_pending_request(monkeypatch, tmp_path: Path) -> None:
         release_timer.cancel()
         panel.close()
     assert app is QApplication.instance()
+
+
+def test_worker_uploads_rgb32_so_gui_pixmap_needs_no_format_conversion(monkeypatch, tmp_path: Path) -> None:
+    app = QApplication.instance() or QApplication([])
+    source = QImage(40, 30, preview_panel._qimage_rgb888_format())
+    source.fill(0x336699)
+    converted = preview_panel._qimage_for_pixmap_upload(source)
+    rgb32 = getattr(getattr(QImage, "Format", QImage), "Format_RGB32")
+    assert converted.format() == rgb32
+    assert converted == source.convertToFormat(rgb32)
+
+    photo = tmp_path / "large.png"
+    photo.write_bytes(b"placeholder")
+    monkeypatch.setattr(preview_panel, "_load_full_preview_qimage", lambda path: source)
+    received: list = []
+    loader = preview_panel._FullPreviewLoader(1, str(photo))
+    loader.loaded.connect(lambda token, path, qimg, ms: received.append(qimg))
+    loader.start()
+    assert loader.wait(3000)
+    assert _process_events_until(app, lambda: bool(received))
+    assert received[0].format() == rgb32
+    loader.deleteLater()
+
+
+def test_qt_reader_full_preview_returns_owned_rgb32_without_extra_copy(tmp_path: Path) -> None:
+    from PIL import Image
+
+    photo = tmp_path / "photo.jpg"
+    Image.new("RGB", (320, 200), (40, 90, 160)).save(photo, quality=95)
+    qimg = preview_panel._load_full_preview_qimage(str(photo))
+    assert qimg is not None and (qimg.width(), qimg.height()) == (320, 200)
+    color = qimg.pixelColor(10, 10)
+    assert abs(color.red() - 40) <= 2 and abs(color.green() - 90) <= 2 and abs(color.blue() - 160) <= 2
+
+
+def test_pixmap_upload_preserves_alpha_and_skips_non_rgb888_conversion():
+    image = QImage(20, 15, QImage.Format.Format_ARGB32)
+    image.fill(QColor(40, 90, 160, 70))
+    result = preview_panel._qimage_for_pixmap_upload(image)
+    assert result is image
+    assert result.pixelColor(0, 0).alpha() == 70
+
+
+def test_interruption_during_upload_conversion_does_not_publish_stale_pixels(monkeypatch):
+    source = QImage(20, 15, preview_panel._qimage_rgb888_format())
+    source.fill(QColor(40, 90, 160))
+    loader = preview_panel._FullPreviewLoader(1, "photo.jpg")
+    original = preview_panel._qimage_for_pixmap_upload
+    def convert(image):
+        loader.requestInterruption()
+        return original(image)
+    monkeypatch.setattr(preview_panel, "_load_full_preview_qimage", lambda path: source)
+    monkeypatch.setattr(preview_panel, "_qimage_for_pixmap_upload", convert)
+    received, finished = [], []
+    loader.loaded.connect(lambda *args: received.append(args))
+    loader.finished.connect(lambda: finished.append(True))
+    try:
+        loader.start()
+        assert loader.wait(3000)
+        assert _process_events_until(_APP, lambda: bool(finished))
+        assert received == []
+    finally:
+        loader.requestInterruption()
+        assert loader.wait(3000)
+        loader.deleteLater()

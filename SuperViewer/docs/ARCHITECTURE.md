@@ -125,6 +125,16 @@ set_photo_tag_for_paths / clear_photo_tags_for_paths
 
 ## 预览策略和线程所有权
 
+### 绘制、缩略图和显示上传优化
+
+共享画布使用最多缓存 16 种尺寸的棋盘纹理，一次 `fillRect` 完成背景绘制；保留裁剪、设备像素比例和构图线/叠加导出行为（移植 `app_common/main` 的 `6b80350`）。缩略图 JPEG draft 请求按源图宽高比计算，RAW 内嵌 JPEG 也走相同降采样；先缩小再就地应用 EXIF 方向。内存缓存写入仍拥有独立像素，读取返回 `QImage` 隐式共享副本，调用方修改时自动分离（适配 `2e643ef`）。本分支已有的渐进 JPEG 最终帧复用和 RAW 来源选择保持原逻辑。
+
+`PreviewPanel` 不再深拷贝已经拥有像素的 `QImageReader.read()` 结果；后台解码器在发信号前把 RGB888 转为 RGB32，减轻 GUI 线程创建 QPixmap 的格式转换开销。透明图像保持原格式；转换前后都检查取消请求（适配根仓库 `main` 的 `273b31c`）。这些优化不改变 40 Mi 像素同步阈值、HEIF 快速导航、解码器所有权或全分辨率导出要求。
+
+共享日志按文件复用一个加锁的写入句柄，默认 10 MiB 轮转并保留 5 份备份，可用 `APP_COMMON_LOG_MAX_BYTES` / `APP_COMMON_LOG_BACKUPS` 配置（适配 `b1058ba`）。Windows 文件被外部进程占用时继续写入，后续再试轮转；因此占用期间不保证体积上限。UTF-8 日志使用 LF，保证轮转计算与实际字节数一致。
+
+回归入口：`app_common/tests/test_preview_canvas_hot_path.py`、`test_thumb_stream_performance.py`、`test_thumbnail_memory_cache.py`、`test_log_rotation.py`，以及 Viewer 的 `test_preview_panel_policy.py`、HEIF、AB、元数据刷新和关闭测试。2026-10-09 Windows 本机离屏小基准（预热后 7 次中位数）中，1400×1000 棋盘绘制从 28.769 ms 降到 0.180 ms；生成的纯色 5616×3744 JPEG 缩到 2048 长边从 214.223 ms 降到 71.847 ms。这是局部合成基准，不代表真实图库或打包应用的整体速度。
+
 ### A/B 图片对照
 
 [`ABPreviewPanel`](../superviewer/ab_preview.py) 拥有两个独立的 `PreviewPanel`。首次开启时以当前图片初始化 A 侧；点击画布、选图框或本侧工具栏激活该侧，列表选择及长按方向键的快速预览只更新活动侧。两侧均沿用本分支普通预览策略：已知尺寸不超过 `40 * 1024 * 1024` 像素且无旧解码器持有者时可同步加载；其余走有界快速预览和后台解码。RAW 内嵌预览与完整分辨率导出仍分开处理。早期的 `set_full_only_mode()` 接口保留，AB 默认不再强制清空并重新加载原图。
