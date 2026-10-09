@@ -4,6 +4,7 @@ from PyQt6.QtCore import QPoint, QSize
 from PyQt6.QtWidgets import QApplication, QDialogButtonBox, QStyleFactory, QWidget
 
 from app_common.settings_dialog import SettingsDialog, SettingsPage
+from app_common.collapsible_section import CollapsibleSection
 from app_common import superviewer_user_options
 from birdstamp import config
 from birdstamp.overlays import safe_area_options
@@ -58,7 +59,14 @@ def test_real_options_pages_resize_and_cancel_without_writes(tmp_path, monkeypat
                 assert dialog.buttons.geometry().bottom() < dialog.height()
         if dialog_class is SuperViewerUserOptionsDialog:
             dialog._spin_thumb_loader_workers.setValue(3)
-            assert dialog.selected_options()['thumbnail_loader_workers'] == 3
+            before = dialog.selected_options()
+            assert before['thumbnail_loader_workers'] == 3
+            for group in dialog.findChildren(CollapsibleSection):
+                state = group.is_expanded()
+                group.set_expanded(not state)
+                assert dialog.selected_options() == before
+                group.set_expanded(state)
+            assert dialog.selected_options() == before
         else:
             dialog.name_edit.setText('尚未保存')
         dialog.buttons.button(QDialogButtonBox.StandardButton.Cancel).click()

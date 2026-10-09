@@ -20,6 +20,7 @@ from birdstamp.gui import editor_core, editor_dejitter, editor_options
 from birdstamp.gui.edit_modes import EDIT_MODE_NONE, EDIT_MODE_REFERENCE_REGION, EDIT_MODE_CROP_ADJUST
 from birdstamp.gui.editor_photo_list import PHOTO_COL_ROW, PHOTO_LIST_PATH_ROLE
 from app_common.toggle_button import ToggleToolButton
+from app_common.collapsible_section import CollapsibleSection
 from birdstamp.gui.editor_utils import path_key
 from birdstamp.gui.editor_sequence_preview_worker import EditorSequencePreviewWorker
 
@@ -461,3 +462,24 @@ def test_export_worker_close_holds_ownership_and_rejects_late_completion(window,
     finally:
         release.set()
         wait_until(lambda: window._sequence_worker is None)
+
+
+def test_parameter_group_collapse_preserves_settings_and_canvas_mode(window, monkeypatch):
+    setup_tab(window, monkeypatch)
+    before = window._build_current_render_settings()
+    canvas = window.preview_label.canvas
+    mode = canvas.edit_mode()
+    groups = {group.title(): group for group in window.dejitter_page.findChildren(CollapsibleSection)}
+    assert {'1. 方式', '2. 选区', '3. 分析'} <= groups.keys()
+    for title in ('1. 方式', '2. 选区', '3. 分析'):
+        group = groups[title]
+        group.set_expanded(False)
+        _APP.processEvents()
+        assert group.content_frame.isHidden()
+        assert window._build_current_render_settings() == before
+        assert canvas.edit_mode() == mode
+        assert window._sequence_worker is None
+        group.set_expanded(True)
+        _APP.processEvents()
+        assert not group.content_frame.isHidden()
+        assert window._build_current_render_settings() == before

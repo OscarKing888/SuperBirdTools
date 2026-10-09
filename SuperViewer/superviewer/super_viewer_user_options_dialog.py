@@ -6,6 +6,7 @@ from __future__ import annotations
 import os
 
 from app_common.settings_dialog import SettingsDialog
+from app_common.collapsible_section import CollapsibleSection
 from app_common.superviewer_user_options import (
     BIRD_SHARPNESS_PARAM_KEYS,
     KEY_NAVIGATION_FPS_OPTIONS,
@@ -64,9 +65,18 @@ class SuperViewerUserOptionsDialog(SettingsDialog):
             f"文件名：{USER_OPTIONS_FILENAME}"
         )
 
-        grid = QGridLayout()
-        grid.setHorizontalSpacing(10)
-        grid.setVerticalSpacing(8)
+        self.option_groups: dict[str, CollapsibleSection] = {}
+
+        def grid_group(title):
+            group = CollapsibleSection(title)
+            self.option_groups[title] = group
+            grid = QGridLayout(group.body)
+            grid.setContentsMargins(0, 0, 0, 0)
+            grid.setHorizontalSpacing(10)
+            grid.setVerticalSpacing(8)
+            return grid
+
+        grid = grid_group("加载与缓存")
 
         row = 0
         grid.addWidget(QLabel("后台图像加载线程数"), row, 0)
@@ -107,7 +117,8 @@ class SuperViewerUserOptionsDialog(SettingsDialog):
         grid.addWidget(self._combo_persistent_thumb_size, row, 1)
         grid.addWidget(QLabel("默认 128"), row, 2)
 
-        row += 1
+        grid = grid_group("浏览行为")
+        row = 0
         grid.addWidget(QLabel("方向键连续浏览速率"), row, 0)
         self._combo_key_navigation_fps = QComboBox(self)
         for fps in KEY_NAVIGATION_FPS_OPTIONS:
@@ -129,7 +140,8 @@ class SuperViewerUserOptionsDialog(SettingsDialog):
         grid.addWidget(self._chk_keep_view, row, 1)
         grid.addWidget(QLabel("默认开启"), row, 2)
 
-        row += 1
+        grid = grid_group("诊断")
+        row = 0
         grid.addWidget(QLabel("性能探针日志"), row, 0)
         self._chk_perf_probes = QCheckBox(self)
         self._chk_perf_probes.setChecked(bool(opts.get(KEY_PERF_PROBES_ENABLED, 0)))
@@ -141,17 +153,18 @@ class SuperViewerUserOptionsDialog(SettingsDialog):
         standard_icons = getattr(QStyle, "StandardPixmap", QStyle)
         general = QWidget(tabs)
         general_layout = QVBoxLayout(general)
-        general_layout.addLayout(grid)
+        for group in self.option_groups.values():
+            general_layout.addWidget(group)
         self.add_page(general, "浏览与性能", self.style().standardIcon(standard_icons.SP_ComputerIcon))
 
         note = QLabel("缩略视图会根据当前缩略图大小自动匹配最合适的一档预览图。")
         note.setWordWrap(True)
         note.setStyleSheet("color: #aaa; font-size: 12px;")
-        general_layout.addWidget(note)
+        self.option_groups["加载与缓存"].body.layout().addWidget(note, 4, 0, 1, 3)
 
         denoise = QWidget(tabs)
         denoise_layout = QVBoxLayout(denoise)
-        denoise_grid = QGridLayout()
+        denoise_grid = grid_group("输出文件")
         denoise_grid.setVerticalSpacing(10)
         self._combo_denoise_mode = QComboBox(denoise)
         for label, value in (("每张照片所在目录的子目录", "source_subdir"),
@@ -175,6 +188,8 @@ class SuperViewerUserOptionsDialog(SettingsDialog):
         self._combo_denoise_format.setCurrentIndex(self._combo_denoise_format.findData(opts["denoise_format"]))
         denoise_grid.addWidget(QLabel("输出格式"), 3, 0)
         denoise_grid.addWidget(self._combo_denoise_format, 3, 1, 1, 2)
+        denoise_layout.addWidget(self.option_groups["输出文件"])
+        denoise_grid = grid_group("降噪处理")
         self._spin_denoise_strength = QSpinBox(denoise)
         self._spin_denoise_strength.setRange(0, 100)
         self._spin_denoise_strength.setSuffix(" %")
@@ -194,7 +209,7 @@ class SuperViewerUserOptionsDialog(SettingsDialog):
         self._spin_denoise_workers.setToolTip("多张照片并行解码和保存；模型逐块推理。实际并行数受共享线程池与可用内存限制。")
         denoise_grid.addWidget(QLabel("最多并行照片数"), 6, 0)
         denoise_grid.addWidget(self._spin_denoise_workers, 6, 1)
-        denoise_layout.addLayout(denoise_grid)
+        denoise_layout.addWidget(self.option_groups["降噪处理"])
         denoise_note = QLabel("NAFNet RGB 降噪。原图保持不变，重名成片会自动编号。\n"
                              "RAW 将先渲染为 sRGB 再降噪。\n"
                              "在照片或目录右键菜单中开始降噪；新的设置用于下一批任务。", denoise)
@@ -206,7 +221,7 @@ class SuperViewerUserOptionsDialog(SettingsDialog):
         self._archive_form = ArchiveOptionsForm(tabs, options=self._initial_archive_options)
         archive_page = QWidget(tabs)
         archive_layout = QVBoxLayout(archive_page)
-        archive_layout.addWidget(self._archive_form)
+        self._add_option_group(archive_layout, "归档规则", self._archive_form)
         self.add_page(archive_page, "珍禽入册", archive_icon())
 
         from .rarity_badge import RarityBadgesForm, ConservationBadgesForm
@@ -214,7 +229,10 @@ class SuperViewerUserOptionsDialog(SettingsDialog):
         self._conservation_badges_form = ConservationBadgesForm(opts, tabs)
         for form, label, icon in ((self._rarity_badges_form, "稀有度徽章", "star"),
                                  (self._conservation_badges_form, "保护等级徽章", "shield")):
-            self.add_page(form, label, menu_icon(icon))
+            page = QWidget(tabs)
+            page_layout = QVBoxLayout(page)
+            self._add_option_group(page_layout, label, form)
+            self.add_page(page, label, menu_icon(icon))
 
         sharpness = QWidget(tabs)
         sharpness_layout = QVBoxLayout(sharpness)
@@ -226,7 +244,7 @@ class SuperViewerUserOptionsDialog(SettingsDialog):
         self._spin_bird_sharpness_max_birds = self._bird_sharpness_form.max_birds
         self._combo_bird_sharpness_estimator = self._bird_sharpness_form.estimator
         self._bird_sharpness_tiles = self._bird_sharpness_form.tiles
-        sharpness_layout.addWidget(self._bird_sharpness_form)
+        self._add_option_group(sharpness_layout, "清晰度参数", self._bird_sharpness_form)
         sharpness_note = QLabel("图像来源：默认测 RAW 里相机内嵌的全尺寸 JPEG（快）；选「RAW 解码」最准，门槛按它标定；"
                                 "「降噪成片」只测已降噪的照片。\n"
                                 "默认测量照片中的全部鸟，取最清晰的一只作为整张照片的清晰度。"
@@ -239,10 +257,17 @@ class SuperViewerUserOptionsDialog(SettingsDialog):
                                 "新的设置用于下一次检测和计算过程查看；计算过程窗口的「参数」页可临时改用其他参数对比。", sharpness)
         sharpness_note.setWordWrap(True)
         sharpness_note.setForegroundRole(getattr(QPalette, "ColorRole", QPalette).PlaceholderText)
-        sharpness_layout.addWidget(sharpness_note)
+        self._add_option_group(sharpness_layout, "参数说明", sharpness_note, expanded=False)
         self.add_page(sharpness, "鸟清晰度", menu_icon("process"))
         self._combo_denoise_mode.currentIndexChanged.connect(self._update_denoise_mode)
         self._update_denoise_mode()
+
+    def _add_option_group(self, layout, title, content, *, expanded=True):
+        group = CollapsibleSection(title, expanded=expanded)
+        group.set_content_widget(content)
+        self.option_groups[title] = group
+        layout.addWidget(group)
+        return group
 
     def _choose_denoise_directory(self) -> None:
         path = QFileDialog.getExistingDirectory(self, "选择降噪输出目录", self._edit_denoise_directory.text())

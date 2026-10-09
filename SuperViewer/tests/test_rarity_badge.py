@@ -118,7 +118,7 @@ def test_conservation_options_sidebar_persistence_and_reset(tmp_path, monkeypatc
         assert loaded['iucn_badge_en_background'] == '#123456'
         assert loaded['rarity_badge_legendary_background'] == RARITY_DEFAULT_OPTIONS['rarity_badge_legendary_background']
         pages = [dialog.tabs.widget(i) for i in range(dialog.tabs.count())]
-        scroll = next(page for page in pages if isinstance(page,QScrollArea) and page.widget() is form)
+        scroll = next(page for page in pages if isinstance(page,QScrollArea) and page.widget().isAncestorOf(form))
         assert scroll.widgetResizable()
         form.reset_defaults()
         assert form.selected_options() == IUCN_DEFAULT_OPTIONS

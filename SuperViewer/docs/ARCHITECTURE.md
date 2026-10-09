@@ -440,3 +440,7 @@ Qt 测试在窗口构造前隔离 `paths_settings` 的应用/用户状态目录�
 无 Qt 核心 [`PinyinUpdater`](../superviewer/bird_pinyin_update.py) 从 XMP、只读 report.db、原图元数据依次取得鸟名，查询共享 [`bird_pinyin`](../../app_common/bird_pinyin.py) 的 SuperPicky 带声调词表；未知名称跳过，已有拼音不覆盖。不需要识鸟服务或联网。写入 `XMP-superpicky:pinyin_name` 与 `pinyin_name_source`（对应鸟名，用于识别鸟名修改后的过期拼音），兼容旧别名。鸟种服务将来返回可选 `pinyin_name` 时，已确认结果也保存到同一字段。
 
 [`MetadataResultSync`](../superviewer/metadata_result_sync.py) 共用于识鸟和拼音，验证保存后的侧车指纹再同步当前目录及同侧车行，不重新选图，不丢失备注草稿。CLI 为 `python -m SuperViewer.superviewer.bird_pinyin_cli <照片或目录> [--recursive]`。测试见 `test_bird_pinyin_update.py`、`test_bird_pinyin_controller.py` 和 `test_bird_identification_controller.py` 的列表/缩略图实窗验证。
+
+### 通用参数分组
+
+[SuperViewerUserOptionsDialog](../superviewer/super_viewer_user_options_dialog.py) 使用共享 [CollapsibleSection](../../app_common/collapsible_section.py)：浏览与性能拆成加载与缓存/浏览行为/诊断，降噪拆成输出文件/降噪处理，归档与两类徽章复用原表单，清晰度参数与可收起说明分开。`option_groups` 保存视图容器，选项仍由原控件和 `selected_options()` 读取，不新增保存字段或改变检测流程；共享外部应用设置也采用同一分组。主浏览器、导航与视口保持原有职责。组件可独立使用，Qt5/Qt6 导入与枚举回退保留；样式由组件负责，设计先查根 [UI 规范](../../docs/ui-style.md) 与 [skill](../../.agents/skills/superbird-ui-design/SKILL.md)。

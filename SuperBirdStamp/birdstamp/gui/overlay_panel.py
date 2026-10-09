@@ -5,10 +5,12 @@ from copy import deepcopy
 from collections import OrderedDict
 from pathlib import Path
 import uuid
+from app_common.collapsible_section import CollapsibleSection
+
 from PyQt6.QtCore import Qt, QSize, QEvent, pyqtSignal, QObject, QRunnable, QThreadPool, pyqtSlot, QTimer
 from PyQt6.QtWidgets import (QWidget,QVBoxLayout,QHBoxLayout,QFormLayout,QListWidget,QListWidgetItem,
     QAbstractItemView,QPushButton,QToolButton,QMenu,QLabel,QLineEdit,QPlainTextEdit,QComboBox,
-    QCheckBox,QDoubleSpinBox,QFileDialog,QMessageBox,QGroupBox,QSizePolicy,QScrollArea,QFrame,QLayout)
+    QCheckBox,QDoubleSpinBox,QFileDialog,QMessageBox,QSizePolicy,QScrollArea,QFrame,QLayout)
 from birdstamp.overlays.model import document, new_item
 from birdstamp.overlays.assets import import_image
 from birdstamp.render.text_effects import DEFAULT_TEXT_EFFECTS, TEXT_EFFECT_RANGES
@@ -44,15 +46,20 @@ class _PropertyColumnsScroll(QScrollArea):
         self.setFrameShape(QFrame.Shape.NoFrame)
         self.setWidgetResizable(True)
         self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self._height_timer = QTimer(self)
+        self._height_timer.setSingleShot(True)
+        self._height_timer.timeout.connect(self._sync_height)
         self.setWidget(columns)
+        columns.setAutoFillBackground(False)
+        self.viewport().setAutoFillBackground(False)
 
     def sizeHint(self):
         columns = self.widget()
         minimum = columns.minimumSizeHint()
         width = max(self.viewport().width(), minimum.width())
         height = columns.layout().totalHeightForWidth(width)
-        if height < 0:
-            height = minimum.height()
+        # 嵌套折叠组的标题/正文最小高度也必须计入，不能只取换行高度。
+        height = max(minimum.height(), height)
         # 预留横向滚动条高度，切换图层或字体后也不裁掉最后一个属性。
         return QSize(minimum.width(), height + self.horizontalScrollBar().sizeHint().height())
 
@@ -73,12 +80,13 @@ class _PropertyColumnsScroll(QScrollArea):
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
-        self._sync_height()
+        self._height_timer.start(0)
 
     def eventFilter(self, watched, event):
         result = super().eventFilter(watched, event)
         if watched is self.widget() and event.type() in (QEvent.Type.LayoutRequest, QEvent.Type.Resize):
-            self._sync_height()
+            # 等 QScrollArea 完成本轮滚动范围计算，避免重入 resize 后残留旧的纵向范围。
+            self._height_timer.start(0)
         return result
 
 
@@ -143,8 +151,8 @@ class OverlayPanel(QWidget):
         self.edit_button=QPushButton('在预览中编辑'); self.edit_button.clicked.connect(self.activateRequested)
         row.addWidget(self.edit_button)
         layout.addLayout(row)
-        self.properties=QGroupBox('叠加层属性')
-        property_layout = QVBoxLayout(self.properties)
+        self.properties=CollapsibleSection('叠加层属性')
+        property_layout = QVBoxLayout(self.properties.body)
         header = QWidget()
         self.form=QFormLayout(header)
         self.form.setContentsMargins(0, 0, 0, 0)
@@ -242,9 +250,9 @@ class OverlayPanel(QWidget):
         self.forms={}
         forms={}
         for name in ('内容','布局','效果'):
-            page = QGroupBox(name)
+            page = CollapsibleSection(name)
             self.property_groups[name] = page
-            forms[name]=QFormLayout(page)
+            forms[name]=QFormLayout(page.body)
             forms[name].setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)
             # 模板与实例使用完全相同的三列属性；窄列中的长控件换到标签下方。
             forms[name].setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapLongRows)
@@ -266,12 +274,12 @@ class OverlayPanel(QWidget):
         for widget,group in ((self.reset_layout_button,'布局'),(self.font_button,'内容'),(self.replace_image_button,'内容')):
             self.form.takeRow(widget); forms[group].addRow(widget)
         self.property_scroll = _PropertyColumnsScroll(columns)
-        self.properties.layout().addWidget(self.property_scroll)
+        self.properties.body.layout().addWidget(self.property_scroll)
         self.setMinimumWidth(0)
 
     def _build_layout_controls(self):
-        self.layout_box = QGroupBox('自动行 / 列组合')
-        form = QFormLayout(self.layout_box)
+        self.layout_box = CollapsibleSection('自动行 / 列组合')
+        form = QFormLayout(self.layout_box.body)
         form.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapLongRows)
         self.layout_group = QComboBox()
         self.layout_group.currentIndexChanged.connect(lambda _: self._layout_properties())

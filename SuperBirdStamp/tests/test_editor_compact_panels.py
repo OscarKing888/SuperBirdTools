@@ -252,7 +252,8 @@ def test_property_height_tracks_layer_type_and_expanded_geometry(window, overlay
             scroll = panel.property_scroll
             assert scroll.verticalScrollBar().maximum() == 0
             assert scroll.widget().height() <= scroll.viewport().height()
-            assert panel.properties.rect().contains(scroll.geometry())
+            assert panel.properties.rect().contains(
+                scroll.rect().translated(scroll.mapTo(panel.properties, QPoint())))
             layout = panel.layout()
             property_index = layout.indexOf(panel.properties)
             following = layout.itemAt(property_index + 1).widget()
