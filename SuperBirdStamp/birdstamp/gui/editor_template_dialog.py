@@ -1027,11 +1027,13 @@ class TemplateManagerDialog(QDialog):
 
     def _on_template_list_context_menu(self, pos: Any) -> None:
         item = self.template_list.itemAt(pos)
-        if item is None:
-            return
         # 固定右键目标，不能用当前正在编辑的模板代替点击的行。
-        name = item.text()
+        name = item.text() if item is not None else None
         menu = QMenu(self)
+        new_action = menu.addAction("新增")
+        copy_action = menu.addAction("复制")
+        copy_action.setEnabled(name is not None)
+        menu.addSeparator()
         label = ("在 Finder 中显示 JSON 文件" if sys.platform == "darwin" else
                  "在资源管理器中显示 JSON 文件" if sys.platform == "win32" else
                  "打开 JSON 所在文件夹")
@@ -1039,8 +1041,14 @@ class TemplateManagerDialog(QDialog):
         menu.addSeparator()
         rename_action = menu.addAction("重命名")
         delete_action = menu.addAction("删除")
+        for action in (reveal_action, rename_action, delete_action):
+            action.setEnabled(name is not None)
         selected = menu.exec(self.template_list.viewport().mapToGlobal(pos))
-        if selected is reveal_action:
+        if selected is new_action:
+            self._create_template()
+        elif selected is copy_action:
+            self._copy_template(name)
+        elif selected is reveal_action:
             self._reveal_template_file(name)
         elif selected is rename_action:
             self._rename_template(name)
@@ -1710,14 +1718,17 @@ class TemplateManagerDialog(QDialog):
         _save_template_payload(path, payload)
         self._reload_template_list(preferred=safe_name)
 
-    def _copy_template(self) -> None:
-        if not self.current_template_name:
+    def _copy_template(self, source_name: str | None = None) -> None:
+        origin_name = str(source_name or self.current_template_name or "").strip()
+        if not origin_name:
             return
-        source_path = self.template_paths.get(self.current_template_name)
+        source_path = self.template_paths.get(origin_name)
         if not source_path:
             return
 
-        base_name = f"{self.current_template_name}_copy"
+        # 复制前提交尚在防抖等待中的文字，确保副本包含最新编辑。
+        self.overlay_panel.flush_text()
+        base_name = f"{origin_name}_copy"
         candidate = base_name
         suffix = 1
         while (self.template_dir / f"{candidate}.json").exists():
