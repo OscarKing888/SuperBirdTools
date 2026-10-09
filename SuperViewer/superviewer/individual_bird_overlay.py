@@ -12,6 +12,7 @@ except ImportError:  # pragma: no cover
 class IndividualBirdOverlayMixin:
     def __init__(self, *args, **kwargs):
         self._individual_highlight = None
+        self._individual_auto_center = False
         super().__init__(*args, **kwargs)
 
     def set_individual_highlight(self, box, color="#00c8ff"):
@@ -20,6 +21,41 @@ class IndividualBirdOverlayMixin:
         if value != self._individual_highlight:
             self._individual_highlight = value
             self.update()
+        if value is not None:
+            self._center_individual_bird()
+
+    def set_individual_auto_center(self, enabled):
+        self._individual_auto_center = bool(enabled)
+        self._center_individual_bird()
+
+    def _individual_center(self):
+        if not self._individual_auto_center or self._individual_highlight is None or self._source_pixmap is None:
+            return None
+        (left, top, right, bottom), _color = self._individual_highlight
+        return ((left + right) / 2, (top + bottom) / 2)
+
+    def _center_individual_bird(self):
+        center = self._individual_center()
+        if center is None:
+            return
+        # 仅平移，不经过缩放接口；允许边缘留白，让画面边缘的鸟也真正居中。
+        self._apply_view_center_ratio(center)
+        self.update()
+        self.individual_centered.emit()
+
+    def _clamp_offset(self):
+        center = self._individual_center()
+        if center is not None:
+            # 悬停期间优先于相机焦点居中，异步预览升级/元数据刷新不能把鸟拉走。
+            self._apply_view_center_ratio(center)
+            return
+        super()._clamp_offset()
+
+    def set_source_pixmap(self, pixmap, **kwargs):
+        if self._individual_center() is not None and pixmap is not None and not pixmap.isNull():
+            # 这次悬停是用户选择的视野；后台清晰图到达不能重新适应窗口或放大鸟框。
+            kwargs.update(reset_view=False, preserve_view=True, preserve_scale=False)
+        super().set_source_pixmap(pixmap, **kwargs)
 
     def _on_source_cleared(self):
         super()._on_source_cleared()

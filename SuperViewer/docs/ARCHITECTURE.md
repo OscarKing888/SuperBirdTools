@@ -347,6 +347,7 @@ CLI 与 GUI 共用核心：在仓库根使用共享 `.venv` 执行 `python -m Su
 复用从 Debug 窗口抽出的 [`TraceBirdList`](../superviewer/bird_result_list.py)；
 `IndividualBirdHover` 校验 A/B 源图身份，`IndividualBirdOverlayMixin` 单独绘制悬停框，
 用视口实际 RAW camera crop 映射，退出悬停/切图/播放清除且不参与导出。
+各侧预览工具栏的「悬停居中」开关默认关闭、会话内独立保留。开启后 `IndividualBirdOverlayMixin` 按已映射的悬停框只平移，不更改 zoom；允许边缘留白，悬停期间优先于相机焦点居中，异步完整预览保留该视野。`individual_centered` 取消首张图待执行的自动适应，并更新 A/B 联动基准而不移动另一张照片；离开悬停只撤框，不主动跳回。
 相关回归：`test_per_bird_identification.py`、`test_per_bird_identification_ui.py`、`test_bird_identification_controller.py`。
 
 手动指定入口由 `BirdIDController` 持有的 [`BirdCatalogController`](../superviewer/bird_catalog_controller.py) 注册照片右键菜单，并纳入同一退出等待。无 Qt [`bird_catalog.py`](../superviewer/bird_catalog.py) 复用本机 HTTP 传输，独立调用 `/birds/search` 分页列表与 `/birds/detail` 身份绑定详情；CLI 复用协议校验和 `apply_bird()`。目录请求有代次、取消和单一待处理请求，真实 `QThread.finished` 后交接，旧搜索/详情不能启用当前选择的保存按钮。批量写入采用有界队列及定时分批 `MetadataResultSync`，网络请求前记录照片/侧车指纹，详情变化和晚到本地编辑均拒绝提交；写入只走 `PhotoMetaDataXMP` 原子事务。手动指定清除旧置信度，保留历史识别候选、用户备注和标签，保存独立的学名/各类拼音/简介/目录来源字段。回归见 [核心协议及 XMP](../tests/test_bird_catalog.py)、[Qt 生命周期](../tests/test_bird_catalog_controller.py) 与 `test_bird_identification_controller.py` 的列表/缩略图真实窗口验证。
