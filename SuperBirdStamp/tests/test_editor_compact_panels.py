@@ -37,12 +37,17 @@ def test_export_actions_stay_visible_when_scrolled_and_collapsed(window):
     window._export_section.set_expanded(False)
     settle()
     assert window.export_current_btn.isVisible()
-    bar.settings_button.click()
+    bar.settings_section.header_button.click()
     settle()
-    assert window._export_section.is_expanded()
-    target = window.image_export_group
-    assert window.left_scroll.viewport().rect().intersects(
-        target.rect().translated(target.mapTo(window.left_scroll.viewport(), QPoint())))
+    assert not bar.settings_section.is_expanded()
+    assert window.export_current_btn.isVisible()
+    bar.settings_section.header_button.click()
+    settle()
+    assert bar.settings_section.is_expanded()
+    assert not window._export_section.is_expanded()
+    assert bar.settings_scroll.isAncestorOf(window.image_export_group)
+    assert not window.left_scroll.isAncestorOf(window.image_export_group)
+    assert window.image_export_group.isVisible()
 
 
 def test_export_modes_busy_and_video_cancel_use_original_actions(window):
@@ -161,3 +166,64 @@ def test_template_and_photo_share_parallel_property_groups(window, overlay_doc, 
         manager.close()
         manager.deleteLater()
         settle()
+
+
+def test_stage_folding_survives_reorder_and_keeps_parameters(window):
+    from birdstamp.gui.editor_collapsible import CollapsibleSection
+
+    window.show()
+    settle()
+    groups = window._pipeline_stage_option_groups
+    assert all(isinstance(group, CollapsibleSection) for group in groups.values())
+    before = window._current_pipeline_stage_enabled_map()
+    value = window.max_edge_combo.currentData()
+    resize = groups['resize_limit']
+    resize.header_button.setFocus()
+    QTest.keyClick(resize.header_button, Qt.Key.Key_Space)
+    assert not resize.is_expanded()
+    assert not window.max_edge_combo.isVisible()
+    order = list(window._current_pipeline_stage_order())
+    order[1], order[2] = order[2], order[1]
+    window._set_pipeline_stage_order(order, save=False, mark_dirty=False)
+    settle()
+    assert not resize.is_expanded()
+    assert resize.title().startswith('3.')
+    assert window._current_pipeline_stage_enabled_map() == before
+    resize.header_button.click()
+    settle()
+    assert window.max_edge_combo.isVisible()
+    assert window.max_edge_combo.currentData() == value
+
+
+@pytest.mark.parametrize('stage', ['export_image', 'export_gif', 'export_video'])
+def test_footer_settings_collapse_preserves_values_and_bounds(window, stage):
+    window.resize(1120, 720)
+    window.show()
+    window._set_selected_export_stage_id(stage, save=False)
+    bar = window.export_action_bar
+    window.gif_export_panel.fps_combo.setValue(17)
+    window.video_export_panel.fps_combo.setCurrentText('24')
+    settle()
+    expanded_height = bar.height()
+    assert bar.settings_scroll.height() <= 240
+    assert window.rect().contains(bar.mapTo(window, bar.rect().bottomRight()))
+    assert window.left_scroll.height() > 100
+    for _ in range(3):
+        bar.settings_section.header_button.click()
+        settle()
+        assert bar.height() < expanded_height
+        assert bar.actions.isVisible()
+        bar.settings_section.header_button.click()
+        settle()
+    assert window.gif_export_panel.fps_combo.value() == 17
+    assert window.video_export_panel.fps_combo.currentText() == '24'
+    window.export_tabs.setCurrentWidget(window.dejitter_page)
+    settle()
+    assert bar.settings_scroll.isAncestorOf(window.dejitter_export_group)
+    assert window.dejitter_export_group.isVisible()
+    assert not window.image_export_group.isVisible()
+    assert not window.video_export_panel.isVisible()
+    window.export_tabs.setCurrentIndex(0)
+    settle()
+    assert window.video_export_panel.isVisible() == (stage == 'export_video')
+    assert window.image_export_group.isVisible() == (stage != 'export_video')
