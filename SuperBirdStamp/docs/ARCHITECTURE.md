@@ -349,7 +349,7 @@ Windows 合并构建由 [`stage_windows_exiftool.py`](../../build_tools/stage_wi
 
 ### 用户选项页面扩展
 
-[user_options_dialog.py](../birdstamp/gui/user_options_dialog.py) 与 SuperViewer 共用 [SettingsDialog / SettingsPage](../../app_common/settings_dialog.py)：公共对话框提供可拖动缩放的窗口、固定底部的确定/取消按钮，以及 `add_page(content, title, icon)` 页面注册接口；每页统一滚动、边距和左上对齐，表单按所需尺寸显示，放大不拉散控件，小窗口可滚动访问全部选项。底层 [SidebarTabWidget](../../app_common/sidebar_tabs.py) 负责顶部对齐的左侧 Tab、横排图标和文字，避免 macOS 原生竖向 Tab 的旋转错位（回归见 [test_settings_dialog.py](../../app_common/tests/test_settings_dialog.py)、[test_sidebar_tabs.py](../../app_common/tests/test_sidebar_tabs.py) 和[双应用布局测试](../../tests/test_shared_settings_dialog.py)）。窗口默认 920×660，最小 640×420。
+[user_options_dialog.py](../birdstamp/gui/user_options_dialog.py) 与 SuperViewer 共用 [SettingsDialog / SettingsPage](../../app_common/settings_dialog.py)：公共对话框提供可拖动缩放的窗口、固定底部的确定/取消按钮，以及 `add_page(content, title, icon)` 页面注册接口；每页统一滚动、边距和左上对齐，表单按所需尺寸显示，放大不拉散控件，小窗口可滚动访问全部选项。底层 [SidebarTabWidget](../../app_common/sidebar_tabs.py) 负责顶部对齐的左侧 Tab、横排图标和文字，避免 macOS 原生竖向 Tab 的旋转错位（回归见 [test_settings_dialog.py](../../app_common/tests/test_settings_dialog.py)、[test_sidebar_tabs.py](../../app_common/tests/test_sidebar_tabs.py) 和[双应用布局测试](../../tests/test_shared_settings_dialog.py)）。BirdStamp 窗口默认 1200×900，为参考图展开后的完整表单预留空间；打开时按父窗口所在屏幕的可用尺寸缩小，并预留窗口边框空间，最小仍为 640×420，小屏通过页面滚动访问全部内容。共享外壳的默认尺寸保持 920×660。
 
 现有安全区编辑器由 `_build_safe_area_page()` 构建：左侧为有限高度的组列表及紧邻的管理按钮，右侧按组名、边距矩阵、预览分区；预览图与横竖屏标题保持固定间距，不随窗口高度拉散。页面使用 QScrollArea 容纳小窗口或较大字体，确定/取消按钮始终位于滚动区域外。后续设置以独立 QWidget 页面通过 `add_page(page, label, icon)` 接入，沿用 Qt 的切页及键盘导航。安全区校验、保存失败留在窗口及取消不落盘行为不变；此布局调整无新增 CLI 参数。回归沿用 [test_safe_area_user_options.py](../tests/test_safe_area_user_options.py)。
 

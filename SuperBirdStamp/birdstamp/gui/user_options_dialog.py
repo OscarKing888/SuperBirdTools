@@ -5,7 +5,7 @@ import uuid
 
 from app_common.collapsible_section import CollapsibleSection
 
-from PyQt6.QtCore import Qt, QRectF
+from PyQt6.QtCore import Qt, QRectF, QSize
 from PyQt6.QtGui import QColor, QImage, QPainter, QPainterPath, QPen
 from PyQt6.QtWidgets import (
     QCheckBox, QFileDialog, QDoubleSpinBox, QFormLayout, QGridLayout,
@@ -98,6 +98,13 @@ class UserOptionsDialog(SettingsDialog):
         self.name_edit.textChanged.connect(self._edit)
         self.groups.currentRowChanged.connect(self._load_row)
         self._refresh_groups()
+        # 为完整表单及加载参考图后的预览预留空间；小屏仍由页面滚动。
+        initial_size = QSize(1200, 960)
+        screen = parent.screen() if parent is not None else self.screen()
+        if screen is not None:
+            available = screen.availableGeometry().size() - QSize(40, 80)
+            initial_size = initial_size.boundedTo(available)
+        self.resize(initial_size.expandedTo(self.minimumSize()))
 
     def _build_safe_area_page(self):
         """安全区控件集中在独立页面，后续选项通过 add_page 追加。"""
