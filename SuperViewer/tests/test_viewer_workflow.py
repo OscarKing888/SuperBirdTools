@@ -147,7 +147,7 @@ def test_settings_drafts_survive_navigation_collapse_and_cancel(tmp_path, monkey
         values = dialog.selected_options()
         assert values["metadata_loader_workers"] == 3
         assert values["persistent_thumb_max_size"] == 512
-        assert len(values) == 7
+        assert set(values) == set(opts)
         dialog.buttons.button(QDialogButtonBox.StandardButton.Cancel).click()
         assert not list(tmp_path.iterdir())
     finally:

@@ -122,8 +122,8 @@ These areas have repeatedly regressed during feature work. Treat them as protect
   - Metadata, EXIF, focus extraction, copy/reveal actions, and sidecar logic must continue to resolve against source-file semantics.
   - Do not assume preview JPEG carries the same metadata as the source file.
 - SuperViewer preview policy:
-  - A committed selection may synchronously load the original when its known pixel count is at most `40 * 1024 * 1024` and no previous full-preview worker still owns the decoder. Keep the exact threshold and ownership check.
-  - Large/unknown-size images first use a cached or bounded quick preview, then an owned background decode. A same-path fast selection becoming committed must still request the missing full preview.
+  - A committed selection may synchronously load the original within the user-selected pixel-count or file-size limit, provided no previous full-preview worker still owns the decoder. Preserve the exact default of `40 * 1024 * 1024` pixels. File-size mode measures regular-file bytes; zero disables direct loading, and neither mode enables synchronous RAW demosaic.
+  - Images exceeding the selected limit, or whose selected measurement is unavailable, first use a cached or bounded quick preview, then an owned background decode. A same-path fast selection becoming committed must still request the missing full preview.
   - Fast keyboard navigation keeps `load_full=False` and must not start HIF/RAW/PSD full decodes in the hot path.
   - In the HEIF quick-preview branch, a cache miss must not invoke synchronous Pillow thumbnail generation that can decode the entire source. Preserve Pillow/`pillow-heif` in the actual full decode path.
   - RAW display prefers embedded previews and may use background half-size demosaic. Overlay export must separately acquire full source resolution, drain the display decoder first, and fail if a full source image cannot be obtained.

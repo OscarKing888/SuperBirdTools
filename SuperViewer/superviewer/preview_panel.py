@@ -6,6 +6,7 @@ from __future__ import annotations
 import io as _io
 import time as _time
 import os
+import stat
 from pathlib import Path
 
 from PIL import Image, ImageOps
@@ -23,7 +24,12 @@ from app_common.preview_canvas import (
     normalize_preview_composition_grid_line_width,
     normalize_preview_composition_grid_mode,
 )
-from app_common.superviewer_user_options import get_keep_view_on_switch
+from app_common.superviewer_user_options import (
+    DEFAULT_DIRECT_PREVIEW_MAX_PIXELS,
+    DIRECT_PREVIEW_BY_FILE_SIZE,
+    get_direct_preview_limit,
+    get_keep_view_on_switch,
+)
 
 from .ab_preview_canvas import ViewerPreviewCanvas
 
@@ -51,7 +57,7 @@ _log = get_logger("superviewer.preview_panel")
 _QUICK_PREVIEW_SIZE = 512
 _QUICK_PREVIEW_FALLBACK_SIZE = 128
 _FULL_PREVIEW_DELAY_MS = 80
-_DIRECT_ORIGINAL_PREVIEW_MAX_PIXELS = 40 * 1024 * 1024  # 保留原有约 40MP 阈值。
+_DIRECT_ORIGINAL_PREVIEW_MAX_PIXELS = DEFAULT_DIRECT_PREVIEW_MAX_PIXELS  # 旧配置保持 40 * 1024 * 1024。
 _EXPORT_PREVIEW_DRAIN_TIMEOUT_MS = 30_000
 _HEIF_PIL_OPENER_REGISTERED = False
 
@@ -186,8 +192,20 @@ def _preview_source_pixel_count(path: str) -> int:
 
 
 def _should_load_original_immediately(path: str) -> bool:
+    # A byte threshold must never enable synchronous RAW demosaic.
+    if not path or Path(path).suffix.lower() in RAW_EXTENSIONS:
+        return False
+    mode, limit = get_direct_preview_limit()
+    if limit <= 0:
+        return False
+    if mode == DIRECT_PREVIEW_BY_FILE_SIZE:
+        try:
+            info = os.stat(path)
+        except OSError:
+            return False
+        return stat.S_ISREG(info.st_mode) and 0 < info.st_size <= limit
     pixels = _preview_source_pixel_count(path)
-    return 0 < pixels <= _DIRECT_ORIGINAL_PREVIEW_MAX_PIXELS
+    return 0 < pixels <= limit
 
 
 def _qimage_pixel_count(qimg: QImage | None) -> int:
