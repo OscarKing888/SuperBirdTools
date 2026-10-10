@@ -3,12 +3,13 @@ import os
 
 import pytest
 from PIL import Image
-from PyQt6.QtCore import Qt
-from PyQt6.QtGui import QPixmap
+from PyQt6.QtCore import QEvent, Qt
+from PyQt6.QtGui import QKeyEvent, QPixmap
 from PyQt6.QtTest import QTest
-from PyQt6.QtWidgets import QApplication
+from PyQt6.QtWidgets import QApplication, QComboBox
 
 from SuperViewer.tests.test_preview_info_sync import window
+from SuperViewer.tests.test_ab_preview import _wait_until
 from SuperViewer.superviewer.ab_preview import ABPreviewPanel
 from app_common import superviewer_user_options
 
@@ -90,19 +91,17 @@ def test_each_side_grid_options_remain_independent(comparison):
     assert b._composition_grid_line_width == 1
 
 
-def test_navigation_does_not_repopulate_directory_choices(comparison, monkeypatch):
+def test_headers_show_filenames_without_directory_choice_widgets(comparison):
     paths = [os.path.normpath(f"photos/{index}.jpg") for index in range(10000)]
     comparison.set_display_paths(paths)
-    resets = []
-    for selector in comparison._selectors.values():
-        selector.model().modelReset.connect(lambda: resets.append(True))
-    monkeypatch.setattr(comparison, "_rebuild_selectors", lambda: pytest.fail("navigation rebuilt choices"))
+    assert not any(header.findChildren(QComboBox) for header in comparison._headers.values())
+    assert set(comparison.findChildren(QComboBox)) == set(comparison._scales.values())
     pixmap = QPixmap(32, 24)
     pixmap.fill()
     for path in (paths[10], "outside.jpg", paths[9999]):
         comparison.set_quick_pixmap_for_list(path, pixmap)
-        assert comparison._selectors[comparison.active_side()].currentData() == os.path.normpath(path)
-    assert not resets
+        assert comparison._filenames[comparison.active_side()].toolTip() == os.path.normpath(path)
+    assert set(comparison.findChildren(QComboBox)) == set(comparison._scales.values())
 
 
 def test_active_side_updates_cached_info_and_list_without_reloading_other_side(window, tmp_path, monkeypatch):
@@ -125,8 +124,8 @@ def test_active_side_updates_cached_info_and_list_without_reloading_other_side(w
     assert window.image_info_panel.current_photo_path() == paths[0]
     assert window._file_list.get_selected_display_path() == paths[0]
     assert not events
-    ab._selectors["B"].setCurrentIndex(2)
-    ab._choose("B")
+    window._file_list.select_display_path_silently(paths[2])
+    window._on_file_selected_from_list(paths[2])
     assert window.image_info_panel.current_photo_path() == paths[2]
     assert window._file_list.get_selected_display_path() == paths[2]
 
@@ -149,6 +148,105 @@ def test_ab_quick_navigation_commits_only_active_side(window, tmp_path):
     assert a._full_preview_loaded and not a._fast_preview_only
     assert b.current_path() == paths[0]
     assert window._current_exif_path == paths[1]
+
+
+@pytest.mark.parametrize("mode", ["list", "thumb"])
+def test_canvas_focus_routes_native_list_selection_and_keys(window, tmp_path, mode):
+    paths = [str(tmp_path / f"photo-{i}.png") for i in range(3)]
+    for path in paths:
+        Image.new("RGB", (100, 80)).save(path)
+    files = window._file_list
+    files._all_files = paths
+    files._set_view_mode(files._MODE_LIST if mode == "list" else files._MODE_THUMB)
+    files._rebuild_views()
+    window.resize(1700, 800)
+    window.show()
+    window.activateWindow()
+    _APP.processEvents()
+    window._on_file_selected_from_list(paths[0])
+    ab = window.preview_compare
+    ab.set_enabled(True)
+    a, b = [ab.preview_for_side(side).canvas for side in ("A", "B")]
+    _APP.processEvents()
+
+    QTest.mouseClick(a, Qt.MouseButton.LeftButton)
+    assert _APP.focusWidget() is a and ab.active_side() == "A"
+    view = files._tree_widget if mode == "list" else files._list_widget
+    QTest.mouseClick(view.viewport(), Qt.MouseButton.LeftButton,
+                     pos=view.visualRect(view.model().index(2, 0)).center())
+    assert ab.path_for_side("A") == paths[2]
+    assert ab.path_for_side("B") == paths[0]
+
+    QTest.mouseClick(b, Qt.MouseButton.LeftButton)
+    assert _APP.focusWidget() is b and ab.active_side() == "B"
+    assert window._current_exif_path == paths[0]
+    QTest.keyClick(b, Qt.Key.Key_Down if mode == "list" else Qt.Key.Key_Right)
+    _wait_until(lambda: ab.path_for_side("B") == paths[1])
+    assert ab.path_for_side("B") == paths[1]
+    assert ab.path_for_side("A") == paths[2]
+    assert _APP.focusWidget() is b
+    assert window._current_exif_path == paths[1]
+
+    # Focus-only activation of a toolbar child must also retarget selection.
+    ab._fits["A"].setFocus()
+    _APP.processEvents()
+    assert ab.active_side() == "A"
+    assert window._current_exif_path == paths[2]
+    assert files.get_selected_display_path() == paths[2]
+
+
+def test_canvas_repeat_stops_on_side_focus_change(window, tmp_path):
+    paths = [str(tmp_path / f"photo-{i}.png") for i in range(4)]
+    for path in paths:
+        Image.new("RGB", (80, 60)).save(path)
+    files = window._file_list
+    files._all_files = paths
+    files._set_view_mode(files._MODE_LIST)
+    files._rebuild_views()
+    window.show()
+    window.activateWindow()
+    _APP.processEvents()
+    window._on_file_selected_from_list(paths[0])
+    ab = window.preview_compare
+    ab.set_enabled(True)
+    a, b = [ab.preview_for_side(side).canvas for side in ("A", "B")]
+    _APP.processEvents()
+    QTest.mouseClick(a, Qt.MouseButton.LeftButton)
+    _APP.sendEvent(a, QKeyEvent(QEvent.Type.KeyPress, Qt.Key.Key_Down, Qt.KeyboardModifier.NoModifier))
+    _APP.sendEvent(a, QKeyEvent(QEvent.Type.KeyPress, Qt.Key.Key_Down, Qt.KeyboardModifier.NoModifier, "", True))
+    assert files._key_navigation_playback_active
+    a_path = ab.path_for_side("A")
+    QTest.mouseClick(b, Qt.MouseButton.LeftButton)
+    assert not files._key_navigation_playback_active
+    assert ab.active_side() == "B"
+    assert ab.path_for_side("A") == a_path
+    assert ab.path_for_side("B") == paths[0]
+
+
+def test_preview_keyboard_reuses_clipboard_action_and_leaves_edits_alone(window, tmp_path, monkeypatch):
+    photo = str(tmp_path / "photo.png")
+    Image.new("RGB", (80, 60)).save(photo)
+    files = window._file_list
+    files._all_files = [photo]
+    files._rebuild_views()
+    window.show()
+    window.activateWindow()
+    _APP.processEvents()
+    window._on_file_selected_from_list(photo)
+    files.select_display_path_silently(photo)
+    canvas = window.preview_compare.active_preview.canvas
+    copied = []
+    monkeypatch.setattr(files, "_copy_paths_to_clipboard", lambda paths: copied.append(paths))
+    QTest.mouseClick(canvas, Qt.MouseButton.LeftButton)
+    QTest.keyClick(canvas, Qt.Key.Key_C, Qt.KeyboardModifier.ControlModifier)
+    assert copied == [[photo]]
+    edit = window.image_info_panel.filename_edit
+    edit.setFocus()
+    edit.setCursorPosition(2)
+    QTest.keyClick(edit, Qt.Key.Key_Left)
+    assert edit.cursorPosition() == 1
+    assert files.get_selected_display_path() == photo
+    assert copied == [[photo]]
 
 
 def test_pending_scroll_does_not_undo_side_activation(window, tmp_path, monkeypatch):

@@ -162,5 +162,5 @@ def test_ab_retains_both_images_when_directory_auto_selects_first(window, tmp_pa
     assert window._current_exif_path == str(b)
     assert window.preview_compare.path_for_side("A") == str(a)
     assert window.preview_compare.path_for_side("B") == str(b)
-    assert window.preview_compare._selectors["A"].itemText(0).startswith("[筛选外]")
-    assert window.preview_compare._selectors["B"].itemText(0).startswith("[筛选外]")
+    assert window.preview_compare._filenames["A"].toolTip() == str(a)
+    assert window.preview_compare._filenames["B"].toolTip() == str(b)

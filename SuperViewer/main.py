@@ -92,6 +92,7 @@ try:
     )
     from .superviewer.preview_panel import PreviewPanel
     from .superviewer.ab_preview import ABPreviewPanel
+    from .superviewer.preview_key_router import PreviewKeyRouter
     from .superviewer.image_info_tabs import (
         ImageInfoTabPanel_ImageInfo,
         ImageInfoTabPanel_Tags,
@@ -165,6 +166,7 @@ except ImportError:
     )
     from superviewer.preview_panel import PreviewPanel
     from superviewer.ab_preview import ABPreviewPanel
+    from superviewer.preview_key_router import PreviewKeyRouter
     from superviewer.image_info_tabs import (
         ImageInfoTabPanel_ImageInfo,
         ImageInfoTabPanel_Tags,
@@ -797,12 +799,15 @@ class MainWindow(QMainWindow):
         left_layout.addLayout(overlay_row)
         self.preview_panel = self.preview_compare.active_preview
         self.preview_compare.active_preview_changed.connect(self._on_active_preview_changed)
-        self.preview_compare.active_path_changed.connect(self._on_ab_choice_changed)
         self.preview_compare.comparison_toggled.connect(self._on_ab_toggled)
         self.preview_compare.full_preview_ready.connect(self._on_full_preview_ready)
         self.preview_compare.display_scale_percent_changed.connect(self._sync_preview_scale_combo)
         self.preview_compare.set_composition_grid_mode(self.combo_preview_grid.currentData())
         self.preview_compare.set_composition_grid_line_width(self.combo_preview_grid_line_width.currentData())
+        self._preview_key_routers = [
+            PreviewKeyRouter(self.preview_compare.preview_for_side(side).canvas, self._file_list, self)
+            for side in ("A", "B")
+        ]
         self._sync_preview_scale_combo(self.preview_panel.current_display_scale_percent())
         left_layout.addWidget(self.preview_compare, stretch=1)
         self._file_list.display_files_changed.connect(self.preview_compare.set_display_paths)

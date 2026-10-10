@@ -10,8 +10,8 @@ from app_common.preview_canvas import configure_preview_scale_preset_combo, sync
 from .ab_view_link import ABViewLink
 from .preview_panel import PreviewPanel
 from .qt_compat import (
-    QComboBox, QEvent, QHBoxLayout, QMenu, QSplitter, QToolButton, QVBoxLayout,
-    QWidget, Qt, pyqtSignal,
+    QComboBox, QEvent, QHBoxLayout, QLabel, QMenu, QSizePolicy, QSplitter,
+    QToolButton, QVBoxLayout, QWidget, Qt, pyqtSignal,
 )
 
 
@@ -25,7 +25,6 @@ class ABPreviewPanel(QWidget):
     active_preview_changed = pyqtSignal(object)
     display_scale_percent_changed = pyqtSignal(object)
     full_preview_ready = pyqtSignal(str)
-    active_path_changed = pyqtSignal(str)
     comparison_toggled = pyqtSignal(bool)
 
     def __init__(self, parent=None) -> None:
@@ -34,8 +33,6 @@ class ABPreviewPanel(QWidget):
         self._active_side = "B"
         self._paths: dict[str, str] = {"A": "", "B": ""}
         self._display_paths: list[str] = []
-        self._display_index: dict[str, int] = {}
-        self._selector_outside_paths: dict[str, str] = {}
         self._current_list_path = ""
         self._shutdown_requested = False
 
@@ -59,14 +56,14 @@ class ABPreviewPanel(QWidget):
         layout.addWidget(self.splitter, 1)
         self._widgets: dict[str, QWidget] = {}
         self._headers: dict[str, QWidget] = {}
-        self._selectors: dict[str, QComboBox] = {}
-        self._buttons: dict[str, QToolButton] = {}
+        self._filenames: dict[str, QLabel] = {}
+        self._side_labels: dict[str, QLabel] = {}
         self._previews: dict[str, PreviewPanel] = {}
         self._scales: dict[str, QComboBox] = {}
         self._fits: dict[str, QToolButton] = {}
         self._toolbars: dict[str, QWidget] = {}
         self._canvas_sides: dict[object, str] = {}
-        self._selector_sides: dict[object, str] = {}
+        self._filename_sides: dict[object, str] = {}
         for side in ("A", "B"):
             panel = QWidget(self.splitter)
             panel.setObjectName(f"abSide{side}")
@@ -76,18 +73,15 @@ class ABPreviewPanel(QWidget):
             header = QWidget(panel)
             row = QHBoxLayout(header)
             row.setContentsMargins(2, 2, 2, 2)
-            button = QToolButton(header)
-            button.setText(side)
-            button.setCheckable(True)
-            button.clicked.connect(lambda _checked=False, s=side: self.set_active_side(s))
-            selector = QComboBox(header)
-            selector.setMinimumWidth(100)
-            selector.setToolTip(f"选择 {side} 侧图片")
-            selector.installEventFilter(self)
-            self._selector_sides[selector] = side
-            selector.activated.connect(lambda _index, s=side: self._choose(s))
-            row.addWidget(button)
-            row.addWidget(selector, 1)
+            side_label = QLabel(side, header)
+            filename = QLabel("未选择", header)
+            filename.setMinimumWidth(0)
+            policy = getattr(QSizePolicy, "Policy", QSizePolicy)
+            filename.setSizePolicy(policy.Ignored, policy.Preferred)
+            filename.setTextFormat(getattr(getattr(Qt, "TextFormat", Qt), "PlainText"))
+            self._filename_sides[filename] = side
+            row.addWidget(side_label)
+            row.addWidget(filename, 1)
             column.addWidget(header)
             preview = PreviewPanel(panel)
             toolbar = QWidget(panel)
@@ -108,8 +102,6 @@ class ABPreviewPanel(QWidget):
             self._toolbars[side] = toolbar
             self._scales[side] = scale
             self._fits[side] = fit
-            preview.canvas.installEventFilter(self)
-            self._canvas_sides[preview.canvas] = side
             preview.display_scale_percent_changed.connect(
                 lambda value, s=side: self._on_scale_changed(s, value))
             preview.full_preview_ready.connect(self.full_preview_ready.emit)
@@ -117,10 +109,12 @@ class ABPreviewPanel(QWidget):
             self.splitter.addWidget(panel)
             self._widgets[side] = panel
             self._headers[side] = header
-            self._selectors[side] = selector
-            self._buttons[side] = button
+            self._filenames[side] = filename
+            self._side_labels[side] = side_label
             self._previews[side] = preview
-            for widget in (panel, header, fit, scale, grid, preview, preview.canvas):
+            # Match main: focus/click anywhere inside a viewport (including
+            # toolbar children and the filename) selects the list update target.
+            for widget in (panel, *panel.findChildren(QWidget)):
                 widget.installEventFilter(self)
                 self._canvas_sides[widget] = side
         self.view_link = ABViewLink(self)
@@ -176,11 +170,14 @@ class ABPreviewPanel(QWidget):
         return self._paths[side]
 
     def eventFilter(self, watched, event):  # type: ignore[override]
-        press = getattr(getattr(QEvent, "Type", QEvent), "MouseButtonPress")
-        if event.type() in (press, getattr(getattr(QEvent, "Type", QEvent), "FocusIn")):
-            side = self._canvas_sides.get(watched) or self._selector_sides.get(watched)
+        events = getattr(QEvent, "Type", QEvent)
+        if event.type() in (events.MouseButtonPress, events.FocusIn):
+            side = self._canvas_sides.get(watched)
             if side and self._enabled:
                 self.set_active_side(side)
+        side = self._filename_sides.get(watched)
+        if side and event.type() in (events.Resize, events.FontChange):
+            self._update_filename(side)
         return super().eventFilter(watched, event)
 
     def set_active_side(self, side: str) -> None:
@@ -210,11 +207,11 @@ class ABPreviewPanel(QWidget):
             for side, preview in self._previews.items():
                 if self._paths[side] and not preview.current_path():
                     preview.set_image(self._paths[side], load_full=True)
+                self._update_filename(side)
         else:
             inactive = "A" if self._active_side == "B" else "B"
             self._previews[inactive].clear_image()
         self._update_layout()
-        self._rebuild_selectors()
         self.view_link.toggle(self.link_button.isChecked())
         self.comparison_toggled.emit(enabled)
         self.active_preview_changed.emit(self.active_preview)
@@ -231,11 +228,15 @@ class ABPreviewPanel(QWidget):
         self._update_active_style()
 
     def _update_active_style(self) -> None:
-        for side, button in self._buttons.items():
-            button.setChecked(side == self._active_side)
+        for side, label in self._side_labels.items():
+            active = self._enabled and side == self._active_side
+            label.setText(f"{side} · 当前" if active else side)
+            label.setStyleSheet("color: #67a9d7; font-weight: 600;" if active else "")
+            self._headers[side].setToolTip(
+                "当前视图响应文件列表选择" if active else "点击激活此视图，再从列表选图")
             self._widgets[side].setStyleSheet(
                 f"QWidget#abSide{side} {{ border: 1px solid #67a9d7; }}"
-                if self._enabled and side == self._active_side else "")
+                if active else "")
 
     def set_display_paths(self, paths: list[str]) -> None:
         seen: set[str] = set()
@@ -248,59 +249,15 @@ class ABPreviewPanel(QWidget):
         if display == self._display_paths:
             return
         self._display_paths = display
-        self._display_index = {_key(path): index for index, path in enumerate(display)}
-        self._rebuild_selectors()
 
-    def _rebuild_selectors(self) -> None:
-        if not self._enabled:
-            return
-        for side, selector in self._selectors.items():
-            selected = self._paths[side]
-            selector.blockSignals(True)
-            try:
-                selector.clear()
-                self._selector_outside_paths[side] = ""
-                if selected and _key(selected) not in self._display_index:
-                    self._selector_outside_paths[side] = selected
-                    selector.addItem(f"[筛选外] {Path(selected).name}", selected)
-                    selector.setItemData(0, selected, getattr(getattr(Qt, "ItemDataRole", Qt), "ToolTipRole"))
-                for path in self._display_paths:
-                    selector.addItem(Path(path).name, path)
-                    selector.setItemData(selector.count() - 1, path,
-                                         getattr(getattr(Qt, "ItemDataRole", Qt), "ToolTipRole"))
-                selector.setCurrentIndex(selector.findData(selected) if selected else -1)
-                selector.setEnabled(selector.count() > 0)
-            finally:
-                selector.blockSignals(False)
-
-    def _sync_selector(self, side: str) -> None:
-        """Selection changes are O(1); only a changed directory rebuilds the choices."""
-        if not self._enabled:
-            return
-        selector = self._selectors[side]
-        selected = self._paths[side]
-        index = self._display_index.get(_key(selected))
-        blocked = selector.blockSignals(True)
-        try:
-            if self._selector_outside_paths.get(side):
-                selector.removeItem(0)
-            self._selector_outside_paths[side] = ""
-            if selected and index is None:
-                selector.insertItem(0, f"[筛选外] {Path(selected).name}", selected)
-                selector.setItemData(0, selected, getattr(getattr(Qt, "ItemDataRole", Qt), "ToolTipRole"))
-                self._selector_outside_paths[side] = selected
-                index = 0
-            selector.setCurrentIndex(index if index is not None else -1)
-            selector.setEnabled(selector.count() > 0)
-        finally:
-            selector.blockSignals(blocked)
-
-    def _choose(self, side: str) -> None:
-        self.set_active_side(side)
-        path = self._selectors[side].currentData()
-        if path:
-            self.set_side_path(side, str(path))
-            self.active_path_changed.emit(str(path))
+    def _update_filename(self, side: str) -> None:
+        path = self._paths[side]
+        label = self._filenames[side]
+        text = Path(path).name if path else "未选择"
+        label.setToolTip(path)
+        label.setText(label.fontMetrics().elidedText(
+            text, getattr(getattr(Qt, "TextElideMode", Qt), "ElideMiddle"),
+            max(0, label.contentsRect().width())))
 
     def set_side_path(self, side: str, path: str, *, load_full: bool = True) -> None:
         if self._shutdown_requested or side not in self._previews:
@@ -312,7 +269,7 @@ class ABPreviewPanel(QWidget):
             preview.set_image(normalized, load_full=load_full)
         else:
             preview.clear_image()
-        self._sync_selector(side)
+        self._update_filename(side)
 
     def set_current_list_path(self, path: str, *, load_full: bool = True) -> None:
         self._current_list_path = os.path.normpath(path) if path else ""
@@ -322,7 +279,7 @@ class ABPreviewPanel(QWidget):
         self._current_list_path = os.path.normpath(path) if path else ""
         self._paths[self._active_side] = self._current_list_path
         self.active_preview.set_quick_pixmap(path, pixmap, quick_size=quick_size)
-        self._sync_selector(self._active_side)
+        self._update_filename(self._active_side)
 
     def source_pixmap_for_path(self, path: str):
         for preview in self._previews.values():

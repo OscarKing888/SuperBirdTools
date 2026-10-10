@@ -37,7 +37,7 @@ def test_independent_sides_active_list_target_filter_and_close(tmp_path):
         assert panel.path_for_side("B") == os.path.normpath(str(photos[1]))
 
         panel.set_active_side("A")
-        panel.eventFilter(panel._selectors["B"], QEvent(QEvent.Type.MouseButtonPress))
+        panel.eventFilter(panel._filenames["B"], QEvent(QEvent.Type.MouseButtonPress))
         assert panel.active_side() == "B"
         panel.set_active_side("A")
         panel.set_current_list_path(str(photos[2]))
@@ -46,9 +46,9 @@ def test_independent_sides_active_list_target_filter_and_close(tmp_path):
 
         panel.set_display_paths([str(photos[0])])
         assert panel.path_for_side("A") == os.path.normpath(str(photos[2]))
-        assert panel._selectors["A"].itemText(0).startswith("[筛选外]")
-        panel._selectors["B"].setCurrentIndex(panel._selectors["B"].findData(str(photos[0])))
-        panel._choose("B")
+        assert panel._filenames["A"].toolTip() == str(photos[2])
+        panel.eventFilter(panel._filenames["B"], QEvent(QEvent.Type.MouseButtonPress))
+        panel.set_current_list_path(str(photos[0]))
         assert panel.active_side() == "B"
         assert panel.path_for_side("B") == os.path.normpath(str(photos[0]))
         assert panel.path_for_side("A") == os.path.normpath(str(photos[2]))
