@@ -407,6 +407,14 @@ Qt 测试在窗口构造前隔离 `paths_settings` 的应用/用户状态目录�
 - **依赖与打包**：Viewer requirements 增加 `imageio-ffmpeg`；默认使用其平台二进制，也支持 `SUPERVIEWER_FFMPEG`、已有工程 FFmpeg 或 PATH。三个 Viewer spec（macOS、Windows 单应用和 Windows 合并）调用 `build_tools.viewer_ffmpeg.collect_viewer_ffmpeg()` 显式收集平台 FFmpeg 和资源子包；依赖或二进制缺失时直接停止构建，不能仅记录 optional-import 警告后交付不完整应用。构建脚本优先仓库根 `.venv`，Qt Multimedia hook 负责播放器插件。使用应用入口 `--check-video <path> --output <json>` 可在真实打包环境只读检查信息和封面解码，不启动目录扫描或写入缓存。Windows 64 位需要在相应环境安装 requirements 后重新构建并进行平台播放验证。
 
 回归入口：[共享视频与扫描测试](../../app_common/tests/test_video.py)、[真实抽帧/播放/切换/关闭与混合目录测试](../tests/test_video_preview.py)，以及原有预览策略、快切、键盘导航、缓存与 BirdStamp 导航/构图网格测试。命令行信息检查可在根目录执行 `.venv/bin/python3 -m app_common.video /path/to/视频.mp4`（Windows 使用 `.venv\Scripts\python.exe`）。
+### 视频完整 PNG 帧导出
+
+列表和缩略图的视频右键提供“提取全部帧为 PNG…”，多选时只处理其中的视频。选择输出父目录后，每个视频独立创建 `<视频名>_frames`，重名追加 ` (2)` 等编号，帧按 `frame_00000001.png` 起顺序保存。保留视频显示分辨率及方向，提取第一条非封面视频轨道的所有解码帧；不缩放、不按固定帧率采样，不因变帧率丢帧或补帧。
+
+无 Qt 核心 [`export_video_frames()`](../superviewer/video_frame_export.py) 使用已有 FFmpeg 定位与并发限制，单次顺序解码并通过 image2 原子落盘。进度/错误落入受管理临时文件，不在内存积累视频像素；Windows 隐藏子进程窗口。失败和取消保留已完成的 PNG，报告数量、错误及目录，清理未完成的 `.png.tmp`；不改源视频。CLI：根 `.venv` 执行 `python -m SuperViewer.superviewer.video_frame_export <视频...> --output <输出父目录>`，Ctrl+C 取消并回收进程。
+
+[`VideoFrameExportController`](../superviewer/video_frame_export_controller.py) 注册现有文件菜单扩展，后台串行处理视频、合并帧进度并有界交付结果；复用 `BirdIDProgressDialog` 显示帧数与结果路径，目录切换不改变已提交任务，运行中禁止重复启动。取消、Esc、关闭窗口均请求停止；主窗口关闭等待 FFmpeg 回收及真实 `QThread.finished` 后才释放任务。通过既有模块收集打包，无新增依赖。真实 FFmpeg CFR/VFR、像素完整性、中文/百分号路径、重复导出、取消、批量失败与线程生命周期回归见 [`test_video_frame_export.py`](../tests/test_video_frame_export.py)。
+
 ## 独立更新器接入
 
 [`entry.py`](../entry.py) 在导入业务模块前调用 `SuperBirdUpdater.runtime.admit_startup()`，登记当前安装目录与进程，遇到安装事务则交给独立等待/恢复进程。源码运行默认不登记。

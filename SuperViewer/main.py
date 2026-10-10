@@ -157,6 +157,7 @@ try:
     from .superviewer.capture_time_controller import CaptureTimeController
     from .superviewer.rarity_controller import RarityController
     from .superviewer.burst_info_controller import BurstInfoController
+    from .superviewer.video_frame_export_controller import VideoFrameExportController
     from .superviewer.preview_key_router import PreviewKeyRouter
     from .superviewer.viewer_ab_preview import ViewerABPreview
     from .superviewer.tag_history_actions import TagHistoryActions
@@ -251,6 +252,7 @@ except ImportError:
     from superviewer.capture_time_controller import CaptureTimeController
     from superviewer.rarity_controller import RarityController
     from superviewer.burst_info_controller import BurstInfoController
+    from superviewer.video_frame_export_controller import VideoFrameExportController
     from superviewer.preview_key_router import PreviewKeyRouter
     from superviewer.viewer_ab_preview import ViewerABPreview
     from superviewer.tag_history_actions import TagHistoryActions
@@ -411,6 +413,7 @@ class MainWindow(QMainWindow):
         self._bird_sharpness.set_denoise_controller(self._denoise)
         # 计算连拍信息：目录树右键 → 按拍摄时间分组 → 写 XMP burst_id/burst_position → 刷新连拍显示
         self._burst_info = BurstInfoController(self, self._file_list, self._dir_browser)
+        self._video_frame_export = VideoFrameExportController(self, self._file_list)
         # 连接文件列表选中 → 预览 + 元信息刷新
         self._file_list.file_fast_preview_requested.connect(self._on_file_fast_preview_requested)
         self._file_list.file_fast_preview_pixmap_requested.connect(
@@ -1725,6 +1728,7 @@ class MainWindow(QMainWindow):
                 self._burst_info.request_shutdown()
             except Exception:
                 pass
+            self._video_frame_export.request_shutdown()
             # Closing the shared stay-open process interrupts metadata calls
             # before the bounded worker waits below.  Its process teardown is
             # kept off the GUI thread because a wedged child may need a bounded
@@ -1761,14 +1765,16 @@ class MainWindow(QMainWindow):
         denoise_done = self._denoise.is_shutdown_done()
         bird_body_done = self._bird_body.is_shutdown_done()
         burst_info_done = self._burst_info.is_shutdown_done()
+        video_frame_export_done = self._video_frame_export.is_shutdown_done()
         pending_state = (
+            video_frame_export_done,
             focus_done, tabs_done, preview_done, exiftool_done, directory_scans_done, bird_sharpness_done,
             burst_info_done, denoise_done, bird_body_done, archive_done, bird_id_done, bird_pinyin_done, shooting_location_done, rarity_edit_done, capture_time_done,
         )
         if not all(pending_state):
             if pending_state != self._shutdown_pending_state:
                 _log.info(
-                    "[shutdown] waiting focus=%s image_info=%s preview=%s exiftool=%s directory_scans_and_pool=%s bird_sharpness=%s burst_info=%s denoise=%s bird_body=%s archive=%s bird_id=%s bird_pinyin=%s shooting_location=%s rarity_edit=%s capture_time=%s",
+                    "[shutdown] waiting focus=%s image_info=%s preview=%s exiftool=%s directory_scans_and_pool=%s bird_sharpness=%s burst_info=%s denoise=%s bird_body=%s archive=%s bird_id=%s bird_pinyin=%s shooting_location=%s rarity_edit=%s capture_time=%s video_frame_export=%s",
                     focus_done,
                     tabs_done,
                     preview_done,
@@ -1784,6 +1790,7 @@ class MainWindow(QMainWindow):
                     shooting_location_done,
                     rarity_edit_done,
                     capture_time_done,
+                    video_frame_export_done,
                 )
                 self._shutdown_pending_state = pending_state
             event.ignore()
