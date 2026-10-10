@@ -19,6 +19,12 @@ def _bootstrap_repo_root() -> Path:
 
 def _repo_venv_python(repo_root: Path) -> Path | None:
     if sys.platform.startswith("win"):
+        # run.bat uses pythonw: retain its windowless mode, including when
+        # switching from another environment into the repository's .venv.
+        if Path(sys.executable).name.lower() == "pythonw.exe":
+            windowless = repo_root / ".venv" / "Scripts" / "pythonw.exe"
+            if windowless.is_file():
+                return windowless
         candidate = repo_root / ".venv" / "Scripts" / "python.exe"
     else:
         candidate = repo_root / ".venv" / "bin" / "python3"
@@ -37,7 +43,11 @@ def _reexec_into_repo_venv_if_needed(repo_root: Path) -> None:
     if current == resolved_target:
         return
     cmd = [str(resolved_target), "-m", "SuperBirdStamp.entry", *sys.argv[1:]]
-    raise SystemExit(subprocess.run(cmd, check=False).returncode)
+    kwargs = {}
+    if sys.platform.startswith("win") and current.name.lower() == "pythonw.exe":
+        # Also cover incomplete environments with only python.exe available.
+        kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
+    raise SystemExit(subprocess.run(cmd, check=False, **kwargs).returncode)
 
 
 def main() -> None:
