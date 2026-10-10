@@ -17,6 +17,7 @@ from app_common.file_browser._browser_core import (
 )
 from app_common.file_browser._permissions import mark_write_action_disabled
 from app_common.perf_probe import elapsed_ms, perf_counter, perf_log
+from app_common.qt_theme import browser_chrome_colors, filter_badge_stylesheet
 from app_common.log import get_logger
 from app_common.exif_io import PhotoMetaDataJSON
 
@@ -44,25 +45,6 @@ except ImportError:
 
 _log = get_logger("superviewer.tagged_file_list")
 
-_TAG_FILTER_BUTTON_STYLE = (
-    "QToolButton {"
-    "font-size: 11px; padding: 1px 7px; min-width: 38px; "
-    "border-radius: 9px; border: 1px solid rgba(160, 160, 160, 120); "
-    "background: rgba(160, 160, 160, 26); color: #d7d7d7;"
-    "}"
-    "QToolButton:hover { background: rgba(160, 160, 160, 48); }"
-    "QToolButton:checked {"
-    "background: rgba(80, 150, 120, 120); border: 1px solid #5fb68e; color: #ffffff;"
-    "}"
-)
-_TAG_FILTER_CLEAR_BUTTON_STYLE = (
-    "QToolButton {"
-    "font-size: 11px; padding: 1px 7px; min-width: 38px; "
-    "border-radius: 9px; border: 1px solid rgba(180, 110, 110, 120); "
-    "background: rgba(180, 80, 80, 28); color: #e3c4c4;"
-    "}"
-    "QToolButton:hover { background: rgba(180, 80, 80, 52); color: #ffffff; }"
-)
 _TAG_FILTER_INLINE_LIMIT = 8
 _PHOTO_TAG_CACHE_BATCH_SIZE = 256
 _PHOTO_TAG_FILTER_REFRESH_MS = 750
@@ -280,6 +262,8 @@ class SuperViewerTaggedFileListPanel(FileListPanel):
         self._available_tag_tree: list[TagTreeNode] = []
         self._active_tag_filters: set[str] = set()
         self._tag_filter_partial_match: bool = True
+        self._tag_filter_title = None
+        self._tag_filter_empty = None
         self._tag_filter_buttons: dict[str, QToolButton] = {}
         self._tag_filter_exact_match_checkbox: QCheckBox | None = None
         self._tag_filter_menu_button: QToolButton | None = None
@@ -780,6 +764,31 @@ class SuperViewerTaggedFileListPanel(FileListPanel):
         # SuperViewer 已切到原始目录 + sidecar 模式，不再暴露 report.db 鸟种菜单。
         return
 
+    def apply_theme(self, scheme=None) -> None:
+        super().apply_theme(scheme)
+        self._apply_tag_filter_theme()
+
+    def _apply_tag_filter_theme(self) -> None:
+        scheme = self._file_list_theme_scheme
+        colors = browser_chrome_colors(scheme)
+        for label in (self._tag_filter_title, self._tag_filter_empty):
+            if label is not None:
+                label.setStyleSheet(f"color: {colors.muted_text}; font-size: 11px;")
+        if self._tag_filter_exact_match_checkbox is not None:
+            self._tag_filter_exact_match_checkbox.setStyleSheet(
+                "QCheckBox { color: palette(text); font-size: 11px; }"
+            )
+        style = filter_badge_stylesheet(
+            "green", scheme=scheme, min_width=38, font_size=11, neutral_unchecked=True,
+        )
+        for button in (*self._tag_filter_buttons.values(), self._tag_filter_menu_button):
+            if button is not None:
+                button.setStyleSheet(style)
+        if self._tag_filter_clear_button is not None:
+            self._tag_filter_clear_button.setStyleSheet(
+                filter_badge_stylesheet("red", scheme=scheme, min_width=38, font_size=11)
+            )
+
     def _install_tag_filter_bar(self) -> None:
         if not getattr(self, "_create_filter_bar", True):
             return
@@ -816,23 +825,24 @@ class SuperViewerTaggedFileListPanel(FileListPanel):
         self._tag_filter_clear_button = None
 
         title = QLabel("标签过滤:")
-        title.setStyleSheet("color: #aaa; font-size: 11px;")
+        self._tag_filter_title = title
+        self._tag_filter_empty = None
         layout.addWidget(title)
 
         exact_match_checkbox = QCheckBox("完全匹配")
         exact_match_checkbox.setChecked(not self._tag_filter_partial_match)
         exact_match_checkbox.setToolTip("勾选：照片必须包含所有已选标签；取消勾选：任意已选标签部分匹配即可。")
-        exact_match_checkbox.setStyleSheet("QCheckBox { color: #d7d7d7; font-size: 11px; }")
         exact_match_checkbox.toggled.connect(self._on_tag_exact_match_toggled)
         self._tag_filter_exact_match_checkbox = exact_match_checkbox
         layout.addWidget(exact_match_checkbox)
 
         if not self._available_tags:
             empty = QLabel("tags.cfg 未配置")
-            empty.setStyleSheet("color: #777; font-size: 11px;")
+            self._tag_filter_empty = empty
             layout.addWidget(empty)
             layout.addStretch()
             self._sync_tag_filter_widgets()
+            self._apply_tag_filter_theme()
             return
 
         inline_tags = self._inline_tag_filter_tags()
@@ -844,7 +854,6 @@ class SuperViewerTaggedFileListPanel(FileListPanel):
         if len(inline_tags) < len(self._available_tags):
             more_btn = QToolButton()
             more_btn.setAutoRaise(False)
-            more_btn.setStyleSheet(_TAG_FILTER_BUTTON_STYLE)
             more_btn.clicked.connect(lambda checked=False, b=more_btn: self._show_tag_filter_menu(b))
             self._tag_filter_menu_button = more_btn
             layout.addWidget(more_btn)
@@ -853,12 +862,12 @@ class SuperViewerTaggedFileListPanel(FileListPanel):
         clear_btn.setText("清除")
         clear_btn.setToolTip("清除所有标签过滤")
         clear_btn.setAutoRaise(False)
-        clear_btn.setStyleSheet(_TAG_FILTER_CLEAR_BUTTON_STYLE)
         clear_btn.clicked.connect(lambda checked=False: self._clear_tag_filters())
         self._tag_filter_clear_button = clear_btn
         layout.addWidget(clear_btn)
         layout.addStretch()
         self._sync_tag_filter_widgets()
+        self._apply_tag_filter_theme()
 
     def _inline_tag_filter_tags(self) -> list[str]:
         """Return compact inline tags; full tag set lives in the filterable menu."""
@@ -883,7 +892,6 @@ class SuperViewerTaggedFileListPanel(FileListPanel):
         btn.setCheckable(True)
         btn.setChecked(tag in self._active_tag_filters)
         btn.setAutoRaise(False)
-        btn.setStyleSheet(_TAG_FILTER_BUTTON_STYLE)
         btn.clicked.connect(lambda checked=False, t=tag: self._on_tag_filter_toggled(t, bool(checked)))
         return btn
 

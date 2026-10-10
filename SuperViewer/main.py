@@ -1539,6 +1539,8 @@ def main():
     window._ui_theme_manager = theme_manager
     theme_manager.add_listener(window._dir_browser.apply_theme)
     window._dir_browser.apply_theme(theme_manager.scheme)
+    theme_manager.add_listener(window._file_list.apply_theme)
+    window._file_list.apply_theme(theme_manager.scheme)
 
     # 单例接收：其它进程「发送到本应用」时回调到主线程
     def on_files_received(paths):

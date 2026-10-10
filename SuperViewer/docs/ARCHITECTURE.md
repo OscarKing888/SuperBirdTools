@@ -199,7 +199,7 @@ HEIF 的直接原图分支仍受普通选图阈值规则约束，不能把“快
 
 [paths_settings.py](../superviewer/paths_settings.py) 区分程序资源与可写状态：`_get_config_path()` 定位运行程序目录的 `super_viewer.cfg`，打包资源读取另走 `_get_config_resource_path()`；`load_last_folder_from_file()` 优先读取用户状态目录的 `last_selected_directory.txt`，再兼容旧程序目录文件。Windows 用户状态在 `%APPDATA%/SuperViewer`，macOS 在 `~/Library/Application Support/SuperViewer`。分栏和目录等设置由对应 `load_*` / `save_*` 接口读写。共享运行选项位于 [superviewer_user_options.py](../../app_common/superviewer_user_options.py)，图库侧车配置与用户界面配置不是同一文件。
 
-`UiThemeManager` 统一语义颜色并通知已连接页面。`apply_theme()` 只重设样式；图片选择或 `refresh_ui()` 才负责读取/重建相应状态，主题切换不应重新解码或覆盖编辑草稿。
+`UiThemeManager` 统一语义颜色并通知已连接页面。`apply_theme()` 只重设样式；图片选择或 `refresh_ui()` 才负责读取/重建相应状态，主题切换不应重新解码或覆盖编辑草稿。 文件列表与目录树都接入主题通知；共享 `FileListPanel.changeEvent()` 同时响应调色板变化。列表背景、交替行、缩略图底板和悬停采用当前 Qt palette；评级与标签过滤徽标复用 `app_common.qt_theme.filter_badge_stylesheet()` 的深浅配色。标签栏重建时使用当前主题，主题切换本身不重建标签、模型或筛选数据。回归见 `test_file_list_theme.py`，覆盖两种视图、宽窄布局、连续切换和缓存/选择保留。
 
 `MainWindow.closeEvent()` 先锁定关闭状态、停止键盘快显并向信息页、预览和文件列表发 `request_shutdown()`，再分别做有界 `shutdown(wait_timeout_ms=25)`。未全部完成时隐藏窗口并通过定时器重试，保留线程持有者；完成后保存分栏并接受关闭。组件自身负责停止计时器、解除监听、保留在退出中的线程，并由创建线程池的 worker 收束其 executor，不能靠销毁 QWidget 终止后台 I/O。
 
