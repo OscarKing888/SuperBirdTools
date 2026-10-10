@@ -994,6 +994,19 @@ class _BirdStampRendererMixin:
         draw_text = _parse_bool_value(settings.get("draw_text"), True)
         return draw_banner or draw_text or _parse_bool_value(settings.get("draw_images"), True)
 
+    def _defer_template_overlay(self, settings: dict[str, Any]) -> bool:
+        """播放/长按期间跳过模板叠加，停播后由 _restore_deferred_template_overlay 补画。"""
+        transport = getattr(self, "sequence_transport", None)
+        if transport is None or not transport.fast_playback or not self._should_draw_template_overlay(settings):
+            return False
+        self._template_overlay_deferred = True
+        return True
+
+    def _restore_deferred_template_overlay(self) -> None:
+        # 停播时的提交选图通常已重新渲染；仅在当前画面仍缺模板叠加时补一次。
+        if getattr(self, "_template_overlay_deferred", False) and self.current_source_image is not None:
+            self.render_preview()
+
     def _selected_text_scale(self) -> float:
         slider = getattr(self, "text_scale_slider", None)
         return normalize_text_scale(slider.value() / 100.0 if slider is not None else None)
@@ -1610,6 +1623,8 @@ class _BirdStampRendererMixin:
                 continue
 
             if stage_id == STAGE_TEMPLATE_OVERLAY_ID:
+                if self._defer_template_overlay(settings):
+                    continue
                 self._overlay_render_pad = outer_pad
                 image = self._render_overlay_for_preview_frame(
                     preview_base=image,
@@ -1716,6 +1731,7 @@ class _BirdStampRendererMixin:
                 if self.current_source_image is None:
                     raise RuntimeError("缺少当前原图数据")
                 settings = self._render_settings_for_path(self.current_path, prefer_current_ui=True)
+                self._template_overlay_deferred = False
                 if hasattr(self, "_sync_overlay_panel"):
                     self._sync_overlay_panel(settings)
                 preview_settings = self._preview_render_settings(settings)

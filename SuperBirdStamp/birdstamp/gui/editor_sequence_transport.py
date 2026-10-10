@@ -132,6 +132,11 @@ class SequenceTransport(QObject):
     def active(self):
         return self.mode is not None
 
+    @property
+    def fast_playback(self):
+        # 原图播放或长按连续切图时只求流畅；首帧与停播后的画面仍完整渲染。
+        return self.mode in ('source_play', 'source_keys', 'ordinary_keys') and self.timer.isActive()
+
     def set_frames(self, sequence, frames):
         self.stop(commit=False)
         self.paths = [job.path for job in sequence.jobs.values()] if sequence else []
@@ -557,6 +562,8 @@ class SequenceTransport(QObject):
             ab = self.editor.ab_preview
             if ab.enabled.isChecked() and ab.active_side == 'a':
                 ab.sync(force=True)
+        if was_active and not self.editor._sequence_shutdown:
+            self.editor._restore_deferred_template_overlay()
 
     def _tick(self):
         if self.mode == 'ordinary_keys':

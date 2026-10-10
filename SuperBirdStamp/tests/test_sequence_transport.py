@@ -14,7 +14,7 @@ from birdstamp.gui.editor_photo_list import (
 )
 from birdstamp.gui.editor_utils import path_key
 from birdstamp.gui.editor_sequence_preview_worker import EditorSequencePreviewWorker
-from birdstamp.gui import editor_options
+from birdstamp.gui import editor_options, editor_renderer
 
 
 def populate(window, paths):
@@ -195,6 +195,45 @@ def test_source_playback_tick_cost_does_not_scale_with_photo_list(window, monkey
     assert calls['list'] == 1
     transport.stop(commit=False)
     wait_until(lambda: window._preview_decode_worker is None)
+
+
+@pytest.mark.parametrize('commit', [False, True])
+def test_source_playback_defers_template_overlay_until_stop(window, monkeypatch, tmp_path, commit):
+    paths = []
+    for index in range(3):
+        path = tmp_path / f'模板_{index}.jpg'
+        Image.new('RGB', (64, 48), (index * 60, 90, 40)).save(path)
+        paths.append(path)
+    populate(window, paths)
+    window.export_tabs.setCurrentIndex(0)
+    window.draw_text_check.setChecked(True)
+    transport = window.sequence_transport
+    transport.sync()
+    assert window._should_draw_template_overlay(
+        window._render_settings_for_path(paths[0], prefer_current_ui=True))
+    calls = []
+    original = editor_renderer._render_template_overlay_in_crop_region
+    def counted(image, **kwargs):
+        calls.append(kwargs.get('metadata_context'))
+        return original(image, **kwargs)
+    monkeypatch.setattr(editor_renderer, '_render_template_overlay_in_crop_region', counted)
+
+    window.ab_preview.b_panel.play.click()
+    wait_until(lambda: transport.mode == 'source_play')
+    assert transport.fast_playback
+    wait_until(lambda: window._source_signature(paths[1]) in transport._source_cache)
+    calls.clear()
+    transport._tick()
+    wait_until(lambda: window.current_path == paths[1] and window.current_source_image is not None)
+    assert not calls  # 播放帧只显示原图快速帧，不排版模板。
+    assert window._template_overlay_deferred
+
+    transport.stop(commit=commit)
+    assert not transport.fast_playback
+    wait_until(lambda: window._preview_decode_worker is None and window.current_source_image is not None
+               and not window._template_overlay_deferred)
+    assert calls  # 停播后当前画面补画模板叠加。
+    assert window.current_path == paths[1]
 
 
 def test_ab_play_buttons_follow_each_sides_original_or_result_mode(window, monkeypatch):
