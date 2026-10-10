@@ -6,7 +6,7 @@
 
 | 入口或模块 | 职责与关键符号 |
 | --- | --- |
-| [entry.py](../entry.py) | `main` 补齐仓库导入路径，开发环境优先重启到仓库 `.venv`，再进入应用入口。 |
+| [entry.py](../entry.py) | `main` 补齐仓库导入路径，开发环境优先重启到仓库 `.venv`，再进入应用入口。Windows 保留 `pythonw.exe` 无控制台模式，已使用仓库解释器时不重启；目标环境缺少 `pythonw.exe` 时以隐藏控制台方式回退到 `python.exe`。回归见 [test_entry_venv.py](../tests/test_entry_venv.py)。 |
 | [main.py](../main.py) | `main` 配置启动日志、处理文件参数和已有实例转发，延迟导入 GUI。 |
 | [gui/editor.py](../birdstamp/gui/editor.py) | `launch_gui` 创建应用、窗口、FileOpen 处理和单实例接收器；窗口显示后安排启动恢复与文件导入。`closeEvent` 先取消元数据读取、在后台关闭 ExifTool，并等实际线程结束；`aboutToQuit` 停止接收器并再次执行幂等清理。 |
 | [cli.py](../birdstamp/cli.py) / [__main__.py](../birdstamp/__main__.py) | Typer 命令 `render`、`inspect`、`inspect-auto-proxy`、`init-config`、`gui`。适合批处理、字段路由诊断和无窗口验证。 |
@@ -21,6 +21,8 @@
 Hot-received photos switch the B preview from result view to source/edit view before the import queue starts, including when the photo list is empty. The IPC receiver reports transfer completion before the import callback, so a late transfer event cannot replace the final import status. File > New Workspace (Ctrl+N) reuses the empty workspace restore path and the editor defaults captured before startup workspace restoration; it clears photos, report databases, sequence results and workspace settings, then returns to source/edit view. The previous named workspace is not overwritten by this action.
 
 ## 2. 编辑器状态与线程归属
+
+处理管线参数分组由 `_sync_pipeline_stage_option_group_order()` 重排：移除布局项时保留控件父对象，禁用组仅隐藏，新建组先加入布局再显示。启动、工作区恢复与阶段启停不得让 `CollapsibleSection` 短暂成为独立顶层窗口（Windows 会显示标题为 `pythonw` 的闪现窗口）。回归 [test_editor_startup_windows.py](../tests/test_editor_startup_windows.py) 在窗口构造前记录 `Show` 事件，并检查重排、启停和恢复期间的窗口归属与参数保留。
 
 主窗口 [BirdStampEditorWindow](../birdstamp/gui/editor.py) 组合六个 mixin：
 
@@ -77,6 +79,8 @@ A/B 的布局与显隐约定见 [A/B 预览工具栏布局](ux/AB_PREVIEW_LAYOUT
 普通格式解码在旋转/转色前缩小像素，并携带原尺寸和文件属性，避免再次打开 TIFF 读取尺寸。TIFF 原尺寸读取兼容 Pillow 已应用 Orientation 的情形，不能重复交换宽高。性能探针 `select.activate`、`select.render_preview`、`preview.cached_thumbnail`、`preview.source_size`、`preview.decode` 区分点击耗时和后台读取耗时。
 
 `BirdStampEditorWindow.closeEvent` 在视频导出仍运行时拒绝关闭并提示先停止；其他工作采用协作停止。元数据加载器通过独立 ExifTool 会话和取消回调中断批量读取，关闭请求会在后台终止 ExifTool 子进程。只要预览、检测、元数据（包括待结束的旧加载器）、发现线程或 ExifTool 清理仍在运行，窗口忽略本次关闭并通过定时器重试，不阻塞 GUI 等待。全部结束后才关闭工作区自动保存并接受关闭。修改这条路径时，应测试“业务完成信号已发出但线程尚未返回”的窗口期。
+
+ExifTool 生命周期与 Viewer 共用 [`exiftool_runner.py`](../../app_common/exif_io/exiftool_runner.py)：并发清理必须等到子进程实际结束，失败保留所有权并记录错误；`aboutToQuit` 与 `atexit` 通过 `shutdown_exiftool_process()` 禁止再创建常驻会话并回收全部已注册会话。Windows 的 [`_windows_job.py`](../../app_common/exif_io/_windows_job.py) 给常驻进程配置独立 Job Object，宿主退出时系统回收这些进程；macOS 沿用共享的显式清理协议。回归见 [`test_exiftool_shutdown.py`](../../app_common/tests/test_exiftool_shutdown.py)，使用真实 ExifTool 验证并行会话和进程级退出，无需打开或改写用户工作区。
 
 照片列表右键“删除所选”和列表获得焦点时的 `Delete`（macOS 另支持 `Backspace`）共用 `PhotoListWidget.remove_selected_action`，通过 `removeSelectedRequested` 交给 `BirdStampEditorWindow._remove_selected_photos`。支持多选，右键未选中行先切换选区；仅从工作区列表移除，保留原图和 XMP，并沿用缓存清理、编号刷新与自动保存。快捷键不拦截文本输入，也不随长按重复触发。此功能仅管理 GUI 工作区，无独立 CLI 参数。回归见 [test_editor_photo_list_sort.py](../tests/test_editor_photo_list_sort.py) 与 [test_photo_start_number.py](../tests/test_photo_start_number.py)。
 

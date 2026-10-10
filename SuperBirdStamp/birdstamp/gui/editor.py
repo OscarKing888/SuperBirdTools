@@ -73,7 +73,7 @@ from PyQt6.QtWidgets import (
 from app_common.toggle_button import ToggleToolButton
 from app_common.about_dialog import load_about_info, load_about_images, show_about_dialog
 from app_common.app_info_bar import AppInfoBar
-from app_common.exif_io import PhotoMetaDataReportDB, close_exiftool_process
+from app_common.exif_io import PhotoMetaDataReportDB, close_exiftool_process, shutdown_exiftool_process
 from app_common.file_utils import is_apple_double_metadata_file
 from app_common.file_browser._work_pool import BrowserWorkPool
 from app_common.log import get_logger
@@ -1863,7 +1863,8 @@ class BirdStampEditorWindow(
             item = layout.takeAt(0)
             widget = item.widget()
             if widget is not None:
-                widget.setParent(None)
+                # Removing a layout item must not turn the section into a
+                # top-level window, even while a disabled stage stays hidden.
                 widget.hide()
         visible_index = 0
         for stage_id in self._current_pipeline_stage_order():
@@ -1875,8 +1876,9 @@ class BirdStampEditorWindow(
                 continue
             visible_index += 1
             group.setTitle(f"{visible_index}. {self._pipeline_stage_label(stage_id)}")
-            group.show()
+            # New groups are initially parentless: attach before showing.
             layout.addWidget(group)
+            group.show()
 
     def _refresh_pipeline_stage_move_buttons(self) -> None:
         stage_list = getattr(self, "pipeline_stage_list", None)
@@ -6114,7 +6116,7 @@ def launch_gui(
                 active_receiver.stop()
             except Exception as exc:
                 _log.warning("receiver stop failed: %s", exc)
-        close_exiftool_process()
+        shutdown_exiftool_process()
 
     startup_inputs: list[Path] = []
     if startup_files:

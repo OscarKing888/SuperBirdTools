@@ -278,6 +278,8 @@ Qt 进度回调只更新界面/初始需求提示，实际任务完成和需求�
 
 `MainWindow.closeEvent()` 首次关闭时停止导航、计时器与各面板请求，并在后台关闭 ExifTool。共享 runner 直接终止常驻子进程，避免向卡住的 stdin 写退出命令；随后用有界等待检查焦点、信息页、完整预览及 ExifTool。仍有任务则隐藏窗口、忽略此次 close 并计时重试。只有相关任务结束后才完成列表 shutdown 和退出。超时不是完成，不能在仍有活线程时销毁父窗口。
 
+共享 [`exiftool_runner.py`](../../app_common/exif_io/exiftool_runner.py) 在并发 close/取消期间保留进程所有权，直到子进程真正结束；终止失败保留引用供重试，并继续清理其他会话。`aboutToQuit` 与 `atexit` 调用 `shutdown_exiftool_process()`，先锁定最终退出状态，再回收共享与线程独有的常驻会话，拒绝迟到的新会话。普通 `close_exiftool_process()` 仍允许后续 CLI/工作会话重新启动。Windows 常驻进程另外归属 [`_windows_job.py`](../../app_common/exif_io/_windows_job.py) 的独立、不可继承 Job Object（`KILL_ON_JOB_CLOSE`），宿主退出时由系统回收，不按进程名扫描或终止其他应用。macOS 使用同一并发清理及最终退出协议。回归见 [`test_exiftool_shutdown.py`](../../app_common/tests/test_exiftool_shutdown.py)，覆盖真实 24 个工作会话加共享会话的退出与 Windows 非正常宿主退出。
+
 ## 8. 主题与布局扩展
 
 `UiThemeManager` 跟随 Qt 系统色彩方案，在旧 Qt 中回退到 palette 变化；`PanelThemeColors` 提供文字、边框、背景等语义色。主窗口通过 listener 更新自身控件，信息页容器广播 `apply_theme()`，共享目录/文件列表用 [`qt_theme.py`](../../app_common/qt_theme.py) 更新本层控件。
