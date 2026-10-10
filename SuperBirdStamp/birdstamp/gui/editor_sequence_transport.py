@@ -43,6 +43,8 @@ class SequenceTransport(QObject):
         self._source_signatures = set()
         self._source_ready = set()
         self._source_failed = {}
+        self._photo_paths = None
+        self._active_source_paths = None
         self._result_frames = {}
         self._play_visual_state = None
         self.timer = QTimer(self)
@@ -121,9 +123,9 @@ class SequenceTransport(QObject):
         self._source_scan_timer.setSingleShot(True)
         self._source_scan_timer.timeout.connect(self._scan_source_list)
         model = editor.photo_list._tree_widget.model()
-        for signal in (model.rowsInserted, model.rowsRemoved, model.modelReset,
-                       model.layoutChanged, model.dataChanged):
-            signal.connect(lambda *args: self._source_scan_timer.start(100))
+        for signal in (model.rowsInserted, model.rowsRemoved, model.modelReset, model.layoutChanged):
+            signal.connect(self._on_photo_list_changed)
+        model.dataChanged.connect(self._on_photo_data_changed)
         self._source_scan_timer.start(0)
 
     @property
@@ -170,19 +172,42 @@ class SequenceTransport(QObject):
                 item.setToolTip(item.toolTip() + '\n' + alignment.description())
         self.strip.blockSignals(False)
 
+    def _on_photo_list_changed(self, *args):
+        self._photo_paths = None
+        self._active_source_paths = None
+        self._source_scan_timer.start(100)
+
+    def _on_photo_data_changed(self, _top_left, _bottom_right, roles=()):
+        # 选图时逐帧回写照片信息等角色；只有路径变化才影响播放序列，避免每帧重扫整个列表。
+        if roles and PHOTO_LIST_PATH_ROLE not in roles:
+            return
+        self._on_photo_list_changed()
+
+    def _list_paths(self):
+        # 每帧会多次取顺序与位置；大列表逐次遍历树节点并构造 Path 会拖慢播放。
+        if self._photo_paths is None:
+            self._photo_paths = tuple(self.editor._list_photo_paths())
+        return self._photo_paths
+
     def _active_paths(self):
         if self.result_mode():
             return self.paths
-        paths = self.editor._list_photo_paths()
-        if self.mode == 'source_play':
-            return [path for path in paths if self.editor._source_signature(path) not in self._source_failed]
-        return paths
+        paths = self._list_paths()
+        if self.mode != 'source_play' or not self._source_failed:
+            return paths
+        if self._active_source_paths is None:
+            self._active_source_paths = tuple(
+                path for path in paths if self.editor._source_signature(path) not in self._source_failed)
+        return self._active_source_paths
 
     def _scan_source_list(self):
         if self._source_shutdown:
             return
-        paths = self.editor._list_photo_paths()
-        entries = tuple((self.editor._source_signature(path), path) for path in paths)
+        # 扫描只在开播、列表变化或签名不符时发生，此处以编辑器列表为准刷新缓存。
+        self._photo_paths = None
+        self._active_source_paths = None
+        paths = self._list_paths()
+        entries =tuple((self.editor._source_signature(path), path) for path in paths)
         if entries == self._source_entries:
             return
         if self.mode in ('source_play', 'source_keys'):
@@ -191,6 +216,7 @@ class SequenceTransport(QObject):
         self._source_signatures = {signature for signature, _ in entries}
         self._source_ready.clear()
         self._source_failed.clear()
+        self._active_source_paths = None
         for signature in list(self._source_cache):
             if signature not in self._source_signatures:
                 image, _ = self._source_cache.pop(signature)
@@ -256,7 +282,8 @@ class SequenceTransport(QObject):
             image.close()
             return
         self._source_ready.add(signature)
-        self._source_failed.pop(signature, None)
+        if self._source_failed.pop(signature, None) is not None:
+            self._active_source_paths = None
         old = self._source_cache.pop(signature, None)
         if old is not None:
             old[0].close()
@@ -291,6 +318,7 @@ class SequenceTransport(QObject):
                 or signature not in self._source_signatures):
             return
         self._source_failed[signature] = message
+        self._active_source_paths = None
         self._update_source_preparation()
 
     def _rebuild_source_strip(self, paths):
@@ -385,7 +413,7 @@ class SequenceTransport(QObject):
         self.strip.setEnabled(ready)
         self.panel.setVisible(ready)
         ab = self.editor.ab_preview
-        source_ready = len(self.editor._list_photo_paths()) > 1 and not self.editor._sequence_exporting
+        source_ready = len(self._list_paths()) > 1 and not self.editor._sequence_exporting
         result_ready = len(self.paths) > 1 and not self.editor._sequence_exporting
         ab.a_panel.play.setEnabled(ab.enabled.isChecked() and
                                    (result_ready if ab.mode.currentIndex() == 1 else source_ready))

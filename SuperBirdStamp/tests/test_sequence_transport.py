@@ -7,7 +7,11 @@ from PyQt6.QtWidgets import QLabel
 from test_editor_dejitter import window, _APP
 from test_dejitter_tab import setup_tab, analyze, sequence
 from test_reference_tracking import wait_until
-from birdstamp.gui.editor_photo_list import PhotoListItem, PHOTO_COL_ROW, PHOTO_LIST_PATH_ROLE
+from PIL import Image
+
+from birdstamp.gui.editor_photo_list import (
+    PhotoListItem, PHOTO_COL_ROW, PHOTO_LIST_PATH_ROLE, PHOTO_LIST_PHOTO_INFO_ROLE,
+)
 from birdstamp.gui.editor_utils import path_key
 from birdstamp.gui.editor_sequence_preview_worker import EditorSequencePreviewWorker
 from birdstamp.gui import editor_options
@@ -145,6 +149,52 @@ def test_single_original_view_playback_stays_quick_until_pause(window, monkeypat
     transport.stop()
     wait_until(lambda: window.current_source_image is not None and not window._preview_is_quick
                and window._preview_decode_worker is None)
+
+
+def test_source_playback_tick_cost_does_not_scale_with_photo_list(window, monkeypatch, tmp_path):
+    paths = []
+    for index in range(120):
+        path = tmp_path / f'连拍_{index:03d}.jpg'
+        Image.new('RGB', (64, 48), (index, 80, 40)).save(path)
+        paths.append(path)
+    populate(window, paths)
+    window.export_tabs.setCurrentIndex(0)
+    transport = window.sequence_transport
+    transport.sync()
+    window.ab_preview.b_panel.play.click()
+    wait_until(lambda: transport.mode == 'source_play')
+    transport.timer.stop()
+    wait_until(lambda: window._source_signature(paths[1]) in transport._source_cache)
+
+    # 选图会回写照片信息角色；它不改变序列，不能触发整表重扫。
+    item = window._find_photo_item_by_path(paths[5])
+    transport._source_scan_timer.stop()
+    item.setData(PHOTO_COL_ROW, PHOTO_LIST_PHOTO_INFO_ROLE, {'title': '白鹭'})
+    assert not transport._source_scan_timer.isActive()
+
+    calls = {'signature': 0, 'list': 0}
+    signature, list_paths = window._source_signature, window._list_photo_paths
+    def counted_signature(path):
+        calls['signature'] += 1
+        return signature(path)
+    def counted_list():
+        calls['list'] += 1
+        return list_paths()
+    monkeypatch.setattr(window, '_source_signature', counted_signature)
+    monkeypatch.setattr(window, '_list_photo_paths', counted_list)
+    transport._tick()
+    assert window.current_path == paths[1]
+    assert calls['list'] == 0
+    assert calls['signature'] < 30, calls  # 只看目标帧及附近预取，不随列表长度增长。
+
+    # 路径角色变化才使序列失效并重扫。
+    renamed = tmp_path / '改名.jpg'
+    item.setData(PHOTO_COL_ROW, PHOTO_LIST_PATH_ROLE, str(renamed))
+    assert transport._source_scan_timer.isActive()
+    assert transport._active_paths() == (*paths[:5], renamed, *paths[6:])
+    assert calls['list'] == 1
+    transport.stop(commit=False)
+    wait_until(lambda: window._preview_decode_worker is None)
 
 
 def test_ab_play_buttons_follow_each_sides_original_or_result_mode(window, monkeypatch):

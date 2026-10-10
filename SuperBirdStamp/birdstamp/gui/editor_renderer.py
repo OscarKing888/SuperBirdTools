@@ -89,6 +89,7 @@ RATIO_NO_CROP                       = editor_options.RATIO_NO_CROP
 OUTPUT_FORMAT_OPTIONS               = editor_options.OUTPUT_FORMAT_OPTIONS
 
 _SOURCE_IMAGE_CACHE_MAX = 4
+_SOURCE_PATH_KEY_CACHE_LIMIT = 20000
 _PREVIEW_IMAGE_CACHE_MAX_BYTES = 128 * 1024 * 1024
 _PREVIEW_IMAGE_CACHE_MAX_ITEMS = 32
 _PREVIEW_DECODE_MAX_LONG_EDGE = 0  # 0 表示清晰预览保持原生像素。
@@ -304,11 +305,18 @@ class _BirdStampRendererMixin:
         return tuple(converted)
 
     def _source_signature(self, path: Path) -> str:
+        # resolve() 逐级 lstat，播放大列表时每帧调用数千次；路径键可复用，文件变化仍由 stat 反映。
+        keys = getattr(self, "_source_path_key_cache", None)
+        if keys is None or len(keys) > _SOURCE_PATH_KEY_CACHE_LIMIT:
+            keys = self._source_path_key_cache = {}
+        key = keys.get(path)
+        if key is None:
+            key = keys[path] = _path_key(path)
         try:
             stat = path.stat()
-            return f"{_path_key(path)}:{stat.st_size}:{stat.st_mtime_ns}"
+            return f"{key}:{stat.st_size}:{stat.st_mtime_ns}"
         except Exception:
-            return _path_key(path)
+            return key
 
     def _store_source_image_cache(self, signature: str, image: Image.Image) -> None:
         cache = getattr(self, "_source_image_cache", None)
