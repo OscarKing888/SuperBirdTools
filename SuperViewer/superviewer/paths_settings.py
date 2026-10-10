@@ -206,6 +206,17 @@ def save_last_selected_directory_to_settings(path: str) -> None:
         _save_settings(_load_settings())
 
 
+def load_include_subdirectories_from_settings() -> bool:
+    """旧配置没有此项时保持默认递归显示。"""
+    return _load_settings().get("include_subdirectories", True) is not False
+
+
+def save_include_subdirectories_to_settings(enabled: bool) -> None:
+    data = _load_settings()
+    data["include_subdirectories"] = bool(enabled)
+    _save_settings(data)
+
+
 def load_main_splitter_state_from_settings() -> dict | None:
     """Load the saved main-window splitter sizes/collapse state."""
     state = _load_settings().get(MAIN_SPLITTER_STATE_KEY)

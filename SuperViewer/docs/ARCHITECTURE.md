@@ -52,6 +52,8 @@ Viewer 已通过 `fb4915e` 接入主分支 `ae968ff` 的 `WorkerAction` / `Brows
 
 Viewer 子类在基础文件筛选上加入标签与文本语义。`photo_tag_filter_matches()` 的精确模式要求全部标签，部分模式对标签子串做任一匹配；`filter_text_tokens_match()` 将文件名、备注、标签纳入文本搜索。目录递归范围仍由文件列表管理。
 
+目录栏提供与 main 一致的“包含子目录”选项，旧配置默认开启；通过 `paths_settings` 的 `include_subdirectories` 保存和恢复。关闭后只扫描当前层，文本/标签筛选、刷新和显式报告兼容扫描均遵守该范围。切换选项通过现有目录加载流程取消旧扫描，保留当前分支的 AB 预览行为。回归见 [test_directory_scope.py](../tests/test_directory_scope.py)、[共享范围测试](../../app_common/tests/test_file_browser_directory_scope.py) 和 [扫描交接测试](../../app_common/tests/test_file_browser_directory_scan_lifecycle.py)。
+
 ### 缓存范围
 
 - 内存缩略图由 [_thumbnail.py](../../app_common/file_browser/_thumbnail.py) 的 `ThumbnailMemoryCache` 管理，视口加载由 `ThumbnailLoader` 负责；列表模式不请求缩略图。
