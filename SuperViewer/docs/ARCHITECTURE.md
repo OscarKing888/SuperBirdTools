@@ -183,6 +183,8 @@ HEIF 的直接原图分支仍受普通选图阈值规则约束，不能把“快
 
 `MainWindow.closeEvent()` 先锁定关闭状态、停止键盘快显并向信息页、预览和文件列表发 `request_shutdown()`，再分别做有界 `shutdown(wait_timeout_ms=25)`。未全部完成时隐藏窗口并通过定时器重试，保留线程持有者；完成后保存分栏并接受关闭。组件自身负责停止计时器、解除监听、保留在退出中的线程，并由创建线程池的 worker 收束其 executor，不能靠销毁 QWidget 终止后台 I/O。
 
+窗口完成清理后仅发一次 `shutdown_finished`，正式入口以 queued connection 连接到 `QApplication.quit()`。等待期间已经隐藏的窗口再次关闭不会触发 Qt 的最后可见窗口退出机制，因此不能只检查 `_shutdown_finalized` 就认为应用已结束。`aboutToQuit` 继续关闭单例接收器和 ExifTool。`[shutdown]` 日志区分关闭请求、窗口清理完成和 Qt 事件循环返回；[test_application_shutdown.py](../tests/test_application_shutdown.py) 用独立进程运行正式入口，覆盖直接关闭和真实扫描线程导致的延迟关闭，并验证整个进程退出。
+
 日志经 [app_common/log.py](../../app_common/log.py) 的 `get_logger()` 输出；根启动脚本设置默认 `APP_COMMON_LOG_FILE=logs/SuperViewer.log`。诊断异步问题时记录源路径、请求/线程身份、缓存命中、已选目录和关闭状态，比仅增加等待时间更有用。
 
 ## 按功能定位与回归

@@ -679,6 +679,8 @@ class TriangleToggleSplitter(QSplitter):
 
 
 class MainWindow(QMainWindow):
+    shutdown_finished = pyqtSignal()
+
     def __init__(self, initial_received_files=None):
         super().__init__()
         self._shutdown_requested = False
@@ -1444,6 +1446,7 @@ class MainWindow(QMainWindow):
             return
         if not self._shutdown_requested:
             self._shutdown_requested = True
+            _log.info("[shutdown] requested")
             try:
                 self._file_list.stop_key_navigation_playback(commit=False)
             except Exception:
@@ -1486,7 +1489,10 @@ class MainWindow(QMainWindow):
         except Exception:
             pass
         self._shutdown_finalized = True
+        self._shutdown_retry_timer.stop()
         super().closeEvent(event)
+        _log.info("[shutdown] window cleanup complete")
+        self.shutdown_finished.emit()
 
 
 def main():
@@ -1522,6 +1528,12 @@ def main():
     app.setStyle("Fusion")
     theme_manager = install_ui_theme(app)
     window = MainWindow(initial_received_files=argv_files if argv_files else None)
+    # A deferred close hides the window while workers drain. Closing that
+    # already-hidden window does not trigger Qt's last-visible-window exit.
+    # Quit only after all owners have completed, queued past closeEvent.
+    window.shutdown_finished.connect(
+        app.quit, getattr(qt_compat.Qt, "ConnectionType", qt_compat.Qt).QueuedConnection,
+    )
     window._ui_theme_manager = theme_manager
     theme_manager.add_listener(window._dir_browser.apply_theme)
     window._dir_browser.apply_theme(theme_manager.scheme)
@@ -1547,7 +1559,9 @@ def main():
     window.showMaximized()
     if argv_files:
         QTimer.singleShot(100, (lambda p: lambda: window._open_received_file_list(p))(argv_files))
-    sys.exit(app.exec())
+    exit_code = app.exec()
+    _log.info("[shutdown] Qt event loop exited code=%s", exit_code)
+    sys.exit(exit_code)
 
 
 if __name__ == "__main__":
