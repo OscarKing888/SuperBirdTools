@@ -46,6 +46,10 @@ flowchart LR
 
 默认目录扫描不读取 `report.db`，也没有主分支按文件构建多报告路径映射的步骤。目录扫描的线程交接独立于报告模式：切换目录后旧扫描仍保留到真正的 `QThread.finished`，进度/结果检查 worker 身份，待应用列表检查请求代次，避免 A → B → A 时旧结果覆盖新请求。Viewer 的有界关闭流程也等待这些已取消扫描的完成回调；不改变持久缩略图队列的保留策略。
 
+Viewer 已通过 `fb4915e` 接入主分支 `ae968ff` 的 `WorkerAction` / `BrowserWorkPool`：同一组线程执行元数据、可见缩略图、预取和持久缓存任务，元数据保留的是并发额度，空闲额度可相互借用。2026-10-10 补齐 `main` 的实际缩略图需求同步：`_sync_shared_pool_budget()` 按视口定时器及真正待办更新初始预留；缓存全命中、空视口或已完成的常驻缓存线程不应空占额度。视口检查结束也立即同步，不能依赖下一次元数据进度信号才释放线程。池内部的 producer、队列及运行任务仍自行维护需求和唤醒；旧目录持久缓存任务继续保留。未引入与普通目录浏览无关的 `ANALYSIS` 任务类型。
+
+元数据启动不再构建已停用焦点预热的全目录路径快照，避免主线程逐文件 `isfile/stat`。UI 回填每次最多 64 条，每 8 条实际模型更新（包括同步 `dataChanged` 回调）后检查 12 ms 预算，下一轮定时器继续剩余任务；单个小批次仍可能超过预算。读取合并顺序、JSON 覆盖、严格快速解析完整性检查和选择/线程所有权保持原契约。设置 `SuperViewer_PERF_PROBES=1` 后，`[metadata.read_batch]` 记录磁盘缓存、快速解析、缓存写入、ExifTool fallback 和侧车耗时，`metadata_apply_tick` 记录 UI 回填耗时；`[metadata.pool]` 汇总线程池状态。回归见 [test_metadata_responsiveness.py](../../app_common/tests/test_metadata_responsiveness.py) 和 [Viewer 线程池集成测试](../tests/test_viewer_shared_pool_integration.py)。
+
 Viewer 子类在基础文件筛选上加入标签与文本语义。`photo_tag_filter_matches()` 的精确模式要求全部标签，部分模式对标签子串做任一匹配；`filter_text_tokens_match()` 将文件名、备注、标签纳入文本搜索。目录递归范围仍由文件列表管理。
 
 ### 缓存范围
