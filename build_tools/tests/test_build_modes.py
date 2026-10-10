@@ -177,8 +177,14 @@ def test_release_builds_never_bundle_all_models(build_entry):
     repo, run = build_entry
     result, calls = run(extra_env={"SUPERBIRDTOOLS_BUNDLE_MODELS": "all"})  # inherited from the shell: ignored
     assert result.returncode == 0, result.stdout + result.stderr
-    assert "download_models" not in [c["stage"] for c in calls]
-    assert next(c for c in calls if c["stage"] == VIEWER_STAGE)["bundle"] is None
+    if os.name == "nt":
+        names = "yolo11l-seg.pt,sam2.1_b.pt"
+        check = next(c for c in calls if c["stage"] == "download_models")
+        assert check["args"] == ["--check-only", "--no-denoise", names]
+        assert next(c for c in calls if c["stage"] == VIEWER_STAGE)["bundle"] == names
+    else:
+        assert "download_models" not in [c["stage"] for c in calls]
+        assert next(c for c in calls if c["stage"] == VIEWER_STAGE)["bundle"] is None
 
 
 def test_missing_models_stop_the_build_before_any_app(build_entry):

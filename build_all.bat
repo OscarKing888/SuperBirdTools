@@ -15,7 +15,7 @@ if defined SUPERBIRDTOOLS_BUILD_ROOT (
 
 set "CLEAN=0"
 set "APPS_ONLY=0"
-set "BUNDLE_MODELS="
+set "BUNDLE_MODELS=yolo11l-seg.pt,sam2.1_b.pt"
 :parse_args
 if "%~1"=="" goto args_done
 if /I "%~1"=="--clean" (
