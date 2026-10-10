@@ -126,7 +126,9 @@ def test_ab_window_routes_list_to_active_side_and_keeps_info_on_list_selection(w
     assert window._current_exif_path == paths[2]
     window._on_file_fast_preview_requested(paths[1])
     assert window.preview_compare.path_for_side("A") == paths[1]
-    assert window.preview_compare.preview_for_side("A")._fast_preview_only
+    assert window.preview_compare.preview_for_side("A")._full_preview_loaded
+    assert not window.preview_compare.preview_for_side("A")._fast_preview_only
+    assert window._current_exif_path == paths[2]  # Held navigation still defers metadata.
     window.preview_compare.set_enabled(False)
     assert window.preview_panel is window.preview_compare.preview_for_side("A")
 

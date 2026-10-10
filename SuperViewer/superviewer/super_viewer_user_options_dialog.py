@@ -154,7 +154,7 @@ class SuperViewerUserOptionsDialog(SettingsDialog):
         grid.addWidget(self._spin_direct_preview_file_mb, 2, 1)
         self._combo_direct_preview_mode.currentIndexChanged.connect(self._sync_direct_preview_controls)
         self._sync_direct_preview_controls()
-        hint = QLabel("上限内直接显示原图；超过上限先显示快速预览。\n设为 0 关闭直显，保存后下次选图生效。")
+        hint = QLabel("鼠标和方向键选图均使用此设置。\n上限内直接显示原图；超过上限先显示快速预览。\n设为 0 关闭直显，保存后下次选图生效。")
         hint.setWordWrap(True)
         grid.addWidget(hint, 3, 0, 1, 2)
 

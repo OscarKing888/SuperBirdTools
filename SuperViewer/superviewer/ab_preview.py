@@ -275,10 +275,15 @@ class ABPreviewPanel(QWidget):
         self._current_list_path = os.path.normpath(path) if path else ""
         self.set_side_path(self._active_side, self._current_list_path, load_full=load_full)
 
-    def set_quick_pixmap_for_list(self, path: str, pixmap, *, quick_size=None) -> None:
+    def set_quick_pixmap_for_list(self, path: str, pixmap, *, quick_size=None, allow_direct=False) -> None:
+        if self._shutdown_requested:
+            return
         self._current_list_path = os.path.normpath(path) if path else ""
         self._paths[self._active_side] = self._current_list_path
-        self.active_preview.set_quick_pixmap(path, pixmap, quick_size=quick_size)
+        if allow_direct:
+            self.active_preview.set_navigation_image(path, pixmap, quick_size=quick_size)
+        else:
+            self.active_preview.set_quick_pixmap(path, pixmap, quick_size=quick_size)
         self._update_filename(self._active_side)
 
     def source_pixmap_for_path(self, path: str):

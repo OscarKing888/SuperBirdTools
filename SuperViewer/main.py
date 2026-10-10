@@ -969,7 +969,7 @@ class MainWindow(QMainWindow):
         probe_t0 = perf_counter()
         perf_log(_log, "[PERF][fast_preview][main] START source=%r", path)
         preview_t0 = _time.perf_counter()
-        self.preview_compare.set_current_list_path(path, load_full=False)
+        self.preview_compare.set_quick_pixmap_for_list(path, None, allow_direct=True)
         preview_ms = (_time.perf_counter() - preview_t0) * 1000.0
         perf_log(
             _log,
@@ -987,10 +987,9 @@ class MainWindow(QMainWindow):
         )
 
     def _on_file_fast_preview_pixmap_requested(self, path: str, pixmap, quick_size: int) -> None:
-        """直接复用缩略图视图已经解码的帧，避免写盘后再读取。"""
-        if not isinstance(pixmap, QPixmap) or pixmap.isNull():
-            return
-        self.preview_compare.set_quick_pixmap_for_list(path, pixmap, quick_size=quick_size)
+        """优先按用户阈值直显源图，超限时复用已经解码的缩略图。"""
+        self.preview_compare.set_quick_pixmap_for_list(
+            path, pixmap, quick_size=quick_size, allow_direct=True)
 
     def _init_menu_bar(self):
         file_menu = self.menuBar().addMenu("文件")

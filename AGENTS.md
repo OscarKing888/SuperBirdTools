@@ -58,7 +58,7 @@ This file is the authoritative behavior and validation contract for the **img_mg
 - RAW normal display prefers an embedded preview, with background half-size demosaic fallback. Display-ready RAW is not proof of full source resolution.
 - Overlay export must explicitly obtain full-resolution source pixels. It drains any active display decoder, rejects stale display callbacks, and fails rather than exporting the thumbnail when full decode is unavailable.
 - Keep one full-preview decoder owner until its real `QThread.finished` cleanup. A logical result, `isRunning() == False`, timeout or interrupted request must not let an old cleanup callback erase a newer worker. Keep only the latest pending selection.
-- Held direction-key navigation uses quick previews after the initial step and commits full loading on the final selection; do not add EXIF/full-image I/O to that hot path.
+- Single and held direction-key navigation use the same user-selected direct-preview limit as mouse selection. Within the limit they may directly load non-RAW source pixels when no earlier decoder owns the preview. Otherwise use only memory/disk cached previews until final commit; do not add EXIF reads or uncached thumbnail generation to this path. Late thumbnails must not downgrade a same-path full preview.
 - `app_common.preview_canvas` owns composition-grid and overlay export behavior. Keep active grids visible on the preview and in exported overlays.
 
 ## Lists, tags and UI lifecycle

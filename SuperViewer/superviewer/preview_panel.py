@@ -131,7 +131,7 @@ def _quick_preview_target_size(canvas: QWidget, requested_size: int | None = Non
     return max(_QUICK_PREVIEW_FALLBACK_SIZE, parsed or _QUICK_PREVIEW_SIZE)
 
 
-def _load_quick_preview_pixmap(path: str, target_size: int) -> QPixmap | None:
+def _load_cached_quick_preview_image(path: str, target_size: int) -> QImage | None:
     qimg = None
     try:
         mtime = float(os.path.getmtime(path))
@@ -143,6 +143,11 @@ def _load_quick_preview_pixmap(path: str, target_size: int) -> QPixmap | None:
         qimg = _read_thumb_from_disk_cache(path, mtime, cached_size)
         if qimg is not None and not qimg.isNull():
             break
+    return qimg
+
+
+def _load_quick_preview_pixmap(path: str, target_size: int) -> QPixmap | None:
+    qimg = _load_cached_quick_preview_image(path, target_size)
     if (qimg is None or qimg.isNull()) and Path(path).suffix.lower() in HEIF_EXTENSIONS:
         # Pillow's HEIF thumbnail path still decodes the full HEVC image.
         # A cache miss must leave that work to the owned full-preview worker,
@@ -570,8 +575,22 @@ class PreviewPanel(QWidget):
 
     def set_quick_pixmap(self, path: str, pixmap: QPixmap, *, quick_size: int | None = None) -> None:
         """直接显示文件列表内存中的当前缩略图层级，避免落盘再读。"""
+        self._set_cached_preview(path, pixmap, quick_size=quick_size, allow_direct=False)
+
+    def set_navigation_image(self, path: str, pixmap=None, *, quick_size: int | None = None) -> None:
+        """键盘选图遵守直显阈值；其余只用缓存，松键后才补齐原图。"""
+        self._set_cached_preview(path, pixmap, quick_size=quick_size, allow_direct=True)
+
+    def _set_cached_preview(self, path: str, pixmap, *, quick_size: int | None, allow_direct: bool) -> None:
         if self._shutdown_requested:
             return
+        same_path = self._is_current_path(path)
+        if allow_direct and same_path and self._full_preview_loaded and self._has_canvas_pixmap():
+            # 迟到的缩略图只取消过期工作，不把已显示的原图降回小图。
+            self.set_image(path, load_full=False)
+            return
+        if allow_direct and same_path and pixmap is None and self._has_canvas_pixmap():
+            pixmap = self._canvas._source_pixmap
         self._consume_first_fit_request()
         self._preview_request_token += 1
         self._current_path = os.path.normpath(path) if path else path
@@ -579,8 +598,14 @@ class PreviewPanel(QWidget):
         self._canvas_source_full_resolution = False
         self._fast_preview_only = True
         self._cancel_pending_full_preview()
+        if allow_direct and not self._full_only_mode and self._try_set_direct_original_preview(self._current_path):
+            return
 
         target_size = _quick_preview_target_size(self._canvas, quick_size)
+        if allow_direct and (not isinstance(pixmap, QPixmap) or pixmap.isNull()):
+            cached = _load_cached_quick_preview_image(path, target_size)
+            if cached is not None and not cached.isNull():
+                pixmap = QPixmap.fromImage(cached)
         output = None
         if isinstance(pixmap, QPixmap) and not pixmap.isNull():
             if pixmap.width() <= target_size and pixmap.height() <= target_size:
@@ -597,7 +622,8 @@ class PreviewPanel(QWidget):
             self._set_preview_status_text(output.width(), output.height())
         else:
             self._canvas.set_source_pixmap(None, log_performance=False)
-            self._canvas.setText(f"无法预览\n{Path(path).name if path else ''}")
+            message = "正在加载预览" if allow_direct else "无法预览"
+            self._canvas.setText(f"{message}\n{Path(path).name if path else ''}")
             self._set_preview_status_text(None, None)
 
     def clear_image(self):

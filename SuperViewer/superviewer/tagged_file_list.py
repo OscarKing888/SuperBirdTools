@@ -601,6 +601,20 @@ class SuperViewerTaggedFileListPanel(FileListPanel):
         self._start_photo_tag_cache_loader_if_needed(files, reason="directory_listing")
         self._probe_log("photo_tag_cache.after_listing", files=len(files), elapsed_ms=elapsed_ms(apply_t0))
 
+    def _emit_fast_preview_for_path(self, path: str) -> None:
+        """始终发送源路径，由预览按用户阈值选择原图或已有缩略图。"""
+        if not path or self._background_shutdown_requested:
+            return
+        norm_path = os.path.normpath(path)
+        self._selected_display_path = norm_path
+        source_path = self._get_actual_path_for_display(norm_path) or norm_path
+        pixmap = self._current_thumbnail_fast_preview_pixmap(norm_path)
+        # 即使缓存未命中也要发送，让小图不必等缩略图生成才能直显。
+        self.file_fast_preview_pixmap_requested.emit(
+            source_path, pixmap, max(1, int(self._thumb_size or 128)))
+        if pixmap is None and self._view_mode == self._MODE_THUMB:
+            self._prioritize_fast_preview_thumbnail(norm_path)
+
     def resolve_preview_path(self, path: str, prefer_fast_preview: bool = False) -> str:
         """SuperViewer 正常预览原图；方向键 fast preview 优先使用当前缩略图尺寸缓存。"""
         norm_path = os.path.normpath(path) if path else ""
