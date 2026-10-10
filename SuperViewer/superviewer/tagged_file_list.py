@@ -32,6 +32,7 @@ from .photo_tags import (
 from .qt_compat import QCheckBox, QHBoxLayout, QLabel, QMenu, QMessageBox, QThread, QTimer, QToolButton, pyqtSignal
 from .tag_commands import ClearPhotoTagsCommand, SetPhotoTagCommand
 from .tag_menu import add_filterable_tag_actions
+from .light_metadata import ViewerMetadataLoader
 
 
 try:
@@ -224,6 +225,18 @@ class SuperViewerTaggedFileListPanel(FileListPanel):
     enable_in_memory_fast_preview = True
     skip_uncached_fast_preview = True
     command_history_changed = pyqtSignal()
+
+    def _create_metadata_loader(self, paths: list[str], **kwargs) -> ViewerMetadataLoader:
+        return ViewerMetadataLoader(paths, **kwargs)
+
+    def get_photo_metadata_for_path(self, path: str, *, allow_slow_read: bool = False) -> dict:
+        # Viewer metadata is loaded asynchronously, even for committed selections.
+        return super().get_photo_metadata_for_path(path, allow_slow_read=False)
+
+    def get_photo_exposure_settings_for_path(
+        self, path: str, *, allow_slow_read: bool = False,
+    ) -> tuple[str, str, str]:
+        return super().get_photo_exposure_settings_for_path(path, allow_slow_read=False)
 
     def select_display_path_silently(self, path: str) -> bool:
         """Reflect an A/B viewport activation in both views without loading a photo."""

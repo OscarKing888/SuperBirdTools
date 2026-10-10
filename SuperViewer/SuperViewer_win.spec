@@ -43,7 +43,8 @@ datas.extend(collect_tree(APP_ROOT / "super_viewer.cfg", "."))
 datas.extend(collect_tree(APP_ROOT / "icons", "icons"))
 datas.extend(collect_tree(APP_COMMON_ROOT / "about_dialog" / "about.cfg", "app_common/about_dialog"))
 datas.extend(collect_tree(APP_COMMON_ROOT / "about_dialog" / "images", "app_common/about_dialog/images"))
-datas.extend(collect_tree(APP_COMMON_ROOT / "exif_io" / "exiftools_win", "app_common/exif_io/exiftools_win"))
+# Viewer uses in-process header metadata + JSON/XMP sidecars. Shared Python
+# ExifTool APIs remain importable, but their optional executable is not bundled.
 
 
 a = Analysis(

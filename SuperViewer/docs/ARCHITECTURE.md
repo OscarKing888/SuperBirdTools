@@ -80,6 +80,16 @@ Viewer 子类在基础文件筛选上加入标签与文本语义。`photo_tag_fi
 
 ## 元数据、标签与权限
 
+### Viewer 轻量元数据策略
+
+[`light_metadata.py`](../superviewer/light_metadata.py) 的 `ViewerMetadataLoader` 通过共享列表的 `_create_metadata_loader()` 扩展点接入，继续使用现有动态 worker pool、分批回推和关闭流程。Viewer 默认只在后台读取源文件头、标准 EXIF、内嵌 XMP/IPTC 及 JSON/XMP 侧车；缺少拍摄参数属于正常结果，不再调用 ExifTool 补读，也不解析 MakerNote 焦点。已提交选择的信息查询仍只读缓存。
+
+PNG 跳过像素块并读取末尾元数据；JPEG/TIFF/WebP 使用 Pillow 元数据接口，HEIF 使用 `open_heif()` 而非像素解码；RAW 使用标准 EXIF 和 `RawPy.open_file()` 的源尺寸，不调用 `imread()`、`unpack()` 或 `postprocess()`；PSD 直接读取资源区，支持 16 位文件。特殊相机私有注释和完整 EXIF 表不属于此轻量策略；默认窗口仍只有图片信息和标签页。
+
+文件内字段缓存在最近图库 `.superpicky/meta_cache/viewer_light_v1.db`（无图库时沿用用户缓存目录），与共享完整策略的 `meta_cache.db` 隔离。侧车不进入文件缓存，每次按内嵌 → XMP → JSON 合并；Viewer 按层规范化编辑字段，确保清空备注/标签、评级 `0` 和 Pick `0` 不会重新落回旧内嵌值。现有本地编辑覆盖、严格标签历史读取、写权限和草稿保护保持原路由。
+
+共享 `MetadataLoader`、`PhotoMetaDataProxy` 和 ExifTool 读写/关闭接口保留原默认行为。Viewer Windows/macOS spec 不再收集 ExifTool 程序和 Perl 运行时；复用完整 EXIF/焦点模块的其他调用方仍可自行提供 ExifTool。回归入口：[`test_light_metadata.py`](../tests/test_light_metadata.py)、共享 `test_xmp_packet.py`、`test_browser_fast_metadata_json.py`，以及下文的元数据编辑、预览和退出测试。
+
 ### 读写适配器和侧车位置
 
 共享 `FileListPanel` 使用 `PhotoMetaDataProxy` 聚合读取；实际合并顺序为内嵌 EXIF、XMP、JSON，后者覆盖同名键，最后规范化评级/Pick 别名。GUI 通过缓存接口获得所需字段。Viewer 标签存储默认使用 `PhotoMetaDataJSON(fallback=PhotoMetaDataXMP())`。JSON 使用 ExifTool 风格的元数据键；适配器处理 Subject、Description、Rating、Pick 的别名和类型转换。
