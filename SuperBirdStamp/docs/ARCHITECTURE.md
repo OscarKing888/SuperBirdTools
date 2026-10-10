@@ -22,6 +22,8 @@ Hot-received photos switch the B preview from result view to source/edit view be
 
 ## 2. 编辑器状态与线程归属
 
+处理管线参数分组由 `_sync_pipeline_stage_option_group_order()` 重排：移除布局项时保留控件父对象，禁用组仅隐藏，新建组先加入布局再显示。启动、工作区恢复与阶段启停不得让 `CollapsibleSection` 短暂成为独立顶层窗口（Windows 会显示标题为 `pythonw` 的闪现窗口）。回归 [test_editor_startup_windows.py](../tests/test_editor_startup_windows.py) 在窗口构造前记录 `Show` 事件，并检查重排、启停和恢复期间的窗口归属与参数保留。
+
 主窗口 [BirdStampEditorWindow](../birdstamp/gui/editor.py) 组合六个 mixin：
 
 | 组成 | 主要职责 |

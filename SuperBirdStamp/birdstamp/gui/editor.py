@@ -1863,7 +1863,8 @@ class BirdStampEditorWindow(
             item = layout.takeAt(0)
             widget = item.widget()
             if widget is not None:
-                widget.setParent(None)
+                # Removing a layout item must not turn the section into a
+                # top-level window, even while a disabled stage stays hidden.
                 widget.hide()
         visible_index = 0
         for stage_id in self._current_pipeline_stage_order():
@@ -1875,8 +1876,9 @@ class BirdStampEditorWindow(
                 continue
             visible_index += 1
             group.setTitle(f"{visible_index}. {self._pipeline_stage_label(stage_id)}")
-            group.show()
+            # New groups are initially parentless: attach before showing.
             layout.addWidget(group)
+            group.show()
 
     def _refresh_pipeline_stage_move_buttons(self) -> None:
         stage_list = getattr(self, "pipeline_stage_list", None)
