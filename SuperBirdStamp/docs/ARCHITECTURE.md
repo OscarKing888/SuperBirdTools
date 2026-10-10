@@ -78,6 +78,8 @@ A/B 的布局与显隐约定见 [A/B 预览工具栏布局](ux/AB_PREVIEW_LAYOUT
 
 `BirdStampEditorWindow.closeEvent` 在视频导出仍运行时拒绝关闭并提示先停止；其他工作采用协作停止。元数据加载器通过独立 ExifTool 会话和取消回调中断批量读取，关闭请求会在后台终止 ExifTool 子进程。只要预览、检测、元数据（包括待结束的旧加载器）、发现线程或 ExifTool 清理仍在运行，窗口忽略本次关闭并通过定时器重试，不阻塞 GUI 等待。全部结束后才关闭工作区自动保存并接受关闭。修改这条路径时，应测试“业务完成信号已发出但线程尚未返回”的窗口期。
 
+ExifTool 生命周期与 Viewer 共用 [`exiftool_runner.py`](../../app_common/exif_io/exiftool_runner.py)：并发清理必须等到子进程实际结束，失败保留所有权并记录错误；`aboutToQuit` 与 `atexit` 通过 `shutdown_exiftool_process()` 禁止再创建常驻会话并回收全部已注册会话。Windows 的 [`_windows_job.py`](../../app_common/exif_io/_windows_job.py) 给常驻进程配置独立 Job Object，宿主退出时系统回收这些进程；macOS 沿用共享的显式清理协议。回归见 [`test_exiftool_shutdown.py`](../../app_common/tests/test_exiftool_shutdown.py)，使用真实 ExifTool 验证并行会话和进程级退出，无需打开或改写用户工作区。
+
 照片列表右键“删除所选”和列表获得焦点时的 `Delete`（macOS 另支持 `Backspace`）共用 `PhotoListWidget.remove_selected_action`，通过 `removeSelectedRequested` 交给 `BirdStampEditorWindow._remove_selected_photos`。支持多选，右键未选中行先切换选区；仅从工作区列表移除，保留原图和 XMP，并沿用缓存清理、编号刷新与自动保存。快捷键不拦截文本输入，也不随长按重复触发。此功能仅管理 GUI 工作区，无独立 CLI 参数。回归见 [test_editor_photo_list_sort.py](../tests/test_editor_photo_list_sort.py) 与 [test_photo_start_number.py](../tests/test_photo_start_number.py)。
 
 ## 3. 元数据与模板 provider

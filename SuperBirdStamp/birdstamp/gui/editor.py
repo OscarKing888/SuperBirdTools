@@ -73,7 +73,7 @@ from PyQt6.QtWidgets import (
 from app_common.toggle_button import ToggleToolButton
 from app_common.about_dialog import load_about_info, load_about_images, show_about_dialog
 from app_common.app_info_bar import AppInfoBar
-from app_common.exif_io import PhotoMetaDataReportDB, close_exiftool_process
+from app_common.exif_io import PhotoMetaDataReportDB, close_exiftool_process, shutdown_exiftool_process
 from app_common.file_utils import is_apple_double_metadata_file
 from app_common.file_browser._work_pool import BrowserWorkPool
 from app_common.log import get_logger
@@ -6114,7 +6114,7 @@ def launch_gui(
                 active_receiver.stop()
             except Exception as exc:
                 _log.warning("receiver stop failed: %s", exc)
-        close_exiftool_process()
+        shutdown_exiftool_process()
 
     startup_inputs: list[Path] = []
     if startup_files:

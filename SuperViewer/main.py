@@ -48,6 +48,7 @@ from app_common.perf_probe import elapsed_ms, perf_counter, perf_log
 from app_common.exif_io import (
     PhotoMetaDataXMP,
     close_exiftool_process,
+    shutdown_exiftool_process,
     find_same_stem_xmp_sidecar,
     _get_exiftool_tag_target,
 )
@@ -1870,7 +1871,7 @@ def main():
             if getattr(window, "_single_instance_receiver", None):
                 window._single_instance_receiver.stop()
         finally:
-            close_exiftool_process()
+            shutdown_exiftool_process()
 
     app.aboutToQuit.connect(stop_receiver)
     window.showMaximized()
