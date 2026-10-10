@@ -880,6 +880,9 @@ class MainWindow(QMainWindow):
 
     def _on_directory_selected(self, path: str, *, force_reload: bool = False):
         """目录树选中目录后，保存路径到设置与 .last_folder.txt，并刷新文件列表。"""
+        if os.path.normcase(os.path.normpath(path)) != os.path.normcase(os.path.normpath(self._file_list.get_current_dir() or "")):
+            for side in ("A", "B"):
+                self.preview_compare.preview_for_side(side).fit_next_image()
         save_last_selected_directory_to_settings(path)
         self._file_list.load_directory(path, force_reload=force_reload)
 

@@ -5,11 +5,12 @@ from __future__ import annotations
 
 import os
 
+from app_common.settings_dialog import SettingsDialog
+from app_common.collapsible_section import CollapsibleSection
 from app_common.superviewer_user_options import (
     KEY_NAVIGATION_FPS_OPTIONS,
     KEY_PERF_PROBES_ENABLED,
     PERSISTENT_THUMB_SIZE_LEVELS,
-    USER_OPTIONS_FILENAME,
     get_runtime_user_options,
     get_user_options_path,
 )
@@ -17,40 +18,40 @@ from app_common.superviewer_user_options import (
 from .qt_compat import (
     QCheckBox,
     QComboBox,
-    QDialog,
-    QDialogButtonBox,
+    QWidget,
     QGridLayout,
     QLabel,
     QSpinBox,
     QVBoxLayout,
 )
 
+from .file_context_menu import menu_icon
 
-class SuperViewerUserOptionsDialog(QDialog):
+
+class SuperViewerUserOptionsDialog(SettingsDialog):
     def __init__(self, parent=None, options: dict | None = None) -> None:
         super().__init__(parent)
-        self.setWindowTitle("用户选项")
-        self.setModal(True)
-        self.resize(520, 260)
-
         opts = dict(options or get_runtime_user_options())
         cpu_count = max(1, os.cpu_count() or 1)
         max_workers = max(64, cpu_count * 2)
 
-        layout = QVBoxLayout(self)
+        self.set_description(f"配置文件：{get_user_options_path()}")
+        browsing = QWidget(self)
+        browsing_layout = QVBoxLayout(browsing)
+        performance = QWidget(self)
+        performance_layout = QVBoxLayout(performance)
+        self.add_page(browsing, "浏览与预览", menu_icon("folder"))
+        self.add_page(performance, "性能与缓存", menu_icon("process"))
 
-        info = QLabel(
-            f"配置文件将保存在程序目录：{get_user_options_path()}\n"
-            f"文件名：{USER_OPTIONS_FILENAME}"
-        )
-        info.setWordWrap(True)
-        info.setStyleSheet("color: #aaa; font-size: 12px;")
-        layout.addWidget(info)
+        def section(layout, title):
+            group = CollapsibleSection(title, self)
+            grid = QGridLayout(group.body)
+            grid.setHorizontalSpacing(10)
+            grid.setVerticalSpacing(8)
+            layout.addWidget(group)
+            return grid
 
-        grid = QGridLayout()
-        grid.setHorizontalSpacing(10)
-        grid.setVerticalSpacing(8)
-
+        grid = section(performance_layout, "线程与缓存")
         row = 0
         grid.addWidget(QLabel("后台图像加载线程数"), row, 0)
         self._spin_thumb_loader_workers = QSpinBox(self)
@@ -91,7 +92,8 @@ class SuperViewerUserOptionsDialog(QDialog):
         grid.addWidget(self._combo_persistent_thumb_size, row, 1)
         grid.addWidget(QLabel("默认 128"), row, 2)
 
-        row += 1
+        grid = section(browsing_layout, "浏览行为")
+        row = 0
         grid.addWidget(QLabel("方向键连续浏览速率"), row, 0)
         self._combo_key_navigation_fps = QComboBox(self)
         for fps in KEY_NAVIGATION_FPS_OPTIONS:
@@ -113,7 +115,8 @@ class SuperViewerUserOptionsDialog(QDialog):
         grid.addWidget(self._chk_keep_view, row, 1)
         grid.addWidget(QLabel("默认开启"), row, 2)
 
-        row += 1
+        grid = section(performance_layout, "诊断")
+        row = 0
         grid.addWidget(QLabel("性能探针日志"), row, 0)
         self._chk_perf_probes = QCheckBox(self)
         self._chk_perf_probes.setChecked(bool(opts.get(KEY_PERF_PROBES_ENABLED, 0)))
@@ -121,24 +124,12 @@ class SuperViewerUserOptionsDialog(QDialog):
         grid.addWidget(self._chk_perf_probes, row, 1)
         grid.addWidget(QLabel("默认关闭"), row, 2)
 
-        layout.addLayout(grid)
-
-        note = QLabel("缩略视图会根据当前缩略图大小自动匹配最合适的一档预览图。")
+        note = QLabel("缩略视图会根据当前缩略图大小自动匹配预览层级。\n元数据读取线程数更改后重启应用生效。")
         note.setWordWrap(True)
-        note.setStyleSheet("color: #aaa; font-size: 12px;")
-        layout.addWidget(note)
-
-        buttons = QDialogButtonBox(
-            (
-                QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
-                if hasattr(QDialogButtonBox.StandardButton, "Ok")
-                else QDialogButtonBox.Ok | QDialogButtonBox.Cancel
-            ),
-            parent=self,
-        )
-        buttons.accepted.connect(self.accept)
-        buttons.rejected.connect(self.reject)
-        layout.addWidget(buttons)
+        performance_layout.addWidget(note)
+        preview_note = QLabel("首次打开或切换目录的首张图片自动适应窗口。")
+        preview_note.setWordWrap(True)
+        browsing_layout.addWidget(preview_note)
 
     def selected_options(self) -> dict[str, int]:
         return {

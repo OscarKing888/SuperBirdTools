@@ -20,6 +20,7 @@ from app_common.perf_probe import elapsed_ms, perf_counter, perf_log
 from app_common.log import get_logger
 from app_common.exif_io import PhotoMetaDataJSON
 
+from .file_context_menu import build_file_context_menu
 from .photo_tags import (
     PhotoTagConfig,
     PhotoTagSidecarStore,
@@ -222,6 +223,8 @@ class SuperViewerTaggedFileListPanel(FileListPanel):
     use_report_db = False
     use_preview_cache = False
     enable_key_navigation_playback = True
+    enable_range_mark_shortcuts = True
+    show_thumbnail_sort_controls = True
     enable_in_memory_fast_preview = True
     skip_uncached_fast_preview = True
     command_history_changed = pyqtSignal()
@@ -497,6 +500,52 @@ class SuperViewerTaggedFileListPanel(FileListPanel):
         self._tag_config_signature = None
         self._clear_command_history()
         return True
+
+    def _reload_after_trash(self, moved_paths: list[str]) -> None:
+        """Restore the nearest surviving predecessor in the displayed order."""
+        if self._view_mode == self._MODE_THUMB:
+            ordered = self._thumb_list_model.all_paths()
+        else:
+            model = self._tree_widget.model()
+            ordered = [
+                self._tree_path_from_index(model.index(row, 0))
+                for row in range(model.rowCount())
+            ]
+        removed = {os.path.normcase(os.path.normpath(path)) for path in moved_paths}
+        current = self._active_view_current_path()
+        target = ""
+        if current and os.path.normcase(current) not in removed:
+            target = current
+        else:
+            anchor = next((i for i, path in enumerate(ordered) if path == current), None)
+            if anchor is None:
+                anchor = next((i for i, path in enumerate(ordered)
+                               if os.path.normcase(path) in removed), 0)
+            candidates = list(reversed(ordered[:anchor])) + ordered[anchor:]
+            target = next((path for path in candidates
+                           if os.path.normcase(path) not in removed), "")
+        super()._reload_after_trash(moved_paths)
+        # load_directory clears/rebuilds the old model synchronously. Queue the
+        # target afterwards so that empty rebuild cannot consume the request.
+        self.set_pending_selection([target] if target else [], apply_immediately=False)
+
+    def _show_file_context_menu(
+        self, viewport, pos, *, paths: list[str], primary_path: str | None, log_prefix: str,
+    ) -> None:
+        menu_paths = self._unique_norm_paths(paths)
+        if primary_path:
+            primary_norm = os.path.normpath(primary_path)
+            if primary_norm and primary_norm not in menu_paths:
+                menu_paths.insert(0, primary_norm)
+        if not menu_paths:
+            self._show_empty_file_context_menu(viewport, pos)
+            return
+        primary = os.path.normpath(primary_path) if primary_path else menu_paths[0]
+        menu = build_file_context_menu(self, menu_paths, primary, log_prefix=log_prefix)
+        try:
+            _exec_menu(menu, viewport.mapToGlobal(pos))
+        finally:
+            menu.deleteLater()
 
     def load_directory(
         self,

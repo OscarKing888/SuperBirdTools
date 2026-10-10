@@ -54,6 +54,12 @@ Viewer 子类在基础文件筛选上加入标签与文本语义。`photo_tag_fi
 
 目录栏提供与 main 一致的“包含子目录”选项，旧配置默认开启；通过 `paths_settings` 的 `include_subdirectories` 保存和恢复。关闭后只扫描当前层，文本/标签筛选、刷新和显式报告兼容扫描均遵守该范围。切换选项通过现有目录加载流程取消旧扫描，保留当前分支的 AB 预览行为。回归见 [test_directory_scope.py](../tests/test_directory_scope.py)、[共享范围测试](../../app_common/tests/test_file_browser_directory_scope.py) 和 [扫描交接测试](../../app_common/tests/test_file_browser_directory_scan_lifecycle.py)。
 
+### 排序、区间选择与删除定位
+
+两个视图共用 `_models.file_sort_key()` 和 `_tree_last_sort_column/order`，按文件名、备注、评级/Pick 或标签排序。同名和相同字段用完整路径作稳定次序；递归扫描也按文件名优先。缩略图工具栏由 Viewer 的 `show_thumbnail_sort_controls` 启用，`reorder_paths()` 原地重排并迁移持久索引，保留多选、当前项和已解码图片。增量填充中切换排序会更新插入排名，结束时校正次序，不恢复整表清空。
+
+Viewer 启用 `enable_range_mark_shortcuts`：`[` 标记当前图，`]` 按实际显示顺序选择含两端的区间，支持全角括号；状态栏显示起点，切换目录清空标记。预览画布按键仍走 `PreviewKeyRouter`。成功删除通过共享 `_reload_after_trash()` 扩展点，在重新扫描后优先选中当前图之前最近的幸存图，无前图时选后图；删除失败的图片仍参与选择。回归见 [共享排序测试](../../app_common/tests/test_file_browser_view_sort.py)、[区间测试](../../app_common/tests/test_file_browser_range_mark.py)、[删除定位测试](../tests/test_delete_selection.py)。
+
 ### 缓存范围
 
 - 内存缩略图由 [_thumbnail.py](../../app_common/file_browser/_thumbnail.py) 的 `ThumbnailMemoryCache` 管理，视口加载由 `ThumbnailLoader` 负责；列表模式不请求缩略图。
@@ -155,6 +161,8 @@ set_photo_tag_for_paths / clear_photo_tags_for_paths
 
 [`ABPreviewPanel`](../superviewer/ab_preview.py) 拥有两个独立的 `PreviewPanel`。首次开启时以当前图片初始化 A 侧；点击或聚焦画布、本侧工具栏及其子控件会激活该侧，列表选择及长按方向键的快速预览只更新活动侧。两侧顶部只显示 A/B 标识和只读文件名（长名称中间省略、悬停显示完整路径），不再提供选图下拉列表。活动侧标为“当前”并高亮边框。两侧均沿用本分支普通预览策略：已知尺寸不超过 `40 * 1024 * 1024` 像素且无旧解码器持有者时可同步加载；其余走有界快速预览和后台解码。RAW 内嵌预览与完整分辨率导出仍分开处理。早期的 `set_full_only_mode()` 接口保留，AB 默认不再强制清空并重新加载原图。
 
+首次显示及目录切换后的下一次选图使用适窗。首次小图升级为清晰图时继续适窗，但用户缩放/平移优先；切目录不会立即改变 AB 固定图，也不会让它迟到的后台结果消费下一次选图的适窗请求。普通提交只发完整选图请求；仅长按的中间帧先走快速预览。
+
 每侧提供独立的适应窗口、缩放和构图线菜单。全局“同步缩放/移动”由 [`ABViewLink`](../superviewer/ab_view_link.py) 管理：开启时记录两侧各自的缩放和中心位置，之后传递相对缩放倍数及归一化中心位移，不把两侧强制对齐到同一视野。[`ViewerPreviewCanvas`](../superviewer/ab_preview_canvas.py) 继承共享画布，只暴露交互和内容变更信号；组合线绘制、叠加导出仍归 `app_common.preview_canvas` 所有。后台清晰图到达和窗口尺寸变化时恢复各侧自己的联动状态。
 
 激活侧通过 `select_display_path_silently()` 同步列表高亮，不发出二次选图信号；信息页跟随活动侧源图，相同图片不会重建未保存草稿。目录或筛选变化保留已固定的两侧图片，自动选中第一项时也保持活动侧信息一致。共享列表的延迟滚动只调整可见位置，不恢复过期选择（适配主分支 `72e5a78`）。文件名更新只处理当前侧，不构建目录选项模型。
@@ -237,3 +245,9 @@ $env:QT_QPA_PLATFORM = 'offscreen'
 macOS 使用 `.venv/bin/python3` 和同一组 pytest 参数。GUI 测试在创建窗口前把 `paths_settings` 读写入口、上次目录、用户选项、权限和相关缓存隔离到临时目录；不要读取真实图库后再清理用户配置。已有 MainWindow 测试可作为隔离模板。持有 QApplication 引用，按真正的异步完成条件做有界等待，并在测试退出时关闭线程。
 
 改变写入必须使用真实临时图片及中文 JSON/XMP 做写后读回；改变打包还需运行产物启动验证。离屏 Qt 测试和 `py_compile` 无法替代实际 Windows/macOS 打包验证。
+
+### 用户选项与右键菜单
+
+用户选项继承共享 [SettingsDialog](../../app_common/settings_dialog.py)，复用 [SidebarTabWidget](../../app_common/sidebar_tabs.py) 和 [CollapsibleSection](../../app_common/collapsible_section.py)。页面为“浏览与预览”“性能与缓存”，保留原有七项配置和 128/256/512 缓存层级；确定后仍由 MainWindow 保存，切页、折叠和取消不写配置。没有迁移配置文件位置或增加主分支的分析功能。
+
+[文件菜单](../superviewer/file_context_menu.py) 置顶复制/粘贴/剪切，保留评级和标签，分组“发送到”“定位文件”，删除放底部；使用主题图标、悬停反馈和 100 ms 子菜单展开。动作继续调用共享路径解析及权限入口。目录右键“复制完整路径”使用右键节点，不切换当前目录。集成回归见 [test_viewer_workflow.py](../tests/test_viewer_workflow.py) 和 [目录菜单测试](../../app_common/tests/test_directory_browser_context_menu.py)。这些变化是界面交互，未新增 CLI 命令。

@@ -418,6 +418,9 @@ class PreviewPanel(QWidget):
         self.setMinimumSize(320, 240)
         self.setAcceptDrops(False)
         self._current_path = None
+        self._fit_next_image = True
+        self._fit_on_next_selection = False
+        self._first_image_fit_token = None
         self._preview_request_token = 0
         self._full_preview_loaded = False
         self._full_only_mode = False
@@ -437,6 +440,7 @@ class PreviewPanel(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(4)
         self._canvas = ViewerPreviewCanvas(self, placeholder_text="未选择图片")
+        self._canvas.viewport_interacted.connect(self._cancel_first_image_fit)
         if hasattr(self._canvas, "set_keep_view_on_switch"):
             self._canvas.set_keep_view_on_switch(self._keep_view_on_switch)
         if hasattr(self._canvas, "display_scale_percent_changed"):
@@ -449,11 +453,14 @@ class PreviewPanel(QWidget):
     def set_image(self, path: str, *, load_full: bool = True, quick_size: int | None = None):
         if self._shutdown_requested:
             return
+        self._consume_first_fit_request()
         t0 = _time.perf_counter()
         norm_path = os.path.normpath(path) if path else path
         same_path = bool(norm_path and self._is_current_path(norm_path))
         can_reuse = bool(same_path and self._has_canvas_pixmap())
         if can_reuse:
+            if self._fit_next_image:
+                self._set_canvas_pixmap(self._canvas._source_pixmap, log_performance=False)
             if not load_full:
                 # 同路径从普通预览切回键盘快速模式时，也必须让已经排队的
                 # full result 失效；保留当前 canvas，不重新读取缩略图。
@@ -547,6 +554,7 @@ class PreviewPanel(QWidget):
         """直接显示文件列表内存中的当前缩略图层级，避免落盘再读。"""
         if self._shutdown_requested:
             return
+        self._consume_first_fit_request()
         self._preview_request_token += 1
         self._current_path = os.path.normpath(path) if path else path
         self._full_preview_loaded = False
@@ -575,6 +583,7 @@ class PreviewPanel(QWidget):
             self._set_preview_status_text(None, None)
 
     def clear_image(self):
+        self.fit_next_image()
         self._preview_request_token += 1
         self._current_path = None
         self._full_preview_loaded = False
@@ -584,8 +593,27 @@ class PreviewPanel(QWidget):
         self._canvas.set_source_pixmap(None)
         self._set_preview_status_text(None, None)
 
+    def fit_next_image(self) -> None:
+        """Fit the next displayed selection without changing a pinned A/B frame."""
+        self._fit_on_next_selection = True
+        self._first_image_fit_token = None
+
+    def _consume_first_fit_request(self) -> None:
+        if self._fit_on_next_selection:
+            self._fit_on_next_selection = False
+            self._fit_next_image = True
+
+    def _cancel_first_image_fit(self) -> None:
+        self._first_image_fit_token = None
+
     def _set_canvas_pixmap(self, pix: QPixmap, *, log_performance: bool = True) -> None:
-        if self._keep_view_on_switch:
+        fit_first = self._fit_next_image or self._first_image_fit_token == self._preview_request_token
+        if fit_first:
+            self._canvas.set_source_pixmap(pix, reset_view=True, log_performance=log_performance)
+            self._canvas.fit_to_window()
+            self._fit_next_image = False
+            self._first_image_fit_token = self._preview_request_token
+        elif self._keep_view_on_switch:
             self._canvas.set_source_pixmap(
                 pix,
                 preserve_view=True,
@@ -621,6 +649,7 @@ class PreviewPanel(QWidget):
         self._set_canvas_pixmap(pix)
         self._set_preview_status_text(pix.width(), pix.height())
         self._full_preview_loaded = True
+        self._first_image_fit_token = None
         self._canvas_source_full_resolution = True
         self._fast_preview_only = False
         perf_log(
@@ -735,6 +764,7 @@ class PreviewPanel(QWidget):
         self._set_canvas_pixmap(pix)
         self._set_preview_status_text(pix.width(), pix.height())
         self._full_preview_loaded = True
+        self._first_image_fit_token = None
         self._canvas_source_full_resolution = Path(path).suffix.lower() not in RAW_EXTENSIONS
         self._fast_preview_only = False
         self.full_preview_ready.emit(path)
@@ -789,6 +819,7 @@ class PreviewPanel(QWidget):
         self._set_canvas_pixmap(pix)
         self._set_preview_status_text(pix.width(), pix.height())
         self._full_preview_loaded = True
+        self._first_image_fit_token = None
         self._canvas_source_full_resolution = True
         self._fast_preview_only = False
         return True
@@ -809,6 +840,7 @@ class PreviewPanel(QWidget):
         return self._canvas.current_display_scale_percent()
 
     def set_display_scale_percent(self, scale_percent: float | int, *, preserve_view: bool = True) -> bool:
+        self._cancel_first_image_fit()
         return self._canvas.set_display_scale_percent(scale_percent, preserve_view=preserve_view)
 
     def render_source_pixmap_with_overlays(self) -> QPixmap | None:
