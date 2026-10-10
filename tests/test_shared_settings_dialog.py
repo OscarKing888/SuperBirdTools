@@ -38,7 +38,7 @@ def test_real_options_pages_resize_and_cancel_without_writes(tmp_path, monkeypat
     try:
         assert isinstance(dialog, SettingsDialog)
         assert dialog.isSizeGripEnabled()
-        expected = (['浏览与性能', '批量降噪', '珍禽入册', '稀有度徽章', '保护等级徽章', '鸟清晰度']
+        expected = (['浏览与性能', '批量降噪', '视频处理', '珍禽入册', '稀有度徽章', '保护等级徽章', '鸟清晰度']
                     if dialog_class is SuperViewerUserOptionsDialog else ['安全区'])
         assert [dialog.tabs.tabText(i) for i in range(dialog.tabs.count())] == expected
         dialog.show()

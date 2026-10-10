@@ -8,8 +8,9 @@ import queue
 import threading
 
 from app_common.video import is_video
+from app_common.superviewer_user_options import get_runtime_user_options
 from .bird_identification_controller import BirdIDProgressDialog
-from .qt_compat import QFileDialog, QThread, QTimer
+from .qt_compat import QFileDialog, QMessageBox, QThread, QTimer
 from .video_frame_export import export_video_frames
 try:
     from PyQt6.QtCore import QObject
@@ -18,9 +19,10 @@ except ImportError:  # pragma: no cover
 
 
 class FrameExportWorker(QThread):
-    def __init__(self, paths, destination):
+    def __init__(self, paths, destination, suffix):
         super().__init__()
         self.paths, self.destination = paths, destination
+        self.suffix = suffix
         self.cancelled = threading.Event()
         self.results = queue.Queue(maxsize=64)
         self._lock = threading.Lock()
@@ -41,6 +43,7 @@ class FrameExportWorker(QThread):
 
             report(0, "")
             result = export_video_frames(path, self.destination,
+                                         suffix=self.suffix,
                                          cancelled=self.cancelled.is_set, on_progress=report)
             self.results.put(result)
 
@@ -72,14 +75,25 @@ class VideoFrameExportController(QObject):
     def choose_destination(self, paths):
         if self._worker is not None or self._shutdown_requested:
             return
-        destination = QFileDialog.getExistingDirectory(
-            self._main, "选择 PNG 帧输出目录（每个视频创建独立文件夹）",
-            str(Path(paths[0]).parent),
-        )
-        if destination:
-            self.start(paths, destination)
+        options = get_runtime_user_options()
+        mode = options["video_frame_output_mode"]
+        destination = None
+        if mode == "fixed":
+            destination = options["video_frame_output_directory"]
+            if not destination or not Path(destination).expanduser().is_absolute():
+                QMessageBox.warning(self._main, "视频处理", "请在用户选项 → 视频处理中设置固定输出根目录。")
+                return
+            destination = str(Path(destination).expanduser())
+        elif mode == "ask":
+            destination = QFileDialog.getExistingDirectory(
+                self._main, "选择 PNG 帧输出目录（每个视频创建独立文件夹）",
+                str(Path(paths[0]).parent),
+            )
+            if not destination:
+                return
+        self.start(paths, destination, suffix=options["video_frame_suffix"])
 
-    def start(self, paths, destination):
+    def start(self, paths, destination=None, *, suffix="_Frames"):
         if self._worker is not None or self._shutdown_requested:
             return False
         sources = {}
@@ -99,10 +113,10 @@ class VideoFrameExportController(QObject):
         self._dialog.label.setText("准备提取视频帧…")
         self._dialog.summary.setWordWrap(True)
         self._dialog.summary.setText("原分辨率逐帧提取；取消后保留已完成的 PNG。")
-        self._dialog.details.append(html.escape(f"输出父目录：{destination}"))
+        self._dialog.details.append(html.escape(f"输出父目录：{destination or '每个视频所在目录'}；目录名后缀：{suffix}"))
         self._dialog.cancel_requested.connect(self.stop)
         self._dialog.rejected.connect(self.stop)  # Escape also cancels the task.
-        worker = self._worker = FrameExportWorker(list(sources.values()), destination)
+        worker = self._worker = FrameExportWorker(list(sources.values()), destination, suffix)
         worker.finished.connect(lambda w=worker: self._finished(w))
         self.show_progress()
         self._timer.start()

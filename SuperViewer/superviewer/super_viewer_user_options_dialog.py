@@ -227,6 +227,13 @@ class SuperViewerUserOptionsDialog(SettingsDialog):
         denoise_layout.addWidget(denoise_note)
         self.add_page(denoise, "批量降噪", menu_icon("denoise"))
 
+        from .video_frame_options_form import VideoFrameOptionsForm
+        video = QWidget(tabs)
+        video_layout = QVBoxLayout(video)
+        self._video_frame_form = VideoFrameOptionsForm(opts, video)
+        self._add_option_group(video_layout, "视频帧提取", self._video_frame_form)
+        self.add_page(video, "视频处理", menu_icon("process"))
+
         self._initial_archive_options = load_archive_options()
         self._archive_form = ArchiveOptionsForm(tabs, options=self._initial_archive_options)
         archive_page = QWidget(tabs)
@@ -291,6 +298,10 @@ class SuperViewerUserOptionsDialog(SettingsDialog):
         self._button_denoise_directory.setEnabled(mode == "fixed")
 
     def accept(self) -> None:
+        error = self._video_frame_form.validation_error()
+        if error:
+            QMessageBox.information(self, "视频处理", error)
+            return
         if not valid_denoise_subdir(self._edit_denoise_subdir.text().strip()):
             QMessageBox.information(self, "批量降噪", "请输入兼容 Windows 的单个子目录名称，不能包含斜线或保留字符。")
             return
@@ -323,6 +334,7 @@ class SuperViewerUserOptionsDialog(SettingsDialog):
             "denoise_strength": self._spin_denoise_strength.value(),
             "denoise_device": str(self._combo_denoise_device.currentData()),
             "denoise_workers": self._spin_denoise_workers.value(),
+            **self._video_frame_form.selected_options(),
             **self._rarity_badges_form.selected_options(),
             **self._conservation_badges_form.selected_options(),
             **bird_sharpness_params_to_options(self._bird_sharpness_form.params()),

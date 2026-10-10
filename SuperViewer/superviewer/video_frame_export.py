@@ -10,6 +10,7 @@ import tempfile
 import time
 
 from app_common.video import _VIDEO_SLOTS, find_ffmpeg
+from app_common.superviewer_user_options import valid_video_frame_suffix
 
 
 @dataclass(frozen=True)
@@ -21,11 +22,11 @@ class FrameExportResult:
     error: str = ""
 
 
-def _new_output_directory(source, parent):
+def _new_output_directory(source, parent, suffix):
     """Reserve a fresh directory atomically; never overwrite a previous export."""
     parent = Path(parent).absolute()
     parent.mkdir(parents=True, exist_ok=True)
-    name = Path(source).stem + "_frames"
+    name = Path(source).stem + suffix
     index = 1
     while True:
         directory = parent / (name if index == 1 else f"{name} ({index})")
@@ -36,7 +37,7 @@ def _new_output_directory(source, parent):
             index += 1
 
 
-def export_video_frames(source, output_parent, *, cancelled=lambda: False,
+def export_video_frames(source, output_parent=None, *, suffix="_Frames", cancelled=lambda: False,
                         on_progress=lambda frames, directory: None):
     """Sequentially decode the first non-cover video track, without FPS conversion.
 
@@ -53,6 +54,8 @@ def export_video_frames(source, output_parent, *, cancelled=lambda: False,
     try:
         if cancelled():
             return FrameExportResult(source, cancelled=True)
+        if not valid_video_frame_suffix(suffix):
+            raise ValueError("无效的视频帧目录名后缀")
         if not Path(source).is_file():
             raise FileNotFoundError(f"找不到视频文件：{source}")
         executable = find_ffmpeg()
@@ -60,7 +63,7 @@ def export_video_frames(source, output_parent, *, cancelled=lambda: False,
             if cancelled():
                 return FrameExportResult(source, cancelled=True)
             acquired = _VIDEO_SLOTS.acquire(timeout=.05)
-        directory = _new_output_directory(source, output_parent)
+        directory = _new_output_directory(source, output_parent or Path(source).parent, suffix)
         on_progress(0, str(directory))
         # Escape literal percent signs in directories for image2's pattern parser.
         pattern = str(directory).replace("%", "%%") + "/frame_%08d.png"
@@ -141,14 +144,15 @@ def main(argv=None):
 
     parser = argparse.ArgumentParser(description="逐帧导出完整视频为原分辨率 PNG")
     parser.add_argument("videos", nargs="+")
-    parser.add_argument("--output", required=True, help="输出父目录；每个视频创建独立目录")
+    parser.add_argument("--output", help="输出父目录；默认每个视频所在目录")
+    parser.add_argument("--suffix", default="_Frames", help="帧目录名后缀，默认 _Frames")
     args = parser.parse_args(argv)
     stop = threading.Event()
     previous = signal.signal(signal.SIGINT, lambda *_: stop.set())
     failed = False
     try:
         for source in args.videos:
-            result = export_video_frames(source, args.output, cancelled=stop.is_set)
+            result = export_video_frames(source, args.output, suffix=args.suffix, cancelled=stop.is_set)
             print(json.dumps(asdict(result), ensure_ascii=False))
             failed |= bool(result.error)
             if stop.is_set():

@@ -409,9 +409,11 @@ Qt 测试在窗口构造前隔离 `paths_settings` 的应用/用户状态目录�
 回归入口：[共享视频与扫描测试](../../app_common/tests/test_video.py)、[真实抽帧/播放/切换/关闭与混合目录测试](../tests/test_video_preview.py)，以及原有预览策略、快切、键盘导航、缓存与 BirdStamp 导航/构图网格测试。命令行信息检查可在根目录执行 `.venv/bin/python3 -m app_common.video /path/to/视频.mp4`（Windows 使用 `.venv\Scripts\python.exe`）。
 ### 视频完整 PNG 帧导出
 
-列表和缩略图的视频右键提供“提取全部帧为 PNG…”，多选时只处理其中的视频。选择输出父目录后，每个视频独立创建 `<视频名>_frames`，重名追加 ` (2)` 等编号，帧按 `frame_00000001.png` 起顺序保存。保留视频显示分辨率及方向，提取第一条非封面视频轨道的所有解码帧；不缩放、不按固定帧率采样，不因变帧率丢帧或补帧。
+列表和缩略图的视频右键提供“提取全部帧为 PNG…”，多选时只处理其中的视频。用户选项“视频处理”页通过 [`VideoFrameOptionsForm`](../superviewer/video_frame_options_form.py) 编辑 `video_frame_output_mode`（`source_subdir` 默认 / `fixed` / `ask`）、`video_frame_output_directory` 和 `video_frame_suffix`（默认 `_Frames`，可留空）。共享 `superviewer_user_options` 归一化并保存配置；后缀限制为 64 字符以内的合法文件名片段，不能用路径跳出输出根目录。表单只编辑草稿，确认后保存；固定模式校验绝对根目录，切换模式保留输入。
 
-无 Qt 核心 [`export_video_frames()`](../superviewer/video_frame_export.py) 使用已有 FFmpeg 定位与并发限制，单次顺序解码并通过 image2 原子落盘。进度/错误落入受管理临时文件，不在内存积累视频像素；Windows 隐藏子进程窗口。失败和取消保留已完成的 PNG，报告数量、错误及目录，清理未完成的 `.png.tmp`；不改源视频。CLI：根 `.venv` 执行 `python -m SuperViewer.superviewer.video_frame_export <视频...> --output <输出父目录>`，Ctrl+C 取消并回收进程。
+每批任务捕获设置快照：默认按解析后的实际视频源路径，在各自所在目录独立创建 `<视频名>_Frames`；固定模式使用指定根目录；询问模式每批选择一次，取消不启动。三种模式都使用配置的后缀，重名追加 ` (2)` 等编号。帧按 `frame_00000001.png` 起顺序保存。保留视频显示分辨率及方向，提取第一条非封面视频轨道的所有解码帧；不缩放、不按固定帧率采样，不因变帧率丢帧或补帧。
+
+无 Qt 核心 [`export_video_frames()`](../superviewer/video_frame_export.py) 使用已有 FFmpeg 定位与并发限制，单次顺序解码并通过 image2 原子落盘。进度/错误落入受管理临时文件，不在内存积累视频像素；Windows 隐藏子进程窗口。失败和取消保留已完成的 PNG，报告数量、错误及目录，清理未完成的 `.png.tmp`；不改源视频。CLI：根 `.venv` 执行 `python -m SuperViewer.superviewer.video_frame_export <视频...> [--output <输出父目录>] [--suffix _Frames]`，省略输出父目录时使用各视频所在目录，参数独立于 GUI 设置；Ctrl+C 取消并回收进程。
 
 [`VideoFrameExportController`](../superviewer/video_frame_export_controller.py) 注册现有文件菜单扩展，后台串行处理视频、合并帧进度并有界交付结果；复用 `BirdIDProgressDialog` 显示帧数与结果路径，目录切换不改变已提交任务，运行中禁止重复启动。取消、Esc、关闭窗口均请求停止；主窗口关闭等待 FFmpeg 回收及真实 `QThread.finished` 后才释放任务。通过既有模块收集打包，无新增依赖。真实 FFmpeg CFR/VFR、像素完整性、中文/百分号路径、重复导出、取消、批量失败与线程生命周期回归见 [`test_video_frame_export.py`](../tests/test_video_frame_export.py)。
 

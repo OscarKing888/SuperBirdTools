@@ -148,6 +148,8 @@ def controller():
 
 
 def test_menu_filter_destination_cancel_and_real_batch(controller, clip, tmp_path, monkeypatch):
+    from app_common import superviewer_user_options as options
+    monkeypatch.setitem(options._RUNTIME_OPTIONS, "video_frame_output_mode", "ask")
     menu = QMenu()
     controller.extend_file_menu(menu, ["photo.jpg"])
     assert not menu.actions()
@@ -160,7 +162,7 @@ def test_menu_filter_destination_cancel_and_real_batch(controller, clip, tmp_pat
     assert not controller.start([str(clip)], tmp_path / "second")
     wait_until(controller.is_shutdown_done)
     assert controller._done == 2 and controller._failed == 1 and controller._frames == 12
-    assert "frame" in controller._dialog.details.toPlainText()
+    assert "_Frames" in controller._dialog.details.toPlainText()
     assert not controller._dialog.running
 
 
@@ -191,6 +193,53 @@ def test_cli_uses_same_export(clip, tmp_path, capsys):
     import json
     assert core.main([str(clip), "--output", str(tmp_path / "cli")]) == 0
     assert json.loads(capsys.readouterr().out)["frames"] == 12
+
+
+@pytest.mark.parametrize("mode", ["source_subdir", "fixed", "ask"])
+def test_output_policy_multiple_sources_custom_suffix(controller, clip, tmp_path, monkeypatch, mode):
+    import shutil
+    from app_common import superviewer_user_options as options
+    second = tmp_path / "other" / clip.name
+    second.parent.mkdir()
+    shutil.copyfile(clip, second)
+    destination = tmp_path / "chosen"
+    monkeypatch.setitem(options._RUNTIME_OPTIONS, "video_frame_output_mode", mode)
+    monkeypatch.setitem(options._RUNTIME_OPTIONS, "video_frame_output_directory", str(destination))
+    monkeypatch.setitem(options._RUNTIME_OPTIONS, "video_frame_suffix", "_逐帧")
+    prompts = []
+    def choose(*args):
+        prompts.append(args)
+        return str(destination)
+    monkeypatch.setattr(ui.QFileDialog, "getExistingDirectory", choose)
+    controller.choose_destination([str(clip), str(second)])
+    # Options belong to the submitted job, not a subsequent settings edit.
+    monkeypatch.setitem(options._RUNTIME_OPTIONS, "video_frame_suffix", "_changed")
+    wait_until(controller.is_shutdown_done)
+    assert controller._frames == 24 and not controller._failed
+    assert len(prompts) == (1 if mode == "ask" else 0)
+    if mode == "source_subdir":
+        folders = [clip.parent / (clip.stem + "_逐帧"), second.parent / (second.stem + "_逐帧")]
+    else:
+        folders = [destination / (clip.stem + "_逐帧"), destination / (clip.stem + "_逐帧 (2)")]
+    assert all(len(list(folder.glob("*.png"))) == 12 for folder in folders)
+
+
+def test_invalid_suffix_does_not_create_output_and_default_is_source(clip, tmp_path):
+    result = core.export_video_frames(clip, tmp_path / "output", suffix="../escape")
+    assert result.error and not result.output_dir and not (tmp_path / "output").exists()
+    result = core.export_video_frames(clip)
+    assert Path(result.output_dir) == clip.parent / (clip.stem + "_Frames")
+    assert result.frames == 12
+
+
+def test_unconfigured_fixed_directory_does_not_start(controller, clip, monkeypatch):
+    from app_common import superviewer_user_options as options
+    monkeypatch.setitem(options._RUNTIME_OPTIONS, "video_frame_output_mode", "fixed")
+    monkeypatch.setitem(options._RUNTIME_OPTIONS, "video_frame_output_directory", "")
+    messages = []
+    monkeypatch.setattr(ui.QMessageBox, "warning", lambda *a: messages.append(a))
+    controller.choose_destination([str(clip)])
+    assert messages and controller._worker is None
 
 
 @pytest.mark.parametrize("theme,point_size", [("light", 10), ("dark", 16)])
