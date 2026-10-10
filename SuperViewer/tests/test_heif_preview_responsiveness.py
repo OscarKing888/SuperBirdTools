@@ -10,6 +10,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from SuperViewer.superviewer import preview_panel
 from SuperViewer.superviewer.qt_compat import QApplication, QImage, QTimer
+from app_common import superviewer_user_options as options
 
 
 # Qt must outlive every widget/worker, including tests collected from other
@@ -35,6 +36,7 @@ def _wait_until(predicate, timeout=3.0):
 
 @pytest.fixture
 def panel(monkeypatch):
+    monkeypatch.setattr(options, "_RUNTIME_OPTIONS", options.normalize_user_options({options.KEY_DIRECT_PREVIEW_MAX_FILE_MB: 0}))
     monkeypatch.setattr(preview_panel, "get_keep_view_on_switch", lambda: False)
     value = preview_panel.PreviewPanel()
     try:
@@ -59,7 +61,7 @@ def test_uncached_heif_selection_returns_then_completes_in_worker(panel, tmp_pat
     photo = tmp_path / ("大图" + suffix)
     photo.write_bytes(b"header fixture")
     path = str(photo)
-    monkeypatch.setattr(preview_panel, "_preview_source_pixel_count", lambda path: 50_000_000)
+    monkeypatch.setattr(preview_panel, "_preview_source_dimensions", lambda path: (10000, 5000))
     monkeypatch.setattr(preview_panel, "_read_thumb_from_disk_cache", lambda *args: None)
     _forbid_source_thumbnail_decode(monkeypatch)
     started = threading.Event()
@@ -101,7 +103,7 @@ def test_uncached_heif_selection_returns_then_completes_in_worker(panel, tmp_pat
 def test_heif_preserves_cached_tier_fallback(panel, tmp_path, monkeypatch, cached_size, expected_reads):
     photo = tmp_path / "cached.HIF"
     photo.write_bytes(b"header fixture")
-    monkeypatch.setattr(preview_panel, "_preview_source_pixel_count", lambda path: 50_000_000)
+    monkeypatch.setattr(preview_panel, "_preview_source_dimensions", lambda path: (10000, 5000))
     reads = []
 
     def cached(path, mtime, size):
@@ -126,7 +128,7 @@ def test_uncached_heif_fast_navigation_never_decodes_or_starts_full_worker(panel
     def forbidden(*args):
         raise AssertionError("fast navigation must not enter original preview policy")
 
-    monkeypatch.setattr(preview_panel, "_preview_source_pixel_count", forbidden)
+    monkeypatch.setattr(preview_panel, "_preview_source_dimensions", forbidden)
     monkeypatch.setattr(preview_panel, "_load_full_preview_qimage", forbidden)
     panel.set_image(str(photo), load_full=False, quick_size=128)
     assert reads == [128]
@@ -139,7 +141,7 @@ def test_uncached_heif_fast_navigation_never_decodes_or_starts_full_worker(panel
 def test_failed_heif_full_decode_keeps_cache_or_replaces_loading_message(panel, tmp_path, monkeypatch, has_cached_frame):
     photo = tmp_path / "damaged.HIF"
     photo.write_bytes(b"damaged fixture")
-    monkeypatch.setattr(preview_panel, "_preview_source_pixel_count", lambda path: 50_000_000)
+    monkeypatch.setattr(preview_panel, "_preview_source_dimensions", lambda path: (10000, 5000))
     monkeypatch.setattr(preview_panel, "_read_thumb_from_disk_cache", lambda *args: _image() if has_cached_frame else None)
     monkeypatch.setattr(preview_panel, "_load_full_preview_qimage", lambda path: None)
     _forbid_source_thumbnail_decode(monkeypatch)
@@ -160,7 +162,7 @@ def test_full_ready_signal_rejects_stale_fast_and_shutdown_results(panel, tmp_pa
     photo = tmp_path / "current.HIF"
     photo.write_bytes(b"header fixture")
     path = str(photo)
-    monkeypatch.setattr(preview_panel, "_preview_source_pixel_count", lambda path: 50_000_000)
+    monkeypatch.setattr(preview_panel, "_preview_source_dimensions", lambda path: (10000, 5000))
     monkeypatch.setattr(preview_panel, "_read_thumb_from_disk_cache", lambda *args: _image(128, 64))
     ready = []
     panel.full_preview_ready.connect(ready.append)
@@ -178,7 +180,7 @@ def test_full_ready_signal_rejects_stale_fast_and_shutdown_results(panel, tmp_pa
 def test_small_heif_still_uses_existing_direct_original_policy(panel, tmp_path, monkeypatch):
     photo = tmp_path / "small.HIF"
     photo.write_bytes(b"header fixture")
-    monkeypatch.setattr(preview_panel, "_preview_source_pixel_count", lambda path: 21_000_000)
+    monkeypatch.setattr(preview_panel, "_preview_source_dimensions", lambda path: (1500, 1400))
     calls = []
     monkeypatch.setattr(preview_panel, "_load_full_preview_qimage", lambda path: calls.append(path) or _image())
     ready = []

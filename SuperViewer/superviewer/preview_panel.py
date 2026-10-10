@@ -25,9 +25,7 @@ from app_common.preview_canvas import (
     normalize_preview_composition_grid_mode,
 )
 from app_common.superviewer_user_options import (
-    DEFAULT_DIRECT_PREVIEW_MAX_PIXELS,
-    DIRECT_PREVIEW_BY_FILE_SIZE,
-    get_direct_preview_limit,
+    get_direct_preview_limits,
     get_keep_view_on_switch,
 )
 
@@ -57,7 +55,6 @@ _log = get_logger("superviewer.preview_panel")
 _QUICK_PREVIEW_SIZE = 512
 _QUICK_PREVIEW_FALLBACK_SIZE = 128
 _FULL_PREVIEW_DELAY_MS = 80
-_DIRECT_ORIGINAL_PREVIEW_MAX_PIXELS = DEFAULT_DIRECT_PREVIEW_MAX_PIXELS  # 旧配置保持 40 * 1024 * 1024。
 _EXPORT_PREVIEW_DRAIN_TIMEOUT_MS = 30_000
 _HEIF_PIL_OPENER_REGISTERED = False
 
@@ -163,27 +160,27 @@ def _load_quick_preview_pixmap(path: str, target_size: int) -> QPixmap | None:
     return pix if not pix.isNull() else None
 
 
-def _preview_source_pixel_count(path: str) -> int:
-    """只读图片头获取像素数，不触发原图像素解码。"""
+def _preview_source_dimensions(path: str) -> tuple[int, int] | None:
+    """只读图片头获取源图宽高，不触发原图像素解码。"""
     if not path or not os.path.isfile(path):
-        return 0
+        return None
     ext = Path(path).suffix.lower()
     if ext in RAW_EXTENSIONS:
         # RAW 即使尺寸较小也不能在选图热路径同步 demosaic。
-        return 0
+        return None
     if ext in PHOTOSHOP_EXTENSIONS:
         psd_size = read_psd_composite_size(path)
-        if psd_size is not None:
-            return max(0, int(psd_size[0])) * max(0, int(psd_size[1]))
+        if psd_size is not None and all(int(value) > 0 for value in psd_size):
+            return int(psd_size[0]), int(psd_size[1])
     try:
         reader = QImageReader(path)
         try:
             reader.setAutoTransform(True)
         except Exception:
             pass
-        pixels = _qsize_pixel_count(reader.size())
-        if pixels > 0:
-            return pixels
+        size = reader.size()
+        if size.isValid() and size.width() > 0 and size.height() > 0:
+            return size.width(), size.height()
     except Exception:
         pass
     if ext in HEIF_EXTENSIONS:
@@ -191,26 +188,31 @@ def _preview_source_pixel_count(path: str) -> int:
     try:
         with Image.open(path) as img:
             width, height = img.size
-            return max(0, int(width)) * max(0, int(height))
+            if int(width) > 0 and int(height) > 0:
+                return int(width), int(height)
     except Exception:
-        return 0
+        pass
+    return None
 
 
 def _should_load_original_immediately(path: str) -> bool:
     # A byte threshold must never enable synchronous RAW demosaic.
     if not path or Path(path).suffix.lower() in RAW_EXTENSIONS:
         return False
-    mode, limit = get_direct_preview_limit()
-    if limit <= 0:
-        return False
-    if mode == DIRECT_PREVIEW_BY_FILE_SIZE:
+    max_width, max_height, max_bytes = get_direct_preview_limits()
+    # File-size success short-circuits the OR, without reading an image header.
+    if max_bytes > 0:
         try:
             info = os.stat(path)
         except OSError:
-            return False
-        return stat.S_ISREG(info.st_mode) and 0 < info.st_size <= limit
-    pixels = _preview_source_pixel_count(path)
-    return 0 < pixels <= limit
+            pass
+        else:
+            if stat.S_ISREG(info.st_mode) and 0 < info.st_size <= max_bytes:
+                return True
+    if max_width <= 0 or max_height <= 0:
+        return False
+    size = _preview_source_dimensions(path)
+    return bool(size and 0 < size[0] <= max_width and 0 < size[1] <= max_height)
 
 
 def _qimage_pixel_count(qimg: QImage | None) -> int:

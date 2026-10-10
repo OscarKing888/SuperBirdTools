@@ -12,12 +12,19 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import numpy as np
 from PIL import Image
+import pytest
+from app_common import superviewer_user_options as options
 
 from SuperViewer.superviewer import preview_panel
 from SuperViewer.superviewer.qt_compat import QApplication, QColor, QImage, QPixmap
 
 
 _APP = QApplication.instance() or QApplication([])
+
+
+@pytest.fixture(autouse=True)
+def isolate_dimension_policy(monkeypatch):
+    monkeypatch.setattr(options, "_RUNTIME_OPTIONS", options.normalize_user_options({options.KEY_DIRECT_PREVIEW_MAX_FILE_MB: 0}))
 
 
 def _app() -> QApplication:
@@ -67,8 +74,8 @@ def test_large_image_keeps_thumbnail_then_background_policy(monkeypatch, tmp_pat
     monkeypatch.setattr(preview_panel, "_load_quick_preview_pixmap", lambda *_args: quick)
     monkeypatch.setattr(
         preview_panel,
-        "_preview_source_pixel_count",
-        lambda _path: preview_panel._DIRECT_ORIGINAL_PREVIEW_MAX_PIXELS + 1,
+        "_preview_source_dimensions",
+        lambda _path: (2049, 2048),
     )
 
     def fail_sync_decode(path: str):
@@ -165,7 +172,7 @@ def test_load_full_false_never_starts_decoder(monkeypatch, tmp_path: Path) -> No
     monkeypatch.setattr(preview_panel, "_load_quick_preview_pixmap", lambda *_args: quick)
     monkeypatch.setattr(
         preview_panel,
-        "_preview_source_pixel_count",
+        "_preview_source_dimensions",
         lambda _path: (_ for _ in ()).throw(
             AssertionError("load_full=False 不应检查同步原图策略")
         ),
@@ -201,8 +208,8 @@ def test_same_path_load_full_false_cancels_pending_full_preview(
     monkeypatch.setattr(preview_panel, "_load_quick_preview_pixmap", lambda *_args: quick)
     monkeypatch.setattr(
         preview_panel,
-        "_preview_source_pixel_count",
-        lambda _path: preview_panel._DIRECT_ORIGINAL_PREVIEW_MAX_PIXELS + 1,
+        "_preview_source_dimensions",
+        lambda _path: (2049, 2048),
     )
     try:
         panel.set_image(str(photo), load_full=True)
@@ -270,7 +277,7 @@ def test_final_commit_reuses_same_path_memory_quick_pixmap(monkeypatch, tmp_path
     panel = preview_panel.PreviewPanel()
     try:
         panel.set_quick_pixmap(str(photo), quick, quick_size=128)
-        monkeypatch.setattr(preview_panel, "_preview_source_pixel_count", lambda _path: 640 * 480)
+        monkeypatch.setattr(preview_panel, "_preview_source_dimensions", lambda _path: (640, 480))
         monkeypatch.setattr(
             preview_panel,
             "_load_quick_preview_pixmap",
@@ -403,7 +410,7 @@ def test_direct_policy_does_not_overlap_active_background_decoder(
                 active -= 1
 
     monkeypatch.setattr(preview_panel, "_load_full_preview_qimage", fake_decode)
-    monkeypatch.setattr(preview_panel, "_preview_source_pixel_count", lambda _path: 320 * 200)
+    monkeypatch.setattr(preview_panel, "_preview_source_dimensions", lambda _path: (320, 200))
     monkeypatch.setattr(preview_panel, "_load_quick_preview_pixmap", lambda *_args: quick)
     panel = preview_panel.PreviewPanel()
     try:

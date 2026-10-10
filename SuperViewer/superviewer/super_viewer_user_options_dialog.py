@@ -8,13 +8,11 @@ import os
 from app_common.settings_dialog import SettingsDialog
 from app_common.collapsible_section import CollapsibleSection
 from app_common.superviewer_user_options import (
-    DIRECT_PREVIEW_BY_FILE_SIZE,
-    DIRECT_PREVIEW_BY_PIXELS,
-    KEY_DIRECT_PREVIEW_LIMIT_MODE,
     KEY_DIRECT_PREVIEW_MAX_FILE_MB,
-    KEY_DIRECT_PREVIEW_MAX_PIXELS,
+    KEY_DIRECT_PREVIEW_MAX_WIDTH,
+    KEY_DIRECT_PREVIEW_MAX_HEIGHT,
     MAX_DIRECT_PREVIEW_FILE_MB,
-    MAX_DIRECT_PREVIEW_PIXELS,
+    MAX_DIRECT_PREVIEW_DIMENSION,
     KEY_NAVIGATION_FPS_OPTIONS,
     KEY_PERF_PROBES_ENABLED,
     PERSISTENT_THUMB_SIZE_LEVELS,
@@ -30,7 +28,6 @@ from .qt_compat import (
     QGridLayout,
     QLabel,
     QSpinBox,
-    QDoubleSpinBox,
     QVBoxLayout,
 )
 
@@ -125,24 +122,20 @@ class SuperViewerUserOptionsDialog(SettingsDialog):
         grid.addWidget(QLabel("默认开启"), row, 2)
 
         grid = section(browsing_layout, "原图直显")
-        grid.addWidget(QLabel("判断方式"), 0, 0)
-        self._combo_direct_preview_mode = QComboBox(self)
-        self._combo_direct_preview_mode.addItem("按分辨率", DIRECT_PREVIEW_BY_PIXELS)
-        self._combo_direct_preview_mode.addItem("按文件大小", DIRECT_PREVIEW_BY_FILE_SIZE)
-        self._combo_direct_preview_mode.setCurrentIndex(
-            self._combo_direct_preview_mode.findData(opts[KEY_DIRECT_PREVIEW_LIMIT_MODE]))
-        grid.addWidget(self._combo_direct_preview_mode, 0, 1)
-
-        grid.addWidget(QLabel("分辨率上限"), 1, 0)
-        self._spin_direct_preview_mp = QDoubleSpinBox(self)
-        self._spin_direct_preview_mp.setDecimals(6)
-        self._spin_direct_preview_mp.setRange(0, MAX_DIRECT_PREVIEW_PIXELS / 1_000_000)
-        self._spin_direct_preview_mp.setSingleStep(1)
-        self._spin_direct_preview_mp.setSuffix(" MP")
-        self._spin_direct_preview_mp.setValue(opts[KEY_DIRECT_PREVIEW_MAX_PIXELS] / 1_000_000)
-        self._spin_direct_preview_mp.setToolTip(
-            "按宽 × 高计算；1 MP = 1,000,000 像素。默认 41.943040 MP，保持原来的像素阈值。")
-        grid.addWidget(self._spin_direct_preview_mp, 1, 1)
+        grid.addWidget(QLabel("宽度上限"), 0, 0)
+        self._spin_direct_preview_width = QSpinBox(self)
+        self._spin_direct_preview_width.setRange(0, MAX_DIRECT_PREVIEW_DIMENSION)
+        self._spin_direct_preview_width.setSuffix(" px")
+        self._spin_direct_preview_width.setValue(opts[KEY_DIRECT_PREVIEW_MAX_WIDTH])
+        self._spin_direct_preview_width.setToolTip("源图宽、高分别不超过上限时满足分辨率条件；任一上限为 0 时停用此条件。")
+        grid.addWidget(self._spin_direct_preview_width, 0, 1)
+        grid.addWidget(QLabel("高度上限"), 1, 0)
+        self._spin_direct_preview_height = QSpinBox(self)
+        self._spin_direct_preview_height.setRange(0, MAX_DIRECT_PREVIEW_DIMENSION)
+        self._spin_direct_preview_height.setSuffix(" px")
+        self._spin_direct_preview_height.setValue(opts[KEY_DIRECT_PREVIEW_MAX_HEIGHT])
+        self._spin_direct_preview_height.setToolTip(self._spin_direct_preview_width.toolTip())
+        grid.addWidget(self._spin_direct_preview_height, 1, 1)
 
         grid.addWidget(QLabel("文件大小上限"), 2, 0)
         self._spin_direct_preview_file_mb = QSpinBox(self)
@@ -152,9 +145,7 @@ class SuperViewerUserOptionsDialog(SettingsDialog):
         self._spin_direct_preview_file_mb.setToolTip(
             "1 MB = 1024 × 1024 字节。文件大小按压缩后的文件计算，不代表解码后的内存占用。")
         grid.addWidget(self._spin_direct_preview_file_mb, 2, 1)
-        self._combo_direct_preview_mode.currentIndexChanged.connect(self._sync_direct_preview_controls)
-        self._sync_direct_preview_controls()
-        hint = QLabel("鼠标和方向键选图均使用此设置。\n上限内直接显示原图；超过上限先显示快速预览。\n设为 0 关闭直显，保存后下次选图生效。")
+        hint = QLabel("分辨率或文件大小满足任一条件，即直显原图。\n宽、高需同时在上限内；设为 0 停用对应条件。\n鼠标和方向键共用，保存后下次选图生效。")
         hint.setWordWrap(True)
         grid.addWidget(hint, 3, 0, 1, 2)
 
@@ -174,11 +165,6 @@ class SuperViewerUserOptionsDialog(SettingsDialog):
         preview_note.setWordWrap(True)
         browsing_layout.addWidget(preview_note)
 
-    def _sync_direct_preview_controls(self, *_args) -> None:
-        by_pixels = self._combo_direct_preview_mode.currentData() == DIRECT_PREVIEW_BY_PIXELS
-        self._spin_direct_preview_mp.setEnabled(by_pixels)
-        self._spin_direct_preview_file_mb.setEnabled(not by_pixels)
-
     def selected_options(self) -> dict[str, int]:
         return {
             "thumbnail_loader_workers": int(self._spin_thumb_loader_workers.value()),
@@ -188,7 +174,7 @@ class SuperViewerUserOptionsDialog(SettingsDialog):
             "key_navigation_fps": int(self._combo_key_navigation_fps.currentData()),
             "keep_view_on_switch": int(self._chk_keep_view.isChecked()),
             KEY_PERF_PROBES_ENABLED: int(self._chk_perf_probes.isChecked()),
-            KEY_DIRECT_PREVIEW_LIMIT_MODE: int(self._combo_direct_preview_mode.currentData()),
-            KEY_DIRECT_PREVIEW_MAX_PIXELS: round(self._spin_direct_preview_mp.value() * 1_000_000),
+            KEY_DIRECT_PREVIEW_MAX_WIDTH: int(self._spin_direct_preview_width.value()),
+            KEY_DIRECT_PREVIEW_MAX_HEIGHT: int(self._spin_direct_preview_height.value()),
             KEY_DIRECT_PREVIEW_MAX_FILE_MB: int(self._spin_direct_preview_file_mb.value()),
         }

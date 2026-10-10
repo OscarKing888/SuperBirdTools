@@ -151,7 +151,7 @@ set_photo_tag_for_paths / clear_photo_tags_for_paths
 
 共享画布使用最多缓存 16 种尺寸的棋盘纹理，一次 `fillRect` 完成背景绘制；保留裁剪、设备像素比例和构图线/叠加导出行为（移植 `app_common/main` 的 `6b80350`）。缩略图 JPEG draft 请求按源图宽高比计算，RAW 内嵌 JPEG 也走相同降采样；先缩小再就地应用 EXIF 方向。内存缓存写入仍拥有独立像素，读取返回 `QImage` 隐式共享副本，调用方修改时自动分离（适配 `2e643ef`）。本分支已有的渐进 JPEG 最终帧复用和 RAW 来源选择保持原逻辑。
 
-`PreviewPanel` 不再深拷贝已经拥有像素的 `QImageReader.read()` 结果；后台解码器在发信号前把 RGB888 转为 RGB32，减轻 GUI 线程创建 QPixmap 的格式转换开销。透明图像保持原格式；转换前后都检查取消请求（适配根仓库 `main` 的 `273b31c`）。这些优化不改变原图直显的默认 40 Mi 像素阈值、HEIF 快速导航、解码器所有权或全分辨率导出要求。
+`PreviewPanel` 不再深拷贝已经拥有像素的 `QImageReader.read()` 结果；后台解码器在发信号前把 RGB888 转为 RGB32，减轻 GUI 线程创建 QPixmap 的格式转换开销。透明图像保持原格式；转换前后都检查取消请求（适配根仓库 `main` 的 `273b31c`）。这些优化不改变用户配置的原图直显条件、HEIF 快速导航、解码器所有权或全分辨率导出要求。
 
 共享日志按文件复用一个加锁的写入句柄，默认 10 MiB 轮转并保留 5 份备份，可用 `APP_COMMON_LOG_MAX_BYTES` / `APP_COMMON_LOG_BACKUPS` 配置（适配 `b1058ba`）。Windows 文件被外部进程占用时继续写入，后续再试轮转；因此占用期间不保证体积上限。UTF-8 日志使用 LF，保证轮转计算与实际字节数一致。
 
@@ -159,7 +159,7 @@ set_photo_tag_for_paths / clear_photo_tags_for_paths
 
 ### A/B 图片对照
 
-[`ABPreviewPanel`](../superviewer/ab_preview.py) 拥有两个独立的 `PreviewPanel`。首次开启时以当前图片初始化 A 侧；点击或聚焦画布、本侧工具栏及其子控件会激活该侧，列表选择及长按方向键的快速预览只更新活动侧。两侧顶部只显示 A/B 标识和只读文件名（长名称中间省略、悬停显示完整路径），不再提供选图下拉列表。活动侧标为“当前”并高亮边框。两侧均沿用用户选项中的原图直显策略：默认已知尺寸不超过 `40 * 1024 * 1024` 像素且无旧解码器持有者时可同步加载，也可改按文件大小判断；其余走有界快速预览和后台解码。RAW 内嵌预览与完整分辨率导出仍分开处理。早期的 `set_full_only_mode()` 接口保留，AB 默认不再强制清空并重新加载原图。
+[`ABPreviewPanel`](../superviewer/ab_preview.py) 拥有两个独立的 `PreviewPanel`。首次开启时以当前图片初始化 A 侧；点击或聚焦画布、本侧工具栏及其子控件会激活该侧，列表选择及长按方向键的快速预览只更新活动侧。两侧顶部只显示 A/B 标识和只读文件名（长名称中间省略、悬停显示完整路径），不再提供选图下拉列表。活动侧标为“当前”并高亮边框。两侧均沿用用户选项中的原图直显策略：默认源图宽、高均不超过 2048 像素，或文件不超过 32 MB，且无旧解码器持有者时可同步加载；其余走有界快速预览和后台解码。RAW 内嵌预览与完整分辨率导出仍分开处理。早期的 `set_full_only_mode()` 接口保留，AB 默认不再强制清空并重新加载原图。
 
 首次显示及目录切换后的下一次选图使用适窗。首次小图升级为清晰图时继续适窗，但用户缩放/平移优先；切目录不会立即改变 AB 固定图，也不会让它迟到的后台结果消费下一次选图的适窗请求。普通提交只发完整选图请求；方向键单次按下和长按中间帧也遵守用户直显阈值，上限内跳过小图。
 
@@ -175,19 +175,19 @@ set_photo_tag_for_paths / clear_photo_tags_for_paths
 
 | 场景 | 路径 | 关键约束 |
 | --- | --- | --- |
-| 普通选图，在用户直显上限内 | `_try_set_direct_original_preview()` | 按所选模式比较头部像素数或 `stat` 文件字节数，且没有旧 full-preview worker 所有权时可直接同步加载；默认仍为 `40 * 1024 * 1024` 像素 |
-| 超过上限 / 无法取得所选判断值 | `_load_quick_preview_pixmap()` → 延迟启动 full loader | 优先已有磁盘缩略图，再由后台解码；同图快显转为正式选中仍要补齐 |
+| 普通选图，在用户直显上限内 | `_try_set_direct_original_preview()` | 源图宽、高都在上限内，或 `stat` 文件字节数在上限内，且没有旧 full-preview worker 所有权时可直接同步加载；默认 2048×2048 像素或 32 MB |
+| 两个条件均不满足 | `_load_quick_preview_pixmap()` → 延迟启动 full loader | 优先已有磁盘缩略图，再由后台解码；同图快显转为正式选中仍要补齐 |
 | HEIF 快速预览缓存未命中 | `_load_quick_preview_pixmap()` 返回空 | 不在这个分支调用 Pillow 缩略图生成；正式选图等待后台，连续按键不启动整图解码 |
 | RAW 普通显示 | `_load_full_preview_qimage_raw()` | 内嵌预览优先，失败后半尺寸 demosaic，保持方向处理 |
 | 覆盖层原图导出 | `_ensure_full_preview_loaded_sync()` | 等待当前显示解码退出，RAW 使用完整源分辨率；失败不拿快显替代 |
 
 HEIF 的直接原图分支仍受普通选图阈值规则约束，不能把“快速缓存未命中保护”理解成所有 HEIF 都异步。RAW 的显示就绪标志和 `_canvas_source_full_resolution` 分开；缩放显示成功不等于已具备完整导出像素。
 
-用户选项 → 浏览与预览 → 原图直显支持“按分辨率”和“按文件大小”。分辨率显示为 MP（1,000,000 像素），默认 41.943040 MP 精确保留旧阈值；文件大小显示为 MB（1024² 字节），默认备用值为 32 MB。所选上限为 0 时关闭直显；保存后下次选图生效，鼠标、方向键和 AB 两侧共用设置。`superviewer_user_options.get_direct_preview_limit()` 返回一致的运行时快照；像素模式只读取图片头，文件模式仅检查普通文件大小，不探测分辨率。缺失或无效配置回退默认值，任一模式都不允许 RAW 同步解码，也不绕过解码器所有权。回归见 [test_direct_preview_settings.py](../tests/test_direct_preview_settings.py) 和 [test_direct_preview_options.py](../../app_common/tests/test_direct_preview_options.py)。
+用户选项 → 浏览与预览 → 原图直显同时设置宽度、高度（px）和文件大小（MB，1024² 字节）。判断式为 `(宽 <= 宽度上限 AND 高 <= 高度上限) OR 文件大小 <= 文件大小上限`，分辨率默认 2048×2048，文件大小默认 32 MB。宽、高任一为 0 时停用分辨率条件，文件大小为 0 时停用文件大小条件；两项都停用才关闭直显。保存后下次选图生效，鼠标、方向键和 AB 两侧共用设置。`superviewer_user_options.get_direct_preview_limits()` 返回一致的运行时快照；文件大小满足时不再读图片头，否则只读源图宽高，不解码像素。旧的模式选择及总像素阈值不再参与判断；缺少宽高配置时采用 2048×2048，保留已有文件大小值。缺失或无效配置回退默认值，任一条件都不允许 RAW 同步解码，也不绕过解码器所有权。回归见 [test_direct_preview_settings.py](../tests/test_direct_preview_settings.py) 和 [test_direct_preview_options.py](../../app_common/tests/test_direct_preview_options.py)。
 
 `_start_full_preview_loader()` 只保留最新 pending 请求，`_launch_full_preview_loader()` 建立当前线程所有权。路径、request token 和关闭状态共同过滤结果；`_cleanup_full_preview_loader()` 只清除同一线程，并在真实 `finished` 清理后交接最新 pending。即使旧线程已不在运行但其清理信号还排队，也不能启动第二个解码器或让旧回调清掉新线程。
 
-导出通过 `render_source_pixmap_with_overlays()` / `save_source_pixmap_with_overlays()` 取得完整源像素并调用共享画布绘制覆盖层；需要先排空已有解码，超时则失败。连续方向键由文件列表的 key-navigation 流程管理。Viewer 的 `_emit_fast_preview_for_path()` 始终传递源路径及可用的内存缩略图（缓存缺失也发请求），通过 AB 活动侧的 `set_navigation_image()` 先判断直显；超限、RAW 或解码器被占用时仅复用内存/磁盘小图，不同步生成缩略图，释放/正式提交后再补齐。列表模式不启动缩略图任务。已显示的同路径原图不会被迟到的小图降级，松键也不重复解码。显式 `load_full=False` / `set_quick_pixmap()` 兼容入口保持只显示小图的约定。回归见 [test_keyboard_preview_policy.py](../tests/test_keyboard_preview_policy.py)，覆盖物理按键、长按、松键、AB、缓存命中/缺失、阈值模式和旧解码器交接。
+导出通过 `render_source_pixmap_with_overlays()` / `save_source_pixmap_with_overlays()` 取得完整源像素并调用共享画布绘制覆盖层；需要先排空已有解码，超时则失败。连续方向键由文件列表的 key-navigation 流程管理。Viewer 的 `_emit_fast_preview_for_path()` 始终传递源路径及可用的内存缩略图（缓存缺失也发请求），通过 AB 活动侧的 `set_navigation_image()` 先判断直显；超限、RAW 或解码器被占用时仅复用内存/磁盘小图，不同步生成缩略图，释放/正式提交后再补齐。列表模式不启动缩略图任务。已显示的同路径原图不会被迟到的小图降级，松键也不重复解码。显式 `load_full=False` / `set_quick_pixmap()` 兼容入口保持只显示小图的约定。回归见 [test_keyboard_preview_policy.py](../tests/test_keyboard_preview_policy.py)，覆盖物理按键、长按、松键、AB、缓存命中/缺失、OR 条件和旧解码器交接。
 
 ### 未挂载模块
 

@@ -25,9 +25,9 @@ def quick_pixmap():
 
 
 @pytest.mark.parametrize("view_mode", ["list", "thumb"])
-@pytest.mark.parametrize("limit_mode", [options.DIRECT_PREVIEW_BY_PIXELS, options.DIRECT_PREVIEW_BY_FILE_SIZE])
+@pytest.mark.parametrize("condition", ["dimensions", "file_size"])
 @pytest.mark.parametrize("cached", [False, True])
-def test_physical_repeat_and_release_skip_small_frames(window, tmp_path, monkeypatch, view_mode, limit_mode, cached):
+def test_physical_repeat_and_release_skip_small_frames(window, tmp_path, monkeypatch, view_mode, condition, cached):
     paths = [str(tmp_path / f"图片{i}.jpg") for i in range(4)]
     for path in paths:
         Image.new("RGB", (120, 90)).save(path)
@@ -46,9 +46,9 @@ def test_physical_repeat_and_release_skip_small_frames(window, tmp_path, monkeyp
     files.select_display_path_silently(paths[0])
     panel = ab.active_preview
     QTest.mouseClick(panel.canvas, Qt.MouseButton.LeftButton)
-    options.apply_runtime_user_options({options.KEY_DIRECT_PREVIEW_LIMIT_MODE: limit_mode,
-                                       options.KEY_DIRECT_PREVIEW_MAX_PIXELS: 120 * 90,
-                                       options.KEY_DIRECT_PREVIEW_MAX_FILE_MB: 1})
+    options.apply_runtime_user_options({options.KEY_DIRECT_PREVIEW_MAX_WIDTH: 120 if condition == "dimensions" else 10,
+                                       options.KEY_DIRECT_PREVIEW_MAX_HEIGHT: 90 if condition == "dimensions" else 10,
+                                       options.KEY_DIRECT_PREVIEW_MAX_FILE_MB: 0 if condition == "dimensions" else 1})
     pixmap = quick_pixmap() if cached else None
     monkeypatch.setattr(files, "_current_thumbnail_fast_preview_pixmap", lambda path: pixmap)
     priorities = []
@@ -92,16 +92,16 @@ def test_physical_repeat_and_release_skip_small_frames(window, tmp_path, monkeyp
         assert priorities == []
 
 
-@pytest.mark.parametrize("mode,limit,large_file", [(0, 1199, False), (0, 0, False), (1, 1, True), (1, 0, False)])
-def test_over_limit_keyboard_frame_stays_quick_until_commit(window, tmp_path, monkeypatch, mode, limit, large_file):
+@pytest.mark.parametrize("width,height,file_mb,large_file", [(39, 30, 0, False), (40, 29, 0, False), (10, 10, 1, True), (0, 0, 0, False)])
+def test_over_limit_keyboard_frame_stays_quick_until_commit(window, tmp_path, monkeypatch, width, height, file_mb, large_file):
     photo = tmp_path / "source.jpg"
     Image.new("RGB", (40, 30)).save(photo)
     if large_file:
         with photo.open("ab") as output:
             output.write(b"\0" * (1024 * 1024 + 1 - photo.stat().st_size))
-    options.apply_runtime_user_options({options.KEY_DIRECT_PREVIEW_LIMIT_MODE: mode,
-                                       options.KEY_DIRECT_PREVIEW_MAX_PIXELS: limit,
-                                       options.KEY_DIRECT_PREVIEW_MAX_FILE_MB: limit})
+    options.apply_runtime_user_options({options.KEY_DIRECT_PREVIEW_MAX_WIDTH: width,
+                                       options.KEY_DIRECT_PREVIEW_MAX_HEIGHT: height,
+                                       options.KEY_DIRECT_PREVIEW_MAX_FILE_MB: file_mb})
     quick = QPixmap(16, 12)
     quick.fill()
     files = window._file_list
@@ -123,7 +123,7 @@ def test_over_limit_keyboard_frame_stays_quick_until_commit(window, tmp_path, mo
 def test_disabled_or_raw_cache_miss_never_decodes_while_held(window, tmp_path, monkeypatch, extension):
     photo = tmp_path / ("source." + extension)
     photo.write_bytes(b"source")
-    options.apply_runtime_user_options({options.KEY_DIRECT_PREVIEW_LIMIT_MODE: 1,
+    options.apply_runtime_user_options({options.KEY_DIRECT_PREVIEW_MAX_WIDTH: 0,
                                        options.KEY_DIRECT_PREVIEW_MAX_FILE_MB: 32 if extension == "ARW" else 0})
     files = window._file_list
     files._set_view_mode(files._MODE_LIST)
@@ -145,7 +145,8 @@ def test_disk_fallback_keeps_source_identity_and_rechecks_live_setting(window, t
     files = window._file_list
     files._set_view_mode(files._MODE_LIST)
     monkeypatch.setattr(files, "_current_thumbnail_fast_preview_pixmap", lambda path: None)
-    options.apply_runtime_user_options({options.KEY_DIRECT_PREVIEW_MAX_PIXELS: 0})
+    options.apply_runtime_user_options({options.KEY_DIRECT_PREVIEW_MAX_WIDTH: 0,
+                                       options.KEY_DIRECT_PREVIEW_MAX_FILE_MB: 0})
     cached = QImage(16, 12, preview_panel._qimage_rgb888_format())
     cached.fill(80)
     probed = []

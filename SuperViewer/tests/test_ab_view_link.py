@@ -140,7 +140,7 @@ def test_ab_quick_navigation_commits_only_active_side(window, tmp_path):
     ab.set_active_side("A")
     quick = QPixmap(40, 30)
     quick.fill()
-    superviewer_user_options.apply_runtime_user_options({"direct_preview_max_pixels": 0})
+    superviewer_user_options.apply_runtime_user_options({"direct_preview_max_width": 0, "direct_preview_max_file_mb": 0})
     window._on_file_fast_preview_pixmap_requested(paths[1], quick, 128)
     a, b = [ab.preview_for_side(side) for side in ("A", "B")]
     assert a._fast_preview_only and not a._full_preview_timer.isActive()
