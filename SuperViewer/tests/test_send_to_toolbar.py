@@ -6,15 +6,17 @@ from types import SimpleNamespace
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import QEvent, QPoint, Qt
+from PyQt6.QtGui import QHelpEvent
 from PyQt6.QtTest import QTest
-from PyQt6.QtWidgets import QApplication, QMainWindow, QToolBar
+from PyQt6.QtWidgets import QApplication, QMainWindow, QToolBar, QToolTip
 
 from app_common.send_to_app import icon as send_icon
 from SuperViewer.superviewer.send_to_toolbar import (
     SEND_TO_TOOLBAR_OBJECT_NAME,
     create_send_to_toolbar,
     rebuild_send_to_toolbar,
+    send_to_app_hover_name,
 )
 
 
@@ -27,7 +29,7 @@ def test_toolbar_lists_each_external_app_with_icon_and_sends_it(tmp_path):
     window.addToolBar(toolbar)
     sent: list[dict] = []
     apps = [
-        {"name": "SuperBirdStamp", "path": str(tmp_path / "missing.app"), "app_id": "birdstamp"},
+        {"name": "SuperBirdStamp.app", "path": str(tmp_path / "missing.app"), "app_id": "birdstamp"},
         {"name": "照片编辑器", "path": ""},
     ]
     window.show()
@@ -39,7 +41,15 @@ def test_toolbar_lists_each_external_app_with_icon_and_sends_it(tmp_path):
         assert [a.text() for a in toolbar.actions()] == ["SuperBirdStamp", "照片编辑器"]
         assert toolbar.actions() == actions
         assert all(not a.icon().isNull() for a in actions)
-        assert actions[1].toolTip() == "发送到:照片编辑器"
+        # Hovering a button shows the app name (bundle/exe suffix dropped).
+        assert [a.toolTip() for a in actions] == ["SuperBirdStamp", "照片编辑器"]
+        for action, expected in zip(actions, ["SuperBirdStamp", "照片编辑器"]):
+            button = toolbar.widgetForAction(action)
+            center = button.rect().center()
+            QApplication.sendEvent(button, QHelpEvent(QEvent.Type.ToolTip, center, button.mapToGlobal(center)))
+            assert QToolTip.isVisible()
+            assert QToolTip.text() == expected
+            QToolTip.hideText()
         QTest.mouseClick(toolbar.widgetForAction(actions[0]), Qt.MouseButton.LeftButton)
         assert sent == [apps[0]]
 
@@ -54,6 +64,14 @@ def test_toolbar_lists_each_external_app_with_icon_and_sends_it(tmp_path):
         window.close()
         window.deleteLater()
         _APP.processEvents()
+
+
+def test_hover_name_drops_app_suffix_and_falls_back_to_path_name():
+    assert send_to_app_hover_name({"name": "Adobe Photoshop 2026.app", "path": "/x"}) == "Adobe Photoshop 2026"
+    assert send_to_app_hover_name({"name": "Viewer.EXE", "path": "C:/x/Viewer.exe"}) == "Viewer"
+    assert send_to_app_hover_name({"name": "DxO PureRAW 6", "path": "/x"}) == "DxO PureRAW 6"
+    assert send_to_app_hover_name({"name": "", "path": "/Applications/Imaging Edge/Viewer.app"}) == "Viewer"
+    assert send_to_app_hover_name({"name": "", "path": ""}) == "未命名"
 
 
 def test_external_app_icon_prefers_existing_app_path(tmp_path, monkeypatch):

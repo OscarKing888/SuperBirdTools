@@ -57,6 +57,8 @@ def transform_source_overlays(state, camera_crop_box):
                                     for box in state.reference_regions)
     state.reference_diagnostics = tuple((_preview_shape(shape, camera_crop_box), label, matched)
                                         for shape, label, matched in state.reference_diagnostics)
+    state.region_drafts = tuple((preview, label, failed) for box, label, failed in state.region_drafts
+                                if (preview := camera_to_preview_box(box, camera_crop_box)) is not None)
     state.subject_points = tuple((*camera_to_preview_point((x, y), camera_crop_box),
                                  *camera_to_preview_point((qx, qy), camera_crop_box), accepted)
                                 for x, y, qx, qy, accepted in state.subject_points)
