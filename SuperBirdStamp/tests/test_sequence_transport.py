@@ -36,7 +36,9 @@ def key(window, kind, code, repeat=False):
 def test_media_controls_follow_dark_and_light_palette(window):
     transport = window.sequence_transport
     buttons = (transport.play, transport.first, transport.previous, transport.next, transport.last,
-               window.ab_preview.a_panel.play, window.ab_preview.b_panel.play)
+               window.ab_preview.a_panel.play, window.ab_preview.b_panel.play,
+               window.ab_preview.a_panel.first, window.ab_preview.a_panel.last,
+               window.ab_preview.b_panel.first, window.ab_preview.b_panel.last)
     original = QPalette(window.palette())
     try:
         for background, foreground in (('#202020', '#eeeeee'), ('#f0f0f0', '#202020')):
@@ -137,6 +139,35 @@ def test_original_playback_controls_work_on_both_ab_sides_without_analysis(windo
     assert window.preview_label.canvas._source_pixmap is not None
     transport.stop()
     wait_until(lambda: window._preview_decode_worker is None)
+
+
+def test_ab_side_first_last_buttons_jump_only_their_side(window, monkeypatch):
+    paths, _, _ = setup_tab(window, monkeypatch)
+    populate(window, paths)
+    window.export_tabs.setCurrentIndex(0)
+    transport = window.sequence_transport
+    ab = window.ab_preview
+    transport.sync()
+    assert not ab.b_panel.first.isEnabled() and ab.b_panel.last.isEnabled()
+    assert not ab.a_panel.first.isEnabled() and not ab.a_panel.last.isEnabled()
+    ab.b_panel.last.click()
+    assert window.current_path == paths[-1]
+    assert ab.b_panel.first.isEnabled() and not ab.b_panel.last.isEnabled()
+
+    ab.enabled.setChecked(True)
+    wait_until(lambda: ab.worker is None and not ab.pending)
+    ab.select_a(paths[0])
+    ab.a_panel.last.click()
+    assert ab.active_side == 'a' and transport.mode is None
+    assert ab.path == paths[-1] and window.current_path == paths[-1]
+    ab.select_a(paths[-1])
+    ab.b_panel.first.click()
+    assert ab.active_side == 'b'
+    assert window.current_path == paths[0] and ab.path == paths[-1]
+    assert not ab.b_panel.first.isEnabled() and not ab.a_panel.last.isEnabled()
+    ab.a_panel.first.click()
+    assert ab.active_side == 'a' and ab.path == paths[0] and window.current_path == paths[0]
+    wait_until(lambda: ab.worker is None and not ab.pending and window._preview_decode_worker is None)
 
 
 def test_single_original_view_playback_stays_quick_until_pause(window, monkeypatch):

@@ -180,11 +180,18 @@ class ABPreview(QObject):
     def bind_transport(self, transport):
         self.a_panel.play.clicked.connect(lambda: self._play_side('a'))
         self.b_panel.play.clicked.connect(lambda: self._play_side('b'))
+        for side, panel in (('a', self.a_panel), ('b', self.b_panel)):
+            panel.first.clicked.connect(lambda _checked=False, side=side: self._jump_side(side, 0))
+            panel.last.clicked.connect(lambda _checked=False, side=side: self._jump_side(side, -1))
         transport.sync()
 
     def _play_side(self, side):
         self.activate(side)
         self.editor.sequence_transport.toggle()
+
+    def _jump_side(self, side, index):
+        self.activate(side)
+        self.editor.sequence_transport.jump(index)
 
     def activate(self, side, *, sync_selection=True):
         if self.stopping or (side == 'a' and not self.enabled.isChecked()) or side == self.active_side:

@@ -431,6 +431,15 @@ class SequenceTransport(QObject):
         ab.a_panel.play.setEnabled(ab.enabled.isChecked() and
                                    (result_ready if ab.mode.currentIndex() == 1 else source_ready))
         ab.b_panel.play.setEnabled(result_ready if self.editor._sequence_result_mode() else source_ready)
+        # A/B 首帧/末帧按本侧当前模式的序列判断边界；A 侧关闭对照时不可用。
+        for panel, side_result, side_path, side_on in (
+                (ab.a_panel, ab.mode.currentIndex() == 1, ab.path, ab.enabled.isChecked()),
+                (ab.b_panel, self.editor._sequence_result_mode(), self.editor.current_path, True)):
+            side_paths = self.paths if side_result else self._list_paths()
+            side_ready = side_on and len(side_paths) > 1 and not self.editor._sequence_exporting
+            side_index = next((i for i, path in enumerate(side_paths) if path == side_path), -1)
+            panel.first.setEnabled(side_ready and side_index != 0)
+            panel.last.setEnabled(side_ready and side_index != len(side_paths) - 1)
         self._update_play_button()
 
     def result_mode(self):
@@ -540,6 +549,10 @@ class SequenceTransport(QObject):
         self.previous.setIcon(media_icon(self.previous, QStyle.StandardPixmap.SP_MediaSeekBackward, color))
         self.next.setIcon(media_icon(self.next, QStyle.StandardPixmap.SP_MediaSeekForward, color))
         self.last.setIcon(media_icon(self.last, QStyle.StandardPixmap.SP_MediaSkipForward, color))
+        ab = self.editor.ab_preview
+        for panel in (ab.a_panel, ab.b_panel):
+            panel.first.setIcon(media_icon(panel.first, QStyle.StandardPixmap.SP_MediaSkipBackward, color))
+            panel.last.setIcon(media_icon(panel.last, QStyle.StandardPixmap.SP_MediaSkipForward, color))
         self._update_play_button(force=True, color=color)
 
     def _update_play_button(self, *, force=False, color: QColor | None = None):
