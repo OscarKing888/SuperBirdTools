@@ -236,6 +236,8 @@ flowchart LR
 
 历史归列表面板所有，最多 100 次；窗口的 [`TagHistoryActions`](../superviewer/tag_history_actions.py) 维护 QAction、图标和快捷键。`MainWindow.__init__()` 通过 `create_toolbar()` 创建固定的 `editToolBar`，与编辑菜单共用同一对动作，统一启用状态和命令入口；菜单重建不重建工具栏。在文字编辑器获焦时释放标签撤销快捷键，工具栏按钮仍操作标签历史。切换标签库、可用叶子集合变化、照片重命名或 EXIF 表直接修改 Subject 时清历史；同库切文件夹、单纯标签重排不清。历史不落盘。
 
+`editToolBar` 右侧是固定的 `sendToToolBar`（[`send_to_toolbar.py`](../superviewer/send_to_toolbar.py)）：`extern_app.json` 中每个外部应用一个仅图标按钮，图标由共享 [`send_to_app/icon.py`](../../app_common/send_to_app/icon.py) 取系统应用图标，缺失时用首字占位；悬停显示“发送到:应用名”。按钮与“文件 → 发送到外部应用”菜单共用 `MainWindow._send_to_external_app()`，发送文件列表 `get_selected_file_paths()` 的全部选中文件（与右键“发送到”一致），无选择时回退当前文件。未配置应用时隐藏该工具栏；外部应用设置保存后与菜单一同重建按钮。回归见 [test_send_to_toolbar.py](../tests/test_send_to_toolbar.py)。
+
 异步读取由 `PhotoTagCacheWorker` 分批执行。每路径 `_photo_tag_generation_by_path` 防止读取早于本地写入的 tag/metadata 批次回退新标签；未知路径会排队补读，GUI 查询不做整批 XMP I/O。`finished_summary` 只报告逻辑进度，真正的线程释放和下一批启动必须等 `QThread.finished`。
 
 ## 7. 状态所有权、线程与关闭

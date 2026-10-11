@@ -161,6 +161,7 @@ try:
     from .superviewer.preview_key_router import PreviewKeyRouter
     from .superviewer.viewer_ab_preview import ViewerABPreview
     from .superviewer.tag_history_actions import TagHistoryActions
+    from .superviewer.send_to_toolbar import create_send_to_toolbar, rebuild_send_to_toolbar
     from .superviewer.metadata_edit_sync import sync_saved_xmp_edit
     from .superviewer.ui_theme import get_ui_theme_manager, install_app_theme, panel_theme_colors
     from .superviewer import qt_compat
@@ -256,6 +257,7 @@ except ImportError:
     from superviewer.preview_key_router import PreviewKeyRouter
     from superviewer.viewer_ab_preview import ViewerABPreview
     from superviewer.tag_history_actions import TagHistoryActions
+    from superviewer.send_to_toolbar import create_send_to_toolbar, rebuild_send_to_toolbar
     from superviewer.metadata_edit_sync import sync_saved_xmp_edit
     from superviewer.ui_theme import get_ui_theme_manager, install_app_theme, panel_theme_colors
     from superviewer import qt_compat
@@ -359,6 +361,9 @@ class MainWindow(QMainWindow):
         self._init_menu_bar()
         self._edit_toolbar = self._tag_history_actions.create_toolbar(self)
         self.addToolBar(self._edit_toolbar)
+        self._send_to_toolbar = create_send_to_toolbar(self)
+        self.addToolBar(self._send_to_toolbar)
+        self._rebuild_send_to_toolbar()
         self._main_splitter: TriangleToggleSplitter | None = None
         self._main_splitter_state_save_timer = QTimer(self)
         self._main_splitter_state_save_timer.setSingleShot(True)
@@ -863,16 +868,26 @@ class MainWindow(QMainWindow):
             self.menuBar().addMenu(updater_menu)
 
     def _send_to_external_app(self, app: dict) -> None:
-        """将当前选中的文件发送到指定外部应用。"""
-        if not self._current_exif_path or not os.path.isfile(self._current_exif_path):
+        """将文件列表中选中的文件（多选时全部）发送到指定外部应用。"""
+        file_list = getattr(self, "_file_list", None)
+        paths = file_list.get_selected_file_paths() if file_list is not None else []
+        paths = [p for p in paths if os.path.isfile(p)]
+        if not paths and self._current_exif_path and os.path.isfile(self._current_exif_path):
+            paths = [self._current_exif_path]
+        if not paths:
             QMessageBox.information(self, "发送", "请先选择要发送的文件。")
             return
-        send_files_to_app([self._current_exif_path], app, base_directory=_get_app_dir())
+        base_dir = file_list.get_current_dir() if file_list is not None else ""
+        send_files_to_app(paths, app, base_directory=base_dir or _get_app_dir())
+
+    def _rebuild_send_to_toolbar(self) -> None:
+        rebuild_send_to_toolbar(self._send_to_toolbar, self._send_to_external_app)
 
     def _open_external_apps_settings(self) -> None:
         def on_saved():
             self.menuBar().clear()
             self._init_menu_bar()
+            self._rebuild_send_to_toolbar()
 
         show_external_apps_settings_dialog(self, on_saved=on_saved)
 

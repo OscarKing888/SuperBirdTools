@@ -140,6 +140,7 @@ class PhotoListWidget(FileListPanel):
     rowNumbersChanged = pyqtSignal()
     manualOrderChanged = pyqtSignal()
     removeSelectedRequested = pyqtSignal()
+    refreshMetadataRequested = pyqtSignal()
 
     def __init__(self) -> None:
         self._start_number = 1
@@ -229,6 +230,17 @@ class PhotoListWidget(FileListPanel):
         self.remove_selected_action.setToolTip("从照片列表移除所选项，保留原始照片和 XMP 文件。")
         self.remove_selected_action.triggered.connect(self._request_remove_selected)
         self._tree_widget.addAction(self.remove_selected_action)
+
+        # 重新读取照片 EXIF/XMP 与 report.db；由编辑器负责后台加载和缓存失效。
+        self.refresh_metadata_action = QAction("刷新照片信息", self._tree_widget)
+        self.refresh_metadata_action.setShortcut(QKeySequence(Qt.Key.Key_F5))
+        self.refresh_metadata_action.setShortcutContext(Qt.ShortcutContext.WidgetShortcut)
+        self.refresh_metadata_action.setAutoRepeat(False)
+        self.refresh_metadata_action.setToolTip(
+            "重新读取列表中全部照片的 EXIF/XMP 元数据和 report.db 信息（F5）；不修改任何文件。"
+        )
+        self.refresh_metadata_action.triggered.connect(self.refreshMetadataRequested)
+        self._tree_widget.addAction(self.refresh_metadata_action)
 
     def _request_remove_selected(self) -> None:
         if self.selectedItems():
@@ -508,6 +520,7 @@ class PhotoListWidget(FileListPanel):
             act_reveal.triggered.connect(lambda checked=False, p=reveal_path: reveal_in_file_manager(p))
 
         menu.addSeparator()
+        menu.addAction(self.refresh_metadata_action)
         menu.addAction(self.remove_selected_action)
 
         _exec_menu(menu, viewport.mapToGlobal(pos))
