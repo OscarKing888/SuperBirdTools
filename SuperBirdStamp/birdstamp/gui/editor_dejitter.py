@@ -1402,6 +1402,7 @@ class _BirdStampDejitterMixin:
                 camera_crop)
             self.preview_label.set_original_size(width, height)
         self.preview_label.set_cropped_size(None, None)
+        state.region_drafts = self.dejitter_recommendation.draft_overlays(self.current_path)
         from .preview_source_geometry import transform_source_overlays
         transform_source_overlays(state, camera_crop)
         self.preview_label.apply_overlay_state(state)

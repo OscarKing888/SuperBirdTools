@@ -62,11 +62,16 @@ class Recommendation:
     samples: tuple = ()
     metadata: dict = field(default_factory=dict)
     candidates: tuple = ()
+    # 背景推荐：进行中的草稿 ((框, 'pending'|'failed'), …)；抽样一致范围；与推荐运动不一致的人工选区编号（0 起）。
+    drafts: tuple = ()
+    coverage: dict = field(default_factory=dict)
+    conflicts: tuple = ()
 
 
-def background_candidates(image, birds=(), existing=()):
+def background_candidates(image, birds=(), existing=(), *, include_grid=True):
+    """纹理合格的背景候选；include_grid=False 时只返回多尺度大框（宽轮廓后备）。"""
     from .auto_regions import suggest_reference_regions, _overlaps_with_margin
-    proposals = list(suggest_reference_regions(image,existing,target_count=9))
+    proposals = list(suggest_reference_regions(image,existing,target_count=9)) if include_grid else []
     # 多尺度均匀覆盖；宽轮廓也能成为候选，最终必须通过匹配器唯一性检查。
     for bw,bh in ((.22,.25),(.32,.36),(.42,.48)):
         for cy in (.205,.5,.8):
@@ -190,12 +195,201 @@ def precheck_chain(paths, reference, samples, trackers, candidates, results_by, 
                   and all(p in results_by[i] for p in samples[1:])
 
 
+RECOMMEND_PREVIEW_EDGE = 2048
+
+
+def ordered_samples(paths, reference):
+    """参考图在前，其余抽样按与参考图的列表距离由近到远；一致前缀即“能覆盖到多远”。"""
+    samples = sample_paths(paths, reference)
+    order = {path: index for index, path in enumerate(dict.fromkeys(Path(p) for p in paths))}
+    base = order.get(Path(reference), 0)
+    return (samples[0], *sorted(samples[1:], key=lambda p: (abs(order.get(p, base)-base), order.get(p, base))))
+
+
+def _coverage(samples, count, paths):
+    """一致前缀之外最近的失配抽样，及与它同侧（相对参考图）最远的一致抽样或参考图。"""
+    measured = len(samples)-1
+    coverage = dict(samples=measured, consistent=count)
+    if measured == 0 or count >= measured:
+        return coverage
+    order = {path: index for index, path in enumerate(dict.fromkeys(Path(p) for p in paths))}
+    base = order.get(samples[0], 0)
+    bad = samples[count+1]
+    side = (order.get(bad, base) > base) - (order.get(bad, base) < base)
+    same = [p for p in samples[1:count+1] if (order.get(p, base) > base) - (order.get(p, base) < base) == side]
+    good = max(same, key=lambda p: abs(order.get(p, base)-base)) if same else samples[0]
+    coverage.update(last_ok=str(good), first_bad=str(bad))
+    return coverage
+
+
+def _top_reason(reasons):
+    from collections import Counter
+    counted = Counter(reason for reason in reasons if reason)
+    return counted.most_common(1)[0][0] if counted else '未匹配'
+
+
+def recommend_background(reference, paths, *, existing=(), target_count=9, options=MatchingOptions(),
+                         cancelled=lambda:False, progress=lambda text:None, detector=detect_bird_candidates,
+                         candidate_callback=lambda result:None):
+    """背景选区：缩小解码抽样帧，全部候选一起实测，取整组一致的运动层后按格挑选并复核。"""
+    from birdstamp.decoders.image_decoder import decode_image_for_preview
+    from .bird_observation_cache import detect_cached
+    from .background_regions import candidate_pool, draft_regions, pixel_offsets, covered_layer, select_regions
+    from .reference_region_tracker import ReferenceRegionTracker
+    reference = Path(reference)
+    existing = tuple(tuple(float(v) for v in box) for box in existing)
+    needed = target_count-len(existing)
+    samples = ordered_samples(paths, reference)
+
+    def check():
+        if cancelled():
+            raise InterruptedError('已取消选区推荐')
+
+    def detect(path, image):
+        return (detect_cached(path, image, cancelled=cancelled, preview_edge=RECOMMEND_PREVIEW_EDGE)
+                if detector is detect_bird_candidates else detector(image, cancelled=cancelled))
+
+    def show(boxes, failed=frozenset(), message='正在抽样预检；虚线草稿尚不是推荐结果。'):
+        if boxes:
+            candidate_callback(Recommendation('prechecking', message, drafts=tuple(
+                (box, 'failed' if index in failed else 'pending') for index, box in enumerate(boxes))))
+
+    check()
+    moving_images = []
+    try:
+        with decode_image_for_preview(reference, max_long_edge=RECOMMEND_PREVIEW_EDGE) as image:
+            size = image.size
+            # 识鸟前先给出草稿，按钮按下即可看到大致位置；识鸟后再避开鸟体重算。
+            cells, pool = candidate_pool(image, existing=existing, target_count=target_count)
+            show(draft_regions(cells, pool, existing), message='已显示候选草稿，正在识别鸟并抽样预检。')
+            progress('识别参考图中的鸟…')
+            birds = detect(reference, image)
+            large = background_candidates(image, birds, existing, include_grid=False)
+            cells, pool = candidate_pool(image, avoid=tuple(b.box for b in birds), existing=existing,
+                                         target_count=target_count, large=large)
+            drafts = draft_regions(cells, pool, existing)
+            draft_ids = [next(i for i, c in enumerate(pool) if c.box == box) for box in drafts]
+            show(drafts)
+            check()
+            tracker = ReferenceRegionTracker(image, tuple(c.box for c in pool), options=options)
+            offsets, scores, reasons, failed = [], [], [], set()
+            for number, path in enumerate(samples[1:], 1):
+                check()
+                progress(f'抽样预检 {number}/{len(samples)-1}：{path.name}')
+                moving = decode_image_for_preview(path, max_long_edge=RECOMMEND_PREVIEW_EDGE)
+                moving_images.append(moving)
+                if moving.size != size:
+                    boxes, row_scores, why = [None]*len(pool), [0.]*len(pool), ['源尺寸不同']*len(pool)
+                else:
+                    current_birds = detect(path, moving)
+                    # 抽样由近到远：在更近的抽样已失配的候选进不了更远的一致前缀，不再测量。
+                    lost = set(np.flatnonzero(np.isnan(offsets).any(axis=0))) if offsets else set()
+                    raw = tracker.measure(moving, cancelled=cancelled, reuse_found=.04*max(size), skip=lost)
+                    boxes, row_scores, why = list(raw.boxes), list(raw.scores), list(raw.reasons)
+                    for index, box in enumerate(boxes):
+                        if box is not None and any(iou(box, bird.box) > 0 for bird in current_birds):
+                            boxes[index], why[index] = None, '进入鸟体范围'
+                offsets.append(pixel_offsets(pool, boxes, size))
+                scores.append(row_scores)
+                reasons.append(why)
+                failed.update(n for n, i in enumerate(draft_ids) if boxes[i] is None)
+                show(drafts, failed)
+            check()
+            progress('寻找整组一致的运动…')
+            manual = [i for i, c in enumerate(pool) if c.manual]
+            centers = np.array([complex((c.box[0]+c.box[2])/2*size[0], (c.box[1]+c.box[3])/2*size[1]) for c in pool])
+            unlimited = None
+            if offsets:
+                layer_options = dict(needed=max(1, needed), tolerance=options.pixel_tolerance(size),
+                                     max_degrees=options.rotation_degrees, min_span=min(size)*.1,
+                                     selectable=[not c.manual for c in pool])
+                count, layer = covered_layer(centers, np.array(offsets), required=manual, **layer_options)
+                if manual and count < len(offsets):
+                    # 人工选区可能把范围限制在更近处；告诉用户不考虑它时能覆盖多远。
+                    free_count, free_layer = covered_layer(centers, np.array(offsets), **layer_options)
+                    limiting = [i for i in manual if layer[i] and not free_layer[i]]
+                    if free_count > count and limiting:
+                        unlimited = (free_count, limiting)
+                quality = np.min(np.array(scores)[:max(1, count)], axis=0)
+            else:
+                count, layer, quality = 0, np.ones(len(pool), dtype=bool), np.ones(len(pool))
+            chosen = (select_regions(cells, pool, layer, quality, existing=existing, needed=needed)
+                      if needed > 0 and (count or not offsets) else ())
+            conflicts = {i for i in manual if not layer[i]} if offsets else set()
+            unmatched = {}
+            # 复核用与正式分析相同的跟踪与一致性规则；只删推荐框，人工框只报告。
+            diagnostics, verified = [], samples[1:count+1] if offsets else ()
+            for _ in range(3):
+                regions = (*existing, *chosen)
+                if not regions or not verified:
+                    break
+                progress('复核推荐选区…')
+                group = ReferenceRegionTracker(image, regions, options=options)
+                rows, failing = [], set()
+                for path, moving in zip(verified, moving_images):
+                    check()
+                    result = group.track(moving, cancelled=cancelled)
+                    for k, box in enumerate(result.boxes):
+                        rows.append(dict(file=path.name, part='background', candidate_id=k, regions=(regions[k],),
+                                         passed=box is not None, reason=result.reasons[k] if box is None else '',
+                                         stage='tracking'))
+                        if box is None:
+                            failing.add(k)
+                diagnostics = rows
+                unmatched = {row['candidate_id']: row['file'] for row in rows
+                             if not row['passed'] and row['candidate_id'] < len(existing)
+                             and row['candidate_id'] not in conflicts}
+                drop = {k-len(existing) for k in failing if k >= len(existing)}
+                if not drop:
+                    break
+                chosen = tuple(box for k, box in enumerate(chosen) if k not in drop)
+    finally:
+        for moving in moving_images:
+            moving.close()
+    for number, path in enumerate(samples[1:], 1):
+        if number > count:
+            row = offsets[number-1]
+            matched = int((~np.isnan(row)).sum())
+            diagnostics.append(dict(file=path.name, part='background', passed=False, stage='tracking',
+                                    reason=f'{matched}/{len(pool)} 个候选匹配，与更近的抽样不属于同一运动；'
+                                           f'常见原因：{_top_reason(reasons[number-1])}'))
+    coverage = _coverage(samples, count, paths) if offsets else dict(samples=0, consistent=0)
+    measured = len(samples)-1
+    if not chosen:
+        message = '没有找到在抽样中运动一致的可靠纹理；请手动框选，或在画面变化处接力追踪。'
+    elif not measured:
+        message = f'只有一张照片，未做抽样预检；推荐 {len(chosen)} 个选区。'
+    elif count >= measured:
+        message = f'抽样预检 {measured} 张运动一致，推荐 {len(chosen)} 个选区；完整分析仍需逐张检查。'
+    else:
+        message = (f'推荐 {len(chosen)} 个选区，在抽样中可一致到 {Path(coverage["last_ok"]).name}；'
+                   f'{Path(coverage["first_bad"]).name} 已找不到同一运动的纹理（原选区多半出画或被遮挡）。'
+                   '分析在两者之间失败时，可在失败照片接力追踪。')
+    if chosen and len(chosen) < needed:
+        message += f'\n目标 {target_count} 个，运动一致且纹理可靠的只有 {len(existing)+len(chosen)} 个。'
+    if conflicts:
+        names = '、'.join(str(i+1) for i in sorted(conflicts))
+        message += f'\n人工选区 {names} 与推荐所依据的主要运动不一致（可能在鸟身上或属于近景），建议删除或重新框选。'
+    for index, name in sorted(unmatched.items()):
+        message += f'\n人工选区 {index+1} 在 {name} 未匹配（可能出画或被遮挡），该照片分析时会标为待检查。'
+    if unlimited:
+        free_coverage = _coverage(samples, unlimited[0], paths)
+        reach = (Path(free_coverage['last_ok']).name if 'last_ok' in free_coverage else '全部抽样')
+        names = '、'.join(str(i+1) for i in unlimited[1])
+        message += f'\n覆盖范围受人工选区 {names} 限制；删除它后推荐可一致到 {reach}。'
+    metadata = dict(version=1, target=None, part='background' if chosen else '', auto_regions=list(chosen),
+                    local_analysis=False, model='', experimental=False, resolved_part='background' if chosen else '')
+    status = 'ready' if chosen else ('manual_conflict' if conflicts else 'no_reliable_region')
+    return Recommendation(status, message, tuple(chosen), 'background' if chosen else '', None, birds, diagnostics,
+                          tuple(p.name for p in samples), metadata, coverage=coverage,
+                          conflicts=tuple(sorted(conflicts)))
+
+
 def recommend_regions(reference, paths, *, method='reference_region', existing=(), target=None,
                       part='auto', target_count=9, experimental=False, options=MatchingOptions(),
                       cancelled=lambda:False, progress=lambda text:None,
                       detector=detect_bird_candidates, pose_predictor=None, candidate_callback=lambda result:None):
     from birdstamp.decoders.image_decoder import decode_image
-    from .reference_region_tracker import ReferenceRegionTracker
     from .local_crop_tracker import LocalCropSubjectTracker
     from .bird_parts.pose import candidates_from_pose
     from .bird_parts.model_store import MODEL_ID
@@ -215,6 +409,10 @@ def recommend_regions(reference, paths, *, method='reference_region', existing=(
         raise ValueError('目标选区数量应在 1–36 之间')
     if method == 'reference_region' and len(existing) >= target_count:
         return Recommendation('unchanged','已有人工选区达到目标数量，保留原选区。')
+    if method == 'reference_region':
+        return recommend_background(reference, paths, existing=existing, target_count=target_count,
+                                    options=options, cancelled=cancelled, progress=progress, detector=detector,
+                                    candidate_callback=candidate_callback)
     def check():
         if cancelled():
             raise InterruptedError('已取消选区推荐')
@@ -263,12 +461,8 @@ def recommend_regions(reference, paths, *, method='reference_region', existing=(
                     tracker=None
                     diagnostics.append(dict(file=reference.name,part=c.part,candidate_id=i,passed=False,reason=str(exc),stage='texture'))
                 trackers.append((c.part,c.regions,tracker,c.confidence))
-        else:
-            trackers=[('background',(box,),ReferenceRegionTracker(image,(box,),options=options),1.)
-                      for box in background_candidates(image,birds,existing)]
         source_size=image.size
     passed=[v[2] is not None for v in trackers]; quality=[v[3] for v in trackers]
-    observed=[{} for _ in trackers]
     results_by=[{} for _ in trackers]; parts_by_path={}; identity_break=None
     trajectory=None
     if method == 'subject_local':
@@ -305,14 +499,11 @@ def recommend_regions(reference, paths, *, method='reference_region', existing=(
                     continue
             for i,(name,regions,tracker,confidence) in enumerate(trackers):
                 check()
-                if tracker is None or (not passed[i] and method != 'subject_local'):
+                if tracker is None:
                     continue
                 if moving.size != source_size:
                     passed[i]=False;diagnostics.append(dict(file=path.name,part=name,candidate_id=i,reason='源尺寸不同'));continue
-                if method == 'subject_local':
-                    result=tracker.track(moving,cancelled=cancelled,target_box=current_target)
-                else:
-                    result=tracker.track(moving,cancelled=cancelled)
+                result=tracker.track(moving,cancelled=cancelled,target_box=current_target)
                 good=result.matched_count == len(regions)
                 reason=result.error
                 swapped=False
@@ -321,12 +512,9 @@ def recommend_regions(reference, paths, *, method='reference_region', existing=(
                     if not semantic_ok:
                         good=False;reason='跟踪位置与同名部位证据不一致或部位不可见'
                 results_by[i][path]=result
-                if good and name == 'background' and any(iou(b,c.box)>0 for b in result.boxes for c in current_birds):
-                    good=False;reason='背景候选进入鸟体范围'
                 if good:
                     score=evidence_score(result)
                     quality[i]=min(quality[i],score)
-                    observed[i][path]=(result.boxes[0],score)
                 else:
                     passed[i]=False
                 diagnostics.append(dict(file=path.name,part=name,candidate_id=i,regions=regions,passed=good,reason=reason,
@@ -335,41 +523,10 @@ def recommend_regions(reference, paths, *, method='reference_region', existing=(
         precheck_chain(paths,reference,samples,trackers,candidates,results_by,parts_by_path,passed,quality,diagnostics,cancelled)
     valid=[i for i,ok in enumerate(passed) if ok]
     valid.sort(key=lambda i:(-round(quality[i],2),{'torso':0,'head':1,'legs':2,'background':0}[trackers[i][0]]))
-    chosen=[];chosen_indices=[];name=''
-    from .auto_regions import _overlaps_with_margin
+    chosen=[];name=''
     for i in valid:
         name,regions,_,_=trackers[i]
-        if method == 'subject_local':
-            chosen=list(regions);break
-        if len(chosen)+len(existing) >= target_count:
-            break
-        if not any(_overlaps_with_margin(regions[0],r,.01) for r in chosen):
-            chosen.extend(regions);chosen_indices.append(i)
-    if method == 'reference_region' and len(chosen_indices) > 1:
-        from .region_consensus import resolve_tracking_consensus
-        from .region_tracking_result import RegionTrackingResult
-        # 单区可匹配不代表多区支持同一相机运动；只添加整个抽样集合一致的组合。
-        while len(chosen_indices) > 1:
-            compatible=True
-            for path in samples[1:]:
-                boxes,scores=zip(*(observed[i][path] for i in chosen_indices))
-                result=resolve_tracking_consensus(tuple(chosen),RegionTrackingResult(boxes,scores=scores),
-                    source_size,source_size,options=options)
-                if result.matched_count != len(chosen_indices):
-                    compatible=False;break
-            if compatible:break
-            chosen_indices.pop();chosen.pop()
-    if method == 'reference_region' and existing and chosen:
-        with decode_image(reference,decoder='auto') as image:
-            group=ReferenceRegionTracker(image,(*existing,*chosen),options=options)
-        for path in samples[1:]:
-            check()
-            with decode_image(path,decoder='auto') as moving:
-                result=group.track(moving,cancelled=cancelled)
-            if result.matched_count != len(group.regions):
-                return Recommendation('manual_conflict',
-                    f'{path.name}：人工区与推荐区未能共同通过预检；已保留原选区，请检查人工区。',
-                    diagnostics=diagnostics,samples=tuple(p.name for p in samples))
+        chosen=list(regions);break
     message=(f'抽样预检通过 {len(samples)}/{len(samples)} 张，推荐 {len(chosen)} 个选区；完整分析仍需逐张检查。'
              if chosen else '没有通过全部抽样帧的可靠选区；请手动选区、补关键帧，或改用背景稳定。')
     if not chosen and method=='subject_local':

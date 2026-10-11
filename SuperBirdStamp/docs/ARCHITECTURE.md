@@ -84,6 +84,8 @@ ExifTool 生命周期与 Viewer 共用 [`exiftool_runner.py`](../../app_common/e
 
 照片列表右键“删除所选”和列表获得焦点时的 `Delete`（macOS 另支持 `Backspace`）共用 `PhotoListWidget.remove_selected_action`，通过 `removeSelectedRequested` 交给 `BirdStampEditorWindow._remove_selected_photos`。支持多选，右键未选中行先切换选区；仅从工作区列表移除，保留原图和 XMP，并沿用缓存清理、编号刷新与自动保存。快捷键不拦截文本输入，也不随长按重复触发。此功能仅管理 GUI 工作区，无独立 CLI 参数。回归见 [test_editor_photo_list_sort.py](../tests/test_editor_photo_list_sort.py) 与 [test_photo_start_number.py](../tests/test_photo_start_number.py)。
 
+照片列表操作行的「刷新信息」按钮、右键「刷新照片信息」与列表获得焦点时的 `F5` 共用 `PhotoListWidget.refresh_metadata_action`，经 `refreshMetadataRequested` 交给 `BirdStampEditorWindow._refresh_photo_list_metadata`，用于外部工具（SuperViewer、SuperPicky）修改 XMP 或 report.db 后重新读取。它重建 report.db 行缓存，失效全部照片的完整元数据缓存、`read_batch_metadata` 进程级缓存与模板上下文缓存，把全部照片重新标记为待读并复用 `EditorPhotoListMetadataLoader` 后台读取；加载期间列表保留旧值，到达后按批更新列表、当前照片预览（即使 EXIF/XMP 未变也强制重建上下文）并标记导出缓存失效。刷新只读，不写原图、XMP 或 report.db；工作区恢复期间忽略。此功能仅属 GUI 列表交互，无独立 CLI 参数。回归见 [test_photo_list_metadata_refresh.py](../tests/test_photo_list_metadata_refresh.py)。
+
 ## 3. 元数据与模板 provider
 
 “拍摄地点” `location` 使用共享 [shooting_location.py](../../app_common/shooting_location.py) 的 `XMP-superpicky:shooting_location` 文本，与 Viewer 编辑字段一致。[meta/normalize.py](../birdstamp/meta/normalize.py) 供模板、Overlay 预览/导出和 CLI 共用；不再拼接存储分析结果的 City/State/Country，也不以 GPS 代替地点，坐标仍由 `gps_text` 提供。自动字段路由固定读取已合并 XMP 的规范地点，清空侧车属性后不能回退到旧照片快照；空值沿用既有缺失字段显示规则。真实中文写入、修改/清空、原图及清晰度保留、Overlay 绘制回归见 [test_template_shooting_location.py](../tests/test_template_shooting_location.py)。
@@ -268,7 +270,7 @@ RAW 源图的去抖动分析、成片预览和导出统一优先读取长边至�
 
 ### 局部主体去抖动
 
-按算法一键选区由 [region_recommendation.py](../birdstamp/image_dejitter/region_recommendation.py) 和 [RegionRecommendationPanel](../birdstamp/gui/region_recommendation_panel.py) 接入。基本方法推荐通过抽样的背景组合；可选 HRNet 鸟类部位识别目前实验性、默认关闭。局部分析恢复源坐标后复用现有导出。CLI `recommend-regions` / `bird-parts-model`、模型安装、缓存及验证边界见 [自动参考区](AUTO_REFERENCE_REGIONS.md)。
+按算法一键选区由 [region_recommendation.py](../birdstamp/image_dejitter/region_recommendation.py) 和 [RegionRecommendationPanel](../birdstamp/gui/region_recommendation_panel.py) 接入。基本方法由 [background_regions.py](../birdstamp/image_dejitter/background_regions.py) 先在抽样上求整组一致的运动层（RANSAC），再按格配额挑选并复核，整组不一致时报告可覆盖范围供接力；推荐进行中的草稿经 `EditorPreviewOverlayState.region_drafts` 画在画布上，不进入选区；可选 HRNet 鸟类部位识别目前实验性、默认关闭。局部分析恢复源坐标后复用现有导出。CLI `recommend-regions` / `bird-parts-model`、模型安装、缓存及验证边界见 [自动参考区](AUTO_REFERENCE_REGIONS.md)。
 
 模型按钮由 [BirdModelStatus](../birdstamp/gui/bird_model_status.py) 后台完整性校验驱动：已校验模型禁用下载，文件属性变化触发重新校验，校验线程参与窗口关闭等待。
 
@@ -312,7 +314,7 @@ RAW 源图的去抖动分析、成片预览和导出统一优先读取长边至�
 | --- | --- | --- |
 | 新格式、原图/预览解码 | [image_decoder.py](../birdstamp/decoders/image_decoder.py)、共享 [image_formats.py](../../app_common/image_formats.py) | [test_decode_image_for_preview.py](../tests/test_decode_image_for_preview.py)、[test_raw_decoder.py](../tests/test_raw_decoder.py)、[test_psd_decoder.py](../tests/test_psd_decoder.py) |
 | 导入、切图、关闭线程 | [editor.py](../birdstamp/gui/editor.py) 及 worker | [test_editor_selection_preview.py](../tests/test_editor_selection_preview.py)、[test_editor_discovery_shutdown.py](../tests/test_editor_discovery_shutdown.py)、[test_editor_worker_lifecycle.py](../tests/test_editor_worker_lifecycle.py) |
-| 列表排序、方向键兼容 | [editor_photo_list.py](../birdstamp/gui/editor_photo_list.py) | [test_editor_photo_list_sort.py](../tests/test_editor_photo_list_sort.py)、[test_editor_photo_list_navigation_compat.py](../tests/test_editor_photo_list_navigation_compat.py)、[test_sequence_preview_keys.py](../tests/test_sequence_preview_keys.py) |
+| 列表排序、方向键兼容、刷新照片信息 | [editor_photo_list.py](../birdstamp/gui/editor_photo_list.py) | [test_editor_photo_list_sort.py](../tests/test_editor_photo_list_sort.py)、[test_photo_list_metadata_refresh.py](../tests/test_photo_list_metadata_refresh.py)、[test_editor_photo_list_navigation_compat.py](../tests/test_editor_photo_list_navigation_compat.py)、[test_sequence_preview_keys.py](../tests/test_sequence_preview_keys.py) |
 | 模板字段、XMP 优先级、缓存失效 | [template_context.py](../birdstamp/gui/template_context.py) | [test_template_context_report_db.py](../tests/test_template_context_report_db.py)、[test_template_context_cache_invalidation.py](../tests/test_template_context_cache_invalidation.py) |
 | 裁切、阶段顺序、去抖 | [pipeline.py](../birdstamp/export_stage/pipeline.py)、[editor_renderer.py](../birdstamp/gui/editor_renderer.py) | [test_image_pipeline.py](../tests/test_image_pipeline.py)、[test_retired_batch_composition.py](../tests/test_retired_batch_composition.py)、[test_video_export_dejitter.py](../tests/test_video_export_dejitter.py)、[test_editor_preview_grid.py](../tests/test_editor_preview_grid.py) |
 | 图片目标名、并行写出 | [editor_exporter.py](../birdstamp/gui/editor_exporter.py) | [test_image_export_targets.py](../tests/test_image_export_targets.py) |

@@ -38,9 +38,12 @@ def cached_observation(path, kind, parameters, compute, cancelled):
     return value
 
 
-def detect_cached(path,image,*,cancelled=lambda:False):
+def detect_cached(path,image,*,cancelled=lambda:False,preview_edge=None):
+    """preview_edge 表示传入的是缩小预览；与原图检测分开缓存，低分辨率结果不能顶替原图检测。"""
     from .bird_candidates import detect_bird_candidates
-    return cached_observation(path,'yolo-all-v1',detector_signature(),
+    kind,parameters=('yolo-all-v1',detector_signature()) if preview_edge is None else \
+        ('yolo-preview-v1',(detector_signature(),int(preview_edge)))
+    return cached_observation(path,kind,parameters,
         lambda:detect_bird_candidates(image,cancelled=cancelled),cancelled)
 
 
