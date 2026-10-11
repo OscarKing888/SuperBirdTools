@@ -152,3 +152,34 @@ def test_switching_candidate_does_not_paint_into_base_image(window):
     assert all(preview._base.pixelColor(x,y).red()==0
                for x in range(preview._base.width()) for y in range(preview._base.height()))
     assert preview.minimumHeight()>=preview.layout().sizeHint().height()
+
+
+def test_background_drafts_paint_during_recommendation_then_clear_and_hint_list_positions(window,monkeypatch):
+    from birdstamp.gui import region_recommendation_panel as module
+    import time
+    current=Path(window.current_path)
+    paths=[current.with_name(f'前{i}.jpg') for i in range(2)]+[current]+[current.with_name(f'后{i}.jpg') for i in range(3)]
+    monkeypatch.setattr(window,'_list_photo_paths',lambda:list(paths))
+    window.export_tabs.setCurrentWidget(window.dejitter_page)
+    window._set_dejitter_view('edit')
+    release=threading.Event();draft=((.1,.1,.2,.2),'pending'),((.6,.6,.7,.7),'failed')
+    def recommend(*a,**kw):
+        kw['candidate_callback'](Recommendation('prechecking','预检中',drafts=draft))
+        release.wait(5)
+        # 核心按文件名给出覆盖范围；面板换算为照片列表位置。
+        return Recommendation('ready','推荐 1 个',((.3,.3,.4,.4),),'background',
+                              coverage=dict(samples=3,consistent=1,last_ok=str(paths[3]),first_bad=str(paths[5])))
+    monkeypatch.setattr(module,'recommend_regions',recommend)
+    panel=window.dejitter_recommendation;panel.recommend()
+    deadline=time.monotonic()+2
+    while not panel.draft_overlays(current) and time.monotonic()<deadline:
+        _APP.processEvents();time.sleep(.005)
+    overlays=panel.draft_overlays(current)
+    assert [o[1] for o in overlays]==['候选 1','候选 2 · 失配'] and [o[2] for o in overlays]==[False,True]
+    assert not panel.draft_overlays(paths[0])  # 只画在推荐所用的参考图上
+    assert window.preview_label.canvas._region_drafts
+    assert not window._dejitter_reference_regions  # 草稿不进入选区
+    release.set();_finish_recommendation(window)
+    assert not panel.draft_overlays(current) and not window.preview_label.canvas._region_drafts
+    assert window._dejitter_reference_regions==((.3,.3,.4,.4),)
+    assert '第 4–6 张' in panel.status.text() and '接力追踪' in panel.status.text()

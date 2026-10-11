@@ -79,6 +79,34 @@ def _cell_candidates(pixels, gradients, strengths, peaks, cell, existing):
     return candidates
 
 
+def cell_candidates(image: Image.Image, avoid=(), *, target_count: int = 9):
+    """(格子, 每格候选) ：按目标数量等面积分格，每格最多 64 个按角点强度排序的 (强度, 框)。
+
+    avoid 中的框（已有选区、鸟体）连同外扩间距都不会被候选覆盖；在长边不超过 768 的缩小图上计算。
+    """
+    cells = _grid_cells(target_count, portrait=image.height > image.width)
+    if min(image.size) < 64:
+        return cells, [[] for _ in cells]
+    scale = min(1, 768 / max(image.size))
+    size = tuple(max(1, round(value * scale)) for value in image.size)
+    if min(size) < 12:
+        return cells, [[] for _ in cells]
+    # 直接缩小已解码预览，不复制整幅原图，也不在 GUI 中读取/解码文件。
+    with image.resize(size, Image.Resampling.BILINEAR) as small, small.convert('L') as gray:
+        pixels = np.asarray(gray, dtype=np.float32)
+        with gray.filter(ImageFilter.GaussianBlur(1)) as smooth:
+            strengths = _corner_strength(np.asarray(smooth, dtype=np.float32))
+    neighbors = np.pad(strengths, 1, constant_values=-1)
+    peaks = strengths >= max(1., .01 * float(strengths.max()))
+    height, width = strengths.shape
+    for dy in range(3):
+        for dx in range(3):
+            peaks &= strengths >= neighbors[dy:dy+height, dx:dx+width]
+    gradients = np.abs(np.diff(pixels, axis=1)), np.abs(np.diff(pixels, axis=0))
+    avoid = tuple(avoid)
+    return cells, [_cell_candidates(pixels, gradients, strengths, peaks, cell, avoid) for cell in cells]
+
+
 def suggest_reference_regions(
     image: Image.Image,
     existing=(),
@@ -92,24 +120,7 @@ def suggest_reference_regions(
     needed = target_count - len(existing)
     if needed <= 0 or min(image.size) < 64:
         return ()
-    scale = min(1, 768 / max(image.size))
-    size = tuple(max(1, round(value * scale)) for value in image.size)
-    if min(size) < 12:
-        return ()
-    # 直接缩小已解码预览，不复制整幅原图，也不在 GUI 中读取/解码文件。
-    with image.resize(size, Image.Resampling.BILINEAR) as small, small.convert('L') as gray:
-        pixels = np.asarray(gray, dtype=np.float32)
-        with gray.filter(ImageFilter.GaussianBlur(1)) as smooth:
-            strengths = _corner_strength(np.asarray(smooth, dtype=np.float32))
-    neighbors = np.pad(strengths, 1, constant_values=-1)
-    peaks = strengths >= max(1., .01 * float(strengths.max()))
-    height, width = strengths.shape
-    for dy in range(3):
-        for dx in range(3):
-            peaks &= strengths >= neighbors[dy:dy+height, dx:dx+width]
-    gradients = np.abs(np.diff(pixels, axis=1)), np.abs(np.diff(pixels, axis=0))
-    cells = _grid_cells(target_count, portrait=image.height > image.width)
-    groups = [_cell_candidates(pixels, gradients, strengths, peaks, cell, existing) for cell in cells]
+    cells, groups = cell_candidates(image, existing, target_count=target_count)
     chosen = []
 
     def available(box):
