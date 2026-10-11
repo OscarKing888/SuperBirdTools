@@ -321,9 +321,15 @@ class _BirdStampReferenceTrackingMixin:
             self._update_reference_tracking_controls()
 
     def _on_edit_reference_photo(self) -> None:
+        # 接力段内的照片跳到所属接力参考图，编辑的才是它正在匹配的那组选区。
+        owner = self._relay_owner_for_path(getattr(self, "current_path", None))
+        self._edit_definition_photo(owner.path if owner is not None else None)
+
+    def _edit_definition_photo(self, path=None) -> None:
+        """切到 path（默认原参考图）并开启选区编辑。"""
         if self._dejitter_tab_active():
             self._set_dejitter_view('edit')
-        source = getattr(self, "_dejitter_reference_source", None)
+        source = path or getattr(self, "_dejitter_reference_source", None)
         if not source:
             return
         item = self._find_photo_item_by_path(Path(source))
