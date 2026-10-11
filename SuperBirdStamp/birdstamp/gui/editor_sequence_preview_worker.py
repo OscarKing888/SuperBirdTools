@@ -25,8 +25,11 @@ class EditorSequencePreviewWorker(QThread):
     progress_counts = pyqtSignal(int, int, int, str)
     failed = pyqtSignal(int, str)
 
-    def __init__(self, *, token, path, seeds=(), template_paths=None, sequence=None, bird_boxes=None, restore_only=False, cache=None, parent=None):
+    def __init__(self, *, token, path, seeds=(), template_paths=None, sequence=None, bird_boxes=None, restore_only=False, cache=None,
+                 tracking_cache=None, parent=None):
         super().__init__(parent)
+        # 逐照片跟踪缓存由编辑器持有、跨任务复用；本线程只读写，不负责释放。
+        self.tracking_cache = tracking_cache
         self.token, self.path = token, path
         self.seeds, self.template_paths = tuple(seeds), dict(template_paths or {})
         self.sequence, self.bird_boxes = sequence, dict(bird_boxes or {})
@@ -52,6 +55,8 @@ class EditorSequencePreviewWorker(QThread):
             with image.copy() as small:
                 small.thumbnail((edge, edge), Image.Resampling.BILINEAR)
                 preview = small.convert('RGB')
+            if self.tracking_cache is not None:
+                self.tracking_cache.put_thumbnail(path, edge, preview)
             with sources_lock:
                 old = sources.get(path_key(path))
                 sources[path_key(path)] = preview
@@ -81,6 +86,7 @@ class EditorSequencePreviewWorker(QThread):
                 progress_counts=report_counts,
                 tracking_ready=lambda key, tracking, signatures: self.diagnostics.emit(
                     self.token, (key, tracking, signatures)),
+                tracking_cache=self.tracking_cache,
             )
             if self.cancel_event.is_set():
                 return
@@ -90,7 +96,7 @@ class EditorSequencePreviewWorker(QThread):
                 for index, (key, job) in enumerate(sequence.jobs.items(), 1):
                     if self.cancel_event.is_set():
                         return
-                    with sequence_photo_errors(job.path), sources.pop(key) as small:
+                    with sequence_photo_errors(job.path), self._source_thumbnail(sources, key, job.path, edge) as small:
                         width, height = sequence.source_sizes[key]
                         alignment = sequence.alignments.get(key)
                         rendered = (render_alignment(small,(width,height),alignment,sequence.canvas_box,max_edge=edge)
@@ -145,6 +151,19 @@ class EditorSequencePreviewWorker(QThread):
         finally:
             for image in sources.values():
                 image.close()
+
+    def _source_thumbnail(self, sources, key, path, edge):
+        """跟踪时顺带缩小的原图；复用缓存跳过解码的照片取缓存小图，缺失时只解码有界预览。"""
+        small = sources.pop(key, None)
+        if small is None and self.tracking_cache is not None:
+            small = self.tracking_cache.thumbnail(path, edge)
+        if small is None:
+            from birdstamp.decoders.image_decoder import decode_image_for_preview
+            with decode_image_for_preview(path, max_long_edge=edge) as image:
+                small = image.convert('RGB')
+            if self.tracking_cache is not None:
+                self.tracking_cache.put_thumbnail(path, edge, small)
+        return small
 
 
 def pil_qimage(image):

@@ -72,8 +72,12 @@ class RelayPlan:
         return {key: (self.trackers[self.anchor_key(anchor)], anchor.path)
                 for key, anchor in self.owners.items() if self.anchor_key(anchor) in self.trackers}
 
-    def track_bridges(self, tracking, *, cancel_event, progress_counts=lambda c, t, s: None, allow_partial=False):
-        """衔接照片另匹配一次接力选区；不能用预测或插值位置把两段接起来。"""
+    def track_bridges(self, tracking, *, cancel_event, progress_counts=lambda c, t, s: None, allow_partial=False,
+                      tracking_cache=None):
+        """衔接照片另匹配一次接力选区；不能用预测或插值位置把两段接起来。
+
+        tracking_cache 命中时直接复用上次的真实匹配结果（输入相同），不是预测。
+        """
         anchors = [a for a in self.anchors if self.anchor_key(a) in self.trackers
                    and self.keys[a.bridge] in tracking and self.anchor_key(a) in tracking]
         for done, anchor in enumerate(anchors):
@@ -81,6 +85,15 @@ class RelayPlan:
             if cancel_event.is_set():
                 raise VideoExportCancelledError('已取消去抖动分析。')
             bridge = self.paths[self.keys[anchor.bridge]]
+            cache_key = None
+            if tracking_cache is not None:
+                from .sequence_tracking_cache import tracking_key
+                tracker = self.trackers[self.anchor_key(anchor)]
+                cache_key = tracking_key(bridge, anchor.path, anchor.regions, tracker.options, kind='bridge')
+                hit = tracking_cache.get(cache_key)
+                if hit is not None:
+                    self.bridges[self.anchor_key(anchor)] = hit[0]
+                    continue
             try:
                 with sequence_photo_errors(bridge), decode_image(bridge, decoder='auto') as image:
                     try:
@@ -88,6 +101,8 @@ class RelayPlan:
                     except InterruptedError as exc:
                         raise VideoExportCancelledError('已取消去抖动分析。') from exc
                     self.bridges[self.anchor_key(anchor)] = result
+                    if tracking_cache is not None:
+                        tracking_cache.put(cache_key, result, image.size)
             except SequencePhotoError as exc:
                 if not allow_partial:
                     raise
