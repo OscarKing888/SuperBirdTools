@@ -77,7 +77,12 @@ class _BirdStampDejitterMixin:
     """去抖动页/共享画布协调；计算与作业结果由无窗口核心持有。"""
 
     def _init_dejitter_preview(self):
+        from birdstamp.export_stage.sequence_tracking_cache import SequenceTrackingCache
         self._sequence_worker = None
+        # 跨任务的逐照片跟踪结果：加接力或手动修正后，只重算输入变化的照片。
+        self._sequence_tracking_cache = SequenceTrackingCache()
+        self._sequence_resume = None
+        self._sequence_resume_dirty = True
         self._sequence_exporting = False
         self._sequence_export_open_workspace = False
         self._sequence_export_workspace_result = None
@@ -393,7 +398,7 @@ class _BirdStampDejitterMixin:
             bridge = self._relay_bridge_path(relay)
             return 1, ('下一步：在这张接力参考图框选新的稳定纹理，或“一键推荐选区”；'
                        f'纹理须在衔接照片第 {relay.bridge + 1} 张{f"（{bridge.name}）" if bridge else ""}中同样可见。'
-                       '完成后点击“分析并预览成片”。')
+                       '完成后点击“继续接力分析”，已对齐的照片直接复用。')
         if sequence is not None:
             return 2, self._dejitter_partial_step(sequence)
         if self.current_path is None:
@@ -407,11 +412,15 @@ class _BirdStampDejitterMixin:
             if target_missing:
                 step += '\n两段式：建议先“选择目标鸟…”（参考图只有一只鸟时可省略）。'
             return 1, step
+        step = f'下一步：点击“{self._analysis_button_text()}”。'
+        detail = self._analysis_resume_detail()
+        if detail:
+            step += '\n' + detail
         drafts = [a for a in self._relay_plan()[2] if not a.regions]
         if drafts:
             names = '、'.join(f'第 {a.index + 1} 张' for a in drafts)
-            return 2, f'下一步：点击“分析并预览成片”。\n接力参考图 {names} 尚未框选，分析时忽略；点击接力链对应行去框选。'
-        return 2, '下一步：点击“分析并预览成片”。'
+            step += f'\n接力参考图 {names} 尚未框选，分析时忽略；点击接力链对应行去框选。'
+        return 2, step
 
     def _dejitter_partial_step(self, sequence):
         """分析在某张失败时的下一步：少量偏移手动修正，原选区出画/被遮挡则接力。"""
@@ -705,7 +714,39 @@ class _BirdStampDejitterMixin:
             return
         panel.recommend()
 
+    def _sequence_resume_plan(self):
+        """下一次分析能复用的照片：tracking_reuse_plan 的结果；没有可复用的照片时为 None。
+
+        设置变化后才重新估算（只读文件属性，不解码），避免每次刷新控件都遍历整组。
+        """
+        if self._sequence_resume_dirty and self._sequence_worker is None:
+            self._sequence_resume_dirty = False
+            self._sequence_resume = None
+            paths = self._list_photo_paths() if self.current_path is not None else ()
+            if paths and getattr(self, '_dejitter_reference_regions', ()):
+                from birdstamp.export_stage.sequence_tracking_cache import tracking_reuse_plan
+                plan = tracking_reuse_plan(self._build_dejitter_seeds(paths), self._sequence_tracking_cache)
+                if plan and plan['reused']:
+                    self._sequence_resume = plan
+        return self._sequence_resume
+
+    def _analysis_button_text(self):
+        plan = self._sequence_resume_plan()
+        if plan is None or plan['first_missing'] is None:
+            return '分析并预览成片'
+        return f"{'继续接力分析' if plan['relay'] else '继续分析'} · 从第 {plan['first_missing'] + 1} 张起"
+
+    def _analysis_resume_detail(self):
+        plan = self._sequence_resume_plan()
+        if plan is None:
+            return ''
+        if plan['first_missing'] is None:
+            return f"全部 {plan['reused']} 张的对齐结果可直接复用，只重新计算共同画幅。"
+        return (f"复用已对齐的 {plan['reused']} 张，只重新对齐 {plan['total'] - plan['reused']} 张"
+                f"（第 {plan['first_missing'] + 1} 张起使用新选区或修正的照片）；共同画幅仍按整组重新计算。")
+
     def _invalidate_sequence_preview(self, *, shutdown=False):
+        self._sequence_resume_dirty = True
         self._sequence_export_open_workspace = False
         self._sequence_export_workspace_result = None
         if self._sequence_progress_kind is not None:
@@ -818,8 +859,10 @@ class _BirdStampDejitterMixin:
         worker = self._sequence_worker
         stopping = worker is not None and worker.isInterruptionRequested()
         upgrading = worker is not None and self._sequence_preview is not None and not self._sequence_exporting
-        self.dejitter_preprocess_btn.setText('正在停止…' if stopping else '分析并预览成片' if upgrading or not worker
+        self.dejitter_preprocess_btn.setText('正在停止…' if stopping else '分析并预览成片' if upgrading
+                                           else self._analysis_button_text() if not worker
                                            else '取消导出' if self._sequence_exporting else '取消分析')
+        self.dejitter_preprocess_btn.setToolTip('' if worker else self._analysis_resume_detail())
         self.dejitter_preprocess_btn.setEnabled(not stopping and not upgrading and not self._sequence_shutdown
                                                and (worker is not None or (self.current_path is not None and bool(regions))))
         sequence = self._sequence_preview
@@ -881,7 +924,7 @@ class _BirdStampDejitterMixin:
             self._begin_sequence_progress('analysis')
         worker = EditorSequencePreviewWorker(
             token=self._sequence_epoch, path=path or self.current_path, seeds=seeds,
-            restore_only=restore_only, cache=SequencePreviewCache(),
+            restore_only=restore_only, cache=SequencePreviewCache(), tracking_cache=self._sequence_tracking_cache,
             template_paths=self.template_paths, sequence=self._sequence_preview,
             bird_boxes=self._bird_box_cache, parent=self,
         )
@@ -1105,6 +1148,7 @@ class _BirdStampDejitterMixin:
         self._sequence_export_open_workspace = False
         self._sequence_worker = None
         self._sequence_exporting = False
+        self._sequence_resume_dirty = True  # 本次分析写入了跟踪缓存
         worker.deleteLater()
         if workspace_result is not None:
             self._sequence_pending_path = None
