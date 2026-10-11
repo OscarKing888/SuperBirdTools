@@ -35,7 +35,7 @@ def key(window, kind, code, repeat=False):
 
 def test_media_controls_follow_dark_and_light_palette(window):
     transport = window.sequence_transport
-    buttons = (transport.play, transport.previous, transport.next,
+    buttons = (transport.play, transport.first, transport.previous, transport.next, transport.last,
                window.ab_preview.a_panel.play, window.ab_preview.b_panel.play)
     original = QPalette(window.palette())
     try:
@@ -84,6 +84,12 @@ def test_native_tabs_and_filmstrip_real_selection(window, monkeypatch):
     assert path_key(paths[1]) not in window._sequence_frames  # 首帧立即来自小预览。
     wait_until(lambda: path_key(paths[1]) in window._sequence_frames and window._sequence_worker is None)
     transport.previous.click()
+    assert window.current_path == paths[0]
+    assert not transport.first.isEnabled() and transport.last.isEnabled()
+    transport.last.click()
+    assert window.current_path == paths[-1]
+    assert transport.first.isEnabled() and not transport.last.isEnabled()
+    transport.first.click()
     assert window.current_path == paths[0]
     window.dejitter_view_tabs.setCurrentIndex(0)
     assert not transport.panel.isHidden()

@@ -60,11 +60,16 @@ class SequenceTransport(QObject):
         self.play.setMinimumSize(36, 32)
         self._update_play_button()
         self.play.clicked.connect(self.toggle)
+        self.first = QToolButton()
+        self.first.clicked.connect(lambda: self.jump(0))
         self.previous = QToolButton()
         self.previous.clicked.connect(lambda: self.step(-1))
         self.next = QToolButton()
         self.next.clicked.connect(lambda: self.step(1))
-        for button, label in ((self.previous, '上一张'), (self.next, '下一张')):
+        self.last = QToolButton()
+        self.last.clicked.connect(lambda: self.jump(-1))
+        for button, label in ((self.first, '第一帧'), (self.previous, '上一张'),
+                              (self.next, '下一张'), (self.last, '最后一帧')):
             button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
             button.setIconSize(self.play.iconSize())
             button.setMinimumSize(self.play.minimumSize())
@@ -83,7 +88,8 @@ class SequenceTransport(QObject):
         self.auto_fps_button.clicked.connect(editor._on_dejitter_auto_fps_requested)
         self.loop = QCheckBox('循环')
         self.loop.setChecked(True)
-        for widget in (self.play, self.previous, self.next, self.position, self.preparation):
+        for widget in (self.play, self.first, self.previous, self.next, self.last,
+                       self.position, self.preparation):
             row.addWidget(widget)
         row.addStretch(1)
         row.addWidget(self.fps)
@@ -109,13 +115,13 @@ class SequenceTransport(QObject):
         self._ordinary_canvas_focus_policy = canvas.focusPolicy()
         self.panel.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         editor.preview_label.setFocusProxy(canvas)
-        for button in (self.play, self.previous, self.next):
+        for button in (self.play, self.first, self.previous, self.next, self.last):
             button.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self._navigation_surfaces = (editor.photo_list._tree_widget,
                                      editor.photo_list._tree_widget.viewport(), canvas, editor.ab_preview.preview.canvas,
                                      self.strip, self.strip.viewport())
         self._result_surfaces = (self.panel, editor.preview_label, editor.dejitter_view_tabs,
-                                 self.play, self.previous, self.next, self.loop)
+                                 self.play, self.first, self.previous, self.next, self.last, self.loop)
         # 窗口只监听失活；避免子控件未处理的按键冒泡后误触发 B 图导航（尤其 A 图）。
         for surface in (editor, *self._navigation_surfaces, *self._result_surfaces):
             surface.installEventFilter(self)
@@ -413,8 +419,10 @@ class SequenceTransport(QObject):
         ready = bool(paths) and not self.editor._sequence_exporting
         self.play.setEnabled(ready and len(paths) > 1)
         self.auto_fps_button.setEnabled(ready and len(paths) > 1)
+        self.first.setEnabled(ready and index > 0)
         self.previous.setEnabled(ready and index > 0)
         self.next.setEnabled(ready and index < len(paths) - 1)
+        self.last.setEnabled(ready and index < len(paths) - 1)
         self.strip.setEnabled(ready)
         self.panel.setVisible(ready)
         ab = self.editor.ab_preview
@@ -461,6 +469,13 @@ class SequenceTransport(QObject):
         self.stop(commit=False)
         paths = self._active_paths()
         self._select(max(0, min(len(paths) - 1, self.index() + direction)))
+
+    def jump(self, index):
+        """跳到首帧（0）或末帧（-1）；与单步一致先停止播放。"""
+        self.stop(commit=False)
+        paths = self._active_paths()
+        if paths:
+            self._select(index % len(paths))
 
     def toggle(self):
         if self.active:
@@ -521,8 +536,10 @@ class SequenceTransport(QObject):
     def refresh_media_icons(self, color: QColor | None = None):
         color = color or self.editor.palette().color(QPalette.ColorRole.ButtonText)
         self._media_icon_color = QColor(color)
-        self.previous.setIcon(media_icon(self.previous, QStyle.StandardPixmap.SP_MediaSkipBackward, color))
-        self.next.setIcon(media_icon(self.next, QStyle.StandardPixmap.SP_MediaSkipForward, color))
+        self.first.setIcon(media_icon(self.first, QStyle.StandardPixmap.SP_MediaSkipBackward, color))
+        self.previous.setIcon(media_icon(self.previous, QStyle.StandardPixmap.SP_MediaSeekBackward, color))
+        self.next.setIcon(media_icon(self.next, QStyle.StandardPixmap.SP_MediaSeekForward, color))
+        self.last.setIcon(media_icon(self.last, QStyle.StandardPixmap.SP_MediaSkipForward, color))
         self._update_play_button(force=True, color=color)
 
     def _update_play_button(self, *, force=False, color: QColor | None = None):
