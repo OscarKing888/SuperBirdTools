@@ -174,6 +174,13 @@ def identify_individuals(source, client, analyzer, options=PerBirdOptions(), *, 
         values = {FIELD: json.dumps(records, ensure_ascii=False, allow_nan=False, separators=(",", ":")),
                   INFO_FIELD: json.dumps(info, ensure_ascii=False, allow_nan=False, separators=(",", ":"))}
         fields = {f"XMP-superpicky:{k}": v for k, v in values.items()}
+        from .per_bird_primary import auto_primary_individual, primary_fields
+        primary = auto_primary_individual(records)
+        if primary is not None:
+            # 只有一个已确认鸟种时与列表同一次提交，设为照片主要鸟名。
+            primary_values, primary_xmp = primary_fields(primary)
+            values.update(primary_values)
+            fields.update(primary_xmp)
         with xmp_sidecar_write_lock(source):
             client.check_cancelled()
             if before != (_fingerprint(source), _fingerprint(sidecar)):
@@ -183,8 +190,12 @@ def identify_individuals(source, client, analyzer, options=PerBirdOptions(), *, 
             saved = _fingerprint(sidecar)
         message = (f"找到 {len(records)} 只鸟，识别 {identified} 只，"
                    f"过滤 {sum(r['status'] == 'skipped' for r in records)} 只，失败 {failed} 只")
+        updates = {**values, **fields}
+        if primary is not None:
+            message += f"，已设为主要鸟名：{values['title']}"
+            updates["Title"] = values["title"]
         return BirdIDResult(source, "partial" if failed else "success", message,
-                            response={"individuals": records}, updates={**values, **fields}, saved_fingerprint=saved, source_fingerprint=before[0])
+                            response={"individuals": records}, updates=updates, saved_fingerprint=saved, source_fingerprint=before[0])
     except BirdIDCancelled:
         return BirdIDResult(source, "cancelled", "已停止，此照片原列表保留", response={"individuals": records})
     except Exception as exc:

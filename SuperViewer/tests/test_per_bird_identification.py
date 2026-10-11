@@ -179,6 +179,42 @@ def test_species_snapshot_selected_candidate_and_legacy_roundtrip(photo, monkeyp
     assert core.individual_species_metadata(legacy)['iucn_category'] is None
 
 
+@pytest.mark.parametrize("answers, title", [
+    ([("白鹭", 60), ("白鹭", 95)], "白鹭"),             # 多只同种：取最高分条目
+    ([("白鹭", 95), None], "白鹭"),                     # 另一只失败，只剩一个鸟种
+    ([("白鹭", 95), ("苍鹭", 30)], "整图鸟名"),         # 两个鸟种不自动设定
+    ([("白鹭", 30)], "整图鸟名"),                       # 唯一鸟种未达确认阈值
+])
+def test_single_confirmed_species_becomes_primary_in_same_write(photo, monkeypatch, answers, title):
+    store = PhotoMetaDataXMP()
+    assert store.write(str(photo), {"XMP-dc:Title": "整图鸟名", "XMP-dc:Description": "中文说明",
+                                    "XMP-xmp:Rating": 4, "XMP-superpicky:pinyin_name": "旧拼音"})
+    pending = list(answers)
+    def recognize(_):
+        answer = pending.pop(0)
+        if answer is None:
+            raise RuntimeError("离线服务错误")
+        return response(*answer)
+    analyzer = Analyzer([(0, 0, 100, 100), (160, 80, 320, 240)][:len(answers)])
+    writes = []
+    original = PhotoMetaDataXMP.write
+    monkeypatch.setattr(PhotoMetaDataXMP, "write", lambda self, *a: writes.append(a) or original(self, *a))
+    result = core.identify_individuals(photo, client(monkeypatch, recognize), analyzer)
+    assert result.status in {"success", "partial"}, result.message
+    assert len(writes) == 1
+    meta = store.read(str(photo))
+    assert meta["Title"] == title
+    assert meta["Description"] == "中文说明" and meta["rating"] == 4
+    assert len(core.read_individuals(meta)) == len(answers)
+    if title == "白鹭":
+        assert meta["bird_species_cn"] == "白鹭" and meta["bird_species_source"] == "individual"
+        assert float(meta["birdid_confidence"]) == 95 and not meta.get("pinyin_name")
+        assert result.updates["Title"] == "白鹭" and "已设为主要鸟名：白鹭" in result.message
+    else:
+        assert "bird_species_cn" not in meta and "Title" not in result.updates
+        assert "主要鸟名" not in result.message
+
+
 def test_rotated_original_is_cropped_in_display_coordinates(photo, monkeypatch):
     from bird_sharpness.image_source import load_analysis_image
     exif = Image.Exif()

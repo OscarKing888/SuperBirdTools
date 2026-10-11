@@ -16,7 +16,6 @@ from SuperViewer.superviewer.send_to_toolbar import (
     SEND_TO_TOOLBAR_OBJECT_NAME,
     create_send_to_toolbar,
     rebuild_send_to_toolbar,
-    send_to_app_hover_name,
 )
 
 
@@ -64,14 +63,6 @@ def test_toolbar_lists_each_external_app_with_icon_and_sends_it(tmp_path):
         window.close()
         window.deleteLater()
         _APP.processEvents()
-
-
-def test_hover_name_drops_app_suffix_and_falls_back_to_path_name():
-    assert send_to_app_hover_name({"name": "Adobe Photoshop 2026.app", "path": "/x"}) == "Adobe Photoshop 2026"
-    assert send_to_app_hover_name({"name": "Viewer.EXE", "path": "C:/x/Viewer.exe"}) == "Viewer"
-    assert send_to_app_hover_name({"name": "DxO PureRAW 6", "path": "/x"}) == "DxO PureRAW 6"
-    assert send_to_app_hover_name({"name": "", "path": "/Applications/Imaging Edge/Viewer.app"}) == "Viewer"
-    assert send_to_app_hover_name({"name": "", "path": ""}) == "未命名"
 
 
 def test_external_app_icon_prefers_existing_app_path(tmp_path, monkeypatch):

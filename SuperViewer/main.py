@@ -73,6 +73,7 @@ from app_common.send_to_app import (
     SingleInstanceReceiver,
     send_files_to_app,
     get_external_apps,
+    external_app_display_name,
 )
 from app_common.send_to_app.settings_ui import show_external_apps_settings_dialog
 from app_common.superviewer_user_options import (
@@ -835,8 +836,7 @@ class MainWindow(QMainWindow):
         if extern_apps:
             send_menu = file_menu.addMenu("发送到外部应用")
             for app in extern_apps:
-                name = (app.get("name") or app.get("path") or "未命名").strip()
-                act = QAction(name, self)
+                act = QAction(external_app_display_name(app), self)
                 act.triggered.connect(lambda checked=False, a=app: self._send_to_external_app(a))
                 send_menu.addAction(act)
         settings_act = QAction("外部应用设置...", self)

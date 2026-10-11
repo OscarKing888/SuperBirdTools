@@ -130,7 +130,8 @@ class _BirdStampDejitterRelayMixin:
         self._relay_changed()
         self._drop_manual_matches_for_source(path)
         self._invalidate_reference_tracking('接力选区已变化，请重新分析。')
-        self._sequence_message = (f'接力参考图 {Path(path).name}：{len(regions)} 个接力选区，请点击“分析并预览成片”。'
+        self._sequence_message = (f'接力参考图 {Path(path).name}：{len(regions)} 个接力选区。点击分析按钮继续，'
+                                  '之前已对齐的照片直接复用，只重新对齐使用接力选区的照片。'
                                   if regions else f'接力参考图 {Path(path).name} 尚未框选，分析时不会使用。')
         self._update_dejitter_reference_clear_enabled()
         self._apply_preview_overlay_options_from_ui()
