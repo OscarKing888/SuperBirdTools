@@ -239,7 +239,7 @@ class RegionRecommendationPanel(QWidget):
         e=self.editor
         if self.worker or e._sequence_worker is not None or e._sequence_shutdown:return
         if not e._reference_regions_editable():
-            e._on_edit_reference_photo();self._show_idle_message('请在参考图加载后点击一键推荐。');return
+            e._on_edit_reference_photo();self._show_idle_message('已切到当前照片所用的参考图，加载后再点一键推荐。');return
         if e.current_path is None:return
         from birdstamp.image_dejitter.matching_options import MatchingOptions
         auto={tuple(r) for r in self.metadata.get('auto_regions',[])}

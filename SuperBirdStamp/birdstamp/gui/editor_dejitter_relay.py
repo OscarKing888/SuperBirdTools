@@ -188,21 +188,22 @@ class _BirdStampDejitterRelayMixin:
         position = self._relay_position(path)
         self._sequence_message = (
             f'已将第 {position + 1} 张（{Path(path).name}）设为接力参考图。请在这张照片框选新的稳定纹理'
-            f'（也须在衔接照片 {bridge.name if bridge else ""} 中可见），然后重新分析；之后的照片改为匹配接力选区。')
+            f'（也须在衔接照片第 {anchor.bridge + 1} 张 {bridge.name} 中可见），然后重新分析；之后的照片改为匹配接力选区。')
         self._update_dejitter_reference_clear_enabled()
         self._update_dejitter_controls()
         self._refresh_preview_label(preserve_view=True)
 
     def _on_dejitter_relay_remove(self):
-        path = self.current_path
-        anchor = self._relay_anchor_for_path(path)
+        # 接力段内任一张照片都可移除其所属接力，不必先找到接力参考图本身。
+        anchor = self._relay_owner_for_path(self.current_path)
         if anchor is None:
             return
+        path = anchor.path
         self._dejitter_relay_anchors.pop(path_key(Path(path)), None)
         self._relay_changed()
         self._drop_manual_matches_for_source(path)
         self._invalidate_reference_tracking('已移除接力，请重新分析。')
-        self._sequence_message = f'已移除接力参考图 {Path(path).name}，请重新分析。'
+        self._sequence_message = f'已移除第 {anchor.index + 1} 张（{Path(path).name}）的接力，请重新分析。'
         self._update_dejitter_reference_clear_enabled()
         self._apply_preview_overlay_options_from_ui()
         self._on_output_settings_changed()
@@ -211,17 +212,57 @@ class _BirdStampDejitterRelayMixin:
         self._schedule_workspace_autosave()
 
     def _relay_status_text(self):
-        """当前照片所属定义的说明；无接力时为空。"""
-        plan = self._relay_plan()
-        if not plan[2]:
+        """当前照片与接力的关系；整条链由接力链列表显示，这里只补充当前照片需要注意的事。"""
+        if not self._relay_plan()[2]:
             return ''
-        names = '、'.join(f'第 {a.index + 1} 张' + ('（未框选）' if not a.regions else '') for a in plan[2])
-        text = f'接力参考图：{names}'
         owner = self._relay_owner_for_path(self.current_path)
-        if owner is not None and not owner.regions:
-            text += f'\n当前接力参考图尚未框选；框选前分析时忽略，其后照片仍匹配上一组选区。'
-        elif owner is not None:
-            bridge = self._relay_bridge_path(owner)
-            text += (f'\n当前照片匹配第 {owner.index + 1} 张的 {len(owner.regions)} 个接力选区'
-                     + (f'，经第 {owner.bridge + 1} 张（{bridge.name}）接回原参考图。' if bridge else '。'))
-        return text
+        if owner is None:
+            return '当前照片匹配原参考图的选区。'
+        bridge = self._relay_bridge_path(owner)
+        if not owner.regions:
+            return (f'当前接力参考图尚未框选；框选前分析时忽略，其后照片仍匹配上一组选区。'
+                    + (f'\n新纹理须同时出现在衔接照片第 {owner.bridge + 1} 张（{bridge.name}）中。' if bridge else ''))
+        if self._relay_anchor_for_path(self.current_path) is not None:
+            return (f'这张是接力参考图，经衔接照片第 {owner.bridge + 1} 张（{bridge.name}）接回原参考图。'
+                    if bridge else '这张是接力参考图。')
+        return f'当前照片匹配第 {owner.index + 1} 张接力参考图的 {len(owner.regions)} 个接力选区。'
+
+    def _region_group_status(self):
+        """(状态, 悬停说明)：始终描述当前照片所用的选区组，与选区列表、清除按钮一致。"""
+        source = getattr(self, '_dejitter_reference_source', None)
+        regions = tuple(getattr(self, '_dejitter_reference_regions', ()))
+        reference = f'{Path(source).name} · {len(regions)} 个选区' if source and regions else ''
+        check = getattr(self, 'dejitter_reference_check', None)
+        if reference and check is not None and not check.isChecked():
+            reference += ' · 已停用'
+        owner = self._relay_owner_for_path(getattr(self, 'current_path', None)) if reference else None
+        if owner is None:
+            return (f'参考图 {reference}' if reference else '尚未选择参考区'), str(source or '')
+        count = f'{len(owner.regions)} 个接力选区' if owner.regions else '尚未框选'
+        return (f'接力参考图 {owner.path.name}（第 {owner.index + 1} 张）· {count}',
+                f'{owner.path}\n原参考图：{reference}')
+
+    def _relay_chain_rows(self):
+        """接力链列表：[(定义源图, 文本, 是否当前照片所属)]；没有接力时为空。
+
+        覆盖范围按生效归属计算，与分析一致；未框选的接力只列出，不计范围。
+        """
+        paths, _, anchors, owners, _ = self._relay_plan()
+        if not anchors:
+            return []
+        span = lambda indices: (f'第 {indices[0] + 1} 张' if len(indices) == 1 else
+                                f'第 {indices[0] + 1}–{indices[-1] + 1} 张') if indices else '无'
+        current = self._relay_owner_for_path(self.current_path)
+        source = Path(self._dejitter_reference_source)
+        reference_index = self._relay_position(source)
+        where = f'第 {reference_index + 1} 张' if reference_index is not None else f'{source.name}（不在列表中）'
+        rows = [(source, f'参考图 · {where} · {len(self._dejitter_reference_regions)} 个选区 · 用于'
+                         f'{span([i for i, o in enumerate(owners) if o is None])}', current is None)]
+        for anchor in anchors:
+            if anchor.regions:
+                used = span([i for i, o in enumerate(owners) if o is not None and o.index == anchor.index])
+                text = f'接力 · 第 {anchor.index + 1} 张 · {len(anchor.regions)} 个选区 · 用于{used}'
+            else:
+                text = f'接力 · 第 {anchor.index + 1} 张 · 未框选（分析时忽略）'
+            rows.append((anchor.path, text, current is not None and current.index == anchor.index))
+        return rows

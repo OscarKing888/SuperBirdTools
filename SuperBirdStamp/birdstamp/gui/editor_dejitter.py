@@ -8,7 +8,7 @@ from app_common.raw_preview_geometry import RAW_FOCUS_CROP_KEY
 from app_common.collapsible_section import CollapsibleSection
 
 from PyQt6.QtGui import QPixmap
-from PyQt6.QtWidgets import QTabBar, QCheckBox, QComboBox, QFileDialog, QListWidget, QHBoxLayout, QLabel, QProgressBar, QPushButton, QSizePolicy, QSlider, QSpinBox, QVBoxLayout, QWidget
+from PyQt6.QtWidgets import QTabBar, QCheckBox, QComboBox, QFileDialog, QListWidget, QListWidgetItem, QHBoxLayout, QLabel, QProgressBar, QPushButton, QSizePolicy, QSlider, QSpinBox, QVBoxLayout, QWidget
 from PyQt6.QtCore import Qt, QTimer
 
 from app_common.toggle_button import ToggleToolButton
@@ -207,7 +207,8 @@ class _BirdStampDejitterMixin:
         self.dejitter_edit_reference_btn = ToggleToolButton('框选参考区')
         self.dejitter_edit_reference_btn.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextOnly)
         self.dejitter_edit_reference_btn.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-        self.dejitter_edit_reference_btn.setToolTip('开启后在参考图上框选、追加或调整选区；已有参考图时自动定位到参考图。')
+        self.dejitter_edit_reference_btn.setToolTip('开启后在参考图上框选、追加或调整选区；已有参考图时自动定位到参考图，\n'
+                                                    '接力段内的照片定位到所属接力参考图。')
         self.dejitter_edit_reference_btn.setAccessibleName('框选参考区')
         self.dejitter_edit_reference_btn.clicked.connect(self._on_edit_reference_toggled)
         self.dejitter_auto_regions_btn = QPushButton('一键推荐选区')
@@ -252,11 +253,21 @@ class _BirdStampDejitterMixin:
         self.dejitter_relay_add_btn.setToolTip(self._dejitter_relay_tooltip)
         self.dejitter_relay_add_btn.clicked.connect(self._on_dejitter_relay_add)
         self.dejitter_relay_remove_btn = QPushButton('移除接力')
-        self.dejitter_relay_remove_btn.setToolTip('移除当前接力参考图；其后照片恢复匹配上一组选区。')
         self.dejitter_relay_remove_btn.clicked.connect(self._on_dejitter_relay_remove)
         relay_row.addWidget(self.dejitter_relay_add_btn, 1)
         relay_row.addWidget(self.dejitter_relay_remove_btn)
         form.addLayout(relay_row)
+        # 接力链：原参考图与各接力参考图各一行，标出各自用于哪些照片；点击切到该照片并进入框选。
+        self.dejitter_relay_chain = QListWidget()
+        self.dejitter_relay_chain.setAccessibleName('接力链')
+        self.dejitter_relay_chain.setMaximumHeight(90)
+        self.dejitter_relay_chain.setWordWrap(True)
+        self.dejitter_relay_chain.setToolTip('每一行是一组选区及其用于的照片；当前照片所用的一组高亮。\n'
+                                             '点击切到该照片并开启框选，可直接修改这一组选区。')
+        self.dejitter_relay_chain.itemClicked.connect(self._on_relay_chain_activated)
+        self.dejitter_relay_chain.itemActivated.connect(self._on_relay_chain_activated)
+        self.dejitter_relay_chain.hide()
+        form.addWidget(self.dejitter_relay_chain)
         self.dejitter_relay_status = QLabel()
         self.dejitter_relay_status.setWordWrap(True)
         self.dejitter_relay_status.hide()
@@ -377,8 +388,14 @@ class _BirdStampDejitterMixin:
             return 2, '正在分析整组照片；完成后在“成片预览”检查效果。'
         if sequence is not None and not sequence.partial:
             return 3, '下一步：在“成片预览”检查效果，然后点击“去抖动导出全部”。'
+        relay = self._relay_anchor_for_path(self.current_path)
+        if relay is not None and not relay.regions:
+            bridge = self._relay_bridge_path(relay)
+            return 1, ('下一步：在这张接力参考图框选新的稳定纹理，或“一键推荐选区”；'
+                       f'纹理须在衔接照片第 {relay.bridge + 1} 张{f"（{bridge.name}）" if bridge else ""}中同样可见。'
+                       '完成后点击“分析并预览成片”。')
         if sequence is not None:
-            return 2, '部分照片未匹配：切到失败照片拖动选区修正位置，再重新分析。'
+            return 2, self._dejitter_partial_step(sequence)
         if self.current_path is None:
             return 1, '请先导入并选择照片。'
         if not regions:
@@ -390,7 +407,21 @@ class _BirdStampDejitterMixin:
             if target_missing:
                 step += '\n两段式：建议先“选择目标鸟…”（参考图只有一只鸟时可省略）。'
             return 1, step
+        drafts = [a for a in self._relay_plan()[2] if not a.regions]
+        if drafts:
+            names = '、'.join(f'第 {a.index + 1} 张' for a in drafts)
+            return 2, f'下一步：点击“分析并预览成片”。\n接力参考图 {names} 尚未框选，分析时忽略；点击接力链对应行去框选。'
         return 2, '下一步：点击“分析并预览成片”。'
+
+    def _dejitter_partial_step(self, sequence):
+        """分析在某张失败时的下一步：少量偏移手动修正，原选区出画/被遮挡则接力。"""
+        failed = sequence.failure.source_path if sequence.failure is not None else None
+        label = _sequence_failure_photo_label(failed, self._list_photo_paths()) if failed else ''
+        where = label.replace('图像', '') if label else '部分照片'
+        if failed is None or self._relay_add_block_reason(Path(failed), ignore_worker=True):
+            return f'{where}未匹配：切到该照片拖动选区修正位置，再重新分析。'
+        return (f'{where}未匹配。个别选区偏移：在该照片拖动选区修正；'
+                '原选区已出画或被遮挡：在该照片点“从当前照片接力追踪”，框选新纹理。完成后重新分析。')
 
     def _sync_dejitter_hud(self):
         hud = getattr(self, 'dejitter_hud', None)
@@ -640,6 +671,30 @@ class _BirdStampDejitterMixin:
             self._on_edit_mode_changed()
         self._sync_edit_reference_toggle()
 
+    def _sync_relay_chain(self):
+        chain = getattr(self, 'dejitter_relay_chain', None)
+        if chain is None:
+            return
+        rows = self._relay_chain_rows()
+        texts = [text for _path, text, _current in rows]
+        chain.blockSignals(True)
+        if texts != [chain.item(i).text() for i in range(chain.count())]:
+            chain.clear()
+            for path, text, _current in rows:
+                item = QListWidgetItem(text)
+                item.setData(Qt.ItemDataRole.UserRole, str(path))
+                item.setToolTip(f'{text}\n{path}')
+                chain.addItem(item)
+        current = next((index for index, row in enumerate(rows) if row[2]), -1)
+        chain.setCurrentRow(current)
+        chain.blockSignals(False)
+        chain.setVisible(bool(rows))
+
+    def _on_relay_chain_activated(self, item):
+        path = item.data(Qt.ItemDataRole.UserRole) if item is not None else None
+        if path and self._sequence_worker is None:
+            self._edit_definition_photo(Path(path))
+
     def _on_dejitter_auto_regions(self):
         panel = self.dejitter_recommendation
         if panel.worker is not None:
@@ -693,18 +748,20 @@ class _BirdStampDejitterMixin:
         self.dejitter_recommendation.sync(self.dejitter_subject_controls.method.currentData() == 'subject_local')
         regions = getattr(self, '_dejitter_reference_regions', ())
         source = self._dejitter_reference_source
-        relay = self._relay_anchor_for_path(self.current_path)
-        owner = relay or self._relay_owner_for_path(self.current_path)
-        status = f'{Path(source).name} · {len(regions)} 个选区' if source and regions else '尚未选择参考区'
-        if relay is not None:
-            status = f'接力参考图 {relay.path.name} · {len(relay.regions)} 个接力选区（原参考：{status}）'
+        owner = self._relay_owner_for_path(self.current_path)
+        status, status_tip = self._region_group_status()
         self.dejitter_reference_status.setText(status)
+        self.dejitter_reference_status.setToolTip(status_tip)
         self.dejitter_reference_strength_slider.setEnabled(bool(regions))
         relay_block = self._relay_add_block_reason(self.current_path)
         self.dejitter_relay_add_btn.setEnabled(not relay_block)
         self.dejitter_relay_add_btn.setToolTip(self._dejitter_relay_tooltip
                                                + (f'\n\n当前不可用：{relay_block}' if relay_block else ''))
-        self.dejitter_relay_remove_btn.setEnabled(relay is not None and self._sequence_worker is None)
+        self.dejitter_relay_remove_btn.setEnabled(owner is not None and self._sequence_worker is None)
+        self.dejitter_relay_remove_btn.setToolTip(
+            f'移除第 {owner.index + 1} 张（{owner.path.name}）的接力及其手动修正；其后照片恢复匹配上一组选区。'
+            if owner is not None else '当前照片未使用接力。')
+        self._sync_relay_chain()
         relay_text = self._relay_status_text()
         self.dejitter_relay_status.setText(relay_text)
         self.dejitter_relay_status.setVisible(bool(relay_text))
@@ -750,7 +807,12 @@ class _BirdStampDejitterMixin:
                 self.dejitter_region_list.addItems(labels)
                 self.dejitter_region_list.blockSignals(False)
             self.dejitter_delete_region_btn.setEnabled(bool(self.dejitter_region_list.selectedItems()))
-            self.dejitter_reference_clear_btn.setEnabled(bool(relay.regions if relay is not None else regions))
+            self.dejitter_reference_clear_btn.setEnabled(bool(owner.regions if owner is not None else regions))
+            # 清除只作用于列表中的这一组：接力段内不会连带清掉原参考区。
+            self.dejitter_reference_clear_btn.setText('清除接力选区' if owner is not None else '清除全部')
+            self.dejitter_reference_clear_btn.setToolTip(
+                f'只清除第 {owner.index + 1} 张接力参考图的选区；原参考区和其它接力保留。' if owner is not None else
+                '清除原参考区；同时清除全部接力和手动修正。')
         if not self._dejitter_tab_active():
             return
         worker = self._sequence_worker

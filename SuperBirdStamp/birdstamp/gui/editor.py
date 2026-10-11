@@ -3129,12 +3129,15 @@ class BirdStampEditorWindow(
         self._on_output_settings_changed()
 
     def _on_dejitter_reference_clear(self) -> None:
-        if self._relay_anchor_for_path(self.current_path) is not None:
-            # 接力参考图上只清除接力选区，保留原参考区和其它接力。
-            self._commit_relay_regions(self.current_path, ())
+        owner = self._relay_owner_for_path(self.current_path)
+        if owner is not None:
+            # 接力段内只清除所属接力的选区（与列表显示一致），保留原参考区和其它接力。
+            self._commit_relay_regions(owner.path, ())
             self._refresh_preview_label(preserve_view=True)
             return
         if not self._dejitter_reference_regions:
+            return
+        if not self._confirm_dejitter_reference_clear():
             return
         self._dejitter_manual_matches.clear()
         self._clear_relay_anchors()
@@ -3146,6 +3149,20 @@ class BirdStampEditorWindow(
         self._update_dejitter_reference_clear_enabled()
         self._apply_preview_overlay_options_from_ui()
         self._on_output_settings_changed()
+
+    def _confirm_dejitter_reference_clear(self) -> bool:
+        """清除原参考区会连带清除全部接力；有接力时先确认，避免在接力段外误点丢失整条链。"""
+        relays = len(getattr(self, "_dejitter_relay_anchors", {}))
+        if not relays:
+            return True
+        answer = QMessageBox.question(
+            self, "清除全部选区",
+            f"清除原参考区会同时清除 {relays} 张接力参考图及其选区和手动修正。\n"
+            "只想重新框选某段接力时，请先切到该接力段的照片再清除。\n\n确定清除全部吗？",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        return answer == QMessageBox.StandardButton.Yes
 
     def _on_canvas_reference_region_changed(
         self, regions: tuple[tuple[float, float, float, float], ...]
@@ -3164,22 +3181,18 @@ class BirdStampEditorWindow(
 
     def _update_dejitter_reference_clear_enabled(self) -> None:
         btn = getattr(self, "dejitter_reference_clear_btn", None)
-        relay = self._relay_anchor_for_path(getattr(self, "current_path", None))
+        owner = self._relay_owner_for_path(getattr(self, "current_path", None))
+        regions = getattr(self, "_dejitter_reference_regions", ())
         if btn is not None:
-            btn.setEnabled(bool(relay.regions if relay is not None else getattr(self, "_dejitter_reference_regions", ())))
+            btn.setEnabled(bool(owner.regions if owner is not None else regions))
         check = getattr(self, "dejitter_reference_check", None)
         if check is not None:
-            regions = getattr(self, "_dejitter_reference_regions", ())
             check.setEnabled(bool(regions))
             self.dejitter_reference_strength_slider.setEnabled(bool(regions) and check.isChecked())
             self.dejitter_reference_value_label.setText(f"{self.dejitter_reference_strength_slider.value()}%")
-            source = getattr(self, "_dejitter_reference_source", None)
-            state = "已启用" if check.isChecked() else "已停用"
-            text = f"{Path(source).name} · {len(regions)} 个区域 · {state}" if source and regions else "尚未选择参考区"
-            if relay is not None:
-                text = f"接力参考图 {relay.path.name} · {len(relay.regions)} 个接力选区（原参考：{text}）"
+            text, tooltip = self._region_group_status()
             self.dejitter_reference_status.setText(text)
-            self.dejitter_reference_status.setToolTip(str(relay.path if relay is not None else source or ""))
+            self.dejitter_reference_status.setToolTip(tooltip)
         self._update_reference_tracking_controls()
 
     def _get_crop_padding_state(self) -> dict[str, Any]:

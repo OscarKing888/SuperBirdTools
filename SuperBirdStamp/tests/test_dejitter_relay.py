@@ -194,6 +194,8 @@ def test_gui_relay_from_failed_photo_reanalyzes_whole_group(window, monkeypatch,
     _analyze(window)
     assert window._sequence_preview.partial
     assert window._sequence_message.count('接力追踪') == 1
+    step, hint = window._dejitter_next_step()  # HUD 同时给出手动修正与接力两种处理
+    assert step == 2 and '第 4/6 张未匹配' in hint and '接力追踪' in hint, hint
 
     _select(window, paths[3])
     window._refresh_preview_label()
@@ -255,3 +257,74 @@ def test_gui_relay_from_failed_photo_reanalyzes_whole_group(window, monkeypatch,
     assert window._relay_anchor_for_path(paths[3]) is None
     assert not window._manual_record_for_path(paths[4])
     assert RELAY_ANCHORS_KEY not in window._build_dejitter_seeds(paths)[0].settings
+
+
+def test_gui_relay_selection_ops_follow_current_group(window, monkeypatch, tmp_path):
+    """选区组的状态、清除、移除和跳转都作用于当前照片所用的那一组，接力链标出各组用于哪些照片。"""
+    from PyQt6.QtWidgets import QMessageBox
+    paths = write_frames(tmp_path / 'ops')
+    monkeypatch.setattr(window, '_list_photo_paths', lambda: list(paths))
+    monkeypatch.setattr(window, '_schedule_async_bird_detect', lambda *a: None)
+    window._preview_outer_pad = (0, 0, 0, 0)
+    window.export_tabs.setCurrentWidget(window.dejitter_page)
+    _select(window, paths[0])
+    window._commit_source_reference_regions(paths[0], (BASE,))
+    window._update_dejitter_controls()
+    assert window.dejitter_relay_chain.isHidden()  # 无接力时不占位
+    assert window.dejitter_reference_clear_btn.text() == '清除全部'
+
+    # 新建的接力参考图尚未框选：下一步直接提示框选，并点明衔接照片；接力链列出但不计范围。
+    _select(window, paths[3])
+    window._update_dejitter_controls()
+    window.dejitter_relay_add_btn.click()
+    step, hint = window._dejitter_next_step()
+    assert step == 1 and '接力参考图' in hint and '第 3 张' in hint, hint
+    chain = window.dejitter_relay_chain
+    assert not chain.isHidden() and chain.count() == 2
+    assert '未框选' in chain.item(1).text() and chain.currentRow() == 1
+    window._commit_source_reference_regions(paths[3], (RELAY,))
+    window._update_dejitter_controls()
+    assert chain.item(0).text().endswith('用于第 1–3 张')
+    assert chain.item(1).text().endswith('用于第 4–6 张')
+
+    # 接力段内的普通照片：状态、列表、清除、移除都指向所属接力，不再显示/清除原参考区。
+    _select(window, paths[5])
+    window._update_dejitter_controls()
+    assert window.dejitter_reference_status.text().startswith('接力参考图 照片3.png（第 4 张）')
+    assert window.dejitter_region_list.item(0).text().startswith('接力选区 1')
+    assert window.dejitter_reference_clear_btn.text() == '清除接力选区'
+    assert window.dejitter_relay_remove_btn.isEnabled() and chain.currentRow() == 1
+    jumps = []
+    monkeypatch.setattr(window, '_edit_definition_photo', lambda path=None: jumps.append(path))
+    window._on_edit_reference_photo()  # “框选参考区”跳到所属接力参考图，而不是原参考图
+    chain.itemClicked.emit(chain.item(0))
+    assert jumps == [paths[3], paths[0]]
+    window.dejitter_reference_clear_btn.click()
+    assert window._dejitter_reference_regions == (BASE,)
+    assert window._relay_anchor_for_path(paths[3]) is not None
+    assert not window._relay_anchor_for_path(paths[3]).regions
+
+    window._commit_source_reference_regions(paths[3], (RELAY,))
+    _select(window, paths[4])
+    window._update_dejitter_controls()
+    window.dejitter_relay_remove_btn.click()
+    assert window._relay_anchor_for_path(paths[3]) is None
+    assert window.dejitter_relay_chain.isHidden()
+
+    # 原参考区连带清除全部接力：先确认，取消时不改动任何选区。
+    _select(window, paths[3])
+    window._update_dejitter_controls()
+    window.dejitter_relay_add_btn.click()
+    window._commit_source_reference_regions(paths[3], (RELAY,))
+    _select(window, paths[1])
+    window._update_dejitter_controls()
+    assert window.dejitter_reference_clear_btn.text() == '清除全部'
+    asked = []
+    monkeypatch.setattr(QMessageBox, 'question',
+                        lambda *a, **k: asked.append(a) or QMessageBox.StandardButton.No)
+    window.dejitter_reference_clear_btn.click()
+    assert asked and window._dejitter_reference_regions == (BASE,)
+    assert window._relay_anchor_for_path(paths[3]) is not None
+    monkeypatch.setattr(QMessageBox, 'question', lambda *a, **k: QMessageBox.StandardButton.Yes)
+    window.dejitter_reference_clear_btn.click()
+    assert not window._dejitter_reference_regions and not window._dejitter_relay_anchors
