@@ -295,6 +295,7 @@ def test_progress_layout_and_escape(controller, clip, tmp_path, monkeypatch, the
 def test_main_window_video_menu_exports_and_closes(clip, tmp_path, monkeypatch, mode):
     import importlib
     from app_common import superviewer_user_options
+    from app_common.file_browser import FileListPanel
     from SuperViewer.superviewer import paths_settings
     from SuperViewer.superviewer.file_context_menu import build_file_context_menu
     from SuperViewer.superviewer.tagged_file_list import SuperViewerTaggedFileListPanel
@@ -313,6 +314,9 @@ def test_main_window_video_menu_exports_and_closes(clip, tmp_path, monkeypatch, 
     monkeypatch.setattr(main, "SuperViewerTaggedFileListPanel",
                         lambda: SuperViewerTaggedFileListPanel(tag_config_path=tags))
     monkeypatch.setattr(ui.QFileDialog, "getExistingDirectory", lambda *a: str(tmp_path / "output"))
+    # tmp_path has no .superpicky directory: the thumbnail-cache prompt is a modal
+    # QMessageBox that nobody can answer offscreen. Decline it like a user would.
+    monkeypatch.setattr(FileListPanel, "_prompt_create_superpicky_cache_scope", lambda self, _count: False)
     window = main.MainWindow(initial_received_files=["skip-restore"])
     window.show()
     menu = None
