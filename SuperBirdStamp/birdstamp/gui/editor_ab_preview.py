@@ -510,6 +510,7 @@ class ABPreview(QObject):
             if apply_alignment_crop(state, sequence, key):
                 options.show_crop_effect = self.a_panel.overlays.crop.isChecked()
         if self.frame is None:
+            state.region_drafts = editor.dejitter_recommendation.draft_overlays(self.path)
             transform_source_overlays(state, self.camera_crop_box)
         self.preview.apply_overlay_options(options)
         self.preview.apply_overlay_state(state)

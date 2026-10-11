@@ -10,6 +10,7 @@ from birdstamp.image_dejitter.bird_parts.pose import PART_LABELS
 from birdstamp.image_dejitter.bird_parts.model_store import install_model
 from birdstamp.image_dejitter.region_tracking_result import image_file_signature
 from .bird_model_status import BirdModelStatus
+from .editor_utils import path_key
 
 
 class RecommendationWorker(QThread):
@@ -55,6 +56,9 @@ class RegionRecommendationPanel(QWidget):
         self.task_kind=None
         self._shutdown=False
         self._draft_context=None
+        # 背景推荐进行中的草稿 (参考图 path_key, ((框, 'pending'|'failed'), …))；只画在画布上，不进入选区。
+        self._drafts=None
+        self._draft_reference=None
         # 面板只承载“2. 选区”中的候选草稿；部位、目标鸟和模型控件由编辑器放入“1. 方式”。
         layout=QVBoxLayout(self);layout.setContentsMargins(0,0,0,0)
         self.part_label=QLabel('稳定部位')
@@ -152,7 +156,38 @@ class RegionRecommendationPanel(QWidget):
     def cancel(self):
         self._snapshot=None
         self.candidates.clear();self._draft_context=None
+        self._clear_drafts()
         if self.worker:self.worker.requestInterruption()
+
+    def draft_overlays(self, path):
+        """画布叠加：只在推荐所用的参考图上显示，编号与“候选”文字区分于已确定的选区。"""
+        if self._drafts is None or path is None or path_key(Path(path)) != self._drafts[0]:
+            return ()
+        return tuple((tuple(box), f'候选 {index+1}' + (' · 失配' if state == 'failed' else ''), state == 'failed')
+                     for index, (box, state) in enumerate(self._drafts[1]))
+
+    def _clear_drafts(self):
+        if self._drafts is not None:
+            self._drafts=None
+            self._refresh_drafts()
+
+    def _refresh_drafts(self):
+        e=self.editor
+        if self._shutdown or not hasattr(e,'preview_label'):return
+        e._refresh_preview_label(preserve_view=True)
+        ab=getattr(e,'ab_preview',None)
+        if ab is not None and ab.enabled.isChecked():ab.sync()
+
+    def _coverage_hint(self, result):
+        """把核心按文件名给出的覆盖范围换成照片列表位置，便于直接切过去接力。"""
+        coverage=getattr(result,'coverage',None) or {}
+        if 'first_bad' not in coverage:return ''
+        keys=[path_key(Path(p)) for p in self.editor._list_photo_paths()]
+        positions=[keys.index(path_key(Path(coverage[k]))) for k in ('last_ok','first_bad')
+                   if path_key(Path(coverage[k])) in keys]
+        if len(positions) != 2:return ''
+        low,high=sorted(positions)
+        return f'\n对应照片列表第 {low+1}–{high+1} 张：分析在这一段失败时，在失败照片点“从当前照片接力追踪”。'
 
     def shutdown(self):
         self._shutdown=True;self.cancel()
@@ -183,6 +218,7 @@ class RegionRecommendationPanel(QWidget):
             interrupted=self.worker.isInterruptionRequested()
             self.worker=None
             self.task_kind=None
+            self._clear_drafts()
             if self._installing:
                 self.model_status.refresh(force=True)
             # 结束后的结论（含“已丢弃旧推荐”“模型已安装”）成为预览区 HUD 的当前状态。
@@ -248,6 +284,7 @@ class RegionRecommendationPanel(QWidget):
         # 接力参考图只补足接力选区，抽样预检也只用匹配这组选区的照片。
         manual=tuple(regions) if relay else tuple(r for r in regions if tuple(r) not in auto)
         reference=Path(source or e.current_path)
+        self._draft_reference=path_key(reference)
         paths=e._definition_paths_for_path(e.current_path)
         kwargs=dict(method=e.dejitter_subject_controls.method.currentData(),existing=manual,
                     target=self.metadata.get('target'),part=self.part.currentData(),
@@ -265,6 +302,10 @@ class RegionRecommendationPanel(QWidget):
     def on_candidates(self, result):
         if (self.sender() is self.worker and not self._shutdown and not self.worker.isInterruptionRequested()
                 and self._snapshot is not None and self._snapshot==self.context()):
+            if getattr(result,'drafts',()):
+                self._drafts=(self._draft_reference,tuple(result.drafts))
+                self._refresh_drafts()
+                return
             self._show_candidates(result)
 
     def _show_idle_message(self, text):
@@ -292,6 +333,7 @@ class RegionRecommendationPanel(QWidget):
 
     def on_ready(self, result):
         if self.sender() is not self.worker or self._shutdown or self.worker.isInterruptionRequested():return
+        self._clear_drafts()
         if self._installing:
             self.status.setText('部位模型已安装；照片在本机处理。');return
         if self._snapshot is None or self._snapshot != self.context() or self.editor._sequence_shutdown:
@@ -305,7 +347,7 @@ class RegionRecommendationPanel(QWidget):
                 f"{d.get('file','')} {PART_LABELS.get(d.get('part'),'')}：{d['reason']}"
                 for d in result.diagnostics if d.get('reason') and not d.get('passed',False)))
             detail='\n'.join(reasons[:3])
-            message=result.message + ('\n'+detail if detail else '')
+            message=result.message + self._coverage_hint(result) + ('\n'+detail if detail else '')
             self.status.setText(message)
             self.status.setToolTip('\n'.join(reasons))
             self.editor._sequence_message=message
@@ -315,7 +357,7 @@ class RegionRecommendationPanel(QWidget):
         if e._relay_anchor_for_path(e.current_path) is not None:
             # 接力选区不改写原参考区的推荐元数据。
             e._commit_source_reference_regions(e.current_path,(*e._definition_for_path(e.current_path)[1],*result.regions))
-            self.status.setText(f'已补充接力选区。{result.message}')
+            self.status.setText(f'已补充接力选区。{result.message}{self._coverage_hint(result)}')
             e._sequence_message=self.status.text();e._update_dejitter_controls()
             e._refresh_preview_label(preserve_view=True)
             return
@@ -324,7 +366,7 @@ class RegionRecommendationPanel(QWidget):
         e._commit_source_reference_regions(e.current_path,(*manual,*result.regions))
         self.metadata=result.metadata
         label=PART_LABELS.get(result.part,'背景')
-        self.status.setText(f'推荐：{label}。{result.message}')
+        self.status.setText(f'推荐：{label}。{result.message}{self._coverage_hint(result)}')
         e._on_output_settings_changed();e._schedule_workspace_autosave();e._update_dejitter_controls()
         e._sequence_message=self.status.text()
         self._show_candidates(result)

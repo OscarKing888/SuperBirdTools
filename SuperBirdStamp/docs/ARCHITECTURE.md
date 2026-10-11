@@ -266,7 +266,7 @@ RAW 源图的去抖动分析、成片预览和导出统一优先读取长边至�
 
 ### 局部主体去抖动
 
-按算法一键选区由 [region_recommendation.py](../birdstamp/image_dejitter/region_recommendation.py) 和 [RegionRecommendationPanel](../birdstamp/gui/region_recommendation_panel.py) 接入。基本方法推荐通过抽样的背景组合；可选 HRNet 鸟类部位识别目前实验性、默认关闭。局部分析恢复源坐标后复用现有导出。CLI `recommend-regions` / `bird-parts-model`、模型安装、缓存及验证边界见 [自动参考区](AUTO_REFERENCE_REGIONS.md)。
+按算法一键选区由 [region_recommendation.py](../birdstamp/image_dejitter/region_recommendation.py) 和 [RegionRecommendationPanel](../birdstamp/gui/region_recommendation_panel.py) 接入。基本方法由 [background_regions.py](../birdstamp/image_dejitter/background_regions.py) 先在抽样上求整组一致的运动层（RANSAC），再按格配额挑选并复核，整组不一致时报告可覆盖范围供接力；推荐进行中的草稿经 `EditorPreviewOverlayState.region_drafts` 画在画布上，不进入选区；可选 HRNet 鸟类部位识别目前实验性、默认关闭。局部分析恢复源坐标后复用现有导出。CLI `recommend-regions` / `bird-parts-model`、模型安装、缓存及验证边界见 [自动参考区](AUTO_REFERENCE_REGIONS.md)。
 
 模型按钮由 [BirdModelStatus](../birdstamp/gui/bird_model_status.py) 后台完整性校验驱动：已校验模型禁用下载，文件属性变化触发重新校验，校验线程参与窗口关闭等待。
 

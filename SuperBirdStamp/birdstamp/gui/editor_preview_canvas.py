@@ -63,6 +63,8 @@ class EditorPreviewOverlayState(PreviewOverlayState):
     union_box: "NormalizedBox | None" = None
     platform_safe_area_box: "NormalizedBox | None" = None
     platform_safe_area: str = 'off'
+    # 一键推荐进行中的草稿：((框, 文字, 是否已失配), …)；只供观看，不可编辑、不写入选区。
+    region_drafts: tuple = ()
 
 
 @dataclass(slots=True)
@@ -114,6 +116,7 @@ class EditorPreviewCanvas(CropResolutionOverlayMixin, FocusCenteredPreviewCanvas
         self._video_safe_frame_size: tuple[int, int] | None = None
         self._platform_safe_area_box = None
         self._platform_safe_area = 'off'
+        self._region_drafts: tuple = ()
         self._reference_regions: tuple["NormalizedBox", ...] = ()
         self._reference_diagnostics: tuple = ()
         self._subject_points: tuple = ()
@@ -406,7 +409,7 @@ class EditorPreviewCanvas(CropResolutionOverlayMixin, FocusCenteredPreviewCanvas
         changed = super()._apply_overlay_state_data(state)
         if not isinstance(state, EditorPreviewOverlayState):
             return changed
-        for name in ('platform_safe_area_box', 'platform_safe_area'):
+        for name in ('platform_safe_area_box', 'platform_safe_area', 'region_drafts'):
             value = getattr(state, name)
             if getattr(self, '_'+name) != value:
                 setattr(self, '_'+name, value)
@@ -461,6 +464,7 @@ class EditorPreviewCanvas(CropResolutionOverlayMixin, FocusCenteredPreviewCanvas
             mode.cancel(self)
         self._reference_regions = ()
         self._reference_diagnostics = ()
+        self._region_drafts = ()
         self._subject_points = ()
         self._alignment_crop_box = None
         self._intersection_box = None
@@ -489,6 +493,8 @@ class EditorPreviewCanvas(CropResolutionOverlayMixin, FocusCenteredPreviewCanvas
                 self._paint_tracking_diagnostics(painter, draw_rect, content_rect)
             elif self._reference_regions:
                 self._paint_reference_regions(painter, draw_rect, content_rect)
+        if self._region_drafts:
+            self._paint_region_drafts(painter, draw_rect, content_rect)
         if self._show_crop_effect and self._alignment_crop_box:
             self._paint_alignment_crop(painter, draw_rect, content_rect)
         if self._show_crop_effect and self._crop_polygon:
@@ -520,6 +526,27 @@ class EditorPreviewCanvas(CropResolutionOverlayMixin, FocusCenteredPreviewCanvas
             bounds = polygon.boundingRect()
             p = bounds.bottomLeft()+QPointF(5,-5) if label_at_bottom else bounds.topLeft()+QPointF(5,painter.fontMetrics().ascent()+3)
             painter.drawText(p,label)
+        painter.restore()
+
+    def _paint_region_drafts(self, painter, draw_rect, content_rect):
+        """推荐草稿一律虚线：蓝色为预检中，红色为已在某张抽样失配；与黄色实线的已确定选区区分。
+
+        标签带半透明底，在杂乱纹理上也能读出编号。
+        """
+        painter.save()
+        painter.setClipRect(draw_rect.intersected(QRectF(content_rect)))
+        metrics = painter.fontMetrics()
+        for (left, top, right, bottom), label, failed in self._region_drafts:
+            color = QColor('#FF5252' if failed else '#4DA3FF')
+            rect = QRectF(draw_rect.left()+left*draw_rect.width(), draw_rect.top()+top*draw_rect.height(),
+                          (right-left)*draw_rect.width(), (bottom-top)*draw_rect.height())
+            painter.setPen(QPen(color, 2, Qt.PenStyle.DashLine))
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.drawRect(rect)
+            chip = QRectF(rect.left()+3, rect.top()+3, metrics.horizontalAdvance(label)+8, metrics.height()+2)
+            painter.fillRect(chip, QColor(0, 0, 0, 150))
+            painter.setPen(color.lighter(130))
+            painter.drawText(chip, Qt.AlignmentFlag.AlignCenter, label)
         painter.restore()
 
     def _paint_focus_box(self,painter,draw_rect,content):
