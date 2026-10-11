@@ -23,11 +23,12 @@ _LOG = get_logger('sequence_analysis')
 class SequenceAnalysisAction(WorkerAction):
     """一张照片的跟踪或遮挡核验；共享参考模板只读，原图由 action 独占。"""
 
-    def __init__(self, path, tracker, *, cancelled, preview_source=None, recovery=None, manual_boxes=()):
+    def __init__(self, path, tracker, *, cancelled, preview_source=None, recovery=None, manual_boxes=(), cache_key=None):
         super().__init__(cancelled=cancelled)
         self.path, self.tracker = path, tracker
         self.preview_source, self.recovery = preview_source, recovery
         self.manual_boxes = manual_boxes
+        self.cache_key = cache_key
 
     def execute(self):
         if self.is_cancelled():
@@ -56,10 +57,11 @@ class SequenceAnalysisAction(WorkerAction):
 def analyze_sequence_frames(jobs, tracker, reference, *, cancel_event, preview_source=None,
                             progress=lambda message: None,
                             progress_counts=lambda current, total, stage: None, analysis_workers=0,
-                            photo_errors=None, segment_trackers=None):
+                            photo_errors=None, segment_trackers=None, tracking_cache=None):
     """preview_source 在池线程调用；传入 photo_errors 可保留失败前已派发的结果。
 
     segment_trackers 把接力段照片映射到 (接力跟踪器, 接力参考图路径)；其余照片匹配原参考图。
+    tracking_cache（SequenceTrackingCache）命中的照片不再解码、跟踪，也不调用 preview_source。
     """
     keys = tuple(path_key(job.path) for job in jobs)
     positions = {key: index for index, key in enumerate(keys)}
@@ -80,6 +82,24 @@ def analyze_sequence_frames(jobs, tracker, reference, *, cancel_event, preview_s
     for key, (owner, source) in identities.items():
         tracking[key] = RegionTrackingResult(owner.regions, signature=image_file_signature(source))
         sizes[key] = owner.reference_size
+    cache_keys, reused = {}, 0
+    if tracking_cache is not None:
+        from .sequence_tracking_cache import tracking_key
+        for job in jobs:
+            key = path_key(job.path)
+            owner, source = definition(key)
+            if key in identities:
+                # 参考图本身的结果固定；给出标识键，使其邻帧的遮挡核验也能复用。
+                signature = image_file_signature(source)
+                cache_keys[key] = ('identity', signature, tuple(owner.regions)) if signature else None
+                continue
+            if getattr(owner, 'options', None) is None:
+                continue
+            cache_keys[key] = tracking_key(job.path, source, owner.regions, owner.options, manual_boxes[key])
+            hit = tracking_cache.get(cache_keys[key])
+            if hit is not None:
+                tracking[key], sizes[key] = hit
+                reused += 1
     # 分析另有 FFT 临时数组；尺寸缺失/小图也至少按 2400 万像素估算预算。
     max_pixels = max(24_000_000, estimate_video_job_max_pixels(jobs),
                      tracker.reference_size[0] * tracker.reference_size[1])
@@ -115,7 +135,7 @@ def analyze_sequence_frames(jobs, tracker, reference, *, cancel_event, preview_s
                     break
                 if positions[path_key(action.path)] >= failure_index:
                     break
-                pending[pool.submit_action(action, kind=WorkKind.METADATA)] = action.path
+                pending[pool.submit_action(action, kind=WorkKind.METADATA)] = action
 
         report()
         refill()
@@ -123,7 +143,8 @@ def analyze_sequence_frames(jobs, tracker, reference, *, cancel_event, preview_s
             check()
             done, _ = wait(pending, timeout=0.1, return_when=FIRST_COMPLETED)
             for future in done:
-                path = pending.pop(future)
+                action = pending.pop(future)
+                path = action.path
                 try:
                     with sequence_photo_errors(path):
                         key, result, size = future.result()
@@ -137,6 +158,8 @@ def analyze_sequence_frames(jobs, tracker, reference, *, cancel_event, preview_s
                     # 不再提交失败帧之后的任务；已派发的前序帧必须等到真实完成。
                     continue
                 tracking[key], sizes[key] = result, size
+                if tracking_cache is not None and action.cache_key is not None:
+                    tracking_cache.put(action.cache_key, result, size)
                 completed += 1
                 report()
             refill()
@@ -144,9 +167,11 @@ def analyze_sequence_frames(jobs, tracker, reference, *, cancel_event, preview_s
     try:
         _LOG.info('sequence analysis start photos=%s workers=%s', len(jobs), workers)
         actions = (SequenceAnalysisAction(job.path, definition(path_key(job.path))[0], cancelled=cancelled,
-                                           preview_source=preview_source, manual_boxes=manual_boxes[path_key(job.path)])
-                   for job in jobs if path_key(job.path) not in identities)
-        run_phase(actions, '对齐照片', len(jobs), len(tracking))
+                                           preview_source=preview_source, manual_boxes=manual_boxes[path_key(job.path)],
+                                           cache_key=cache_keys.get(path_key(job.path)))
+                   for job in jobs if path_key(job.path) not in identities and path_key(job.path) not in tracking)
+        # 复用的照片计入进度；分析从第一张需要重算的照片开始实际解码。
+        run_phase(actions, f'对齐照片（复用 {reused} 张）' if reused else '对齐照片', len(jobs), len(tracking))
         # 用列表顺序恢复字典；完成顺序不能改变邻帧或最终输出的语义。
         tracking = {key: tracking[key] for key in keys if key in tracking}
         sizes = {key: sizes[key] for key in keys if key in sizes}
@@ -167,14 +192,22 @@ def analyze_sequence_frames(jobs, tracker, reference, *, cancel_event, preview_s
             previous, following = first_pass[keys[index - 1]], first_pass[keys[index + 1]]
             if any(box is None and previous.boxes[i] is not None and following.boxes[i] is not None
                    for i, box in enumerate(result.boxes)):
+                # 核验结果只取决于本张与前后两张的首轮输入；三者都可缓存时一起作键。
+                around = tuple(cache_keys.get(k) for k in keys[index - 1:index + 2])
+                recovery_key = ('recover', *around) if all(around) else None
+                hit = tracking_cache.get(recovery_key) if tracking_cache is not None else None
+                if hit is not None:
+                    tracking[keys[index]], sizes[keys[index]] = hit
+                    continue
                 recovery_actions.append(SequenceAnalysisAction(
                     jobs[index].path, owner, cancelled=cancelled, recovery=(result, previous, following),
-                    manual_boxes=manual_boxes[keys[index]]))
+                    manual_boxes=manual_boxes[keys[index]], cache_key=recovery_key))
         if recovery_actions:
             run_phase(recovery_actions, '核验遮挡', len(recovery_actions))
         check()
-        _LOG.info('sequence analysis complete photos=%s tracked=%s read_errors=%s recovery=%s workers=%s elapsed_s=%.3f',
-                  len(jobs), len(tracking), len(photo_errors or {}), len(recovery_actions), workers, monotonic() - started)
+        _LOG.info('sequence analysis complete photos=%s tracked=%s reused=%s read_errors=%s recovery=%s workers=%s elapsed_s=%.3f',
+                  len(jobs), len(tracking), reused, len(photo_errors or {}), len(recovery_actions), workers,
+                  monotonic() - started)
         return tracking, sizes
     except BaseException as exc:
         stopped.set()

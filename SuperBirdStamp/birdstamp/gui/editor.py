@@ -103,6 +103,7 @@ from app_common.exif_io import (
     extract_many_with_xmp_priority,
     extract_pillow_metadata,
     extract_metadata_with_xmp_priority,
+    invalidate_metadata_cache,
     read_batch_metadata,
 )
 from birdstamp.meta.normalize import format_settings_line, normalize_metadata
@@ -742,6 +743,8 @@ class BirdStampEditorWindow(
         self.photo_list_metadata_cache: dict[str, dict[str, Any]] = {}
         self._photo_item_map: dict[str, QTreeWidgetItem] = {}
         self._photo_list_metadata_pending_keys: set[str] = set()
+        # 手动刷新时即使元数据未变也要重建当前照片上下文（report.db 可能已变化）。
+        self._photo_list_metadata_forced_refresh_keys: set[str] = set()
         self._photo_list_metadata_loader: EditorPhotoListMetadataLoader | None = None
         self._pending_photo_list_metadata_loaders: list[EditorPhotoListMetadataLoader] = []
         self._exiftool_shutdown_thread: threading.Thread | None = None
@@ -1188,6 +1191,11 @@ class BirdStampEditorWindow(
         add_dir_btn.clicked.connect(self._pick_directory)
         photo_manage_row.addWidget(add_dir_btn)
 
+        refresh_btn = QPushButton("刷新信息")
+        refresh_btn.setAccessibleName("刷新照片信息")
+        refresh_btn.clicked.connect(self._refresh_photo_list_metadata)
+        photo_manage_row.addWidget(refresh_btn)
+
         remove_btn = QPushButton("删除所选")
         remove_btn.clicked.connect(self._remove_selected_photos)
         photo_manage_row.addWidget(remove_btn)
@@ -1248,6 +1256,8 @@ class BirdStampEditorWindow(
         self.photo_list = PhotoListWidget()
         self.photo_list.removeSelectedRequested.connect(self._remove_selected_photos)
         remove_btn.setToolTip(self.photo_list.remove_selected_action.toolTip())
+        self.photo_list.refreshMetadataRequested.connect(self._refresh_photo_list_metadata)
+        refresh_btn.setToolTip(self.photo_list.refresh_metadata_action.toolTip())
         self.photo_list.set_start_number(self.photo_start_number_spin.value())
         self.photo_start_number_spin.valueChanged.connect(self._on_photo_start_number_changed)
         self.photo_list.rowNumbersChanged.connect(self._on_photo_row_numbers_changed)
@@ -4286,6 +4296,32 @@ class BirdStampEditorWindow(
         self._photo_list_metadata_loader = loader
         loader.start()
 
+    def _refresh_photo_list_metadata(self) -> None:
+        """重新读取列表全部照片的 EXIF/XMP 与 report.db，只读，不写任何文件。"""
+        if self._workspace_restore_in_progress():
+            self._set_status("工作区恢复中，请稍后再刷新照片信息。")
+            return
+        paths = self._list_photo_paths()
+        if not paths:
+            self._set_status("照片列表为空，无需刷新。")
+            return
+        # report.db 可能被 SuperPicky 等外部工具更新，重新读取行缓存。
+        self._rebuild_report_db_cache()
+        # 自动 FPS 等路径经 read_batch_metadata 的进程级缓存读取，同样需要失效。
+        invalidate_metadata_cache(
+            [str(path) for path in paths] + [str(path.resolve(strict=False)) for path in paths]
+        )
+        keys = {_path_key(path) for path in paths}
+        for key in keys:
+            # 保留列表缓存作为加载期间的显示值；完整缓存失效后由后台快照覆盖。
+            self.raw_metadata_cache.pop(key, None)
+        self._photo_list_metadata_pending_keys.update(keys)
+        self._photo_list_metadata_forced_refresh_keys = set(keys)
+        self._metadata_context_cache.clear()
+        self._mark_all_photo_exports_dirty()
+        self._restart_photo_list_metadata_loader()
+        self._set_status(f"正在重新读取 {len(paths)} 张照片信息...")
+
     def _finish_photo_list_metadata_loading(self) -> None:
         self._photo_list_metadata_loading = False
         self._set_photo_list_header_fast_mode(False)
@@ -4302,6 +4338,7 @@ class BirdStampEditorWindow(
         if not batch:
             return
         current_metadata_refresh: tuple[Path, dict[str, Any]] | None = None
+        force_current_refresh = False
         current_key = _path_key(self.current_path) if self.current_path is not None else ""
         self._begin_photo_list_item_display_batch()
         try:
@@ -4318,6 +4355,10 @@ class BirdStampEditorWindow(
                     if current_key and key == current_key:
                         current_metadata_refresh = (path, merged)
                 self._photo_list_metadata_pending_keys.discard(key)
+                if key in self._photo_list_metadata_forced_refresh_keys:
+                    self._photo_list_metadata_forced_refresh_keys.discard(key)
+                    if current_key and key == current_key:
+                        force_current_refresh = True
                 settings = self.photo_render_overrides.get(key)
                 self._update_photo_list_item_display(
                     path,
@@ -4332,6 +4373,7 @@ class BirdStampEditorWindow(
                 current_metadata_refresh[0],
                 current_metadata_refresh[1],
                 refresh_preview=True,
+                force=force_current_refresh,
             )
         ab = getattr(self, "ab_preview", None)
         if ab is not None and ab.enabled.isChecked() and ab.path is not None:
@@ -5110,6 +5152,7 @@ class BirdStampEditorWindow(
         self.photo_list_metadata_cache.clear()
         self._photo_item_map.clear()
         self._photo_list_metadata_pending_keys.clear()
+        self._photo_list_metadata_forced_refresh_keys.clear()
         self.photo_render_overrides.clear()
         self._photo_export_dirty_keys.clear()
         self._bird_box_cache.clear()
@@ -5446,12 +5489,13 @@ class BirdStampEditorWindow(
         raw_metadata: dict[str, Any],
         *,
         refresh_preview: bool,
+        force: bool = False,
     ) -> None:
         if self.current_path is None or _path_key(path) != _path_key(self.current_path):
             return
         if not isinstance(raw_metadata, dict):
             return
-        if raw_metadata == self.current_raw_metadata:
+        if not force and raw_metadata == self.current_raw_metadata:
             return
         self.current_raw_metadata = dict(raw_metadata)
         item = self._find_photo_item_by_path(path)

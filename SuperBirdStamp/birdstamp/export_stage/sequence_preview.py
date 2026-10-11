@@ -225,8 +225,11 @@ def prepare_rigid_geometry(regions, tracking, sizes, reference_size, reference_k
 def prepare_sequence_preview(seeds, template_paths=None, *, cancel_event, progress=lambda message: None,
                              bird_boxes=None, preview_source=None, tracking_ready=None,
                              progress_counts=lambda current, total, stage: None,
-                             analysis_workers=0, allow_partial=False) -> SequencePreview:
-    """allow_partial 供交互预览保留失败前缀；默认保持整组失败即抛错的契约。"""
+                             analysis_workers=0, allow_partial=False, tracking_cache=None) -> SequencePreview:
+    """allow_partial 供交互预览保留失败前缀；默认保持整组失败即抛错的契约。
+
+    tracking_cache 复用输入未变照片的跟踪结果（见 sequence_tracking_cache）；局部主体方法不使用。
+    """
     seeds = tuple(seeds)
     if not seeds:
         raise ValueError('请先导入照片。')
@@ -273,12 +276,13 @@ def prepare_sequence_preview(seeds, template_paths=None, *, cancel_event, progre
         tracker, reference, cancel_event=cancel_event, preview_source=preview_source,
         progress=progress, progress_counts=progress_counts, analysis_workers=analysis_workers,
         photo_errors=photo_errors if allow_partial else None,
-        **({'segment_trackers': relay.segment_trackers()} if relay is not None else {}))
+        **({'segment_trackers': relay.segment_trackers()} if relay is not None else {}),
+        **({'tracking_cache': tracking_cache} if tracking_cache is not None and not subject_local else {}))
     if cancel_event.is_set():
         raise VideoExportCancelledError('已取消去抖动分析。')
     if relay is not None:
         relay.track_bridges(tracking, cancel_event=cancel_event, progress_counts=progress_counts,
-                            allow_partial=allow_partial)
+                            allow_partial=allow_partial, tracking_cache=tracking_cache)
     if tracking_ready is not None and not cancel_event.is_set():
         tracking_ready(key, dict(tracking), signatures)
     progress_counts(0, 0, '计算共同画幅')

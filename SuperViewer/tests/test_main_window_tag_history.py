@@ -43,6 +43,13 @@ def test_toolbar_undo_redo_preserves_original_tags_and_survives_menu_rebuild(tmp
         Image.new("RGB", (8, 6), (40, 120, 180)).save(path)
     metadata = PhotoMetaDataXMP()
     assert metadata.write_subjects(str(photos[0]), ["白鹭", "库外关键词"])
+    apps = [
+        {"name": "Adobe Photoshop 2026.app", "path": str(tmp_path / "missing" / "Adobe Photoshop 2026.app")},
+        {"name": "", "path": str(tmp_path / "missing" / "Viewer.exe")},
+    ]
+    monkeypatch.setattr(main, "get_external_apps", lambda: apps)
+    send_to_toolbar = importlib.import_module(main.rebuild_send_to_toolbar.__module__)
+    monkeypatch.setattr(send_to_toolbar, "get_external_apps", lambda: apps)
     window = main.MainWindow(initial_received_files=["skip-restore"])
     window.show()
     try:
@@ -64,6 +71,11 @@ def test_toolbar_undo_redo_preserves_original_tags_and_survives_menu_rebuild(tmp
         window.menuBar().clear()
         window._init_menu_bar()
         edit = next(action.menu() for action in window.menuBar().actions() if action.text() == "编辑")
+        file_menu = next(action.menu() for action in window.menuBar().actions() if action.text() == "文件")
+        send_menu = next(action.menu() for action in file_menu.actions() if action.text() == "发送到外部应用")
+        assert [action.text() for action in send_menu.actions()] == ["Adobe Photoshop 2026", "Viewer"]
+        send_toolbar, = window.findChildren(QToolBar, "sendToToolBar")
+        assert [action.toolTip() for action in send_toolbar.actions()] == ["Adobe Photoshop 2026", "Viewer"]
         assert edit.actions() == [actions.undo_action, actions.redo_action]
         assert window.findChildren(QToolBar, "editToolBar") == [toolbar]
         assert toolbar.actions() == edit.actions()
