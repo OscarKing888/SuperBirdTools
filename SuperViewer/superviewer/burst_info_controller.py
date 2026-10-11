@@ -294,12 +294,11 @@ class BurstInfoController(QObject):
 
     def _is_listed(self, path: str) -> bool:
         """只刷新当前显示目录中的行；其它目录打开时会重新读取 XMP。"""
-        model = getattr(self._file_list, "_file_table_model", None)
-        row_for_path = getattr(model, "row_for_path", None)
-        if not callable(row_for_path):
+        is_listed_path = getattr(self._file_list, "is_listed_path", None)
+        if not callable(is_listed_path):
             return True
         try:
-            return row_for_path(path) is not None
+            return bool(is_listed_path(path))
         except Exception:
             return True
 

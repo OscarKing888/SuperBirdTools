@@ -691,25 +691,39 @@ class BirdSharpnessController(QObject):
         self._counts[result.verdict] += 1
         if result.verdict != VERDICT_ERROR and not written:
             self._write_failures += 1
-        if written and self._is_listed(display_path):
+        paths = self._listed_paths_sharing_sidecar(display_path, getattr(result, "path", "")) if written else []
+        if paths:
             from bird_sharpness.xmp_store import browser_meta_updates
 
+            updates = browser_meta_updates(result)
             try:
-                self._file_list.sync_metadata_edit_for_path(display_path, meta_updates=browser_meta_updates(result))
+                batch = getattr(self._file_list, "sync_metadata_edits_for_paths", None)
+                if callable(batch):
+                    batch({path: dict(updates) for path in paths})
+                else:
+                    for path in paths:
+                        self._file_list.sync_metadata_edit_for_path(path, meta_updates=dict(updates))
             except Exception:
                 _log.error("[BirdSharpness] list refresh failed path=%r: %s", display_path, traceback.format_exc())
         self._refresh_summary()
 
-    def _is_listed(self, path: str) -> bool:
-        """Only rows of the directory being shown need a refresh; others reread XMP when opened."""
-        model = getattr(self._file_list, "_file_table_model", None)
-        row_for_path = getattr(model, "row_for_path", None)
-        if not callable(row_for_path):
-            return True
+    def _listed_paths_sharing_sidecar(self, display_path: str, source_path: str) -> list[str]:
+        """Listed rows reading the written sidecar: the photo and its same-stem RAW/JPEG siblings.
+
+        Only rows of the directory being shown need a refresh; others reread XMP when opened.
+        """
+        siblings = getattr(self._file_list, "listed_sidecar_siblings", None)
+        if not callable(siblings):
+            return [display_path]
+        paths: list[str] = []
         try:
-            return row_for_path(path) is not None
+            for path in (display_path, source_path):
+                for listed in (siblings(path) if path else ()):
+                    if listed not in paths:
+                        paths.append(listed)
         except Exception:
-            return True
+            return [display_path]
+        return paths
 
     def _on_failed(self, worker, message: str) -> None:
         if worker is self._worker:

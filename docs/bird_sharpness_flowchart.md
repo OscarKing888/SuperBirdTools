@@ -513,8 +513,10 @@ flowchart TD
     C --> E["XMP-superpicky:bird_sharpness_verdict / _score / _sigma / _region /<br/>_bird_count / _head_sigma / _body_sigma / _motion_ratio / _eye_visibility / _version"]
     D --> F["PhotoMetaDataXMP.write()：同一次提交<br/>ExifTool 字段 + 直接编辑 XML 的 superpicky 字段<br/>非 ASCII 值走 UTF-8 临时文件"]
     E --> F
-    F --> G["invalidate_metadata_cache(path)"]
-    G --> H["SuperViewer 刷新：列表“鸟清晰”列、缩略图底栏标签、右侧信息行"]
+    F --> G["invalidate_same_stem_metadata_cache(path)<br/>同目录同 stem（RAW+JPEG 共用 sidecar）的缓存记录一并作废"]
+    G --> L{"当前目录列表中有读这个 sidecar 的照片？<br/>FileListPanel.listed_sidecar_siblings(显示路径 / 源路径)<br/>同 stem 不区分大小写，与列表/缩略图视图、筛选无关"}
+    L -->|有| H["browser_meta_updates() 一次合并进这些照片的内存元数据<br/>SuperViewer 刷新：列表“鸟清晰”列、缩略图底栏标签、右侧信息行"]
+    L -->|无| M["不改内存；打开该目录时重新读取 XMP"]
     A --> I["birds[]、found_by、head_samples 等明细<br/>只在 CLI --json 与计算过程窗口可见，不写 XMP"]
 ```
 

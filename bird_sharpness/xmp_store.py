@@ -6,7 +6,7 @@ from typing import Dict, Optional
 
 from app_common import bird_sharpness_fields as fields
 from app_common.exif_io.photo_meta import PhotoMetaDataXMP
-from app_common.exif_io.writer import invalidate_metadata_cache
+from app_common.exif_io.writer import invalidate_same_stem_metadata_cache
 
 from .analyzer import BirdSharpnessResult
 
@@ -19,7 +19,8 @@ def write_result(path: str, result: BirdSharpnessResult, *, writer: Optional[Pho
     writer = writer or PhotoMetaDataXMP()
     ok = writer.write(path, assignments)
     if ok:
-        invalidate_metadata_cache([path])
+        # RAW+JPEG of one shot share this sidecar: drop the sibling's cached record too.
+        invalidate_same_stem_metadata_cache([path])
     return ok
 
 
