@@ -366,8 +366,10 @@ def test_real_window_result_refresh_preserves_preview_and_comment_draft(tmp_path
             assert badge.text() == '传说'
 
         from app_common.bird_pinyin import bird_name
-        assert bird_name(files.get_photo_metadata_for_path(source)) == '白头鹎'
-        assert PhotoMetaDataXMP().read(source)['Title'] == '白头鹎'
+        # 逐只识别两只都是苍鹭：自动设为主要鸟名，并同步到当前缓存。
+        primary = '苍鹭' if operation == 'per_bird' else '白头鹎'
+        assert bird_name(files.get_photo_metadata_for_path(source)) == primary
+        assert PhotoMetaDataXMP().read(source)['Title'] == primary
         assert not reselections
         assert window.preview_panel.source_pixmap_for_path(source).cacheKey() == cache_key
         assert window.image_info_panel.comment_edit.toPlainText() == '用户未保存的备注'

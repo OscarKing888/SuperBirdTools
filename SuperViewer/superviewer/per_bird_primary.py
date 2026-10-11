@@ -20,6 +20,38 @@ def can_set_primary(item):
             and item.get('confidence') is not None)
 
 
+def auto_primary_individual(items):
+    """所有已识别的鸟同为一个鸟种且最高分已确认时，返回该鸟种最高分的条目。"""
+    identified = [item for item in items if can_set_primary(item)]
+    species = {((item.get('cn_name') or '').strip(), (item.get('en_name') or '').strip()) for item in identified}
+    if len(species) != 1:
+        return None
+    best = max(identified, key=lambda item: float(item['confidence']))
+    return best if best['status'] == 'confirmed' else None
+
+
+def primary_fields(item):
+    """逐只条目 -> 主要鸟名的 XMP 字段；手动设定与逐只识别自动设定共用。"""
+    species = individual_species_metadata(item)
+    best = {**species, **{key: item.get(key, '') for key in ('cn_name', 'en_name', 'confidence')}}
+    for key in ('scientific_name', 'pinyin_name', 'description'):
+        best[key] = best.get(key) or ''
+    parse_response({'success': True, 'results': [best]})
+    response = item.get('response')
+    try:
+        parse_response(response)
+    except BirdIDError:
+        response = {'success': True, 'results': [best]}
+    values, fields = candidate_fields(response, best, confirmed=True)
+    # 清除前一主鸟的拼音等辅助字段，缺失等级不沿用旧鸟种。
+    extra = {PINYIN_FIELD: best['pinyin_name'], PINYIN_SOURCE_FIELD: values['title'],
+             'china_protection_level': species['china_protection_level'] or '',
+             'bird_species_source': 'individual'}
+    values.update(extra)
+    fields.update({f'XMP-superpicky:{key}': value for key, value in extra.items()})
+    return values, fields
+
+
 def set_primary_individual(source, index, expected, *, cancelled=lambda: False):
     """核对菜单绑定的列表快照；所有读取及提交均在工作线程执行。"""
     source = os.path.normpath(os.path.abspath(source))
@@ -40,24 +72,7 @@ def set_primary_individual(source, index, expected, *, cancelled=lambda: False):
             matches = [item for item in read_individuals(metadata) if item['index'] == index]
             if len(matches) != 1 or not can_set_primary(matches[0]):
                 raise BirdIDError('此鸟没有可设为主要鸟名的识别结果')
-            item = matches[0]
-            species = individual_species_metadata(item)
-            best = {**species, **{key: item.get(key, '') for key in ('cn_name', 'en_name', 'confidence')}}
-            for key in ('scientific_name', 'pinyin_name', 'description'):
-                best[key] = best.get(key) or ''
-            parse_response({'success': True, 'results': [best]})
-            response = item.get('response')
-            try:
-                parse_response(response)
-            except BirdIDError:
-                response = {'success': True, 'results': [best]}
-            values, fields = candidate_fields(response, best, confirmed=True)
-            # 清除前一主鸟的拼音等辅助字段，缺失等级不沿用旧鸟种。
-            extra = {PINYIN_FIELD: best['pinyin_name'], PINYIN_SOURCE_FIELD: values['title'],
-                     'china_protection_level': species['china_protection_level'] or '',
-                     'bird_species_source': 'individual'}
-            values.update(extra)
-            fields.update({f'XMP-superpicky:{key}': value for key, value in extra.items()})
+            values, fields = primary_fields(matches[0])
             if cancelled():
                 return BirdIDResult(source, 'cancelled', '已取消设置主要鸟名')
             if before != (_fingerprint(source), _fingerprint(sidecar)):

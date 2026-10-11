@@ -51,6 +51,21 @@ def test_set_primary_chinese_metadata_and_originals_preserved(saved):
     assert result.updates['Title'] == '白鹭'
 
 
+def test_set_primary_on_adobe_nested_description_sidecar(saved):
+    """ACR 写出的 li 内嵌 Alt 曾使 ExifTool 拒绝稀有度兼容字段，报“XMP 保存失败”。"""
+    photo, store, expected = saved
+    sidecar = photo.with_suffix('.xmp')
+    nested = ('<dc:description><rdf:Alt><rdf:li xml:lang="x-default"><rdf:Alt>'
+              '<rdf:li xml:lang="x-default">保留中文备注</rdf:li></rdf:Alt></rdf:li></rdf:Alt></dc:description>')
+    text = sidecar.read_text(encoding='utf-8')
+    start, end = text.index('<dc:description>'), text.index('</dc:description>') + len('</dc:description>')
+    sidecar.write_text(text[:start] + nested + text[end:], encoding='utf-8')
+    result = set_primary_individual(photo, 3, expected)
+    assert result.status == 'success', result.message
+    meta = store.read(str(photo))
+    assert meta['Title'] == '白鹭' and meta['Description'] == '保留中文备注'
+
+
 def test_primary_cli_uses_displayed_number(saved, capsys):
     from SuperViewer.superviewer.per_bird_primary import main
     photo, store, _ = saved
