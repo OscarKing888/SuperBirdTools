@@ -10,7 +10,8 @@ from typing import Iterable
 
 from app_common.command_history import CommandHistory
 from app_common.file_browser import FileListPanel
-from app_common.file_browser._browser_core import _metadata_comment_from_meta
+from app_common.file_browser._browser_core import _metadata_comment_from_meta, _metadata_lens_model_text
+from app_common.filterable_combo import FilterableComboBox
 from app_common.image_formats import HEIF_EXTENSIONS, RAW_EXTENSIONS
 from app_common.perf_probe import elapsed_ms, perf_counter, perf_log
 from app_common.log import get_logger
@@ -50,6 +51,7 @@ _TAG_FILTER_INLINE_LIMIT = 8
 _PHOTO_TAG_CACHE_BATCH_SIZE = 256
 _PHOTO_TAG_FILTER_REFRESH_MS = 750
 _FOCUS_SOURCE_PREFERRED_EXTENSIONS = (".arw", ".hif", ".heif", ".heic")
+_LENS_FILTER_ALL_TEXT = "全部镜头"
 
 
 def _tag_filter_button_style(colors: PanelThemeColors, *, clear: bool = False) -> str:
@@ -322,6 +324,9 @@ class SuperViewerTaggedFileListPanel(FileListPanel):
         self._tag_filter_title_label: QLabel | None = None
         self._tag_filter_empty_label: QLabel | None = None
         self._tag_filter_theme_applying = False
+        self._lens_filter_value = ""
+        self._lens_filter_combo: FilterableComboBox | None = None
+        self._lens_filter_label: QLabel | None = None
         self._photo_tag_store = tag_store or PhotoTagSidecarStore()
         self._photo_tag_cache: dict[str, set[str]] = {}
         self._photo_tag_generation_by_path: dict[str, int] = {}
@@ -407,6 +412,7 @@ class SuperViewerTaggedFileListPanel(FileListPanel):
                 (self._tag_filter_menu_button, button_style),
                 (self._tag_filter_clear_button, _tag_filter_button_style(colors, clear=True)),
                 (self._tag_filter_title_label, f"color: {colors.secondary_text}; font-size: 11px;"),
+                (self._lens_filter_label, f"color: {colors.secondary_text}; font-size: 11px;"),
                 (self._tag_filter_empty_label, f"color: {colors.muted_text}; font-size: 11px;"),
                 (self._tag_filter_exact_match_checkbox, f"QCheckBox {{ color: {colors.label_text}; font-size: 11px; }}"),
             ))
@@ -776,7 +782,7 @@ class SuperViewerTaggedFileListPanel(FileListPanel):
         return updated_paths
 
     def _has_any_filter(self) -> bool:
-        return super()._has_any_filter() or bool(self._active_tag_filters)
+        return super()._has_any_filter() or bool(self._active_tag_filters) or bool(self._lens_filter_value)
 
     def _filter_text_tokens(self) -> list[str]:
         if not getattr(self, "_filter_edit", None):
@@ -802,6 +808,8 @@ class SuperViewerTaggedFileListPanel(FileListPanel):
             filter_min_rating=self._filter_min_rating,
             filter_focus_status=self._filter_focus_status,
         ):
+            return False
+        if self._lens_filter_value and self._lens_model_for_path(path) != self._lens_filter_value:
             return False
         tokens = self._filter_text_tokens()
         if tokens:
@@ -851,19 +859,96 @@ class SuperViewerTaggedFileListPanel(FileListPanel):
         finally:
             menu.deleteLater()
 
+    def _lens_model_for_path(self, path: str) -> str:
+        meta = self._meta_cache.get(os.path.normpath(path), {})
+        return _metadata_lens_model_text(meta if isinstance(meta, dict) else {}).strip()
+
+    def _lens_model_counts(self) -> dict[str, int]:
+        """Count lens models over every listed photo, ignoring the active filters."""
+        counts: dict[str, int] = {}
+        for path in self._all_files:
+            lens = self._lens_model_for_path(path)
+            if lens:
+                counts[lens] = counts.get(lens, 0) + 1
+        return counts
+
+    def _install_lens_filter_combo(self, layout: QHBoxLayout) -> None:
+        """Lens filter leads the tag filter row, which keeps it out of the crowded rating row."""
+        label = QLabel("镜头:")
+        self._lens_filter_label = label
+        layout.addWidget(label)
+        combo = FilterableComboBox()
+        combo.setFilterPlaceholderText("过滤镜头...")
+        combo.setSizeAdjustPolicy(FilterableComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
+        combo.setMinimumContentsLength(14)
+        combo.setMaximumWidth(260)
+        combo.popupAboutToShow.connect(self._refresh_lens_filter_options)
+        combo.currentIndexChanged.connect(self._on_lens_filter_index_changed)
+        self._lens_filter_combo = combo
+        layout.addWidget(combo)
+        layout.addSpacing(8)
+        self._refresh_lens_filter_options()
+
+    def _refresh_lens_filter_options(self) -> None:
+        """Rebuild options from the lens models of the photos currently listed."""
+        combo = self._lens_filter_combo
+        if combo is None:
+            return
+        counts = self._lens_model_counts()
+        active = self._lens_filter_value
+        if active and active not in counts:
+            # Keep the active choice selectable so it stays visible and can be cleared.
+            counts[active] = 0
+        with QSignalBlocker(combo):
+            combo.clear()
+            combo.addItem(_LENS_FILTER_ALL_TEXT, "")
+            for lens in sorted(counts, key=str.casefold):
+                combo.addItem(f"{lens} ({counts[lens]})", lens)
+            index = combo.findData(active) if active else 0
+            combo.setCurrentIndex(max(0, index))
+        self._sync_lens_filter_tooltip()
+
+    def _sync_lens_filter_tooltip(self) -> None:
+        combo = self._lens_filter_combo
+        if combo is None:
+            return
+        if self._lens_filter_value:
+            combo.setToolTip(f"只显示镜头「{self._lens_filter_value}」拍摄的照片")
+        else:
+            combo.setToolTip("按镜头型号过滤；选项来自当前列表中的照片")
+
+    def _on_lens_filter_index_changed(self, index: int) -> None:
+        combo = self._lens_filter_combo
+        if combo is None:
+            return
+        self.set_lens_filter(str(combo.itemData(index) or "") if index >= 0 else "")
+
+    def set_lens_filter(self, lens: str) -> None:
+        lens = str(lens or "").strip()
+        if lens == self._lens_filter_value:
+            return
+        self._lens_filter_value = lens
+        self._refresh_lens_filter_options()
+        self._refresh_filter_scope()
+
     def _install_tag_filter_bar(self) -> None:
         if not getattr(self, "_create_filter_bar", True):
             return
-        self._tag_filter_bar = QHBoxLayout()
-        self._tag_filter_bar.setSpacing(3)
         layout = self.layout()
         if layout is None:
             return
+        row = QHBoxLayout()
+        row.setSpacing(3)
+        self._install_lens_filter_combo(row)
+        # Tag widgets live in their own sub-layout because tag config changes rebuild it wholesale.
+        self._tag_filter_bar = QHBoxLayout()
+        self._tag_filter_bar.setSpacing(3)
+        row.addLayout(self._tag_filter_bar, 1)
         stack_index = layout.indexOf(getattr(self, "_stack", None))
         if stack_index >= 0:
-            layout.insertLayout(stack_index, self._tag_filter_bar)
+            layout.insertLayout(stack_index, row)
         else:
-            layout.addLayout(self._tag_filter_bar)
+            layout.addLayout(row)
         self._rebuild_tag_filter_bar()
 
     def _clear_tag_filter_bar(self) -> None:

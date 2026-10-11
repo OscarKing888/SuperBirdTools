@@ -72,6 +72,14 @@ class PreviewViewportPanel(QWidget):
         self.play.setToolTip(f'播放 {name} 侧照片序列')
         self.play.setAccessibleName(f'播放 {name} 侧照片序列')
         tools.addWidget(self.play)
+        self.first = QToolButton()
+        self.last = QToolButton()
+        for button, kind, label in ((self.first, QStyle.StandardPixmap.SP_MediaSkipBackward, '第一帧'),
+                                    (self.last, QStyle.StandardPixmap.SP_MediaSkipForward, '最后一帧')):
+            button.setIcon(media_icon(button, kind, button.palette().color(QPalette.ColorRole.ButtonText)))
+            button.setToolTip(f'{name} 侧跳到{label}')
+            button.setAccessibleName(f'{name} 侧跳到{label}')
+            tools.addWidget(button)
         self.mode = PreviewModeButtons()
         tools.addWidget(self.mode)
         self.show_raw = ToggleToolButton()

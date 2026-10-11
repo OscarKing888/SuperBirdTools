@@ -14,7 +14,7 @@ Windows 下，`main.py` 在导入任何 Qt 控件前调用 [`preload_windows_run
 | --- | --- | --- |
 | 窗口协调 | [`main.py`](../main.py)：`MainWindow` | 目录、列表、预览、信息页的连接；编辑回调、焦点任务、关闭状态 |
 | 目录与列表 | [`_directory_browser.py`](../../app_common/file_browser/_directory_browser.py)、[`_panel.py`](../../app_common/file_browser/_panel.py) | 目录选择、报告范围、实际路径解析、过滤、选择、导航、剪贴板与缓存 |
-| Viewer 列表扩展 | [`tagged_file_list.py`](../superviewer/tagged_file_list.py)：`SuperViewerTaggedFileListPanel` | 标签库、标签过滤/历史、异步标签缓存、Viewer 快切开关、只读缓存 provider |
+| Viewer 列表扩展 | [`tagged_file_list.py`](../superviewer/tagged_file_list.py)：`SuperViewerTaggedFileListPanel` | 标签库、标签/镜头过滤、标签历史、异步标签缓存、Viewer 快切开关、只读缓存 provider |
 | 数据模型与后台任务 | [`_models.py`](../../app_common/file_browser/_models.py)、[`_workers.py`](../../app_common/file_browser/_workers.py)、[`_thumbnail.py`](../../app_common/file_browser/_thumbnail.py) | 列表/缩略图模型，扫描、元数据、路径查找和缩略图任务 |
 | 预览 | [`preview_panel.py`](../superviewer/preview_panel.py)：`PreviewPanel`；[`viewer_ab_preview.py`](../superviewer/viewer_ab_preview.py)：`ViewerABPreview`；[`canvas.py`](../../app_common/preview_canvas/canvas.py)：`PreviewCanvas` | 面板决定加载策略和线程交接；A/B 控制激活侧、工具行及视野联动；画布负责缩放、平移、构图线、焦点叠加和输出 |
 | 焦点 | [`focus_box_loader.py`](../superviewer/focus_box_loader.py)、[`focus_preview_loader.py`](../superviewer/focus_preview_loader.py) | 来源选择、不同格式的元数据提取、方向变换、报告保底 |
@@ -62,7 +62,7 @@ flowchart TD
 
 目录切换立即启动新扫描；旧扫描取消后仍由面板持有，直到其真正的 `QThread.finished` 被处理。扫描进度和结果校验 worker 身份，排队的列表应用还校验请求代次，防止 A → B → A 时旧 A 的结果覆盖新请求。窗口关闭也等待这些扫描完成交接。
 
-`FileTableModel` / `FileTableSortProxyModel` 和 `ThumbnailListModel` 展示同一套过滤数据。文本、评级、精选、排除、焦点及标签条件组合后重建数据集，不靠逐行隐藏控件。编号列只表示当前自然顺序。列表模式不触发缩略图工作；缩略图模式依据可见区域加载。连拍分组底框由两个模型共享的 `_BurstGroupMixin` 按模型行序惰性计算（同目录 + 同 `burst_id`、至少 2 张），两种配色交替；列表模式走 `BackgroundRole`，缩略图模式由 `ThumbnailItemDelegate` 读取 `_MetaBurstGroupRole` 画色带。`_apply_filter()` / `_rebuild_views()` 调用 `_sync_burst_group_display()`，任何过滤（含标签过滤）激活时关闭底框。
+`FileTableModel` / `FileTableSortProxyModel` 和 `ThumbnailListModel` 展示同一套过滤数据。文本、评级、精选、排除、焦点及标签条件组合后重建数据集，不靠逐行隐藏控件。镜头过滤是标签过滤行最前的可搜索下拉框：每次展开时从当前列表全部照片（不受其它过滤影响）的 `_meta_cache` 镜头型号汇总选项和张数，加载过程中不做额外工作；当前选中的镜头即使不在新列表中也保留为 0 张选项，便于看到和清除。编号列只表示当前自然顺序。列表模式不触发缩略图工作；缩略图模式依据可见区域加载。连拍分组底框由两个模型共享的 `_BurstGroupMixin` 按模型行序惰性计算（同目录 + 同 `burst_id`、至少 2 张），两种配色交替；列表模式走 `BackgroundRole`，缩略图模式由 `ThumbnailItemDelegate` 读取 `_MetaBurstGroupRole` 画色带。`_apply_filter()` / `_rebuild_views()` 调用 `_sync_burst_group_display()`，任何过滤（含标签过滤）激活时关闭底框。
 
 Viewer 缩略图由 [`BirdThumbnailModel` / `BirdThumbnailDelegate`](../superviewer/thumbnail_metadata.py) 扩展共享模型与委托：照片下方固定鸟名、稀有度/IUCN 徽章、筛片状态三层，文件名和连拍编号仍独立置底；128 档也显示鸟名，长文本省略后可悬停查看完整鸟名、等级、已保存拼音与地点。徽章复用 `metadata_badges` 的配置和来源校验，缺失等级留空、0 分有效。标题字段解析与列表一致，初次加载和增量修改都会更新。`FileListPanel.thumbnail_model_class` / `thumbnail_delegate_class` 提供宿主扩展点，`ThumbnailItemDelegate.grid_size()` 将新增的 52 px 同时加到卡片与信息区高度，保留照片显示尺寸；滚动步长跟随新网格。绘制只读缓存，无逐项控件或文件读取，共享默认布局及 BirdStamp 不增加身份行。悬停通过模型 ToolTipRole 取得完整信息；测试见 [test_thumbnail_metadata.py](../tests/test_thumbnail_metadata.py) 与 [test_thumbnail_species_metadata.py](../../app_common/tests/test_thumbnail_species_metadata.py)。
 
@@ -236,6 +236,8 @@ flowchart LR
 
 历史归列表面板所有，最多 100 次；窗口的 [`TagHistoryActions`](../superviewer/tag_history_actions.py) 维护 QAction、图标和快捷键。`MainWindow.__init__()` 通过 `create_toolbar()` 创建固定的 `editToolBar`，与编辑菜单共用同一对动作，统一启用状态和命令入口；菜单重建不重建工具栏。在文字编辑器获焦时释放标签撤销快捷键，工具栏按钮仍操作标签历史。切换标签库、可用叶子集合变化、照片重命名或 EXIF 表直接修改 Subject 时清历史；同库切文件夹、单纯标签重排不清。历史不落盘。
 
+`editToolBar` 右侧是固定的 `sendToToolBar`（[`send_to_toolbar.py`](../superviewer/send_to_toolbar.py)）：`extern_app.json` 中每个外部应用一个仅图标按钮，图标由共享 [`send_to_app/icon.py`](../../app_common/send_to_app/icon.py) 取系统应用图标，缺失时用首字占位；悬停显示“发送到:应用名”。按钮与“文件 → 发送到外部应用”菜单共用 `MainWindow._send_to_external_app()`，发送文件列表 `get_selected_file_paths()` 的全部选中文件（与右键“发送到”一致），无选择时回退当前文件。未配置应用时隐藏该工具栏；外部应用设置保存后与菜单一同重建按钮。回归见 [test_send_to_toolbar.py](../tests/test_send_to_toolbar.py)。
+
 异步读取由 `PhotoTagCacheWorker` 分批执行。每路径 `_photo_tag_generation_by_path` 防止读取早于本地写入的 tag/metadata 批次回退新标签；未知路径会排队补读，GUI 查询不做整批 XMP I/O。`finished_summary` 只报告逻辑进度，真正的线程释放和下一批启动必须等 `QThread.finished`。
 
 ## 7. 状态所有权、线程与关闭
@@ -293,7 +295,7 @@ Qt 进度回调只更新界面/初始需求提示，实际任务完成和需求�
 | 需求 | 入口与核心 | 优先测试 |
 | --- | --- | --- |
 | 目录根/子目录、报告陈旧路径 | `_panel.py.load_directory()`、`_workers.py`、`_browser_core.py` | [缓存路径](../../app_common/tests/test_file_browser_cache_paths.py)、[只读报告](../../app_common/tests/test_report_db_read_only.py) |
-| 文件列表新列/过滤项 | `_models.py`、`MetadataLoader._parse_rec()`、`_path_matches_active_filters()` | [列表元数据](../../app_common/tests/test_file_browser_metadata.py)、[标签过滤](../tests/test_photo_tags.py) |
+| 文件列表新列/过滤项 | `_models.py`、`MetadataLoader._parse_rec()`、`_path_matches_active_filters()` | [列表元数据](../../app_common/tests/test_file_browser_metadata.py)、[标签过滤](../tests/test_photo_tags.py)、[镜头过滤](../tests/test_lens_filter.py) |
 | 新图片格式或预览策略 | [image_formats.py](../../app_common/image_formats.py)、`preview_panel.py`、[thumb_stream.py](../../app_common/thumb_stream.py) | [预览策略](../tests/test_preview_panel_policy.py)、[目录响应](../tests/test_directory_selection_responsiveness.py)、[格式](../../app_common/tests/test_image_formats.py) |
 | 连续浏览 FPS/缓存复用 | `_panel.py` 导航计时器、Main 的两个快切槽、`cached_quick_preview_for_path()` | [快切策略](../tests/test_fast_preview_policy.py)、[按键导航](../../app_common/tests/test_file_browser_key_navigation.py) |
 | 新相机焦点或方向修正 | `focus_preview_loader.py`、`FocusBoxLoader`、`focus_calc.py` | [焦点预览](../tests/test_focus_preview_loader.py)、[焦点算法](../../app_common/tests/test_focus_calc.py) |
