@@ -31,6 +31,8 @@ from app_common.preview_canvas import (
 from app_common.superviewer_user_options import get_keep_view_on_switch
 from .individual_bird_overlay import IndividualBirdOverlayMixin
 from .bird_body_overlay import BirdBodyOverlayMixin, map_bird_overlay
+from .preview_photo_info import photo_capture_info_text
+from .ui_theme import panel_theme_colors
 
 from .focus_preview_loader import _load_preview_pixmap_for_canvas
 from .qt_compat import (
@@ -40,11 +42,13 @@ from .qt_compat import (
     QImageReader,
     QLabel,
     QPixmap,
+    QSizePolicy,
     QSize,
     QThread,
     QTimer,
     QVBoxLayout,
     QWidget,
+    Qt,
     pyqtSignal,
 )
 
@@ -604,6 +608,8 @@ class PreviewPanel(QWidget):
         self._full_preview_timer.setSingleShot(True)
         self._full_preview_timer.timeout.connect(self._start_full_preview_loader)
         self._preview_resolution: tuple[int, int] | None = None
+        self._photo_capture_info_text = ""
+        self.source_changed.connect(lambda: self.set_photo_metadata(None))
         self._fast_preview_perf_started_at = 0.0
         self._fast_preview_perf_frames = 0
         self._fast_preview_perf_total_ms = 0.0
@@ -624,8 +630,18 @@ class PreviewPanel(QWidget):
             self._canvas.display_scale_percent_changed.connect(self._on_canvas_display_scale_percent_changed)
         layout.addWidget(self._canvas, stretch=1)
         self._preview_status_label = QLabel("当前预览分辨率: - | 当前缩放: -")
-        self._preview_status_label.setStyleSheet("color: #aaa; font-size: 12px;")
+        self._preview_status_label.setTextFormat(getattr(Qt, "TextFormat", Qt).PlainText)
+        self._preview_status_label.setWordWrap(True)
+        self._preview_status_label.setMinimumWidth(0)
+        policy = getattr(QSizePolicy, "Policy", QSizePolicy)
+        self._preview_status_label.setSizePolicy(policy.Expanding, policy.Preferred)
+        self._preview_status_label.setAccessibleName("预览状态与照片拍摄信息")
+        self.apply_status_theme()
         layout.addWidget(self._preview_status_label)
+
+    def apply_status_theme(self, scheme=None) -> None:
+        """Update the existing status label's color without touching photo data."""
+        self._preview_status_label.setStyleSheet(f"color: {panel_theme_colors(scheme).secondary_text};")
 
     def show_raw(self) -> bool:
         return self._show_raw
@@ -1028,9 +1044,10 @@ class PreviewPanel(QWidget):
             return
         if qimg is None or qimg.isNull():
             if self._preview_source_mode == "denoised":
-                self._preview_status_label.setText("降噪成片与原图均无法预览，可切换预览来源重试")
+                self._preview_note = "降噪成片与原图均无法预览，可切换预览来源重试"
             if self._show_raw and Path(path).suffix.lower() in RAW_EXTENSIONS:
-                self._preview_status_label.setText("RAW 解码失败，可切回‘默认预览’重试内嵌预览")
+                self._preview_note = "RAW 解码失败，可切回‘默认预览’重试内嵌预览"
+            self._refresh_preview_status_text()
             if not self._has_canvas_pixmap():
                 self._canvas.setText(f"无法预览\n{Path(path).name}")
             perf_log(
@@ -1191,7 +1208,18 @@ class PreviewPanel(QWidget):
             resolution_text = f"{self._preview_resolution[0]}x{self._preview_resolution[1]}"
         scale_text = format_preview_scale_percent(self.current_display_scale_percent())
         note = f" | {self._preview_note}" if self._preview_note else ""
-        self._preview_status_label.setText(f"当前预览分辨率: {resolution_text} | 当前缩放: {scale_text}{note}")
+        capture = f" | {self._photo_capture_info_text}" if self._photo_capture_info_text else ""
+        text = f"当前预览分辨率: {resolution_text} | 当前缩放: {scale_text}{note}{capture}"
+        if self._preview_status_label.text() != text:
+            self._preview_status_label.setText(text)
+            self._preview_status_label.setToolTip(text.replace(" | ", "\n"))
+
+    def set_photo_metadata(self, metadata: dict | None) -> None:
+        """Present cached source metadata; callers own lookup and async updates."""
+        text = photo_capture_info_text(metadata) if metadata is not None else ""
+        if text != self._photo_capture_info_text:
+            self._photo_capture_info_text = text
+            self._refresh_preview_status_text()
 
     def _on_canvas_display_scale_percent_changed(self, scale_percent: object) -> None:
         self._refresh_preview_status_text()

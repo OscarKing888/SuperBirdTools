@@ -11,6 +11,7 @@ from app_common.preview_toolbar import ViewportOverlayTools, iconize, zoom_menu
 from app_common.preview_canvas import configure_preview_scale_preset_combo, sync_preview_scale_preset_combo
 from app_common.video import is_video
 from app_common.image_formats import RAW_EXTENSIONS
+from app_common.file_browser._browser_core import _get_cached_actual_path
 
 from .qt_compat import (
     QComboBox, QFrame, QHBoxLayout, QLabel,
@@ -31,10 +32,11 @@ _ELIDE = getattr(Qt, "TextElideMode", Qt)
 class ViewerViewportPanel(QWidget):
     activated = pyqtSignal()
 
-    def __init__(self, name, preview, *, center=None, scale=None, overlays=None):
+    def __init__(self, name, preview, *, center=None, scale=None, overlays=None, metadata_provider=None):
         super().__init__()
         self.name = name
         self.preview = preview
+        self._metadata_provider = metadata_provider
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(4)
@@ -92,12 +94,20 @@ class ViewerViewportPanel(QWidget):
         frame_layout.setContentsMargins(2, 2, 2, 2)
         frame_layout.addWidget(preview)
         layout.addWidget(self.viewport_frame, 1)
+        preview.source_changed.connect(self.refresh_photo_info)
         self._filename = "未选择"
         self.set_active(False, compare_mode=False)
         preview.display_scale_percent_changed.connect(self._update_available)
         preview.video_view.activated.connect(self.activated.emit)
         self._install_filters()
         self._update_available()
+        self.refresh_photo_info()
+
+    def refresh_photo_info(self):
+        path = self.preview.source_identity_path()
+        metadata = (self._metadata_provider(path)
+                    if path and not is_video(path) and self._metadata_provider is not None else {})
+        self.preview.set_photo_metadata(metadata if path and not is_video(path) else None)
 
     def _install_filters(self):
         for widget in (self, *self.findChildren(QWidget)):
@@ -250,7 +260,7 @@ class ViewerABViewLink(QObject):
 class ViewerABPreview(QObject):
     """Owns the extra viewport; the existing MainWindow preview remains B."""
 
-    def __init__(self, owner, b_preview, a_preview, *, b_center, b_scale, b_overlays):
+    def __init__(self, owner, b_preview, a_preview, *, b_center, b_scale, b_overlays, metadata_provider=None):
         super().__init__(owner)
         self.owner = owner
         self.a_preview = a_preview
@@ -271,8 +281,9 @@ class ViewerABPreview(QObject):
         self.linked.hide()
         self.splitter = QSplitter(_Horizontal)
         self.splitter.setChildrenCollapsible(False)
-        self.a_panel = ViewerViewportPanel("A", a_preview)
-        self.b_panel = ViewerViewportPanel("B", b_preview, center=b_center, scale=b_scale, overlays=b_overlays)
+        self.a_panel = ViewerViewportPanel("A", a_preview, metadata_provider=metadata_provider)
+        self.b_panel = ViewerViewportPanel("B", b_preview, center=b_center, scale=b_scale, overlays=b_overlays,
+                                           metadata_provider=metadata_provider)
         self.a_panel.overlays.restore(b_overlays.state())
         self.a_panel.overlays.changed.connect(lambda: owner._on_viewport_overlays_changed(self.a_panel))
         self.splitter.addWidget(self.a_panel)
@@ -282,6 +293,18 @@ class ViewerABPreview(QObject):
         self.b_panel.activated.connect(lambda: self.activate("b"))
         self.view_link = ViewerABViewLink(self)
         self.enabled.toggled.connect(self._toggle)
+
+    def refresh_photo_info(self, changed_paths):
+        """Late metadata refreshes each displayed source, including the inactive side."""
+        sources = set(changed_paths)
+        for path in changed_paths:
+            actual = _get_cached_actual_path(path)
+            if actual:
+                sources.add(os.path.normcase(os.path.normpath(actual)))
+        for viewport in (self.a_panel, self.b_panel):
+            source = viewport.preview.source_identity_path()
+            if source and os.path.normcase(os.path.normpath(source)) in sources:
+                viewport.refresh_photo_info()
 
     def active_panel(self):
         return self.a_preview if self.enabled.isChecked() and self.active_side == "a" else self.b_preview

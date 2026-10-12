@@ -538,6 +538,7 @@ class MainWindow(QMainWindow):
         self.ab_preview = ViewerABPreview(
             self, self.preview_panel, self.preview_a,
             b_center=self.check_auto_focus_center, b_scale=self.combo_preview_scale, b_overlays=b_overlays,
+            metadata_provider=self._file_list.cached_preview_metadata_for_path,
         )
         for viewport in (self.ab_preview.a_panel, self.ab_preview.b_panel):
             self._bird_body.set_panel_enabled(viewport.preview, viewport.overlays.bird.isChecked())
@@ -639,6 +640,8 @@ class MainWindow(QMainWindow):
             return
         colors = panel_theme_colors(scheme)
         self.file_label.setStyleSheet("color: %s; font-size: 12px;" % colors.secondary_text)
+        for preview in (self.preview_panel, self.preview_a):
+            preview.apply_status_theme(scheme)
 
     def _on_include_subdirectories_changed(self, enabled: bool) -> None:
         """范围改变后重新加载当前列表，沿用目录切换的取消与预览清理流程。"""
@@ -1329,6 +1332,7 @@ class MainWindow(QMainWindow):
     def _on_photo_metadata_cache_updated(self, paths: object) -> None:
         if not self._shutdown_requested:
             changed = _norm_paths_for_compare(paths)
+            self.ab_preview.refresh_photo_info(changed)
             # 焦点数据可能晚于快速位图到达。按各侧显示身份刷新，不读 EXIF，
             # 不使用播放中可能已前进到下一张的列表选择身份。
             for preview in (self.preview_panel, self.preview_a):

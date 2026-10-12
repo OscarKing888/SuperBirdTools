@@ -40,6 +40,7 @@ L0 应用外壳：主窗口、菜单、状态栏
 | L4 照片、元数据、标签列表 | 现有共享浏览器、模型与委托 | 分组调整不重建模型，不触发缩略图/EXIF 读取 |
 | L4 识鸟批量结果 | Viewer [`BirdIDResultsTable`](../SuperViewer/superviewer/bird_identification_table.py) / [`PerBirdResultsTable`](../SuperViewer/superviewer/per_bird_results_table.py) | 一个批次一个窗口；候选/逐只记录由模型保存，按照片分组，可见缩略图与滚动由表格统一调度；逐只汇总隐藏整图采纳动作 |
 | L4 图片/视频预览 | 已有 `PreviewCanvas` / `PreviewWithStatusBar` | 不改像素来源、坐标、缩放/平移和 A/B 语义；模板原有预览分组可折叠 |
+| L5 Viewer 预览状态与拍摄信息 | [`PreviewPanel`](../SuperViewer/superviewer/preview_panel.py) 原有底部状态 `QLabel`；格式化 [`preview_photo_info.py`](../SuperViewer/superviewer/preview_photo_info.py) | 分辨率/缩放之后显示快门、光圈、ISO、焦距、镜头和机器型号，A/B 各侧独立；窄宽度自动换行，使用原生字体/共享主题色，缺失值显示“—”；只读源照片的浏览器/报告缓存，未选择或视频不显示拍摄信息，无新增显示栏、滚动、保存或 EXIF 读取 |
 | L5 输入字段 | 原生编辑器、项目 `ColorEditor` / `PercentEditor` 等 | 复用范围、校验和信号；UI 不持有新的业务副本 |
 | L5 Viewer 颜色选择 | [`rarity_badge.ColorButton`](../SuperViewer/superviewer/rarity_badge.py) | 颜色色块、色值及原生 QColorDialog；徽章和鸟名悬停框共用，修改设置草稿，确认设置后持久化 |
 | L4 徽章配置表单 | Viewer [`MetadataBadgesForm`](../SuperViewer/superviewer/rarity_badge.py) | 显示文本输入框旁提供“编辑”按钮，使用原生 `QInputDialog`；应用更新草稿及预览，设置页确定后统一保存，取消不写配置 |

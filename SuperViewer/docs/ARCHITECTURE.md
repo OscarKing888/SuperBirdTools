@@ -429,6 +429,8 @@ Qt 测试在窗口构造前隔离 `paths_settings` 的应用/用户状态目录�
 
 ### 视口图标工具栏
 
+各侧 `PreviewPanel` 原有底部状态栏在分辨率、缩放和来源提示后追加快门、光圈、ISO、拍摄焦距、镜头型号、机器型号，窄窗口/A/B 分栏自动换行，缺失值显示“—”。[`preview_photo_info.py`](../superviewer/preview_photo_info.py) 复用共享浏览器的字段别名与格式化；`ViewerViewportPanel.refresh_photo_info()` 根据本侧 `source_identity_path()` 取 [`cached_preview_metadata_for_path()`](../superviewer/tagged_file_list.py) 的源照片/报告缓存，不借用另一侧当前选中项，不读取 EXIF 或探测原图。`source_changed` 覆盖普通选择、RAW/降噪来源、快切和清空；后台元数据及 XMP 编辑通过 `ViewerABPreview.refresh_photo_info()` 只更新匹配源图（含已解析旧路径）的视口，保留另一侧和原分辨率/缩放/失败提示。视频继续隐藏照片状态栏。无新增显示栏、设置或 CLI；回归见 [`test_preview_photo_info.py`](../tests/test_preview_photo_info.py)。
+
 [ViewerViewportPanel](../superviewer/viewer_ab_preview.py) 将来源、对焦点、鸟体框、构图线/线宽、焦点居中、适应窗口与缩放放在各自 A/B 视口内；主工具栏只保留 A/B 和视野同步。图标由共享 [preview_toolbar.py](../../app_common/preview_toolbar.py) 绘制，选中态沿用 `ToggleToolButton`。构图菜单直接在一级显示全部类型的互斥单选，下方通过滑动条和右侧输入框同步设置 1–32 px 整数线宽；来源菜单保持互斥单选，缩放图标菜单包含原缩放控件；悬停说明当前模式或比例。A 的显示设置独立保留在窗口会话内，B 继续兼容原设置存储，切换激活侧不复制选项。
 
 鸟体控制器 `set_panel_enabled()` 分侧控制绘制与分析需求，共享同源结果；隐藏侧框不取消另一侧仍需要的计算。切目录保留每侧开关，长按只读缓存。改构图线、线宽与工具栏主题不触发解码或元数据读取。回归见 [test_viewer_viewport_toolbar.py](../tests/test_viewer_viewport_toolbar.py) 和 [test_bird_body_controller.py](../tests/test_bird_body_controller.py)。

@@ -10,7 +10,13 @@ from typing import Iterable
 
 from app_common.command_history import CommandHistory
 from app_common.file_browser import FileListPanel
-from app_common.file_browser._browser_core import _metadata_comment_from_meta, _metadata_lens_model_text
+from app_common.file_browser._browser_core import (
+    _get_cached_actual_path,
+    _metadata_comment_from_meta,
+    _metadata_lens_model_text,
+    _report_row_candidate_paths,
+    _report_row_from_cache_for_path,
+)
 from app_common.filterable_combo import FilterableComboBox
 from app_common.image_formats import HEIF_EXTENSIONS, RAW_EXTENSIONS
 from app_common.perf_probe import elapsed_ms, perf_counter, perf_log
@@ -620,6 +626,24 @@ class SuperViewerTaggedFileListPanel(FileListPanel):
         """Return current browser/report fields without waiting for EXIF I/O."""
         metadata = dict(self.get_report_row_for_path(path) or {})
         metadata.update(self.get_photo_metadata_for_path(path, allow_slow_read=False))
+        return metadata
+
+    def cached_preview_metadata_for_path(self, path: str) -> dict:
+        """Read only this viewport's source caches, never another selected photo."""
+        norm_path = os.path.normpath(path) if path else ""
+        if not norm_path:
+            return {}
+        row = self._report_row_by_path.get(norm_path)
+        if not isinstance(row, dict):
+            row = _report_row_from_cache_for_path(norm_path, self._report_full_cache or self._report_cache)
+        metadata = dict(row or {})
+        aliases = _report_row_candidate_paths(row, str((row or {}).get("_report_root_dir") or self._report_root_dir))
+        selected = self._selected_display_path
+        actual = _get_cached_actual_path(selected) if selected else None
+        if actual and os.path.normcase(os.path.normpath(actual)) == os.path.normcase(norm_path):
+            aliases.append(os.path.normpath(selected))
+        for candidate in (*aliases, norm_path):
+            metadata.update(self._meta_cache.get(candidate) or {})
         return metadata
 
     def sync_metadata_edits_for_paths(self, updates_by_path: dict) -> int:
