@@ -349,6 +349,12 @@ class BirdSharpnessController(QObject):
     def busy(self) -> bool:
         return self._worker is not None
 
+    def show_progress(self) -> None:
+        if self._dialog is not None:
+            self._dialog.show()
+            self._dialog.raise_()
+            self._dialog.activateWindow()
+
     # ── menus ─────────────────────────────────────────────────────────────
     def _add_stop_action(self, menu) -> None:
         act = menu.addAction("停止鸟清晰度检测")

@@ -12,9 +12,11 @@ from app_common.send_to_app import get_external_apps
 from app_common.send_to_app.icon import external_app_display_name, external_app_icon
 
 from . import qt_compat
+from .file_context_menu import menu_icon
 from .qt_compat import QAction, QSize
 
 SEND_TO_TOOLBAR_OBJECT_NAME = "sendToToolBar"
+SETTINGS_ACTION_TEXT = "外部应用设置…"
 
 
 def create_send_to_toolbar(window) -> QToolBar:
@@ -32,8 +34,13 @@ def rebuild_send_to_toolbar(
     toolbar: QToolBar,
     send: Callable[[dict], None],
     apps: list[dict] | None = None,
+    *,
+    open_settings: Callable[[], None] | None = None,
 ) -> list[QAction]:
-    """按外部应用列表重建按钮；列表为空时隐藏工具栏。返回新建的动作。"""
+    """按外部应用列表重建按钮，末尾放「外部应用设置」齿轮。返回新建的应用动作。
+
+    提供 open_settings 时工具栏始终显示（未配置应用时只有齿轮），否则无应用即隐藏。
+    """
     for action in list(toolbar.actions()):
         toolbar.removeAction(action)
         action.deleteLater()
@@ -48,5 +55,13 @@ def rebuild_send_to_toolbar(
         action.triggered.connect(lambda _checked=False, a=dict(app): send(a))
         toolbar.addAction(action)
         actions.append(action)
-    toolbar.setVisible(bool(actions))
+    if open_settings is not None:
+        if actions:
+            toolbar.addSeparator()
+        gear = QAction(menu_icon("gear"), SETTINGS_ACTION_TEXT, toolbar)
+        gear.setToolTip(SETTINGS_ACTION_TEXT)
+        gear.setStatusTip("添加、删除或调整「发送到」外部应用")
+        gear.triggered.connect(lambda _checked=False: open_settings())
+        toolbar.addAction(gear)
+    toolbar.setVisible(bool(actions) or open_settings is not None)
     return actions

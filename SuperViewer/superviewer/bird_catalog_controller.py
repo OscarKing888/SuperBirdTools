@@ -185,6 +185,11 @@ class BirdCatalogController(QObject):
     def busy(self):
         return self._query_worker is not None or self._apply_worker is not None or self._debounce.isActive()
 
+    @property
+    def applying(self):
+        """正在把手动指定的鸟名写入照片。"""
+        return self._apply_worker is not None
+
     def _allowed(self):
         check = getattr(self._files, '_file_writes_allowed', None)
         return not callable(check) or check('手动指定鸟名')

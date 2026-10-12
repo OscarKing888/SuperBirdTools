@@ -237,6 +237,11 @@ class BirdIDController(QObject):
     def busy(self):
         return self._worker is not None or self._adopt_worker is not None
 
+    @property
+    def catalog(self):
+        """「手动指定鸟名」控制器，供工具栏复用。"""
+        return self._catalog
+
     def show_progress(self):
         if self._dialog is not None:
             self._dialog.show()

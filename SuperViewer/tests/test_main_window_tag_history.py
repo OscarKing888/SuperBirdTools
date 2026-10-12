@@ -75,7 +75,16 @@ def test_toolbar_undo_redo_preserves_original_tags_and_survives_menu_rebuild(tmp
         send_menu = next(action.menu() for action in file_menu.actions() if action.text() == "发送到外部应用")
         assert [action.text() for action in send_menu.actions()] == ["Adobe Photoshop 2026", "Viewer"]
         send_toolbar, = window.findChildren(QToolBar, "sendToToolBar")
-        assert [action.toolTip() for action in send_toolbar.actions()] == ["Adobe Photoshop 2026", "Viewer"]
+        tips = [action.toolTip() for action in send_toolbar.actions() if not action.isSeparator()]
+        assert tips == ["Adobe Photoshop 2026", "Viewer", "外部应用设置…"]
+        process_toolbar, = window.findChildren(QToolBar, "processToolBar")
+        assert process_toolbar.isVisible()
+        names = [action.text() for action in process_toolbar.actions() if not action.isSeparator()]
+        assert names == ["识别鸟种…", "选择候选鸟名…", "手动指定鸟名…", "鸟清晰度检测", "批量降噪"]
+        # 工具栏从左到右：编辑 | 照片处理 | 发送到。
+        order = sorted((toolbar, process_toolbar, send_toolbar), key=lambda bar: bar.geometry().x())
+        assert order == [toolbar, process_toolbar, send_toolbar]
+        assert all(window.toolBarArea(bar) == window.toolBarArea(toolbar) for bar in order)
         assert edit.actions() == [actions.undo_action, actions.redo_action]
         assert window.findChildren(QToolBar, "editToolBar") == [toolbar]
         assert toolbar.actions() == edit.actions()

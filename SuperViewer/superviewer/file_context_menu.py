@@ -1,6 +1,7 @@
 """Viewer 照片菜单的分组与图标；动作仍由原有浏览器和控制器创建。"""
 from __future__ import annotations
 
+import math
 import sys
 
 from app_common.file_utils import reveal_in_file_manager
@@ -58,13 +59,14 @@ def file_menu_group(name, *, order=100):
 
 class _MenuIcon(QIconEngine):
     """无字体/外部资源依赖，按系统主题、悬停和禁用状态绘制线条。"""
-    def __init__(self, kind, *, highlight_active=False):
+    def __init__(self, kind, *, highlight_active=False, busy=False):
         super().__init__()
         self.kind = kind
         self.highlight_active = highlight_active
+        self.busy = busy
 
     def clone(self):
-        return _MenuIcon(self.kind, highlight_active=self.highlight_active)
+        return _MenuIcon(self.kind, highlight_active=self.highlight_active, busy=self.busy)
 
     def paint(self, painter, rect, mode, state):
         palette = QApplication.palette()
@@ -134,6 +136,33 @@ class _MenuIcon(QIconEngine):
             line(3, 6, 21, 6); box(9, 2, 6, 4)
             line(5, 6, 6, 21); line(6, 21, 18, 21); line(18, 21, 19, 6)
             line(10, 10, 10, 17); line(14, 10, 14, 17)
+        elif kind == "candidates":
+            line(2, 6, 4, 8); line(4, 8, 7, 4)
+            ellipse(3, 11, 2, 2); ellipse(3, 17, 2, 2)
+            line(10, 6, 21, 6); line(10, 12, 21, 12); line(10, 18, 21, 18)
+        elif kind == "pencil":
+            polygon([(4, 20), (5, 15), (16, 4), (20, 8), (9, 19)])
+            line(14, 6, 18, 10); line(5, 15, 9, 19)
+        elif kind == "focus":
+            line(3, 8, 3, 3); line(3, 3, 8, 3); line(16, 3, 21, 3); line(21, 3, 21, 8)
+            line(21, 16, 21, 21); line(21, 21, 16, 21); line(8, 21, 3, 21); line(3, 21, 3, 16)
+            ellipse(8.5, 8.5, 7, 7)
+        elif kind == "gear":
+            points = []
+            for step in range(8):
+                center = step * 45
+                for offset, radius in ((-17, 7.2), (-9, 10), (9, 10), (17, 7.2)):
+                    angle = math.radians(center + offset)
+                    points.append((12 + radius * math.cos(angle), 12 + radius * math.sin(angle)))
+            polygon(points)
+            ellipse(9, 9, 6, 6)
+        if self.busy:
+            # 任务运行中：右上角实心强调色圆点。
+            painter.setPen(Qt.PenStyle.NoPen)
+            # Accent（Qt 6.6+）是系统强调色；macOS 浅色下 Highlight 只是很淡的选区色。
+            accent = getattr(QPalette.ColorRole, "Accent", QPalette.ColorRole.Highlight)
+            painter.setBrush(palette.color(group, accent))
+            painter.drawEllipse(QRectF(16, 0.5, 7.5, 7.5))
         painter.restore()
 
     def pixmap(self, size, mode, state):
@@ -147,9 +176,9 @@ class _MenuIcon(QIconEngine):
         return pixmap
 
 
-def menu_icon(kind):
-    """菜单和设置导航共用的主题自适应图标。"""
-    return QIcon(_MenuIcon(kind))
+def menu_icon(kind, *, busy=False):
+    """菜单、设置导航和工具栏共用的主题自适应图标；busy 时右上角加运行标记。"""
+    return QIcon(_MenuIcon(kind, busy=busy))
 
 
 def _icon(action, kind):

@@ -163,6 +163,7 @@ try:
     from .superviewer.viewer_ab_preview import ViewerABPreview
     from .superviewer.tag_history_actions import TagHistoryActions
     from .superviewer.send_to_toolbar import create_send_to_toolbar, rebuild_send_to_toolbar
+    from .superviewer.process_toolbar import ProcessToolbar
     from .superviewer.metadata_edit_sync import sync_saved_xmp_edit
     from .superviewer.ui_theme import get_ui_theme_manager, install_app_theme, panel_theme_colors
     from .superviewer import qt_compat
@@ -259,6 +260,7 @@ except ImportError:
     from superviewer.viewer_ab_preview import ViewerABPreview
     from superviewer.tag_history_actions import TagHistoryActions
     from superviewer.send_to_toolbar import create_send_to_toolbar, rebuild_send_to_toolbar
+    from superviewer.process_toolbar import ProcessToolbar
     from superviewer.metadata_edit_sync import sync_saved_xmp_edit
     from superviewer.ui_theme import get_ui_theme_manager, install_app_theme, panel_theme_colors
     from superviewer import qt_compat
@@ -417,6 +419,11 @@ class MainWindow(QMainWindow):
         self._bird_id = BirdIDController(self, self._file_list, self._dir_browser)
         self._denoise = DenoiseController(self, self._file_list, self._dir_browser)
         self._bird_sharpness.set_denoise_controller(self._denoise)
+        # 照片处理工具栏：放在编辑与发送到之间，复用上面控制器的右键菜单动作。
+        self._process_toolbar = ProcessToolbar(
+            self, self._file_list, self._bird_id, self._bird_sharpness, self._denoise,
+        )
+        self.insertToolBar(self._send_to_toolbar, self._process_toolbar.toolbar)
         # 计算连拍信息：目录树右键 → 按拍摄时间分组 → 写 XMP burst_id/burst_position → 刷新连拍显示
         self._burst_info = BurstInfoController(self, self._file_list, self._dir_browser)
         self._video_frame_export = VideoFrameExportController(self, self._file_list)
@@ -881,7 +888,9 @@ class MainWindow(QMainWindow):
         send_files_to_app(paths, app, base_directory=base_dir or _get_app_dir())
 
     def _rebuild_send_to_toolbar(self) -> None:
-        rebuild_send_to_toolbar(self._send_to_toolbar, self._send_to_external_app)
+        rebuild_send_to_toolbar(
+            self._send_to_toolbar, self._send_to_external_app, open_settings=self._open_external_apps_settings,
+        )
 
     def _open_external_apps_settings(self) -> None:
         def on_saved():
@@ -1705,6 +1714,10 @@ class MainWindow(QMainWindow):
                 pass
             try:
                 self._file_list.request_shutdown()
+            except Exception:
+                pass
+            try:
+                self._process_toolbar.request_shutdown()
             except Exception:
                 pass
             try:

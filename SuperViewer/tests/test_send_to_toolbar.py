@@ -14,6 +14,7 @@ from PyQt6.QtWidgets import QApplication, QMainWindow, QToolBar, QToolTip
 from app_common.send_to_app import icon as send_icon
 from SuperViewer.superviewer.send_to_toolbar import (
     SEND_TO_TOOLBAR_OBJECT_NAME,
+    SETTINGS_ACTION_TEXT,
     create_send_to_toolbar,
     rebuild_send_to_toolbar,
 )
@@ -59,6 +60,33 @@ def test_toolbar_lists_each_external_app_with_icon_and_sends_it(tmp_path):
         rebuild_send_to_toolbar(toolbar, sent.append, [])
         assert toolbar.actions() == []
         assert not toolbar.isVisible()
+    finally:
+        window.close()
+        window.deleteLater()
+        _APP.processEvents()
+
+
+def test_settings_gear_follows_apps_and_keeps_toolbar_visible() -> None:
+    window = QMainWindow()
+    toolbar = create_send_to_toolbar(window)
+    window.addToolBar(toolbar)
+    opened: list[bool] = []
+    window.show()
+    try:
+        apps = rebuild_send_to_toolbar(toolbar, print, [{"name": "A.app", "path": ""}], open_settings=lambda: opened.append(True))
+        items = toolbar.actions()
+        assert items[0] is apps[0] and items[1].isSeparator()
+        gear = items[2]
+        assert gear.text() == gear.toolTip() == SETTINGS_ACTION_TEXT
+        assert not gear.icon().isNull()
+        QTest.mouseClick(toolbar.widgetForAction(gear), Qt.MouseButton.LeftButton)
+        assert opened == [True]
+
+        # 未配置应用时只剩齿轮，工具栏仍显示，便于发现设置入口。
+        assert rebuild_send_to_toolbar(toolbar, print, [], open_settings=lambda: opened.append(True)) == []
+        _APP.processEvents()
+        assert [a.text() for a in toolbar.actions()] == [SETTINGS_ACTION_TEXT]
+        assert toolbar.isVisible()
     finally:
         window.close()
         window.deleteLater()
