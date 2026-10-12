@@ -76,8 +76,9 @@ a = Analysis(
     + collect_submodules("superviewer") + video_hiddenimports + denoise_hiddenimports + bird_hiddenimports,
     hookspath=[],
     hooksconfig={},
-    runtime_hooks=[],
-    excludes=["IPython", "notebook", "nbformat", "matplotlib", "tkinter", "__main__"],
+    runtime_hooks=[str(REPO_ROOT / "build_tools" / "pyinstaller_bootstrap" / "sitecustomize.py")],
+    # Avoid WMI stalls in platform queries during frozen startup/model imports.
+    excludes=["IPython", "notebook", "nbformat", "matplotlib", "tkinter", "__main__", "_wmi"],
     noarchive=False,
     optimize=0,
 )

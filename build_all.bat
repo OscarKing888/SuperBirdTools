@@ -102,6 +102,7 @@ if defined BUNDLE_MODELS (
   "%PYTHON_EXE%" "%ROOT_DIR%build_tools\download_models.py" --check-only --no-denoise %MODEL_ARGS%
   if errorlevel 1 goto models_missing
 )
+echo [INFO] Starting PyInstaller; Windows platform detection uses local system information.
 "%PYTHON_EXE%" -m PyInstaller %PYINSTALLER_ARGS% ^
   --distpath "%DIST_ROOT%" ^
   --workpath "%BUILD_ROOT%\merged_win" ^
@@ -120,6 +121,7 @@ if defined BUNDLE_MODELS (
   %PYTHON_LAUNCHER% "%ROOT_DIR%build_tools\download_models.py" --check-only --no-denoise %MODEL_ARGS%
   if errorlevel 1 goto models_missing
 )
+echo [INFO] Starting PyInstaller; Windows platform detection uses local system information.
 %PYTHON_LAUNCHER% -m PyInstaller %PYINSTALLER_ARGS% ^
   --distpath "%DIST_ROOT%" ^
   --workpath "%BUILD_ROOT%\merged_win" ^

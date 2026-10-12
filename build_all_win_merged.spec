@@ -136,8 +136,10 @@ superviewer_a = Analysis(
     + collect_submodules("superviewer") + video_hiddenimports + denoise_hiddenimports + bird_hiddenimports,
     hookspath=[],
     hooksconfig={},
-    runtime_hooks=[],
-    excludes=["IPython", "notebook", "nbformat", "matplotlib", "tkinter", "__main__"],
+    runtime_hooks=[str(REPO_ROOT / "build_tools" / "pyinstaller_bootstrap" / "sitecustomize.py")],
+    # platform falls back to local APIs when its optional WMI backend is absent.
+    # Keep frozen startup/model imports independent of an unresponsive WMI service.
+    excludes=["IPython", "notebook", "nbformat", "matplotlib", "tkinter", "__main__", "_wmi"],
     noarchive=False,
     optimize=0,
 )
@@ -192,8 +194,12 @@ superbirdstamp_a = Analysis(
     + ultralytics_hiddenimports,
     hookspath=[],
     hooksconfig={},
-    runtime_hooks=[str(SUPERBIRDSTAMP_ROOT / "scripts_dev" / "pyi_rthook_cwd.py")],
+    runtime_hooks=[
+        str(REPO_ROOT / "build_tools" / "pyinstaller_bootstrap" / "sitecustomize.py"),
+        str(SUPERBIRDSTAMP_ROOT / "scripts_dev" / "pyi_rthook_cwd.py"),
+    ],
     excludes=[
+        "_wmi",  # Use platform's local Windows fallback in the frozen app too.
         "IPython",
         "notebook",
         "nbformat",

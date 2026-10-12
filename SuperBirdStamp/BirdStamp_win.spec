@@ -120,8 +120,12 @@ a = Analysis(
     + ultralytics_hiddenimports,
     hookspath=[],
     hooksconfig={},
-    runtime_hooks=[str(RUNTIME_HOOK)],
+    runtime_hooks=[
+        str(REPO_ROOT / "build_tools" / "pyinstaller_bootstrap" / "sitecustomize.py"),
+        str(RUNTIME_HOOK),
+    ],
     excludes=[
+        "_wmi",  # Use platform's local fallback instead of querying WMI.
         "IPython",
         "notebook",
         "nbformat",

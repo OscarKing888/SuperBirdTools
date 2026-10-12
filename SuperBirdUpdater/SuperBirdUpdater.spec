@@ -17,8 +17,11 @@ a = Analysis(
     [str(ROOT / "SuperBirdUpdater" / "entry.py")],
     pathex=[str(ROOT)],
     binaries=[], datas=[], hiddenimports=[],
-    hookspath=[], runtime_hooks=[],
-    excludes=["__main__", "torch", "ultralytics", "numpy", "PIL", "cv2", "matplotlib", "PyQt5", "PySide6"],
+    hookspath=[],
+    runtime_hooks=([str(ROOT / "build_tools" / "pyinstaller_bootstrap" / "sitecustomize.py")]
+                   if sys.platform == "win32" else []),
+    excludes=["__main__", "torch", "ultralytics", "numpy", "PIL", "cv2", "matplotlib", "PyQt5", "PySide6"]
+    + (["_wmi"] if sys.platform == "win32" else []),
     noarchive=False,
 )
 pyz = PYZ(a.pure)

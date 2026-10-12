@@ -190,6 +190,16 @@ build_all.bat --clean
 Python 标准库或 Torch/Qt 的 C/C++ 代码。PyInstaller 会分析导入关系、生成 Python
 字节码归档、收集已经安装的原生库，并在 macOS 上处理库路径与代码签名。
 
+Windows 模型校验显示“需下载 0 个”后会直接结束校验，继续 PyInstaller 打包；
+`Starting PyInstaller` 标记这个阶段切换。启动脚本
+[`sitecustomize.py`](build_tools/pyinstaller_bootstrap/sitecustomize.py) 让 Python
+使用 `platform` 自带的本地 Windows API、注册表和环境变量回退，避免 Python 3.12+
+因 WMI 无响应而在 PyInstaller 第一条日志之前卡住。该设置随构建入口的 `PYTHONPATH`
+传给隔离工作进程。Windows spec 同时排除可选的 `_wmi` 模块，并在程序启动时运行
+同一 bootstrap：使用本地系统信息回退，并在 Qt/Torch/NumPy 导入前预加载系统 MSVC
+运行库，保证普通启动和模型诊断的 DLL 加载顺序一致。无需更改系统 WMI 服务或
+虚拟环境中的库文件。
+
 增量缓存以整个 PyInstaller 构建阶段为单位；修改任一已收集的 Python 文件后，
 所属 app 的 Analysis 仍可能完整重跑，不能保证只处理改动的业务代码。
 Windows 的 COLLECT 阶段及 macOS BUNDLE 阶段每次都会重新收集；
