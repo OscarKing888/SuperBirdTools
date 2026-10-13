@@ -58,6 +58,10 @@ flowchart TD
 
 `SuperViewerTaggedFileListPanel.load_directory()` 先切换标签配置范围、取消旧标签请求，再调用共享 `FileListPanel.load_directory()`。共享层负责复用同根报告缓存、扫描范围和取消旧任务；`_apply_directory_listing_result()` 拒绝过期目录结果，建立 `_all_files`、报告映射与视图。Viewer 在这里建立同目录同名 RAW/HEIF 的焦点来源索引。
 
+Viewer 切换目录前通过 `_remember_directory_selection()` 保存活动列表/缩略图的当前照片路径和显示行号；无 Qt 的 [`DirectorySelectionCache`](../superviewer/directory_selection.py) 按规范化目录路径保存最近 256 个目录，使用 LRU 淘汰，仅当前窗口会话有效。两种视图共用同一照片记忆，切换视图继续沿用共享选择同步。返回目录时，`_select_first_file_if_needed()` 等活动模型分批填充和排序完成，优先按路径恢复原图；若原图被外部删除或过滤，则把旧行号限制在新列表范围内并查找邻近有效源文件，全部不可用时保持无选择。报告旧路径仍通过原有只读实际源路径解析验证，不保存 Qt 索引或复用旧目录文件列表。
+
+恢复沿用原有滚动机制并只提交一次正常预览选择；用户在填充期间主动选图、外部指定待选文件以及删除后选前一张的行为优先。中途切走时空模型不覆盖目录记忆，扫描仍由共享请求代次拒绝过期结果。此功能属于浏览会话状态，无新增配置、控件或 CLI。回归见 [`test_directory_selection_memory.py`](../tests/test_directory_selection_memory.py) 与删除选择测试。
+
 报告模式保留整个根目录的 `_report_full_cache`，当前目录只是它的一个范围。`report.db.current_path` 可能仍指向 XMP，或照片实际已移动：[`_browser_core.py`](../../app_common/file_browser/_browser_core.py) 的报告路径规范化、范围筛选、实际路径缓存负责这种兼容。不要把原始报告路径、实际源图路径和预览 JPEG 路径合成一个可变字段，也不要回写报告修复路径。
 
 多报告目录通过 `_build_report_scope_maps_for_files()` 按文件所属报告范围建立 `_IndexedReportCache` 路径索引；未命中的旧路径不能为每张照片重新遍历整份报告。索引随目录缓存保存和释放，保留同名照片的完整路径区分。扫描 worker 分别报告文件枚举与报告匹配进度，记录报告读取、文件枚举、报告匹配耗时，并在匹配期间响应取消。
