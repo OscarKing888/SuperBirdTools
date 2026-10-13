@@ -102,7 +102,7 @@ exe = EXE(
     argv_emulation=False,
     target_arch=os.environ.get("SUPERBIRDTOOLS_TARGET_ARCH") or None,
     codesign_identity=None,
-    entitlements_file=None,
+    entitlements_file=str(APP_ROOT / "macos_entitlements.plist"),
     icon=[str(ICON_PATH)] if ICON_PATH.exists() else None,
 )
 # 直接生成 .app，避免先收集完整 onedir 再重复拷贝进 BUNDLE。
@@ -117,5 +117,6 @@ app = BUNDLE(
         "CFBundleShortVersionString": APP_INFO.bundle_version,
         "CFBundleVersion": APP_INFO.build_number,
         "CFBundleDisplayName": APP_INFO.product_name,
+        "NSAppleEventsUsageDescription": "将拖放的照片及 XMP 交给 Finder 移动或复制，并由系统处理文件冲突。",
     },
 )

@@ -38,6 +38,7 @@ L0 应用外壳：主窗口、菜单、状态栏
 | L3 浮窗 | `QDialog`；已有模板/叠加窗口 | 模态与非模态按用户任务决定，复用已有保存/关闭流程 |
 | L4 表单 | `QFormLayout` / `QGridLayout` | 同级字段共享标签/控件列；窄宽度换行或滚动，不裁掉编辑控件 |
 | L4 照片、元数据、标签列表 | 现有共享浏览器、模型与委托 | 分组调整不重建模型，不触发缩略图/EXIF 读取 |
+| L4/L5 Viewer 目录操作与文件拖放 | [`ViewerDirectoryBrowser / DirectoryDropTree / DragFileTableView / DragThumbnailView`](../SuperViewer/superviewer/file_drag_views.py)、原生 `QInputDialog`；[`DirectoryFileController`](../SuperViewer/superviewer/directory_file_controller.py) | 目录右键“新建子目录…”只创建输入名称的一级目录，增量插入并保留当前浏览/展开；列表、缩略图多选拖到目录，默认移动，实体 Ctrl 复制（macOS 使用 Qt MetaModifier）；悬停目录按 palette Highlight 描边，600 ms 展开，边缘滚动，离开/完成清除；系统拥有操作进度/冲突/取消，应用状态栏反馈结果。共享视图工厂默认不启用拖放，BirdStamp 保持原行为；见[设计与覆盖](ui-design/viewer-directory-file-operations.md) |
 | L4 识鸟批量结果 | Viewer [`BirdIDResultsTable`](../SuperViewer/superviewer/bird_identification_table.py) / [`PerBirdResultsTable`](../SuperViewer/superviewer/per_bird_results_table.py) | 一个批次一个窗口；候选/逐只记录由模型保存，按照片分组，可见缩略图与滚动由表格统一调度；逐只汇总隐藏整图采纳动作 |
 | L4 图片/视频预览 | 已有 `PreviewCanvas` / `PreviewWithStatusBar` | 不改像素来源、坐标、缩放/平移和 A/B 语义；模板原有预览分组可折叠 |
 | L1/L4 BirdStamp 拼图 | [`CollageEditor`](../SuperBirdStamp/birdstamp/gui/editor_collage.py) + `CollapsibleSection` / `ColorEditor` / `PreviewWithStatusBar` / `OverlayEditorDock` | 处理设置中位于去抖动之后；原生比例/分辨率组合框与联动宽高框定义最终画布（默认 3:4、1080 × 1440），单格自动计算；自定义宫格显示原生横向列数/纵向行数框，切回预设隐藏但保留数值；左侧参数和素材顺序由主滚动区容纳，右侧独立画布复用 OverlayPanel / OverlaySession，导出/取消/进度固定在 ExportActionBar。切页和折叠保留内容，拼图参数与素材、叠加层随工作区保存，后台单 worker 按版本接收并等真实 finished 交接；见[设计说明](ui-design/birdstamp-collage.md) |

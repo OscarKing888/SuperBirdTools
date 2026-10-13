@@ -43,6 +43,7 @@ from .tag_menu import add_filterable_tag_actions
 from .ui_theme import PanelThemeColors, panel_theme_colors
 from .rarity_file_table import RarityFileTableModel, RarityBadgeDelegate
 from .thumbnail_metadata import BirdThumbnailModel, BirdThumbnailDelegate
+from .file_drag_views import DragFileTableModel, DragThumbnailModel, DragFileTableView, DragThumbnailView
 
 try:
     from PyQt6.QtCore import QItemSelectionModel, QSignalBlocker, Qt
@@ -245,8 +246,10 @@ class SuperViewerTaggedFileListPanel(FileListPanel):
     include_videos = True
     use_unified_worker_pool = True
     show_thumbnail_sort_controls = True
-    file_table_model_class = RarityFileTableModel
-    thumbnail_model_class = BirdThumbnailModel
+    file_table_model_class = DragFileTableModel
+    thumbnail_model_class = DragThumbnailModel
+    file_table_view_class = DragFileTableView
+    thumbnail_view_class = DragThumbnailView
     thumbnail_delegate_class = BirdThumbnailDelegate
     video_playback_stop_requested = pyqtSignal()
     playback_state_changed = pyqtSignal(bool)

@@ -42,7 +42,7 @@ def test_cached_details_refresh_and_stale_species_markers():
 def test_viewer_layout_is_opt_in():
     assert FileListPanel.thumbnail_delegate_class is ThumbnailItemDelegate
     assert SuperViewerTaggedFileListPanel.thumbnail_delegate_class is BirdThumbnailDelegate
-    assert SuperViewerTaggedFileListPanel.thumbnail_model_class is BirdThumbnailModel
+    assert issubclass(SuperViewerTaggedFileListPanel.thumbnail_model_class, BirdThumbnailModel)
     for size in (128, 256, 512, 1024, 2048):
         basic = ThumbnailItemDelegate.grid_size(size)
         viewer = BirdThumbnailDelegate.grid_size(size)

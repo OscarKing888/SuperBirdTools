@@ -160,6 +160,8 @@ try:
     from .superviewer.burst_info_controller import BurstInfoController
     from .superviewer.video_frame_export_controller import VideoFrameExportController
     from .superviewer.image_png_export_controller import ImagePngExportController
+    from .superviewer.directory_file_controller import DirectoryFileController
+    from .superviewer.file_drag_views import ViewerDirectoryBrowser
     from .superviewer.preview_key_router import PreviewKeyRouter
     from .superviewer.viewer_ab_preview import ViewerABPreview
     from .superviewer.tag_history_actions import TagHistoryActions
@@ -258,6 +260,8 @@ except ImportError:
     from superviewer.burst_info_controller import BurstInfoController
     from superviewer.video_frame_export_controller import VideoFrameExportController
     from superviewer.image_png_export_controller import ImagePngExportController
+    from superviewer.directory_file_controller import DirectoryFileController
+    from superviewer.file_drag_views import ViewerDirectoryBrowser
     from superviewer.preview_key_router import PreviewKeyRouter
     from superviewer.viewer_ab_preview import ViewerABPreview
     from superviewer.tag_history_actions import TagHistoryActions
@@ -392,7 +396,7 @@ class MainWindow(QMainWindow):
 
         # ── 面板 1：目录浏览器 ──
         include_subdirectories = load_include_subdirectories_from_settings()
-        self._dir_browser = DirectoryBrowserWidget(include_subdirectories=include_subdirectories)
+        self._dir_browser = ViewerDirectoryBrowser(include_subdirectories=include_subdirectories)
         self._dir_browser.setMinimumWidth(140)
         splitter.addWidget(self._dir_browser)
 
@@ -430,6 +434,8 @@ class MainWindow(QMainWindow):
         self._burst_info = BurstInfoController(self, self._file_list, self._dir_browser)
         self._video_frame_export = VideoFrameExportController(self, self._file_list)
         self._image_png_export = ImagePngExportController(self, self._file_list)
+        self._directory_files = DirectoryFileController(self, self._file_list, self._dir_browser)
+        self._directory_files.photos_moved.connect(self._on_archive_photos_moved)
         # 连接文件列表选中 → 预览 + 元信息刷新
         self._file_list.file_fast_preview_requested.connect(self._on_file_fast_preview_requested)
         self._file_list.file_fast_preview_pixmap_requested.connect(
@@ -1765,6 +1771,7 @@ class MainWindow(QMainWindow):
                 pass
             self._video_frame_export.request_shutdown()
             self._image_png_export.request_shutdown()
+            self._directory_files.request_shutdown()
             # Closing the shared stay-open process interrupts metadata calls
             # before the bounded worker waits below.  Its process teardown is
             # kept off the GUI thread because a wedged child may need a bounded
@@ -1803,15 +1810,16 @@ class MainWindow(QMainWindow):
         burst_info_done = self._burst_info.is_shutdown_done()
         video_frame_export_done = self._video_frame_export.is_shutdown_done()
         image_png_export_done = self._image_png_export.is_shutdown_done()
+        directory_files_done = self._directory_files.is_shutdown_done()
         pending_state = (
-            video_frame_export_done, image_png_export_done,
+            video_frame_export_done, image_png_export_done, directory_files_done,
             focus_done, tabs_done, preview_done, exiftool_done, directory_scans_done, bird_sharpness_done,
             burst_info_done, denoise_done, bird_body_done, archive_done, bird_id_done, bird_pinyin_done, shooting_location_done, rarity_edit_done, capture_time_done,
         )
         if not all(pending_state):
             if pending_state != self._shutdown_pending_state:
                 _log.info(
-                    "[shutdown] waiting focus=%s image_info=%s preview=%s exiftool=%s directory_scans_and_pool=%s bird_sharpness=%s burst_info=%s denoise=%s bird_body=%s archive=%s bird_id=%s bird_pinyin=%s shooting_location=%s rarity_edit=%s capture_time=%s video_frame_export=%s image_png_export=%s",
+                    "[shutdown] waiting focus=%s image_info=%s preview=%s exiftool=%s directory_scans_and_pool=%s bird_sharpness=%s burst_info=%s denoise=%s bird_body=%s archive=%s bird_id=%s bird_pinyin=%s shooting_location=%s rarity_edit=%s capture_time=%s video_frame_export=%s image_png_export=%s directory_files=%s",
                     focus_done,
                     tabs_done,
                     preview_done,
@@ -1829,6 +1837,7 @@ class MainWindow(QMainWindow):
                     capture_time_done,
                     video_frame_export_done,
                     image_png_export_done,
+                    directory_files_done,
                 )
                 self._shutdown_pending_state = pending_state
             event.ignore()
