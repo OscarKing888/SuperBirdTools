@@ -130,7 +130,8 @@ def generate(root: Path, output: Path, identity: dict, target: str, arch: str,
     return data
 
 
-def package_suite(root: Path, output: Path, manifest: dict, repo: Path) -> Path:
+def package_suite(root: Path, output: Path, manifest: dict, repo: Path, *,
+                  include_update_metadata: bool = True) -> Path:
     """完整安装包与增量清单来自同一份最终产物，保留 macOS 链接和权限。"""
     version = manifest.get("release_version", manifest["version"])
     name = f"SuperBirdTools-{version}-{manifest['platform']}-{manifest['arch']}"
@@ -154,7 +155,7 @@ def package_suite(root: Path, output: Path, manifest: dict, repo: Path) -> Path:
             else:
                 with archive.open(info, "w", force_zip64=True) as dest, (root / entry["path"]).open("rb") as src:
                     shutil.copyfileobj(src, dest, BLOCK_SIZE)
-        for file in (INSTALLED_MANIFEST, CONFIG_NAME):
+        for file in ((INSTALLED_MANIFEST, CONFIG_NAME) if include_update_metadata else ()):
             archive.write(root / file, f"{name}/{file}")
         for source, dest in (("THIRD_PARTY_NOTICES.md", "THIRD_PARTY_NOTICES.md"),
                              ("SuperViewer/LICENSE", "LICENSE-SuperViewer"),
@@ -165,3 +166,17 @@ def package_suite(root: Path, output: Path, manifest: dict, repo: Path) -> Path:
         result.unlink()
         raise UpdateError("完整安装包超过 GitHub 单附件限制；请缩减打包依赖后重建")
     return result
+
+
+def package_full_suite(root: Path, output: Path, version: str, target: str, arch: str,
+                       repo: Path) -> Path:
+    """Package final applications without generating update manifests or volumes."""
+    from app_identity import normalize_version
+    from .common import executable
+
+    for app in APPS:
+        if not executable(root, app, target).is_file():
+            raise UpdateError(f"Missing packaged executable: {app}")
+    data = {"version": normalize_version(version), "platform": target, "arch": arch,
+            "files": _entries(root, target)}
+    return package_suite(root, output, data, repo, include_update_metadata=False)

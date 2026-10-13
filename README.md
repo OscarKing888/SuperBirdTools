@@ -18,11 +18,11 @@
 
 ## 鸟识别模型与 SuperPicky
 
-SuperViewer 的「鸟清晰度检测」「查看清晰度计算过程」和「显示鸟体」会用到下面的模型。模型权重都不入 git；其中分割模型和鸟眼模型来自 [SuperPicky（慧眼选鸟）](https://github.com/jamesphotography/SuperPicky)，本仓库既不复制也不打包它们，而是在运行时读取已安装的 SuperPicky 里的文件。
+SuperViewer 的「鸟清晰度检测」「查看清晰度计算过程」和「显示鸟体」会用到下面的模型。模型权重都不入 git；GitHub 发布包从 Ultralytics 官方资源下载并打包 `yolo11l-seg.pt`、`sam2.1_b.pt` 和基础 `yolo11n.pt`，另带 NAFNet 降噪模型。鸟眼模型仍在运行时读取已安装的 [SuperPicky（慧眼选鸟）](https://github.com/jamesphotography/SuperPicky) 文件，不随本仓库分发。
 
 | 用途 | 模型文件 | 来源 | 缺失时 |
 | --- | --- | --- | --- |
-| 鸟体识别（首选，给出每只鸟的像素轮廓） | `yolo11l-seg.pt`（或 `yolo11m/s/n-seg.pt`） | SuperPicky 安装包 | 改用下面的检测模型，只有鸟框 |
+| 鸟体识别（首选，给出每只鸟的像素轮廓） | `yolo11l-seg.pt`（或 `yolo11m/s/n-seg.pt`） | Ultralytics 官方资源，GitHub 发布包自带；也可复用 SuperPicky | 改用下面的检测模型，只有鸟框 |
 | 鸟体识别（备用，只有鸟框） | `yolo11n.pt`（或 `yolo11s.pt`、`yolov8n.pt`） | `python init_dev.py` 下载到 `SuperBirdStamp/models`，打包版 Viewer 自带 | 两种识别模型都没有时无法检测 |
 | 鸟眼、鸟喙定位 | `cub200_keypoint_resnet50_slim.pth` | SuperPicky 安装包 | 按整只鸟测量，准确度明显下降 |
 
@@ -43,7 +43,7 @@ SuperPicky 的鸟眼模型：
    - Windows：`%ProgramFiles%\SuperPicky`、`%LOCALAPPDATA%\SuperPicky` 下的 `_internal\models` 或 `models`；
 6. 与本仓库同级的 SuperPicky 源码目录 `SuperPicky/models`。
 
-所以要获得完整的鸟清晰度检测，请安装 SuperPicky，或把上面两个文件放进 `SuperViewer/models`。打包版 SuperViewer 目前只带 `yolo11n.pt`，没装 SuperPicky 的电脑只能按鸟框测整只鸟，检测进度窗口会提示。SuperPicky 自带的其他模型（飞行判断 `superFlier_efficientnet.pth`、鸟种识别 `model20240824.pth`、美学评分 `cfanet_iaa_ava_res50`）目前没有使用。细节见 [鸟清晰度检测](docs/bird_sharpness.md#模型)；两者清晰度算法的区别与实测对比见 [与 SuperPicky 锐度算法对比](docs/bird_sharpness_vs_superpicky.md)。
+GitHub 发布版 SuperViewer 自带鸟体分割与 SAM 精细分割模型；鸟眼定位仍需安装 SuperPicky，或把 `cub200_keypoint_resnet50_slim.pth` 放进 `SuperViewer/models`。缺少鸟眼模型时按整只鸟测量，检测进度窗口会提示。SuperPicky 自带的其他模型（飞行判断 `superFlier_efficientnet.pth`、鸟种识别 `model20240824.pth`、美学评分 `cfanet_iaa_ava_res50`）目前没有使用。细节见 [鸟清晰度检测](docs/bird_sharpness.md#模型)；两者清晰度算法的区别与实测对比见 [与 SuperPicky 锐度算法对比](docs/bird_sharpness_vs_superpicky.md)。
 
 ## 目录原则
 
@@ -81,7 +81,7 @@ python init_dev.py
 ./download_models.sh --dry-run       # 只看计划；--check-only 离线校验；--list 列出全部
 ```
 
-发布安装包仍只带 `yolo11n.pt` 和降噪模型，build 直接使用 workspace 里已校验的文件；`build_all_no_zip.sh` 会把全部模型打进本机构建的 SuperViewer（见「打包入口」），用户也可在设置里按需下载。
+GitHub 发布安装包带 `yolo11n.pt`、NAFNet 降噪模型、`yolo11l-seg.pt` 与 `sam2.1_b.pt`。CI 在构建前下载并校验，build 使用 workspace 里已校验的文件；`build_all_no_zip.sh` 也打包这四个模型（见「打包入口」），其余模型可在设置里按需下载。
 
 从仓库根目录启动 GUI：
 
@@ -157,7 +157,7 @@ macOS 也可直接使用免 ZIP 入口，支持传入 `--clean` 等原有参数�
 bash build_all_no_zip.sh
 ```
 
-`build_all.sh` 和 Windows 的 `build_all.bat` 均支持 `--bundle-models yolo11l-seg.pt,sam2.1_b.pt` 指定额外模型，也可以用 `--bundle-all-models` 打包全部模型（如 `download_models.bat` 后 `build_all.bat --apps-only --bundle-all-models`）；发布构建不带此参数，安装包和更新分卷保持只有 `yolo11n.pt` 与降噪模型。
+`build_all.sh` 和 Windows 的 `build_all.bat` 均支持 `--bundle-models yolo11l-seg.pt,sam2.1_b.pt` 指定额外模型，也可以用 `--bundle-all-models` 打包全部模型（如 `download_models.bat` 后 `build_all.bat --apps-only --bundle-all-models`）；GitHub 发布构建显式使用 `--bundle-models yolo11l-seg.pt,sam2.1_b.pt`，安装包和更新分卷均包含这两个模型以及基础 `yolo11n.pt` 与降噪模型；Windows 本地构建默认也带这两个额外模型，macOS 未传模型参数时仅包含基础模型。
 
 ```bat
 build_all.bat --apps-only
@@ -267,7 +267,7 @@ Windows 使用 `.venv\Scripts\python.exe` 执行同一脚本。macOS `CFBundleSh
 
 ## GitHub Actions 自动构建
 
-`.github/workflows/build-release.yml` 每次都以 `--clean` 构建 Windows x86_64 和 macOS arm64 三应用套件，入口如下：
+`.github/workflows/build-release.yml` 在下载和校验上述四个模型后，每次都以 `--clean --apps-only --bundle-models yolo11l-seg.pt,sam2.1_b.pt` 构建 Windows x86_64 和 macOS arm64 三应用套件，入口如下：
 
 - push 到 `main` 或向 `main` 提交 Pull Request 时自动构建（只改 Markdown、`docs/`、`ai_rules/`、`.cursor/` 时跳过）。版本前两段取 `app_metadata.json`，第三段取实际 HEAD 前 8 位（PR 为 GitHub 生成的合并提交），结果保留为 14 天的 Actions artifacts，不发布 Release。同一分支或 PR 的新提交会取消尚未完成的旧构建。
 - 在 GitHub Actions 页面手动运行时，可输入前两段版本号（例如 `1.2`），留空则取 `app_metadata.json`；第三段取所选 ref 的实际 HEAD 前 8 位，同样只生成 Actions artifacts。手动运行即使选择 Tag，也不发布 Release。
@@ -299,7 +299,7 @@ bump-version.bat 1.2
 
 Tag 必须是 `v主版本.次版本.8位小写hash`，hash 必须等于 Tag 所指 commit 的前 8 位，前两段也必须与该提交的源码配置一致。旧数字三段版本、预发布后缀、错误 hash 都会在 CI 校验时被拒绝。更新器用 `release_version` 显示完整版本，同时保留旧清单的短 commit `version` 字段，兼容已发布更新器；更新顺序仍按主线 first-parent 提交数判断，不能对 hash 排大小。
 
-本地 `build_all.sh` / `build_all.bat` 和单应用 spec 均自动生成当前 commit 版本。CI 通过 `SUPERBIRDTOOLS_BUILD_VERSION` 和 `SUPERBIRDTOOLS_BUILD_NUMBER` 传递统一版本与构建号，两个平台再次验证与各自 HEAD 一致。完整安装包名为 `SuperBirdTools-1.2.<hash>-<platform>-<arch>.zip`。回归检查：`.venv/bin/python3 -m pytest build_tools/tests/test_bump_version.py build_tools/tests/test_set_build_version.py -q`。
+本地 `build_all.sh` / `build_all.bat` 和单应用 spec 均自动生成当前 commit 版本。CI 通过 `SUPERBIRDTOOLS_BUILD_VERSION` 和 `SUPERBIRDTOOLS_BUILD_NUMBER` 传递统一版本与构建号，两个平台再次验证与各自 HEAD 一致。完整安装包名为 `SuperBirdTools-1.2.<hash>-<platform>-<arch>.zip`。CI 暂停生成与上传 `update-*.zip`、`update-*.json`，使用 `build_tools/package_release.py` 单独打包应用；Release 仅发布 Windows、macOS 两个完整 ZIP 和 `SHA256SUMS.txt`（另有 GitHub 自动提供的源码下载）。回归检查：`.venv/bin/python3 -m pytest build_tools/tests/test_bump_version.py build_tools/tests/test_set_build_version.py -q`。
 
 进度见 [Build packages and release](https://github.com/OscarKing888/SuperBirdTools/actions/workflows/build-release.yml)，成功后的下载见 [Releases](https://github.com/OscarKing888/SuperBirdTools/releases)。也可以运行 `gh run list --workflow build-release.yml`，再运行 `gh run watch <运行ID> --exit-status`。仓库需启用 GitHub Actions；发布 job 使用工作流自带的 `GITHUB_TOKEN` 和 `contents: write` 权限，无需额外配置个人令牌。
 
@@ -309,7 +309,7 @@ Tag 必须是 `v主版本.次版本.8位小写hash`，hash 必须等于 Tag 所�
 
 Windows merged 包中的 `SuperViewer/` 与 `SuperBirdStamp/` 相互引用，必须保持在同一个 zip 中分发。macOS 产物当前是原生 arm64。自动构建产物均未做 Windows 代码签名或 macOS Developer ID 签名/公证，首次运行时可能出现系统安全提示。
 
-Release 已存在且本工作流的资产齐全时，会保留旧资产而不覆盖；若只存在部分资产，工作流会停止，避免新 checksum 与旧包混用。修复上传失败的草稿时，请先人工删除该草稿中本工作流生成的 ZIP、更新清单 JSON 和 `SHA256SUMS.txt`，再重新运行；已公开版本的内容更新请使用新 Tag。当前依赖和外部模型/ffmpeg 资源尚未锁定到完整哈希，因此历史 tag 的重新构建不保证逐字节一致。
+Release 已存在且本工作流的资产齐全时，会保留旧资产而不覆盖；若只存在部分资产，工作流会停止，避免新 checksum 与旧包混用。修复上传失败的草稿时，请先人工删除该草稿中本工作流生成的完整 ZIP 和 `SHA256SUMS.txt`，再重新运行；已公开版本的内容更新请使用新 Tag。当前依赖和外部模型/ffmpeg 资源尚未锁定到完整哈希，因此历史 tag 的重新构建不保证逐字节一致。
 
 ## 平台差异
 
@@ -325,6 +325,6 @@ Release 已存在且本工作流的资产齐全时，会保留旧资产而不覆
 - 每个 app 新增 `entry.py` / `__main__.py`，解决 sibling `app_common` 的导入问题。
 ## 自动更新
 
-完整多应用构建现在同时生成独立 `SuperBirdUpdater`、短 commit 版本文件清单、并行 MD5/SHA-256 校验和文件级增量下载载荷。默认通过公开 GitHub Release 免登录更新；保留百度盘手动入口。
+本地默认完整构建可生成独立 `SuperBirdUpdater`、短 commit 版本文件清单、并行 MD5/SHA-256 校验和文件级增量下载载荷。当前 CI/CD 暂停发布增量更新清单和分卷，新版本请下载完整 ZIP 安装；更新器代码与本地构建能力保留。
 
 首次安装需解压整个套件，两个主应用与更新器放在同一个可写目录；下载完成后安全关闭两应用，事务安装成功后重启。配置、发布方法、命令行及恢复流程见 [更新器文档](SuperBirdUpdater/README.md)。

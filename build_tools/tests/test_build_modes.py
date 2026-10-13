@@ -221,10 +221,14 @@ def _entry_env(repo):
 
 
 @pytest.mark.parametrize("fail", ["", "download_models"])
-def test_selected_models_are_verified_before_build(build_entry, fail):
+@pytest.mark.parametrize("clean", [False, True])
+def test_selected_models_are_verified_before_build(build_entry, fail, clean):
     _, run = build_entry
     names = "yolo11l-seg.pt,sam2.1_b.pt"
-    result, calls = run("--apps-only", "--bundle-models", names, fail=fail)
+    args = ["--apps-only", "--bundle-models", names]
+    if clean:
+        args.append("--clean")
+    result, calls = run(*args, fail=fail)
     check = next(c for c in calls if c["stage"] == "download_models")
     assert check["args"] == ["--check-only", "--no-denoise", names]
     if fail:
@@ -236,7 +240,8 @@ def test_selected_models_are_verified_before_build(build_entry, fail):
         assert viewer["bundle"] == names and calls.index(check) < calls.index(viewer)
 
 
-def test_bundle_models_requires_a_value(build_entry):
+@pytest.mark.parametrize("trailing", [(), ("--clean",)])
+def test_bundle_models_requires_a_value(build_entry, trailing):
     _, run = build_entry
-    result, calls = run("--bundle-models")
+    result, calls = run("--bundle-models", *trailing)
     assert result.returncode != 0 and not calls

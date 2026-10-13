@@ -64,10 +64,10 @@ jobs:
         with:
           python-version: "3.13"
 
-      - name: Test release version rules
+      - name: Test release version and package rules
         run: |
           python -m pip install pytest
-          python -m pytest build_tools/tests/test_set_build_version.py build_tools/tests/test_bump_version.py -q
+          python -m pytest build_tools/tests/test_set_build_version.py build_tools/tests/test_bump_version.py build_tools/tests/test_package_release.py -q
 
       - name: Resolve build version
         id: version
@@ -124,6 +124,12 @@ jobs:
         shell: pwsh
         run: python init_dev.py
 
+      - name: Download and verify release detection and segmentation models
+        shell: pwsh
+        run: |
+          .\.venv\Scripts\python.exe build_tools/download_models.py yolo11n.pt yolo11l-seg.pt sam2.1_b.pt --no-denoise
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
       - name: Generate package metadata and remove runtime state
         shell: pwsh
         run: |
@@ -140,26 +146,28 @@ jobs:
         shell: pwsh
         run: |
           $env:PYTHON_EXE = (Resolve-Path ".\.venv\Scripts\python.exe").Path
-          cmd /c build_all.bat --clean
+          cmd /c build_all.bat --clean --apps-only --bundle-models yolo11l-seg.pt,sam2.1_b.pt
           if ($LASTEXITCODE -ne 0) {
             exit $LASTEXITCODE
           }
 
-      - name: Verify and stage Windows update artifacts
+      - name: Verify and package Windows applications
         shell: pwsh
         run: |
           $expected = @(
             "dist/SuperViewer/SuperViewer.exe",
             "dist/SuperBirdStamp/SuperBirdStamp.exe",
-            "dist/SuperBirdUpdater/SuperBirdUpdater.exe",
-            "dist/installed-update.json",
-            "dist/updates/update-windows-x86_64.json"
+            "dist/SuperBirdUpdater/SuperBirdUpdater.exe"
           )
           foreach ($path in $expected) {
             if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
               throw "Missing build output: $path"
             }
           }
+          .\.venv\Scripts\python.exe build_tools/download_models.py yolo11n.pt yolo11l-seg.pt sam2.1_b.pt --no-denoise --check-only --dest dist/SuperViewer/_internal/models
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          .\.venv\Scripts\python.exe build_tools/download_denoise_model.py --check-only --dest dist/SuperViewer/_internal/models/denoise/NAFNet-SIDD-width64.pth
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $env:SUPERBIRD_DENOISE_MODEL_DIR = ""
           $denoiseReport = Join-Path $env:RUNNER_TEMP "denoise-windows.json"
           $probe = Start-Process -FilePath "dist/SuperViewer/SuperViewer.exe" `
@@ -171,8 +179,8 @@ jobs:
           Get-Content -LiteralPath $denoiseReport
           & "dist/SuperBirdUpdater/SuperBirdUpdater.exe" --diagnose
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          New-Item -ItemType Directory -Path "release" -Force | Out-Null
-          Copy-Item -Path "dist/updates/*" -Destination "release"
+          .\.venv\Scripts\python.exe build_tools/package_release.py --platform windows --arch x86_64
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Upload Windows package
         uses: actions/upload-artifact@v7
@@ -215,6 +223,9 @@ jobs:
       - name: Install build dependencies and assets
         run: python3 init_dev.py
 
+      - name: Download and verify release detection and segmentation models
+        run: ./.venv/bin/python3 build_tools/download_models.py yolo11n.pt yolo11l-seg.pt sam2.1_b.pt --no-denoise
+
       - name: Generate package metadata and remove runtime state
         run: |
           ./.venv/bin/python3 build_tools/set_build_version.py
@@ -225,20 +236,20 @@ jobs:
       - name: Build macOS applications
         env:
           PYTHON_BIN: ${{ github.workspace }}/.venv/bin/python3
-        run: bash build_all.sh --clean
+        run: bash build_all.sh --clean --apps-only --bundle-models yolo11l-seg.pt,sam2.1_b.pt
 
-      - name: Verify and stage macOS update artifacts
+      - name: Verify and package macOS applications
         run: |
           test -x "dist/SuperViewer.app/Contents/MacOS/SuperViewer"
           test -x "dist/SuperBirdStamp.app/Contents/MacOS/SuperBirdStamp"
           test -x "dist/SuperBirdUpdater.app/Contents/MacOS/SuperBirdUpdater"
+          ./.venv/bin/python3 build_tools/download_models.py yolo11n.pt yolo11l-seg.pt sam2.1_b.pt --no-denoise --check-only --dest dist/SuperViewer.app/Contents/Resources/models
+          ./.venv/bin/python3 build_tools/download_denoise_model.py --check-only --dest dist/SuperViewer.app/Contents/Resources/models/denoise/NAFNet-SIDD-width64.pth
           SUPERBIRD_DENOISE_MODEL_DIR="" "dist/SuperViewer.app/Contents/MacOS/SuperViewer" \
             --check-denoise --device cpu --output "$RUNNER_TEMP/denoise-macos.json"
           cat "$RUNNER_TEMP/denoise-macos.json"
           "dist/SuperBirdUpdater.app/Contents/MacOS/SuperBirdUpdater" --diagnose
-          test -f "dist/updates/update-macos-arm64.json"
-          mkdir -p release
-          cp dist/updates/* release/
+          ./.venv/bin/python3 build_tools/package_release.py --platform macos --arch arm64
 
       - name: Upload macOS package
         uses: actions/upload-artifact@v7
@@ -272,12 +283,12 @@ jobs:
           path: release-assets
           merge-multiple: true
 
-      - name: Validate complete update artifacts
-        run: python3 build_tools/validate_update_release.py release-assets
+      - name: Validate full application packages
+        run: python3 build_tools/package_release.py --verify --output release-assets --version "${{ needs.prepare.outputs.version }}"
 
       - name: Generate checksums
         working-directory: release-assets
-        run: sha256sum ./*.zip ./*.json > SHA256SUMS.txt
+        run: sha256sum ./*.zip > SHA256SUMS.txt
 
       - name: Create release or upload missing assets
         shell: bash
