@@ -131,3 +131,88 @@ def test_cli(photos, tmp_path):
     assert result.exit_code == 0, result.output
     with Image.open(output) as image:
         assert image.size == (250, 100)
+
+
+@pytest.mark.parametrize('preset', PRESETS)
+def test_fixed_canvas_and_automatic_cells(photos, preset):
+    options = CollageOptions(preset=preset, width=301, height=401, gap=5, margin=11, fit='cover')
+    image, plan = render_collage(photos, options)
+    try:
+        assert plan.size == image.size == (301, 401)
+        for box, color in zip(plan.boxes, [(255, 0, 0), (0, 255, 0)]):
+            left, top, right, bottom = box
+            assert 11 <= left < right <= 290 and 11 <= top < bottom <= 390
+            assert image.getpixel((left, top)) == color
+            assert image.getpixel((right - 1, bottom - 1)) == color
+        assert image.getpixel((300, 400)) == (255, 255, 255)
+    finally:
+        image.close()
+
+
+@pytest.mark.parametrize('preset,columns,rows', [('grid4', 2, 2), ('grid6', 3, 2), ('grid9', 3, 3), ('grid16', 4, 4)])
+def test_grid_remainder_pixels_fill_canvas(preset, columns, rows):
+    plan = plan_collage([(20, 10)] * (columns * rows),
+                        CollageOptions(preset=preset, width=301, height=401, gap=5, margin=11))
+    assert plan.boxes[0][:2] == (11, 11)
+    assert plan.boxes[-1][2:] == (290, 390)
+    widths = [r - x for x, y, r, b in plan.boxes]
+    heights = [b - y for x, y, r, b in plan.boxes]
+    assert max(widths) - min(widths) <= 1
+    assert max(heights) - min(heights) <= 1
+    for index, box in enumerate(plan.boxes):
+        if index % columns:
+            assert box[0] - plan.boxes[index - 1][2] == 5
+        if index >= columns:
+            assert box[1] - plan.boxes[index - columns][3] == 5
+
+
+def test_default_portrait_and_weighted_strips():
+    assert plan_collage([(100, 100)], CollageOptions()).size == (1080, 1440)
+    vertical = plan_collage([(200, 100), (100, 200)],
+                            CollageOptions(width=240, height=640, gap=20, margin=10))
+    assert vertical.boxes == ((10, 10, 230, 130), (10, 150, 230, 630))
+    horizontal = plan_collage([(200, 100), (100, 200)],
+                              CollageOptions(preset='horizontal', width=640, height=240, gap=20, margin=10))
+    assert horizontal.boxes == ((10, 10, 490, 230), (510, 10, 630, 230))
+    tiny = plan_collage([(1, 100000)] + [(100000, 1)] * 63,
+                        CollageOptions(width=64, height=64, margin=0, gap=0))
+    assert all(bottom - top == 1 for _, top, _, bottom in tiny.boxes)
+
+
+def test_fixed_canvas_limits():
+    with pytest.raises(ValueError, match='空间不足'):
+        plan_collage([(10, 10)], CollageOptions(preset='grid16', width=64, height=64, gap=20))
+    with pytest.raises(ValueError, match='拼图过大'):
+        plan_collage([(10, 10)], CollageOptions(width=10000, height=10000))
+
+
+def test_portrait_preview_and_overlay_export(photos, tmp_path):
+    options = CollageOptions(preset='grid4', fit='cover')
+    preview, plan = render_collage(photos, options, preview_edge=400)
+    assert preview.size == (300, 400)
+    assert plan.size == (1080, 1440)
+    preview.close()
+    key, asset = import_image(photos[1])
+    item = new_item('image')
+    item.update(asset_id=key, width=.2, x=.75, y=.75)
+    output = tmp_path / '竖版.png'
+    export_collage(photos, options, output, overlays=dict(overlays=[item], overlay_assets={key: asset}))
+    with Image.open(output) as image:
+        assert image.size == (1080, 1440)
+        assert image.getpixel((810, 1080)) == (0, 255, 0)
+
+
+def test_cli_canvas_dimensions(photos, tmp_path):
+    from birdstamp.cli import app
+    output = tmp_path / '成图.png'
+    args = ['collage', *map(str, photos), '-o', str(output)]
+    result = CliRunner().invoke(app, args)
+    assert result.exit_code == 0, result.output
+    with Image.open(output) as image:
+        assert image.size == (1080, 1440)
+    result = CliRunner().invoke(app, args + ['--width', '640', '--height', '360'])
+    assert result.exit_code == 0, result.output
+    with Image.open(output) as image:
+        assert image.size == (640, 360)
+    result = CliRunner().invoke(app, args + ['--width', '640', '--cell-size', '100'])
+    assert result.exit_code != 0 and '不能与' in result.output
