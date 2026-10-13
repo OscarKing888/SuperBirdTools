@@ -259,3 +259,69 @@ def test_legacy_cell_size_workspace_migrates_in_worker(window, tmp_path, preset,
     collage.restore(restored, tmp_path / 'workspace.json')
     ready(collage)
     assert collage.plan.size == size
+
+
+def test_custom_grid_controls_export_and_workspace(window, tmp_path):
+    collage = window.collage
+    window.resize(1120, 720)
+    window.show()
+    window.export_tabs.setCurrentWidget(collage.page)
+    assert collage.columns.isHidden() and collage.rows.isHidden()
+    collage.preset.setCurrentIndex(collage.preset.findData('custom'))
+    assert not collage.columns.isHidden() and not collage.rows.isHidden()
+    collage.columns.setFocus()
+    QTest.keyClick(collage.columns, Qt.Key.Key_Up)
+    assert collage.columns.value() == 3
+    collage.rows.setValue(2)
+    collage.canvas_width.setValue(300)
+    collage.fit.setCurrentIndex(collage.fit.findData('cover'))
+    collage.add_paths([source(tmp_path)] * 4)
+    ready(collage)
+    assert collage.plan.size == (300, 400)
+    assert '3 列 × 2 行' in collage.summary.text()
+    assert collage.plan.boxes[3][0] == collage.plan.boxes[0][0]
+    assert collage.plan.boxes[3][1] > collage.plan.boxes[0][3]
+    collage.panel.add('image', asset=import_image(source(tmp_path, '蓝色标记.png', 'blue')))
+    collage.panel.edit('width', .15)
+    collage.panel.edit('x', .8)
+    collage.panel.edit('y', .8)
+    path = tmp_path / '自定义工作区.json'
+    saved = collage.state(path)
+    for _ in range(3):
+        collage.layout_group.header_button.setFocus()
+        QTest.keyClick(collage.layout_group.header_button, Qt.Key.Key_Space)
+        QTest.keyClick(collage.layout_group.header_button, Qt.Key.Key_Space)
+    assert collage.state(path) == saved
+    collage.preset.setCurrentIndex(collage.preset.findData('grid4'))
+    assert collage.columns.isHidden() and collage.rows.isHidden()
+    collage.preset.setCurrentIndex(collage.preset.findData('custom'))
+    assert (collage.columns.value(), collage.rows.value()) == (3, 2)
+    collage.restore(None, path)
+    collage.restore(saved, path)
+    ready(collage)
+    assert collage.state(path) == saved
+    output = tmp_path / '横三竖二.png'
+    collage.start_export(output)
+    wait_for(lambda: collage.worker is None)
+    with Image.open(output) as image:
+        assert image.size == (300, 400)
+        assert image.getpixel((240, 320)) == (0, 0, 255)
+    _APP.processEvents()
+    assert window.rect().contains(collage.export_button.mapTo(window, collage.export_button.rect().bottomRight()))
+
+
+def test_custom_grid_capacity_failure_recovers(window, tmp_path):
+    collage = window.collage
+    collage.preset.setCurrentIndex(collage.preset.findData('custom'))
+    collage.columns.setValue(9)
+    collage.rows.setValue(8)
+    collage.add_paths([source(tmp_path)] * 6)
+    wait_for(lambda: collage.worker is None and not collage.pending)
+    assert '最多 64 格' in collage.status.text() and not collage.export_button.isEnabled()
+    collage.columns.setValue(2)
+    collage.rows.setValue(2)
+    wait_for(lambda: collage.worker is None and not collage.pending)
+    assert '最多容纳 4' in collage.status.text() and not collage.export_button.isEnabled()
+    collage.rows.setValue(3)
+    ready(collage)
+    assert len(collage.plan.boxes) == 6 and collage.export_button.isEnabled()

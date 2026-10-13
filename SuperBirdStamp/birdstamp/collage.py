@@ -17,6 +17,7 @@ PRESETS = {
     'grid6': ('6 宫格 · 3 × 2', 3, 2),
     'grid9': ('9 宫格 · 3 × 3', 3, 3),
     'grid16': ('16 宫格 · 4 × 4', 4, 4),
+    'custom': ('自定义宫格', 0, 0),
 }
 MAX_IMAGES = 64
 MAX_PIXELS = 64_000_000
@@ -38,12 +39,15 @@ class CollageOptions:
     fit: str = 'contain'
     width: int = 1080
     height: int = 1440
+    columns: int = 2
+    rows: int = 2
 
     def __post_init__(self):
         if self.preset not in PRESETS:
             raise ValueError('请选择有效的拼图排版')
         for name, low, high in (('cell_size', 64, 4096), ('gap', 0, 256), ('margin', 0, 256),
-                                ('width', 1, MAX_EDGE), ('height', 1, MAX_EDGE)):
+                                ('width', 1, MAX_EDGE), ('height', 1, MAX_EDGE),
+                                ('columns', 1, MAX_IMAGES), ('rows', 1, MAX_IMAGES)):
             value = getattr(self, name)
             if name == 'cell_size' and value is None:
                 continue
@@ -60,13 +64,21 @@ class CollagePlan:
     boxes: tuple[tuple[int, int, int, int], ...]
 
 
+def _grid_dimensions(options: CollageOptions) -> tuple[int, int]:
+    if options.preset == 'custom':
+        if options.columns * options.rows > MAX_IMAGES:
+            raise ValueError(f'自定义宫格最多 {MAX_IMAGES} 格，请减小横向列数或纵向行数')
+        return options.columns, options.rows
+    return PRESETS[options.preset][1:]
+
+
 def plan_collage(sizes: Sequence[tuple[int, int]], options: CollageOptions) -> CollagePlan:
     count = len(sizes)
     if not 1 <= count <= MAX_IMAGES:
         raise ValueError(f'请添加 1–{MAX_IMAGES} 张照片')
     if any(w <= 0 or h <= 0 for w, h in sizes):
         raise ValueError('照片尺寸无效')
-    _, cols, rows = PRESETS[options.preset]
+    cols, rows = _grid_dimensions(options)
     if cols and rows and count > cols * rows:
         raise ValueError(f'此排版最多容纳 {cols * rows} 张，当前有 {count} 张；请移除多余照片或更换排版')
     side, gap, margin = options.cell_size, options.gap, options.margin
@@ -143,7 +155,7 @@ def render_collage(paths: Sequence[Path], options: CollageOptions, *, preview_ed
     from birdstamp.decoders.image_decoder import decode_image, decode_image_for_preview
     if not 1 <= len(paths) <= MAX_IMAGES:
         raise ValueError(f'请添加 1–{MAX_IMAGES} 张照片')
-    _, cols, rows = PRESETS[options.preset]
+    cols, rows = _grid_dimensions(options)
     if cols and rows and len(paths) > cols * rows:
         plan_collage([(1, 1)] * len(paths), options)
     sizes, alpha_flags = [], []

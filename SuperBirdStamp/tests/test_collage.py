@@ -216,3 +216,55 @@ def test_cli_canvas_dimensions(photos, tmp_path):
         assert image.size == (640, 360)
     result = CliRunner().invoke(app, args + ['--width', '640', '--cell-size', '100'])
     assert result.exit_code != 0 and '不能与' in result.output
+
+
+def test_custom_grid_row_order_and_empty_cells(photos):
+    options = CollageOptions(preset='custom', columns=3, rows=2, width=301, height=401,
+                             gap=5, margin=11, fit='cover', background='#112233')
+    image, plan = render_collage(photos * 2, options)
+    try:
+        assert image.size == plan.size == (301, 401)
+        assert plan.boxes == ((11, 11, 101, 198), (106, 11, 195, 198),
+                              (200, 11, 290, 198), (11, 203, 101, 390))
+        expected = [(255, 0, 0), (0, 255, 0), (255, 0, 0), (0, 255, 0), (17, 34, 51), (17, 34, 51)]
+        points = [(56, 104), (150, 104), (245, 104), (56, 296), (150, 296), (245, 296)]
+        assert [image.getpixel(point) for point in points] == expected
+    finally:
+        image.close()
+
+
+@pytest.mark.parametrize('columns,rows', [(1, 64), (64, 1), (8, 8)])
+def test_custom_grid_capacity_boundary(columns, rows):
+    options = CollageOptions(preset='custom', columns=columns, rows=rows,
+                             width=512, height=512, gap=0, margin=0)
+    plan = plan_collage([(20, 10)] * 64, options)
+    assert len(plan.boxes) == 64
+    assert plan.boxes[0] == (0, 0, 512 // columns, 512 // rows)
+    assert plan.boxes[-1][2:] == (512, 512)
+
+
+def test_custom_grid_invalid_capacity():
+    with pytest.raises(ValueError, match='最多容纳 6'):
+        plan_collage([(20, 10)] * 7, CollageOptions(preset='custom', columns=3, rows=2))
+    with pytest.raises(ValueError, match='最多 64 格'):
+        plan_collage([(20, 10)], CollageOptions(preset='custom', columns=9, rows=8))
+    for kwargs in ({'rows': 0}, {'columns': 65}, {'rows': 1.5}):
+        with pytest.raises(ValueError):
+            CollageOptions(preset='custom', **kwargs)
+
+
+def test_cli_custom_grid(photos, tmp_path):
+    from birdstamp.cli import app
+    output = tmp_path / '自定义拼图.png'
+    args = ['collage', *map(str, photos), '--columns', '1', '--rows', '3',
+            '--width', '300', '--height', '400', '--margin', '0', '--gap', '0',
+            '--fit', 'cover', '-o', str(output)]
+    result = CliRunner().invoke(app, args + ['--preset', 'custom'])
+    assert result.exit_code == 0, result.output
+    with Image.open(output) as image:
+        assert image.size == (300, 400)
+        assert image.getpixel((150, 66)) == (255, 0, 0)
+        assert image.getpixel((150, 200)) == (0, 255, 0)
+        assert image.getpixel((150, 333)) == (255, 255, 255)
+    result = CliRunner().invoke(app, args)
+    assert result.exit_code != 0 and '--preset custom' in result.output
