@@ -488,6 +488,8 @@ class OverlayPanel(QWidget):
         if keep_scroll:
             self.list.verticalScrollBar().setValue(scroll_position)
         self.scope.setText('跟随模板' if self.following else '叠加层 · 当前照片独立配置' if self.context.startswith('photo:') else '模板叠加层')
+        if self.context.startswith('collage:'):
+            self.scope.setText('拼图叠加层')
         undo,redo=self._history.get(self.context,([],[]))
         self.undo_button.setEnabled(bool(undo)); self.redo_button.setEnabled(bool(redo))
         self._updating=False; self._properties()

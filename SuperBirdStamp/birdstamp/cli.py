@@ -31,6 +31,29 @@ app = typer.Typer(add_completion=False, no_args_is_help=True, help="极速鸟框
 LOGGER = logging.getLogger("birdstamp")
 
 
+@app.command("collage")
+def collage_command(
+    photos: list[Path] = typer.Argument(..., exists=True, dir_okay=False),
+    output: Path = typer.Option(..., '--output', '-o'),
+    preset: str = typer.Option('vertical', help='vertical/horizontal/grid4/grid6/grid9/grid16'),
+    cell_size: int = typer.Option(800, min=64, max=4096),
+    gap: int = typer.Option(12, min=0, max=256),
+    margin: int = typer.Option(12, min=0, max=256),
+    background: str = typer.Option('#FFFFFF'),
+    fit: str = typer.Option('contain', help='contain 完整显示；cover 居中裁满宫格。'),
+    overlays: Path | None = typer.Option(None, exists=True, dir_okay=False, help='可选的 Overlay 文档 JSON。'),
+):
+    """按参数顺序拼长图、横图或宫格，导出 PNG / JPEG。"""
+    from birdstamp.collage import CollageOptions, export_collage
+    try:
+        doc = json.loads(overlays.read_text(encoding='utf-8')) if overlays else None
+        options = CollageOptions(preset, cell_size, gap, margin, background, fit)
+        result = export_collage(photos, options, output, overlays=doc)
+    except (ValueError, OSError, RuntimeError) as exc:
+        raise typer.BadParameter(str(exc)) from exc
+    typer.echo(str(result))
+
+
 @app.command("recommend-regions")
 def recommend_regions_command(
     frames: list[Path] = typer.Argument(..., exists=True, dir_okay=False),

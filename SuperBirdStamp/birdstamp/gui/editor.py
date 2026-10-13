@@ -1135,13 +1135,27 @@ class BirdStampEditorWindow(
         self.export_action_bar = ExportActionBar(self)
         left_container_layout.addWidget(self.export_action_bar)
         splitter.addWidget(left_container)
-        splitter.addWidget(self.overlay_dock.create_host(right_panel))
+        from PyQt6.QtWidgets import QStackedWidget
+        self.preview_pages = QStackedWidget()
+        self.preview_pages.addWidget(self.overlay_dock.create_host(right_panel))
+        self.preview_pages.addWidget(self.collage.preview_host)
+        splitter.addWidget(self.preview_pages)
+        self.export_tabs.currentChanged.connect(self._sync_collage_page)
         splitter.setStretchFactor(0, 0)
         splitter.setStretchFactor(1, 1)
         splitter.setSizes([600, 920])
         splitter.setChildrenCollapsible(False)
 
         self.setStatusBar(self.statusBar())
+
+    def _sync_collage_page(self, *_args) -> None:
+        active = self.export_tabs.currentWidget() is self.collage.page
+        self.preview_pages.setCurrentIndex(1 if active else 0)
+        self.left_scroll.setHorizontalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAsNeeded if active else Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+        )
+        # 浮动 Dock 不随父页隐藏，切页时收起，内容与撤销历史仍保留。
+        (self.overlay_dock if active else self.collage.dock).hide()
 
     def _setup_ui_photos_list(self, left_layout: QVBoxLayout) -> None:
         """构建左侧「Report 数据库」+「照片列表」分组 UI。"""
@@ -1555,6 +1569,9 @@ class BirdStampEditorWindow(
         self.export_tabs = CurrentPageTabWidget()
         self.export_tabs.addTab(export_content, "图片处理")
         self.export_tabs.addTab(self.dejitter_page, "去抖动")
+        from .editor_collage import CollageEditor
+        self.collage = CollageEditor(self)
+        self.export_tabs.addTab(self.collage.page, "拼图")
         self.export_tabs.currentChanged.connect(self._on_export_tab_changed)
         export_section.set_content_widget(self.export_tabs)
         left_layout.addWidget(export_section)
@@ -2218,12 +2235,16 @@ class BirdStampEditorWindow(
 
         self.action_export_current = QAction("导出当前", self)
         self.action_export_current.setShortcut(QKeySequence("Ctrl+E"))
-        self.action_export_current.triggered.connect(self.export_current)
+        self.action_export_current.triggered.connect(
+            lambda: self.collage.pick_export() if self.export_tabs.currentWidget() is self.collage.page else self.export_current()
+        )
         self.addAction(self.action_export_current)
 
         self.action_export_all = QAction("批量导出", self)
         self.action_export_all.setShortcut(QKeySequence("Ctrl+Shift+E"))
-        self.action_export_all.triggered.connect(self.export_all)
+        self.action_export_all.triggered.connect(
+            lambda: self.collage.pick_export() if self.export_tabs.currentWidget() is self.collage.page else self.export_all()
+        )
         self.addAction(self.action_export_all)
 
     def _setup_menu_bar(self) -> None:
@@ -2881,6 +2902,7 @@ class BirdStampEditorWindow(
         if session is not None:
             session.cancel()
             session.clear()
+        collage_stopped = self.collage.shutdown()
         recommendation_stopped = self.dejitter_recommendation.shutdown()
         ab_stopped = self.ab_preview.shutdown()
         source_preview_stopped = self.sequence_transport.shutdown()
@@ -2910,7 +2932,7 @@ class BirdStampEditorWindow(
         ) or (
             metadata_worker is not None
             and metadata_worker.isRunning()
-        ) or not recommendation_stopped or pending_metadata_running or not self._exiftool_shutdown_done.is_set() or not ab_stopped or not source_preview_stopped or not self._preview_action_pool.is_finished() or not discovery_stopped or self._reference_tracking_worker is not None or self._sequence_worker is not None:
+        ) or not collage_stopped or not recommendation_stopped or pending_metadata_running or not self._exiftool_shutdown_done.is_set() or not ab_stopped or not source_preview_stopped or not self._preview_action_pool.is_finished() or not discovery_stopped or self._reference_tracking_worker is not None or self._sequence_worker is not None:
             self._set_status("正在安全结束后台任务...")
             event.ignore()
             QTimer.singleShot(100, self.close)
