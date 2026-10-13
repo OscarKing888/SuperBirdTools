@@ -86,20 +86,23 @@ class ExportActionBar(QFrame):
         dejitter_layout.addWidget(editor.dejitter_export_progress)
         dejitter_layout.addWidget(editor.dejitter_export_complete)
         self.actions.addWidget(dejitter_page)
+        self.actions.addWidget(editor.collage.actions)
         editor.export_tabs.currentChanged.connect(self.sync)
         self.sync()
 
     def sync(self, *_args):
         editor = self.editor
         dejitter = editor._dejitter_tab_active()
+        collage = editor.export_tabs.currentWidget() is editor.collage.page
         video = editor._is_video_output_selected()
         gif = editor._is_gif_output_selected()
-        self.mode_label.setText('去抖动导出' if dejitter else '导出')
-        editor.export_stage_widget.setVisible(not dejitter)
+        self.mode_label.setText('拼图导出' if collage else '去抖动导出' if dejitter else '导出')
+        editor.export_stage_widget.setVisible(not dejitter and not collage)
+        self.settings_section.setVisible(not collage)
         editor.image_export_group.setVisible(not dejitter and not video)
         editor.video_export_panel.setVisible(not dejitter and video)
         editor.dejitter_export_group.setVisible(dejitter)
-        self.actions.setCurrentIndex(2 if dejitter else 1 if video else 0)
+        self.actions.setCurrentIndex(3 if collage else 2 if dejitter else 1 if video else 0)
         self.format_label.setText('GIF' if gif else editor._selected_output_suffix().upper())
         editor.export_current_btn.setVisible(not gif)
         refresh_layout_chain(self.settings_scroll.widget())

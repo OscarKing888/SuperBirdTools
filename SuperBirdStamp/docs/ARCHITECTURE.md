@@ -11,6 +11,7 @@
 | [gui/editor.py](../birdstamp/gui/editor.py) | `launch_gui` 创建应用、窗口、FileOpen 处理和单实例接收器；窗口显示后安排启动恢复与文件导入。`closeEvent` 先取消元数据读取、在后台关闭 ExifTool，并等实际线程结束；`aboutToQuit` 停止接收器并再次执行幂等清理。 |
 | [cli.py](../birdstamp/cli.py) / [__main__.py](../birdstamp/__main__.py) | Typer 命令 `render`、`inspect`、`inspect-auto-proxy`、`init-config`、`gui`。适合批处理、字段路由诊断和无窗口验证。 |
 | [gui/editor_core.py](../birdstamp/gui/editor_core.py) / [decoders/image_decoder.py](../birdstamp/decoders/image_decoder.py) | 裁切、缩放等图像计算与原图/预览解码。部分可复用计算目前仍位于 `gui` 包内，不能仅凭目录名判断是否依赖窗口。 |
+| [collage.py](../birdstamp/collage.py) / [gui/editor_collage.py](../birdstamp/gui/editor_collage.py) | 无窗口拼图布局、渲染和原子导出；独立页签参数、素材顺序、预览、Overlay 编辑与单 worker 生命周期。CLI `collage` 使用同一核心。 |
 | [image_pipeline](../birdstamp/image_pipeline/__init__.py) / [export_stage](../birdstamp/export_stage/__init__.py) | 处理阶段、单帧任务、批量预计算、帧缓存及视频编码。 |
 | [app_common](../../app_common/__init__.py) | 两应用共用的格式定义、元数据/XMP/report.db、文件列表、预览画布、进程与应用间文件传递能力。 |
 
@@ -309,6 +310,10 @@ RAW 源图的去抖动分析、成片预览和导出统一优先读取长边至�
 [config.py](../birdstamp/config.py) 区分只读资源与可写状态：`resolve_bundled_path` 定位内置资源；`get_user_data_dir` 在源码版和打包版均返回同一平台用户目录；`get_config_path` 返回其 `Config/config.yaml`。macOS 配置目录为 `~/Library/Application Support/BirdStamp/Config`，Windows 为 `%APPDATA%/BirdStamp/Config`（缺失时依次回退 `%LOCALAPPDATA%`、`~/AppData/Roaming`），Linux 使用 `$XDG_CONFIG_HOME/BirdStamp/Config` 或 `~/.config/BirdStamp/Config`。模板经 [template_directory](../birdstamp/gui/editor_template.py) 进入同级 `templates`，运行状态和 `editor_autosave.birdstamp-workspace.json` 也位于配置目录；各版本直接复用已有用户配置，不自动合并或覆盖旧源码目录的运行状态。内置模板通过资源路径补缺，已有用户模板不覆盖。默认编辑选项来自只读的 [editor_options.json](../config/editor_options.json)。自动保存、导出状态和用户路径不应打包为发行默认值。
 
 ## 7. 按功能定位入口与回归
+
+「拼图」位于处理设置的「去抖动」之后，使用独立画布及 Overlay 文档。纵向等宽、横向等高并保留照片比例；4/6/9/16 宫格使用方格，支持完整显示或居中裁满，少图留空、多图报错。素材来自主列表所选/全部照片或文件选择器，顺序可独立调整；使用源照片，不隐式套用逐图模板和去抖动结果。PNG 透明素材保留透明通道后合成到指定背景。`CollageOptions` / `plan_collage` / `render_collage` 统一计算逻辑尺寸，预览最长边 1600，导出逐张解码原图。单张最多 64 张素材、6400 万像素、单边 32768 px，超过限制在分配画布前报错。
+
+`CollageEditor` 复用 `OverlayPanel`、`OverlaySession`、`OverlayEditorDock` 添加图像/文字并拖动编辑；预览与 PNG/JPEG 导出使用同一 `build_scene` / `compose_scene`。拼图参数、路径、排序与 Overlay 文档存于 `editor_state.collage`，素材经过既有工作区资产去重机制内嵌，旧工作区恢复为空拼图。`CollageWorker` 单任务运行，参数变更取消旧请求、合并到最新版本，只有真实 `QThread.finished` 才交接；关闭窗口等待拼图线程及素材导入完成。导出用同目录暂存再原子替换，取消/失败保留已有目标，拒绝覆盖输入照片。CLI 示例：`python -m birdstamp collage a.jpg b.jpg --preset grid4 --cell-size 1000 --fit contain -o 拼图.png`（`PYTHONPATH=SuperBirdStamp`）；`--overlays` 可读自包含 Overlay JSON。交互布局见[设计说明](../../docs/ui-design/birdstamp-collage.md)，回归见 [test_collage.py](../tests/test_collage.py)、[test_editor_collage.py](../tests/test_editor_collage.py)。
 
 | 要修改的功能 | 首先定位 | 主要回归入口 |
 | --- | --- | --- |
