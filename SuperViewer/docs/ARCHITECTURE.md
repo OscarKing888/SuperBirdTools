@@ -34,6 +34,8 @@ Windows 下，`main.py` 在导入任何 Qt 控件前调用 [`preload_windows_run
 
 ## 2. 目录选择到可见列表
 
+Viewer 通过 `FileListPanel.show_cut_state` 启用待剪切反馈：共享 [`FileCutState`](../../app_common/file_browser/_cut_state.py) 监听系统剪贴板，只解析内部剪切 payload 的源路径与旧显示路径，查询已缓存的实际路径，不访问文件系统。两个模型通过 `_CutPendingRole` 提供同一状态；[`ThumbnailItemDelegate` / `CutFileNameDelegate`](../../app_common/file_browser/_models.py) 分别将照片淡化到 40% 不透明度并叠加“待剪切”、给列表文件名前加提示及斜体。选中边框、鸟名/评级和原排序值不变。剪贴板更新只重绘视口，切目录、排序、筛选、图片异步到达和多窗口保持一致；复制其他内容、清空剪贴板或成功剪切粘贴恢复普通状态，事务失败保留提示。共享浏览器默认关闭此显示能力，BirdStamp 外观不变；不新增持久化设置或 CLI。回归见 [`test_cut_state.py`](../tests/test_cut_state.py) 和共享 [`test_file_browser_cut_state.py`](../../app_common/tests/test_file_browser_cut_state.py)。
+
 目录标题栏的“包含子目录”复选框默认开启，状态通过 [`paths_settings.py`](../superviewer/paths_settings.py) 的 `include_subdirectories` 保存到用户配置。`MainWindow._on_include_subdirectories_changed()` 更新共享 `FileListPanel.set_include_subdirectories()` 后，沿用目录切换流程取消旧扫描、清空旧预览并刷新当前目录。关闭时，普通扫描、report.db 范围筛选、旧路径补充、空报告回退和视频枚举都只保留当前目录；文本/评级/标签过滤及刷新继续遵守该范围。共享目录组件仅在宿主显式传入 `include_subdirectories` 时显示此控件，BirdStamp 保持原有界面与默认扫描行为。此项为浏览界面偏好，无新增 CLI。
 
 共享 `DirectoryBrowserWidget._on_dir_context_menu()` 提供“复制完整路径”，取右键节点的绝对路径写入剪贴板，不触发目录选择；空白处和占位节点不显示菜单。宿主通过 `add_context_menu_extender(callback(menu, path))` 追加目录动作（如鸟清晰度检测、计算连拍信息），文件列表/缩略图菜单对应 `FileListPanel.add_file_context_menu_extender(callback(menu, paths))`；扩展回调异常只记日志，不影响菜单。
@@ -57,6 +59,10 @@ flowchart TD
 ```
 
 `SuperViewerTaggedFileListPanel.load_directory()` 先切换标签配置范围、取消旧标签请求，再调用共享 `FileListPanel.load_directory()`。共享层负责复用同根报告缓存、扫描范围和取消旧任务；`_apply_directory_listing_result()` 拒绝过期目录结果，建立 `_all_files`、报告映射与视图。Viewer 在这里建立同目录同名 RAW/HEIF 的焦点来源索引。
+
+Viewer 切换目录前通过 `_remember_directory_selection()` 保存活动列表/缩略图的当前照片路径和显示行号；无 Qt 的 [`DirectorySelectionCache`](../superviewer/directory_selection.py) 按规范化目录路径保存最近 256 个目录，使用 LRU 淘汰，仅当前窗口会话有效。两种视图共用同一照片记忆，切换视图继续沿用共享选择同步。返回目录时，`_select_first_file_if_needed()` 等活动模型分批填充和排序完成，优先按路径恢复原图；若原图被外部删除或过滤，则把旧行号限制在新列表范围内并查找邻近有效源文件，全部不可用时保持无选择。报告旧路径仍通过原有只读实际源路径解析验证，不保存 Qt 索引或复用旧目录文件列表。
+
+恢复沿用原有滚动机制并只提交一次正常预览选择；用户在填充期间主动选图、外部指定待选文件以及删除后选前一张的行为优先。中途切走时空模型不覆盖目录记忆，扫描仍由共享请求代次拒绝过期结果。此功能属于浏览会话状态，无新增配置、控件或 CLI。回归见 [`test_directory_selection_memory.py`](../tests/test_directory_selection_memory.py) 与删除选择测试。
 
 报告模式保留整个根目录的 `_report_full_cache`，当前目录只是它的一个范围。`report.db.current_path` 可能仍指向 XMP，或照片实际已移动：[`_browser_core.py`](../../app_common/file_browser/_browser_core.py) 的报告路径规范化、范围筛选、实际路径缓存负责这种兼容。不要把原始报告路径、实际源图路径和预览 JPEG 路径合成一个可变字段，也不要回写报告修复路径。
 

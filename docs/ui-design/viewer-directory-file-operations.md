@@ -14,10 +14,12 @@
 创建成功仅向已有父节点插入新节点并展开，当前浏览目录、文件多选和已有展开子树保留。
 名称校验遵守 Windows/macOS 的共同文件名限制，不允许路径或递归创建。
 
-`app_common` 仅增加 `directory_tree_class`、`file_table_view_class`、`thumbnail_view_class`
+`app_common` 提供 `directory_tree_class`、`file_table_view_class`、`thumbnail_view_class`
 工厂，默认仍为原有 Qt 视图。Viewer 的派生模型仅增加可拖动标志，原有稀有度列、徽章、排序
 和缩略图缓存仍由原模型实现。两个拖动视图复用原生选择处理，按下已选行不丢失多选；
 不修改方向键播放事件。目录树只接收本窗口当前拖动令牌，空白、占位、外来或过期拖动被拒绝。
+目录选择记忆和待剪切显示仍保留；延迟滚动定位由面板持有的定时器执行，关闭时拒绝访问模型，
+面板销毁时取消回调，避免文件操作刷新后迅速关窗访问已释放的模型。
 高亮仅绘制边框，不改变当前目录或文件预览。实体 Ctrl 在 macOS 映射为 Qt MetaModifier，
 Windows 映射为 ControlModifier；放下时读取当前状态，因此拖动途中可以切换复制/移动。
 
@@ -50,5 +52,6 @@ macOS 使用 CoreServices Apple Event：`core/move` 或 `core/clon`，文件 URL
 - `test_directory_file_transfer.py`：中文目录与非法名称、同名 XMP/共用侧车去重、
   Windows 参数/取消/STA 回收、Finder 描述符/权限错误/交互标志、两个视图真实鼠标多选拖动、
   真实 Qt drop 默认移动及实体 Ctrl 复制、取消部分完成、关闭生命周期、深浅色和放大字体截图。
-- 共享目录菜单/主题/扫描、剪贴板侧车、缓存/元数据/过滤、预览/长按播放与 BirdStamp 导航回归。
+- 共享目录菜单/主题/扫描、剪贴板侧车、缓存/元数据/过滤、预览/长按播放、目录选择记忆、
+  待剪切提示、延迟定位关闭/销毁生命周期与 BirdStamp 导航回归。
 - 默认测试用临时文件和替代系统执行器，不弹系统操作或权限窗口；Windows 64 位系统交互须在 Windows 实机验证。

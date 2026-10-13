@@ -26,6 +26,7 @@ from app_common.qt_theme import is_theme_change_event, scheme_from_palette
 from app_common.toggle_button import TOGGLE_CHECKED_STYLE
 
 from .filter_controls import FilterDropdown, FilterFlowLayout
+from .directory_selection import DirectorySelectionCache
 from .rarity_badge import rarity_badge_style
 from .file_context_menu import build_file_context_menu, species_shortcut_sequence
 from .photo_tags import (
@@ -246,6 +247,7 @@ class SuperViewerTaggedFileListPanel(FileListPanel):
     include_videos = True
     use_unified_worker_pool = True
     show_thumbnail_sort_controls = True
+    show_cut_state = True
     file_table_model_class = DragFileTableModel
     thumbnail_model_class = DragThumbnailModel
     file_table_view_class = DragFileTableView
@@ -320,6 +322,7 @@ class SuperViewerTaggedFileListPanel(FileListPanel):
         tag_config_path: str | os.PathLike[str] | None = None,
         tag_store: PhotoTagSidecarStore | None = None,
     ) -> None:
+        self._directory_selections = DirectorySelectionCache()
         self._fallback_tag_config_path = os.fspath(tag_config_path) if tag_config_path else _default_tag_config_path()
         self._tag_config = PhotoTagConfig(self._fallback_tag_config_path)
         self._tag_config_signature: tuple[str, int, int] | None = None
@@ -547,6 +550,50 @@ class SuperViewerTaggedFileListPanel(FileListPanel):
         # target afterwards so that empty rebuild cannot consume the request.
         self.set_pending_selection([target] if target else [], apply_immediately=False)
 
+    def _remember_directory_selection(self) -> None:
+        view = self._list_widget if self._view_mode == self._MODE_THUMB else self._tree_widget
+        index = view.currentIndex()
+        # 切换太快时旧目录可能还未填完；无有效当前项不能覆盖上一次记忆。
+        if index.isValid():
+            self._directory_selections.remember(
+                self.get_current_dir(), self._active_view_current_path(), index.row(),
+            )
+
+    def _select_first_file_if_needed(self, *, reason: str = "") -> None:
+        if self._background_shutdown_requested:
+            return
+        if self._pending_selection_paths or self._selected_display_path or not self._filtered_files:
+            return
+        if self._active_view_selected_paths():
+            return
+        remembered = self._directory_selections.get(self.get_current_dir())
+        if remembered is None:
+            super()._select_first_file_if_needed(reason=reason)
+            return
+        # 等当前视图填充、排序完成，避免把尚未加入模型的照片误判为已删除。
+        if self._view_mode == self._MODE_THUMB:
+            if self._thumb_model_dirty:
+                return
+            ordered = self._thumb_list_model.all_paths()
+        else:
+            if self._tree_view_dirty:
+                return
+            model = self._tree_widget.model()
+            ordered = [self._tree_path_from_index(model.index(row, 0)) for row in range(model.rowCount())]
+        target = remembered.resolve(
+            ordered, lambda path: os.path.isfile(self._resolve_source_path_for_action(path)),
+        )
+        if target and self.select_display_path_silently(target):
+            self._request_selection_visibility_restore(target, reason="directory_selection")
+            self._schedule_selection_visibility_restore(target, reason="directory_selection")
+            self._emit_file_selected_for_path(target)
+
+    def _populate_thumb_model_batch(self) -> None:
+        super()._populate_thumb_model_batch()
+        if (self._view_mode == self._MODE_THUMB and not self._thumb_model_dirty
+                and self._directory_selections.get(self.get_current_dir()) is not None):
+            self._select_first_file_if_needed(reason="thumb_model_population_done")
+
     def load_directory(
         self,
         path: str,
@@ -557,6 +604,7 @@ class SuperViewerTaggedFileListPanel(FileListPanel):
     ) -> None:
         if self.tag_library.busy or self.tag_library.refreshing:
             return
+        self._remember_directory_selection()
         self.tag_library.dirty_paths.clear()
         tag_config_scope_changed = self._set_tag_config_directory(path)
         self._load_tag_config_if_changed(force=tag_config_scope_changed)
@@ -571,12 +619,18 @@ class SuperViewerTaggedFileListPanel(FileListPanel):
         self._photo_tag_loader_covers_all_files = False
         self._focus_source_index = {}
         self._stop_photo_tag_cache_loader()
+        pending_paths = self._pending_selection_paths
+        pending_current = self._pending_selection_current_path
         super().load_directory(
             path,
             force_reload=force_reload,
             preserve_meta_cache=preserve_meta_cache,
             reuse_cached_listing=reuse_cached_listing,
         )
+        # 列表模式的空模型重建会消费待选请求；保留外部打开文件的明确选择，
+        # 等真正扫描结果到达后应用，优先于目录记忆。
+        if pending_paths and self._directory_scan_worker is not None and not self._pending_selection_paths:
+            self.set_pending_selection(pending_paths, pending_current, apply_immediately=False)
 
     def _apply_directory_listing_result(
         self,
