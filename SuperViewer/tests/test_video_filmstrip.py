@@ -157,7 +157,7 @@ def test_one_frame_portrait_clip_without_audio(panel, tmp_path):
     assert panel.video_view.filmstrip.isEnabled()
 
 
-def test_filmstrip_above_aligned_waveform_and_paused_seek(panel, clip, tmp_path):
+def test_filmstrip_above_aligned_waveform_and_click_to_play(panel, clip, tmp_path):
     panel.set_image(str(clip))
     wait_until(lambda: panel._video_worker is None and panel._filmstrip_worker is None, timeout=30)
     view = panel.video_view
@@ -166,11 +166,9 @@ def test_filmstrip_above_aligned_waveform_and_paused_seek(panel, clip, tmp_path)
     assert strip.width() == view.seek.width()
     assert strip.geometry().bottom() < view.seek.geometry().top()
     QTest.mouseClick(strip, Qt.MouseButton.LeftButton, pos=point_at(strip, .5))
-    assert view._pending_seek == pytest.approx(1000, abs=10)
     assert view.seek.value() == strip.value()
-    assert view.player is None
-    view.toggle_play()
-    wait_until(lambda: view._pending_seek is None and view.player.position() >= 1000)
+    wait_until(lambda: view._pending_seek is None and view.player.position() >= 958)
+    assert view.player.playbackState() == view.player.PlaybackState.PlayingState
     view.toggle_play()
     QTest.mousePress(strip, Qt.MouseButton.LeftButton, pos=point_at(strip, .2))
     QTest.mouseMove(strip, point_at(strip, .7))
@@ -178,8 +176,9 @@ def test_filmstrip_above_aligned_waveform_and_paused_seek(panel, clip, tmp_path)
     view._position_changed(500)
     assert strip.value() == view.seek.value() == value
     QTest.mouseRelease(strip, Qt.MouseButton.LeftButton, pos=point_at(strip, .7))
-    wait_until(lambda: abs(view.player.position() - 1400) < 30)
-    assert view.player.playbackState() == view.player.PlaybackState.PausedState
+    wait_until(lambda: abs(view.player.position() - 1375) < 50)
+    assert view.player.playbackState() == view.player.PlaybackState.PlayingState
+    view.toggle_play()
     QTest.mouseClick(view.seek, Qt.MouseButton.LeftButton, pos=point_at(view.seek, .25))
     assert strip.value() == view.seek.value()
     view._restart()

@@ -150,6 +150,13 @@ def test_two_video_viewports_keep_independent_players_and_active_info(window, cl
     from PyQt6.QtTest import QTest
     QTest.mouseClick(window.preview_a.video_view.video, Qt.MouseButton.LeftButton)
     assert ab.active_side == "a"
+    a, b = window.preview_a.video_view, window.preview_panel.video_view
+    QTest.keyClick(_APP.focusWidget(), Qt.Key.Key_Space)
+    assert a.player.playbackState() == a.player.PlaybackState.PausedState
+    assert b.player.playbackState() == b.player.PlaybackState.PlayingState
+    QTest.keyClick(_APP.focusWidget(), Qt.Key.Key_Right)
+    assert a._step_frame is not None and b._step_frame is None
+    assert ab.active_side == "a" and window.video_info_panel.path == str(other)
 
 
 def test_real_list_highlight_switches_without_emitting_selection(window, tmp_path):

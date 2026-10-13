@@ -13,6 +13,7 @@ from app_common.log import get_logger
 from .preview_panel import PreviewPanel, _qimage_rgb888_format
 from .waveform_slider import WaveformSlider
 from .filmstrip_slider import FilmstripSlider
+from .video_playback import FrameClock
 from .qt_compat import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QSlider, QComboBox,
     QStackedWidget, QTableWidget, QTableWidgetItem, QThread, QImage, QPixmap,
@@ -26,6 +27,8 @@ except ImportError:
     from PyQt5.QtCore import QEvent
 
 _EVENTS = getattr(QEvent, "Type", QEvent)
+_KEYS = getattr(Qt, 'Key', Qt)
+_FOCUS = getattr(Qt, 'FocusPolicy', Qt)
 
 _log = get_logger('superviewer.video')
 
@@ -165,6 +168,10 @@ class VideoPlayerView(QWidget):
         self._position = 0
         self._source_set = False
         self._pending_seek = None
+        self._pending_play = False
+        self._fps = 0.0
+        self._step_frame = None
+        self.setFocusPolicy(_FOCUS.StrongFocus)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         self.stack = QStackedWidget()
@@ -177,7 +184,7 @@ class VideoPlayerView(QWidget):
         self.message = QLabel('点击播放视频')
         self.message.setWordWrap(True)
         layout.addWidget(self.message)
-        # 两条时间轴占满整行、上下对齐；时间文字放在控制行，不挤占时间轴。
+        # 两条时间轴占满整行、上下对齐；时间文字放在音量行，不挤占时间轴和逐帧按钮。
         timeline = QVBoxLayout()
         timeline.setSpacing(2)
         self.filmstrip = FilmstripSlider()
@@ -192,39 +199,55 @@ class VideoPlayerView(QWidget):
         timeline.addWidget(self.seek)
         layout.addLayout(timeline)
         controls = QHBoxLayout()
+        controls.setSpacing(4)
+        self.previous_frame = QPushButton('上一帧')
+        self.previous_frame.setToolTip('后退 1 帧并暂停（←）')
+        self.previous_frame.setEnabled(False)
+        self.previous_frame.clicked.connect(lambda: self.step_frame(-1))
+        controls.addWidget(self.previous_frame)
         self.play = QPushButton('▶ 播放')
+        self.play.setToolTip('播放 / 暂停（空格）')
         self.play.clicked.connect(self.toggle_play)
         controls.addWidget(self.play)
+        self.next_frame = QPushButton('下一帧')
+        self.next_frame.setToolTip('前进 1 帧并暂停（→）')
+        self.next_frame.setEnabled(False)
+        self.next_frame.clicked.connect(lambda: self.step_frame(1))
+        controls.addWidget(self.next_frame)
         self.restart = QPushButton('↺ 重播')
         self.restart.clicked.connect(self._restart)
         controls.addWidget(self.restart)
         self.time_label = QLabel('00:00 / —')
         self.time_label.setToolTip('当前位置 / 总时长')
-        # 按最宽的时长文字预留宽度，播放中数字变化时控制行不抖动。
-        self.time_label.setMinimumWidth(
-            self.time_label.fontMetrics().horizontalAdvance('0:00:00 / 0:00:00') + 12)
-        controls.addSpacing(8)
-        controls.addWidget(self.time_label)
         controls.addStretch(1)
+        layout.addLayout(controls)
+        audio_controls = QHBoxLayout()
+        audio_controls.addWidget(self.time_label)
+        audio_controls.addStretch(1)
         self.speed = QComboBox()
         for speed in (0.25, 0.5, 1, 1.5, 2):
             self.speed.addItem(f'{speed:g}×', speed)
         self.speed.setCurrentIndex(2)
         self.speed.setToolTip('播放速度')
         self.speed.currentIndexChanged.connect(self._set_speed)
-        controls.addWidget(self.speed)
+        audio_controls.addWidget(self.speed)
         self.mute = ToggleToolButton('静音')
         self.mute.setCheckable(True)
         self.mute.toggled.connect(self._set_audio)
-        controls.addWidget(self.mute)
+        audio_controls.addWidget(self.mute)
         self.volume = QSlider(_Horizontal)
         self.volume.setRange(0, 100)
         self.volume.setValue(70)
         self.volume.setMaximumWidth(90)
         self.volume.setToolTip('音量')
         self.volume.valueChanged.connect(self._set_audio)
-        controls.addWidget(self.volume)
-        layout.addLayout(controls)
+        audio_controls.addWidget(self.volume)
+        layout.addLayout(audio_controls)
+        # 只接管视频画面、时间轴和回放按钮；列表/输入框、音量与倍速仍用原生按键。
+        self.poster.setFocusPolicy(_FOCUS.StrongFocus)
+        for widget in (self, self.poster, self.filmstrip, self.seek, self.play,
+                       self.previous_frame, self.next_frame, self.restart):
+            widget.installEventFilter(self)
 
     def set_path(self, path):
         self.stop()
@@ -236,6 +259,7 @@ class VideoPlayerView(QWidget):
         self.play.setEnabled(True)
         self.restart.setEnabled(True)
         self._duration = self._position = 0
+        self._fps = 0.0
         self.seek.setValue(0)
         self.seek.set_waveform(status='正在生成音频波形…')
         self.filmstrip.setValue(0)
@@ -254,17 +278,24 @@ class VideoPlayerView(QWidget):
         super().resizeEvent(event)
         self._resize_poster()
 
+    def changeEvent(self, event):
+        super().changeEvent(event)
+        if event.type() == _EVENTS.FontChange and hasattr(self, 'time_label'):
+            self._update_time()
+
     def _ensure_player(self):
         if self.player is not None:
             return True
         try:
             from PyQt6.QtCore import QUrl, QMetaObject, Q_ARG
-            from PyQt6.QtMultimedia import QMediaPlayer, QAudioOutput
+            from PyQt6.QtMultimedia import QMediaPlayer, QAudioOutput, QMediaMetaData
             from PyQt6.QtMultimediaWidgets import QVideoWidget
             self._url = QUrl
             self._invoke = QMetaObject.invokeMethod
             self._arg = Q_ARG
+            self._frame_rate_key = QMediaMetaData.Key.VideoFrameRate
             self.video = QVideoWidget(self)
+            self.video.setFocusPolicy(_FOCUS.StrongFocus)
             self.video.installEventFilter(self)
             self.stack.addWidget(self.video)
             self.player = QMediaPlayer(self)
@@ -285,40 +316,52 @@ class VideoPlayerView(QWidget):
             return False
 
     def eventFilter(self, watched, event):
-        if watched is getattr(self, "video", None) and event.type() in (
-            _EVENTS.MouseButtonPress, _EVENTS.FocusIn,
-        ):
+        kind = event.type()
+        if kind in (_EVENTS.MouseButtonPress, _EVENTS.FocusIn):
             self.activated.emit()
+            if kind == _EVENTS.MouseButtonPress and watched in (self.poster, getattr(self, 'video', None)):
+                watched.setFocus()
+        if (kind in (_EVENTS.ShortcutOverride, _EVENTS.KeyPress, _EVENTS.KeyRelease)
+                and event.modifiers() == getattr(Qt, 'KeyboardModifier', Qt).NoModifier
+                and event.key() in (_KEYS.Key_Space, _KEYS.Key_Left, _KEYS.Key_Right)):
+            if kind == _EVENTS.KeyPress and self.play.isEnabled():
+                if event.key() == _KEYS.Key_Space:
+                    if not event.isAutoRepeat():
+                        self.toggle_play()
+                else:
+                    self.step_frame(-1 if event.key() == _KEYS.Key_Left else 1)
+            event.accept()
+            return True
         return super().eventFilter(watched, event)
 
-    def toggle_play(self):
-        if not self.path or not self._ensure_player():
-            return
+    def _ensure_source(self):
+        if not self.path or not self.play.isEnabled() or not self._ensure_player():
+            return False
         if not self._source_set:
             self._source_set = True
             self.player.setSource(self._url.fromLocalFile(os.path.abspath(self.path)))
-        if self.player.playbackState() == self.player.PlaybackState.PlayingState:
+        self.stack.setCurrentWidget(self.video)
+        return True
+
+    def toggle_play(self):
+        if not self._ensure_source():
+            return
+        if self._pending_play or self.player.playbackState() == self.player.PlaybackState.PlayingState:
+            self._pending_play = False
             self.player.pause()
         else:
-            if self.player.mediaStatus() == self.player.MediaStatus.EndOfMedia:
+            self._step_frame = None
+            if self.player.mediaStatus() == self.player.MediaStatus.EndOfMedia and self._pending_seek is None:
                 self.player.setPosition(0)
-            self.stack.setCurrentWidget(self.video)
-            self.message.setText('正在播放')
-            self.player.play()
-            self._apply_pending_seek()
+            if self._pending_seek is not None:
+                self._pending_play = True
+                self._apply_pending_seek()
+            else:
+                self.player.play()
 
     def _restart(self):
-        self._pending_seek = None
-        self._position = 0
-        self.seek.setValue(0)
-        self.filmstrip.setValue(0)
-        self._update_time()
-        if self.player is not None and self._source_set:
-            self.player.setPosition(0)
-            self.stack.setCurrentWidget(self.video)
-            self.player.play()
-        else:
-            self.toggle_play()
+        self._step_frame = None
+        self._seek_to(0, play=True)
 
     def _state_changed(self, state):
         playing = state == self.player.PlaybackState.PlayingState
@@ -329,9 +372,16 @@ class VideoPlayerView(QWidget):
     def _media_status(self, status):
         if not self._source_set:
             return
-        if status == self.player.MediaStatus.LoadedMedia and self.player.audioTracks():
-            # 波形读取首条音轨，播放使用同一音轨，避免多音轨素材错位。
-            self.player.setActiveAudioTrack(0)
+        if status == self.player.MediaStatus.LoadedMedia:
+            if self.player.audioTracks():
+                # 波形读取首条音轨，播放使用同一音轨，避免多音轨素材错位。
+                self.player.setActiveAudioTrack(0)
+            tracks = self.player.videoTracks()
+            if tracks:
+                fps = tracks[0].value(self._frame_rate_key)
+                if fps and FrameClock(self._duration, float(fps)).available:
+                    # Qt 保留 30000/1001 等精度，优于 FFmpeg 摘要显示的 29.97。
+                    self.set_frame_rate(fps)
         self._apply_pending_seek()
         if status == self.player.MediaStatus.EndOfMedia:
             self.message.setText('播放结束 · 点击播放或重播')
@@ -359,15 +409,58 @@ class VideoPlayerView(QWidget):
     def _seek(self, *_args):
         if not self._duration:
             return
-        self._position = round(self.seek.value() / 10000 * self._duration)
-        self.filmstrip.setValue(self.seek.value())
-        self._pending_seek = self._position
-        self._update_time()
-        self._apply_pending_seek()
+        self._step_frame = None
+        self._seek_to(round(self.seek.value() / 10000 * self._duration))
 
     def _filmstrip_seek(self, value):
+        if not self._duration:
+            return
+        position = round(value / 10000 * self._duration)
+        clock = FrameClock(self._duration, self._fps)
+        if clock.available:
+            position = clock.position(clock.frame_at(position))
+        self._step_frame = None
+        self._seek_to(position, play=True)
+
+    def _seek_to(self, position, *, play=False, paused=False):
+        self._position = max(0, min(max(0, self._duration - 1), position))
+        self._pending_seek = self._position
+        self._pending_play = play
+        value = round(self._position / max(1, self._duration) * 10000)
         self.seek.setValue(value)
-        self._seek()
+        self.filmstrip.setValue(value)
+        self._update_time()
+        if play or paused:
+            if not self._ensure_source():
+                self._pending_play = False
+                return
+            if paused:
+                self.player.pause()
+        self._apply_pending_seek()
+
+    def step_frame(self, direction):
+        clock = FrameClock(self._duration, self._fps)
+        if not self.play.isEnabled() or not self.previous_frame.isEnabled() or not clock.available:
+            return
+        if self._step_frame is None:
+            position = self._position
+            if self._source_set and self._pending_seek is None:
+                frame = self.video.videoSink().videoFrame()
+                if frame.isValid() and frame.startTime() >= 0:
+                    # 按实际显示帧计算，播放 positionChanged 的低频回调可能落后数帧。
+                    position = (frame.startTime() + 1) / 1000
+            self._step_frame = clock.frame_at(position)
+        self._step_frame = max(0, min(clock.last_frame, self._step_frame + direction))
+        self._seek_to(clock.position(self._step_frame), paused=True)
+
+    def set_frame_rate(self, fps):
+        self._fps = float(fps or 0)
+        self._update_frame_controls()
+
+    def _update_frame_controls(self):
+        enabled = self.seek.isEnabled() and FrameClock(self._duration, self._fps).available
+        self.previous_frame.setEnabled(enabled)
+        self.next_frame.setEnabled(enabled)
 
     def _scrub_time(self, value):
         position = round(value / 10000 * self._duration)
@@ -384,18 +477,28 @@ class VideoPlayerView(QWidget):
             self.filmstrip.set_duration(self._duration)
             self.filmstrip.setEnabled(self._duration > 0)
             self._update_time()
+            self._update_frame_controls()
 
     def _seekable_changed(self, enabled):
         if self._source_set:
             self.seek.setEnabled(enabled and self._duration > 0)
             self.filmstrip.setEnabled(enabled and self._duration > 0)
+            self._update_frame_controls()
             self._apply_pending_seek()
 
     def _apply_pending_seek(self):
+        # seekableChanged 在 LoadedMedia 前到达时，Qt 仍可能丢弃 setPosition。
+        # 等加载完成再提交；先定位再播放，首次点击不会从第 0 帧闪播。
         if (self._pending_seek is not None and self.player is not None
-                and self._source_set and self.player.isSeekable()):
+                and self._source_set and self.player.isSeekable()
+                and self.player.mediaStatus() not in (
+                    self.player.MediaStatus.NoMedia, self.player.MediaStatus.LoadingMedia,
+                    self.player.MediaStatus.InvalidMedia)):
             position, self._pending_seek = self._pending_seek, None
+            play, self._pending_play = self._pending_play, False
             self.player.setPosition(position)
+            if play:
+                self.player.play()
 
     def _position_changed(self, value):
         if self._source_set and self._pending_seek is None:
@@ -413,15 +516,23 @@ class VideoPlayerView(QWidget):
             self.filmstrip.set_duration(value)
             self.filmstrip.setEnabled(self.player.isSeekable())
             self._update_time()
+            self._update_frame_controls()
 
     def _update_time(self, position=None):
         position = self._position if position is None else position
-        self.time_label.setText(f'{format_duration(position / 1000)} / {format_duration(self._duration / 1000) if self._duration else "—"}')
+        duration = format_duration(self._duration / 1000) if self._duration else '—'
+        # 按本视频最长时间及当前字体预留宽度；放大字体不能沿用初始化时的像素宽度。
+        sample = f'{duration}.888 / {duration}' if self._duration else '00:00.000 / —'
+        sample = ''.join('8' if char.isdigit() else char for char in sample)
+        self.time_label.setMinimumWidth(self.fontMetrics().horizontalAdvance(sample) + 12)
+        self.time_label.setText(f'{format_duration(position / 1000)}.{int(position) % 1000:03d} / {duration}')
 
     def stop(self):
         had_source = self._source_set
         self._source_set = False
         self._pending_seek = None
+        self._pending_play = False
+        self._step_frame = None
         self.seek.cancel_drag()
         self.filmstrip.cancel_drag()
         if self.player is not None and had_source:
@@ -431,6 +542,7 @@ class VideoPlayerView(QWidget):
             self._invoke(self.player, 'setSource', Qt.ConnectionType.DirectConnection,
                          self._arg(self._url, self._url()))
         self.seek.setEnabled(False)
+        self._update_frame_controls()
         self.seek.set_duration(0)
         self.seek.set_waveform()
         self.filmstrip.setEnabled(False)
@@ -533,6 +645,8 @@ class MediaPreviewPanel(PreviewPanel):
             if self.video_view._poster is None:
                 self.video_view.poster.setText('▶ 视频封面不可用')
         self.video_view.set_duration_hint(round(float(info.get('duration') or 0) * 1000))
+        if not self.video_view._source_set or not self.video_view._fps:
+            self.video_view.set_frame_rate(info.get('fps', 0))
         if info.get('duration', 0) > 0:
             request = (token, path, info['duration'], info.get('fps', 0))
             if self._filmstrip_worker is not None:
