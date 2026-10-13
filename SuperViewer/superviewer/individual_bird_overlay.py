@@ -1,18 +1,26 @@
 # -*- coding: utf-8 -*-
-"""逐只识别悬停框，独立于鸟体开关，仅用于视口绘制。"""
+"""逐只识别悬停框与编号，独立于鸟体开关，仅用于视口绘制。"""
 from .bird_body_overlay import _valid_box
 try:
     from PyQt6.QtCore import QRectF, Qt
-    from PyQt6.QtGui import QColor, QPen
+    from PyQt6.QtGui import QColor, QFont, QFontMetricsF, QPalette, QPen
 except ImportError:  # pragma: no cover
     from PyQt5.QtCore import QRectF, Qt
-    from PyQt5.QtGui import QColor, QPen
+    from PyQt5.QtGui import QColor, QFont, QFontMetricsF, QPalette, QPen
 
 
 class IndividualBirdOverlayMixin:
     def __init__(self, *args, **kwargs):
         self._individual_highlight = None
+        self._individual_numbers = ()
         super().__init__(*args, **kwargs)
+
+    def set_individual_numbers(self, numbers):
+        value = tuple((number, valid) for number, box in numbers
+                      if (valid := _valid_box(box)) is not None)
+        if value != self._individual_numbers:
+            self._individual_numbers = value
+            self.update()
 
     def set_individual_highlight(self, box, color="#FF0000"):
         box = _valid_box(box)
@@ -55,18 +63,23 @@ class IndividualBirdOverlayMixin:
     def _on_source_cleared(self):
         super()._on_source_cleared()
         self._individual_highlight = None
+        self._individual_numbers = ()
 
     def render_source_pixmap_with_overlays(self):
-        # 悬停属于临时交互状态；导出仍包含原有焦点、构图网格和鸟体叠加。
+        # 悬停和编号属于预览状态；导出仍包含原有焦点、构图网格和鸟体叠加。
         previous = self._individual_highlight
+        numbers = self._individual_numbers
         try:
             self._individual_highlight = None
+            self._individual_numbers = ()
             return super().render_source_pixmap_with_overlays()
         finally:
             self._individual_highlight = previous
+            self._individual_numbers = numbers
 
     def _paint_overlays(self, painter, draw_rect, content_rect):
         super()._paint_overlays(painter, draw_rect, content_rect)
+        self._paint_individual_numbers(painter, draw_rect, content_rect)
         if self._individual_highlight is None:
             return
         box, color = self._individual_highlight
@@ -79,5 +92,36 @@ class IndividualBirdOverlayMixin:
             painter.setPen(QPen(QColor(color), 3))
             painter.setBrush(getattr(Qt, "BrushStyle", Qt).NoBrush)
             painter.drawRect(rect)
+        finally:
+            painter.restore()
+
+    def _paint_individual_numbers(self, painter, draw_rect, content_rect):
+        clip = draw_rect.intersected(QRectF(content_rect))
+        if not self._individual_numbers or clip.isEmpty():
+            return
+        painter.save()
+        try:
+            painter.setClipRect(clip)
+            font = QFont(self.font())
+            font.setBold(True)
+            painter.setFont(font)
+            metrics = QFontMetricsF(font)
+            roles = getattr(QPalette, 'ColorRole', QPalette)
+            painter.setPen(self.palette().color(roles.HighlightedText))
+            painter.setBrush(self.palette().brush(roles.Highlight))
+            for number, (left, top, right, bottom) in self._individual_numbers:
+                bird = QRectF(draw_rect.left() + left * draw_rect.width(),
+                              draw_rect.top() + top * draw_rect.height(),
+                              (right - left) * draw_rect.width(), (bottom - top) * draw_rect.height())
+                if not bird.intersects(clip):
+                    continue
+                text = f'#{number}'
+                width, height = metrics.horizontalAdvance(text) + 10, metrics.height() + 4
+                # 边缘/局部可见的鸟仍显示完整标签，画外的鸟不挤进视口。
+                x = max(clip.left(), min(bird.left(), clip.right() - width))
+                y = max(clip.top(), min(bird.top(), clip.bottom() - height))
+                label = QRectF(x, y, width, height)
+                painter.drawRoundedRect(label, 3, 3)
+                painter.drawText(label, getattr(Qt, 'AlignmentFlag', Qt).AlignCenter, text)
         finally:
             painter.restore()

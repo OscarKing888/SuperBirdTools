@@ -609,6 +609,9 @@ class PreviewPanel(QWidget):
         self._full_preview_timer.timeout.connect(self._start_full_preview_loader)
         self._preview_resolution: tuple[int, int] | None = None
         self._photo_capture_info_text = ""
+        self._show_individual_numbers = False
+        self._individual_number_metadata = {}
+        self._individual_number_records = None
         self.source_changed.connect(lambda: self.set_photo_metadata(None))
         self._fast_preview_perf_started_at = 0.0
         self._fast_preview_perf_frames = 0
@@ -665,6 +668,7 @@ class PreviewPanel(QWidget):
         if active == self._navigation_playback_active:
             return
         self._navigation_playback_active = active
+        self._apply_individual_numbers()
         if active:
             # 首个重复帧缓存未就绪时可能保留已提交画面，仍必须冻结其完整任务。
             self._preview_request_token += 1
@@ -932,6 +936,8 @@ class PreviewPanel(QWidget):
         self._first_image_fit_token = None
 
     def _set_canvas_pixmap(self, pix: QPixmap, *, log_performance: bool = True) -> None:
+        # 编号始终按当前像素的 RAW 裁切几何映射，快速帧与完整预览升级共用。
+        self._apply_individual_numbers()
         fit_first = (self._fit_next_image
                      or self._first_image_fit_token == self._preview_request_token)
         if fit_first:
@@ -1169,6 +1175,22 @@ class PreviewPanel(QWidget):
     def set_individual_bird_highlight(self, box, color="#FF0000") -> None:
         self._canvas.set_individual_highlight(map_camera_focus_box(box, self._raw_focus_crop_box), color)
 
+    def set_show_individual_numbers(self, enabled: bool) -> None:
+        self._show_individual_numbers = bool(enabled)
+        self._apply_individual_numbers()
+
+    def _apply_individual_numbers(self) -> None:
+        numbers = ()
+        if self._show_individual_numbers and not self._navigation_playback_active:
+            if self._individual_number_records is None:
+                from .per_bird_identification import read_individuals
+                self._individual_number_records = tuple(
+                    (item['index'] + 1, tuple(item['box']))
+                    for item in read_individuals(self._individual_number_metadata))
+            numbers = tuple((number, map_camera_focus_box(box, self._raw_focus_crop_box))
+                            for number, box in self._individual_number_records)
+        self._canvas.set_individual_numbers(numbers)
+
     def set_show_bird_box(self, enabled: bool) -> None:
         self._canvas.set_show_bird_box(enabled)
 
@@ -1216,6 +1238,14 @@ class PreviewPanel(QWidget):
 
     def set_photo_metadata(self, metadata: dict | None) -> None:
         """Present cached source metadata; callers own lookup and async updates."""
+        from .per_bird_identification import FIELD, INFO_FIELD
+        source = metadata or {}
+        numbers = {key: source.get(f'XMP-superpicky:{key}', source.get(key, '{}'))
+                   for key in (FIELD, INFO_FIELD)}
+        if numbers != self._individual_number_metadata:
+            self._individual_number_metadata = numbers
+            self._individual_number_records = None
+        self._apply_individual_numbers()
         text = photo_capture_info_text(metadata) if metadata is not None else ""
         if text != self._photo_capture_info_text:
             self._photo_capture_info_text = text

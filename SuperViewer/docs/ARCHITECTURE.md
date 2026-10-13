@@ -377,6 +377,11 @@ CLI 与 GUI 共用核心：在仓库根使用共享 `.venv` 执行 `python -m Su
 列表上方原生下拉框支持编号、可信度、稀有度分别升序/降序，默认编号升序，切图及刷新保留窗口内选择。
 `_sorted_individuals()` 按原始数值生成独立显示顺序，缺失值始终置后，同值按编号升序；稀有度沿用逐鸟属性兼容读取。
 排序只影响视图，不修改 XMP 或检测编号；悬停框、徽章刷新与设为主要鸟名都从对应显示记录取原始身份，无独立 CLI。
+排序栏下方“显示编号”复用共享 `ToggleToolButton`，默认关闭、窗口内保留；`IndividualBirdHover.set_numbers_visible()` 同步 A/B 开关，
+每侧 `PreviewPanel.set_photo_metadata()` 沿用拍摄信息的源图缓存入口，只保存逐鸟列表/坐标说明，开启时惰性解析、更新时失效。
+`_apply_individual_numbers()` 按本侧实际 RAW 裁切映射，`IndividualBirdOverlayMixin` 在鸟区域左上角绘制原始编号，标签随字体、保持屏幕大小。
+切图先清空旧缓存，后台元数据与 RAW 升级局部刷新，长按播放隐藏且不解析逐鸟列表；停止后从缓存恢复。
+关闭或隐藏信息面板不改变开关，切目录保留非活动侧编号；编号不居中、不启动识别/解码、不参与导出。回归见 `test_individual_bird_numbers.py`。
 编号色块使用该鸟稀有度徽章背景色；预览为空心框，独立读取 `bird_hover_color` 用户选项（默认红色）。`refresh_badges()` 同步用户配色及当前鸟名悬停框；
 鸟名右键通过 `primary_requested` 交给 `PrimaryBirdController`：后台调用
 `per_bird_primary.set_primary_individual()` 核对列表快照并复用候选字段映射写 XMP，

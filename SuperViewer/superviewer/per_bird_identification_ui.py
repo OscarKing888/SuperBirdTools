@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 from dataclasses import replace
 from app_common.superviewer_user_options import KEY_BIRD_HOVER_COLOR, get_runtime_user_options
+from app_common.toggle_button import ToggleToolButton
 
 from .bird_result_list import TraceBirdList
 from .bird_identification import BirdIDOptions
@@ -158,6 +159,13 @@ class IndividualBirdsPanel(QWidget):
         sort_layout.addStretch(1)
         self.sort_bar.hide()
         layout.addWidget(self.sort_bar)
+        self.show_numbers = ToggleToolButton("显示编号", self)
+        self.show_numbers.setAccessibleName("在预览图上显示逐鸟编号")
+        self.show_numbers.setToolTip("在各预览图上显示对应逐鸟结果的原始编号；只影响预览，不改变排序或导出。")
+        number_layout = QHBoxLayout()
+        number_layout.addWidget(self.show_numbers)
+        number_layout.addStretch(1)
+        layout.addLayout(number_layout)
         self.birds = TraceBirdList(self)
         layout.addWidget(self.birds)
         layout.addStretch(1)
@@ -255,9 +263,15 @@ class IndividualBirdHover(QObject):
         self.panels = panels
         self.source, self.row = "", None
         info.individual_birds.hovered.connect(self.highlight)
+        info.individual_birds.show_numbers.toggled.connect(self.set_numbers_visible)
         for panel in panels:
             panel.source_changed.connect(self.clear)
             panel.full_preview_ready.connect(self.refresh)
+        self.set_numbers_visible(info.individual_birds.show_numbers.isChecked())
+
+    def set_numbers_visible(self, enabled):
+        for panel in self.panels:
+            panel.set_show_individual_numbers(enabled)
 
     def clear(self, *_):
         self.highlight("", None)
