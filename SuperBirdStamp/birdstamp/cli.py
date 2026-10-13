@@ -35,7 +35,9 @@ LOGGER = logging.getLogger("birdstamp")
 def collage_command(
     photos: list[Path] = typer.Argument(..., exists=True, dir_okay=False),
     output: Path = typer.Option(..., '--output', '-o'),
-    preset: str = typer.Option('vertical', help='vertical/horizontal/grid4/grid6/grid9/grid16'),
+    preset: str = typer.Option('vertical', help='vertical/horizontal/grid4/grid6/grid9/grid16/custom'),
+    columns: int | None = typer.Option(None, min=1, max=64, help='自定义宫格横向列数，默认 2；需 --preset custom，总计最多 64 格。'),
+    rows: int | None = typer.Option(None, min=1, max=64, help='自定义宫格纵向行数，默认 2；需 --preset custom。'),
     width: int | None = typer.Option(None, min=1, max=32768, help='成图宽度，默认 1080 px。'),
     height: int | None = typer.Option(None, min=1, max=32768, help='成图高度，默认 1440 px。'),
     cell_size: int | None = typer.Option(None, min=64, max=4096, help='兼容旧单格尺寸；不能与 --width/--height 同用。'),
@@ -50,10 +52,14 @@ def collage_command(
     try:
         if cell_size is not None and (width is not None or height is not None):
             raise ValueError('--cell-size 不能与 --width/--height 同用')
+        if preset != 'custom' and (columns is not None or rows is not None):
+            raise ValueError('--columns/--rows 需配合 --preset custom 使用')
         doc = json.loads(overlays.read_text(encoding='utf-8')) if overlays else None
         options = CollageOptions(preset, cell_size, gap, margin, background, fit,
                                  width=width if width is not None else 1080,
-                                 height=height if height is not None else 1440)
+                                 height=height if height is not None else 1440,
+                                 columns=columns if columns is not None else 2,
+                                 rows=rows if rows is not None else 2)
         result = export_collage(photos, options, output, overlays=doc)
     except (ValueError, OSError, RuntimeError) as exc:
         raise typer.BadParameter(str(exc)) from exc

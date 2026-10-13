@@ -98,12 +98,22 @@ class CollageEditor(QObject):
         root.setContentsMargins(0, 6, 0, 0)
         self.layout_group = CollapsibleSection('拼图排版')
         form = QFormLayout(self.layout_group.body)
+        self.layout_form = form
         form.setContentsMargins(0, 0, 0, 0)
         form.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapLongRows)
         self.preset = QComboBox()
         for key, (label, _, _) in PRESETS.items():
             self.preset.addItem(label, key)
         form.addRow('排版', self.preset)
+        self.columns, self.rows = QSpinBox(), QSpinBox()
+        for label, widget, suffix in [('横向列数', self.columns, ' 列'), ('纵向行数', self.rows, ' 行')]:
+            widget.setRange(1, MAX_IMAGES)
+            widget.setValue(2)
+            widget.setSuffix(suffix)
+            widget.setKeyboardTracking(False)
+            widget.setToolTip(f'按列 × 行均分画布，最多 {MAX_IMAGES} 格；照片从左到右、从上到下排列。')
+            form.addRow(label, widget)
+        self._sync_grid_controls()
         self.aspect_ratio = QComboBox()
         for key, label in ASPECT_RATIOS.items():
             self.aspect_ratio.addItem(label, key)
@@ -160,15 +170,24 @@ class CollageEditor(QObject):
         body.addWidget(hint)
         root.addWidget(self.sources_group)
         root.addStretch(1)
-        self.preset.currentIndexChanged.connect(self._settings_changed)
+        self.preset.currentIndexChanged.connect(self._preset_changed)
         self.fit.currentIndexChanged.connect(self._settings_changed)
         self.background.colorChanged.connect(self._settings_changed)
         self.aspect_ratio.currentIndexChanged.connect(self._ratio_changed)
         self.resolution.currentIndexChanged.connect(self._resolution_changed)
         self.canvas_width.valueChanged.connect(lambda: self._dimension_changed(True))
         self.canvas_height.valueChanged.connect(lambda: self._dimension_changed(False))
-        for widget in (self.gap, self.margin):
+        for widget in (self.gap, self.margin, self.columns, self.rows):
             widget.valueChanged.connect(self._settings_changed)
+
+    def _sync_grid_controls(self):
+        custom = self.preset.currentData() == 'custom'
+        for widget in (self.columns, self.rows):
+            self.layout_form.setRowVisible(widget, custom)
+
+    def _preset_changed(self):
+        self._sync_grid_controls()
+        self._settings_changed()
 
     def _ratio_units(self):
         key = self.aspect_ratio.currentData()
@@ -271,7 +290,8 @@ class CollageEditor(QObject):
     def options(self):
         return CollageOptions(preset=self.preset.currentData(), cell_size=self._legacy_cell_size,
                               gap=self.gap.value(), margin=self.margin.value(), background=self.background.value(),
-                              fit=self.fit.currentData(), width=self.canvas_width.value(), height=self.canvas_height.value())
+                              fit=self.fit.currentData(), width=self.canvas_width.value(), height=self.canvas_height.value(),
+                              columns=self.columns.value(), rows=self.rows.value())
 
     def _refresh_files(self, selected=()):
         self.files.clear()
@@ -400,7 +420,10 @@ class CollageEditor(QObject):
                         widths, heights = zip(*sizes)
                         self.cell_summary.setText(f'{min(widths)}–{max(widths)} × {min(heights)}–{max(heights)} px（自动）')
                     self._render_overlays(fit=True)
-                    self.summary.setText(f'{PRESETS[worker.options.preset][0]} · {len(worker.paths)} 张 · {self.plan.size[0]} × {self.plan.size[1]} px')
+                    label = PRESETS[worker.options.preset][0]
+                    if worker.options.preset == 'custom':
+                        label += f' · {worker.options.columns} 列 × {worker.options.rows} 行'
+                    self.summary.setText(f'{label} · {len(worker.paths)} 张 · {self.plan.size[0]} × {self.plan.size[1]} px')
                     self.status.setText('拼图已更新，可添加 overlay 或导出。')
             else:
                 result[0].close()
@@ -517,6 +540,8 @@ class CollageEditor(QObject):
             except (TypeError, ValueError, AttributeError):
                 options = CollageOptions()
             self.preset.setCurrentIndex(self.preset.findData(options.preset))
+            self.columns.setValue(options.columns)
+            self.rows.setValue(options.rows)
             self._legacy_cell_size = options.cell_size
             ratio = state.get('aspect_ratio', '3:4' if options.width * 4 == options.height * 3 else 'custom')
             ratio = ratio if isinstance(ratio, str) and ratio in ASPECT_RATIOS else 'custom'
@@ -526,7 +551,7 @@ class CollageEditor(QObject):
             self.gap.setValue(options.gap)
             self.margin.setValue(options.margin)
             self.background.set_value(options.background)
-            fit = 'contain' if options.cell_size is not None and not options.preset.startswith('grid') else options.fit
+            fit = 'contain' if options.cell_size is not None and options.preset in ('vertical', 'horizontal') else options.fit
             self.fit.setCurrentIndex(self.fit.findData(fit))
             self.paths = [p for raw in (state.get('paths') or [])[:MAX_IMAGES]
                           if (p := resolve_workspace_path(raw, workspace_path=workspace_path)) is not None]
