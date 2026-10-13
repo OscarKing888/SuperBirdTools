@@ -43,6 +43,7 @@ L0 应用外壳：主窗口、菜单、状态栏
 | L1/L4 BirdStamp 拼图 | [`CollageEditor`](../SuperBirdStamp/birdstamp/gui/editor_collage.py) + `CollapsibleSection` / `ColorEditor` / `PreviewWithStatusBar` / `OverlayEditorDock` | 处理设置中位于去抖动之后；原生比例/分辨率组合框与联动宽高框定义最终画布（默认 3:4、1080 × 1440），单格自动计算；左侧参数和素材顺序由主滚动区容纳，右侧独立画布复用 OverlayPanel / OverlaySession，导出/取消/进度固定在 ExportActionBar。切页和折叠保留内容，拼图参数与素材、叠加层随工作区保存，后台单 worker 按版本接收并等真实 finished 交接；见[设计说明](ui-design/birdstamp-collage.md) |
 | L5 Viewer 预览状态与拍摄信息 | [`PreviewPanel`](../SuperViewer/superviewer/preview_panel.py) 原有底部状态 `QLabel`；格式化 [`preview_photo_info.py`](../SuperViewer/superviewer/preview_photo_info.py) | 分辨率/缩放之后显示快门、光圈、ISO、焦距、镜头和机器型号，A/B 各侧独立；窄宽度自动换行，使用原生字体/共享主题色，缺失值显示“—”；只读源照片的浏览器/报告缓存，未选择或视频不显示拍摄信息，无新增显示栏、滚动、保存或 EXIF 读取 |
 | L5 输入字段 | 原生编辑器、项目 `ColorEditor` / `PercentEditor` 等 | 复用范围、校验和信号；UI 不持有新的业务副本 |
+| L4/L5 Viewer 过滤下拉栏 | [`FilterDropdown / FilterFlowLayout`](../SuperViewer/superviewer/filter_controls.py)、共享 `FilterableComboBox`、已有 `add_filterable_tag_actions` | 镜头、稀有等级、标签并列，窄宽度按控件换行；下拉显示已选数量，菜单可连续多选、键盘切换及清除。标签搜索/分组与完全匹配保留，稀有等级复用共享分档和配置名称；状态由文件列表持有，关闭菜单不清空，不新增保存或读取 |
 | L5 Viewer 颜色选择 | [`rarity_badge.ColorButton`](../SuperViewer/superviewer/rarity_badge.py) | 颜色色块、色值及原生 QColorDialog；徽章和鸟名悬停框共用，修改设置草稿，确认设置后持久化 |
 | L4 徽章配置表单 | Viewer [`MetadataBadgesForm`](../SuperViewer/superviewer/rarity_badge.py) | 显示文本输入框旁提供“编辑”按钮，使用原生 `QInputDialog`；应用更新草稿及预览，设置页确定后统一保存，取消不写配置 |
 | L5 面板布尔选项 | `QCheckBox` | 启用/禁用与展开/收起分开；折叠不取消功能 |
