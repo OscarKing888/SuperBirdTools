@@ -85,9 +85,11 @@ def test_toolbar_undo_redo_preserves_original_tags_and_survives_menu_rebuild(tmp
         order = sorted((toolbar, process_toolbar, send_toolbar), key=lambda bar: bar.geometry().x())
         assert order == [toolbar, process_toolbar, send_toolbar]
         assert all(window.toolBarArea(bar) == window.toolBarArea(toolbar) for bar in order)
-        assert edit.actions() == [actions.undo_action, actions.redo_action]
+        assert edit.actions()[:2] == [actions.undo_action, actions.redo_action]
+        assert edit.actions()[2].isSeparator()
+        assert edit.actions()[3:] == [window._move_history_actions.undo_action, window._move_history_actions.redo_action]
         assert window.findChildren(QToolBar, "editToolBar") == [toolbar]
-        assert toolbar.actions() == edit.actions()
+        assert toolbar.actions() == edit.actions()[:2]
         QTest.mouseClick(undo_button, Qt.MouseButton.LeftButton)
         assert metadata.read_subjects(str(photos[0]), strict=True) == ["白鹭", "库外关键词"]
         assert metadata.read_subjects(str(photos[1]), strict=True) == []

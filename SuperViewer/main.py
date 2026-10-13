@@ -165,6 +165,7 @@ try:
     from .superviewer.preview_key_router import PreviewKeyRouter
     from .superviewer.viewer_ab_preview import ViewerABPreview
     from .superviewer.tag_history_actions import TagHistoryActions
+    from .superviewer.file_move_actions import FileMoveHistoryActions
     from .superviewer.send_to_toolbar import create_send_to_toolbar, rebuild_send_to_toolbar
     from .superviewer.process_toolbar import ProcessToolbar
     from .superviewer.metadata_edit_sync import sync_saved_xmp_edit
@@ -265,6 +266,7 @@ except ImportError:
     from superviewer.preview_key_router import PreviewKeyRouter
     from superviewer.viewer_ab_preview import ViewerABPreview
     from superviewer.tag_history_actions import TagHistoryActions
+    from superviewer.file_move_actions import FileMoveHistoryActions
     from superviewer.send_to_toolbar import create_send_to_toolbar, rebuild_send_to_toolbar
     from superviewer.process_toolbar import ProcessToolbar
     from superviewer.metadata_edit_sync import sync_saved_xmp_edit
@@ -367,6 +369,7 @@ class MainWindow(QMainWindow):
         self.setMinimumSize(900, 600)
         self.resize(1500, 960)
         self._tag_history_actions = TagHistoryActions(self)
+        self._move_history_actions = FileMoveHistoryActions(self)
         self._init_menu_bar()
         self._edit_toolbar = self._tag_history_actions.create_toolbar(self)
         self.addToolBar(self._edit_toolbar)
@@ -865,6 +868,7 @@ class MainWindow(QMainWindow):
 
         edit_menu = self.menuBar().addMenu("编辑")
         self._tag_history_actions.add_to_menu(edit_menu)
+        self._move_history_actions.add_to_menu(edit_menu)
 
         settings_menu = self.menuBar().addMenu("设置")
         user_options_act = QAction("用户选项...", self)
