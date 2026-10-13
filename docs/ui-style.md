@@ -32,7 +32,7 @@ L0 应用外壳：主窗口、菜单、状态栏
 | L1 用户选项 | [`SettingsDialog / SettingsPage`](../app_common/settings_dialog.py) | 用 `add_page` 注册页面；确认/取消固定在滚动区外 |
 | L2 左侧页面导航 | [`SidebarTabWidget`](../app_common/sidebar_tabs.py) | 复用统一的左侧图标/文字页签 |
 | L2 可调分栏 | `QSplitter`；需折叠整块侧栏时用 [`TriangleToggleSplitter`](../app_common/triangle_toggle_splitter.py) | 分栏折叠与表单分组折叠是不同职责；不以分组替代整幅画布/目录树 |
-| L2 滚动与操作区 | `QScrollArea` / `SettingsPage`；BirdStamp [`ExportActionBar`](../SuperBirdStamp/birdstamp/gui/editor_compact_panels.py) | 单一主滚动归属；BirdStamp 视频参数按当前宽度所需高度完整展开，上方主滚动区让出空间；图片/GIF/去抖动参数保持紧凑高度，超出窗口的极长重复播放列表保留滚动兜底，动作、取消与进度始终可达 |
+| L2 滚动与操作区 | `QScrollArea` / `SettingsPage`；BirdStamp [`ExportActionBar`](../SuperBirdStamp/birdstamp/gui/editor_compact_panels.py) | 单一主滚动归属；BirdStamp 视频参数按当前宽度所需高度完整展开，上方主滚动区让出空间；内部 `_CurrentExportActions` 只取当前按钮页高度，隐藏页不占空间；图片/GIF/去抖动参数保持紧凑高度，超出窗口的极长重复播放列表保留滚动兜底，动作、取消与进度始终可达 |
 | L3 有标题分组 | [`CollapsibleSection`](../app_common/collapsible_section.py) | 替代应用自建 `QGroupBox`；内容放 `body` 或 `set_content_widget`；默认展开 |
 | L3 无标题布局容器 | `QWidget` + 布局 | 不为了边框再套一层折叠组，不给每个字段单独建组 |
 | L3 浮窗 | `QDialog`；已有模板/叠加窗口 | 模态与非模态按用户任务决定，复用已有保存/关闭流程 |
@@ -40,6 +40,7 @@ L0 应用外壳：主窗口、菜单、状态栏
 | L4 照片、元数据、标签列表 | 现有共享浏览器、模型与委托 | 分组调整不重建模型，不触发缩略图/EXIF 读取 |
 | L4 识鸟批量结果 | Viewer [`BirdIDResultsTable`](../SuperViewer/superviewer/bird_identification_table.py) / [`PerBirdResultsTable`](../SuperViewer/superviewer/per_bird_results_table.py) | 一个批次一个窗口；候选/逐只记录由模型保存，按照片分组，可见缩略图与滚动由表格统一调度；逐只汇总隐藏整图采纳动作 |
 | L4 图片/视频预览 | 已有 `PreviewCanvas` / `PreviewWithStatusBar` | 不改像素来源、坐标、缩放/平移和 A/B 语义；模板原有预览分组可折叠 |
+| L1/L4 BirdStamp 拼图 | [`CollageEditor`](../SuperBirdStamp/birdstamp/gui/editor_collage.py) + `CollapsibleSection` / `ColorEditor` / `PreviewWithStatusBar` / `OverlayEditorDock` | 处理设置中位于去抖动之后；左侧参数和素材顺序由主滚动区容纳，右侧独立画布复用 OverlayPanel / OverlaySession，导出/取消/进度固定在 ExportActionBar。切页和折叠保留内容，拼图参数与素材、叠加层随工作区保存，后台单 worker 按版本接收并等真实 finished 交接；见[设计说明](ui-design/birdstamp-collage.md) |
 | L5 Viewer 预览状态与拍摄信息 | [`PreviewPanel`](../SuperViewer/superviewer/preview_panel.py) 原有底部状态 `QLabel`；格式化 [`preview_photo_info.py`](../SuperViewer/superviewer/preview_photo_info.py) | 分辨率/缩放之后显示快门、光圈、ISO、焦距、镜头和机器型号，A/B 各侧独立；窄宽度自动换行，使用原生字体/共享主题色，缺失值显示“—”；只读源照片的浏览器/报告缓存，未选择或视频不显示拍摄信息，无新增显示栏、滚动、保存或 EXIF 读取 |
 | L5 输入字段 | 原生编辑器、项目 `ColorEditor` / `PercentEditor` 等 | 复用范围、校验和信号；UI 不持有新的业务副本 |
 | L5 Viewer 颜色选择 | [`rarity_badge.ColorButton`](../SuperViewer/superviewer/rarity_badge.py) | 颜色色块、色值及原生 QColorDialog；徽章和鸟名悬停框共用，修改设置草稿，确认设置后持久化 |
@@ -47,7 +48,7 @@ L0 应用外壳：主窗口、菜单、状态栏
 | L5 面板布尔选项 | `QCheckBox` | 启用/禁用与展开/收起分开；折叠不取消功能 |
 | L5 工具栏显示开关 | [`ToggleToolButton`](../app_common/toggle_button.py) | 蓝底白字选中态；与根规范一致。折叠标题是 disclosure，不使用蓝色开关样式 |
 | L5 动作 | `QPushButton` / `QToolButton`、已有菜单动作 | 主次动作位置一致，保留忙碌、取消及键盘行为 |
-| L4/L5 Viewer 视频回放 | [`VideoPlayerView`](../SuperViewer/superviewer/video_preview.py)、`FilmstripSlider` / `WaveformSlider`、原生 `QPushButton` | 预览伸缩、两条时间轴满行；常驻两行控制：上一帧/播放/下一帧/重播，时间/倍速/静音/音量。视频区域空格切换播放、左右键暂停并逐帧，序列帧带点击/拖动后从该位置播放；音量和倍速保留原生键盘操作。状态由每侧播放器拥有，无新增持久化或滚动区 |
+| L4/L5 Viewer 视频回放 | [`VideoPlayerView`](../SuperViewer/superviewer/video_preview.py)、`FilmstripSlider` / `WaveformSlider`、原生 `QPushButton` | 预览伸缩、两条时间轴满行；常驻单行控制：左侧上一帧/播放/下一帧/重播，中间弹性空白，右侧倍速/静音/音量；时间读数放在时间轴上方状态行右侧。视频区域空格切换播放、左右键暂停并逐帧，Home/End 定位首尾帧，时间轴点击/拖动及首尾定位均保持播放状态，首次定位显示目标帧并暂停；音量和倍速保留原生键盘操作。状态由每侧播放器拥有，无新增持久化或滚动区 |
 | L5 反馈 | `QLabel` / `QProgressBar`、现有状态组件 | 反馈靠近所属操作；不能因折叠把唯一取消入口藏掉 |
 | L1 Viewer 视频逐帧导出 | 复用 [`BirdIDProgressDialog`](../SuperViewer/superviewer/bird_identification_controller.py)，由 [`VideoFrameExportController`](../SuperViewer/superviewer/video_frame_export_controller.py) 驱动 | 右键动作 → 按用户选项决定目录（询问模式才打开选择框）→ 当前视频/帧数、忙碌进度、可滚动结果、固定停止/关闭按钮；原生主题和可缩放布局，Esc/关闭取消，完成 PNG 保留，任务不绑定当前选择 |
 | L1/L4 Viewer 视频处理选项 | `SettingsPage` + `CollapsibleSection`（视频帧提取）+ [`VideoFrameOptionsForm`](../SuperViewer/superviewer/video_frame_options_form.py) | 纵向排列目录类型、固定根目录/浏览、目录名后缀、示例与说明；分组默认展开，固定根目录仅 fixed 模式启用；外层页面统一滚动，确认/取消固定，折叠和模式切换保留草稿，配置在确认后保存 |

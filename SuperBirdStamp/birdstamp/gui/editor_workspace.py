@@ -701,6 +701,7 @@ class _BirdStampWorkspaceMixin:
                 "video_export": self._collect_workspace_video_export_state(workspace_path),
                 "preview": self._collect_workspace_preview_state(),
                 "sequence_preview": self._collect_sequence_workspace_state(),
+                "collage": self.collage.state(workspace_path),
                 "dejitter_manual_matches": list(self._dejitter_manual_matches.values()),
                 "dejitter_relay_anchors": self._relay_settings_value(),
             },
@@ -980,6 +981,7 @@ class _BirdStampWorkspaceMixin:
             editor_state = payload.get("editor_state")
             if not isinstance(editor_state, dict):
                 editor_state = {}
+            self.collage.restore(editor_state.get('collage'), workspace_path)
             # 旧工作区固定从 1 开始，不能沿用上一个工作区的编号。
             start_number = normalize_start_number(editor_state.get("photo_start_number", 1))
             blocked = self.photo_start_number_spin.blockSignals(True)

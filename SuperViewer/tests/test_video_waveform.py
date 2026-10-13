@@ -21,8 +21,8 @@ def test_real_waveform_preplay_position_and_drag_while_paused(panel, clip):
     assert view.player is None
     assert view.seek.isEnabled() and max(view.seek._peaks) > 0
     QTest.mouseClick(view.seek, Qt.MouseButton.LeftButton, pos=point_at(view.seek, .5))
-    assert view._pending_seek == pytest.approx(1000, abs=10)
-    assert view.player is None
+    wait_until(lambda: view._pending_seek is None and abs(view.player.position() - 1000) < 10)
+    assert view.player.playbackState() == view.player.PlaybackState.PausedState
     view.toggle_play()
     wait_until(lambda: view._pending_seek is None and view.player.position() >= 1000)
     view.toggle_play()

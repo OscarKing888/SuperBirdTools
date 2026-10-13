@@ -387,6 +387,16 @@ def test_video_settings_fit_without_scrolling(window, width, height, font_px, re
         settle()
         assert panel.current_state() == before
 
+    window.export_tabs.setCurrentWidget(window.collage.page)
+    settle()
+    assert not bar.settings_section.isVisible()
+    assert bar.actions.currentWidget() is window.collage.actions
+    window.export_tabs.setCurrentIndex(0)
+    wait_until(lambda: bar.settings_section.isVisible()
+               and bar.settings_scroll.verticalScrollBar().maximum() == 0)
+    assert panel.current_state() == before
+    assert panel.export_button.isVisible()
+
 
 def test_video_repeat_rows_resize_settings_and_keep_cancel_reachable(window):
     window.resize(1120, 720)

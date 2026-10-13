@@ -11,6 +11,7 @@
 | [gui/editor.py](../birdstamp/gui/editor.py) | `launch_gui` 创建应用、窗口、FileOpen 处理和单实例接收器；窗口显示后安排启动恢复与文件导入。`closeEvent` 先取消元数据读取、在后台关闭 ExifTool，并等实际线程结束；`aboutToQuit` 停止接收器并再次执行幂等清理。 |
 | [cli.py](../birdstamp/cli.py) / [__main__.py](../birdstamp/__main__.py) | Typer 命令 `render`、`inspect`、`inspect-auto-proxy`、`init-config`、`gui`。适合批处理、字段路由诊断和无窗口验证。 |
 | [gui/editor_core.py](../birdstamp/gui/editor_core.py) / [decoders/image_decoder.py](../birdstamp/decoders/image_decoder.py) | 裁切、缩放等图像计算与原图/预览解码。部分可复用计算目前仍位于 `gui` 包内，不能仅凭目录名判断是否依赖窗口。 |
+| [collage.py](../birdstamp/collage.py) / [gui/editor_collage.py](../birdstamp/gui/editor_collage.py) | 无窗口拼图布局、渲染和原子导出；独立页签参数、素材顺序、预览、Overlay 编辑与单 worker 生命周期。CLI `collage` 使用同一核心。 |
 | [image_pipeline](../birdstamp/image_pipeline/__init__.py) / [export_stage](../birdstamp/export_stage/__init__.py) | 处理阶段、单帧任务、批量预计算、帧缓存及视频编码。 |
 | [app_common](../../app_common/__init__.py) | 两应用共用的格式定义、元数据/XMP/report.db、文件列表、预览画布、进程与应用间文件传递能力。 |
 
@@ -116,7 +117,7 @@ ExifTool 生命周期与 Viewer 共用 [`exiftool_runner.py`](../../app_common/e
 
 主窗口通过 [overlay_editor_dock.py](../birdstamp/gui/overlay_editor_dock.py) 的 `OverlayEditorDock` 承载完整叠加编辑器及批量应用／另存模板操作。外层 splitter 保留左侧设置区，右侧嵌入式 `QMainWindow` 以预览为 central widget、叠加面板为左侧 Dock，确保默认顺序为设置→叠加编辑→预览。原生标题栏支持拖动、浮动、重新停靠，底部也提供显式切换按钮；首次打开分配约 45% 预览侧空间给编辑器，Qt 保留预览最小尺寸，后续保留会话内宽度及浮动状态，关闭后预览收回空间。浮动窗口限制在所在屏幕可用范围内。编辑区独立纵向滚动，`OverlayPanel` 的三组属性单独横向滚动，避免撑宽列表和常用操作；当前照片／图层标题与底部操作保持可见。关闭和面板内 Esc 均先提交待输入文字再隐藏，保留模型及撤销历史；画布 Esc 仍处理画布自己的编辑退出。主设置区仅显示输出类别开关、文本缩放、状态摘要和编辑入口。这是 GUI 布局行为，无新增 CLI 参数。
 
-[editor_compact_panels.py](../birdstamp/gui/editor_compact_panels.py) 的 `ExportActionBar` 位于左侧主滚动区外，复用原导出类型选择器、图片／GIF 按钮、视频生成／中断按钮容器，以及去抖动导出按钮和图片／去抖动进度控件。`_refresh_image_export_action_states` 和导出页签切换同步当前按钮页；业务信号、忙碌禁用与工作区导出参数仍由既有模块管理。「导出设置」使用通用 [CollapsibleSection](../../app_common/collapsible_section.py) 在底部就地展开当前图片／GIF、视频或去抖动的参数；视频参数按当前宽度及内容所需高度展开，不再受 240 px 上限约束；`_ExportSettingsScrollArea.heightForWidth` 随换行、字体及重复播放行数重新计算高度，上方主滚动区让出空间，正常表单无需滚动。视频表单复用分组正文边距、缩短常驻说明，详细缓存说明保留在提示中。图片/GIF/去抖动沿用紧凑高度；只有内容确实超出可用窗口（如添加大量重复播放行）时滚动兜底，避免挤掉生成/中断按钮。收起后按钮和进度仍可用。上方「处理设置」保留图片处理／去抖动页签，处理管线及各阶段、GIF／视频选项也复用该折叠组件。组件以紧凑实心三角表示状态，标题与正文共用连续背景及单层外框，支持键盘焦点与空格切换；收起、重排不重建控件或改动参数，折叠状态仅用于当前窗口。布局、收起保留中文输入、视频取消和模式切换回归见 [test_editor_compact_panels.py](../tests/test_editor_compact_panels.py)。
+[editor_compact_panels.py](../birdstamp/gui/editor_compact_panels.py) 的 `ExportActionBar` 位于左侧主滚动区外，复用原导出类型选择器、图片／GIF 按钮、视频生成／中断按钮容器，以及去抖动导出按钮和图片／去抖动进度控件。`_refresh_image_export_action_states` 和导出页签切换同步当前按钮页；业务信号、忙碌禁用与工作区导出参数仍由既有模块管理。「导出设置」使用通用 [CollapsibleSection](../../app_common/collapsible_section.py) 在底部就地展开当前图片／GIF、视频或去抖动的参数；视频参数按当前宽度及内容所需高度展开，不再受 240 px 上限约束；`_ExportSettingsScrollArea.heightForWidth` 随换行、字体及重复播放行数重新计算高度，上方主滚动区让出空间，正常表单无需滚动。内部 `_CurrentExportActions` 的首选/最小高度及按宽度换行高度只跟随当前按钮页，隐藏的拼图状态/进度不再挤占视频参数空间。视频表单复用分组正文边距、缩短常驻说明，详细缓存说明保留在提示中。图片/GIF/去抖动沿用紧凑高度；只有内容确实超出可用窗口（如添加大量重复播放行）时滚动兜底，避免挤掉生成/中断按钮。收起后按钮和进度仍可用。上方「处理设置」保留图片处理／去抖动页签，处理管线及各阶段、GIF／视频选项也复用该折叠组件。组件以紧凑实心三角表示状态，标题与正文共用连续背景及单层外框，支持键盘焦点与空格切换；收起、重排不重建控件或改动参数，折叠状态仅用于当前窗口。布局、收起保留中文输入、视频取消和模式切换回归见 [test_editor_compact_panels.py](../tests/test_editor_compact_panels.py)。
 
 自动行/列组合由 [overlays/layout.py](../birdstamp/overlays/layout.py) 的 `normalize_layouts` / `arrange` / `snap_candidate` / `join` 提供无 Qt 核心。可选 `overlay_layouts` 保存独立于绘制顺序的树；`build_scene` 按真实内容与旋转/效果边界测量后递归布局，组合成员跳过旧字号避让，背景最后根据已排版文字计算。行/列可嵌套，空/隐藏项折叠，固定边控制动态生长。`OverlaySession` 在缓存图层上预览组合，松手才提交完整文档，Command/Ctrl 移动/组合整组，Alt 移出，取消不写入。`OverlayPanel` 提供所在/外层组合方向、间距、对齐和固定边，精确独立定位默认折叠；同一历史覆盖组合与内容。模板/照片/工作区与现有 CLI、图片/GIF/视频共享保存和渲染入口，源帧缓存版本为 16。操作与边界见 [OVERLAY_EDITOR.md](OVERLAY_EDITOR.md)，回归见 [test_overlay_layout.py](../tests/test_overlay_layout.py)。
 
@@ -309,6 +310,10 @@ RAW 源图的去抖动分析、成片预览和导出统一优先读取长边至�
 [config.py](../birdstamp/config.py) 区分只读资源与可写状态：`resolve_bundled_path` 定位内置资源；`get_user_data_dir` 在源码版和打包版均返回同一平台用户目录；`get_config_path` 返回其 `Config/config.yaml`。macOS 配置目录为 `~/Library/Application Support/BirdStamp/Config`，Windows 为 `%APPDATA%/BirdStamp/Config`（缺失时依次回退 `%LOCALAPPDATA%`、`~/AppData/Roaming`），Linux 使用 `$XDG_CONFIG_HOME/BirdStamp/Config` 或 `~/.config/BirdStamp/Config`。模板经 [template_directory](../birdstamp/gui/editor_template.py) 进入同级 `templates`，运行状态和 `editor_autosave.birdstamp-workspace.json` 也位于配置目录；各版本直接复用已有用户配置，不自动合并或覆盖旧源码目录的运行状态。内置模板通过资源路径补缺，已有用户模板不覆盖。默认编辑选项来自只读的 [editor_options.json](../config/editor_options.json)。自动保存、导出状态和用户路径不应打包为发行默认值。
 
 ## 7. 按功能定位入口与回归
+
+「拼图」位于处理设置的「去抖动」之后，使用独立画布及 Overlay 文档。纵向等宽、横向等高并保留照片比例；4/6/9/16 宫格使用方格，支持完整显示或居中裁满，少图留空、多图报错。素材来自主列表所选/全部照片或文件选择器，顺序可独立调整；使用源照片，不隐式套用逐图模板和去抖动结果。PNG 透明素材保留透明通道后合成到指定背景。`CollageOptions` / `plan_collage` / `render_collage` 统一计算逻辑尺寸，预览最长边 1600，导出逐张解码原图。单张最多 64 张素材、6400 万像素、单边 32768 px，超过限制在分配画布前报错。
+
+`CollageEditor` 复用 `OverlayPanel`、`OverlaySession`、`OverlayEditorDock` 添加图像/文字并拖动编辑；预览与 PNG/JPEG 导出使用同一 `build_scene` / `compose_scene`。拼图参数、路径、排序与 Overlay 文档存于 `editor_state.collage`，素材经过既有工作区资产去重机制内嵌，旧工作区恢复为空拼图。`CollageWorker` 单任务运行，参数变更取消旧请求、合并到最新版本，只有真实 `QThread.finished` 才交接；关闭窗口等待拼图线程及素材导入完成。导出用同目录暂存再原子替换，取消/失败保留已有目标，拒绝覆盖输入照片。CLI 示例：`python -m birdstamp collage a.jpg b.jpg --preset grid4 --cell-size 1000 --fit contain -o 拼图.png`（`PYTHONPATH=SuperBirdStamp`）；`--overlays` 可读自包含 Overlay JSON。交互布局见[设计说明](../../docs/ui-design/birdstamp-collage.md)，回归见 [test_collage.py](../tests/test_collage.py)、[test_editor_collage.py](../tests/test_editor_collage.py)。
 
 | 要修改的功能 | 首先定位 | 主要回归入口 |
 | --- | --- | --- |

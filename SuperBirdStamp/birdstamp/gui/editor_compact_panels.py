@@ -51,6 +51,25 @@ class _ExportSettingsScrollArea(QScrollArea):
         return super().eventFilter(watched, event)
 
 
+class _CurrentExportActions(QStackedWidget):
+    """仅当前操作页参与高度计算，隐藏的拼图状态/进度不挤占视频参数空间。"""
+
+    def sizeHint(self):
+        page = self.currentWidget()
+        return page.sizeHint() if page is not None else super().sizeHint()
+
+    def minimumSizeHint(self):
+        page = self.currentWidget()
+        return page.minimumSizeHint() if page is not None else super().minimumSizeHint()
+
+    def heightForWidth(self, width):
+        page = self.currentWidget()
+        if page is None:
+            return super().heightForWidth(width)
+        height = page.heightForWidth(width) if page.hasHeightForWidth() else page.sizeHint().height()
+        return max(page.minimumSizeHint().height(), height)
+
+
 class ExportActionBar(QFrame):
     """当前导出类型的参数就地折叠，原按钮和进度始终留在主滚动区外。"""
 
@@ -81,7 +100,7 @@ class ExportActionBar(QFrame):
         self.settings_section.set_content_widget(self.settings_scroll)
         layout.addWidget(self.settings_section)
 
-        self.actions = QStackedWidget()
+        self.actions = _CurrentExportActions()
         layout.addWidget(self.actions)
         image_page = QWidget()
         image_layout = QVBoxLayout(image_page)
@@ -101,22 +120,26 @@ class ExportActionBar(QFrame):
         dejitter_layout.addWidget(editor.dejitter_export_progress)
         dejitter_layout.addWidget(editor.dejitter_export_complete)
         self.actions.addWidget(dejitter_page)
+        self.actions.addWidget(editor.collage.actions)
         editor.export_tabs.currentChanged.connect(self.sync)
         self.sync()
 
     def sync(self, *_args):
         editor = self.editor
         dejitter = editor._dejitter_tab_active()
+        collage = editor.export_tabs.currentWidget() is editor.collage.page
         video = editor._is_video_output_selected()
         gif = editor._is_gif_output_selected()
-        self.mode_label.setText('去抖动导出' if dejitter else '导出')
-        editor.export_stage_widget.setVisible(not dejitter)
+        self.mode_label.setText('拼图导出' if collage else '去抖动导出' if dejitter else '导出')
+        editor.export_stage_widget.setVisible(not dejitter and not collage)
+        self.settings_section.setVisible(not collage)
         editor.image_export_group.setVisible(not dejitter and not video)
         editor.video_export_panel.setVisible(not dejitter and video)
         editor.dejitter_export_group.setVisible(dejitter)
         # 视频优先展示完整参数；只有超出窗口的极长重复播放列表才需要滚动。
-        self.settings_scroll.set_show_full_content(not dejitter and video)
-        self.actions.setCurrentIndex(2 if dejitter else 1 if video else 0)
+        self.settings_scroll.set_show_full_content(not dejitter and not collage and video)
+        self.actions.setCurrentIndex(3 if collage else 2 if dejitter else 1 if video else 0)
+        self.actions.updateGeometry()
         self.format_label.setText('GIF' if gif else editor._selected_output_suffix().upper())
         editor.export_current_btn.setVisible(not gif)
         refresh_layout_chain(self.settings_scroll.widget())
