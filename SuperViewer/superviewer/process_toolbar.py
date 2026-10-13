@@ -9,10 +9,10 @@ from __future__ import annotations
 from typing import Callable
 
 try:
-    from PyQt6.QtCore import QObject, QPoint, QTimer
+    from PyQt6.QtCore import QObject, QPoint
     from PyQt6.QtWidgets import QMenu, QMessageBox, QToolBar, QToolButton
 except ImportError:  # pragma: no cover
-    from PyQt5.QtCore import QObject, QPoint, QTimer
+    from PyQt5.QtCore import QObject, QPoint
     from PyQt5.QtWidgets import QMenu, QMessageBox, QToolBar, QToolButton
 
 from . import qt_compat
@@ -20,7 +20,6 @@ from .file_context_menu import menu_icon
 from .qt_compat import QAction, QSize
 
 PROCESS_TOOLBAR_OBJECT_NAME = "processToolBar"
-_REFRESH_INTERVAL_MS = 500
 
 
 class _TaskButton:
@@ -75,11 +74,11 @@ class ProcessToolbar(QObject):
         )
         self._tasks = [self.identify, self.candidates, self.sharpness, self.denoise]
 
-        # 控制器没有运行状态信号，任务也可能从右键菜单启动；只读几个布尔标志，代价可忽略。
-        self._timer = QTimer(self)
-        self._timer.setInterval(_REFRESH_INTERVAL_MS)
-        self._timer.timeout.connect(self.refresh)
-        self._timer.start()
+        # 任务也可能从右键菜单或目录菜单启动，因此跟随控制器的运行状态信号，而不是只在点击后刷新。
+        self._state_signals = [bird_id.busy_changed, sharpness.busy_changed, denoise.busy_changed,
+                               bird_id.catalog.applying_changed]
+        for signal in self._state_signals:
+            signal.connect(self._on_task_state_changed)
         self.refresh()
 
     # ── construction ─────────────────────────────────────────────────────
@@ -124,7 +123,6 @@ class ProcessToolbar(QObject):
         paths = self._selected_paths(task.action.text().rstrip("…"))
         if paths:
             start(list(paths))
-        self.refresh()
 
     def _run_menu_item(self, task: _TaskButton, callback, allowed_while_busy: bool) -> None:
         if task.controller.busy and not allowed_while_busy:
@@ -133,7 +131,6 @@ class ProcessToolbar(QObject):
         paths = self._selected_paths(task.action.text().rstrip("…"))
         if paths:
             callback(list(paths))
-        self.refresh()
 
     def _open_manual_name(self) -> None:
         catalog = self._bird_id.catalog
@@ -143,7 +140,6 @@ class ProcessToolbar(QObject):
         if not paths or not self._file_list._file_writes_allowed("手动指定鸟名", warn=True):
             return
         catalog.open(list(paths))
-        self.refresh()
 
     def busy_menu(self, task: _TaskButton) -> QMenu:
         menu = QMenu(self.toolbar)
@@ -160,9 +156,11 @@ class ProcessToolbar(QObject):
                 menu.exec(anchor)
         finally:
             menu.deleteLater()
-        self.refresh()
 
     # ── state ────────────────────────────────────────────────────────────
+    def _on_task_state_changed(self, _state: bool) -> None:
+        self.refresh()
+
     def refresh(self) -> None:
         for task in self._tasks:
             busy = bool(task.controller.busy)
@@ -179,5 +177,10 @@ class ProcessToolbar(QObject):
         self.manual_name.setEnabled(not self._bird_id.catalog.applying)
 
     def request_shutdown(self) -> None:
-        self._timer.stop()
+        for signal in self._state_signals:
+            try:
+                signal.disconnect(self._on_task_state_changed)
+            except (TypeError, RuntimeError):
+                pass
+        self._state_signals = []
         self.toolbar.setEnabled(False)

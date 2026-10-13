@@ -503,6 +503,8 @@ def test_can_adopt_finished_photo_while_batch_continues(env, monkeypatch):
             assert gate.wait(5)
         return multi_response()
     monkeypatch.setattr(BirdIDClient, 'recognize', recognize)
+    busy = []
+    controller.busy_changed.connect(busy.append)
     controller.start_for_paths(paths[:2], options=BirdIDOptions())
     try:
         assert wait_for(lambda: waiting.is_set() and controller._dialog.details.model().rowCount() == 3)
@@ -511,12 +513,15 @@ def test_can_adopt_finished_photo_while_batch_continues(env, monkeypatch):
         table._request(2)
         assert wait_for(lambda: controller._adopt_worker is None)
         assert controller._worker is worker and controller.busy
+        # 采纳在批量识别期间开始和结束，整体一直忙，不重复通知。
+        assert busy == [True]
         assert PhotoMetaDataXMP().read(paths[0])['Title'] == '黑短脚鹎'
         assert table.model().index(2, 2).data() == '已采纳'
         assert table.model().index(0, 1).data() == '候选'
     finally:
         gate.set()
     assert wait_for(lambda: not controller.busy)
+    assert busy == [True, False]
     assert controller._counts == {'candidate': 1, 'success': 1}
 
 
@@ -525,6 +530,8 @@ def test_adoption_write_failure_allows_retry(env, monkeypatch):
     monkeypatch.setattr(BirdIDClient, 'recognize', lambda *_: multi_response())
     controller.start_for_paths(paths[:1], options=BirdIDOptions())
     assert wait_for(lambda: not controller.busy)
+    busy = []
+    controller.busy_changed.connect(busy.append)
     table = controller._dialog.details
     with monkeypatch.context() as patch:
         patch.setattr(PhotoMetaDataXMP, '_write_tree_atomic', staticmethod(lambda *_: False))
@@ -535,6 +542,8 @@ def test_adoption_write_failure_allows_retry(env, monkeypatch):
     assert controller._counts['candidate'] == 1
     table._request(1)
     assert wait_for(lambda: not controller.busy)
+    # 批量结束后单独采纳：每次保存线程都通知开始和结束。
+    assert busy == [True, False, True, False]
     assert PhotoMetaDataXMP().read(paths[0])['Title'] == '红耳鹎'
     assert controller._counts['success'] == 1
 

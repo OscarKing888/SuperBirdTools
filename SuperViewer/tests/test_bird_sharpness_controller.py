@@ -155,7 +155,10 @@ def test_menus_offer_start_then_stop_while_busy(env) -> None:
 
     gate = threading.Event()
     analyzer.gate = gate
+    busy = []
+    controller.busy_changed.connect(busy.append)
     controller.start_for_paths(paths)
+    assert busy == [True]
     assert _wait(analyzer.entered.is_set)
     busy_menu = QMenu()
     controller.extend_file_menu(busy_menu, paths)
@@ -164,8 +167,10 @@ def test_menus_offer_start_then_stop_while_busy(env) -> None:
     assert not controller.start(BirdSharpnessJob(title="again", items=[(paths[0], paths[0])]))
     assert controller.messages == ["已有鸟清晰度检测任务在运行。"]
     next(a for a in busy_menu.actions() if a.text() == "停止鸟清晰度检测").trigger()
+    assert busy == [True]
     gate.set()
     assert _wait(lambda: not controller.busy)
+    assert busy == [True, False]
     assert len(analyzer.analyzed) == 1  # stopped after the in-flight photo
     assert controller._dialog.label.text() == "已停止。"
 

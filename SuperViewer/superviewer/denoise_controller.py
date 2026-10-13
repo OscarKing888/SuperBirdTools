@@ -15,6 +15,7 @@ from app_common.superviewer_user_options import get_runtime_user_options
 from image_denoise.types import DenoiseCancelled, DenoiseOptions
 
 from .file_context_menu import file_menu_group
+from .task_state import TaskSlot
 from .qt_compat import (QComboBox, QDialog, QFileDialog, QHBoxLayout, QLabel, QMessageBox,
                         QPushButton, QTextEdit, QThread, QVBoxLayout, pyqtSignal)
 
@@ -187,6 +188,8 @@ class DenoiseProgressDialog(QDialog):
 class DenoiseController(QObject):
     output_ready = pyqtSignal(str, str)
     batch_finished = pyqtSignal()  # after the last output_ready of a batch (also stopped/failed)
+    busy_changed = pyqtSignal(bool)  # 批量降噪开始/结束（含停止、失败、关窗）
+    _worker = TaskSlot("busy_changed", "busy")
 
     def __init__(self, main_window, file_list, dir_browser=None):
         super().__init__(main_window)
