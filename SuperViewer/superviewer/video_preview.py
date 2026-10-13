@@ -323,11 +323,14 @@ class VideoPlayerView(QWidget):
                 watched.setFocus()
         if (kind in (_EVENTS.ShortcutOverride, _EVENTS.KeyPress, _EVENTS.KeyRelease)
                 and event.modifiers() == getattr(Qt, 'KeyboardModifier', Qt).NoModifier
-                and event.key() in (_KEYS.Key_Space, _KEYS.Key_Left, _KEYS.Key_Right)):
+                and event.key() in (_KEYS.Key_Space, _KEYS.Key_Left, _KEYS.Key_Right,
+                                    _KEYS.Key_Home, _KEYS.Key_End)):
             if kind == _EVENTS.KeyPress and self.play.isEnabled():
                 if event.key() == _KEYS.Key_Space:
                     if not event.isAutoRepeat():
                         self.toggle_play()
+                elif event.key() in (_KEYS.Key_Home, _KEYS.Key_End):
+                    self.seek_boundary(end=event.key() == _KEYS.Key_End)
                 else:
                     self.step_frame(-1 if event.key() == _KEYS.Key_Left else 1)
             event.accept()
@@ -352,11 +355,13 @@ class VideoPlayerView(QWidget):
         else:
             self._step_frame = None
             if self.player.mediaStatus() == self.player.MediaStatus.EndOfMedia and self._pending_seek is None:
-                self.player.setPosition(0)
+                self._set_player_position(0)
             if self._pending_seek is not None:
                 self._pending_play = True
                 self._apply_pending_seek()
             else:
+                # 加载尚未完成时 Qt 可能仍报告 StoppedState，保留用户的播放意图。
+                self._pending_play = True
                 self.player.play()
 
     def _restart(self):
@@ -365,6 +370,8 @@ class VideoPlayerView(QWidget):
 
     def _state_changed(self, state):
         playing = state == self.player.PlaybackState.PlayingState
+        if playing:
+            self._pending_play = False
         self.play.setText('Ⅱ 暂停' if playing else '▶ 播放')
         if self._source_set:
             self.message.setText('正在播放' if playing else '已暂停')
@@ -392,6 +399,7 @@ class VideoPlayerView(QWidget):
 
     def _error(self, *_args):
         if self._source_set:
+            self._pending_play = False
             detail = self.player.errorString() or '当前系统无法解码此视频'
             self.message.setText('无法播放：' + detail)
             self.stack.setCurrentWidget(self.poster)
@@ -409,8 +417,7 @@ class VideoPlayerView(QWidget):
     def _seek(self, *_args):
         if not self._duration:
             return
-        self._step_frame = None
-        self._seek_to(round(self.seek.value() / 10000 * self._duration))
+        self._seek_preserving_state(round(self.seek.value() / 10000 * self._duration))
 
     def _filmstrip_seek(self, value):
         if not self._duration:
@@ -419,8 +426,23 @@ class VideoPlayerView(QWidget):
         clock = FrameClock(self._duration, self._fps)
         if clock.available:
             position = clock.position(clock.frame_at(position))
+        self._seek_preserving_state(position)
+
+    def seek_boundary(self, *, end):
+        if not self.play.isEnabled() or not self.seek.isEnabled() or not self._duration:
+            return
+        clock = FrameClock(self._duration, self._fps)
+        position = (clock.position(clock.last_frame) if clock.available
+                    else self._duration - 1) if end else 0
+        self._seek_preserving_state(position)
+
+    def _seek_preserving_state(self, position):
+        # 定位本身不切换播放状态；首次查看帧或结束后定位只显示画面，不自动播放。
+        playing = self._pending_play or bool(
+            self._source_set and self.player is not None
+            and self.player.playbackState() == self.player.PlaybackState.PlayingState)
         self._step_frame = None
-        self._seek_to(position, play=True)
+        self._seek_to(position, play=playing, paused=not playing)
 
     def _seek_to(self, position, *, play=False, paused=False):
         self._position = max(0, min(max(0, self._duration - 1), position))
@@ -496,9 +518,15 @@ class VideoPlayerView(QWidget):
                     self.player.MediaStatus.InvalidMedia)):
             position, self._pending_seek = self._pending_seek, None
             play, self._pending_play = self._pending_play, False
-            self.player.setPosition(position)
+            self._set_player_position(position)
             if play:
                 self.player.play()
+
+    def _set_player_position(self, position):
+        # 首尾跳转也会释放/重建音频连接；同 stop 一样通过元调用释放 GIL，
+        # 避免 GUI 的 positionChanged 与音频线程 disconnectNotify 互等。
+        self._invoke(self.player, 'setPosition', Qt.ConnectionType.DirectConnection,
+                     self._arg('qint64', int(position)))
 
     def _position_changed(self, value):
         if self._source_set and self._pending_seek is None:

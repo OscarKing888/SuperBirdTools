@@ -13,6 +13,8 @@ from .qt_compat import (
 class WaveformSlider(QSlider):
     position_selected = pyqtSignal(int)
     _MARGIN = 8
+    _SEEK_HINT = ('点击或拖动定位（保持播放状态） · Home/End 首尾帧'
+                  ' · ←/→ 逐帧 · 空格播放/暂停')
 
     def __init__(self, parent=None):
         super().__init__(_Horizontal, parent)
@@ -35,7 +37,7 @@ class WaveformSlider(QSlider):
         self._peaks = tuple(peaks)
         self._columns_width = 0
         self._status = status
-        self.setToolTip((status or '音频波形（首条音轨）') + ' · 点击或拖动定位视频')
+        self.setToolTip((status or '音频波形（首条音轨）') + ' · ' + self._SEEK_HINT)
         self.update()
 
     def cancel_drag(self):
@@ -73,7 +75,7 @@ class WaveformSlider(QSlider):
             milliseconds = round(self._value_at(x) / max(1, self.maximum()) * self._duration_ms)
             seconds, fraction = divmod(milliseconds, 1000)
             minutes, seconds = divmod(seconds, 60)
-            self.setToolTip(f'{minutes:02d}:{seconds:02d}.{fraction:03d} · 点击或拖动定位视频')
+            self.setToolTip(f'{minutes:02d}:{seconds:02d}.{fraction:03d} · {self._SEEK_HINT}')
         event.accept()
 
     def mouseReleaseEvent(self, event):
