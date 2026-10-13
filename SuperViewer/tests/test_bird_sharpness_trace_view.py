@@ -10,8 +10,8 @@ from pathlib import Path
 
 import numpy as np
 import pytest
-from PyQt6.QtCore import Qt
-from PyQt6.QtGui import QKeyEvent
+from PyQt6.QtCore import QPoint, QRect, Qt
+from PyQt6.QtGui import QColor, QFont, QKeyEvent, QPalette
 from PyQt6.QtCore import QEvent, QObject, pyqtSignal
 from PyQt6.QtWidgets import QApplication, QMenu, QWidget
 
@@ -116,6 +116,57 @@ def test_dialog_steps_navigation_compare_and_bird_switch(monkeypatch) -> None:
     finally:
         dialog.close()
         _APP.processEvents()
+
+
+@pytest.mark.parametrize("dark, font_scale", [(False, 1.0), (True, 1.4)])
+def test_step_chips_remain_unclipped_after_bird_switch(monkeypatch, dark, font_scale) -> None:
+    trace = _trace(monkeypatch, birds=tuple((x, 600, 150, 0.3) for x in (300, 700, 1100, 1500)))
+    original_palette = QPalette(_APP.palette())
+    if dark:
+        palette = QPalette(original_palette)
+        for role in (QPalette.ColorRole.Window, QPalette.ColorRole.Base, QPalette.ColorRole.Button):
+            palette.setColor(role, QColor("#303030"))
+        for role in (QPalette.ColorRole.WindowText, QPalette.ColorRole.Text, QPalette.ColorRole.ButtonText):
+            palette.setColor(role, QColor("#eeeeee"))
+        palette.setColor(QPalette.ColorRole.PlaceholderText, QColor("#aaaaaa"))
+        _APP.setPalette(palette)
+    dialog = BirdSharpnessTraceDialog(None, "x.ARW")
+    font = QFont(dialog.font())
+    font.setPointSizeF(font.pointSizeF() * font_scale)
+    dialog.setFont(font)
+
+    def chips_fit():
+        viewport = dialog.chips_scroll.viewport()
+        for button in dialog.chip_group.buttons():
+            top = button.mapTo(viewport, QPoint()).y()
+            if (not button.isVisible() or button.height() < button.sizeHint().height()
+                    or top < 0 or top + button.height() > viewport.height()):
+                return False
+        return True
+
+    try:
+        dialog.show()
+        dialog.set_trace(trace)
+        assert _wait(lambda: dialog.view_a._has_image and chips_fit())
+        for width, height in ((1320, 840), (dialog.minimumSizeHint().width(), 640)):
+            dialog.resize(width, height)
+            for selection in (1, 0, 4, 0, 2, 0):
+                dialog.bird_combo.setCurrentIndex(selection)
+                assert _wait(chips_fit, timeout=1.0), "切鸟后步骤按钮被压缩或超出滚动视口"
+                # 到达末尾再返回，检验滚动条显示、键盘导航与按钮的实际可见区域。
+                _key(dialog, Qt.Key.Key_End)
+                button = dialog.chip_group.button(dialog.index)
+                viewport = dialog.chips_scroll.viewport()
+                assert _wait(lambda: viewport.rect().contains(
+                    QRect(button.mapTo(viewport, QPoint()), button.size())))
+                assert not dialog.grab().isNull()
+                _key(dialog, Qt.Key.Key_Home)
+                assert dialog.index == 0 and chips_fit()
+            assert dialog.chips_scroll.horizontalScrollBar().isVisible()
+    finally:
+        dialog.close()
+        _APP.processEvents()
+        _APP.setPalette(original_palette)
 
 
 def test_bird_list_shows_swatches_and_hover_highlights_the_box(monkeypatch) -> None:

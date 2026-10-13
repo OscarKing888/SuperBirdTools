@@ -802,7 +802,10 @@ class BirdSharpnessTraceDialog(QDialog):
             chip.clicked.connect(lambda _c=False, k=i: self.go(k))
             self.chip_group.addButton(chip, i)
             self.chips_layout.addWidget(chip)
+            # 切鸟时父容器已显示，新按钮仍会暂时隐藏；先显示，避免布局把高度算成 0。
+            chip.show()
         self.chips_layout.addStretch(1)
+        self.chips_layout.activate()
         bar_h = self.chips_scroll.horizontalScrollBar().sizeHint().height()
         self.chips_scroll.setFixedHeight(self.chips_box.sizeHint().height() + bar_h + 2)
         self.slider.blockSignals(True)
