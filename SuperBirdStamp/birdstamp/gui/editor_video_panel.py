@@ -77,13 +77,13 @@ class VideoExportPanel(CollapsibleSection):
 
     def _build_ui(self) -> None:
         root = QVBoxLayout(self.body)
-        root.setContentsMargins(8, 8, 8, 8)
+        root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(6)
 
         form = QFormLayout()
         form.setContentsMargins(0, 0, 0, 0)
         form.setHorizontalSpacing(10)
-        form.setVerticalSpacing(6)
+        form.setVerticalSpacing(4)
 
         (
             self.video_format_widget,
@@ -252,7 +252,11 @@ class VideoExportPanel(CollapsibleSection):
         root.addLayout(form)
 
         self.hint_label = QLabel(
-            "按当前文件列表顺序生成视频，需要 ffmpeg；勾选“保留临时文件”后，FPS/编码参数会复用已有缓存，全局导出开关变化会切换缓存桶，单张模板或裁切变化只重做对应帧。"
+            "按当前列表顺序生成视频；保留临时文件可复用渲染缓存。"
+        )
+        self.hint_label.setToolTip(
+            "需要 ffmpeg；勾选“保留临时文件”后，FPS/编码参数会复用已有缓存，"
+            "全局导出开关变化会切换缓存桶，单张模板或裁切变化只重做对应帧。"
         )
         self.hint_label.setStyleSheet("color: #7A7A7A; font-size: 11px;")
         self.hint_label.setWordWrap(True)

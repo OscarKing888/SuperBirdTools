@@ -32,7 +32,7 @@ L0 应用外壳：主窗口、菜单、状态栏
 | L1 用户选项 | [`SettingsDialog / SettingsPage`](../app_common/settings_dialog.py) | 用 `add_page` 注册页面；确认/取消固定在滚动区外 |
 | L2 左侧页面导航 | [`SidebarTabWidget`](../app_common/sidebar_tabs.py) | 复用统一的左侧图标/文字页签 |
 | L2 可调分栏 | `QSplitter`；需折叠整块侧栏时用 [`TriangleToggleSplitter`](../app_common/triangle_toggle_splitter.py) | 分栏折叠与表单分组折叠是不同职责；不以分组替代整幅画布/目录树 |
-| L2 滚动与操作区 | `QScrollArea` / `SettingsPage`；BirdStamp [`ExportActionBar`](../SuperBirdStamp/birdstamp/gui/editor_compact_panels.py) | 单一主滚动归属；常驻操作栏的长参数可内部有界滚动，动作、取消与进度始终可达 |
+| L2 滚动与操作区 | `QScrollArea` / `SettingsPage`；BirdStamp [`ExportActionBar`](../SuperBirdStamp/birdstamp/gui/editor_compact_panels.py) | 单一主滚动归属；BirdStamp 视频参数按当前宽度所需高度完整展开，上方主滚动区让出空间；内部 `_CurrentExportActions` 只取当前按钮页高度，隐藏页不占空间；图片/GIF/去抖动参数保持紧凑高度，超出窗口的极长重复播放列表保留滚动兜底，动作、取消与进度始终可达 |
 | L3 有标题分组 | [`CollapsibleSection`](../app_common/collapsible_section.py) | 替代应用自建 `QGroupBox`；内容放 `body` 或 `set_content_widget`；默认展开 |
 | L3 无标题布局容器 | `QWidget` + 布局 | 不为了边框再套一层折叠组，不给每个字段单独建组 |
 | L3 浮窗 | `QDialog`；已有模板/叠加窗口 | 模态与非模态按用户任务决定，复用已有保存/关闭流程 |

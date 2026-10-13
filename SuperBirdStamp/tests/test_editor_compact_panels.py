@@ -1,4 +1,6 @@
 """固定导出入口与停靠叠加面板的交互回归；沿用隔离配置的真实窗口。"""
+from time import monotonic
+
 import pytest
 from PyQt6.QtCore import QPoint, Qt
 from PyQt6.QtTest import QTest
@@ -15,6 +17,13 @@ from birdstamp.gui.overlay_panel import OverlayPanel
 def settle():
     for _ in range(4):
         _APP.processEvents()
+
+
+def wait_until(predicate):
+    deadline = monotonic() + 1.0
+    while not predicate() and monotonic() < deadline:
+        QTest.qWait(1)
+    assert predicate()
 
 
 def test_export_actions_stay_visible_when_scrolled_and_collapsed(window):
@@ -297,7 +306,10 @@ def test_footer_settings_collapse_preserves_values_and_bounds(window, stage):
     window.video_export_panel.fps_combo.setCurrentText('24')
     settle()
     expanded_height = bar.height()
-    assert bar.settings_scroll.height() <= 240
+    if stage == 'export_video':
+        assert bar.settings_scroll.verticalScrollBar().maximum() == 0
+    else:
+        assert bar.settings_scroll.height() <= 240
     assert window.rect().contains(bar.mapTo(window, bar.rect().bottomRight()))
     assert window.left_scroll.height() > 100
     for _ in range(3):
@@ -319,3 +331,95 @@ def test_footer_settings_collapse_preserves_values_and_bounds(window, stage):
     settle()
     assert window.video_export_panel.isVisible() == (stage == 'export_video')
     assert window.image_export_group.isVisible() == (stage != 'export_video')
+
+
+@pytest.mark.parametrize('width,height,font_px,repeat_fps', [
+    (1120, 720, 13, []),
+    (1120, 720, 13, [12, 6]),
+    (1120, 720, 17, []),
+    (1420, 920, 17, [12, 6]),
+])
+def test_video_settings_fit_without_scrolling(window, width, height, font_px, repeat_fps):
+    window.setStyleSheet(window.styleSheet().replace('font-size: 13px;', f'font-size: {font_px}px;'))
+    window.resize(width, height)
+    window.show()
+    window._set_selected_export_stage_id('export_video', save=False)
+    panel = window.video_export_panel
+    panel.repeat_editor.set_values(repeat_fps)
+    panel.fps_combo.setCurrentText('24')
+    settle()
+    before = panel.current_state()
+    bar = window.export_action_bar
+    controls = [
+        panel.video_format_widget, panel.codec_widget, panel.fps_combo,
+        panel.auto_fps_button, panel.repeat_editor.add_button,
+        panel.frame_size_combo, panel.show_safe_frame_check, panel.orientation_widget,
+        panel.frame_width_spin, panel.frame_height_spin, panel.preset_widget,
+        panel.crf_spin, panel.preserve_temp_files_check, panel.hint_label, panel.status_label,
+        *(row for row, _label, _combo in panel.repeat_editor.rows),
+    ]
+    for _ in range(2):
+        viewport = bar.settings_scroll.viewport()
+        # 字体/新增行会连带触发滚动条、可用宽度和换行的多轮布局。
+        wait_until(lambda: bar.settings_scroll.verticalScrollBar().maximum() == 0
+                   and all(viewport.rect().contains(control.rect().translated(
+                       control.mapTo(viewport, QPoint()))) for control in controls))
+        assert bar.settings_scroll.verticalScrollBar().maximum() == 0
+        assert bar.settings_scroll.horizontalScrollBar().maximum() == 0
+        for control in controls:
+            assert control.isVisible()
+            rect = control.rect().translated(control.mapTo(viewport, QPoint()))
+            assert viewport.rect().contains(rect), type(control).__name__
+            assert control.height() >= control.minimumSizeHint().height()
+        assert window.rect().contains(bar.rect().translated(bar.mapTo(window, QPoint())))
+        assert panel.export_button.isVisible()
+        # 键盘收起/展开、切换导出类型后，尺寸与参数均应恢复。
+        bar.settings_section.header_button.setFocus()
+        QTest.keyClick(bar.settings_section.header_button, Qt.Key.Key_Space)
+        settle()
+        assert not panel.fps_combo.isVisible()
+        assert panel.export_button.isVisible()
+        QTest.keyClick(bar.settings_section.header_button, Qt.Key.Key_Space)
+        window._set_selected_export_stage_id('export_image', save=False)
+        settle()
+        assert bar.settings_scroll.height() <= 240
+        window._set_selected_export_stage_id('export_video', save=False)
+        settle()
+        assert panel.current_state() == before
+
+    window.export_tabs.setCurrentWidget(window.collage.page)
+    settle()
+    assert not bar.settings_section.isVisible()
+    assert bar.actions.currentWidget() is window.collage.actions
+    window.export_tabs.setCurrentIndex(0)
+    wait_until(lambda: bar.settings_section.isVisible()
+               and bar.settings_scroll.verticalScrollBar().maximum() == 0)
+    assert panel.current_state() == before
+    assert panel.export_button.isVisible()
+
+
+def test_video_repeat_rows_resize_settings_and_keep_cancel_reachable(window):
+    window.resize(1120, 720)
+    window.show()
+    window._set_selected_export_stage_id('export_video', save=False)
+    panel = window.video_export_panel
+    settle()
+    bar = window.export_action_bar
+    original_height = bar.height()
+    panel.repeat_editor.add_button.click()
+    settle()
+    assert bar.height() > original_height
+    assert bar.settings_scroll.verticalScrollBar().maximum() == 0
+    # 极端列表仍可访问每一行，不能压扁控件或把取消按钮挤出窗口。
+    panel.repeat_editor.set_values([12] * 16)
+    panel.set_busy(True)
+    settle()
+    assert bar.settings_scroll.verticalScrollBar().maximum() > 0
+    assert panel.cancel_button.isVisible()
+    assert window.rect().contains(panel.cancel_button.rect().translated(
+        panel.cancel_button.mapTo(window, QPoint())))
+    panel.set_busy(False)
+    panel.repeat_editor.set_values([])
+    settle()
+    assert bar.settings_scroll.verticalScrollBar().maximum() == 0
+    assert bar.height() == original_height
