@@ -30,17 +30,23 @@ class CollageCancelled(Exception):
 @dataclass(frozen=True)
 class CollageOptions:
     preset: str = 'vertical'
-    cell_size: int = 800
+    # 仅兼容旧工作区/CLI；新拼图由最终画布自动计算单格。
+    cell_size: int | None = None
     gap: int = 12
     margin: int = 12
     background: str = '#FFFFFF'
     fit: str = 'contain'
+    width: int = 1080
+    height: int = 1440
 
     def __post_init__(self):
         if self.preset not in PRESETS:
             raise ValueError('请选择有效的拼图排版')
-        for name, low, high in (('cell_size', 64, 4096), ('gap', 0, 256), ('margin', 0, 256)):
+        for name, low, high in (('cell_size', 64, 4096), ('gap', 0, 256), ('margin', 0, 256),
+                                ('width', 1, MAX_EDGE), ('height', 1, MAX_EDGE)):
             value = getattr(self, name)
+            if name == 'cell_size' and value is None:
+                continue
             if not isinstance(value, int) or not low <= value <= high:
                 raise ValueError(f'{name} 必须在 {low}–{high} 之间')
         if self.fit not in ('contain', 'cover'):
@@ -65,7 +71,26 @@ def plan_collage(sizes: Sequence[tuple[int, int]], options: CollageOptions) -> C
         raise ValueError(f'此排版最多容纳 {cols * rows} 张，当前有 {count} 张；请移除多余照片或更换排版')
     side, gap, margin = options.cell_size, options.gap, options.margin
     boxes = []
-    if options.preset in ('vertical', 'horizontal'):
+    if side is None:
+        size = (options.width, options.height)
+        _check_canvas_size(size)
+        # 长条按原片比例分配长度；宫格均分，累计边界吸收舍入余数。
+        if options.preset == 'vertical':
+            xs = _cell_spans(size[0], [1], gap, margin)
+            ys = _cell_spans(size[1], [h / w for w, h in sizes], gap, margin)
+            cols = 1
+        elif options.preset == 'horizontal':
+            xs = _cell_spans(size[0], [w / h for w, h in sizes], gap, margin)
+            ys = _cell_spans(size[1], [1], gap, margin)
+            cols = count
+        else:
+            xs = _cell_spans(size[0], [1] * cols, gap, margin)
+            ys = _cell_spans(size[1], [1] * rows, gap, margin)
+        for index in range(count):
+            x, right = xs[index % cols]
+            y, bottom = ys[index // cols]
+            boxes.append((x, y, right, bottom))
+    elif options.preset in ('vertical', 'horizontal'):
         vertical = options.preset == 'vertical'
         offset = margin
         for width, height in sizes:
@@ -80,9 +105,30 @@ def plan_collage(sizes: Sequence[tuple[int, int]], options: CollageOptions) -> C
             x = margin + (index % cols) * (side + gap)
             y = margin + (index // cols) * (side + gap)
             boxes.append((x, y, x + side, y + side))
-    if max(size) > MAX_EDGE or size[0] * size[1] > MAX_PIXELS:
-        raise ValueError('拼图过大（最多 6400 万像素，单边 32768 px），请减小单格尺寸或照片数量')
+    _check_canvas_size(size)
     return CollagePlan(size, tuple(boxes))
+
+
+def _check_canvas_size(size):
+    if max(size) > MAX_EDGE or size[0] * size[1] > MAX_PIXELS:
+        raise ValueError('拼图过大（最多 6400 万像素，单边 32768 px），请减小分辨率')
+
+
+def _cell_spans(length, weights, gap, margin):
+    available = length - 2 * margin - (len(weights) - 1) * gap
+    if available < len(weights):
+        raise ValueError('画布空间不足，请减小间距、外边距或增大分辨率')
+    total, accumulated, previous = sum(weights), 0, 0
+    spans = []
+    for index, weight in enumerate(weights):
+        accumulated += weight
+        # 极端长宽比也至少分到 1 px，且不挤掉后续照片。
+        end = min(available - (len(weights) - index - 1),
+                  max(previous + 1, round(available * accumulated / total)))
+        offset = margin + index * gap
+        spans.append((offset + previous, offset + end))
+        previous = end
+    return spans
 
 
 def _check_cancel(cancel):
@@ -132,7 +178,7 @@ def render_collage(paths: Sequence[Path], options: CollageOptions, *, preview_ed
             else:
                 source = decode_image_for_preview(Path(path), max_long_edge=limit)
             try:
-                method = ImageOps.fit if options.fit == 'cover' and cols and rows else ImageOps.contain
+                method = ImageOps.fit if options.fit == 'cover' and (options.cell_size is None or (cols and rows)) else ImageOps.contain
                 tile = method(source, target, method=Image.Resampling.LANCZOS)
                 try:
                     position = (x + (target[0] - tile.width) // 2, y + (target[1] - tile.height) // 2)
