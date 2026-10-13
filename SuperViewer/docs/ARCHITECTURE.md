@@ -421,6 +421,16 @@ Qt 测试在窗口构造前隔离 `paths_settings` 的应用/用户状态目录�
 
 [`VideoFrameExportController`](../superviewer/video_frame_export_controller.py) 注册现有文件菜单扩展，后台串行处理视频、合并帧进度并有界交付结果；复用 `BirdIDProgressDialog` 显示帧数与结果路径，目录切换不改变已提交任务，运行中禁止重复启动。取消、Esc、关闭窗口均请求停止；主窗口关闭等待 FFmpeg 回收及真实 `QThread.finished` 后才释放任务。通过既有模块收集打包，无新增依赖。真实 FFmpeg CFR/VFR、像素完整性、中文/百分号路径、重复导出、取消、批量失败与线程生命周期回归见 [`test_video_frame_export.py`](../tests/test_video_frame_export.py)。
 
+### 图片 PNG 导出
+
+列表和缩略图的一级右键菜单提供“导出为 PNG…”，支持单张和多选，混选视频时只导出图片。原生目录选择框默认定位到已解析的实际源图所在目录，取消不启动任务。输出使用 `<原文件名>.png`，大小写或 Unicode 等价重名均追加 ` (2)` 等编号，不覆盖原图、已有 PNG 或 XMP。
+
+无 Qt 核心 [`export_image_png()`](../superviewer/image_png_export.py) 复用共享格式集合，HIF/HEIF/HEIC 通过 Pillow HEIF 完整解码，其他图片使用 Pillow，PSD 必要时读取共享合成图。保持像素尺寸、显示方向、透明通道及 ICC；HEIF 沿用现有 Pillow 的 8 位显示解码。RAW 只提取内嵌 JPG：检查 LibRaw 与 ExifTool 的 `JpgFromRaw` / `PreviewImage` / `ThumbnailImage` 以及 EXIF 缩略图，取像素面积最大的可解码 JPEG，按其自身 EXIF 方向导出，不解马赛克、不调用当前预览/缩略图缓存或降噪来源；没有可用 JPG 时该文件失败，继续后续文件。只含小预览的 RAW 按实际内嵌尺寸导出，进度结果显示输出尺寸。PNG 不附带源 EXIF/XMP，源图及侧车只读。临时文件与目标同目录，编码完成后原子替换预留的新文件名，失败/取消清理未完成输出。
+
+[`ImagePngExportController`](../superviewer/image_png_export_controller.py) 注册现有菜单扩展，解析并去重实际源路径。独立后台线程串行处理，有界队列和定时器分批显示进度，运行中禁止重复启动，可重开进度窗；复用 `BirdIDProgressDialog`，停止/Esc/关闭保留已完成图片。关闭主窗口等待真实 `QThread.finished` 及结果排空，ExifTool 调用复用取消/超时和 Windows 隐藏窗口策略。没有新增依赖或共享模块改动，沿用现有模块自动收集打包。
+
+CLI：根 `.venv` 执行 `python -m SuperViewer.superviewer.image_png_export <图片...> [--output <目录>]`；省略目录时输出到各源图所在目录，逐张打印 JSON 结果，失败返回非零，Ctrl+C 取消。回归见 [`test_image_png_export.py`](../tests/test_image_png_export.py)：真实 HEIF/JPEG/PNG、RAW 最大内嵌图/缺失/损坏、中文路径和重名、像素/方向/透明度、写入失败/取消、列表/缩略图实窗、深浅色放大字体及线程关闭。
+
 ## 独立更新器接入
 
 [`entry.py`](../entry.py) 在导入业务模块前调用 `SuperBirdUpdater.runtime.admit_startup()`，登记当前安装目录与进程，遇到安装事务则交给独立等待/恢复进程。源码运行默认不登记。
