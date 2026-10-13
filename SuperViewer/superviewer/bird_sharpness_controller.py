@@ -25,6 +25,7 @@ from bird_sharpness.timing import TimingStats
 from .file_context_menu import file_menu_group
 from .bird_sharpness_progress import BirdSharpnessProgressDialog, WorkerLane, WorkerLoad
 from .qt_compat import QThread, pyqtSignal
+from .task_state import TaskSlot
 
 try:
     from PyQt6.QtCore import QObject
@@ -302,6 +303,9 @@ def _analysis_options() -> dict:
 
 class BirdSharpnessController(QObject):
     """Owns the analyzer (models load once per session) and the single running job."""
+
+    busy_changed = pyqtSignal(bool)  # 批量检测开始/结束（含停止、失败、关窗）
+    _worker = TaskSlot("busy_changed", "busy")
 
     def __init__(self, main_window, file_list, dir_browser=None) -> None:
         super().__init__(main_window)

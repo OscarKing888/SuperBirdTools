@@ -14,6 +14,7 @@ from .file_context_menu import file_menu_group
 from .bird_identification import BirdIDClient, BirdIDOptions, collect_paths, identify_file, adopt_candidate
 from .per_bird_identification import PerBirdOptions, identify_individuals, make_analyzer
 from .qt_compat import QThread, pyqtSignal
+from .task_state import TaskSlot
 
 try:
     from PyQt6.QtCore import QObject, QTimer
@@ -215,6 +216,10 @@ class BirdIDProgressDialog(QDialog):
 
 
 class BirdIDController(QObject):
+    busy_changed = pyqtSignal(bool)  # 识别或采纳保存开始/全部结束
+    _worker = TaskSlot("busy_changed", "busy")
+    _adopt_worker = TaskSlot("busy_changed", "busy")
+
     def __init__(self, window, file_list, dir_browser=None):
         super().__init__(window)
         self._main, self._file_list = window, file_list

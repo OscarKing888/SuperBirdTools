@@ -6,7 +6,7 @@ from types import SimpleNamespace
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import pytest
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import QObject, Qt, pyqtSignal
 from PyQt6.QtTest import QTest
 from PyQt6.QtWidgets import QApplication, QMainWindow, QToolButton
 
@@ -17,10 +17,23 @@ from SuperViewer.superviewer.process_toolbar import PROCESS_TOOLBAR_OBJECT_NAME,
 _APP = QApplication.instance() or QApplication([])
 
 
-class _Controller:
+class _Controller(QObject):
+    busy_changed = pyqtSignal(bool)
+
     def __init__(self) -> None:
-        self.busy = False
+        super().__init__()
+        self._busy = False
         self.calls: list[tuple] = []
+
+    @property
+    def busy(self):
+        return self._busy
+
+    @busy.setter
+    def busy(self, value):
+        if value != self._busy:
+            self._busy = value
+            self.busy_changed.emit(value)
 
     def start_for_paths(self, paths, **kwargs):
         self.calls.append(("start", paths, kwargs))
@@ -35,10 +48,23 @@ class _Controller:
         self.calls.append(("trace", path))
 
 
-class _Catalog:
+class _Catalog(QObject):
+    applying_changed = pyqtSignal(bool)
+
     def __init__(self) -> None:
-        self.applying = False
+        super().__init__()
+        self._applying = False
         self.opened: list[list[str]] = []
+
+    @property
+    def applying(self):
+        return self._applying
+
+    @applying.setter
+    def applying(self, value):
+        if value != self._applying:
+            self._applying = value
+            self.applying_changed.emit(value)
 
     def open(self, paths):
         self.opened.append(paths)
@@ -130,7 +156,6 @@ def test_busy_task_shows_badge_and_progress_or_stop_menu(toolbar_env) -> None:
     env = toolbar_env
     idle_icon = env.bar.sharpness.action.icon().cacheKey()
     env.sharp.busy = True
-    env.bar.refresh()
     assert env.bar.sharpness.action.toolTip() == "鸟清晰度检测进行中：点击查看进度或停止"
     assert env.bar.sharpness.action.icon().cacheKey() != idle_icon
     env.bar.sharpness.action.trigger()
@@ -147,14 +172,12 @@ def test_busy_task_shows_badge_and_progress_or_stop_menu(toolbar_env) -> None:
     assert env.sharp.calls[-2:] == [("progress",), ("stop",)]
 
     env.bird.busy = True
-    env.bar.refresh()
     env.bar.identify.action.menu().actions()[0].trigger()
     env.bar.candidates.action.trigger()
     assert env.busy_menus[-2:] == ["识鸟", "识鸟"]
     assert env.bird.calls == []
 
     env.sharp.busy = False
-    env.bar.refresh()
     assert env.bar.sharpness.action.toolTip() == "鸟清晰度检测"
 
 
@@ -168,22 +191,23 @@ def test_manual_name_checks_writes_and_disables_while_applying(toolbar_env) -> N
     env.bar.manual_name.trigger()
     assert env.bird.catalog.opened == [env.files.paths]
     env.bird.catalog.applying = True
-    env.bar.refresh()
     assert not env.bar.manual_name.isEnabled()
     env.bird.catalog.applying = False
-    env.bar.refresh()
     assert env.bar.manual_name.isEnabled()
 
 
-def test_refresh_timer_tracks_tasks_started_elsewhere(toolbar_env) -> None:
+def test_state_signals_update_buttons_and_disconnect_on_shutdown(toolbar_env) -> None:
     env = toolbar_env
-    assert env.bar._timer.isActive()
+    # 任务从右键菜单等其他入口启动时，只靠控制器信号更新按钮。
     env.denoise.busy = True
-    env.bar._timer.timeout.emit()
     assert env.bar.denoise.action.toolTip() == "降噪进行中：点击查看进度或停止"
+    env.denoise.busy = False
+    assert env.bar.denoise.action.toolTip() == "批量降噪"
     env.bar.request_shutdown()
-    assert not env.bar._timer.isActive()
     assert not env.bar.toolbar.isEnabled()
+    env.denoise.busy = True
+    assert env.bar.denoise.action.toolTip() == "批量降噪"
+    env.bar.request_shutdown()  # 重复关闭不报错
 
 
 def test_real_busy_menu_pops_under_button_and_closes(monkeypatch) -> None:
@@ -207,7 +231,6 @@ def test_real_busy_menu_pops_under_button_and_closes(monkeypatch) -> None:
 
     try:
         denoise.busy = True
-        bar.refresh()
         QTimer.singleShot(50, close_popup)
         bar.denoise.action.trigger()
         button = bar.toolbar.widgetForAction(bar.denoise.action)

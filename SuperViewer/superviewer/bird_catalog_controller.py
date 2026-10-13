@@ -13,6 +13,7 @@ from .bird_catalog import BirdCatalogClient, apply_bird, snapshot
 from .bird_identification import BirdIDOptions, collect_paths
 from .metadata_result_sync import MetadataResultSync
 from .qt_compat import QThread
+from .task_state import TaskSlot
 try:
     from PyQt6.QtCore import QObject, QTimer, Qt, pyqtSignal
     from PyQt6.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit,
@@ -162,6 +163,9 @@ class CatalogDialog(QDialog):
 
 
 class BirdCatalogController(QObject):
+    applying_changed = pyqtSignal(bool)  # 手动指定的鸟名开始/结束写入
+    _apply_worker = TaskSlot("applying_changed", "applying")
+
     def __init__(self, window, files, options_provider=BirdIDOptions):
         super().__init__(window)
         self._main, self._files = window, files

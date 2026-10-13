@@ -150,15 +150,20 @@ def test_ask_directory_cancel_starts_nothing(env, monkeypatch):
 def test_cancel_keeps_worker_owned_until_all_photos_stop(env):
     controller, _, paths, state, engine, pool = env
     state["gate"] = threading.Event()
+    busy = []
+    controller.busy_changed.connect(busy.append)
     assert controller.start_for_paths(paths)
+    assert busy == [True]
     assert wait_for(lambda: state["active"] == 2)
     assert state["peak"] == 2
     old_worker = controller._worker
     assert not controller.start_for_paths(paths)
     controller.stop()
     assert controller.busy and controller._worker is old_worker
+    assert busy == [True]  # 停止请求不等于结束；线程真正退出后才通知
     state["gate"].set()
     assert wait_for(lambda: not controller.busy)
+    assert busy == [True, False]
     assert len(state["seen"]) == 2 and "已停止" in controller._dialog.label.text()
     assert not any(Path(paths[0]).parent.glob("denoised/*"))
     count = controller._counts.copy()

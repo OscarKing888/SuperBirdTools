@@ -104,8 +104,12 @@ def test_menu_search_detail_batch_save_and_no_reselection(env):
     assert wait_for(lambda: controller._selected is not None)
     assert 'bái tóu bēi' in dialog.detail.toPlainText()
     assert 'LC 无危' in dialog.detail.toPlainText()
+    applying = []
+    controller.applying_changed.connect(applying.append)
     dialog.apply.click()
+    assert applying == [True] and controller.applying
     assert wait_for(lambda: controller._apply_worker is None)
+    assert applying == [True, False] and not controller.applying
     assert controller._counts['success'] == 3
     assert not dialog.isVisible()
     assert dialog.result() == dialog.DialogCode.Accepted
