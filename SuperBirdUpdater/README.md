@@ -37,7 +37,7 @@
 
 更新器优先显示 `release_version`（`主版本.次版本.HEAD前8位`）；旧清单回退为短 commit。清单保留原来的短 hash `version`，兼容已发布客户端，并保留完整 commit、共享子模块 commit 和主线 first-parent 提交数量。顺序依赖同一条不重写历史的发布主线，浅克隆禁止生成；同序号不同 commit 拒绝自动更新。同 commit 的重新打包不会作为新版本推送；需要发布新 commit。源码 `app_metadata.json` 保存前两段版本；构建配置生成在 `build/version/app_metadata.json`，系统 bundle/EXE 数值版本保留兼容格式。
 
-CI 的两个平台构建保持 `--clean`，上传完整包、清单和所有分卷；发布阶段校验两平台版本、哈希、附件数量及大小，在草稿附件齐全后才发布。已有附件不覆盖，不混合不同构建。手动工作流仅提供 Actions 制品；真正自动更新使用公开 Release 附件，而不是需要登录的 Actions 下载页。
+CI 当前以 `--clean --apps-only` 构建，通过 `build_tools/package_release.py` / `build.py:package_full_suite()` 单独生成完整 ZIP，暂停生成与上传更新清单和分卷，完整 ZIP 也不附带安装更新清单或更新配置。发布阶段验证两个平台的完整包版本名、可执行文件、ZIP 完整性与大小，然后发布两个 ZIP 和 `SHA256SUMS.txt`。新版本请下载完整包安装；上面的本地更新构建入口保留。已有附件不覆盖，不混合不同构建；手动工作流仅提供 Actions 制品。
 
 ## 模块与协议
 
