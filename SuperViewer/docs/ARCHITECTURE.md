@@ -62,7 +62,7 @@ flowchart TD
 
 目录切换立即启动新扫描；旧扫描取消后仍由面板持有，直到其真正的 `QThread.finished` 被处理。扫描进度和结果校验 worker 身份，排队的列表应用还校验请求代次，防止 A → B → A 时旧 A 的结果覆盖新请求。窗口关闭也等待这些扫描完成交接。
 
-`FileTableModel` / `FileTableSortProxyModel` 和 `ThumbnailListModel` 展示同一套过滤数据。文本、评级、精选、排除、焦点及标签条件组合后重建数据集，不靠逐行隐藏控件。镜头过滤是标签过滤行最前的可搜索下拉框：每次展开时从当前列表全部照片（不受其它过滤影响）的 `_meta_cache` 镜头型号汇总选项和张数，加载过程中不做额外工作；当前选中的镜头即使不在新列表中也保留为 0 张选项，便于看到和清除。编号列只表示当前自然顺序。列表模式不触发缩略图工作；缩略图模式依据可见区域加载。连拍分组底框由两个模型共享的 `_BurstGroupMixin` 按模型行序惰性计算（同目录 + 同 `burst_id`、至少 2 张），两种配色交替；列表模式走 `BackgroundRole`，缩略图模式由 `ThumbnailItemDelegate` 读取 `_MetaBurstGroupRole` 画色带。`_apply_filter()` / `_rebuild_views()` 调用 `_sync_burst_group_display()`，任何过滤（含标签过滤）激活时关闭底框。
+`FileTableModel` / `FileTableSortProxyModel` 和 `ThumbnailListModel` 展示同一套过滤数据。文本、评级、精选、排除、焦点及标签条件组合后重建数据集，不靠逐行隐藏控件。过滤栏通过 [`FilterFlowLayout`](../superviewer/filter_controls.py) 按实际字体与可用宽度换行，依次显示镜头、稀有等级和标签下拉。镜头过滤是最前的可搜索下拉框：每次展开时从当前列表全部照片（不受其它过滤影响）的 `_meta_cache` 镜头型号汇总选项和张数，加载过程中不做额外工作；当前选中的镜头即使不在新列表中也保留为 0 张选项，便于看到和清除。编号列只表示当前自然顺序。列表模式不触发缩略图工作；缩略图模式依据可见区域加载。连拍分组底框由两个模型共享的 `_BurstGroupMixin` 按模型行序惰性计算（同目录 + 同 `burst_id`、至少 2 张），两种配色交替；列表模式走 `BackgroundRole`，缩略图模式由 `ThumbnailItemDelegate` 读取 `_MetaBurstGroupRole` 画色带。`_apply_filter()` / `_rebuild_views()` 调用 `_sync_burst_group_display()`，任何过滤（含标签过滤）激活时关闭底框。
 
 Viewer 缩略图由 [`BirdThumbnailModel` / `BirdThumbnailDelegate`](../superviewer/thumbnail_metadata.py) 扩展共享模型与委托：照片下方固定鸟名、稀有度/IUCN 徽章、筛片状态三层，文件名和连拍编号仍独立置底；128 档也显示鸟名，长文本省略后可悬停查看完整鸟名、等级、已保存拼音与地点。徽章复用 `metadata_badges` 的配置和来源校验，缺失等级留空、0 分有效。标题字段解析与列表一致，初次加载和增量修改都会更新。`FileListPanel.thumbnail_model_class` / `thumbnail_delegate_class` 提供宿主扩展点，`ThumbnailItemDelegate.grid_size()` 将新增的 52 px 同时加到卡片与信息区高度，保留照片显示尺寸；滚动步长跟随新网格。绘制只读缓存，无逐项控件或文件读取，共享默认布局及 BirdStamp 不增加身份行。悬停通过模型 ToolTipRole 取得完整信息；测试见 [test_thumbnail_metadata.py](../tests/test_thumbnail_metadata.py) 与 [test_thumbnail_species_metadata.py](../../app_common/tests/test_thumbnail_species_metadata.py)。
 
@@ -76,7 +76,11 @@ RAW 焦点读取（[`raw_focus_metadata.py`](../../app_common/raw_focus_metadata
 
 ## 3. 预览与连续快切
 
-列表上方的评级（含星级）和标签过滤徽章由 [`SuperViewerTaggedFileListPanel`](../superviewer/tagged_file_list.py) 接入共享 [`TOGGLE_CHECKED_STYLE`](../../app_common/toggle_button.py)，与预览开关保持同样的蓝底白字选中态，同时保留徽章的紧凑尺寸、圆角和原有筛选语义。
+列表上方的评级（含星级）徽章保留原布局，标签徽章整理为单个“全部标签”下拉，激活后显示“标签(N)”。菜单复用 [`add_filterable_tag_actions`](../superviewer/tag_menu.py) 的搜索、分组与持续勾选，完全匹配和清除操作放在菜单内；部分匹配仍为任一标签命中，完全匹配仍要求同时包含全部已选标签。空标签库显示提示，关闭或重新展开保留条件。
+
+稀有等级下拉支持普通/少见/稀有/史诗/传奇/未知多选，多个等级按 OR、与其它条件按 AND 组合；空选择表示不限。复用共享 `rarity_metadata()` / `rarity_level()`，保留 0 分与缺失/过期鸟名的区分，显示名称跟随徽章配置，选择身份使用稳定等级键。`_has_any_filter()` 与 `_path_matches_active_filters()` 驱动同一过滤数据源，后台元数据及手动等级更新沿用增量刷新，只在成员资格改变时重建。菜单只读缓存，不额外读取照片/XMP，也不改变等级写入或清晰度流程。
+
+两种下拉通过 [`FilterDropdown / FilterMenu`](../superviewer/filter_controls.py) 使用原生 Qt 菜单，鼠标及空格/回车可连续勾选，Esc/点外部关闭。激活摘要沿用共享 [`TOGGLE_CHECKED_STYLE`](../../app_common/toggle_button.py) 的蓝底白字选中态。标签库变更、主题和窗口尺寸变化保留控件与选择状态，无新增持久化配置或 CLI。回归见 [`test_filter_dropdowns.py`](../tests/test_filter_dropdowns.py)、`test_tag_filter_theme.py`、`test_tag_tree_menu.py` 和 `test_lens_filter.py`。
 
 ### A/B 对照
 
@@ -422,6 +426,16 @@ Qt 测试在窗口构造前隔离 `paths_settings` 的应用/用户状态目录�
 无 Qt 核心 [`export_video_frames()`](../superviewer/video_frame_export.py) 使用已有 FFmpeg 定位与并发限制，单次顺序解码并通过 image2 原子落盘。进度/错误落入受管理临时文件，不在内存积累视频像素；Windows 隐藏子进程窗口。失败和取消保留已完成的 PNG，报告数量、错误及目录，清理未完成的 `.png.tmp`；不改源视频。CLI：根 `.venv` 执行 `python -m SuperViewer.superviewer.video_frame_export <视频...> [--output <输出父目录>] [--suffix _Frames]`，省略输出父目录时使用各视频所在目录，参数独立于 GUI 设置；Ctrl+C 取消并回收进程。
 
 [`VideoFrameExportController`](../superviewer/video_frame_export_controller.py) 注册现有文件菜单扩展，后台串行处理视频、合并帧进度并有界交付结果；复用 `BirdIDProgressDialog` 显示帧数与结果路径，目录切换不改变已提交任务，运行中禁止重复启动。取消、Esc、关闭窗口均请求停止；主窗口关闭等待 FFmpeg 回收及真实 `QThread.finished` 后才释放任务。通过既有模块收集打包，无新增依赖。真实 FFmpeg CFR/VFR、像素完整性、中文/百分号路径、重复导出、取消、批量失败与线程生命周期回归见 [`test_video_frame_export.py`](../tests/test_video_frame_export.py)。
+
+### 图片 PNG 导出
+
+列表和缩略图的一级右键菜单提供“导出为 PNG…”，支持单张和多选，混选视频时只导出图片。原生目录选择框默认定位到已解析的实际源图所在目录，取消不启动任务。输出使用 `<原文件名>.png`，大小写或 Unicode 等价重名均追加 ` (2)` 等编号，不覆盖原图、已有 PNG 或 XMP。
+
+无 Qt 核心 [`export_image_png()`](../superviewer/image_png_export.py) 复用共享格式集合，HIF/HEIF/HEIC 通过 Pillow HEIF 完整解码，其他图片使用 Pillow，PSD 必要时读取共享合成图。保持像素尺寸、显示方向、透明通道及 ICC；HEIF 沿用现有 Pillow 的 8 位显示解码。RAW 只提取内嵌 JPG：检查 LibRaw 与 ExifTool 的 `JpgFromRaw` / `PreviewImage` / `ThumbnailImage` 以及 EXIF 缩略图，取像素面积最大的可解码 JPEG，按其自身 EXIF 方向导出，不解马赛克、不调用当前预览/缩略图缓存或降噪来源；没有可用 JPG 时该文件失败，继续后续文件。只含小预览的 RAW 按实际内嵌尺寸导出，进度结果显示输出尺寸。PNG 不附带源 EXIF/XMP，源图及侧车只读。临时文件与目标同目录，编码完成后原子替换预留的新文件名，失败/取消清理未完成输出。
+
+[`ImagePngExportController`](../superviewer/image_png_export_controller.py) 注册现有菜单扩展，解析并去重实际源路径。独立后台线程串行处理，有界队列和定时器分批显示进度，运行中禁止重复启动，可重开进度窗；复用 `BirdIDProgressDialog`，停止/Esc/关闭保留已完成图片。关闭主窗口等待真实 `QThread.finished` 及结果排空，ExifTool 调用复用取消/超时和 Windows 隐藏窗口策略。没有新增依赖或共享模块改动，沿用现有模块自动收集打包。
+
+CLI：根 `.venv` 执行 `python -m SuperViewer.superviewer.image_png_export <图片...> [--output <目录>]`；省略目录时输出到各源图所在目录，逐张打印 JSON 结果，失败返回非零，Ctrl+C 取消。回归见 [`test_image_png_export.py`](../tests/test_image_png_export.py)：真实 HEIF/JPEG/PNG、RAW 最大内嵌图/缺失/损坏、中文路径和重名、像素/方向/透明度、写入失败/取消、列表/缩略图实窗、深浅色放大字体及线程关闭。
 
 ## 独立更新器接入
 

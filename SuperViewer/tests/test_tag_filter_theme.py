@@ -22,7 +22,9 @@ def qt_app():
 
 
 @pytest.fixture
-def panel_factory(qt_app, tmp_path: Path):
+def panel_factory(qt_app, tmp_path: Path, monkeypatch):
+    from app_common import superviewer_user_options
+    monkeypatch.setattr(superviewer_user_options, "get_user_options_path", lambda: str(tmp_path / "options.cfg"))
     original_palette = qt_app.palette()
     panels = []
 
@@ -46,20 +48,11 @@ def panel_factory(qt_app, tmp_path: Path):
 
 def _assert_colors(panel, scheme):
     colors = panel_theme_colors(scheme)
-    assert colors.secondary_text in panel._tag_filter_title_label.styleSheet()
-    assert colors.label_text in panel._tag_filter_exact_match_checkbox.styleSheet()
-    for button in panel._tag_filter_buttons.values():
+    for button in (panel._tag_filter_menu_button, panel._rarity_filter_button):
         assert colors.chip_bg in button.styleSheet()
         assert colors.chip_text in button.styleSheet()
         assert "#1769c2" in button.styleSheet()
         assert "#ffffff" in button.styleSheet()
-    if panel._tag_filter_menu_button is not None:
-        assert colors.chip_text in panel._tag_filter_menu_button.styleSheet()
-    if panel._tag_filter_clear_button is not None:
-        assert colors.secondary_text in panel._tag_filter_clear_button.styleSheet()
-        assert colors.button_bg in panel._tag_filter_clear_button.styleSheet()
-    if panel._tag_filter_empty_label is not None:
-        assert colors.muted_text in panel._tag_filter_empty_label.styleSheet()
 
 
 @pytest.mark.parametrize("scheme", ["dark", "light"])
@@ -70,7 +63,7 @@ def test_initial_and_rebuilt_filter_bar_use_current_palette(panel_factory, schem
     # Rebuilding after a config change also styles newly created controls.
     panel._tag_config.path.write_text("场景\n  湿地\n  树林\n", encoding="utf-8")
     panel._load_tag_config_if_changed(force=True)
-    assert set(panel._tag_filter_buttons) == {"湿地", "树林"}
+    assert set(panel.available_photo_tags()) == {"湿地", "树林"}
     _assert_colors(panel, scheme)
 
 
@@ -93,10 +86,7 @@ def test_palette_changes_restyle_existing_controls_without_data_or_selection_wor
     selection.blockSignals(False)
     qt_app.processEvents()
 
-    controls = list(panel._tag_filter_buttons.values()) + [
-        panel._tag_filter_menu_button, panel._tag_filter_clear_button,
-        panel._tag_filter_exact_match_checkbox, panel._tag_filter_title_label,
-    ]
+    controls = [panel._tag_filter_menu_button, panel._rarity_filter_button]
     calls = []
     for method in (
         "_rebuild_tag_filter_bar", "_load_tag_config_if_changed", "_sync_tag_filter_widgets",
@@ -111,18 +101,11 @@ def test_palette_changes_restyle_existing_controls_without_data_or_selection_wor
         qt_app.setPalette(build_palette(scheme))
         qt_app.processEvents()
         _assert_colors(panel, scheme)
-        assert controls == list(panel._tag_filter_buttons.values()) + [
-            panel._tag_filter_menu_button, panel._tag_filter_clear_button,
-            panel._tag_filter_exact_match_checkbox, panel._tag_filter_title_label,
-        ]
+        assert controls == [panel._tag_filter_menu_button, panel._rarity_filter_button]
         assert panel._active_tag_filters == {"飞行", "湿地"}
         assert panel._tag_filter_partial_match is False
-        assert panel._tag_filter_buttons["飞行"].isChecked()
-        assert panel._tag_filter_buttons["湿地"].isChecked()
-        assert not panel._tag_filter_buttons["捕食"].isChecked()
-        assert panel._tag_filter_exact_match_checkbox.isChecked()
-        assert not panel._tag_filter_clear_button.isHidden()
-        assert panel._tag_filter_menu_button.text() == "全部标签(2)"
+        assert panel._tag_filter_menu_button.isChecked()
+        assert panel._tag_filter_menu_button.text() == "标签(2)"
         assert selection.currentIndex() == index
         assert selection.selectedIndexes() == [index]
         assert panel._photo_tag_cache[path] == {"飞行"}
@@ -134,7 +117,7 @@ def test_filter_palette_handler_ignores_reentrant_events(qt_app, panel_factory, 
     panel = panel_factory()
     qt_app.setPalette(build_palette("light"))
     qt_app.processEvents()
-    button = panel._tag_filter_buttons["飞行"]
+    button = panel._tag_filter_menu_button
     button.setStyleSheet("")
     original_set_style = button.setStyleSheet
     reentries = []

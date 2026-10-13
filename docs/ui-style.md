@@ -40,9 +40,10 @@ L0 应用外壳：主窗口、菜单、状态栏
 | L4 照片、元数据、标签列表 | 现有共享浏览器、模型与委托 | 分组调整不重建模型，不触发缩略图/EXIF 读取 |
 | L4 识鸟批量结果 | Viewer [`BirdIDResultsTable`](../SuperViewer/superviewer/bird_identification_table.py) / [`PerBirdResultsTable`](../SuperViewer/superviewer/per_bird_results_table.py) | 一个批次一个窗口；候选/逐只记录由模型保存，按照片分组，可见缩略图与滚动由表格统一调度；逐只汇总隐藏整图采纳动作 |
 | L4 图片/视频预览 | 已有 `PreviewCanvas` / `PreviewWithStatusBar` | 不改像素来源、坐标、缩放/平移和 A/B 语义；模板原有预览分组可折叠 |
-| L1/L4 BirdStamp 拼图 | [`CollageEditor`](../SuperBirdStamp/birdstamp/gui/editor_collage.py) + `CollapsibleSection` / `ColorEditor` / `PreviewWithStatusBar` / `OverlayEditorDock` | 处理设置中位于去抖动之后；左侧参数和素材顺序由主滚动区容纳，右侧独立画布复用 OverlayPanel / OverlaySession，导出/取消/进度固定在 ExportActionBar。切页和折叠保留内容，拼图参数与素材、叠加层随工作区保存，后台单 worker 按版本接收并等真实 finished 交接；见[设计说明](ui-design/birdstamp-collage.md) |
+| L1/L4 BirdStamp 拼图 | [`CollageEditor`](../SuperBirdStamp/birdstamp/gui/editor_collage.py) + `CollapsibleSection` / `ColorEditor` / `PreviewWithStatusBar` / `OverlayEditorDock` | 处理设置中位于去抖动之后；原生比例/分辨率组合框与联动宽高框定义最终画布（默认 3:4、1080 × 1440），单格自动计算；左侧参数和素材顺序由主滚动区容纳，右侧独立画布复用 OverlayPanel / OverlaySession，导出/取消/进度固定在 ExportActionBar。切页和折叠保留内容，拼图参数与素材、叠加层随工作区保存，后台单 worker 按版本接收并等真实 finished 交接；见[设计说明](ui-design/birdstamp-collage.md) |
 | L5 Viewer 预览状态与拍摄信息 | [`PreviewPanel`](../SuperViewer/superviewer/preview_panel.py) 原有底部状态 `QLabel`；格式化 [`preview_photo_info.py`](../SuperViewer/superviewer/preview_photo_info.py) | 分辨率/缩放之后显示快门、光圈、ISO、焦距、镜头和机器型号，A/B 各侧独立；窄宽度自动换行，使用原生字体/共享主题色，缺失值显示“—”；只读源照片的浏览器/报告缓存，未选择或视频不显示拍摄信息，无新增显示栏、滚动、保存或 EXIF 读取 |
 | L5 输入字段 | 原生编辑器、项目 `ColorEditor` / `PercentEditor` 等 | 复用范围、校验和信号；UI 不持有新的业务副本 |
+| L4/L5 Viewer 过滤下拉栏 | [`FilterDropdown / FilterFlowLayout`](../SuperViewer/superviewer/filter_controls.py)、共享 `FilterableComboBox`、已有 `add_filterable_tag_actions` | 镜头、稀有等级、标签并列，窄宽度按控件换行；下拉显示已选数量，菜单可连续多选、键盘切换及清除。标签搜索/分组与完全匹配保留，稀有等级复用共享分档和配置名称；状态由文件列表持有，关闭菜单不清空，不新增保存或读取 |
 | L5 Viewer 颜色选择 | [`rarity_badge.ColorButton`](../SuperViewer/superviewer/rarity_badge.py) | 颜色色块、色值及原生 QColorDialog；徽章和鸟名悬停框共用，修改设置草稿，确认设置后持久化 |
 | L4 徽章配置表单 | Viewer [`MetadataBadgesForm`](../SuperViewer/superviewer/rarity_badge.py) | 显示文本输入框旁提供“编辑”按钮，使用原生 `QInputDialog`；应用更新草稿及预览，设置页确定后统一保存，取消不写配置 |
 | L5 面板布尔选项 | `QCheckBox` | 启用/禁用与展开/收起分开；折叠不取消功能 |
@@ -51,6 +52,7 @@ L0 应用外壳：主窗口、菜单、状态栏
 | L4/L5 Viewer 视频回放 | [`VideoPlayerView`](../SuperViewer/superviewer/video_preview.py)、`FilmstripSlider` / `WaveformSlider`、原生 `QPushButton` | 预览伸缩、两条时间轴满行；常驻单行控制：左侧上一帧/播放/下一帧/重播，中间弹性空白，右侧倍速/静音/音量；时间读数放在时间轴上方状态行右侧。视频区域空格切换播放、左右键暂停并逐帧，Home/End 定位首尾帧，时间轴点击/拖动及首尾定位均保持播放状态，首次定位显示目标帧并暂停；音量和倍速保留原生键盘操作。状态由每侧播放器拥有，无新增持久化或滚动区 |
 | L5 反馈 | `QLabel` / `QProgressBar`、现有状态组件 | 反馈靠近所属操作；不能因折叠把唯一取消入口藏掉 |
 | L1 Viewer 视频逐帧导出 | 复用 [`BirdIDProgressDialog`](../SuperViewer/superviewer/bird_identification_controller.py)，由 [`VideoFrameExportController`](../SuperViewer/superviewer/video_frame_export_controller.py) 驱动 | 右键动作 → 按用户选项决定目录（询问模式才打开选择框）→ 当前视频/帧数、忙碌进度、可滚动结果、固定停止/关闭按钮；原生主题和可缩放布局，Esc/关闭取消，完成 PNG 保留，任务不绑定当前选择 |
+| L1 Viewer 图片 PNG 导出 | 复用 `QFileDialog` / [`BirdIDProgressDialog`](../SuperViewer/superviewer/bird_identification_controller.py)，由 [`ImagePngExportController`](../SuperViewer/superviewer/image_png_export_controller.py) 驱动 | 列表/缩略图一级右键“导出为 PNG…” → 选择输出目录 → 当前文件、完成张数、可滚动结果、固定停止/关闭按钮；原生主题，最小 600×380，可伸缩结果区，Esc/关闭取消；后台任务持有选择快照，目录切换不影响任务；不新增持久化选项 |
 | L1/L4 Viewer 视频处理选项 | `SettingsPage` + `CollapsibleSection`（视频帧提取）+ [`VideoFrameOptionsForm`](../SuperViewer/superviewer/video_frame_options_form.py) | 纵向排列目录类型、固定根目录/浏览、目录名后缀、示例与说明；分组默认展开，固定根目录仅 fixed 模式启用；外层页面统一滚动，确认/取消固定，折叠和模式切换保留草稿，配置在确认后保存 |
 
 ## 3. 折叠组 API 与样式来源

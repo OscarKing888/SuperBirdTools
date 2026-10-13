@@ -7,7 +7,7 @@ from pathlib import Path
 from threading import Event
 import uuid
 
-from PyQt6.QtCore import QObject, QThread, QTimer, Qt, pyqtSignal
+from PyQt6.QtCore import QObject, QSignalBlocker, QThread, QTimer, Qt, pyqtSignal
 from PyQt6.QtWidgets import (
     QAbstractItemView, QComboBox, QFileDialog, QFormLayout, QGridLayout,
     QHBoxLayout, QLabel, QListWidget, QListWidgetItem, QMessageBox,
@@ -16,7 +16,7 @@ from PyQt6.QtWidgets import (
 from app_common.collapsible_section import CollapsibleSection
 from app_common.image_formats import SUPPORTED_IMAGE_EXTENSIONS
 from app_common.preview_canvas import PreviewWithStatusBar
-from birdstamp.collage import CollageCancelled, CollageOptions, PRESETS, MAX_IMAGES, export_collage, render_collage
+from birdstamp.collage import CollageCancelled, CollageOptions, PRESETS, MAX_EDGE, MAX_IMAGES, export_collage, render_collage
 from birdstamp.overlays.model import document
 from birdstamp.overlays.render import build_scene, compose_scene
 from birdstamp.workspace import resolve_workspace_path, serialize_workspace_path
@@ -26,6 +26,14 @@ from .editor_utils import pil_to_qpixmap
 from .overlay_edit import OverlaySession
 from .overlay_editor_dock import OverlayEditorDock
 from .overlay_panel import OverlayPanel
+
+
+ASPECT_RATIOS = {
+    '3:4': '3:4 · 小红书竖版', '1:1': '1:1 · 方形', '4:3': '4:3 · 横版',
+    '9:16': '9:16 · 竖屏', '16:9': '16:9 · 横屏', '2:3': '2:3 · 竖版',
+    '3:2': '3:2 · 横版', 'custom': '自由比例',
+}
+RESOLUTIONS = ((1080, '标准'), (1440, '高清'), (2160, '超清'))
 
 
 class CollageWorker(QThread):
@@ -64,6 +72,7 @@ class CollageEditor(QObject):
         self.pending = False
         self.closed = False
         self.restoring = False
+        self._legacy_cell_size = None
         self.base = self.plan = None
         self.last_output = None
         self.timer = QTimer(self)
@@ -95,12 +104,24 @@ class CollageEditor(QObject):
         for key, (label, _, _) in PRESETS.items():
             self.preset.addItem(label, key)
         form.addRow('排版', self.preset)
-        self.cell_size = QSpinBox()
-        self.cell_size.setRange(64, 4096)
-        self.cell_size.setValue(800)
-        self.cell_size.setSuffix(' px')
-        self.cell_size.setToolTip('纵向为照片宽度，横向为照片高度，宫格为每格边长。')
-        form.addRow('单格尺寸', self.cell_size)
+        self.aspect_ratio = QComboBox()
+        for key, label in ASPECT_RATIOS.items():
+            self.aspect_ratio.addItem(label, key)
+        form.addRow('成图比例', self.aspect_ratio)
+        self.resolution = QComboBox()
+        form.addRow('分辨率', self.resolution)
+        self.canvas_width, self.canvas_height = QSpinBox(), QSpinBox()
+        for label, widget, value in [('宽度', self.canvas_width, 1080), ('高度', self.canvas_height, 1440)]:
+            widget.setRange(1, MAX_EDGE)
+            widget.setValue(value)
+            widget.setSuffix(' px')
+            widget.setKeyboardTracking(False)
+            widget.setToolTip('最终导出尺寸。固定比例时自动联动另一边；自由比例可分别修改宽高。')
+            form.addRow(label, widget)
+        self._refresh_resolutions()
+        self.cell_summary = QLabel('单格尺寸自动计算')
+        self.cell_summary.setWordWrap(True)
+        form.addRow('单元格', self.cell_summary)
         self.gap = QSpinBox()
         self.margin = QSpinBox()
         for label, widget in [('间距', self.gap), ('外边距', self.margin)]:
@@ -111,8 +132,7 @@ class CollageEditor(QObject):
         self.fit = QComboBox()
         self.fit.addItem('完整显示（留边）', 'contain')
         self.fit.addItem('居中裁满', 'cover')
-        self.fit.setEnabled(False)
-        form.addRow('宫格照片', self.fit)
+        form.addRow('照片填充', self.fit)
         self.background = ColorEditor('#FFFFFF')
         form.addRow('背景', self.background)
         root.addWidget(self.layout_group)
@@ -135,7 +155,7 @@ class CollageEditor(QObject):
         self._button('下移', lambda: self.move_selected(1), row)
         self._button('清空', self.clear, row)
         body.addLayout(row)
-        hint = QLabel('按列表顺序排版。长图保留照片比例；宫格不足时留空。\n使用源照片，不套用逐图模板或去抖动结果。')
+        hint = QLabel('按列表顺序排版，单格适配成图尺寸；宫格不足时留空。\n使用源照片，不套用逐图模板或去抖动结果。')
         hint.setWordWrap(True)
         body.addWidget(hint)
         root.addWidget(self.sources_group)
@@ -143,8 +163,71 @@ class CollageEditor(QObject):
         self.preset.currentIndexChanged.connect(self._settings_changed)
         self.fit.currentIndexChanged.connect(self._settings_changed)
         self.background.colorChanged.connect(self._settings_changed)
-        for widget in (self.cell_size, self.gap, self.margin):
+        self.aspect_ratio.currentIndexChanged.connect(self._ratio_changed)
+        self.resolution.currentIndexChanged.connect(self._resolution_changed)
+        self.canvas_width.valueChanged.connect(lambda: self._dimension_changed(True))
+        self.canvas_height.valueChanged.connect(lambda: self._dimension_changed(False))
+        for widget in (self.gap, self.margin):
             widget.valueChanged.connect(self._settings_changed)
+
+    def _ratio_units(self):
+        key = self.aspect_ratio.currentData()
+        if key == 'custom':
+            return self.canvas_width.value(), self.canvas_height.value()
+        return tuple(map(int, key.split(':')))
+
+    def _resolution_size(self, short_edge):
+        width, height = self._ratio_units()
+        factor = min(short_edge / min(width, height), MAX_EDGE / max(width, height))
+        return max(1, round(width * factor)), max(1, round(height * factor))
+
+    def _set_canvas_size(self, width, height):
+        with QSignalBlocker(self.canvas_width), QSignalBlocker(self.canvas_height):
+            self.canvas_width.setValue(width)
+            self.canvas_height.setValue(height)
+
+    def _refresh_resolutions(self):
+        with QSignalBlocker(self.resolution):
+            self.resolution.clear()
+            current = (self.canvas_width.value(), self.canvas_height.value())
+            selected = len(RESOLUTIONS)
+            for index, (edge, label) in enumerate(RESOLUTIONS):
+                size = self._resolution_size(edge)
+                self.resolution.addItem(f'{label} · {size[0]} × {size[1]}', edge)
+                if size == current:
+                    selected = index
+            self.resolution.addItem('自定义', None)
+            self.resolution.setCurrentIndex(selected)
+
+    def _ratio_changed(self):
+        if self.restoring:
+            return
+        edge = self.resolution.currentData() or min(self.canvas_width.value(), self.canvas_height.value())
+        self._set_canvas_size(*self._resolution_size(edge))
+        self._refresh_resolutions()
+        self._settings_changed()
+
+    def _resolution_changed(self):
+        if self.restoring or self.resolution.currentData() is None:
+            return
+        self._set_canvas_size(*self._resolution_size(self.resolution.currentData()))
+        self._settings_changed()
+
+    def _dimension_changed(self, width_changed):
+        if self.restoring:
+            return
+        width, height = self.canvas_width.value(), self.canvas_height.value()
+        if self.aspect_ratio.currentData() != 'custom':
+            rw, rh = self._ratio_units()
+            if width_changed:
+                height = max(1, min(MAX_EDGE, round(width * rh / rw)))
+                width = max(1, round(height * rw / rh))
+            else:
+                width = max(1, min(MAX_EDGE, round(height * rw / rh)))
+                height = max(1, round(width * rh / rw))
+            self._set_canvas_size(width, height)
+        self._refresh_resolutions()
+        self._settings_changed()
 
     def _build_preview(self):
         preview = QWidget()
@@ -186,8 +269,9 @@ class CollageEditor(QObject):
         layout.addLayout(row)
 
     def options(self):
-        return CollageOptions(self.preset.currentData(), self.cell_size.value(), self.gap.value(),
-                              self.margin.value(), self.background.value(), self.fit.currentData())
+        return CollageOptions(preset=self.preset.currentData(), cell_size=self._legacy_cell_size,
+                              gap=self.gap.value(), margin=self.margin.value(), background=self.background.value(),
+                              fit=self.fit.currentData(), width=self.canvas_width.value(), height=self.canvas_height.value())
 
     def _refresh_files(self, selected=()):
         self.files.clear()
@@ -237,12 +321,14 @@ class CollageEditor(QObject):
         self._refresh_files()
         self._settings_changed()
 
-    def _settings_changed(self, *_args):
+    def _settings_changed(self, *_args, preserve_legacy=False):
         if self.restoring or self.closed:
             return
         self.generation += 1
         self.pending = True
-        self.fit.setEnabled(self.preset.currentData().startswith('grid'))
+        if not preserve_legacy:
+            self._legacy_cell_size = None
+        self.cell_summary.setText('正在计算…' if self.paths else '单格尺寸自动计算')
         self.session.cancel()
         self.session.clear()
         if self.base is not None:
@@ -295,10 +381,27 @@ class CollageEditor(QObject):
         worker.result = None
         if worker.output is None and result is not None:
             if current and not worker.cancelled.is_set():
-                self.base, self.plan = result
-                self._render_overlays(fit=True)
-                self.summary.setText(f'{PRESETS[worker.options.preset][0]} · {len(worker.paths)} 张 · {self.plan.size[0]} × {self.plan.size[1]} px')
-                self.status.setText('拼图已更新，可添加 overlay 或导出。')
+                if self._legacy_cell_size is not None:
+                    # 旧工作区在后台算出原画布后迁移，归一化 Overlay 坐标随画布保留。
+                    self._legacy_cell_size = None
+                    with QSignalBlocker(self.aspect_ratio):
+                        self.aspect_ratio.setCurrentIndex(self.aspect_ratio.findData('custom'))
+                    self._set_canvas_size(*result[1].size)
+                    self._refresh_resolutions()
+                    result[0].close()
+                    self._settings_changed()
+                else:
+                    self.base, self.plan = result
+                    sizes = {(right - x, bottom - y) for x, y, right, bottom in self.plan.boxes}
+                    if len(sizes) == 1:
+                        width, height = next(iter(sizes))
+                        self.cell_summary.setText(f'{width} × {height} px（自动）')
+                    else:
+                        widths, heights = zip(*sizes)
+                        self.cell_summary.setText(f'{min(widths)}–{max(widths)} × {min(heights)}–{max(heights)} px（自动）')
+                    self._render_overlays(fit=True)
+                    self.summary.setText(f'{PRESETS[worker.options.preset][0]} · {len(worker.paths)} 张 · {self.plan.size[0]} × {self.plan.size[1]} px')
+                    self.status.setText('拼图已更新，可添加 overlay 或导出。')
             else:
                 result[0].close()
         elif current and result is not None:
@@ -308,6 +411,7 @@ class CollageEditor(QObject):
             self.status.setText(f'拼图失败：{worker.error}')
             if worker.output is None:
                 self.summary.setText('拼图未生成，请检查照片与排版参数')
+                self.cell_summary.setText('无法排版，请调整参数')
         elif current and not self.pending:
             self.status.setText('已取消。调整参数可重新生成拼图。')
         self.progress.hide()
@@ -399,6 +503,7 @@ class CollageEditor(QObject):
     def state(self, workspace_path):
         self.panel.flush_text()
         return dict(options=asdict(self.options()),
+                    aspect_ratio=self.aspect_ratio.currentData(),
                     paths=[serialize_workspace_path(p, workspace_path=workspace_path) for p in self.paths],
                     overlays=deepcopy(self.panel.doc))
 
@@ -412,18 +517,24 @@ class CollageEditor(QObject):
             except (TypeError, ValueError, AttributeError):
                 options = CollageOptions()
             self.preset.setCurrentIndex(self.preset.findData(options.preset))
-            self.cell_size.setValue(options.cell_size)
+            self._legacy_cell_size = options.cell_size
+            ratio = state.get('aspect_ratio', '3:4' if options.width * 4 == options.height * 3 else 'custom')
+            ratio = ratio if isinstance(ratio, str) and ratio in ASPECT_RATIOS else 'custom'
+            self.aspect_ratio.setCurrentIndex(self.aspect_ratio.findData(ratio))
+            self._set_canvas_size(options.width, options.height)
+            self._refresh_resolutions()
             self.gap.setValue(options.gap)
             self.margin.setValue(options.margin)
             self.background.set_value(options.background)
-            self.fit.setCurrentIndex(self.fit.findData(options.fit))
+            fit = 'contain' if options.cell_size is not None and not options.preset.startswith('grid') else options.fit
+            self.fit.setCurrentIndex(self.fit.findData(fit))
             self.paths = [p for raw in (state.get('paths') or [])[:MAX_IMAGES]
                           if (p := resolve_workspace_path(raw, workspace_path=workspace_path)) is not None]
             self._refresh_files()
             self.panel.set_document(document(state.get('overlays') or {'overlays': []}), 'collage:' + uuid.uuid4().hex)
         finally:
             self.restoring = False
-        self._settings_changed()
+        self._settings_changed(preserve_legacy=True)
 
     def shutdown(self):
         if not self.closed:

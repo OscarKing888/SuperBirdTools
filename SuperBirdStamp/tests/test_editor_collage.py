@@ -1,11 +1,13 @@
 """独立拼图状态、工作区与 Qt worker 真实 finished 交接。"""
 from pathlib import Path
 import time
+import pytest
 
 from PIL import Image
 from PyQt6.QtCore import QPointF, QEvent, Qt
 from PyQt6.QtTest import QTest
 from birdstamp.overlays.assets import import_image
+from birdstamp.overlays.model import new_item
 from birdstamp.workspace import read_workspace_json, write_workspace_json
 from test_overlay_editor import window, _APP, mouse
 
@@ -39,6 +41,8 @@ def test_tab_order_preview_export_overlay_and_workspace(window, tmp_path):
     assert not window.export_action_bar.settings_section.isVisible()
     collage.add_paths([source(tmp_path)])
     ready(collage)
+    assert collage.plan.size == (1080, 1440)
+    assert collage.aspect_ratio.currentData() == '3:4'
     collage.preset.setCurrentIndex(collage.preset.findData('grid4'))
     ready(collage)
     collage.panel.add('image', asset=import_image(source(tmp_path, '蓝.png', 'blue')))
@@ -62,6 +66,7 @@ def test_tab_order_preview_export_overlay_and_workspace(window, tmp_path):
     wait_for(lambda: collage.worker is None)
     assert output.exists()
     with Image.open(output) as image:
+        assert image.size == (1080, 1440)
         assert image.getpixel((image.width // 2, image.height // 2))[2] == 255
     workspace = tmp_path / '测试.birdstamp-workspace.json'
     payload = window._collect_workspace_payload(workspace)
@@ -125,7 +130,7 @@ def test_late_preview_and_shutdown_are_owned(window, tmp_path, monkeypatch):
     started, release = Event(), Event()
     calls = []
     def delayed(paths, options, **kwargs):
-        calls.append(options.cell_size)
+        calls.append(options.width)
         if len(calls) == 1:
             started.set()
             release.wait(5)
@@ -137,13 +142,13 @@ def test_late_preview_and_shutdown_are_owned(window, tmp_path, monkeypatch):
     collage.add_paths([source(tmp_path)])
     wait_for(started.is_set)
     first = collage.worker
-    collage.cell_size.setValue(400)
+    collage.canvas_width.setValue(400)
     assert collage.worker is first
     assert not collage.shutdown()
     assert collage.worker is first
     release.set()
     wait_for(lambda: collage.worker is None)
-    assert collage.closed and collage.base is None and calls == [800]
+    assert collage.closed and collage.base is None and calls == [1080]
     assert collage.shutdown()
 
 
@@ -151,9 +156,9 @@ def test_latest_request_wins(window, tmp_path):
     collage = window.collage
     collage.add_paths([source(tmp_path)])
     collage.preset.setCurrentIndex(collage.preset.findData('grid9'))
-    collage.cell_size.setValue(100)
+    collage.canvas_width.setValue(100)
     ready(collage)
-    assert collage.plan.size == (348, 348)
+    assert collage.plan.size == (100, 133)
     assert collage.options().preset == 'grid9'
 
 
@@ -164,7 +169,7 @@ def test_stale_completed_pixels_are_discarded_before_next_worker(window, tmp_pat
     started, release = Event(), Event()
     calls = []
     def delayed(paths, options, **kwargs):
-        calls.append(options.cell_size)
+        calls.append(options.width)
         if len(calls) == 1:
             started.set()
             release.wait(5)
@@ -175,13 +180,13 @@ def test_stale_completed_pixels_are_discarded_before_next_worker(window, tmp_pat
     collage.add_paths([source(tmp_path)])
     wait_for(started.is_set)
     first = collage.worker
-    collage.cell_size.setValue(200)
-    collage.cell_size.setValue(300)
+    collage.canvas_width.setValue(200)
+    collage.canvas_width.setValue(300)
     assert collage.worker is first
     release.set()
     ready(collage)
-    assert calls == [800, 300]
-    assert collage.plan.size == (324, 212)
+    assert calls == [1080, 300]
+    assert collage.plan.size == (300, 400)
 
 
 def test_failure_disables_export_and_recovers(window, tmp_path):
@@ -196,3 +201,61 @@ def test_failure_disables_export_and_recovers(window, tmp_path):
     collage.remove_selected()
     ready(collage)
     assert collage.export_button.isEnabled()
+
+
+def test_ratio_resolution_and_custom_canvas_roundtrip(window, tmp_path):
+    collage = window.collage
+    collage.add_paths([source(tmp_path)] * 4)
+    collage.preset.setCurrentIndex(collage.preset.findData('grid4'))
+    collage.aspect_ratio.setCurrentIndex(collage.aspect_ratio.findData('16:9'))
+    assert (collage.options().width, collage.options().height) == (1920, 1080)
+    collage.resolution.setCurrentIndex(collage.resolution.findData(1440))
+    assert (collage.options().width, collage.options().height) == (2560, 1440)
+    collage.canvas_height.setValue(360)
+    assert collage.canvas_width.value() == 640
+    assert collage.resolution.currentData() is None
+    collage.aspect_ratio.setCurrentIndex(collage.aspect_ratio.findData('custom'))
+    collage.canvas_width.setValue(501)
+    assert collage.canvas_height.value() == 360
+    ready(collage)
+    assert collage.plan.size == (501, 360)
+    assert collage.fit.isEnabled()
+    collage.panel.add('text')
+    collage.panel.edit('text', '竖版测试')
+    doc = collage.panel.doc.copy()
+    saved = collage.state(tmp_path / 'workspace.json')
+    collage.restore(None, tmp_path / 'workspace.json')
+    collage.restore(saved, tmp_path / 'workspace.json')
+    ready(collage)
+    assert collage.plan.size == (501, 360)
+    assert collage.aspect_ratio.currentData() == 'custom'
+    assert collage.panel.doc == doc
+    # 不足排版时关闭导出，恢复参数后仍保留选定输出大小与 Overlay。
+    collage.margin.setValue(256)
+    wait_for(lambda: collage.worker is None and not collage.pending)
+    assert '空间不足' in collage.status.text() and not collage.export_button.isEnabled()
+    collage.margin.setValue(12)
+    ready(collage)
+    assert collage.plan.size == (501, 360) and collage.panel.doc == doc
+
+
+@pytest.mark.parametrize('preset,size', [('vertical', (124, 86)), ('horizontal', (184, 124)), ('grid4', (236, 236))])
+def test_legacy_cell_size_workspace_migrates_in_worker(window, tmp_path, preset, size):
+    collage = window.collage
+    photo = source(tmp_path)
+    item = new_item('text')
+    item.update(text='旧拼图标注', x=.25, y=.75)
+    state = dict(options=dict(preset=preset, cell_size=100, fit='cover'), paths=[str(photo)],
+                 overlays={'overlays': [item]})
+    collage.restore(state, tmp_path / 'workspace.json')
+    ready(collage)
+    assert collage.plan.size == size
+    assert collage.options().cell_size is None
+    assert collage.aspect_ratio.currentData() == 'custom'
+    assert collage.panel.doc['overlays'][0]['text'] == '旧拼图标注'
+    assert collage.panel.doc['overlays'][0]['x'] == .25
+    restored = collage.state(tmp_path / 'workspace.json')
+    assert (restored['options']['width'], restored['options']['height']) == size
+    collage.restore(restored, tmp_path / 'workspace.json')
+    ready(collage)
+    assert collage.plan.size == size
