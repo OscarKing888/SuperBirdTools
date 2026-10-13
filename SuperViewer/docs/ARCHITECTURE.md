@@ -100,6 +100,8 @@ RAW 焦点读取（[`raw_focus_metadata.py`](../../app_common/raw_focus_metadata
 
 每侧都有文件名、自动焦点居中、适应窗口和缩放控件。公共构图线和对焦点显示作用于两侧；「同步缩放／移动」开启时以当前两侧视野为基准联动后续变化，并关闭两侧焦点居中。焦点与完整预览后台结果按请求代次、视口和源路径校验；关闭窗口等待两侧解码和视频探测完成。开启对照时文件列表最小宽度临时降为 260px 并自动收窄，主分隔条仍可拖动；关闭后恢复原 520px 下限及开启前宽度。
 
+`MainWindow._on_directory_selected()` 只清空激活侧的图片、鸟体状态、文件名和视频信息，并重置其首张图适应窗口。未激活侧保留源路径、已显示像素、缩放／平移、叠加及独立视频播放，支持跨目录对照；进入空目录或重新加载目录也遵循该规则。再次激活保留侧时，右侧信息跟随该侧源文件，列表仍属于当前浏览目录。回归见 [`test_viewer_ab_preview.py`](../tests/test_viewer_ab_preview.py) 和 [`test_first_preview_fit.py`](../tests/test_first_preview_fit.py)。这是预览会话行为，无新增配置或 CLI。
+
 ### 正常选择
 
 `MainWindow._on_file_selected_from_list()` 调用 `PreviewPanel.set_image()`，然后 `on_image_loaded()` 提交当前信息路径。缩略图档位由列表的 `preview_quick_size()` 提供。

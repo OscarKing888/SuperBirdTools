@@ -85,13 +85,116 @@ def test_splitter_contracts_and_restores_and_directory_clear(window, tmp_path, m
     assert window._main_splitter.sizes()[1] > 260
     monkeypatch.setattr(window._file_list, "load_directory", lambda _path, **kwargs: None)
     window._on_directory_selected(str(tmp_path))
-    assert window.preview_a.current_path() is None
+    assert window.preview_a.current_path() == source
     assert window.preview_panel.current_path() is None
     ab.enabled.setChecked(False)
     _APP.processEvents()
     assert window._file_list.minimumWidth() == 520
     assert not ab.a_panel.isVisible()
     assert window._main_splitter.sizes()[1] == pytest.approx(before[1], abs=20)
+
+
+@pytest.mark.parametrize("active_side", ["a", "b"])
+@pytest.mark.parametrize("mode", ["list", "thumb"])
+def test_directory_switch_keeps_inactive_photo_for_cross_directory_comparison(
+        window, tmp_path, monkeypatch, active_side, mode):
+    first_dir, second_dir, empty_dir = [tmp_path / name for name in ("原目录", "新目录", "空目录")]
+    for directory in (first_dir, second_dir, empty_dir):
+        directory.mkdir()
+    first = _image(first_dir / "同名.jpg", "red")
+    second = _image(second_dir / "同名.jpg", "blue")
+    files = window._file_list
+    monkeypatch.setattr(files, "_start_metadata_loader", lambda *_: None)
+    monkeypatch.setattr(files, "_schedule_persistent_thumb_cache_build", lambda *_: None)
+    monkeypatch.setattr(files, "_schedule_visible_thumbnail_update", lambda *a, **kw: None)
+    files._set_view_mode(files._MODE_LIST if mode == "list" else files._MODE_THUMB)
+    window.resize(1800, 820)
+    window.show()
+    window._on_directory_selected(str(first_dir))
+    _wait_until(lambda: window.preview_panel.current_path() == first)
+    ab = window.ab_preview
+    ab.enabled.setChecked(True)
+    ab.activate(active_side)
+    _APP.processEvents()
+    active = ab.active_panel()
+    inactive_side = "b" if active_side == "a" else "a"
+    inactive = window.preview_panel if inactive_side == "b" else window.preview_a
+    viewport = ab.b_panel if inactive_side == "b" else ab.a_panel
+    inactive.set_display_scale_percent(200)
+    inactive.set_focus_box((0.1, 0.2, 0.3, 0.4))
+    inactive.set_bird_box((0.2, 0.3, 0.6, 0.7))
+    state = inactive.canvas.viewport_state()
+    pixels = inactive.canvas._source_pixmap.cacheKey()
+    token = inactive._preview_request_token
+
+    window._on_directory_selected(str(empty_dir))
+    _wait_until(lambda: not files.has_pending_directory_scans() and not files.get_display_file_paths())
+    assert ab.active_side == active_side
+    assert active.current_path() is None
+    assert ab.display_paths[active_side] == ""
+    assert window._current_exif_path == ""
+    assert window.image_info_panel.current_photo_path() == ""
+    assert inactive.current_path() == first
+    assert inactive.source_identity_path() == first
+    assert ab.display_paths[inactive_side] == first
+    assert viewport.filename.toolTip() == first
+    assert inactive.canvas._source_pixmap.cacheKey() == pixels
+    assert inactive.canvas.viewport_state() == state
+    assert inactive._source_focus_box == (0.1, 0.2, 0.3, 0.4)
+    assert inactive._source_bird_box == (0.2, 0.3, 0.6, 0.7)
+    assert inactive._preview_request_token == token
+
+    window._on_directory_selected(str(second_dir))
+    _wait_until(lambda: active.current_path() == second)
+    assert inactive.current_path() == first
+    assert inactive.canvas._source_pixmap.cacheKey() == pixels
+    assert inactive.canvas.viewport_state() == state
+    assert window._current_exif_path == second
+    ab.activate(inactive_side)
+    assert window._current_exif_path == first
+    assert window.image_info_panel.current_photo_path() == first
+    assert active.current_path() == second
+    # 激活保留图不会重载列表，也不会把新目录的同名图当作旧图。
+    assert files.get_current_dir() == str(second_dir)
+    assert inactive.canvas._source_pixmap.cacheKey() == pixels
+    window._on_directory_selected(str(empty_dir), force_reload=True)
+    _wait_until(lambda: not files.has_pending_directory_scans())
+    assert inactive.current_path() is None
+    assert active.current_path() == second
+
+
+@pytest.mark.parametrize("active_side", ["a", "b"])
+def test_directory_switch_rejects_only_active_sides_late_full_preview(window, tmp_path, monkeypatch, active_side):
+    from PyQt6.QtGui import QPixmap
+
+    source = str(tmp_path / "等待完整预览.ARW")
+    (tmp_path / "等待完整预览.ARW").touch()
+    ab = window.ab_preview
+    ab.enabled.setChecked(True)
+    ab.activate(active_side)
+    quick = QPixmap(96, 72)
+    quick.fill(Qt.GlobalColor.green)
+    for side, panel in (("a", window.preview_a), ("b", window.preview_panel)):
+        panel.set_quick_preview_provider(lambda *_: quick)
+        panel.set_image(source, quick_size=128)
+        panel._full_preview_timer.stop()
+        ab.set_side_path(side, source)
+    active = ab.active_panel()
+    reference = window.preview_panel if active_side == "a" else window.preview_a
+    active_token, reference_token = active._preview_request_token, reference._preview_request_token
+    ready = []
+    reference.full_preview_ready.connect(ready.append)
+    monkeypatch.setattr(window._file_list, "load_directory", lambda *_args, **_kwargs: None)
+    window._on_directory_selected(str(tmp_path))
+    full = quick.scaled(960, 720).toImage()
+    active._on_full_preview_loaded(active_token, source, full, 0)
+    reference._on_full_preview_loaded(reference_token, source, full, 0)
+    assert active.current_path() is None
+    assert not active._has_canvas_pixmap()
+    assert reference.current_path() == source
+    assert reference.get_preview_image_size() == (960, 720)
+    assert ready == [source]
+    assert window._current_exif_path == ""
 
 
 def test_linked_zoom_and_focus_mutual_exclusion(window):
@@ -117,7 +220,7 @@ def test_linked_zoom_and_focus_mutual_exclusion(window):
     assert not ab.linked.isChecked()
 
 
-def test_two_video_viewports_keep_independent_players_and_active_info(window, clip, tmp_path):
+def test_two_video_viewports_keep_independent_players_and_active_info(window, clip, tmp_path, monkeypatch):
     other = tmp_path / "另一个.mp4"
     other.write_bytes(clip.read_bytes())
     window.resize(1500, 850)
@@ -162,6 +265,19 @@ def test_two_video_viewports_keep_independent_players_and_active_info(window, cl
     assert b.player.playbackState() == b.player.PlaybackState.PlayingState
     QTest.keyClick(_APP.focusWidget(), Qt.Key.Key_Home)
     assert a._position == 0 and ab.active_side == "a"
+    cached_b_info = ab.video_info["b"]
+    monkeypatch.setattr(window._file_list, "load_directory", lambda *_args, **_kwargs: None)
+    window._on_directory_selected(str(tmp_path))
+    assert ab.active_side == "a"
+    assert a.player.source().isEmpty()
+    assert window.preview_a.current_path() is None
+    assert window.preview_panel.current_path() == str(clip)
+    assert not b.player.source().isEmpty()
+    assert b.player.playbackState() == b.player.PlaybackState.PlayingState
+    assert ab.video_info["a"] is None
+    assert ab.video_info["b"] is cached_b_info
+    ab.activate("b")
+    assert window.video_info_panel.path == str(clip)
 
 
 def test_real_list_highlight_switches_without_emitting_selection(window, tmp_path):

@@ -75,7 +75,8 @@ def test_manual_zoom_on_first_thumbnail_is_not_overwritten_by_upgrade(tmp_path):
         panel.close()
 
 
-def test_directory_switch_resets_each_ab_first_image(window, tmp_path, monkeypatch):
+@pytest.mark.parametrize("side", ["a", "b"])
+def test_directory_switch_resets_active_first_image_and_keeps_reference_view(window, tmp_path, monkeypatch, side):
     import importlib
     main = importlib.import_module("SuperViewer.main")
     window.show()
@@ -92,19 +93,24 @@ def test_directory_switch_resets_each_ab_first_image(window, tmp_path, monkeypat
     monkeypatch.setattr(window._file_list, 'load_directory', load_directory)
     window._on_file_selected_from_list(str(first))
     window.ab_preview.enabled.setChecked(True)
+    window.ab_preview.activate(side)
     for panel in (window.preview_a, window.preview_panel):
         panel.set_auto_focus_center(True)
         panel.set_display_scale_percent(panel.current_display_scale_percent() * 3)
         assert panel.canvas._zoom > 1
+    panel = window.ab_preview.active_panel()
+    reference = window.preview_panel if side == 'a' else window.preview_a
+    reference_zoom = reference.canvas._zoom
     window._on_directory_selected(str(tmp_path))
     assert directories == [str(tmp_path)]
-    for side, panel in [('a', window.preview_a), ('b', window.preview_panel)]:
-        window.ab_preview.activate(side)
-        window._on_file_selected_from_list(str(second))
-        assert panel.canvas._zoom == pytest.approx(1)
-        rect = panel.canvas._display_rect()
-        assert rect.width() <= panel.canvas.contentsRect().width() + 1
-        assert rect.height() <= panel.canvas.contentsRect().height() + 1
+    assert reference.current_path() == str(first)
+    assert reference.canvas._zoom == pytest.approx(reference_zoom)
+    window._on_file_selected_from_list(str(second))
+    assert panel.canvas._zoom == pytest.approx(1)
+    rect = panel.canvas._display_rect()
+    assert rect.width() <= panel.canvas.contentsRect().width() + 1
+    assert rect.height() <= panel.canvas.contentsRect().height() + 1
+    assert reference.canvas._zoom == pytest.approx(reference_zoom)
 
 
 def test_first_uncached_raw_waits_for_pixels_before_fitting(tmp_path):

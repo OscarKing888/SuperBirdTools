@@ -20,9 +20,9 @@ from .qt_compat import (
 )
 
 try:
-    from PyQt6.QtCore import QEvent, QObject, pyqtSignal
+    from PyQt6.QtCore import QEvent, QObject, QSignalBlocker, pyqtSignal
 except ImportError:
-    from PyQt5.QtCore import QEvent, QObject, pyqtSignal
+    from PyQt5.QtCore import QEvent, QObject, QSignalBlocker, pyqtSignal
 
 _POLICY = getattr(QSizePolicy, "Policy", QSizePolicy)
 _EVENTS = getattr(QEvent, "Type", QEvent)
@@ -314,6 +314,16 @@ class ViewerABPreview(QObject):
 
     def active_path(self):
         return self.active_panel().current_path() or ""
+
+    def clear_active(self):
+        """清空激活侧，保留另一侧的来源、视野与媒体状态。"""
+        panel = self.active_panel()
+        side = "a" if panel is self.a_preview else "b"
+        # 隐藏视频/工具控件时 Qt 会转移焦点；这不是用户切换对照侧。
+        with QSignalBlocker(self.a_panel), QSignalBlocker(self.b_panel):
+            panel.clear_image()
+            self.set_side_path(side, "")
+            self.video_info[side] = None
 
     def set_side_path(self, side, path, *, display_path=None):
         self.display_paths[side] = os.path.normpath(display_path or path) if path else ""

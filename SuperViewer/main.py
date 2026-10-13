@@ -665,13 +665,10 @@ class MainWindow(QMainWindow):
 
     def _on_directory_selected(self, path: str, *, force_reload: bool = False):
         """目录树选中目录后，保存路径到设置与 .last_folder.txt，并刷新文件列表。"""
-        self._bird_body.clear_panel(self.preview_a)
-        self._bird_body.clear_panel(self.preview_panel)
-        self.preview_a.clear_image()
-        self.preview_panel.clear_image()
-        self.ab_preview.set_side_path("a", "")
-        self.ab_preview.set_side_path("b", "")
-        self.ab_preview.video_info = {"a": None, "b": None}
+        # 只重置响应列表选择的视口，另一侧保留原图和视野以便跨目录对照。
+        panel = self._active_preview_panel()
+        self._bird_body.clear_panel(panel)
+        self.ab_preview.clear_active()
         self.video_info_panel.set_path('')
         self.media_info_stack.setCurrentWidget(self.image_info_tabs)
         self.image_info_tabs.on_photo_selected('')
