@@ -117,29 +117,91 @@ def test_space_toggle_repeat_suppression_and_step_during_play(panel, clip):
     assert view.player.playbackState() == view.player.PlaybackState.PausedState
 
 
-def test_timeline_first_click_starts_at_selected_frame_and_resume(panel, clip):
+def test_timeline_first_click_shows_selected_frame_without_playing(panel, clip):
     view = load(panel, clip)
     assert view._ensure_player()
-    frames = []
+    frames, states = [], []
+    view.player.playbackStateChanged.connect(states.append)
     view.video.videoSink().videoFrameChanged.connect(
         lambda frame: frames.append(frame.startTime()) if frame.isValid() else None)
     strip = view.filmstrip
     point = QPoint(strip._MARGIN + round(.6 * strip._span()), strip.height() // 2)
     QTest.mouseClick(strip, Qt.MouseButton.LeftButton, pos=point)
-    wait_until(lambda: bool(frames) and view.player.playbackState() == view.player.PlaybackState.PlayingState)
+    wait_until(lambda: shown_frame(view) == 28)
     assert frames[0] >= 1_125_000  # 首帧来自点击处，加载时不能先从零播放。
-    view.toggle_play()
-    frames.clear()
-    point = QPoint(strip._MARGIN + round(.25 * strip._span()), strip.height() // 2)
-    QTest.mouseClick(strip, Qt.MouseButton.LeftButton, pos=point)
-    wait_until(lambda: bool(frames) and 450 <= view.player.position() < 700)
+    assert view.player.playbackState() == view.player.PlaybackState.PausedState
+    assert view.player.PlaybackState.PlayingState not in states
+    QTest.keyClick(strip, Qt.Key.Key_Space)
+    wait_until(lambda: shown_frame(view) >= 29)
     assert view.player.playbackState() == view.player.PlaybackState.PlayingState
+
+
+@pytest.mark.parametrize('timeline', ['filmstrip', 'seek'])
+@pytest.mark.parametrize('playing', [False, True])
+@pytest.mark.parametrize('drag', [False, True])
+def test_timeline_click_and_drag_preserve_playback_state(panel, clip, timeline, playing, drag):
+    view = load(panel, clip)
+    view.step_frame(1)
+    wait_until(lambda: shown_frame(view) == 1)
+    if playing:
+        view.toggle_play()
+    state = view.player.playbackState()
+    states = []
+    view.player.playbackStateChanged.connect(states.append)
+    slider = getattr(view, timeline)
+    point = lambda part: QPoint(slider._MARGIN + round(part * slider._span()), slider.height() // 2)
+    if drag:
+        QTest.mousePress(slider, Qt.MouseButton.LeftButton, pos=point(.2))
+        QTest.mouseMove(slider, point(.5))
+        assert view.player.playbackState() == state
+        QTest.mouseRelease(slider, Qt.MouseButton.LeftButton, pos=point(.5))
+    else:
+        QTest.mouseClick(slider, Qt.MouseButton.LeftButton, pos=point(.5))
+    wait_until(lambda: 23 <= shown_frame(view) <= 26)
+    assert view.player.playbackState() == state
+    assert all(value == state for value in states)
+
+
+@pytest.mark.parametrize('target', ['poster', 'filmstrip', 'seek', 'play'])
+def test_home_end_before_play_show_boundary_frames_and_reset_step_target(panel, clip, target):
+    view = load(panel, clip)
+    QTest.keyClick(getattr(view, target), Qt.Key.Key_End)
+    wait_until(lambda: shown_frame(view) == 47)
+    assert view.player.playbackState() == view.player.PlaybackState.PausedState
+    QTest.keyClick(view.video, Qt.Key.Key_Left)
+    wait_until(lambda: shown_frame(view) == 46)
+    QTest.keyClick(getattr(view, target), Qt.Key.Key_Home)
+    wait_until(lambda: shown_frame(view) == 0)
+    assert view.player.playbackState() == view.player.PlaybackState.PausedState
+    QTest.keyClick(view.video, Qt.Key.Key_Right)
+    wait_until(lambda: shown_frame(view) == 1)
+
+
+def test_home_end_preserve_playing_state_and_seek_after_end_stays_paused(panel, clip):
+    view = load(panel, clip)
+    view.toggle_play()
+    wait_until(lambda: shown_frame(view) >= 3)
+    QTest.keyClick(view.video, Qt.Key.Key_Home)
+    assert view.player.playbackState() == view.player.PlaybackState.PlayingState
+    wait_until(lambda: shown_frame(view) <= 2)
+    frames = []
+    view.video.videoSink().videoFrameChanged.connect(
+        lambda frame: frames.append(round(frame.startTime() * view._fps / 1_000_000))
+        if frame.isValid() else None)
+    QTest.keyClick(view.video, Qt.Key.Key_End)
+    assert view.player.playbackState() == view.player.PlaybackState.PlayingState
+    wait_until(lambda: view.player.mediaStatus() == view.player.MediaStatus.EndOfMedia)
+    assert 47 in frames  # 正常播完后 Qt 可以清空 sink；End 必须先显示实际尾帧。
+    QTest.keyClick(view.video, Qt.Key.Key_Home)
+    wait_until(lambda: shown_frame(view) == 0)
+    assert view.player.playbackState() == view.player.PlaybackState.PausedState
 
 
 def test_fast_browse_and_stop_disable_transport(panel, clip):
     panel.set_image(str(clip), load_full=False)
     view = panel.video_view
-    for key in (Qt.Key.Key_Space, Qt.Key.Key_Left, Qt.Key.Key_Right):
+    for key in (Qt.Key.Key_Space, Qt.Key.Key_Left, Qt.Key.Key_Right,
+                Qt.Key.Key_Home, Qt.Key.Key_End):
         QTest.keyClick(view.poster, key)
     assert view.player is None and view._pending_seek is None
     assert not view.previous_frame.isEnabled() and not view.next_frame.isEnabled()
@@ -169,9 +231,11 @@ def test_unknown_fps_and_native_audio_keys(panel, clip):
         editor.deleteLater()
 
 
-def test_space_cancels_timeline_autoplay_while_loading(panel, clip):
+def test_space_cancels_explicit_play_while_seek_is_loading(panel, clip):
     view = load(panel, clip)
     view._filmstrip_seek(7500)
+    assert not view._pending_play
+    QTest.keyClick(view.filmstrip, Qt.Key.Key_Space)
     assert view._pending_play
     QTest.keyClick(view.filmstrip, Qt.Key.Key_Space)
     wait_until(lambda: shown_frame(view) == 36)

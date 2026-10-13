@@ -31,7 +31,7 @@ class FilmstripSlider(WaveformSlider):
             images[min(ready, key=lambda i: (abs(i - index), i))]
             for index, image in enumerate(images))
         self._status = status
-        self.setToolTip((status or '视频序列帧') + ' · 点击或拖动后从此处播放 · ←/→ 逐帧 · 空格播放/暂停')
+        self.setToolTip((status or '视频序列帧') + ' · ' + self._SEEK_HINT)
         self.update()
 
     def paintEvent(self, event):
