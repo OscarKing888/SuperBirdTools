@@ -9,10 +9,11 @@ from .editor_collapsible import CollapsibleSection, refresh_layout_chain
 
 
 class _ExportSettingsScrollArea(QScrollArea):
-    """按当前参数所需高度展开，长表单内部滚动，不挤走常驻操作按钮。"""
+    """视频按完整表单高度展开，其余导出参数保持紧凑高度。"""
 
     def __init__(self, content):
         super().__init__()
+        self._show_full_content = False
         self.setWidgetResizable(True)
         self.setFrameShape(QFrame.Shape.NoFrame)
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
@@ -21,11 +22,25 @@ class _ExportSettingsScrollArea(QScrollArea):
         content.setAutoFillBackground(False)
         self.viewport().setAutoFillBackground(False)
         content.installEventFilter(self)
+        policy = self.sizePolicy()
+        policy.setHeightForWidth(True)
+        self.setSizePolicy(policy)
+
+    def set_show_full_content(self, enabled):
+        self._show_full_content = bool(enabled)
+        self.setMaximumHeight(16777215 if enabled else 240)
+        self.updateGeometry()
+
+    def heightForWidth(self, width):
+        layout = self.widget().layout()
+        height = (layout.totalHeightForWidth(width) if layout.hasHeightForWidth()
+                  else layout.totalSizeHint().height())
+        height = max(36, height)
+        return height if self._show_full_content else min(240, height)
 
     def sizeHint(self):
         content = self.widget()
-        height = content.layout().totalSizeHint().height()
-        return QSize(content.sizeHint().width(), min(240, max(36, height)))
+        return QSize(content.sizeHint().width(), self.heightForWidth(self.viewport().width()))
 
     def minimumSizeHint(self):
         return QSize(0, 36)
@@ -99,6 +114,8 @@ class ExportActionBar(QFrame):
         editor.image_export_group.setVisible(not dejitter and not video)
         editor.video_export_panel.setVisible(not dejitter and video)
         editor.dejitter_export_group.setVisible(dejitter)
+        # 视频优先展示完整参数；只有超出窗口的极长重复播放列表才需要滚动。
+        self.settings_scroll.set_show_full_content(not dejitter and video)
         self.actions.setCurrentIndex(2 if dejitter else 1 if video else 0)
         self.format_label.setText('GIF' if gif else editor._selected_output_suffix().upper())
         editor.export_current_btn.setVisible(not gif)
