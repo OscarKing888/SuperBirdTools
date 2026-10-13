@@ -1,12 +1,14 @@
 """已保存识鸟候选的兼容读取、精简字段优先级及中文采纳回读。"""
 import json
+import sqlite3
+import xml.etree.ElementTree as ET
 
 from PIL import Image
 import pytest
 
 from app_common.exif_io.photo_meta import PhotoMetaDataXMP
-from SuperViewer.superviewer.bird_identification import adopt_candidate
-from SuperViewer.superviewer.bird_identification_candidates import load_saved_candidates
+from SuperViewer.superviewer.bird_identification import BirdIDError, adopt_candidate
+from SuperViewer.superviewer.bird_identification_candidates import load_saved_candidates, saved_candidates
 
 
 @pytest.fixture
@@ -133,3 +135,124 @@ def test_missing_cancelled_or_corrupt_sidecars_never_create_or_modify_data(saved
     sidecar.unlink()
     assert load_saved_candidates(photo).status == 'skipped'
     assert not sidecar.exists()
+
+
+@pytest.mark.parametrize('title', ['反嘴鹬（待确定 33%）', '反嘴鹬 (待确定 33%)'])
+def test_legacy_pending_title_is_read_only_and_can_be_adopted(tmp_path, title):
+    # 复现旧版侧车和复制鸟名后只有待确定标题、没有新版 JSON 候选的情况。
+    photo = tmp_path / 'DSC05874.HIF'
+    photo.write_bytes(b'photo must not be decoded or changed')
+    store = PhotoMetaDataXMP()
+    assert store.write(str(photo), {'XMP-dc:Title': title, 'XMP-superpicky:bird_species_cn': title,
+                                   'XMP-dc:Description': '保留中文拍摄笔记', 'XMP-xmp:Rating': 3})
+    # 真实旧侧车还重复追加了评分/标记，采纳的通用字段写入同样需要成功。
+    tree = ET.parse(photo.with_suffix('.xmp'))
+    rdf = tree.getroot().find('{http://www.w3.org/1999/02/22-rdf-syntax-ns#}RDF')
+    desc = ET.SubElement(rdf, '{http://www.w3.org/1999/02/22-rdf-syntax-ns#}Description',
+                         {'{http://www.w3.org/1999/02/22-rdf-syntax-ns#}about': ''})
+    ET.SubElement(desc, '{http://ns.adobe.com/xap/1.0/}Rating').text = '3'
+    tree.write(photo.with_suffix('.xmp'), encoding='utf-8', xml_declaration=True)
+    original = photo.read_bytes(), photo.with_suffix('.xmp').read_bytes()
+    result = load_saved_candidates(str(photo))
+    assert result.status == 'candidate', result.message
+    assert result.accepted_index is None and result.candidates_missing
+    assert result.response['results'] == [{'cn_name': '反嘴鹬', 'en_name': '', 'confidence': 33.0}]
+    assert '旧版待确定记录' in result.message
+    assert (photo.read_bytes(), photo.with_suffix('.xmp').read_bytes()) == original
+    adopted = adopt_candidate(result, 0)
+    assert adopted.status == 'success', adopted.message
+    metadata = store.read(str(photo))
+    assert metadata['Title'] == metadata['bird_species_cn'] == '反嘴鹬'
+    assert float(metadata['birdid_confidence']) == 33
+    assert metadata['Description'] == '保留中文拍摄笔记' and metadata['rating'] == 3
+    assert not metadata.get('birdid_response')
+    assert json.loads(metadata['birdid_candidates']) == result.response['results']
+    assert photo.read_bytes() == original[0]
+    assert load_saved_candidates(str(photo)).accepted_index == 0
+
+
+@pytest.mark.parametrize('confidence', [0, 0.63, 33.36047828197479, 100])
+def test_legacy_structured_candidate_preserves_percentage_units(confidence):
+    response, record, missing = saved_candidates({
+        'XMP-superpicky:alt_species_cn': '反嘴鹬', 'XMP-superpicky:alt_species_en': 'Pied Avocet',
+        'XMP-superpicky:alt_confidence': str(confidence)})
+    assert response['results'] == [{'cn_name': '反嘴鹬', 'en_name': 'Pied Avocet', 'confidence': confidence}]
+    assert record == '' and missing
+
+
+def test_xmp_legacy_candidate_precedes_report_and_keeps_current_confirmed_name():
+    response, _, _ = saved_candidates({'Title': '当前已确认鸟名', 'alt_species_cn': '反嘴鹬',
+                                      'alt_species_en': 'Pied Avocet', 'alt_confidence': 33},
+                                     report_metadata={'alt_species_cn': '旧报告鸟名', 'alt_confidence': 80})
+    assert response['results'] == [{'cn_name': '反嘴鹬', 'en_name': 'Pied Avocet', 'confidence': 33}]
+
+
+def test_legacy_report_candidate_is_available_when_xmp_only_contains_notes():
+    response, _, _ = saved_candidates({'Description': '保留拍摄笔记'},
+                                     report_metadata={'alt_species_en': 'Pied Avocet', 'alt_confidence': 33})
+    assert response['results'] == [{'cn_name': '', 'en_name': 'Pied Avocet', 'confidence': 33}]
+
+
+@pytest.mark.parametrize('title,score,expected', [('反嘴鹬（待确定 33%）', 33.5, 33),
+                                              ('反嘴鹬（待确定 33.4%）', 33.43, 33.43),
+                                              ('反嘴鹬（待确定 33.4%）', 33.89, 33.4)])
+def test_report_enrichment_respects_title_precision(title, score, expected):
+    response, _, _ = saved_candidates({'Title': title},
+                                     report_metadata={'alt_species_cn': '反嘴鹬', 'alt_confidence': score})
+    assert response['results'][0]['confidence'] == expected
+
+
+@pytest.mark.parametrize('confidence', [None, '', 'NaN', 'inf', -1, 101, True])
+def test_invalid_legacy_confidence_does_not_create_a_candidate(confidence):
+    with pytest.raises(BirdIDError, match='格式错误'):
+        saved_candidates({'alt_species_cn': '反嘴鹬', 'alt_confidence': confidence})
+
+
+@pytest.mark.parametrize('title', ['反嘴鹬', '反嘴鹬（待确定）', '随手记：33%', '反嘴鹬（待确定 101%）'])
+def test_ordinary_or_invalid_titles_are_not_inferred_as_candidates(title):
+    with pytest.raises(BirdIDError):
+        saved_candidates({'Title': title})
+
+
+@pytest.mark.parametrize('report_name,score,enriched', [('反嘴鹬', 33.36047828197479, True),
+                                                      ('反嘴鹬', 98, False), ('黑尾塍鹬', 9, False)])
+def test_report_legacy_candidate_only_enriches_matching_pending_title(tmp_path, report_name, score, enriched):
+    photo = tmp_path / '中文照片.HIF'
+    photo.write_bytes(b'original HIF')
+    store = PhotoMetaDataXMP()
+    assert store.write_title(str(photo), '反嘴鹬（待确定 33%）')
+    db_path = tmp_path / '.superpicky' / 'report.db'
+    db_path.parent.mkdir()
+    # 单独构造生产者字段，current_path 为预览图，按原图路径解析旧报告。
+    connection = sqlite3.connect(db_path)
+    try:
+        with connection:
+            connection.execute('CREATE TABLE photos (filename TEXT, original_path TEXT, current_path TEXT, '
+                               'alt_species_cn TEXT, alt_species_en TEXT, alt_confidence REAL)')
+            connection.execute('INSERT INTO photos VALUES (?, ?, ?, ?, ?, ?)',
+                               (photo.stem, photo.name, '.superpicky/cache/temp_preview/中文照片.jpg',
+                                report_name, 'Pied Avocet' if enriched else 'Other Bird', score))
+    finally:
+        connection.close()
+    before = db_path.read_bytes(), db_path.stat().st_mtime_ns, photo.with_suffix('.xmp').read_bytes()
+    result = load_saved_candidates(str(photo))
+    assert result.status == 'candidate', result.message
+    candidate = result.response['results'][0]
+    assert candidate == {'cn_name': '反嘴鹬', 'en_name': 'Pied Avocet' if enriched else '',
+                         'confidence': score if enriched else 33.0}
+    assert (db_path.read_bytes(), db_path.stat().st_mtime_ns, photo.with_suffix('.xmp').read_bytes()) == before
+    assert adopt_candidate(result, 0).status == 'success'
+    assert store.read(str(photo))['Title'] == '反嘴鹬'
+    assert (db_path.read_bytes(), db_path.stat().st_mtime_ns) == before[:2]
+
+
+def test_modern_records_keep_priority_over_legacy_pending_title(saved):
+    photo, candidates, response, raw = saved
+    store = PhotoMetaDataXMP()
+    assert store.write_title(photo, '反嘴鹬（待确定 33%）')
+    assert len(load_saved_candidates(photo).response['results']) == 3
+    assert store.write(photo, {'XMP-superpicky:birdid_candidates': ''})
+    assert len(load_saved_candidates(photo).response['results']) == 3
+    assert store.write(photo, {'XMP-superpicky:birdid_response': '{broken'})
+    result = load_saved_candidates(photo)
+    assert result.status == 'failed' and '格式错误' in result.message

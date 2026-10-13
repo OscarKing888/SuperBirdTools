@@ -340,7 +340,9 @@ CLI 与 GUI 共用核心：在仓库根使用共享 `.venv` 执行 `python -m Su
 
 最前面的“分组”列在表格网格绘制后以连续括线连接同一 `ResultEntry` 的候选，照片间断开，选中行和滚动裁剪不打断组内连线；逻辑列追加后移到视觉首列，保留原有预览/采纳列索引。照片列使用 [`BirdIDThumbnails`](../superviewer/bird_identification_thumbnails.py) 显示等比预览及文件名；它复用共享 `ThumbnailLoader`、列表的 `ThumbnailMemoryCache`、`BrowserWorkPool` 和报告/每文件磁盘缓存解析。只请求可见照片的 256 档缩略图，同照片候选去重；表格绘制不读取磁盘或解码，保留最多 64 张结果。目录和报告上下文在识别开始时快照，隐藏/滚动/换批次使旧请求失效，协调器保有唯一 loader 至真实 `finished` 后才交接；控制器退出条件也等待预览线程结束。回归见 [识鸟表格预览测试](../tests/test_bird_identification_thumbnails.py)。
 
-照片右键“选择候选鸟名…”通过同一 `BirdIDWorker` 的只读模式调用 [`load_saved_candidates()`](../superviewer/bird_identification_candidates.py)，不访问识鸟服务。新 `birdid_candidates` 优先，缺字段时回退完整响应；以原始候选索引维护数据身份，表格只按置信度排序显示，保留当前已采纳项，无已采纳项时选中最高分。详情按中英文名与置信度匹配，保存保留原始响应及候选顺序，旧记录可“采纳并补存”。实际写入沿用侧车指纹保护与元数据局部同步。回归见 [保存候选读取/采纳](../tests/test_bird_identification_candidates.py) 与识鸟控制器的列表/缩略图实窗测试。
+照片右键“选择候选鸟名…”通过同一 `BirdIDWorker` 的只读模式调用 [`load_saved_candidates()`](../superviewer/bird_identification_candidates.py)，不访问识鸟服务。新 `birdid_candidates` 优先，缺字段时回退完整响应；两者都缺失时兼容现有 XMP 的旧 `alt_species_*` / `alt_confidence` 和“鸟名（待确定 N%）”标题，并通过共享 `PhotoMetaDataReportDB` 只读补充旧候选。同名且分数匹配标题的四舍五入值时才补回英文名和精确分数，XMP 候选优先，旧格式只恢复单个候选，不自动确认；新版 JSON 损坏不降级为旧记录。以原始候选索引维护数据身份，表格只按置信度排序显示，保留当前已采纳项，无已采纳项时选中最高分。详情按中英文名与置信度匹配，保存保留原始响应及候选顺序，旧记录可“采纳并补存”；旧标题/alt 候选采纳时去掉标题的待确定后缀、补存候选列表，不伪造服务原文。实际写入沿用侧车指纹保护与元数据局部同步。回归见 [保存候选读取/采纳](../tests/test_bird_identification_candidates.py) 与识鸟控制器的列表/缩略图实窗测试。
+
+旧侧车可能在多个 RDF Description 中重复追加星级、精选或分析评分。共享 `PhotoMetaDataXMP._deduplicate_photo_scalars()` 在交给 ExifTool 前只修复暂存副本中的这些已知标量，按现有读取顺序保留最后非空值；不碰未知属性、带限定信息的值或其它资源。整个写入成功才发布，失败保留原侧车。回归见 [test_xmp_exiftool_writes.py](../../app_common/tests/test_xmp_exiftool_writes.py)。
 
 结果表以照片组为单位将待确定、可重试的采纳失败和需补存候选置顶，同一优先级保持结果到达顺序，组内保持置信度降序。采纳成功或结果过期时使用 Qt 行移动通知重排整组，维护 `first_row`、候选原始索引及持久选区，避免按钮指向另一张照片；新增置顶组不抢走已有选择。可用的“采纳 / 采纳并补存”按钮绘制绿色填充、白字和键盘焦点虚线，悬停加深；已采纳、保存中和过期等禁用状态沿用中性样式，行选中色与主题不会覆盖绿色。排序为 UI 行为，不改变 XMP 或服务结果顺序。回归见 [表格排序与绘制](../tests/test_bird_identification_table.py) 及识鸟控制器的后台采纳测试。
 
