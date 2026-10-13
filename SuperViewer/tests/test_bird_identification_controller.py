@@ -585,6 +585,37 @@ def test_saved_candidates_menu_offline_selection_and_reopen(env, monkeypatch, le
     assert controller._dialog.details.currentIndex().row() == 0
 
 
+def test_legacy_pending_title_menu_offline_adoption(env, monkeypatch, tmp_path):
+    from PyQt6.QtCore import Qt
+    from PyQt6.QtTest import QTest
+    controller, files, paths, state = env
+    store = PhotoMetaDataXMP()
+    assert store.write_title(paths[0], '反嘴鹬（待确定 33%）')
+    before = Path(paths[0]).with_suffix('.xmp').read_bytes()
+    monkeypatch.setattr(BirdIDClient, 'health', lambda _: pytest.fail('旧版待确定候选不访问服务'))
+    monkeypatch.setattr(BirdIDClient, 'recognize', lambda *_: pytest.fail('采纳旧候选不重新识别'))
+    menu = QMenu()
+    controller.extend_file_menu(menu, paths[:1])
+    next(a for a in menu.actions() if a.text() == '选择候选鸟名…').trigger()
+    assert wait_for(lambda: not controller.busy)
+    table = controller._dialog.details
+    model = table.model()
+    assert model.rowCount() == 1
+    assert model.index(0, 4).data() == '反嘴鹬'
+    assert model.index(0, 2).data() == '采纳'
+    assert controller._counts['candidate'] == 1
+    assert controller._counts['failed'] == 0
+    assert Path(paths[0]).with_suffix('.xmp').read_bytes() == before
+    assert controller._dialog.grab().save(str(tmp_path / 'legacy-pending-candidate.png'))
+    target = model.index(0, 2)
+    QTest.mouseClick(table.viewport(), Qt.MouseButton.LeftButton, pos=table.visualRect(target).center())
+    assert wait_for(lambda: not controller.busy)
+    assert store.read(paths[0])['Title'] == '反嘴鹬'
+    assert files.updates[-1][paths[0]]['title'] == '反嘴鹬'
+    assert model.index(0, 2).data() == '已采纳'
+    assert controller._counts['success'] == 1
+
+
 def test_live_unsorted_candidates_default_to_highest_and_adopt_correct_row(env, monkeypatch):
     controller, files, paths, state = env
     candidates = multi_response()
