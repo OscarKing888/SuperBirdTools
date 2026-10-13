@@ -47,7 +47,7 @@ L0 应用外壳：主窗口、菜单、状态栏
 | L5 面板布尔选项 | `QCheckBox` | 启用/禁用与展开/收起分开；折叠不取消功能 |
 | L5 工具栏显示开关 | [`ToggleToolButton`](../app_common/toggle_button.py) | 蓝底白字选中态；与根规范一致。折叠标题是 disclosure，不使用蓝色开关样式 |
 | L5 动作 | `QPushButton` / `QToolButton`、已有菜单动作 | 主次动作位置一致，保留忙碌、取消及键盘行为 |
-| L4/L5 Viewer 视频回放 | [`VideoPlayerView`](../SuperViewer/superviewer/video_preview.py)、`FilmstripSlider` / `WaveformSlider`、原生 `QPushButton` | 预览伸缩、两条时间轴满行；常驻两行控制：上一帧/播放/下一帧/重播，时间/倍速/静音/音量。视频区域空格切换播放、左右键暂停并逐帧，Home/End 定位首尾帧，时间轴点击/拖动及首尾定位均保持播放状态，首次定位显示目标帧并暂停；音量和倍速保留原生键盘操作。状态由每侧播放器拥有，无新增持久化或滚动区 |
+| L4/L5 Viewer 视频回放 | [`VideoPlayerView`](../SuperViewer/superviewer/video_preview.py)、`FilmstripSlider` / `WaveformSlider`、原生 `QPushButton` | 预览伸缩、两条时间轴满行；常驻单行控制：左侧上一帧/播放/下一帧/重播，中间弹性空白，右侧倍速/静音/音量；时间读数放在时间轴上方状态行右侧。视频区域空格切换播放、左右键暂停并逐帧，Home/End 定位首尾帧，时间轴点击/拖动及首尾定位均保持播放状态，首次定位显示目标帧并暂停；音量和倍速保留原生键盘操作。状态由每侧播放器拥有，无新增持久化或滚动区 |
 | L5 反馈 | `QLabel` / `QProgressBar`、现有状态组件 | 反馈靠近所属操作；不能因折叠把唯一取消入口藏掉 |
 | L1 Viewer 视频逐帧导出 | 复用 [`BirdIDProgressDialog`](../SuperViewer/superviewer/bird_identification_controller.py)，由 [`VideoFrameExportController`](../SuperViewer/superviewer/video_frame_export_controller.py) 驱动 | 右键动作 → 按用户选项决定目录（询问模式才打开选择框）→ 当前视频/帧数、忙碌进度、可滚动结果、固定停止/关闭按钮；原生主题和可缩放布局，Esc/关闭取消，完成 PNG 保留，任务不绑定当前选择 |
 | L1/L4 Viewer 视频处理选项 | `SettingsPage` + `CollapsibleSection`（视频帧提取）+ [`VideoFrameOptionsForm`](../SuperViewer/superviewer/video_frame_options_form.py) | 纵向排列目录类型、固定根目录/浏览、目录名后缀、示例与说明；分组默认展开，固定根目录仅 fixed 模式启用；外层页面统一滚动，确认/取消固定，折叠和模式切换保留草稿，配置在确认后保存 |
