@@ -245,6 +245,7 @@ class SuperViewerTaggedFileListPanel(FileListPanel):
     include_videos = True
     use_unified_worker_pool = True
     show_thumbnail_sort_controls = True
+    show_cut_state = True
     file_table_model_class = RarityFileTableModel
     thumbnail_model_class = BirdThumbnailModel
     thumbnail_delegate_class = BirdThumbnailDelegate

@@ -34,6 +34,8 @@ Windows 下，`main.py` 在导入任何 Qt 控件前调用 [`preload_windows_run
 
 ## 2. 目录选择到可见列表
 
+Viewer 通过 `FileListPanel.show_cut_state` 启用待剪切反馈：共享 [`FileCutState`](../../app_common/file_browser/_cut_state.py) 监听系统剪贴板，只解析内部剪切 payload 的源路径与旧显示路径，查询已缓存的实际路径，不访问文件系统。两个模型通过 `_CutPendingRole` 提供同一状态；[`ThumbnailItemDelegate` / `CutFileNameDelegate`](../../app_common/file_browser/_models.py) 分别将照片淡化到 40% 不透明度并叠加“待剪切”、给列表文件名前加提示及斜体。选中边框、鸟名/评级和原排序值不变。剪贴板更新只重绘视口，切目录、排序、筛选、图片异步到达和多窗口保持一致；复制其他内容、清空剪贴板或成功剪切粘贴恢复普通状态，事务失败保留提示。共享浏览器默认关闭此显示能力，BirdStamp 外观不变；不新增持久化设置或 CLI。回归见 [`test_cut_state.py`](../tests/test_cut_state.py) 和共享 [`test_file_browser_cut_state.py`](../../app_common/tests/test_file_browser_cut_state.py)。
+
 目录标题栏的“包含子目录”复选框默认开启，状态通过 [`paths_settings.py`](../superviewer/paths_settings.py) 的 `include_subdirectories` 保存到用户配置。`MainWindow._on_include_subdirectories_changed()` 更新共享 `FileListPanel.set_include_subdirectories()` 后，沿用目录切换流程取消旧扫描、清空旧预览并刷新当前目录。关闭时，普通扫描、report.db 范围筛选、旧路径补充、空报告回退和视频枚举都只保留当前目录；文本/评级/标签过滤及刷新继续遵守该范围。共享目录组件仅在宿主显式传入 `include_subdirectories` 时显示此控件，BirdStamp 保持原有界面与默认扫描行为。此项为浏览界面偏好，无新增 CLI。
 
 共享 `DirectoryBrowserWidget._on_dir_context_menu()` 提供“复制完整路径”，取右键节点的绝对路径写入剪贴板，不触发目录选择；空白处和占位节点不显示菜单。宿主通过 `add_context_menu_extender(callback(menu, path))` 追加目录动作（如鸟清晰度检测、计算连拍信息），文件列表/缩略图菜单对应 `FileListPanel.add_file_context_menu_extender(callback(menu, paths))`；扩展回调异常只记日志，不影响菜单。

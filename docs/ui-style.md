@@ -38,6 +38,7 @@ L0 应用外壳：主窗口、菜单、状态栏
 | L3 浮窗 | `QDialog`；已有模板/叠加窗口 | 模态与非模态按用户任务决定，复用已有保存/关闭流程 |
 | L4 表单 | `QFormLayout` / `QGridLayout` | 同级字段共享标签/控件列；窄宽度换行或滚动，不裁掉编辑控件 |
 | L4 照片、元数据、标签列表 | 现有共享浏览器、模型与委托 | 分组调整不重建模型，不触发缩略图/EXIF 读取 |
+| L5 待剪切反馈 | 共享 `FileCutState`、`ThumbnailItemDelegate` / `CutFileNameDelegate`；Viewer 通过 `show_cut_state` 启用 | 剪贴板是唯一状态源；缩略图图片淡化并显示“待剪切”，列表文件名加提示及斜体，保留选中高亮、元数据、尺寸和滚动。复制/清空剪贴板或成功粘贴恢复；失败保留。只重绘视口，绘制不读文件、不重建模型；共享默认关闭 |
 | L4 识鸟批量结果 | Viewer [`BirdIDResultsTable`](../SuperViewer/superviewer/bird_identification_table.py) / [`PerBirdResultsTable`](../SuperViewer/superviewer/per_bird_results_table.py) | 一个批次一个窗口；候选/逐只记录由模型保存，按照片分组，可见缩略图与滚动由表格统一调度；逐只汇总隐藏整图采纳动作 |
 | L4 图片/视频预览 | 已有 `PreviewCanvas` / `PreviewWithStatusBar` | 不改像素来源、坐标、缩放/平移和 A/B 语义；模板原有预览分组可折叠 |
 | L1/L4 BirdStamp 拼图 | [`CollageEditor`](../SuperBirdStamp/birdstamp/gui/editor_collage.py) + `CollapsibleSection` / `ColorEditor` / `PreviewWithStatusBar` / `OverlayEditorDock` | 处理设置中位于去抖动之后；原生比例/分辨率组合框与联动宽高框定义最终画布（默认 3:4、1080 × 1440），单格自动计算；自定义宫格显示原生横向列数/纵向行数框，切回预设隐藏但保留数值；左侧参数和素材顺序由主滚动区容纳，右侧独立画布复用 OverlayPanel / OverlaySession，导出/取消/进度固定在 ExportActionBar。切页和折叠保留内容，拼图参数与素材、叠加层随工作区保存，后台单 worker 按版本接收并等真实 finished 交接；见[设计说明](ui-design/birdstamp-collage.md) |
