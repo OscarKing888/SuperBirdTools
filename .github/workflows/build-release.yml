@@ -124,6 +124,12 @@ jobs:
         shell: pwsh
         run: python init_dev.py
 
+      - name: Download and verify release detection and segmentation models
+        shell: pwsh
+        run: |
+          .\.venv\Scripts\python.exe build_tools/download_models.py yolo11n.pt yolo11l-seg.pt sam2.1_b.pt --no-denoise
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
       - name: Generate package metadata and remove runtime state
         shell: pwsh
         run: |
@@ -140,7 +146,7 @@ jobs:
         shell: pwsh
         run: |
           $env:PYTHON_EXE = (Resolve-Path ".\.venv\Scripts\python.exe").Path
-          cmd /c build_all.bat --clean
+          cmd /c build_all.bat --clean --bundle-models yolo11l-seg.pt,sam2.1_b.pt
           if ($LASTEXITCODE -ne 0) {
             exit $LASTEXITCODE
           }
@@ -160,6 +166,10 @@ jobs:
               throw "Missing build output: $path"
             }
           }
+          .\.venv\Scripts\python.exe build_tools/download_models.py yolo11n.pt yolo11l-seg.pt sam2.1_b.pt --no-denoise --check-only --dest dist/SuperViewer/_internal/models
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          .\.venv\Scripts\python.exe build_tools/download_denoise_model.py --check-only --dest dist/SuperViewer/_internal/models/denoise/NAFNet-SIDD-width64.pth
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $env:SUPERBIRD_DENOISE_MODEL_DIR = ""
           $denoiseReport = Join-Path $env:RUNNER_TEMP "denoise-windows.json"
           $probe = Start-Process -FilePath "dist/SuperViewer/SuperViewer.exe" `
@@ -215,6 +225,9 @@ jobs:
       - name: Install build dependencies and assets
         run: python3 init_dev.py
 
+      - name: Download and verify release detection and segmentation models
+        run: ./.venv/bin/python3 build_tools/download_models.py yolo11n.pt yolo11l-seg.pt sam2.1_b.pt --no-denoise
+
       - name: Generate package metadata and remove runtime state
         run: |
           ./.venv/bin/python3 build_tools/set_build_version.py
@@ -225,13 +238,15 @@ jobs:
       - name: Build macOS applications
         env:
           PYTHON_BIN: ${{ github.workspace }}/.venv/bin/python3
-        run: bash build_all.sh --clean
+        run: bash build_all.sh --clean --bundle-models yolo11l-seg.pt,sam2.1_b.pt
 
       - name: Verify and stage macOS update artifacts
         run: |
           test -x "dist/SuperViewer.app/Contents/MacOS/SuperViewer"
           test -x "dist/SuperBirdStamp.app/Contents/MacOS/SuperBirdStamp"
           test -x "dist/SuperBirdUpdater.app/Contents/MacOS/SuperBirdUpdater"
+          ./.venv/bin/python3 build_tools/download_models.py yolo11n.pt yolo11l-seg.pt sam2.1_b.pt --no-denoise --check-only --dest dist/SuperViewer.app/Contents/Resources/models
+          ./.venv/bin/python3 build_tools/download_denoise_model.py --check-only --dest dist/SuperViewer.app/Contents/Resources/models/denoise/NAFNet-SIDD-width64.pth
           SUPERBIRD_DENOISE_MODEL_DIR="" "dist/SuperViewer.app/Contents/MacOS/SuperViewer" \
             --check-denoise --device cpu --output "$RUNNER_TEMP/denoise-macos.json"
           cat "$RUNNER_TEMP/denoise-macos.json"

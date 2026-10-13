@@ -33,17 +33,24 @@ if /I "%~1"=="--bundle-all-models" (
   shift
   goto parse_args
 )
-if /I "%~1"=="--bundle-models" (
-  if "%~2"=="" (
-    echo --bundle-models requires comma-separated model names >&2
-    exit /b 1
-  )
-  set "BUNDLE_MODELS=%~2"
-  shift
-  shift
-  goto parse_args
-)
+if /I "%~1"=="--bundle-models" goto parse_models
 echo Unknown option: %~1
+exit /b 1
+
+:parse_models
+shift
+set "BUNDLE_MODELS="
+:next_model
+if "%~1"=="" goto models_done
+set "MODEL_TOKEN=%~1"
+if "%MODEL_TOKEN:~0,2%"=="--" goto models_done
+rem cmd splits unquoted comma-separated lists into individual arguments.
+if defined BUNDLE_MODELS (set "BUNDLE_MODELS=%BUNDLE_MODELS%,%~1") else (set "BUNDLE_MODELS=%~1")
+shift
+goto next_model
+:models_done
+if defined BUNDLE_MODELS goto parse_args
+echo --bundle-models requires comma-separated model names >&2
 exit /b 1
 
 :args_done

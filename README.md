@@ -18,11 +18,11 @@
 
 ## 鸟识别模型与 SuperPicky
 
-SuperViewer 的「鸟清晰度检测」「查看清晰度计算过程」和「显示鸟体」会用到下面的模型。模型权重都不入 git；其中分割模型和鸟眼模型来自 [SuperPicky（慧眼选鸟）](https://github.com/jamesphotography/SuperPicky)，本仓库既不复制也不打包它们，而是在运行时读取已安装的 SuperPicky 里的文件。
+SuperViewer 的「鸟清晰度检测」「查看清晰度计算过程」和「显示鸟体」会用到下面的模型。模型权重都不入 git；GitHub 发布包从 Ultralytics 官方资源下载并打包 `yolo11l-seg.pt`、`sam2.1_b.pt` 和基础 `yolo11n.pt`，另带 NAFNet 降噪模型。鸟眼模型仍在运行时读取已安装的 [SuperPicky（慧眼选鸟）](https://github.com/jamesphotography/SuperPicky) 文件，不随本仓库分发。
 
 | 用途 | 模型文件 | 来源 | 缺失时 |
 | --- | --- | --- | --- |
-| 鸟体识别（首选，给出每只鸟的像素轮廓） | `yolo11l-seg.pt`（或 `yolo11m/s/n-seg.pt`） | SuperPicky 安装包 | 改用下面的检测模型，只有鸟框 |
+| 鸟体识别（首选，给出每只鸟的像素轮廓） | `yolo11l-seg.pt`（或 `yolo11m/s/n-seg.pt`） | Ultralytics 官方资源，GitHub 发布包自带；也可复用 SuperPicky | 改用下面的检测模型，只有鸟框 |
 | 鸟体识别（备用，只有鸟框） | `yolo11n.pt`（或 `yolo11s.pt`、`yolov8n.pt`） | `python init_dev.py` 下载到 `SuperBirdStamp/models`，打包版 Viewer 自带 | 两种识别模型都没有时无法检测 |
 | 鸟眼、鸟喙定位 | `cub200_keypoint_resnet50_slim.pth` | SuperPicky 安装包 | 按整只鸟测量，准确度明显下降 |
 
@@ -43,7 +43,7 @@ SuperPicky 的鸟眼模型：
    - Windows：`%ProgramFiles%\SuperPicky`、`%LOCALAPPDATA%\SuperPicky` 下的 `_internal\models` 或 `models`；
 6. 与本仓库同级的 SuperPicky 源码目录 `SuperPicky/models`。
 
-所以要获得完整的鸟清晰度检测，请安装 SuperPicky，或把上面两个文件放进 `SuperViewer/models`。打包版 SuperViewer 目前只带 `yolo11n.pt`，没装 SuperPicky 的电脑只能按鸟框测整只鸟，检测进度窗口会提示。SuperPicky 自带的其他模型（飞行判断 `superFlier_efficientnet.pth`、鸟种识别 `model20240824.pth`、美学评分 `cfanet_iaa_ava_res50`）目前没有使用。细节见 [鸟清晰度检测](docs/bird_sharpness.md#模型)；两者清晰度算法的区别与实测对比见 [与 SuperPicky 锐度算法对比](docs/bird_sharpness_vs_superpicky.md)。
+GitHub 发布版 SuperViewer 自带鸟体分割与 SAM 精细分割模型；鸟眼定位仍需安装 SuperPicky，或把 `cub200_keypoint_resnet50_slim.pth` 放进 `SuperViewer/models`。缺少鸟眼模型时按整只鸟测量，检测进度窗口会提示。SuperPicky 自带的其他模型（飞行判断 `superFlier_efficientnet.pth`、鸟种识别 `model20240824.pth`、美学评分 `cfanet_iaa_ava_res50`）目前没有使用。细节见 [鸟清晰度检测](docs/bird_sharpness.md#模型)；两者清晰度算法的区别与实测对比见 [与 SuperPicky 锐度算法对比](docs/bird_sharpness_vs_superpicky.md)。
 
 ## 目录原则
 
@@ -81,7 +81,7 @@ python init_dev.py
 ./download_models.sh --dry-run       # 只看计划；--check-only 离线校验；--list 列出全部
 ```
 
-发布安装包仍只带 `yolo11n.pt` 和降噪模型，build 直接使用 workspace 里已校验的文件；`build_all_no_zip.sh` 会把全部模型打进本机构建的 SuperViewer（见「打包入口」），用户也可在设置里按需下载。
+GitHub 发布安装包带 `yolo11n.pt`、NAFNet 降噪模型、`yolo11l-seg.pt` 与 `sam2.1_b.pt`。CI 在构建前下载并校验，build 使用 workspace 里已校验的文件；`build_all_no_zip.sh` 也打包这四个模型（见「打包入口」），其余模型可在设置里按需下载。
 
 从仓库根目录启动 GUI：
 
@@ -157,7 +157,7 @@ macOS 也可直接使用免 ZIP 入口，支持传入 `--clean` 等原有参数�
 bash build_all_no_zip.sh
 ```
 
-`build_all.sh` 和 Windows 的 `build_all.bat` 均支持 `--bundle-models yolo11l-seg.pt,sam2.1_b.pt` 指定额外模型，也可以用 `--bundle-all-models` 打包全部模型（如 `download_models.bat` 后 `build_all.bat --apps-only --bundle-all-models`）；发布构建不带此参数，安装包和更新分卷保持只有 `yolo11n.pt` 与降噪模型。
+`build_all.sh` 和 Windows 的 `build_all.bat` 均支持 `--bundle-models yolo11l-seg.pt,sam2.1_b.pt` 指定额外模型，也可以用 `--bundle-all-models` 打包全部模型（如 `download_models.bat` 后 `build_all.bat --apps-only --bundle-all-models`）；GitHub 发布构建显式使用 `--bundle-models yolo11l-seg.pt,sam2.1_b.pt`，安装包和更新分卷均包含这两个模型以及基础 `yolo11n.pt` 与降噪模型；Windows 本地构建默认也带这两个额外模型，macOS 未传模型参数时仅包含基础模型。
 
 ```bat
 build_all.bat --apps-only
@@ -267,7 +267,7 @@ Windows 使用 `.venv\Scripts\python.exe` 执行同一脚本。macOS `CFBundleSh
 
 ## GitHub Actions 自动构建
 
-`.github/workflows/build-release.yml` 每次都以 `--clean` 构建 Windows x86_64 和 macOS arm64 三应用套件，入口如下：
+`.github/workflows/build-release.yml` 在下载和校验上述四个模型后，每次都以 `--clean --bundle-models yolo11l-seg.pt,sam2.1_b.pt` 构建 Windows x86_64 和 macOS arm64 三应用套件，入口如下：
 
 - push 到 `main` 或向 `main` 提交 Pull Request 时自动构建（只改 Markdown、`docs/`、`ai_rules/`、`.cursor/` 时跳过）。版本前两段取 `app_metadata.json`，第三段取实际 HEAD 前 8 位（PR 为 GitHub 生成的合并提交），结果保留为 14 天的 Actions artifacts，不发布 Release。同一分支或 PR 的新提交会取消尚未完成的旧构建。
 - 在 GitHub Actions 页面手动运行时，可输入前两段版本号（例如 `1.2`），留空则取 `app_metadata.json`；第三段取所选 ref 的实际 HEAD 前 8 位，同样只生成 Actions artifacts。手动运行即使选择 Tag，也不发布 Release。
