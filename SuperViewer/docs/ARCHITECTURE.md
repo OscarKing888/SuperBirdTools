@@ -62,7 +62,7 @@ flowchart TD
 
 目录切换立即启动新扫描；旧扫描取消后仍由面板持有，直到其真正的 `QThread.finished` 被处理。扫描进度和结果校验 worker 身份，排队的列表应用还校验请求代次，防止 A → B → A 时旧 A 的结果覆盖新请求。窗口关闭也等待这些扫描完成交接。
 
-`FileTableModel` / `FileTableSortProxyModel` 和 `ThumbnailListModel` 展示同一套过滤数据。文本、评级、精选、排除、焦点及标签条件组合后重建数据集，不靠逐行隐藏控件。镜头过滤是标签过滤行最前的可搜索下拉框：每次展开时从当前列表全部照片（不受其它过滤影响）的 `_meta_cache` 镜头型号汇总选项和张数，加载过程中不做额外工作；当前选中的镜头即使不在新列表中也保留为 0 张选项，便于看到和清除。编号列只表示当前自然顺序。列表模式不触发缩略图工作；缩略图模式依据可见区域加载。连拍分组底框由两个模型共享的 `_BurstGroupMixin` 按模型行序惰性计算（同目录 + 同 `burst_id`、至少 2 张），两种配色交替；列表模式走 `BackgroundRole`，缩略图模式由 `ThumbnailItemDelegate` 读取 `_MetaBurstGroupRole` 画色带。`_apply_filter()` / `_rebuild_views()` 调用 `_sync_burst_group_display()`，任何过滤（含标签过滤）激活时关闭底框。
+`FileTableModel` / `FileTableSortProxyModel` 和 `ThumbnailListModel` 展示同一套过滤数据。文本、评级、精选、排除、焦点及标签条件组合后重建数据集，不靠逐行隐藏控件。过滤栏通过 [`FilterFlowLayout`](../superviewer/filter_controls.py) 按实际字体与可用宽度换行，依次显示镜头、稀有等级和标签下拉。镜头过滤是最前的可搜索下拉框：每次展开时从当前列表全部照片（不受其它过滤影响）的 `_meta_cache` 镜头型号汇总选项和张数，加载过程中不做额外工作；当前选中的镜头即使不在新列表中也保留为 0 张选项，便于看到和清除。编号列只表示当前自然顺序。列表模式不触发缩略图工作；缩略图模式依据可见区域加载。连拍分组底框由两个模型共享的 `_BurstGroupMixin` 按模型行序惰性计算（同目录 + 同 `burst_id`、至少 2 张），两种配色交替；列表模式走 `BackgroundRole`，缩略图模式由 `ThumbnailItemDelegate` 读取 `_MetaBurstGroupRole` 画色带。`_apply_filter()` / `_rebuild_views()` 调用 `_sync_burst_group_display()`，任何过滤（含标签过滤）激活时关闭底框。
 
 Viewer 缩略图由 [`BirdThumbnailModel` / `BirdThumbnailDelegate`](../superviewer/thumbnail_metadata.py) 扩展共享模型与委托：照片下方固定鸟名、稀有度/IUCN 徽章、筛片状态三层，文件名和连拍编号仍独立置底；128 档也显示鸟名，长文本省略后可悬停查看完整鸟名、等级、已保存拼音与地点。徽章复用 `metadata_badges` 的配置和来源校验，缺失等级留空、0 分有效。标题字段解析与列表一致，初次加载和增量修改都会更新。`FileListPanel.thumbnail_model_class` / `thumbnail_delegate_class` 提供宿主扩展点，`ThumbnailItemDelegate.grid_size()` 将新增的 52 px 同时加到卡片与信息区高度，保留照片显示尺寸；滚动步长跟随新网格。绘制只读缓存，无逐项控件或文件读取，共享默认布局及 BirdStamp 不增加身份行。悬停通过模型 ToolTipRole 取得完整信息；测试见 [test_thumbnail_metadata.py](../tests/test_thumbnail_metadata.py) 与 [test_thumbnail_species_metadata.py](../../app_common/tests/test_thumbnail_species_metadata.py)。
 
@@ -76,7 +76,11 @@ RAW 焦点读取（[`raw_focus_metadata.py`](../../app_common/raw_focus_metadata
 
 ## 3. 预览与连续快切
 
-列表上方的评级（含星级）和标签过滤徽章由 [`SuperViewerTaggedFileListPanel`](../superviewer/tagged_file_list.py) 接入共享 [`TOGGLE_CHECKED_STYLE`](../../app_common/toggle_button.py)，与预览开关保持同样的蓝底白字选中态，同时保留徽章的紧凑尺寸、圆角和原有筛选语义。
+列表上方的评级（含星级）徽章保留原布局，标签徽章整理为单个“全部标签”下拉，激活后显示“标签(N)”。菜单复用 [`add_filterable_tag_actions`](../superviewer/tag_menu.py) 的搜索、分组与持续勾选，完全匹配和清除操作放在菜单内；部分匹配仍为任一标签命中，完全匹配仍要求同时包含全部已选标签。空标签库显示提示，关闭或重新展开保留条件。
+
+稀有等级下拉支持普通/少见/稀有/史诗/传奇/未知多选，多个等级按 OR、与其它条件按 AND 组合；空选择表示不限。复用共享 `rarity_metadata()` / `rarity_level()`，保留 0 分与缺失/过期鸟名的区分，显示名称跟随徽章配置，选择身份使用稳定等级键。`_has_any_filter()` 与 `_path_matches_active_filters()` 驱动同一过滤数据源，后台元数据及手动等级更新沿用增量刷新，只在成员资格改变时重建。菜单只读缓存，不额外读取照片/XMP，也不改变等级写入或清晰度流程。
+
+两种下拉通过 [`FilterDropdown / FilterMenu`](../superviewer/filter_controls.py) 使用原生 Qt 菜单，鼠标及空格/回车可连续勾选，Esc/点外部关闭。激活摘要沿用共享 [`TOGGLE_CHECKED_STYLE`](../../app_common/toggle_button.py) 的蓝底白字选中态。标签库变更、主题和窗口尺寸变化保留控件与选择状态，无新增持久化配置或 CLI。回归见 [`test_filter_dropdowns.py`](../tests/test_filter_dropdowns.py)、`test_tag_filter_theme.py`、`test_tag_tree_menu.py` 和 `test_lens_filter.py`。
 
 ### A/B 对照
 
@@ -340,7 +344,9 @@ CLI 与 GUI 共用核心：在仓库根使用共享 `.venv` 执行 `python -m Su
 
 最前面的“分组”列在表格网格绘制后以连续括线连接同一 `ResultEntry` 的候选，照片间断开，选中行和滚动裁剪不打断组内连线；逻辑列追加后移到视觉首列，保留原有预览/采纳列索引。照片列使用 [`BirdIDThumbnails`](../superviewer/bird_identification_thumbnails.py) 显示等比预览及文件名；它复用共享 `ThumbnailLoader`、列表的 `ThumbnailMemoryCache`、`BrowserWorkPool` 和报告/每文件磁盘缓存解析。只请求可见照片的 256 档缩略图，同照片候选去重；表格绘制不读取磁盘或解码，保留最多 64 张结果。目录和报告上下文在识别开始时快照，隐藏/滚动/换批次使旧请求失效，协调器保有唯一 loader 至真实 `finished` 后才交接；控制器退出条件也等待预览线程结束。回归见 [识鸟表格预览测试](../tests/test_bird_identification_thumbnails.py)。
 
-照片右键“选择候选鸟名…”通过同一 `BirdIDWorker` 的只读模式调用 [`load_saved_candidates()`](../superviewer/bird_identification_candidates.py)，不访问识鸟服务。新 `birdid_candidates` 优先，缺字段时回退完整响应；以原始候选索引维护数据身份，表格只按置信度排序显示，保留当前已采纳项，无已采纳项时选中最高分。详情按中英文名与置信度匹配，保存保留原始响应及候选顺序，旧记录可“采纳并补存”。实际写入沿用侧车指纹保护与元数据局部同步。回归见 [保存候选读取/采纳](../tests/test_bird_identification_candidates.py) 与识鸟控制器的列表/缩略图实窗测试。
+照片右键“选择候选鸟名…”通过同一 `BirdIDWorker` 的只读模式调用 [`load_saved_candidates()`](../superviewer/bird_identification_candidates.py)，不访问识鸟服务。新 `birdid_candidates` 优先，缺字段时回退完整响应；两者都缺失时兼容现有 XMP 的旧 `alt_species_*` / `alt_confidence` 和“鸟名（待确定 N%）”标题，并通过共享 `PhotoMetaDataReportDB` 只读补充旧候选。同名且分数匹配标题的四舍五入值时才补回英文名和精确分数，XMP 候选优先，旧格式只恢复单个候选，不自动确认；新版 JSON 损坏不降级为旧记录。以原始候选索引维护数据身份，表格只按置信度排序显示，保留当前已采纳项，无已采纳项时选中最高分。详情按中英文名与置信度匹配，保存保留原始响应及候选顺序，旧记录可“采纳并补存”；旧标题/alt 候选采纳时去掉标题的待确定后缀、补存候选列表，不伪造服务原文。实际写入沿用侧车指纹保护与元数据局部同步。回归见 [保存候选读取/采纳](../tests/test_bird_identification_candidates.py) 与识鸟控制器的列表/缩略图实窗测试。
+
+旧侧车可能在多个 RDF Description 中重复追加星级、精选或分析评分。共享 `PhotoMetaDataXMP._deduplicate_photo_scalars()` 在交给 ExifTool 前只修复暂存副本中的这些已知标量，按现有读取顺序保留最后非空值；不碰未知属性、带限定信息的值或其它资源。整个写入成功才发布，失败保留原侧车。回归见 [test_xmp_exiftool_writes.py](../../app_common/tests/test_xmp_exiftool_writes.py)。
 
 结果表以照片组为单位将待确定、可重试的采纳失败和需补存候选置顶，同一优先级保持结果到达顺序，组内保持置信度降序。采纳成功或结果过期时使用 Qt 行移动通知重排整组，维护 `first_row`、候选原始索引及持久选区，避免按钮指向另一张照片；新增置顶组不抢走已有选择。可用的“采纳 / 采纳并补存”按钮绘制绿色填充、白字和键盘焦点虚线，悬停加深；已采纳、保存中和过期等禁用状态沿用中性样式，行选中色与主题不会覆盖绿色。排序为 UI 行为，不改变 XMP 或服务结果顺序。回归见 [表格排序与绘制](../tests/test_bird_identification_table.py) 及识鸟控制器的后台采纳测试。
 

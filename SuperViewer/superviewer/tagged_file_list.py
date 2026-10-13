@@ -8,6 +8,7 @@ from contextlib import ExitStack
 from pathlib import Path
 from typing import Iterable
 
+from app_common.bird_rarity import RARITY_LEVELS, rarity_level, rarity_metadata
 from app_common.command_history import CommandHistory
 from app_common.file_browser import FileListPanel
 from app_common.file_browser._browser_core import (
@@ -24,6 +25,8 @@ from app_common.log import get_logger
 from app_common.qt_theme import is_theme_change_event, scheme_from_palette
 from app_common.toggle_button import TOGGLE_CHECKED_STYLE
 
+from .filter_controls import FilterDropdown, FilterFlowLayout
+from .rarity_badge import rarity_badge_style
 from .file_context_menu import build_file_context_menu, species_shortcut_sequence
 from .photo_tags import (
     PhotoTagConfig,
@@ -34,7 +37,7 @@ from .photo_tags import (
     find_superpicky_tag_config_path,
     photo_tag_filter_matches,
 )
-from .qt_compat import QCheckBox, QHBoxLayout, QLabel, QMenu, QMessageBox, QPixmap, QThread, QTimer, QToolButton, pyqtSignal
+from .qt_compat import QMenu, QMessageBox, QPixmap, QThread, QTimer, QToolButton, QWidget, pyqtSignal
 from .photo_tag_commands import ClearPhotoTagsCommand, SetPhotoTagCommand
 from .tag_menu import add_filterable_tag_actions
 from .ui_theme import PanelThemeColors, panel_theme_colors
@@ -53,23 +56,22 @@ except ImportError:
 
 _log = get_logger("superviewer.tagged_file_list")
 
-_TAG_FILTER_INLINE_LIMIT = 8
 _PHOTO_TAG_CACHE_BATCH_SIZE = 256
 _PHOTO_TAG_FILTER_REFRESH_MS = 750
 _FOCUS_SOURCE_PREFERRED_EXTENSIONS = (".arw", ".hif", ".heif", ".heic")
 _LENS_FILTER_ALL_TEXT = "全部镜头"
 
 
-def _tag_filter_button_style(colors: PanelThemeColors, *, clear: bool = False) -> str:
-    text = colors.secondary_text if clear else colors.chip_text
-    background = colors.button_bg if clear else colors.chip_bg
+def _tag_filter_button_style(colors: PanelThemeColors) -> str:
     return (
         "QToolButton {"
-        "font-size: 11px; padding: 1px 7px; min-width: 38px; "
-        f"border-radius: 9px; border: 1px solid {colors.chip_border}; "
-        f"background: {background}; color: {text};"
+        "padding: 4px 20px 4px 8px; "
+        f"border-radius: 4px; border: 1px solid {colors.chip_border}; "
+        f"background: {colors.chip_bg}; color: {colors.chip_text};"
         "}"
         f"QToolButton:hover {{ background: {colors.button_hover}; }}"
+        "QToolButton::menu-indicator { subcontrol-origin: padding; "
+        "subcontrol-position: center right; right: 5px; }"
     ) + TOGGLE_CHECKED_STYLE
 
 
@@ -323,16 +325,15 @@ class SuperViewerTaggedFileListPanel(FileListPanel):
         self._available_tag_tree: list[TagTreeNode] = []
         self._active_tag_filters: set[str] = set()
         self._tag_filter_partial_match: bool = True
-        self._tag_filter_buttons: dict[str, QToolButton] = {}
-        self._tag_filter_exact_match_checkbox: QCheckBox | None = None
+        self._tag_filter_exact_match_action = None
+        self._tag_filter_clear_action = None
         self._tag_filter_menu_button: QToolButton | None = None
-        self._tag_filter_clear_button: QToolButton | None = None
-        self._tag_filter_title_label: QLabel | None = None
-        self._tag_filter_empty_label: QLabel | None = None
+        self._active_rarity_filters: set[str] = set()
+        self._rarity_filter_button: FilterDropdown | None = None
+        self._rarity_filter_clear_action = None
         self._tag_filter_theme_applying = False
         self._lens_filter_value = ""
         self._lens_filter_combo: FilterableComboBox | None = None
-        self._lens_filter_label: QLabel | None = None
         self._photo_tag_store = tag_store or PhotoTagSidecarStore()
         self._photo_tag_cache: dict[str, set[str]] = {}
         self._photo_tag_generation_by_path: dict[str, int] = {}
@@ -346,7 +347,7 @@ class SuperViewerTaggedFileListPanel(FileListPanel):
         self._photo_tag_loader_covers_all_files = False
         self._tag_shutdown_requested = False
         self._tag_shutdown_complete = False
-        self._tag_filter_bar: QHBoxLayout | None = None
+        self._tag_filter_bar: FilterFlowLayout | None = None
         self._focus_source_index: dict[tuple[str, str], str] = {}
         self._command_history = CommandHistory(max_commands=100)
         super().__init__(parent)
@@ -397,6 +398,7 @@ class SuperViewerTaggedFileListPanel(FileListPanel):
         super().apply_user_options()
         self._file_table_model.refresh_badges()
         self._list_widget.viewport().update()
+        self._sync_rarity_filter_widgets()
 
     def changeEvent(self, event) -> None:
         super().changeEvent(event)
@@ -412,16 +414,9 @@ class SuperViewerTaggedFileListPanel(FileListPanel):
             colors = panel_theme_colors(scheme_from_palette(self.palette()))
             button_style = _tag_filter_button_style(colors)
             styled_widgets = [
-                (button, button_style) for button in self._tag_filter_buttons.values()
-            ]
-            styled_widgets.extend((
                 (self._tag_filter_menu_button, button_style),
-                (self._tag_filter_clear_button, _tag_filter_button_style(colors, clear=True)),
-                (self._tag_filter_title_label, f"color: {colors.secondary_text}; font-size: 11px;"),
-                (self._lens_filter_label, f"color: {colors.secondary_text}; font-size: 11px;"),
-                (self._tag_filter_empty_label, f"color: {colors.muted_text}; font-size: 11px;"),
-                (self._tag_filter_exact_match_checkbox, f"QCheckBox {{ color: {colors.label_text}; font-size: 11px; }}"),
-            ))
+                (self._rarity_filter_button, button_style),
+            ]
             for widget, style in styled_widgets:
                 if widget is not None and widget.styleSheet() != style:
                     widget.setStyleSheet(style)
@@ -806,7 +801,8 @@ class SuperViewerTaggedFileListPanel(FileListPanel):
         return updated_paths
 
     def _has_any_filter(self) -> bool:
-        return super()._has_any_filter() or bool(self._active_tag_filters) or bool(self._lens_filter_value)
+        return (super()._has_any_filter() or bool(self._active_tag_filters)
+                or bool(self._lens_filter_value) or bool(self._active_rarity_filters))
 
     def _filter_text_tokens(self) -> list[str]:
         if not getattr(self, "_filter_edit", None):
@@ -835,6 +831,11 @@ class SuperViewerTaggedFileListPanel(FileListPanel):
             return False
         if self._lens_filter_value and self._lens_model_for_path(path) != self._lens_filter_value:
             return False
+        if self._active_rarity_filters:
+            meta = self._meta_cache.get(os.path.normpath(path), {})
+            score = rarity_metadata(meta if isinstance(meta, dict) else {})[0]
+            if rarity_level(score) not in self._active_rarity_filters:
+                return False
         tokens = self._filter_text_tokens()
         if tokens:
             norm = os.path.normpath(path)
@@ -896,21 +897,16 @@ class SuperViewerTaggedFileListPanel(FileListPanel):
                 counts[lens] = counts.get(lens, 0) + 1
         return counts
 
-    def _install_lens_filter_combo(self, layout: QHBoxLayout) -> None:
-        """Lens filter leads the tag filter row, which keeps it out of the crowded rating row."""
-        label = QLabel("镜头:")
-        self._lens_filter_label = label
-        layout.addWidget(label)
+    def _install_lens_filter_combo(self, layout) -> None:
         combo = FilterableComboBox()
         combo.setFilterPlaceholderText("过滤镜头...")
         combo.setSizeAdjustPolicy(FilterableComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
-        combo.setMinimumContentsLength(14)
-        combo.setMaximumWidth(260)
+        combo.setMinimumContentsLength(10)
+        combo.setMaximumWidth(220)
         combo.popupAboutToShow.connect(self._refresh_lens_filter_options)
         combo.currentIndexChanged.connect(self._on_lens_filter_index_changed)
         self._lens_filter_combo = combo
         layout.addWidget(combo)
-        layout.addSpacing(8)
         self._refresh_lens_filter_options()
 
     def _refresh_lens_filter_options(self) -> None:
@@ -961,165 +957,135 @@ class SuperViewerTaggedFileListPanel(FileListPanel):
         layout = self.layout()
         if layout is None:
             return
-        row = QHBoxLayout()
-        row.setSpacing(3)
+        self._filter_controls = QWidget(self)
+        row = FilterFlowLayout(self._filter_controls)
+        self._tag_filter_bar = row
         self._install_lens_filter_combo(row)
-        # Tag widgets live in their own sub-layout because tag config changes rebuild it wholesale.
-        self._tag_filter_bar = QHBoxLayout()
-        self._tag_filter_bar.setSpacing(3)
-        row.addLayout(self._tag_filter_bar, 1)
+        self._rarity_filter_button = FilterDropdown(self)
+        self._rarity_filter_button.menu().aboutToShow.connect(self._populate_rarity_filter_menu)
+        row.addWidget(self._rarity_filter_button)
+        self._tag_filter_menu_button = FilterDropdown(self)
+        self._tag_filter_menu_button.menu().aboutToShow.connect(self._populate_tag_filter_menu)
+        row.addWidget(self._tag_filter_menu_button)
         stack_index = layout.indexOf(getattr(self, "_stack", None))
         if stack_index >= 0:
-            layout.insertLayout(stack_index, row)
+            layout.insertWidget(stack_index, self._filter_controls)
         else:
-            layout.addLayout(row)
+            layout.addWidget(self._filter_controls)
         self._rebuild_tag_filter_bar()
-
-    def _clear_tag_filter_bar(self) -> None:
-        layout = self._tag_filter_bar
-        if layout is None:
-            return
-        while layout.count():
-            item = layout.takeAt(0)
-            widget = item.widget()
-            if widget is not None:
-                widget.deleteLater()
+        self._sync_rarity_filter_widgets()
 
     def _rebuild_tag_filter_bar(self) -> None:
-        layout = self._tag_filter_bar
-        if layout is None:
-            return
-        self._clear_tag_filter_bar()
-        self._tag_filter_buttons = {}
-        self._tag_filter_exact_match_checkbox = None
-        self._tag_filter_menu_button = None
-        self._tag_filter_clear_button = None
-        self._tag_filter_title_label = None
-        self._tag_filter_empty_label = None
-
-        title = QLabel("标签过滤:")
-        self._tag_filter_title_label = title
-        layout.addWidget(title)
-
-        exact_match_checkbox = QCheckBox("完全匹配")
-        exact_match_checkbox.setChecked(not self._tag_filter_partial_match)
-        exact_match_checkbox.setToolTip("勾选：照片必须包含所有已选标签；取消勾选：任意已选标签部分匹配即可。")
-        exact_match_checkbox.toggled.connect(self._on_tag_exact_match_toggled)
-        self._tag_filter_exact_match_checkbox = exact_match_checkbox
-        layout.addWidget(exact_match_checkbox)
-
-        if not self._available_tags:
-            empty = QLabel("tags.cfg 未配置")
-            self._tag_filter_empty_label = empty
-            layout.addWidget(empty)
-            layout.addStretch()
-            self._apply_tag_filter_theme()
-            self._sync_tag_filter_widgets()
-            return
-
-        inline_tags = self._inline_tag_filter_tags()
-        for tag in inline_tags:
-            btn = self._create_tag_filter_button(tag)
-            self._tag_filter_buttons[tag] = btn
-            layout.addWidget(btn)
-
-        if len(inline_tags) < len(self._available_tags) or any(node.is_group for node in self._available_tag_tree):
-            more_btn = QToolButton()
-            more_btn.setAutoRaise(False)
-            more_btn.clicked.connect(lambda checked=False, b=more_btn: self._show_tag_filter_menu(b))
-            self._tag_filter_menu_button = more_btn
-            layout.addWidget(more_btn)
-
-        clear_btn = QToolButton()
-        clear_btn.setText("清除")
-        clear_btn.setToolTip("清除所有标签过滤")
-        clear_btn.setAutoRaise(False)
-        clear_btn.clicked.connect(lambda checked=False: self._clear_tag_filters())
-        self._tag_filter_clear_button = clear_btn
-        layout.addWidget(clear_btn)
-        layout.addStretch()
+        # 标签库重载只同步摘要；按钮和已展开菜单的生命周期不随勾选变化。
         self._apply_tag_filter_theme()
         self._sync_tag_filter_widgets()
 
-    def _inline_tag_filter_tags(self) -> list[str]:
-        """Return compact inline tags; full tag set lives in the filterable menu."""
-        inline: list[str] = []
-        for tag in self._available_tags:
-            if tag in self._active_tag_filters:
-                inline.append(tag)
-                if len(inline) >= _TAG_FILTER_INLINE_LIMIT:
-                    return inline
-        for tag in self._available_tags:
-            if tag in self._active_tag_filters or tag in inline:
-                continue
-            inline.append(tag)
-            if len(inline) >= _TAG_FILTER_INLINE_LIMIT:
-                break
-        return inline
-
-    def _create_tag_filter_button(self, tag: str) -> QToolButton:
-        btn = QToolButton()
-        btn.setText(tag)
-        btn.setToolTip(self._tag_filter_button_tooltip(tag))
-        btn.setCheckable(True)
-        btn.setChecked(tag in self._active_tag_filters)
-        btn.setAutoRaise(False)
-        btn.clicked.connect(lambda checked=False, t=tag: self._on_tag_filter_toggled(t, bool(checked)))
-        return btn
-
-    def _tag_filter_button_tooltip(self, tag: str) -> str:
-        if self._tag_filter_partial_match:
-            return f"筛选标签「{tag}」；当前为部分匹配，任意已选标签命中即可"
-        return f"筛选标签「{tag}」；当前为完全匹配，照片需同时包含所有已选标签"
-
     def _sync_tag_filter_widgets(self) -> None:
-        for key, btn in self._tag_filter_buttons.items():
-            btn.setChecked(key in self._active_tag_filters)
-        active_count = len(self._active_tag_filters)
-        menu_button = self._tag_filter_menu_button
-        if menu_button is not None:
-            hidden_count = max(0, len(self._available_tags) - len(self._tag_filter_buttons))
-            if active_count:
-                menu_button.setText(f"全部标签({active_count})")
-            elif not hidden_count:
-                menu_button.setText("全部标签")
-            else:
-                menu_button.setText(f"更多({hidden_count})")
-            menu_button.setToolTip(
-                f"打开全部 {len(self._available_tags)} 个标签，可输入过滤文本后勾选过滤"
-            )
-        clear_button = self._tag_filter_clear_button
-        if clear_button is not None:
-            clear_button.setVisible(bool(active_count))
-        exact_match_checkbox = self._tag_filter_exact_match_checkbox
-        if exact_match_checkbox is not None:
-            exact_match_checkbox.setChecked(not self._tag_filter_partial_match)
-            exact_match_checkbox.setToolTip(
-                "勾选：照片必须包含所有已选标签；取消勾选：任意已选标签部分匹配即可。"
-            )
-        for tag, btn in self._tag_filter_buttons.items():
-            btn.setToolTip(self._tag_filter_button_tooltip(tag))
-
-    def _show_tag_filter_menu(self, button: QToolButton) -> None:
-        self._load_tag_config_if_changed()
-        if not self._available_tags:
+        button = self._tag_filter_menu_button
+        if button is None:
             return
-        menu = QMenu(self)
-        add_filterable_tag_actions(
-            menu,
-            self._available_tags,
-            lambda tag, checked=False: self._on_tag_filter_toggled(tag, bool(checked)),
-            tag_tree=self._available_tag_tree,
-            checkable=True,
-            checked_provider=lambda tag: tag in self._active_tag_filters,
-            filter_placeholder="过滤标签",
-            no_match_text="没有匹配的标签",
-        )
+        count = len(self._active_tag_filters)
+        button.setText(f"标签({count})" if count else "全部标签")
+        button.setChecked(bool(count))
+        mode = "完全匹配：同时包含所有已选标签" if not self._tag_filter_partial_match else "部分匹配：任意已选标签命中"
+        selected = "、".join(tag for tag in self._available_tags if tag in self._active_tag_filters)
+        button.setToolTip(f"{mode}\n已选：{selected or '不限'}\n打开菜单搜索、多选或清除标签过滤")
+        if self._tag_filter_clear_action is not None:
+            self._tag_filter_clear_action.setEnabled(bool(count))
+        if self._tag_filter_exact_match_action is not None:
+            with QSignalBlocker(self._tag_filter_exact_match_action):
+                self._tag_filter_exact_match_action.setChecked(not self._tag_filter_partial_match)
+
+    def _populate_tag_filter_menu(self) -> None:
+        self._load_tag_config_if_changed()
+        menu = self._tag_filter_menu_button.menu()
+        self._tag_filter_exact_match_action = None
+        self._tag_filter_clear_action = None
+        menu.clear()
+        exact = menu.addAction("完全匹配（包含全部已选标签）")
+        exact.setCheckable(True)
+        exact.setChecked(not self._tag_filter_partial_match)
+        exact.toggled.connect(self._on_tag_exact_match_toggled)
+        self._tag_filter_exact_match_action = exact
+        clear = menu.addAction("清除标签过滤")
+        clear.setEnabled(bool(self._active_tag_filters))
+        clear.triggered.connect(lambda checked=False: self._clear_tag_filters())
+        self._tag_filter_clear_action = clear
         menu.addSeparator()
-        clear_action = menu.addAction("清除标签过滤")
-        clear_action.setEnabled(bool(self._active_tag_filters))
-        clear_action.triggered.connect(lambda checked=False: self._clear_tag_filters())
-        _exec_menu(menu, button.mapToGlobal(button.rect().bottomLeft()))
+        if self._available_tags:
+            add_filterable_tag_actions(
+                menu, self._available_tags, self._on_tag_filter_toggled,
+                tag_tree=self._available_tag_tree, checkable=True, keep_open=True,
+                checked_provider=lambda tag: tag in self._active_tag_filters,
+                filter_placeholder="过滤标签", no_match_text="没有匹配的标签",
+            )
+        else:
+            menu.addAction("tags.cfg 未配置标签").setEnabled(False)
+
+    def _populate_rarity_filter_menu(self) -> None:
+        menu = self._rarity_filter_button.menu()
+        self._rarity_filter_clear_action = None
+        menu.clear()
+        clear = menu.addAction("清除稀有等级过滤")
+        clear.setEnabled(bool(self._active_rarity_filters))
+        clear.triggered.connect(lambda checked=False: self.set_rarity_filters(set()))
+        self._rarity_filter_clear_action = clear
+        menu.addSeparator()
+        for level, description, _text, _color in RARITY_LEVELS:
+            text = rarity_badge_style(None, level=level)[0]
+            action = menu.addAction(text)
+            action.setData(level)
+            action.setToolTip(description)
+            action.setCheckable(True)
+            action.setChecked(level in self._active_rarity_filters)
+            action.toggled.connect(lambda checked, key=level: self._on_rarity_filter_toggled(key, checked))
+
+    def _on_rarity_filter_toggled(self, level: str, checked: bool) -> None:
+        levels = set(self._active_rarity_filters)
+        if checked:
+            levels.add(level)
+        else:
+            levels.discard(level)
+        self.set_rarity_filters(levels)
+
+    def set_rarity_filters(self, levels: Iterable[str]) -> None:
+        selected = set(levels).intersection(level[0] for level in RARITY_LEVELS)
+        if selected == self._active_rarity_filters:
+            return
+        self._active_rarity_filters = selected
+        self._sync_rarity_filter_widgets()
+        self._refresh_filter_scope()
+
+    def _sync_rarity_filter_widgets(self) -> None:
+        button = self._rarity_filter_button
+        if button is None:
+            return
+        count = len(self._active_rarity_filters)
+        button.setText(f"稀有等级({count})" if count else "全部稀有等级")
+        button.setChecked(bool(count))
+        selected = "、".join(rarity_badge_style(None, level=key)[0]
+                            for key, *_ in RARITY_LEVELS if key in self._active_rarity_filters)
+        button.setToolTip(f"多选稀有等级，命中任一等级即可；与其他过滤条件同时生效。\n已选：{selected or '不限'}")
+        if self._rarity_filter_clear_action is not None:
+            self._rarity_filter_clear_action.setEnabled(bool(count))
+        for action in button.menu().actions():
+            if action.isCheckable():
+                with QSignalBlocker(action):
+                    action.setChecked(action.data() in self._active_rarity_filters)
+                    action.setText(rarity_badge_style(None, level=action.data())[0])
+
+    def _filters_require_rebuild_after_metadata_refresh(self, paths: list[str]) -> bool:
+        # 手动改等级/识鸟结果也可能使照片进入或离开当前过滤集合。
+        if super()._filters_require_rebuild_after_metadata_refresh(paths):
+            return True
+        if not (self._active_rarity_filters or self._active_tag_filters or self._lens_filter_value):
+            return False
+        visible = {os.path.normcase(os.path.normpath(path)) for path in self._filtered_files}
+        listed = {os.path.normcase(os.path.normpath(path)) for path in self._all_files}
+        return any(
+            (os.path.normcase(path) in visible) != self._path_matches_active_filters(path)
+            for path in self._unique_norm_paths(paths) if os.path.normcase(path) in listed
+        )
 
     def _load_tag_config_if_changed(self, *, force: bool = False, preserve_history: bool = False) -> bool:
         library = getattr(self, "tag_library", None)
@@ -1521,12 +1487,7 @@ class SuperViewerTaggedFileListPanel(FileListPanel):
             self._active_tag_filters.add(tag)
         else:
             self._active_tag_filters.discard(tag)
-        current_inline = set(self._tag_filter_buttons)
-        desired_inline = set(self._inline_tag_filter_tags())
-        if current_inline != desired_inline:
-            self._rebuild_tag_filter_bar()
-        else:
-            self._sync_tag_filter_widgets()
+        self._sync_tag_filter_widgets()
         self._refresh_filter_scope()
 
     def _on_tag_exact_match_toggled(self, checked: bool) -> None:
@@ -1543,7 +1504,7 @@ class SuperViewerTaggedFileListPanel(FileListPanel):
         if not self._active_tag_filters:
             return
         self._active_tag_filters.clear()
-        self._rebuild_tag_filter_bar()
+        self._sync_tag_filter_widgets()
         self._refresh_filter_scope()
 
     def _add_photo_tag_menu_actions(self, menu, paths: list[str]) -> None:

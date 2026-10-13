@@ -109,6 +109,11 @@ class BirdIDWorker(QThread):
             self.progress_changed.emit(0, len(paths))
             if not paths or self.client.cancelled.is_set():
                 return
+            # 本批共用报告索引，旧候选不能每张照片重新加载整个 report.db。
+            report_reader = None
+            if self.job.saved_candidates:
+                from app_common.exif_io.photo_meta import PhotoMetaDataReportDB
+                report_reader = PhotoMetaDataReportDB()
             analyzer = None
             if self.job.per_bird:
                 from .bird_sharpness_controller import _viewer_focus_box
@@ -127,7 +132,8 @@ class BirdIDWorker(QThread):
                 elif self.job.saved_candidates:
                     from .bird_identification_candidates import load_saved_candidates
                     self.status_changed.emit(f"正在读取候选：{Path(path).name}")
-                    result = load_saved_candidates(path, cancelled=self.client.cancelled.is_set)
+                    result = load_saved_candidates(path, cancelled=self.client.cancelled.is_set,
+                                                   report_reader=report_reader)
                 else:
                     self.status_changed.emit(f"正在识别：{Path(path).name}")
                     result = identify_file(path, self.client)
