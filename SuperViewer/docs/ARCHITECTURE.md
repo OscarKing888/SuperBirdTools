@@ -374,6 +374,9 @@ CLI 与 GUI 共用核心：在仓库根使用共享 `.venv` 执行 `python -m Su
 每只另存所选候选索引、学名/拼音/说明/稀有度/IUCN/国家保护等级快照及完整服务响应。
 `individual_species_metadata()` 为旧记录从匹配候选恢复属性，不借用整图等级；
 `IndividualBirdsPanel` 按编号、鸟名/置信度、徽章/检测信息分列，复用 `rarity_badge` 用户样式，
+列表上方原生下拉框支持编号、可信度、稀有度分别升序/降序，默认编号升序，切图及刷新保留窗口内选择。
+`_sorted_individuals()` 按原始数值生成独立显示顺序，缺失值始终置后，同值按编号升序；稀有度沿用逐鸟属性兼容读取。
+排序只影响视图，不修改 XMP 或检测编号；悬停框、徽章刷新与设为主要鸟名都从对应显示记录取原始身份，无独立 CLI。
 编号色块使用该鸟稀有度徽章背景色；预览为空心框，独立读取 `bird_hover_color` 用户选项（默认红色）。`refresh_badges()` 同步用户配色及当前鸟名悬停框；
 鸟名右键通过 `primary_requested` 交给 `PrimaryBirdController`：后台调用
 `per_bird_primary.set_primary_individual()` 核对列表快照并复用候选字段映射写 XMP，

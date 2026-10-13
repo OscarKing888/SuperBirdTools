@@ -15,11 +15,21 @@ from .qt_compat import QLabel, QVBoxLayout, QHBoxLayout, QWidget, pyqtSignal
 try:
     from PyQt6.QtCore import QObject, Qt
     from PyQt6.QtWidgets import (QCheckBox, QDialog, QDialogButtonBox, QDoubleSpinBox,
-                                QFormLayout, QLineEdit, QSpinBox, QScrollArea, QTabWidget, QMenu)
+                                QFormLayout, QLineEdit, QSpinBox, QScrollArea, QTabWidget, QMenu, QComboBox)
 except ImportError:  # pragma: no cover
     from PyQt5.QtCore import QObject, Qt
     from PyQt5.QtWidgets import (QCheckBox, QDialog, QDialogButtonBox, QDoubleSpinBox,
-                                QFormLayout, QLineEdit, QSpinBox, QScrollArea, QTabWidget, QMenu)
+                                QFormLayout, QLineEdit, QSpinBox, QScrollArea, QTabWidget, QMenu, QComboBox)
+
+
+def _sorted_individuals(items, field, descending):
+    """只生成显示顺序；缺失值置后，同值按检测编号，保留原始记录身份。"""
+    def key(item):
+        value = (individual_species_metadata(item)['gbif_rarity_100']
+                 if field == 'rarity' else item.get(field))
+        return (value is None, (-value if descending else value) if value is not None else 0,
+                item['index'])
+    return sorted(items, key=key)
 
 
 class PerBirdSettingsDialog(QDialog):
@@ -120,6 +130,7 @@ class IndividualBirdsPanel(QWidget):
         super().__init__(parent)
         self.path = ""
         self._items = []
+        self._display_items = []
         self._record_snapshot = (None, None)
         self.primary_allowed = lambda: False
         layout = QVBoxLayout(self)
@@ -127,10 +138,32 @@ class IndividualBirdsPanel(QWidget):
         self.empty = QLabel("暂无逐只识别结果（照片右键 → 逐只识别…）", self)
         self.empty.setWordWrap(True)
         layout.addWidget(self.empty)
+        self.sort_bar = QWidget(self)
+        sort_layout = QHBoxLayout(self.sort_bar)
+        sort_layout.setContentsMargins(0, 0, 0, 0)
+        sort_label = QLabel("排序", self.sort_bar)
+        self.sort_field = QComboBox(self.sort_bar)
+        for label, field in (("编号", "index"), ("可信度", "confidence"), ("稀有度", "rarity")):
+            self.sort_field.addItem(label, field)
+        self.sort_field.setAccessibleName("逐鸟结果排序字段")
+        self.sort_field.setToolTip("按鸟编号、鸟种识别可信度或稀有度数值排序；缺失值始终排在最后。")
+        sort_label.setBuddy(self.sort_field)
+        self.sort_order = QComboBox(self.sort_bar)
+        self.sort_order.addItem("升序", False)
+        self.sort_order.addItem("降序", True)
+        self.sort_order.setAccessibleName("逐鸟结果排序方向")
+        self.sort_order.setToolTip("升序：从小到大；降序：从大到小。相同数值按编号升序。")
+        for widget in (sort_label, self.sort_field, self.sort_order):
+            sort_layout.addWidget(widget)
+        sort_layout.addStretch(1)
+        self.sort_bar.hide()
+        layout.addWidget(self.sort_bar)
         self.birds = TraceBirdList(self)
         layout.addWidget(self.birds)
         layout.addStretch(1)
         self.birds.hovered.connect(lambda row: self.hovered.emit(self.path, row))
+        self.sort_field.currentIndexChanged.connect(self._render_results)
+        self.sort_order.currentIndexChanged.connect(self._render_results)
 
     def set_metadata(self, path, metadata):
         items = read_individuals(metadata)
@@ -140,10 +173,15 @@ class IndividualBirdsPanel(QWidget):
             return
         self.birds.set_rows([])  # 先清除旧照片的悬停状态。
         self.path, self._items = path, items
+        self._render_results()
+
+    def _render_results(self):
+        self._display_items = _sorted_individuals(
+            self._items, self.sort_field.currentData(), self.sort_order.currentData())
         rows, details = [], []
-        if items:
+        if self._display_items:
             from bird_sharpness.trace import TraceBirdRow
-            for item in items:
+            for item in self._display_items:
                 n = item["index"]
                 x0, y0, x1, y1 = item["box_px"]
                 name = item["cn_name"] or item["en_name"] or "未识别"
@@ -184,9 +222,10 @@ class IndividualBirdsPanel(QWidget):
             label.setContextMenuPolicy(getattr(Qt, 'ContextMenuPolicy', Qt).CustomContextMenu)
             label.customContextMenuRequested.connect(lambda pos, r=row, w=label: self._primary_menu(r, w, pos))
         self.empty.setVisible(not rows)
+        self.sort_bar.setVisible(bool(rows))
 
     def _primary_menu(self, row, label, pos):
-        item = self._items[row]
+        item = self._display_items[row]
         path, expected, index = self.path, self._record_snapshot, item['index']
         menu = QMenu(self)
         action = menu.addAction('设为本照片主要鸟名')
@@ -199,7 +238,7 @@ class IndividualBirdsPanel(QWidget):
         for badge in self.birds.findChildren(MetadataBadge):
             badge.refresh_style()
         # 色块仍跟随稀有度；预览框采用独立的用户颜色。
-        for index, (item, row) in enumerate(zip(self._items, self.birds.rows)):
+        for index, (item, row) in enumerate(zip(self._display_items, self.birds.rows)):
             color = rarity_badge_style(individual_species_metadata(item)['gbif_rarity_100'])[1]
             if color != row.color:
                 row = replace(row, color=color)

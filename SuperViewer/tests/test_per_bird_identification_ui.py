@@ -25,6 +25,110 @@ def metadata():
             INFO_FIELD: json.dumps({"schema": 1, "coordinate_space": "oriented_camera_normalized_xyxy"})}
 
 
+def sortable_metadata():
+    saved = metadata()
+    template = json.loads(saved[FIELD])[0]
+    items = []
+    for index, confidence, rarity in ((9, 80, 80), (2, 90.04, 8.04), (0, 90.03, 8.03),
+                                     (11, None, None), (1, 0, 0), (3, 90.04, 8.04)):
+        items.append({**template, 'index': index, 'cn_name': f'白鹭 {index + 1}',
+                      'confidence': confidence, 'gbif_rarity_100': rarity,
+                      'box': [.01 * index, .2, .01 * index + .1, .4],
+                      'box_px': [index, 20, index + 10, 40]})
+    # 旧记录的稀有度从匹配的服务候选恢复，排序必须与徽章一致。
+    items[0]['response'] = {'results': [{k: items[0][k] for k in
+                           ('cn_name', 'en_name', 'confidence', 'gbif_rarity_100')}]}
+    del items[0]['gbif_rarity_100']
+    saved[FIELD] = json.dumps(items, ensure_ascii=False)
+    return saved
+
+
+@pytest.mark.parametrize('field,descending,expected', [
+    ('index', False, [0, 1, 2, 3, 9, 11]),
+    ('index', True, [11, 9, 3, 2, 1, 0]),
+    ('confidence', False, [1, 9, 0, 2, 3, 11]),
+    ('confidence', True, [2, 3, 0, 9, 1, 11]),
+    ('rarity', False, [1, 0, 2, 3, 9, 11]),
+    ('rarity', True, [9, 2, 3, 0, 1, 11]),
+])
+def test_individual_sort_numeric_order_and_original_identity(field, descending, expected, monkeypatch):
+    from PyQt6.QtCore import QPoint
+    from PyQt6.QtWidgets import QMenu
+    from SuperViewer.superviewer.rarity_badge import RarityBadge, rarity_badge_style
+    from SuperViewer.superviewer.per_bird_identification import individual_species_metadata
+    panel = IndividualBirdsPanel()
+    saved = sortable_metadata()
+    original = json.loads(saved[FIELD])
+    events, requested = [], []
+    panel.hovered.connect(lambda path, row: events.append(row))
+    panel.primary_requested.connect(lambda *args: requested.append(args))
+    panel.primary_allowed = lambda: True
+    monkeypatch.setattr(QMenu, 'exec', lambda menu, pos: menu.actions()[0].trigger())
+    try:
+        panel.set_metadata('群鸟.jpg', saved)
+        panel.show()
+        _APP.processEvents()
+        panel.sort_field.setCurrentIndex(panel.sort_field.findData(field))
+        panel.sort_order.setCurrentIndex(panel.sort_order.findData(descending))
+        assert [row.bird for row in panel.birds.rows] == expected
+        assert [row.label for row in panel.birds.rows] == [f'鸟 #{n + 1}' for n in expected]
+        assert panel._items == original and json.loads(saved[FIELD]) == original
+        # 排序后悬停与右键使用鸟的检测编号，而非当前行号。
+        name = panel.birds.cells[0][2]
+        _APP.sendEvent(name, QEvent(QEvent.Type.Enter))
+        assert events[-1].bird == expected[0]
+        item = next(item for item in original if item['index'] == expected[0])
+        assert events[-1].box == tuple(item['box'])
+        name.customContextMenuRequested.emit(QPoint())
+        assert requested == ([] if item['confidence'] is None else
+                             [('群鸟.jpg', expected[0], (saved[FIELD], saved[INFO_FIELD]))])
+        monkeypatch.setattr('SuperViewer.superviewer.rarity_badge.get_runtime_user_options',
+                            lambda: {'rarity_badge_common_background': '#123456'})
+        panel.refresh_badges()
+        for row, detail in zip(panel.birds.rows, panel.birds._detail_cells):
+            item = next(item for item in original if item['index'] == row.bird)
+            color = rarity_badge_style(individual_species_metadata(item)['gbif_rarity_100'])[1]
+            assert row.color == color
+            assert color in detail.findChild(RarityBadge).styleSheet()
+    finally:
+        panel.close()
+
+
+def test_sort_controls_keyboard_refresh_empty_and_hover_reset():
+    from PyQt6.QtCore import Qt
+    from PyQt6.QtTest import QTest
+    panel = IndividualBirdsPanel()
+    events = []
+    panel.hovered.connect(lambda path, row: events.append(row))
+    saved = sortable_metadata()
+    try:
+        panel.set_metadata('群鸟.jpg', saved)
+        panel.show()
+        _APP.processEvents()
+        assert panel.sort_field.currentData() == 'index'
+        assert panel.sort_order.currentData() is False
+        _APP.sendEvent(panel.birds.cells[0][2], QEvent(QEvent.Type.Enter))
+        panel.sort_field.setFocus()
+        QTest.keyClick(panel.sort_field, Qt.Key.Key_End)
+        QTest.keyClick(panel.sort_order, Qt.Key.Key_End)
+        assert panel.sort_field.currentData() == 'rarity'
+        assert panel.sort_order.currentData() is True
+        assert events[-1] is None
+        expected = [9, 2, 3, 0, 1, 11]
+        for path, values in [('群鸟.jpg', saved), ('另一张.jpg', saved), ('', {}), ('群鸟.jpg', saved)]:
+            panel.set_metadata(path, values)
+            for _ in range(2):
+                panel.hide()
+                panel.show()
+                _APP.processEvents()
+            assert panel.sort_field.currentData() == 'rarity'
+            assert panel.sort_order.currentData() is True
+            assert panel.sort_bar.isVisible() == bool(values)
+            assert [row.bird for row in panel.birds.rows] == (expected if values else [])
+    finally:
+        panel.close()
+
+
 def test_settings_defaults_and_adjustments():
     dialog = PerBirdSettingsDialog(None, BirdIDOptions(), PerBirdOptions(), {"image_source": "jpeg"})
     try:
@@ -209,9 +313,13 @@ def test_info_panel_reloads_saved_list_without_resetting_drafts(tmp_path):
     try:
         panel.on_photo_selected(path)
         panel.comment_edit.setPlainText('正在输入')
-        data.update(metadata())
+        data.update(sortable_metadata())
         panel.refresh_metadata_fields()
-        assert len(panel.individual_birds.birds.rows) == 1
+        assert len(panel.individual_birds.birds.rows) == 6
+        panel.individual_birds.sort_field.setCurrentIndex(1)
+        panel.individual_birds.sort_order.setCurrentIndex(1)
+        panel.refresh_metadata_fields()
+        assert [row.bird for row in panel.individual_birds.birds.rows] == [2, 3, 0, 9, 1, 11]
         assert panel.comment_edit.toPlainText() == '正在输入'
         panel.on_photo_selected('')
         assert panel.individual_birds.birds.rows == []
