@@ -1,136 +1,198 @@
-"""Ordered, repeatable adjustment steps for any supported editing input."""
-try:
-    from PyQt6.QtCore import Qt, QSignalBlocker
-    from PyQt6.QtWidgets import QComboBox,QPushButton,QHBoxLayout,QListWidget,QListWidgetItem,QWidget,QVBoxLayout,QFileDialog
-except ImportError:
-    from PyQt5.QtCore import Qt, QSignalBlocker
-    from PyQt5.QtWidgets import QComboBox,QPushButton,QHBoxLayout,QListWidget,QListWidgetItem,QWidget,QVBoxLayout,QFileDialog
+"""Flat adjustment groups backed by the existing ordered, repeatable recipe."""
+from copy import deepcopy
 
-from app_common.photo_edit.catalog import ADJUSTMENT_TITLES,adjustment_defaults
+try:
+    from PyQt6.QtCore import QSignalBlocker
+    from PyQt6.QtWidgets import QCheckBox, QLabel, QPushButton, QToolButton, QMenu, QHBoxLayout, QVBoxLayout, QWidget, QFileDialog
+except ImportError:
+    from PyQt5.QtCore import QSignalBlocker
+    from PyQt5.QtWidgets import QCheckBox, QLabel, QPushButton, QToolButton, QMenu, QHBoxLayout, QVBoxLayout, QWidget, QFileDialog
+
+from app_common.collapsible_section import CollapsibleSection
+from app_common.photo_edit.catalog import ADJUSTMENT_TITLES, adjustment_defaults
 from app_common.photo_edit.model import AdjustmentStep
 from .image_info_tab_photo_edit import ImageInfoTabPanel_PhotoEdit
 from .photo_edit_forms import AdjustmentForm
 
-_CHECK = getattr(Qt,"CheckState",Qt)
-_ROLE = getattr(Qt,"ItemDataRole",Qt)
-_FLAG = getattr(Qt,"ItemFlag",Qt)
+
+def adjustment_sections(steps):
+    """Include unused types without changing the relative order of saved steps."""
+    sections = [(step.kind, step) for step in steps]
+    present = {step.kind for step in steps}
+    ranks = {kind: index for index, kind in enumerate(ADJUSTMENT_TITLES)}
+    for kind in ADJUSTMENT_TITLES:
+        if kind not in present:
+            index = next((i for i, (other, _) in enumerate(sections)
+                          if ranks[other] > ranks[kind]), len(sections))
+            sections.insert(index, (kind, None))
+    return sections
+
+
+class AdjustmentGroup(CollapsibleSection):
+    """Visibility belongs to the section; enabled/parameters belong to the recipe."""
+
+    def __init__(self, kind, panel):
+        super().__init__(ADJUSTMENT_TITLES[kind], panel)
+        self.kind = kind
+        self.step_id = None
+        body = QVBoxLayout(self.body)
+        body.setContentsMargins(0, 0, 0, 0)
+        row = QHBoxLayout()
+        self.enabled = QCheckBox("启用", self.body)
+        self.enabled.setAccessibleName("启用" + ADJUSTMENT_TITLES[kind])
+        self.position = QLabel(self.body)
+        self.actions = QToolButton(self.body)
+        self.actions.setText("操作")
+        self.actions.setAccessibleName(ADJUSTMENT_TITLES[kind] + "操作")
+        self.actions.setPopupMode(getattr(QToolButton, "ToolButtonPopupMode", QToolButton).InstantPopup)
+        menu = QMenu(self.actions)
+        self.move_up = menu.addAction("上移", lambda: panel.move_step(self, -1))
+        self.move_down = menu.addAction("下移", lambda: panel.move_step(self, 1))
+        menu.addSeparator()
+        self.duplicate = menu.addAction("复制此调整", lambda: panel.duplicate_step(self))
+        self.remove = menu.addAction("移除此调整", lambda: panel.remove_step(self))
+        self.actions.setMenu(menu)
+        row.addWidget(self.enabled)
+        row.addStretch(1)
+        row.addWidget(self.position)
+        row.addWidget(self.actions)
+        body.addLayout(row)
+        self.form = AdjustmentForm(kind, self.body)
+        body.addWidget(self.form)
+        self.enabled.toggled.connect(lambda value: panel.set_step_enabled(self, value))
+        self.form.changed.connect(lambda value, commit: panel.set_step_params(self, value, commit))
+        self.form.invalid.connect(lambda error: panel._error_changed(panel.current_photo_path(), error))
+        self.form.lut_requested.connect(lambda: panel.import_lut(self))
+        self.sync(None, None, 0)
+
+    def sync(self, step, index, count):
+        self.step_id = step.id if step else None
+        enabled = bool(step and step.enabled)
+        with QSignalBlocker(self.enabled):
+            self.enabled.setChecked(enabled)
+        self.form.setEnabled(enabled)
+        values = step.params if step else adjustment_defaults(self.kind)
+        # Save notifications and edits in other groups must not reset a focused field.
+        if self.form.values != values:
+            self.form.set_values(values)
+        self.position.setText(f"第 {index + 1} 步" if index is not None else "")
+        self.actions.setEnabled(step is not None)
+        self.move_up.setEnabled(index is not None and index > 0)
+        self.move_down.setEnabled(index is not None and index < count - 1)
+        self.duplicate.setEnabled(step is not None and count < 64)
+        self.enabled.setEnabled(step is not None or count < 64)
+        suffix = "" if enabled else "（未启用）"
+        self.setTitle(ADJUSTMENT_TITLES[self.kind] + suffix)
 
 
 class ImageInfoTabPanel_ColorAdjust(ImageInfoTabPanel_PhotoEdit):
     tab_title = "调色"
 
-    def create_editor(self,body):
+    def create_editor(self, body):
+        note = QLabel("已启用的调整按下方顺序处理；收起分组不关闭效果。", self)
+        note.setWordWrap(True)
+        body.addWidget(note)
         row = QHBoxLayout()
-        self.kind = QComboBox(self)
-        for kind,title in ADJUSTMENT_TITLES.items():
-            self.kind.addItem(title,kind)
-        add = QPushButton("添加",self)
-        add.clicked.connect(self.add_step)
-        row.addWidget(self.kind,1)
-        row.addWidget(add)
+        self.expand_all = QPushButton("全部展开", self)
+        self.collapse_all = QPushButton("全部收起", self)
+        self.expand_all.clicked.connect(lambda: self.set_groups_expanded(True))
+        self.collapse_all.clicked.connect(lambda: self.set_groups_expanded(False))
+        row.addWidget(self.expand_all)
+        row.addWidget(self.collapse_all)
         body.addLayout(row)
-        self.steps = QListWidget(self)
-        self.steps.setMinimumHeight(105)
-        self.steps.setMaximumHeight(170)
-        self.steps.setAccessibleName("调色步骤，按列表顺序执行")
-        self.steps.currentRowChanged.connect(self._selected)
-        self.steps.itemChanged.connect(self._enabled_changed)
-        body.addWidget(self.steps)
-        actions = QHBoxLayout()
-        for label,callback in (("上移",lambda:self.move_step(-1)),("下移",lambda:self.move_step(1)),("删除",self.remove_step)):
-            button = QPushButton(label,self)
-            button.clicked.connect(callback)
-            actions.addWidget(button)
-        body.addLayout(actions)
-        self.editor_host = QWidget(self)
-        self.editor_layout = QVBoxLayout(self.editor_host)
-        self.editor_layout.setContentsMargins(0,0,0,0)
-        body.addWidget(self.editor_host)
+        host = QWidget(self)
+        self.groups_layout = QVBoxLayout(host)
+        self.groups_layout.setContentsMargins(0, 0, 0, 0)
+        self.groups = [AdjustmentGroup(kind, self) for kind in ADJUSTMENT_TITLES]
+        for group in self.groups:
+            self.groups_layout.addWidget(group)
+        body.addWidget(host)
         body.addStretch(1)
-        self.form = None
-        self._form_step_id = None
 
-    def _step(self):
+    def set_groups_expanded(self, expanded):
+        for group in self.groups:
+            group.set_expanded(expanded)
+
+    def apply_theme(self, colors=None):
+        super().apply_theme(colors)
+        # Qt stylesheet widgets can retain their creation palette across an app
+        # palette change. Propagate the host palette without recreating editors.
+        for group in self.groups:
+            for widget in (group, *group.findChildren(QWidget)):
+                widget.setPalette(self.palette())
+
+    def update_editor(self, recipe):
+        remaining = list(self.groups)
+        by_id = {group.step_id: group for group in remaining if group.step_id}
+        indices = {step.id: i for i, step in enumerate(recipe.steps)}
+        groups = []
+        for kind, step in adjustment_sections(recipe.steps):
+            group = by_id.get(step.id) if step else None
+            if group is None or group.kind != kind:
+                group = next((candidate for candidate in remaining
+                              if candidate.kind == kind and candidate.step_id not in indices), None)
+            if group is None:
+                group = AdjustmentGroup(kind, self)
+            else:
+                remaining.remove(group)
+            group.sync(step, indices.get(step.id) if step else None, len(recipe.steps))
+            groups.append(group)
+        for group in remaining:
+            self.groups_layout.removeWidget(group)
+            group.hide()
+            group.deleteLater()
+        for index, group in enumerate(groups):
+            item = self.groups_layout.itemAt(index)
+            if item is None or item.widget() is not group:
+                self.groups_layout.insertWidget(index, group)
+                group.show()
+        self.groups = groups
+
+    def _recipe_step(self, group):
         session = self._session()
-        row = self.steps.currentRow()
-        if session and 0<=row<len(session.state.current.recipe.steps):
-            return session.state.current.recipe.steps[row]
+        if session and not self._refreshing and group in self.groups:
+            recipe = session.state.current.recipe.validated()
+            index = next((i for i, step in enumerate(recipe.steps) if step.id == group.step_id), None)
+            return recipe, index
+        return None, None
 
-    def update_editor(self,recipe):
-        item = self.steps.currentItem()
-        selected = item.data(_ROLE.UserRole) if item else None
-        row = self.steps.currentRow()
-        with QSignalBlocker(self.steps):
-            self.steps.clear()
-            for index,step in enumerate(recipe.steps):
-                item = QListWidgetItem(f"{index+1}. {ADJUSTMENT_TITLES[step.kind]}",self.steps)
-                item.setData(_ROLE.UserRole,step.id)
-                item.setFlags(item.flags()|_FLAG.ItemIsUserCheckable)
-                item.setCheckState(_CHECK.Checked if step.enabled else _CHECK.Unchecked)
-                if step.id==selected:
-                    row = index
-            self.steps.setCurrentRow(min(max(0,row),len(recipe.steps)-1))
-        self._selected()
-
-    def _selected(self,*_):
-        step = self._step()
-        if self._form_step_id!=(step.id if step else None):
-            if self.form:
-                self.editor_layout.removeWidget(self.form)
-                self.form.deleteLater()
-            self.form = AdjustmentForm(step.kind,self) if step else None
-            self._form_step_id = step.id if step else None
-            if self.form:
-                self.editor_layout.addWidget(self.form)
-                self.form.changed.connect(self._params_changed)
-                self.form.invalid.connect(lambda error:self._error_changed(self.current_photo_path(),error))
-                self.form.lut_requested.connect(self._import_lut)
-        if self.form and step:
-            self.form.set_values(step.params)
-
-    def add_step(self):
-        session = self._session()
-        if not session:
+    def set_step_enabled(self, group, enabled):
+        recipe, index = self._recipe_step(group)
+        if recipe is None:
             return
-        recipe = session.state.current.recipe.validated()
-        if len(recipe.steps)>=64:
-            self._error_changed(self.current_photo_path(),"最多支持 64 个调色步骤。")
-            return
-        kind = self.kind.currentData()
-        recipe.steps.append(AdjustmentStep(kind,adjustment_defaults(kind)))
+        if index is None:
+            if not enabled or len(recipe.steps) >= 64:
+                return
+            # Empty groups occupy visible insertion slots, not recipe/history entries.
+            index = sum(other.step_id is not None for other in self.groups[:self.groups.index(group)])
+            recipe.steps.insert(index, AdjustmentStep(group.kind, adjustment_defaults(group.kind)))
+        else:
+            recipe.steps[index].enabled = enabled
         self.apply_recipe(recipe)
-        self.steps.setCurrentRow(len(recipe.steps)-1)
 
-    def _params_changed(self,value,commit):
-        step,session = self._step(),self._session()
-        if step and session and not self._refreshing:
-            recipe = session.state.current.recipe.validated()
-            recipe.steps[self.steps.currentRow()].params = value
-            self.apply_recipe(recipe,commit)
+    def set_step_params(self, group, value, commit):
+        recipe, index = self._recipe_step(group)
+        if index is not None and recipe.steps[index].enabled:
+            recipe.steps[index].params = value
+            self.apply_recipe(recipe, commit)
 
-    def _enabled_changed(self,item):
-        session = self._session()
-        if session and not self._refreshing:
-            recipe = session.state.current.recipe.validated()
-            for step in recipe.steps:
-                if step.id==item.data(_ROLE.UserRole):
-                    step.enabled = item.checkState()==_CHECK.Checked
+    def move_step(self, group, delta):
+        recipe, index = self._recipe_step(group)
+        if index is not None and 0 <= index + delta < len(recipe.steps):
+            recipe.steps[index], recipe.steps[index + delta] = recipe.steps[index + delta], recipe.steps[index]
             self.apply_recipe(recipe)
 
-    def move_step(self,delta):
-        session = self._session()
-        row = self.steps.currentRow()
-        if session and 0<=row+delta<len(session.state.current.recipe.steps) and row>=0:
-            recipe = session.state.current.recipe.validated()
-            recipe.steps[row],recipe.steps[row+delta] = recipe.steps[row+delta],recipe.steps[row]
+    def duplicate_step(self, group):
+        recipe, index = self._recipe_step(group)
+        if index is not None and len(recipe.steps) < 64:
+            step = recipe.steps[index]
+            recipe.steps.insert(index + 1, AdjustmentStep(step.kind, deepcopy(step.params), step.enabled))
             self.apply_recipe(recipe)
 
-    def remove_step(self):
-        session = self._session()
-        row = self.steps.currentRow()
-        if session and 0<=row<len(session.state.current.recipe.steps):
-            recipe = session.state.current.recipe.validated()
-            recipe.steps.pop(row)
+    def remove_step(self, group):
+        recipe, index = self._recipe_step(group)
+        if index is not None:
+            recipe.steps.pop(index)
             self.apply_recipe(recipe)
 
     def reset_editor(self):
@@ -140,23 +202,27 @@ class ImageInfoTabPanel_ColorAdjust(ImageInfoTabPanel_PhotoEdit):
             recipe.steps = []
             self.apply_recipe(recipe)
 
-    def _import_lut(self):
-        step = self._step()
-        if not step:
+    def import_lut(self, group):
+        recipe, index = self._recipe_step(group)
+        if index is None:
             return
-        path,_ = QFileDialog.getOpenFileName(self,"导入颜色查找表","","LUT (*.cube *.3dl *.look)")
+        step_id = recipe.steps[index].id
+        path, _ = QFileDialog.getOpenFileName(self, "导入颜色查找表", "", "LUT (*.cube *.3dl *.look)")
         if not path:
             return
-        step_id = step.id
-        def prepare(snapshot,cancelled):
+
+        def prepare(snapshot, cancelled):
             from app_common.photo_edit.assets import import_lut
             from app_common.image_processing_types import check_cancelled
             check_cancelled(cancelled)
-            return import_lut(snapshot.source,path)
-        def apply(session,reference):
+            return import_lut(snapshot.source, path)
+
+        def apply(session, reference):
             recipe = session.state.current.recipe.validated()
             for item in recipe.steps:
-                if item.id==step_id:
-                    item.params.update(asset=reference,builtin="")
-            session.edit(recipe)
-        self.controller.run_operation("import-lut",prepare,apply=apply)
+                if item.id == step_id:
+                    item.params.update(asset=reference, builtin="")
+                    session.edit(recipe)
+                    break
+
+        self.controller.run_operation("import-lut", prepare, apply=apply)

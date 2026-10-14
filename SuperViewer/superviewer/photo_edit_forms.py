@@ -294,7 +294,9 @@ class AdjustmentForm(ParameterForm):
             self.check(body,"四面体插值","tetrahedral")
             self.check(body,"抖动减轻色带","dither")
         elif kind=="invert":
-            body.addRow(QLabel("将各 RGB 通道反相，透明度保持不变。",self))
+            note = QLabel("将各 RGB 通道反相，透明度保持不变。",self)
+            note.setWordWrap(True)
+            body.addRow(note)
         elif kind=="gradientMap":
             self._gradient(body)
         elif kind=="selectiveColor":
