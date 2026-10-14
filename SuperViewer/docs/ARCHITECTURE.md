@@ -519,6 +519,8 @@ CLI：根 `.venv` 执行 `python -m SuperViewer.superviewer.image_png_export <�
 - `image_info_tab_color_adjust.AdjustmentGroup` 复用 `CollapsibleSection` 和 `AdjustmentForm`，
   将所有调色类型平铺，独立启用、默认展开。`adjustment_sections()` 在真实步骤间插入未使用类型，
   不改已有顺序或重复步骤；首次启用按可见位置插入。刷新按步骤身份复用表单，折叠仅为会话视图状态。
+  标题“＋”菜单经 `add_step_after()` 添加独立步骤；未配置锚点以禁用步骤保留，一次事务可撤销。
+  新组定位由面板拥有的单次计时器等待布局完成，按照片、底图与步骤身份拒绝失效定位。
 - `photo_edit_preview.PhotoEditPreviewBridge`：A/B 独立请求、900 px 代理到完整结果、同底图前后比较。
   `PreviewPanel` 的编辑来源分支仍遵守原有快速导航／请求令牌／几何及首次适配合同。
   `ViewerABPreview` 添加第四个源模式“编辑效果”和每侧独立的前后按钮。

@@ -121,6 +121,113 @@ def test_steps_repeat_reorder_disable_remove_and_undo(panels):
     assert controller.session().state.current.recipe.steps[2].params["exposure"] == 2.5
 
 
+def add_action(group, kind):
+    return next(action for action in group.add_menu.actions() if action.data() == kind)
+
+
+def test_group_add_menu_works_collapsed_inserts_after_anchor_and_undoes_once(panels):
+    controller, _, colors = panels
+    exposure = group_for(colors, "exposure")
+    exposure.enabled.click()
+    exposure.form.findChildren(ScalarEditor)[0].spin.setValue(1.25)
+    invert = group_for(colors, "invert")
+    invert.enabled.click()
+    exposure.set_expanded(False)
+    colors.show()
+    scroll = colors.findChild(QScrollArea)
+    scroll.ensureWidgetVisible(exposure.header_button)
+    assert wait_for(exposure.add_button.isVisible)
+    assert not exposure.form.isVisible()
+    assert [action.data() for action in exposure.add_menu.actions()] == list(ADJUSTMENT_TITLES)
+    before = controller.session().state.current.recipe.to_dict()
+    serial = controller.session().serial
+    menu = exposure.add_menu
+    menu.popup(exposure.add_button.mapToGlobal(exposure.add_button.rect().bottomLeft()))
+    assert wait_for(menu.isVisible)
+    QTest.keyClick(menu, Qt.Key.Key_Escape)
+    assert controller.session().serial == serial
+    assert controller.session().state.current.recipe.to_dict() == before
+    menu.popup(exposure.add_button.mapToGlobal(exposure.add_button.rect().bottomLeft()))
+    assert wait_for(menu.isVisible)
+    menu.setActiveAction(add_action(exposure, "invert"))
+    QTest.keyClick(menu, Qt.Key.Key_Return)
+    steps = controller.session().state.current.recipe.steps
+    assert [step.kind for step in steps] == ["exposure", "invert", "invert"]
+    assert steps[0].params["exposure"] == 1.25
+    assert steps[2].id == invert.step_id
+    assert steps[1].id != steps[2].id and steps[1].enabled
+    added = next(group for group in colors.groups if group.step_id == steps[1].id)
+    assert added.is_expanded() and added.add_button.isEnabled()
+    assert not exposure.is_expanded()
+    assert wait_for(lambda: 0 <= added.header_button.mapTo(scroll.viewport(), added.header_button.rect().center()).y() < scroll.viewport().height())
+    colors.undo_button.click()
+    assert controller.session().state.current.recipe.to_dict() == before
+    colors.redo_button.click()
+    assert len(controller.session().state.current.recipe.steps) == 3
+    colors.hide()
+
+
+def test_add_after_unused_group_preserves_disabled_anchor_and_supports_new_group_menu(panels):
+    controller, _, colors = panels
+    anchor = group_for(colors, "selectiveColor")
+    anchor.set_expanded(False)
+    add_action(anchor, "exposure").trigger()
+    steps = controller.session().state.current.recipe.steps
+    assert [step.kind for step in steps] == ["selectiveColor", "exposure"]
+    assert not steps[0].enabled and steps[1].enabled
+    assert not anchor.enabled.isChecked() and not anchor.is_expanded()
+    added = next(group for group in colors.groups if group.step_id == steps[1].id)
+    assert added.is_expanded()
+    add_action(added, "exposure").trigger()
+    steps = controller.session().state.current.recipe.steps
+    assert [step.kind for step in steps] == ["selectiveColor", "exposure", "exposure"]
+    assert len({step.id for step in steps}) == 3
+    colors.undo_button.click()
+    assert len(controller.session().state.current.recipe.steps) == 2
+    colors.undo_button.click()
+    assert not controller.session().state.current.recipe.steps
+    assert not controller.session().history.can_undo
+
+
+def test_group_add_menu_respects_recipe_limit_including_unused_anchor(panels):
+    controller, _, colors = panels
+    recipe = controller.session().state.current.recipe.validated()
+    recipe.steps = [AdjustmentStep("invert") for _ in range(63)]
+    controller.edit(recipe)
+    anchor = group_for(colors, "invert")
+    unused = group_for(colors, "exposure")
+    assert anchor.add_button.isEnabled()
+    assert not unused.add_button.isEnabled()  # Anchor + new step need two positions.
+    before = controller.session().state.current.recipe.signature()
+    colors.add_step_after(unused, "invert")
+    assert controller.session().state.current.recipe.signature() == before
+    add_action(anchor, "exposure").trigger()
+    assert len(controller.session().state.current.recipe.steps) == 64
+    assert all(not group.add_button.isEnabled() for group in colors.groups)
+    before = controller.session().state.current.recipe.signature()
+    colors.add_step_after(anchor, "invert")
+    assert controller.session().state.current.recipe.signature() == before
+    colors.undo_button.click()
+    assert len(controller.session().state.current.recipe.steps) == 63
+    assert anchor.add_button.isEnabled()
+
+
+def test_undone_add_does_not_reveal_stale_group(panels):
+    controller, _, colors = panels
+    anchor = group_for(colors, "brightnessContrast")
+    anchor.enabled.click()
+    colors.show()
+    assert wait_for(colors.isVisible)
+    add_action(anchor, "brightnessContrast").trigger()
+    assert colors._reveal_timer.isActive()
+    controller.undo()
+    anchor.header_button.setFocus()
+    assert wait_for(lambda: not colors._reveal_timer.isActive())
+    assert anchor.header_button.hasFocus()
+    assert len(controller.session().state.current.recipe.steps) == 1
+    colors.hide()
+
+
 def test_flat_groups_keep_gesture_history_folds_channels_and_focus(panels):
     controller, _, colors = panels
     exposure = group_for(colors, "exposure")

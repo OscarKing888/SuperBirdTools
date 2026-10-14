@@ -2,11 +2,11 @@
 from copy import deepcopy
 
 try:
-    from PyQt6.QtCore import QSignalBlocker
-    from PyQt6.QtWidgets import QCheckBox, QLabel, QPushButton, QToolButton, QMenu, QHBoxLayout, QVBoxLayout, QWidget, QFileDialog
+    from PyQt6.QtCore import QSignalBlocker, QTimer
+    from PyQt6.QtWidgets import QCheckBox, QLabel, QPushButton, QToolButton, QMenu, QHBoxLayout, QVBoxLayout, QWidget, QFileDialog, QScrollArea
 except ImportError:
-    from PyQt5.QtCore import QSignalBlocker
-    from PyQt5.QtWidgets import QCheckBox, QLabel, QPushButton, QToolButton, QMenu, QHBoxLayout, QVBoxLayout, QWidget, QFileDialog
+    from PyQt5.QtCore import QSignalBlocker, QTimer
+    from PyQt5.QtWidgets import QCheckBox, QLabel, QPushButton, QToolButton, QMenu, QHBoxLayout, QVBoxLayout, QWidget, QFileDialog, QScrollArea
 
 from app_common.collapsible_section import CollapsibleSection
 from app_common.photo_edit.catalog import ADJUSTMENT_TITLES, adjustment_defaults
@@ -35,6 +35,24 @@ class AdjustmentGroup(CollapsibleSection):
         super().__init__(ADJUSTMENT_TITLES[kind], panel)
         self.kind = kind
         self.step_id = None
+        self.add_button = QToolButton(self)
+        self.add_button.setText("＋")
+        self.add_button.setAccessibleName("在" + ADJUSTMENT_TITLES[kind] + "之后添加处理")
+        self.add_button.setPopupMode(getattr(QToolButton, "ToolButtonPopupMode", QToolButton).InstantPopup)
+        self.add_menu = QMenu(self.add_button)
+        for new_kind, title in ADJUSTMENT_TITLES.items():
+            action = self.add_menu.addAction(title)
+            action.setData(new_kind)
+            action.triggered.connect(lambda _checked=False, kind=new_kind: panel.add_step_after(self, kind))
+        self.add_button.setMenu(self.add_menu)
+        # Keep the shared disclosure button and body; only extend the header row.
+        self.layout().removeWidget(self.header_button)
+        header = QHBoxLayout()
+        header.setContentsMargins(0, 0, 0, 0)
+        header.setSpacing(0)
+        header.addWidget(self.header_button, 1)
+        header.addWidget(self.add_button)
+        self.layout().insertLayout(0, header)
         body = QVBoxLayout(self.body)
         body.setContentsMargins(0, 0, 0, 0)
         row = QHBoxLayout()
@@ -81,6 +99,9 @@ class AdjustmentGroup(CollapsibleSection):
         self.move_down.setEnabled(index is not None and index < count - 1)
         self.duplicate.setEnabled(step is not None and count < 64)
         self.enabled.setEnabled(step is not None or count < 64)
+        can_add = count + (1 if step else 2) <= 64
+        self.add_button.setEnabled(can_add)
+        self.add_button.setToolTip("在此组之后添加处理" if can_add else "最多支持 64 个步骤，已无足够位置添加处理。")
         suffix = "" if enabled else "（未启用）"
         self.setTitle(ADJUSTMENT_TITLES[self.kind] + suffix)
 
@@ -89,6 +110,10 @@ class ImageInfoTabPanel_ColorAdjust(ImageInfoTabPanel_PhotoEdit):
     tab_title = "调色"
 
     def create_editor(self, body):
+        self._reveal_request = None
+        self._reveal_timer = QTimer(self)
+        self._reveal_timer.setSingleShot(True)
+        self._reveal_timer.timeout.connect(self._reveal_added_group)
         note = QLabel("已启用的调整按下方顺序处理；收起分组不关闭效果。", self)
         note.setWordWrap(True)
         body.addWidget(note)
@@ -175,6 +200,42 @@ class ImageInfoTabPanel_ColorAdjust(ImageInfoTabPanel_PhotoEdit):
         if index is not None and recipe.steps[index].enabled:
             recipe.steps[index].params = value
             self.apply_recipe(recipe, commit)
+
+    def add_step_after(self, group, kind):
+        recipe, index = self._recipe_step(group)
+        if recipe is None or kind not in ADJUSTMENT_TITLES:
+            return
+        if len(recipe.steps) + (1 if index is not None else 2) > 64:
+            return
+        if index is None:
+            # An unused group has no stored position yet. Retain it as disabled
+            # so the new step stays after this anchor when the recipe is reloaded.
+            index = sum(other.step_id is not None for other in self.groups[:self.groups.index(group)])
+            recipe.steps.insert(index, AdjustmentStep(group.kind, adjustment_defaults(group.kind), enabled=False))
+        step = AdjustmentStep(kind, adjustment_defaults(kind))
+        recipe.steps.insert(index + 1, step)
+        self.apply_recipe(recipe)
+        added = next((item for item in self.groups if item.step_id == step.id), None)
+        if added is not None:
+            added.set_expanded(True)
+            self._reveal_request = (self.current_photo_path(), self._session().state.active, step.id)
+            self._reveal_timer.start(0)
+
+    def _reveal_added_group(self):
+        request, self._reveal_request = self._reveal_request, None
+        session = self._session()
+        if not request or not session or not self.isVisible():
+            return
+        source, active, step_id = request
+        if source != self.current_photo_path() or active != session.state.active:
+            return
+        added = next((group for group in self.groups if group.step_id == step_id), None)
+        if added is not None:
+            # The popup has closed and Qt has laid out the inserted form now.
+            scroll = self.findChild(QScrollArea)
+            if scroll is not None:
+                scroll.ensureWidgetVisible(added.header_button)
+            added.header_button.setFocus()
 
     def move_step(self, group, delta):
         recipe, index = self._recipe_step(group)
