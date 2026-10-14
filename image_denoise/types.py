@@ -2,6 +2,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from app_common.image_processing_types import (
+    ImageProcessingCancelled as DenoiseCancelled, UnsupportedImage, check_cancelled,
+)
 
 
 @dataclass(frozen=True)
@@ -23,16 +26,3 @@ class DenoiseResult:
     error: str = ""
     device: str = ""
     tile_size: int = 0
-
-
-class DenoiseCancelled(Exception):
-    """任务已取消，调用者须清理当前照片的临时结果。"""
-
-
-class UnsupportedImage(ValueError):
-    """不能按静态 SDR 照片安全处理的输入。"""
-
-
-def check_cancelled(cancelled) -> None:
-    if cancelled is not None and cancelled():
-        raise DenoiseCancelled("已取消")

@@ -67,9 +67,10 @@ class ConservationBadge(MetadataBadge):
 
 
 class ColorButton(QPushButton):
-    def __init__(self, color, changed, parent):
+    def __init__(self, color, changed, parent, *, title="选择徽章颜色"):
         super().__init__(parent)
         self._changed = changed
+        self._dialog_title = title
         self.set_color(color)
         self.clicked.connect(self._choose)
 
@@ -81,7 +82,7 @@ class ColorButton(QPushButton):
                            "border-radius: 3px; padding: 5px; background: palette(button);")
 
     def _choose(self):
-        color = QColorDialog.getColor(QColor(self.color), self, "选择徽章颜色")
+        color = QColorDialog.getColor(QColor(self.color), self, self._dialog_title)
         if color.isValid():
             self.set_color(color.name().upper())
             self._changed()

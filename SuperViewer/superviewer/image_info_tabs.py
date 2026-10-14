@@ -7,6 +7,8 @@ from .image_info_tab_exif import ImageInfoTabPanel_EXIF
 from .image_info_tab_image_info import ImageInfoTabPanel_ImageInfo
 from .image_info_tab_tags import ImageInfoTabPanel_Tags
 from .image_info_tab_widget import ImageInfoTabWidget
+from .image_info_tab_camera_raw import ImageInfoTabPanel_CameraRaw
+from .image_info_tab_color_adjust import ImageInfoTabPanel_ColorAdjust
 
 
 __all__ = [
@@ -15,4 +17,6 @@ __all__ = [
     "ImageInfoTabPanel_ImageInfo",
     "ImageInfoTabPanel_Tags",
     "ImageInfoTabWidget",
+    "ImageInfoTabPanel_CameraRaw",
+    "ImageInfoTabPanel_ColorAdjust",
 ]

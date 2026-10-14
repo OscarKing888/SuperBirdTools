@@ -140,7 +140,8 @@ class DirectoryFileController(QObject):
 
     def _replay(self, direction, entries):
         paths = [e.source for e in entries if not is_sidecar(e.source)]
-        if not self._files._file_operation_paths_allowed(paths, "撤销/重做移动", warn=True):
+        targets = [e.target for e in entries if not is_sidecar(e.target)]
+        if not self._files._file_operation_paths_allowed(paths+targets, "撤销/重做移动", warn=True):
             return
         self._displays = {path: path for path in paths}
         self._scopes = {path: self._files._report_scope_path_key(self._files.get_report_row_for_path(path)) for path in paths}
@@ -202,7 +203,8 @@ class DirectoryFileController(QObject):
         if not self.accepts_drag(mime) or not os.path.isdir(destination):
             return False
         sources = self._drag_sources
-        if not copy and not self._files._file_operation_paths_allowed(list(sources), "拖放移动", warn=True):
+        targets = [str(Path(destination)/Path(p).name) for p in sources]
+        if not self._files._file_operation_paths_allowed(list(sources)+targets, "拖放移动/复制", warn=True):
             return False
         self._displays, self._scopes = dict(self._drag_displays), dict(self._drag_scopes)
         # 系统窗口不归属主窗口 HWND：应用关闭等待时隐藏主窗，系统取消入口仍须可见。
@@ -211,6 +213,9 @@ class DirectoryFileController(QObject):
         return True
 
     def _start(self, worker, message):
+        editor = getattr(self._main,"_photo_edit",None)
+        if editor:
+            editor.begin_file_operation()
         self._worker = worker
         worker.finished.connect(self._worker_finished)
         self._main.statusBar().showMessage(message)
@@ -224,6 +229,9 @@ class DirectoryFileController(QObject):
         if worker is not self._worker:
             return
         self._worker = None
+        editor = getattr(self._main,"_photo_edit",None)
+        if editor:
+            editor.end_file_operation([*worker.paths,*worker.targets])
         if not self._shutdown_requested:
             if worker.direction:
                 self._history.finish(worker.direction, worker.inverse, worker.remaining)

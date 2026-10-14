@@ -39,6 +39,9 @@ video_datas, video_hiddenimports = collect_viewer_ffmpeg()
 
 from build_tools.windows_version import version_resource
 from build_tools.set_build_version import prepare_build_metadata
+from build_tools.photo_edit_native import collect_photo_edit
+
+edit_datas, edit_binaries, edit_imports = collect_photo_edit(REPO_ROOT)
 
 BUILD_METADATA = prepare_build_metadata(REPO_ROOT)
 
@@ -113,6 +116,7 @@ bird_datas, bird_binaries, bird_hiddenimports = collect_viewer_bird_body(
 # --------------------------------------------------------------------------- #
 use_app_workpath("superviewer")
 superviewer_datas = [
+    *edit_datas,
     *video_datas,
     *denoise_datas,
     *bird_datas,
@@ -130,9 +134,9 @@ superviewer_datas = [
 superviewer_a = Analysis(
     [str(SUPERVIEWER_ROOT / "entry.py")],
     pathex=[str(SUPERVIEWER_ROOT), str(REPO_ROOT)],
-    binaries=denoise_binaries + bird_binaries,
+    binaries=edit_binaries + denoise_binaries + bird_binaries,
     datas=superviewer_datas,
-    hiddenimports=collect_submodules("app_common")
+    hiddenimports=edit_imports + collect_submodules("app_common")
     + collect_submodules("superviewer") + video_hiddenimports + denoise_hiddenimports + bird_hiddenimports,
     hookspath=[],
     hooksconfig={},
@@ -150,6 +154,7 @@ superviewer_pyz = PYZ(superviewer_a.pure)
 # --------------------------------------------------------------------------- #
 use_app_workpath("superbirdstamp")
 superbirdstamp_datas = [
+    *edit_datas,
     *collect_tree(BUILD_METADATA, "."),
     *collect_tree(SUPERBIRDSTAMP_ROOT / "about.cfg", "."),
     *collect_tree(SUPERBIRDSTAMP_ROOT / "models", "models"),
@@ -166,7 +171,7 @@ superbirdstamp_datas = [
 superbirdstamp_a = Analysis(
     [str(SUPERBIRDSTAMP_ROOT / "entry.py")],
     pathex=[str(SUPERBIRDSTAMP_ROOT), str(REPO_ROOT)],
-    binaries=ultralytics_binaries,
+    binaries=edit_binaries + ultralytics_binaries,
     datas=superbirdstamp_datas + ultralytics_datas,
     hiddenimports=[
         "PyQt6.QtCore",

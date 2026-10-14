@@ -1,0 +1,65 @@
+# SuperViewer 照片编辑设计与实施记录
+
+状态：功能已实现；本轮按共享库先提交、主仓集成后合并的流程交付。对应用户批准的 Camera RAW / 调色计划。
+
+## 已确定的产品合同
+
+- Rust 保留 PhotoCraft 算法，Python 负责共享 API、文件与状态，Qt 负责界面。
+- 继续使用 rawpy 解码 RAW，首版 SDR/sRGB，16 位输入、float32 计算；不声称传感器域高光恢复。
+- 两个 ImageInfoTabPanel 子类共享编辑控制器。Camera RAW 七组参数和调色十六类有序步骤。
+- 编辑参数自动写原图 XMP，800 ms 去抖，支持会话内撤销/重做；不新增照片 JSON 侧车。
+- 同名 RAW/JPEG 和原始/降噪底图的配方分别保存。成片保存已烘焙快照，重开不重复执行。
+- 缓存可重建；降噪 TIFF 是长期资产。导出默认 edited 子目录，统一支持同目录、平级目录、固定目录、询问。
+- 编辑来源与前后对比独立；A/B 各自视图、共享相同照片配方。长按导航不得启动编辑解码或 XMP I/O。
+- LUT 为内容寻址资源，移动/复制照片需携带；缺失报错。原照片及 report.db 不写回。
+- 库、GUI、CLI 共用完整渲染与安全导出；后台线程保留至真实结束，旧请求不得覆盖新结果。
+
+## UI 选型
+
+| 层级 | 组件 | 状态与伸缩 |
+|---|---|---|
+| L3 页签 | ImageInfoTabPanel / ImageInfoTabWidget | Camera RAW、调色；隐藏页延迟加载 |
+| L4 参数区 | QScrollArea + CollapsibleSection | 单一纵向滚动；顶部对齐；折叠保留输入 |
+| L5 来源/动作 | QComboBox / ToggleToolButton / QPushButton | 来源与前后独立，固定底部撤销/重做/重置/导出 |
+| L5 参数 | QSlider + QDoubleSpinBox、共享曲线/色轮/直方图 | UI 只编辑模型；一次拖动一条撤销 |
+
+```text
+预览工具栏 [默认/RAW/降噪/编辑效果] [调整前/后] [缩放等]
+右侧 [信息][标签][EXIF][Camera RAW][调色]
+      照片 / A-B / 保存状态
+      编辑底图 [原始文件/降噪版本]
+      直方图 / 参数组 / 调色步骤（纵向滚动）
+      撤销 重做 重置 导出（固定）
+```
+
+## 完成审计清单
+
+- [x] 固定上游源码、更新工具、许可证、Rust/Python 绑定及原生算法对照测试。
+- [x] 高位深来源解码、几何/ICC、配方、XMP 原子合并、外部冲突、失败恢复和撤销。
+- [x] 有界缓存、输入来源校验、降噪版本固定与显式切换、LUT 资源管理。
+- [x] Camera RAW 七组、直方图/溢出、曲线/色轮、设置导入导出。
+- [x] 十六类调色步骤的增删排序启用、参数编辑和配方复制/粘贴。
+- [x] 主窗口/A-B/编辑效果/前后/长按导航/退出整合与回归。
+- [x] 统一输出位置、TIFF/JPEG/PNG、烘焙快照、安全文件发布、CLI。
+- [x] Windows/macOS 构建集成、离屏视觉 QA、打包启动、实图检查；不能实测的平台明确记录。
+- [x] 更新架构/用户说明/UI 登记；子模块先提交，主仓集成提交，合并 main 并清理本轮 worktree/分支。
+
+后续范围（不计入首版）：传感器级显影、广色域/HDR、匹配/替换颜色、HDR 色调、矢量示波器、复杂局部蒙版。
+
+## 验证记录
+
+2026-10-14，Windows / Python 3.13 / Rust 1.95，使用主 checkout 的共享 `.venv`、独立 worktree 和临时照片／配置目录：
+
+- Rust 绑定 6 项测试通过，逐一与上游 16 类调色实现对照；Camera RAW 定向 13 项通过。
+- 上游 `cms` / `compose` 共 282 项通过，1 项忽略；`algo` 全套 547 通过、22 忽略、1 项既有失败：`pixelate::tests::facet_reuse_matches_scalar_in_every_model` 的 NaN 符号位差异。该算法未暴露给本次编辑器，未改上游来掩盖结果。
+- 编辑模型／保存／原生渲染／文件资产／CLI／元数据／选项／降噪合并回归 246 项通过，1 项跳过。Windows 合并测试需使用现有 `build_tools/pyinstaller_bootstrap` 预载 MSVC，避免已知 Qt 先于 Torch 导入的 DLL 冲突。
+- 编辑控制器、两个真实面板、A/B、代理升级、正常点击、小图／大图／RAW、长按及最终松键、焦点／首次适配回归 103 项通过。
+- 文件事务、剪贴板、目录拖放／复制和 LUT 携带已验证。归档核心独立重测 58 项通过；既有真实窗口归档测试在 Windows 偶发 `WinError 32`（后台读取仍占用照片），已在未修改的 main 上复现，失败保留原文件及恢复副本。本轮没有把该既有并发文件占用问题伪装成通过。
+- 构建脚本回归 25 项通过、7 项平台条件跳过；Windows `build_all.bat --clean --apps-only` 成功，输出在 worktree 根 `dist` 的三应用目录。打包后的 `--check-photo-edit` 与 `--check-denoise --device cpu` 真实运行成功；前者覆盖中文文件、XMP 往返、TIFF16／PNG16／JPEG、原图不变和成片重开不二次烘焙。
+- 实际使用仓库 `benchmark/DSC08031.jpg`（7008×4672）复制到临时目录，完整调色并导出 16 位 TIFF；尺寸正确、原图字节不变。预览与成片目视检查无异常。
+- 离屏 Fusion 浅色 10 pt、深色 16 pt：检查约 354／411 px 面板、小窗口、设置页、曲线、色轮、中文、滚动与固定底部动作。离屏字体库为空时仅在 QA 脚本中加载系统 Microsoft YaHei，不改变产品字体。
+- 245 个上游文件均按 manifest 验证，暂存区 git blob 也逐个核验；`.gitattributes` 保留上游字节及其原有 EOF，防止 Windows autocrlf 破坏校验。自有 Python 和 spec 编译、两仓 diff 空白检查通过。
+
+未实测：macOS 实机／打包运行、真实相机 RAW 文件（当前仓库无 RAW 样本）；RAW 来源与几何分支由既有和新增模拟解码回归覆盖。macOS 构建与 CI 诊断已接入，不能等同本机实测。
+
+用户说明：[照片编辑](../photo_edit.md)。首版仍为 SDR/sRGB、最多 6400 万像素和可用内存门禁；不声称 Adobe Camera Raw 完整兼容或传感器域恢复。

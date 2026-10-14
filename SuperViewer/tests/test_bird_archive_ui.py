@@ -35,6 +35,9 @@ class Files:
     def add_file_context_menu_extender(self, callback):
         self.extenders.append(callback)
 
+    def _file_operation_paths_allowed(self, paths, action, *, warn=False):
+        return True
+
     def _resolve_source_path_for_action(self, path):
         return self.sources.get(path, path)
 

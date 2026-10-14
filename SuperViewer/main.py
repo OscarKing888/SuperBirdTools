@@ -144,7 +144,11 @@ try:
         ImageInfoTabPanel_ImageInfo,
         ImageInfoTabPanel_Tags,
         ImageInfoTabWidget,
+        ImageInfoTabPanel_CameraRaw,
+        ImageInfoTabPanel_ColorAdjust,
     )
+    from .superviewer.photo_edit_controller import PhotoEditController
+    from .superviewer.photo_edit_preview import PhotoEditPreviewBridge, render_for_viewer
     from .superviewer.super_viewer_user_options_dialog import SuperViewerUserOptionsDialog
     from .superviewer.tagged_file_list import SuperViewerTaggedFileListPanel
     from .superviewer.bird_sharpness_controller import BirdSharpnessController
@@ -245,7 +249,11 @@ except ImportError:
         ImageInfoTabPanel_ImageInfo,
         ImageInfoTabPanel_Tags,
         ImageInfoTabWidget,
+        ImageInfoTabPanel_CameraRaw,
+        ImageInfoTabPanel_ColorAdjust,
     )
+    from superviewer.photo_edit_controller import PhotoEditController
+    from superviewer.photo_edit_preview import PhotoEditPreviewBridge, render_for_viewer
     from superviewer.super_viewer_user_options_dialog import SuperViewerUserOptionsDialog
     from superviewer.tagged_file_list import SuperViewerTaggedFileListPanel
     from superviewer.bird_sharpness_controller import BirdSharpnessController
@@ -602,6 +610,15 @@ class MainWindow(QMainWindow):
         self.image_info_tabs.add_info_panel(self.image_info_panel)
         self.image_info_tabs.add_info_panel(self.tags_info_panel)
         self.image_info_tabs.add_info_panel(self.exif_info_panel)
+        self._photo_edit = PhotoEditController(self,renderer=render_for_viewer)
+        self._file_list.file_operation_guard = self._photo_edit_file_guard
+        self.camera_raw_panel = ImageInfoTabPanel_CameraRaw(self._photo_edit,self.image_info_tabs)
+        self.color_adjust_panel = ImageInfoTabPanel_ColorAdjust(self._photo_edit,self.image_info_tabs)
+        self.image_info_tabs.add_info_panel(self.camera_raw_panel)
+        self.image_info_tabs.add_info_panel(self.color_adjust_panel)
+        self._photo_edit_preview = PhotoEditPreviewBridge(self,self._photo_edit,self.ab_preview,
+                                                        (self.camera_raw_panel,self.color_adjust_panel))
+        self._file_list.playback_state_changed.connect(self._photo_edit_preview.set_suspended)
         self._file_list.photo_tags_cache_updated.connect(self._on_photo_tags_cache_updated)
         self._file_list.tag_library_changed.connect(self.tags_info_panel.refresh_current_photo)
         self._file_list.tag_library_changed.connect(self.image_info_panel.refresh_photo_tags)
@@ -785,6 +802,9 @@ class MainWindow(QMainWindow):
 
     def _on_file_selected_from_list(self, path: str):
         """文件列表中选中图像文件，触发预览和元信息刷新（等同于拖放）。"""
+        edit_preview = getattr(self,"_photo_edit_preview",None)
+        if edit_preview is not None:
+            edit_preview.set_suspended(False)
         t0 = _time.perf_counter()
         probe_t0 = perf_counter()
         perf_log(_log, "[PERF][image_switch][main] START source=%r", path)
@@ -822,6 +842,9 @@ class MainWindow(QMainWindow):
 
     def _on_file_fast_preview_requested(self, path: str):
         """连续方向键长按时显示已解析的当前档位缓存。"""
+        edit_preview = getattr(self,"_photo_edit_preview",None)
+        if edit_preview is not None:
+            edit_preview.set_suspended(True)
         quick_size_fn = getattr(self._file_list, "preview_quick_size", None)
         quick_size = quick_size_fn() if callable(quick_size_fn) else None
         panel = getattr(self, "_active_preview_panel", lambda: self.preview_panel)()
@@ -835,6 +858,9 @@ class MainWindow(QMainWindow):
 
     def _on_file_fast_preview_pixmap_requested(self, path: str, pixmap, quick_size: int) -> None:
         """直接复用缩略图视图已解码的当前档位帧，避免 JPEG 落盘再读。"""
+        edit_preview = getattr(self,"_photo_edit_preview",None)
+        if edit_preview is not None:
+            edit_preview.set_suspended(True)
         if not isinstance(pixmap, QPixmap) or pixmap.isNull():
             return
         panel = getattr(self, "_active_preview_panel", lambda: self.preview_panel)()
@@ -1166,6 +1192,12 @@ class MainWindow(QMainWindow):
     def _file_writes_allowed(self, path: str | None = None) -> bool:
         return True
 
+    def _photo_edit_file_guard(self, paths, *, warn=False):
+        reason = self._photo_edit.file_operation_reason(paths,prepare=warn)
+        if reason and warn:
+            self.statusBar().showMessage(reason,10000)
+        return not reason
+
     def _sidecar_writes_allowed(self) -> bool:
         return self._file_list.tag_edits_allowed()
 
@@ -1173,6 +1205,11 @@ class MainWindow(QMainWindow):
         return ""
 
     def _rename_photo_from_info_panel(self, path: str, requested_name: str) -> str:
+        editor = getattr(self,"_photo_edit",None)
+        if editor:
+            reason = editor.file_operation_reason([path],prepare=True)
+            if reason:
+                raise RuntimeError(reason)
         if not self._file_writes_allowed(path):
             raise PermissionError(self._file_writes_disabled_message("重命名", path))
         source_path = os.path.normpath(os.path.abspath(path)) if path else ""
@@ -1275,6 +1312,9 @@ class MainWindow(QMainWindow):
 
     def on_image_loaded(self, path: str):
         """图片被拖入或选择后调用。"""
+        edit_preview = getattr(self,"_photo_edit_preview",None)
+        if edit_preview is not None:
+            edit_preview.sync_target(path)
         t0 = _time.perf_counter()
         probe_t0 = perf_counter()
         perf_log(_log, "[PERF][image_switch][info] START path=%r", path)
@@ -1698,6 +1738,29 @@ class MainWindow(QMainWindow):
         if self._shutdown_finalized:
             super().closeEvent(event)
             return
+        photo_edit = getattr(self,"_photo_edit",None)
+        if not self._shutdown_requested and photo_edit is not None:
+            # Finish saves before shutting down the rest of the application.
+            # If even the local journal failed, leave the usable window open.
+            if not getattr(self,"_edit_close_pending",False) or any(
+                    s.dirty and not s.error and s.recovery_serial<s.serial
+                    for s in photo_edit.sessions.values()):
+                self._edit_close_pending = True
+                for session in photo_edit.sessions.values():
+                    session.finish_gesture()
+                photo_edit.flush()
+            if photo_edit._saving:
+                event.ignore()
+                if not self._shutdown_retry_timer.isActive():
+                    self._shutdown_retry_timer.start(25)
+                return
+            if photo_edit.unsafe_drafts():
+                self._edit_close_pending = False
+                event.ignore()
+                QMessageBox.warning(self,"编辑草稿尚未保存",
+                    "编辑参数和本地恢复草稿均未能写入，窗口暂时保留。请处理磁盘或目录权限问题后重试关闭，"
+                    "也可先复制配方备份。\n"+"\n".join(photo_edit.unsafe_drafts()))
+                return
         if not self._shutdown_requested:
             self._shutdown_requested = True
             if self._ui_theme_manager is not None:

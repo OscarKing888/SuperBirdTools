@@ -13,18 +13,22 @@ from .types import DenoiseCancelled, DenoiseOptions
 
 
 def main(argv=None) -> int:
+    from app_common.cli_encoding import configure_utf8_output
+    configure_utf8_output()
     parser = argparse.ArgumentParser(prog="image_denoise", description="NAFNet RGB 批量降噪；保留原图，默认输出 16 位 TIFF")
     parser.add_argument("paths", nargs="+", help="照片或目录")
     parser.add_argument("-r", "--recursive", action="store_true", help="处理子目录（排除降噪输出目录）")
     parser.add_argument("-o", "--output-directory", "--output-dir", default="", help="固定输出目录；默认每张源照片目录下的子目录")
     parser.add_argument("--subdir", default="denoised", help="源照片目录中的输出子目录名")
+    parser.add_argument("--output-mode", choices=("source_subdir", "source_dir", "sibling_dir", "fixed"),
+                        help="输出位置规则；指定 --output-dir 时默认 fixed")
     parser.add_argument("--format", choices=("tiff", "jpeg"), default="tiff")
     parser.add_argument("--strength", type=int, default=100, help="降噪强度 0–100")
     parser.add_argument("--device", choices=("auto", "cpu", "cuda", "mps"), default="auto")
     parser.add_argument("-j", "--workers", type=int, default=2, help="并行照片数 1–4，仍受内存预算限制")
     parser.add_argument("--json", action="store_true", help="每张照片输出一行 JSON")
     args = parser.parse_args(argv)
-    options = DenoiseOptions(output_mode="fixed" if args.output_directory else "source_subdir",
+    options = DenoiseOptions(output_mode=args.output_mode or ("fixed" if args.output_directory else "source_subdir"),
                              subdir=args.subdir, output_directory=args.output_directory,
                              format=args.format, strength=args.strength, device=args.device,
                              workers=args.workers)

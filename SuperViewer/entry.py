@@ -17,6 +17,9 @@ def _bootstrap_repo_root() -> Path:
 
 def main() -> None:
     _bootstrap_repo_root()
+    if len(sys.argv) > 1 and sys.argv[1] == "--check-photo-edit":
+        from app_common.photo_edit.diagnostics import main as check_photo_edit
+        raise SystemExit(check_photo_edit(sys.argv[2:]))
     if len(sys.argv) > 1 and sys.argv[1] == "--check-bird-body":
         # 打包诊断可读已有缓存并离线推理，始终禁止写入照片侧车。
         from superviewer.bird_body import main as check_bird_body

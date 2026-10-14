@@ -62,10 +62,15 @@ class ViewerViewportPanel(QWidget):
             "默认优先相机内嵌预览；降噪显示已生成的成片，缺失时显示原图并提示。\n"
             "仅影响本侧视口；连续按键期间保持缩略图，松键后加载所选来源。")
         self.raw_toggle.clicked.connect(self._cycle_preview_source)
-        self.source_menu = PreviewSourceMenu(self.raw_toggle)
+        self.source_menu = PreviewSourceMenu(self.raw_toggle,extra_modes=(("edited","编辑效果"),))
         self.source_menu.mode_selected.connect(preview.set_preview_source_mode)
         self.source_menu.aboutToShow.connect(self._update_available)
         row.addWidget(self.raw_toggle)
+        self.before_button = ToggleToolButton("调整前",parent=self.toolbar)
+        self.before_button.setToolTip("查看当前编辑底图的调整前效果；再次点击返回调整后。")
+        self.before_button.setAccessibleName(f"{name} 同一底图调整前后")
+        self.before_button.toggled.connect(preview.set_edit_before)
+        row.addWidget(self.before_button)
         preview.source_changed.connect(self._update_available)
         self.center = center if center is not None else ToggleToolButton("自动焦点居中")
         if center is None:
@@ -149,14 +154,17 @@ class ViewerViewportPanel(QWidget):
         self.raw_toggle.setVisible(bool(path) and not is_video(path))
         mode = self.preview.preview_source_mode()
         self.source_menu.sync(mode, raw_available=Path(path).suffix.lower() in RAW_EXTENSIONS)
-        self.raw_toggle.setText({"default": "默认预览", "raw": "显示 RAW", "denoised": "显示降噪"}[mode])
+        self.raw_toggle.setText({"default": "默认预览", "raw": "显示 RAW", "denoised": "显示降噪", "edited":"编辑效果"}[mode])
+        self.before_button.setVisible(bool(path) and not is_video(path) and mode=="edited")
+        with QSignalBlocker(self.before_button):
+            self.before_button.setChecked(self.preview.edit_before())
         if mode == "raw" and Path(path).suffix.lower() not in RAW_EXTENSIONS:
             self.raw_toggle.setText("默认预览")
         effective = "default" if mode == "raw" and Path(path).suffix.lower() not in RAW_EXTENSIONS else mode
-        iconize(self.raw_toggle, effective, self.raw_toggle.text())
+        iconize(self.raw_toggle, "result" if effective=="edited" else effective, self.raw_toggle.text())
         self.raw_toggle.setAccessibleName(f"{self.name} 预览来源：{self.raw_toggle.text()}")
         self.raw_toggle.setToolTip(self.raw_toggle.text() + "：点击循环切换，箭头菜单直接选择；仅影响本侧视口。")
-        self.raw_toggle.setChecked(mode == "denoised" or (mode == "raw" and Path(path).suffix.lower() in RAW_EXTENSIONS))
+        self.raw_toggle.setChecked(mode in {"denoised", "edited"} or (mode == "raw" and Path(path).suffix.lower() in RAW_EXTENSIONS))
         available = (self.preview.current_display_scale_percent() is not None
                      and not is_video(self.preview.current_path() or ""))
         self.fit.setEnabled(available)
@@ -167,7 +175,7 @@ class ViewerViewportPanel(QWidget):
 
     def _cycle_preview_source(self):
         raw = Path(self.preview.source_identity_path()).suffix.lower() in RAW_EXTENSIONS
-        modes = ("default", "raw", "denoised") if raw else ("default", "denoised")
+        modes = ("default", "raw", "denoised", "edited") if raw else ("default", "denoised", "edited")
         current = self.preview.preview_source_mode()
         if current not in modes:
             current = "default"

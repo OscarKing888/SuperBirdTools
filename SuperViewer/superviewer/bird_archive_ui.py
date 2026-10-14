@@ -296,9 +296,17 @@ class BirdArchiveController(QObject):
         except Exception as exc:
             QMessageBox.warning(self._main, "珍禽入册", str(exc))
             return False
+        editor = getattr(self._main,"_photo_edit",None)
+        # Archive destinations are resolved in the worker; include every open
+        # session to avoid racing a target-side save during a merge/overwrite.
+        guarded = sources + (list(editor.sessions) if editor else [])
+        if not self._files._file_operation_paths_allowed(guarded,"珍禽入册",warn=True):
+            return False
         if self._dialog is not None:
             self._dialog.close()
             self._dialog.deleteLater()
+        if editor:
+            editor.begin_file_operation()
         self._display_paths, self._scope_keys = displays, scopes
         self._worker = worker = ArchiveWorker(tuple(sources), options, reports)
         self._dialog = ArchiveProgress(self._main)
@@ -330,6 +338,9 @@ class BirdArchiveController(QObject):
         if worker is not self._worker:
             return
         self._worker = None
+        editor = getattr(self._main,"_photo_edit",None)
+        if editor:
+            editor.end_file_operation([p for result in worker.results for p in (*result.sources,*result.destinations)])
         if self._shutdown_requested:
             self._dialog.finish("已停止")
             self._dialog.close()

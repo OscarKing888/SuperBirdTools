@@ -13,6 +13,7 @@ import unicodedata
 import xml.etree.ElementTree as ET
 
 from app_common.image_formats import SUPPORTED_IMAGE_EXTENSIONS
+from app_common.image_output_paths import output_directory
 from app_common.exif_io.xmp_sidecar import _photo_descriptions
 from .types import DenoiseOptions, check_cancelled
 
@@ -122,6 +123,10 @@ def find_denoised_preview(source, options: DenoiseOptions | None = None, *, canc
     with _recent_lock:
         recent = _recent.get(_key(source))
     directories = [source.parent / options.subdir, source.parent / "denoised"]
+    try:
+        directories.insert(0, output_directory(source, options))
+    except ValueError:
+        pass  # "ask" has no selected directory until a job starts.
     if options.output_directory:
         directories.insert(0, Path(options.output_directory).expanduser())
     candidates = [Path(recent)] if recent else []

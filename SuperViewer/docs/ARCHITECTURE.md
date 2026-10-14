@@ -504,3 +504,30 @@ CLI：根 `.venv` 执行 `python -m SuperViewer.superviewer.image_png_export <�
 ### 通用参数分组
 
 [SuperViewerUserOptionsDialog](../superviewer/super_viewer_user_options_dialog.py) 使用共享 [CollapsibleSection](../../app_common/collapsible_section.py)：浏览与性能拆成加载与缓存/浏览行为/诊断，降噪拆成输出文件/降噪处理，归档与两类徽章复用原表单，清晰度参数与可收起说明分开。`option_groups` 保存视图容器，选项仍由原控件和 `selected_options()` 读取，不新增保存字段或改变检测流程；共享外部应用设置也采用同一分组。主浏览器、导航与视口保持原有职责。组件可独立使用，Qt5/Qt6 导入与枚举回退保留；样式由组件负责，设计先查根 [UI 规范](../../docs/ui-style.md) 与 [skill](../../.agents/skills/superbird-ui-design/SKILL.md)。
+
+
+## Camera RAW 与调色
+
+两个 `ImageInfoTabPanel` 子类位于 `image_info_tab_camera_raw.py`、`image_info_tab_color_adjust.py`，
+共用 `image_info_tab_photo_edit.py` 和 `photo_edit_forms.py`。七组 Camera RAW 与十六类调色步骤的
+模型、校验、XMP、LUT、缓存及导出位于 `app_common/photo_edit`；原生算法快照和 PyO3 适配位于
+`app_common/native/photo_edit`。完整功能与 CLI 见 [照片编辑说明](../../docs/photo_edit.md)。
+
+- `photo_edit_controller.PhotoEditController`：后台载入、有界会话、800 ms 自动保存、恢复草稿、
+  外部冲突、每底图撤销历史、合并渲染请求、真实 QThread 结束及关闭等待。文件操作 guard
+  先保存同 stem 的参数，后台移动／归档期间暂停编辑，完成后重新读取受影响路径。
+- `photo_edit_preview.PhotoEditPreviewBridge`：A/B 独立请求、900 px 代理到完整结果、同底图前后比较。
+  `PreviewPanel` 的编辑来源分支仍遵守原有快速导航／请求令牌／几何及首次适配合同。
+  `ViewerABPreview` 添加第四个源模式“编辑效果”和每侧独立的前后按钮。
+- `app_common.photo_edit.storage.RecipeStore` 经 `PhotoMetaDataXMP` 原子合并私有 XMP 字段；完整
+  文件名区分同 stem RAW/JPEG，input key 区分原始／固定降噪版本，revision 检测外部配方变化。
+- `app_common.image_pixels` 共用既有降噪的高位深解码；`image_output_paths` 统一五种目录策略；
+  `image_export` 共用成片像素、元数据及成对发布。降噪公开模块保留兼容接口。
+- `app_common.photo_edit.file_assets` 在共享文件事务与系统原生拖放前携带 LUT。资源按内容寻址，
+  源目录可能共享而不删除。降噪资产不自动搬移，来源不匹配报错。
+- `build_tools.photo_edit_native.collect_photo_edit` 为全部应用 spec 校验／构建当前 ABI 的 Rust 组件，
+  附带上游及依赖许可。`entry.py --check-photo-edit` 运行离线打包诊断，CI 两平台均执行。
+
+回归入口：`tests/test_photo_edit_{controller,panels,preview}.py`、
+`app_common/tests/test_photo_edit_*.py`、既有预览策略／快速导航／A-B／文件操作／降噪测试。
+界面选型及验收记录见 [设计记录](../../docs/ui-design/viewer-photo-edit.md)。

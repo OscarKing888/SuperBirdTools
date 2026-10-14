@@ -36,6 +36,9 @@ bird_datas, bird_binaries, bird_hiddenimports = collect_viewer_bird_body(REPO_RO
 
 from app_identity import load_app_identity
 from build_tools.set_build_version import prepare_build_metadata
+from build_tools.photo_edit_native import collect_photo_edit
+
+edit_datas, edit_binaries, edit_imports = collect_photo_edit(REPO_ROOT)
 
 BUILD_METADATA = prepare_build_metadata(REPO_ROOT)
 
@@ -71,12 +74,14 @@ datas.extend(collect_tree(APP_COMMON_ROOT / "about_dialog" / "images", "app_comm
 datas.extend(collect_tree(APP_COMMON_ROOT / "exif_io" / "exiftools_mac", "app_common/exif_io/exiftools_mac"))
 
 
+datas.extend(edit_datas)
+
 a = Analysis(
     [str(ENTRY_SCRIPT)],
     pathex=[str(APP_ROOT), str(REPO_ROOT)],
-    binaries=denoise_binaries + bird_binaries,
+    binaries=edit_binaries + denoise_binaries + bird_binaries,
     datas=datas,
-    hiddenimports=collect_submodules("app_common")
+    hiddenimports=edit_imports + collect_submodules("app_common")
     + collect_submodules("superviewer") + video_hiddenimports + denoise_hiddenimports + bird_hiddenimports,
     hookspath=[],
     hooksconfig={},

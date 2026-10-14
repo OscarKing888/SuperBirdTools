@@ -37,8 +37,10 @@ def _wait_until(predicate, timeout=4.0):
 @pytest.fixture
 def window(tmp_path, monkeypatch):
     main = importlib.import_module("SuperViewer.main")
+    from SuperViewer.superviewer import photo_edit_controller
     settings = tmp_path / "settings"
     settings.mkdir()
+    monkeypatch.setattr(photo_edit_controller,"get_user_state_dir",lambda:str(settings/"state"))
     (settings / paths_settings.CONFIG_FILENAME).write_text("{}", encoding="utf-8")
     monkeypatch.setattr(paths_settings, "_get_app_dir", lambda: str(settings))
     monkeypatch.setattr(paths_settings, "_get_user_state_dir", lambda: str(settings / "state"))

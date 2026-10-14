@@ -124,6 +124,14 @@ jobs:
         shell: pwsh
         run: python init_dev.py
 
+      - name: Prepare pinned photo editor toolchain
+        shell: pwsh
+        run: |
+          rustup toolchain install 1.95.0 --profile minimal
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          .\.venv\Scripts\python.exe -m pip install -r build_tools/requirements-photo-edit.txt
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
       - name: Download and verify release detection and segmentation models
         shell: pwsh
         run: |
@@ -177,6 +185,13 @@ jobs:
           $denoise = Get-Content -LiteralPath $denoiseReport -Raw | ConvertFrom-Json
           if (-not $denoise.ok) { throw "Packaged NAFNet inference failed: $($denoise.error)" }
           Get-Content -LiteralPath $denoiseReport
+          $editReport = Join-Path $env:RUNNER_TEMP "photo-edit-windows.json"
+          $editProbe = Start-Process -FilePath "dist/SuperViewer/SuperViewer.exe" `
+            -ArgumentList @("--check-photo-edit", "--output", "`"$editReport`"") `
+            -WindowStyle Hidden -Wait -PassThru
+          if ($editProbe.ExitCode -ne 0) { throw "Packaged photo editor failed: $($editProbe.ExitCode)" }
+          $edit = Get-Content -LiteralPath $editReport -Raw | ConvertFrom-Json
+          if (-not $edit.ok) { throw "Packaged photo editor failed: $($edit.error)" }
           & "dist/SuperBirdUpdater/SuperBirdUpdater.exe" --diagnose
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           .\.venv\Scripts\python.exe build_tools/package_release.py --platform windows --arch x86_64
@@ -223,6 +238,11 @@ jobs:
       - name: Install build dependencies and assets
         run: python3 init_dev.py
 
+      - name: Prepare pinned photo editor toolchain
+        run: |
+          rustup toolchain install 1.95.0 --profile minimal
+          ./.venv/bin/python3 -m pip install -r build_tools/requirements-photo-edit.txt
+
       - name: Download and verify release detection and segmentation models
         run: ./.venv/bin/python3 build_tools/download_models.py yolo11n.pt yolo11l-seg.pt sam2.1_b.pt --no-denoise
 
@@ -248,6 +268,8 @@ jobs:
           SUPERBIRD_DENOISE_MODEL_DIR="" "dist/SuperViewer.app/Contents/MacOS/SuperViewer" \
             --check-denoise --device cpu --output "$RUNNER_TEMP/denoise-macos.json"
           cat "$RUNNER_TEMP/denoise-macos.json"
+          "dist/SuperViewer.app/Contents/MacOS/SuperViewer" --check-photo-edit --output "$RUNNER_TEMP/photo-edit-macos.json"
+          cat "$RUNNER_TEMP/photo-edit-macos.json"
           "dist/SuperBirdUpdater.app/Contents/MacOS/SuperBirdUpdater" --diagnose
           ./.venv/bin/python3 build_tools/package_release.py --platform macos --arch arm64
 

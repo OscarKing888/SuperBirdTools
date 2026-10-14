@@ -1,0 +1,2 @@
+# Build-only dependency. End users do not need Rust or maturin.
+maturin==1.9.6

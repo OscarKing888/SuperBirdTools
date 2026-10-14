@@ -121,7 +121,7 @@ def test_late_denoised_worker_cannot_replace_new_raw_request(tmp_path, monkeypat
         panel.close()
 
 
-def test_toolbar_cycles_three_modes_independently_and_skips_raw_for_jpeg(window, tmp_path):
+def test_toolbar_cycles_four_modes_independently_and_skips_raw_for_jpeg(window, tmp_path):
     raw = tmp_path / "photo.ARW"
     raw.touch()
     jpg = tmp_path / "photo.jpg"
@@ -129,13 +129,15 @@ def test_toolbar_cycles_three_modes_independently_and_skips_raw_for_jpeg(window,
     panel = window.preview_panel
     panel.set_quick_pixmap(str(raw), QPixmap.fromImage(_image()))
     button = window.ab_preview.b_panel.source_button
-    for mode, label in (("raw", "显示 RAW"), ("denoised", "显示降噪"), ("default", "默认预览")):
+    for mode, label in (("raw", "显示 RAW"), ("denoised", "显示降噪"), ("edited", "编辑效果"), ("default", "默认预览")):
         button.click()
         assert panel.preview_source_mode() == mode and button.text() == label
         assert window.preview_a.preview_source_mode() == "default"
     panel.set_quick_pixmap(str(jpg), QPixmap.fromImage(_image()))
     button.click()
     assert panel.preview_source_mode() == "denoised"
+    button.click()
+    assert panel.preview_source_mode() == "edited"
     button.click()
     assert panel.preview_source_mode() == "default"
     assert not panel._full_preview_timer.isActive()

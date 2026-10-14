@@ -33,7 +33,7 @@ def _jpeg(size=(1600, 900), orientation=1):
     (_jpeg((1599, 900)), (120, 80)),
     (b"broken jpeg", (120, 80)),
     (None, (120, 80)),
-])
+], ids=["rotated-camera-jpeg","small-camera-jpeg","damaged-preview","no-preview"])
 def test_default_raw_source_threshold_orientation_and_fallback(tmp_path, monkeypatch, data, expected):
     path = tmp_path / "照片.ARW"
     path.touch()
@@ -235,6 +235,9 @@ def test_source_menu_selects_one_viewport_and_preserves_quick_navigation(window,
         assert menu.group.checkedAction().data() == 'denoised'
         assert not panels[0]._full_preview_timer.isActive()
         assert panels[0]._full_preview_loader is None
+        toolbars[0].source_button.click()
+        assert menu.group.checkedAction().data() == 'edited'
+        assert not panels[0]._full_preview_timer.isActive()
         toolbars[0].source_button.click()
         assert menu.group.checkedAction().data() == 'default'
         menu.mode_actions['raw'].trigger()

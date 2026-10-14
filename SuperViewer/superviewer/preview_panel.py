@@ -578,6 +578,7 @@ class PreviewPanel(QWidget):
     display_scale_percent_changed = pyqtSignal(object)
     full_preview_ready = pyqtSignal(str)
     source_changed = pyqtSignal()
+    edit_preview_requested = pyqtSignal(int, str)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -588,6 +589,7 @@ class PreviewPanel(QWidget):
         self._focus_cache_path = ""
         self._show_raw = False
         self._preview_source_mode = "default"
+        self._edit_before = False
         self._preview_note = ""
         self._denoised_display_path = ""
         self._source_focus_box = None
@@ -655,6 +657,52 @@ class PreviewPanel(QWidget):
     def preview_source_mode(self) -> str:
         return self._preview_source_mode
 
+    def edit_before(self) -> bool:
+        return self._edit_before
+
+    def set_edit_before(self, before: bool) -> None:
+        if self._edit_before != bool(before):
+            self._edit_before = bool(before)
+            self.refresh_edited_preview()
+            self.source_changed.emit()
+
+    def refresh_edited_preview(self) -> None:
+        if (self._shutdown_requested or self._preview_source_mode != "edited"
+                or self._navigation_playback_active or self._fast_preview_only or not self._current_path):
+            return
+        self._preview_request_token += 1
+        self._full_preview_loaded = False
+        self._cancel_pending_full_preview()
+        self._full_preview_timer.start(_FULL_PREVIEW_DELAY_MS)
+
+    def apply_edited_preview(self, token, path, qimg, *, full=False, camera_crop=None):
+        """Accept owned editing results using the same source/generation guard."""
+        if (self._shutdown_requested or self._navigation_playback_active or self._fast_preview_only
+                or self._preview_source_mode != "edited" or token != self._preview_request_token
+                or not self._is_current_path(path) or qimg is None or qimg.isNull()):
+            return False
+        pix = QPixmap.fromImage(qimg)
+        self._raw_focus_crop_box = camera_crop
+        self.set_focus_box(self._source_focus_box)
+        self.set_bird_box(self._source_bird_box)
+        if self._fit_next_image or self._first_image_fit_token == token:
+            self._set_canvas_pixmap(pix)
+        else:
+            self._apply_individual_numbers()
+            self._canvas.set_source_pixmap(pix,preserve_view=True,preserve_scale=True)
+        self._preview_note = ("调整前" if self._edit_before else "编辑效果")+ (" · 完整分辨率" if full else " · 交互预览")
+        self._set_preview_status_text(pix.width(),pix.height())
+        self._full_preview_loaded = bool(full)
+        if full:
+            self._first_image_fit_token = None
+            self.full_preview_ready.emit(path)
+        return True
+
+    def set_edit_preview_error(self, token, path, error):
+        if self._preview_source_mode == "edited" and token == self._preview_request_token and self._is_current_path(path):
+            self._preview_note = "编辑预览失败："+error
+            self._refresh_preview_status_text()
+
     def source_identity_path(self) -> str:
         return self._source_identity_path or self._current_path or ""
 
@@ -676,7 +724,7 @@ class PreviewPanel(QWidget):
             self._cancel_pending_full_preview()
 
     def set_preview_source_mode(self, mode: str) -> None:
-        if mode not in {"default", "raw", "denoised"}:
+        if mode not in {"default", "raw", "denoised", "edited"}:
             raise ValueError(f"未知预览来源：{mode}")
         if self._shutdown_requested or mode == self._preview_source_mode:
             return
@@ -686,7 +734,7 @@ class PreviewPanel(QWidget):
         path = self.source_identity_path()
         from app_common.video import is_video
         if path and not is_video(path) and (Path(path).suffix.lower() in RAW_EXTENSIONS
-                                           or "denoised" in (old_mode, mode)):
+                                           or any(value in {"denoised", "edited"} for value in (old_mode, mode))):
             # 模式属于请求身份；强制绕过同路径复用，并让迟到结果失效。
             if self._navigation_playback_active or self._fast_preview_only:
                 # 长按切模式时连缓存磁盘查询都不做，松键才读取最终来源。
@@ -766,7 +814,7 @@ class PreviewPanel(QWidget):
         full_decode_busy = active_loader is not None and active_loader.isRunning()
         # RAW never decodes in the GUI thread: the embedded camera preview is
         # extracted and decoded by the owned full worker (two-stage display).
-        if (load_full and path and self._preview_source_mode != "denoised"
+        if (load_full and path and self._preview_source_mode not in {"denoised", "edited"}
                 and not full_decode_busy and _should_load_full_preview_sync(path)):
             qimg = _load_full_preview_qimage(path)
             if qimg is not None and not qimg.isNull():
@@ -986,6 +1034,11 @@ class PreviewPanel(QWidget):
     def _start_full_preview_loader(self) -> None:
         if self._shutdown_requested or self._navigation_playback_active:
             return
+        if self._preview_source_mode == "edited":
+            path = self.source_identity_path()
+            if path:
+                self.edit_preview_requested.emit(self._preview_request_token,path)
+            return
         path = os.path.normpath(str(self._current_path or ""))
         if not path or not os.path.isfile(path):
             return
@@ -1008,6 +1061,9 @@ class PreviewPanel(QWidget):
         if int(token) != int(self._preview_request_token):
             return
         if not path or not self._is_current_path(path) or not os.path.isfile(path):
+            return
+        if self._preview_source_mode == "edited":
+            self.edit_preview_requested.emit(token,path)
             return
         loader = _FullPreviewLoader(token, path, self, source_mode=self._preview_source_mode)
         loader.loaded.connect(self._on_full_preview_loaded)
@@ -1124,7 +1180,7 @@ class PreviewPanel(QWidget):
 
     def render_source_pixmap_with_overlays(self) -> QPixmap | None:
         path = self._current_path or ""
-        if (self._preview_source_mode == "denoised" or
+        if (self._preview_source_mode in {"denoised", "edited"} or
                 (Path(path).suffix.lower() in RAW_EXTENSIONS and (self._show_raw or not self._full_preview_loaded))):
             # 来源切换只控制视口。叠加导出固定使用默认来源且不改变当前请求/画布。
             image = _load_full_preview_qimage(path)

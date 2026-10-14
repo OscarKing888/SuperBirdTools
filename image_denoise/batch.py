@@ -11,6 +11,7 @@ import threading
 import unicodedata
 
 from app_common.image_formats import SUPPORTED_IMAGE_EXTENSIONS
+from app_common.image_output_paths import OUTPUT_MODES, allocate_outputs
 
 from .types import DenoiseCancelled, DenoiseOptions, DenoiseResult, UnsupportedImage, check_cancelled
 
@@ -22,7 +23,7 @@ _log = logging.getLogger("image_denoise.batch")
 
 
 def validate_options(options: DenoiseOptions) -> None:
-    if options.output_mode not in {"source_subdir", "fixed", "ask"}:
+    if options.output_mode not in dict(OUTPUT_MODES):
         raise ValueError("无效的降噪输出位置模式")
     name = options.subdir
     if (not isinstance(name, str) or not name or name in {".", ".."}
@@ -93,34 +94,9 @@ def collect_image_paths(inputs, *, recursive=False, options=None, cancelled=None
 
 
 def allocate_destinations(paths, options: DenoiseOptions) -> list[str]:
-    """提交工作前预分配整批名称；图像/XMP 一起做 NFC 和大小写无关冲突检查。"""
+    """Shared image/XMP allocation, retaining the existing denoised suffix."""
     validate_options(options)
-    allocated, occupied = [], {}
-    extension = ".tif" if options.format == "tiff" else ".jpg"
-    for source in map(Path, paths):
-        directory = (source.parent / options.subdir if options.output_mode == "source_subdir"
-                     else Path(options.output_directory).expanduser())
-        directory = directory.resolve()
-        key = _portable_key(directory)
-        if key not in occupied:
-            try:
-                occupied[key] = {_portable_key(p.name) for p in directory.iterdir()}
-            except OSError:
-                # 无法列举某张的输出位置时，交给单张导出报告错误；不能中断其他源目录。
-                # 导出仍会检查现有图像/XMP，并以不覆盖方式发布文件。
-                occupied[key] = set()
-        used = occupied[key]
-        stem = f"{source.stem}_denoised"
-        count = 1
-        while True:
-            name = stem if count == 1 else f"{stem}_{count}"
-            image_name, sidecar_name = name + extension, name + ".xmp"
-            if _portable_key(image_name) not in used and _portable_key(sidecar_name) not in used:
-                used.update((_portable_key(image_name), _portable_key(sidecar_name)))
-                allocated.append(str(directory / image_name))
-                break
-            count += 1
-    return allocated
+    return allocate_outputs(paths, options, suffix="denoised")
 
 
 def memory_snapshot() -> tuple[int, int]:

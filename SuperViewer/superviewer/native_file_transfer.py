@@ -184,6 +184,9 @@ def native_transfer(paths, destination, *, copy=False, owner=0):
     if any("\0" in path for path in (*paths, destination)):
         return TransferResult(error="文件路径含有无效字符")
     try:
+        from app_common.photo_edit.file_assets import copy_photo_edit_assets
+        for source in paths:
+            copy_photo_edit_assets(source,Path(destination)/Path(source).name)
         if sys.platform == "win32":
             return _windows_transfer(paths, destination, copy, owner)
         if sys.platform == "darwin":

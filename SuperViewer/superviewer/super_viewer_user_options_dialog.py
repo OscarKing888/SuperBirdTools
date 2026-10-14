@@ -177,8 +177,8 @@ class SuperViewerUserOptionsDialog(SettingsDialog):
         denoise_grid = grid_group("输出文件")
         denoise_grid.setVerticalSpacing(10)
         self._combo_denoise_mode = QComboBox(denoise)
-        for label, value in (("每张照片所在目录的子目录", "source_subdir"),
-                             ("固定输出目录", "fixed"), ("每次开始时选择目录", "ask")):
+        from app_common.image_output_paths import OUTPUT_MODES
+        for value, label in OUTPUT_MODES:
             self._combo_denoise_mode.addItem(label, value)
         self._combo_denoise_mode.setCurrentIndex(self._combo_denoise_mode.findData(opts["denoise_output_mode"]))
         denoise_grid.addWidget(QLabel("输出位置"), 0, 0)
@@ -226,6 +226,34 @@ class SuperViewerUserOptionsDialog(SettingsDialog):
         denoise_note.setWordWrap(True)
         denoise_layout.addWidget(denoise_note)
         self.add_page(denoise, "批量降噪", menu_icon("denoise"))
+
+        from app_common.image_output_form import ImageOutputOptionsForm
+        photo_edit = QWidget(tabs)
+        photo_edit_layout = QVBoxLayout(photo_edit)
+        self._photo_edit_output = ImageOutputOptionsForm(opts, photo_edit)
+        self._add_option_group(photo_edit_layout, "编辑成片", self._photo_edit_output)
+        cache_form = QWidget(photo_edit)
+        cache_grid = QGridLayout(cache_form)
+        cache_grid.setContentsMargins(0, 0, 0, 0)
+        self._photo_edit_memory = QSpinBox(cache_form)
+        self._photo_edit_memory.setRange(64, 4096)
+        self._photo_edit_memory.setSuffix(" MiB")
+        self._photo_edit_memory.setValue(opts["photo_edit_memory_mb"])
+        self._photo_edit_disk = QSpinBox(cache_form)
+        self._photo_edit_disk.setRange(0, 16384)
+        self._photo_edit_disk.setSuffix(" MiB")
+        self._photo_edit_disk.setValue(opts["photo_edit_disk_mb"])
+        cache_grid.addWidget(QLabel("内存缓存"), 0, 0)
+        cache_grid.addWidget(self._photo_edit_memory, 0, 1)
+        cache_grid.addWidget(QLabel("磁盘预览缓存"), 1, 0)
+        cache_grid.addWidget(self._photo_edit_disk, 1, 1)
+        self._add_option_group(photo_edit_layout, "编辑缓存", cache_form)
+        edit_note = QLabel("调整参数自动保存到原照片 XMP，可在编辑会话中撤销。\n"
+                           "导出单独生成成片和 XMP，重名自动编号。磁盘缓存可重建，0 表示关闭；"
+                           "缓存设置重启后生效。", photo_edit)
+        edit_note.setWordWrap(True)
+        photo_edit_layout.addWidget(edit_note)
+        self.add_page(photo_edit, "照片编辑", menu_icon("process"))
 
         from .video_frame_options_form import VideoFrameOptionsForm
         video = QWidget(tabs)
@@ -293,11 +321,15 @@ class SuperViewerUserOptionsDialog(SettingsDialog):
 
     def _update_denoise_mode(self, *_args) -> None:
         mode = self._combo_denoise_mode.currentData()
-        self._edit_denoise_subdir.setEnabled(mode == "source_subdir")
+        self._edit_denoise_subdir.setEnabled(mode in {"source_subdir", "sibling_dir"})
         self._edit_denoise_directory.setEnabled(mode == "fixed")
         self._button_denoise_directory.setEnabled(mode == "fixed")
 
     def accept(self) -> None:
+        error = self._photo_edit_output.validation_error()
+        if error:
+            QMessageBox.information(self, "照片编辑", error)
+            return
         error = self._video_frame_form.validation_error()
         if error:
             QMessageBox.information(self, "视频处理", error)
@@ -334,6 +366,9 @@ class SuperViewerUserOptionsDialog(SettingsDialog):
             "denoise_strength": self._spin_denoise_strength.value(),
             "denoise_device": str(self._combo_denoise_device.currentData()),
             "denoise_workers": self._spin_denoise_workers.value(),
+            **self._photo_edit_output.selected_options(),
+            "photo_edit_memory_mb": self._photo_edit_memory.value(),
+            "photo_edit_disk_mb": self._photo_edit_disk.value(),
             **self._video_frame_form.selected_options(),
             **self._rarity_badges_form.selected_options(),
             **self._conservation_badges_form.selected_options(),

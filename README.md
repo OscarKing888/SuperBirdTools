@@ -13,6 +13,7 @@
 - [SuperViewer 架构与功能定位](SuperViewer/docs/ARCHITECTURE.md)
 - [SuperBirdStamp 架构与功能定位](SuperBirdStamp/docs/ARCHITECTURE.md)
 - [SuperViewer 批量 RGB 降噪、模型预下载与离线打包](docs/image_denoise.md)
+- [Camera RAW、调色、非破坏参数与原生构建](docs/photo_edit.md)
 - [鸟清晰度检测：算法、阈值、存储与模型](docs/bird_sharpness.md)
 - [鸟清晰度检测与 SuperPicky 锐度算法对比](docs/bird_sharpness_vs_superpicky.md)
 

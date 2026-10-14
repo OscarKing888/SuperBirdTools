@@ -8,7 +8,7 @@ SuperViewer 使用本地 NAFNet-SIDD width64 模型对照片进行 RGB 降噪。
 
 在“设置 → 用户选项 → 批量降噪”中配置：
 
-- 输出到每张照片所在目录下的子目录（默认 `denoised`）、固定目录，或每次弹框选择目录。
+- 输出到每张照片所在目录下的子目录（默认 `denoised`）、原图同目录、原目录的平级目录（`原目录名_denoised`）、固定目录，或每次弹框选择目录。命名与位置策略复用 `app_common.image_output_paths`，设置与照片编辑分别保存。
 - TIFF（默认 16 位，保留透明度），或 JPEG（质量 95、无色度抽样）。有透明度的图片不能输出 JPEG。
 - 强度 0–100%，默认 100%。这是原像素与模型结果的混合比例，不是模型训练噪声级别；0% 只完成显影/格式转换。
 - 设备自动选择 CUDA、MPS 或 CPU；可以强制 CPU。同时处理照片默认 2 张、上限 4 张，还受浏览器池分析配额及可用内存限制。
@@ -51,3 +51,5 @@ SuperViewer 使用本地 NAFNet-SIDD width64 模型对照片进行 RGB 降噪。
 模型和新增依赖改变了打包内容，首次集成或正式发布使用 `build_all.sh --clean` / `build_all.bat --clean`。CI 在 macOS arm64、Windows 64 位执行真实包内 `--check-denoise`，校验模型推理、16 位 TIFF 和 ICC 编解码；诊断 JSON 不写用户运行配置。Windows CUDA 与 macOS MPS 仍需对应设备验证。
 
 回归入口：`image_denoise/tests`、`SuperViewer/tests/test_denoise_controller.py`、共享用户选项和浏览器工作池测试，以及原有预览/快切/关闭回归。测试只写临时照片目录；模型测试在本地权重准备好后运行。
+
+共享实现：`app_common.image_pixels` 提供高位深解码，`app_common.image_export` 提供像素编码与安全发布；原 `image_denoise.image_io` 和导出入口保留兼容接口。[Camera RAW / 调色](photo_edit.md) 可将已验证的降噪成片固定为独立编辑底图。
