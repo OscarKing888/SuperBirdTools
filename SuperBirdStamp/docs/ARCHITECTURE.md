@@ -228,6 +228,8 @@ RAW 源图的去抖动分析、成片预览和导出统一优先读取长边至�
 
 所有新渲染的 PNG/JPG 写入（普通单图/批量、CLI、独立去抖动、GIF 和视频帧）统一经过 [export_metadata.py](../birdstamp/export_metadata.py) 的 `save_export_image`，必须传入实际 `source_path`；有效 PNG 成品或同尺寸源帧可原子复制完整字节和已有 EXIF。ExifTool 从原文件复制 EXIF 块及可写元数据，包含 MakerNotes/未知 EXIF 标签；随后单独校正成片方向与尺寸，清除旧 IFD1 目录并按成片像素重建缩略图；即使源 EXIF 的缩略图目录截断，也不解析或沿用该损坏目录，其他 EXIF、未知标签及 MakerNotes 仍按原有完整复制路径保留。不能用模板筛选后的元数据字典重建 EXIF。临时文件完成图片和 EXIF 后才替换目标，元数据失败不冒充成功、不覆盖已有完整目标，也禁止覆盖原图。使用共享 ExifTool runner（超时、Windows 隐藏窗口、应用关闭/atexit 清理）；中文内容通过文件复制保留，不拼入命令行。原图没有 EXIF 时可正常导出。源帧缓存版本更新后不会复用旧的无 EXIF 缓存。
 
+成片同时内嵌原图 XMP 和同目录同名侧车（扩展名不区分大小写）的合并结果；[export_xmp.py](../birdstamp/export_xmp.py) 的 `merge_export_xmp` 按完整 RDF 属性以侧车为优先，保留内嵌独有属性、多语言、数组、数值零/空值、自定义 `XMP-superpicky` 及其他未知命名空间。原图 EXIF 继续独立保留，不强制转换成 XMP。XMP 按整块写入，避免 ExifTool 的已知标签复制遗漏自定义字段；合并后仍按成片校正方向/尺寸。损坏侧车或写入失败使该图导出失败，已有成片和源照片/侧车保持不变。普通单张、批量、CLI、去抖动及中间帧共用该入口；不额外为普通导出生成旁车文件，发送 PNG/JPG 本身即可携带两类信息。源帧签名包含实际侧车文件状态，增删改会使缓存失效，版本 17 排除旧的不完整 XMP 成片。拼图包含多张不同照片，仍不把某一张的拍摄参数冒充整张拼图的 EXIF。
+
 独立去抖动另外使用 `copy_export_sidecar`，通过共享严格同目录/同名查找器定位 `.xmp`（扩展名不区分大小写），原样复制到导出图的新同名 `.xmp`；缺少时不生成空文件，失败/取消随本次目录一起回滚。分析签名记录实际 sidecar 路径，之后增加、删除或修改 `.XMP` 同样使结果失效。GIF/视频成品不作为逐张原始 EXIF 容器，其保留的 PNG 帧各自携带元数据。回归见 [test_export_metadata.py](../tests/test_export_metadata.py)。
 
 `_build_batch_image_targets` 在启动并行写入前分配所有文件名：使用 NFC 规范化加 `casefold` 判断本批同名目标，依次追加 `_2`、`_3`。这避免不同目录的 `a.jpg`、`A.jpg` 或 Unicode 等价名称写到同一目标；它解决本批目标互撞，不提供跨进程文件锁。普通图片并行度沿用视频导出的 CPU/图像像素内存预算；GIF 中间 PNG 帧使用整组图片导出的可用逻辑核心及内存预算，实际线程数仍受待导出帧数限制。成功的普通 PNG/JPG 导出由 [exported_image_index.py](../birdstamp/exported_image_index.py) 记录到用户配置缓存目录，索引上限 50,000 个签名；视频/GIF 可跨输出目录按 PNG 优先、JPG 补帧的顺序复用，文件状态或处理输入变化时退回原图渲染。旧导出图和独立去抖动序列没有可验证的普通管线签名，不进入索引。
@@ -350,7 +352,7 @@ macOS 使用 `.venv/bin/python3` 执行相同的 `-m pytest` 参数。先运行�
 GUI 测试必须在构造窗口前将 `birdstamp.config.get_user_data_dir` patch 到临时目录，并按需隔离缓存。构造后才禁用保存不能防止启动读取或初始化真实配置。使用进程级强引用保留 `QApplication`，按实际状态/定时器/线程完成条件等待，不能只增加固定 sleep。自动保存、模板与导出状态的真实用户文件不应成为测试输入或清理对象；离屏测试也不替代 Windows/macOS 打包后启动验证。
 ## 独立更新器接入
 
-Windows 合并构建由 [`stage_windows_exiftool.py`](../../build_tools/stage_windows_exiftool.py) 在发布清单生成前为两个应用各复制完整 ExifTool（含 `exiftool_files`），并检查安装副本的版本；失败即停止打包。[`pyi_rthook_cwd.py`](../scripts_dev/pyi_rthook_cwd.py) 优先配置 BirdStamp 安装目录中的副本，避免依赖 MERGE 的临时解压路径，并保留显式 `EXIFTOOL_EXE` / `EXIFTOOL_PATH` 覆盖。`SuperBirdStamp.exe --check-runtime --output <报告.json>` 在临时目录验证中文 EXIF 的 JPEG/PNG 实际导出与 CPU 模型推理，不加载用户工作区；加 `--export-only` 可独立检查 ExifTool 导出，不加载模型。
+Windows 合并构建由 [`stage_windows_exiftool.py`](../../build_tools/stage_windows_exiftool.py) 在发布清单生成前为两个应用各复制完整 ExifTool（含 `exiftool_files`），并检查安装副本的版本；失败即停止打包。[`pyi_rthook_cwd.py`](../scripts_dev/pyi_rthook_cwd.py) 优先配置 BirdStamp 安装目录中的副本，避免依赖 MERGE 的临时解压路径，并保留显式 `EXIFTOOL_EXE` / `EXIFTOOL_PATH` 覆盖。`SuperBirdStamp.exe --check-runtime --output <报告.json>` 在临时目录验证中文 EXIF、侧车自定义 XMP 的 JPEG/PNG 实际导出与 CPU 模型推理，不加载用户工作区；加 `--export-only` 可独立检查 ExifTool 导出，不加载模型。
 
 [`entry.py`](../entry.py) 在业务模块导入前进行 `SuperBirdUpdater.runtime.admit_startup()` 登记。`launch_gui()` 在窗口显示后接入更新菜单、后台检查及独立 IPC；图片/GIF、序列和视频导出中的实例拒绝更新退出。通过准备检查后冻结窗口输入，再调用原 `closeEvent`，保留工作区保存及线程/ExifTool 清理语义。
 

@@ -23,7 +23,12 @@ def prepared_sequence(tmp_path, count=6):
         exif[271] = f'Camera {index}'
         with Image.new('RGB', (96, 64), (index * 30, 50, 80)) as image:
             image.save(path, exif=exif)
-        path.with_suffix('.XMP').write_text(f'中文元数据 {index}', encoding='utf-8')
+        path.with_suffix('.XMP').write_text(
+            '<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF '
+            'xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">'
+            '<rdf:Description rdf:about="" xmlns:dc="http://purl.org/dc/elements/1.1/">'
+            f'<dc:description>中文元数据 {index}</dc:description>'
+            '</rdf:Description></rdf:RDF></x:xmpmeta>', encoding='utf-8')
         key = path_key(path)
         jobs[key] = VideoFrameJob(path, {}, {}, {})
         boxes[key], sizes[key] = (4, 2, 92, 62), (96, 64)

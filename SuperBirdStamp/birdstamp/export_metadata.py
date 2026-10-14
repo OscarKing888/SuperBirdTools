@@ -9,7 +9,8 @@ import tempfile
 
 from PIL import Image
 from app_common.exif_io import get_exiftool_executable_path, find_same_stem_xmp_sidecar
-from app_common.exif_io.exiftool_runner import run_exiftool
+from app_common.exif_io.exiftool_runner import run_exiftool, run_exiftool_once
+from birdstamp.export_xmp import merge_export_xmp
 
 _LOG = logging.getLogger(__name__)
 
@@ -29,21 +30,34 @@ def _run(executable: str, args: list[str], *, allow_empty_source: bool = False) 
             and all(line.startswith('Warning: No writable tags set from ') for line in lines)
             and 'due to errors' not in result.stdout):
         return
-    if result.returncode:
-        raise RuntimeError(f'导出 EXIF 保存失败：{result.stderr or result.stdout}')
+    if result.returncode or any('Invalid XMP data' in line for line in lines):
+        raise RuntimeError(f'导出 EXIF/XMP 保存失败：{result.stderr or result.stdout}')
     if result.stderr.strip():
-        _LOG.warning('导出 EXIF：%s', result.stderr.strip())
+        _LOG.warning('导出 EXIF/XMP：%s', result.stderr.strip())
 
 
 def copy_export_metadata(source: Path, target: Path, image: Image.Image) -> None:
-    """复制完整 EXIF（含厂商私有数据），只校正成片方向、尺寸和缩略图。"""
+    """复制完整 EXIF 和 XMP，合并侧车，再校正成片方向、尺寸和缩略图。"""
     executable = get_exiftool_executable_path()
     if not executable:
         raise RuntimeError('无法使用 ExifTool（程序缺失或捆绑组件不完整），不能完整保留原图 EXIF，已取消此图片导出。')
     # 直接从原文件复制，不能用模板用的筛选后元数据字典重建 EXIF。
     # EXIF 块保留未知标签；all:all 兼容 TIFF/RAW 标签复制并保留其他可写元数据。
-    _run(executable, ['-TagsFromFile', str(source), '-all:all', '-EXIF', '-ICC_Profile', '-IFD0:Orientation#=1', str(target)], allow_empty_source=True)
+    # XMP 也按块复制；all:all 单独使用会丢弃未知/自定义 XMP 字段。
+    _run(executable, ['-TagsFromFile', str(source), '-all:all', '-EXIF', '-XMP', '-ICC_Profile', '-IFD0:Orientation#=1', str(target)], allow_empty_source=True)
     with tempfile.TemporaryDirectory(prefix='birdstamp-exif-') as directory:
+        sidecar = find_same_stem_xmp_sidecar(str(source))
+        if sidecar is not None:
+            # 二进制包可能没有尾换行，不能混入 stay_open 的按行 ready 协议。
+            result = run_exiftool_once(
+                [executable, '-charset', 'filename=UTF8', '-b', '-XMP', str(target)],
+                capture_output=True, timeout=60,
+            )
+            if result.returncode:
+                raise RuntimeError(f'导出 XMP 读取失败：{result.stderr.decode("utf-8", errors="replace")}')
+            xmp_path = Path(directory) / 'merged.xmp'
+            xmp_path.write_bytes(merge_export_xmp(result.stdout, Path(sidecar).read_bytes(), source=source))
+            _run(executable, [f'-XMP<={xmp_path}', str(target)])
         thumbnail_path = Path(directory) / 'thumbnail.jpg'
         with image.convert('RGB') as thumbnail:
             thumbnail.thumbnail((160, 160), Image.Resampling.LANCZOS)
@@ -67,7 +81,7 @@ def copy_export_metadata(source: Path, target: Path, image: Image.Image) -> None
 
 def save_export_image(image: Image.Image, target: Path, *, source_path: Path,
                       format: str, **save_options) -> None:
-    """先完成图片及 EXIF 临时文件，再替换目标；失败不留下无 EXIF 的半成品。"""
+    """先完成图片及 EXIF/XMP 临时文件，再替换目标；失败不留下元数据不全的半成品。"""
     target = Path(target)
     source = Path(source_path).resolve()
     if not source.is_file():

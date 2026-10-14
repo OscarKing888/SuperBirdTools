@@ -4,6 +4,7 @@ from io import BytesIO
 import json
 import struct
 import threading
+from xml.etree import ElementTree as ET
 from types import SimpleNamespace
 
 import pytest
@@ -162,6 +163,7 @@ def test_all_image_write_routes_keep_original_exif(original, tmp_path, route):
     from birdstamp.gui.editor_exporter import _BirdStampExporterMixin
     from birdstamp.cli import _save_image
     from birdstamp.export_stage.core import _save_rendered_source_frame, _save_normalized_temp_frame
+    original.with_suffix('.xmp').write_bytes(xmp_packet('<sp:bird_species_cn>普通翠鸟</sp:bird_species_cn>'))
     output = tmp_path / f'{route}.png'
     with Image.new('RGB', (40, 30)) as image:
         if route in ('gui', 'gif_frame'):
@@ -176,6 +178,7 @@ def test_all_image_write_routes_keep_original_exif(original, tmp_path, route):
     assert result['ExifIFD:ISO'] == 1600
     assert result['ExifIFD:UserComment'] == '小勺子，原始拍摄信息。'
     assert result['ExifIFD:ExifImageWidth'] == (60 if route == 'video_frame' else 40)
+    assert exported_xmp(output).find('.//sp:bird_species_cn', NS).text == '普通翠鸟'
 
 
 def test_matching_video_frame_copies_complete_png_and_chinese_exif(original, tmp_path):
@@ -201,7 +204,7 @@ def test_dejitter_export_renames_uppercase_xmp_and_keeps_exact_bytes(sequence, t
     from birdstamp.export_stage.sequence_export import export_aligned_sequence
     seeds, _ = sequence
     sidecar = seeds[0].path.with_suffix('.XMP')
-    payload = '<?xml version="1.0" encoding="UTF-8"?><x:xmpmeta xmlns:x="adobe:ns:meta/">中文小勺子</x:xmpmeta>'.encode()
+    payload = xmp_packet('<dc:title><rdf:Alt><rdf:li xml:lang="x-default">中文小勺子</rdf:li></rdf:Alt></dc:title>')
     sidecar.write_bytes(payload)
     exiftool('-overwrite_original', '-ISO=1250', str(seeds[0].path))
     result = prepare_sequence_preview(seeds, cancel_event=threading.Event())
@@ -247,3 +250,158 @@ def test_unknown_exif_and_opaque_maker_notes_are_not_dropped(tmp_path):
     with Image.open(source) as a, Image.open(target) as b:
         assert a.getexif()[65001] == b.getexif()[65001]
         assert a.getexif().get_ifd(34665)[37500] == b.getexif().get_ifd(34665)[37500]
+
+
+NS = {
+    'rdf': 'http://www.w3.org/1999/02/22-rdf-syntax-ns#',
+    'dc': 'http://purl.org/dc/elements/1.1/',
+    'sp': 'https://superbirdtools.local/xmp/superpicky/1.0/',
+    'custom': 'https://example.test/private/',
+    'xmp': 'http://ns.adobe.com/xap/1.0/',
+    'tiff': 'http://ns.adobe.com/tiff/1.0/',
+    'exif': 'http://ns.adobe.com/exif/1.0/',
+}
+
+
+def xmp_packet(properties='', attributes='', other=''):
+    namespaces = ' '.join(f'xmlns:{prefix}="{uri}"' for prefix, uri in NS.items())
+    return (f'<x:xmpmeta xmlns:x="adobe:ns:meta/" {namespaces}><rdf:RDF>'
+            f'<rdf:Description rdf:about="" {attributes}>{properties}</rdf:Description>'
+            f'{other}</rdf:RDF></x:xmpmeta>').encode('utf-8')
+
+
+def embed_xmp(source, payload, tmp_path):
+    packet = tmp_path / 'packet.xmp'
+    packet.write_bytes(payload)
+    exiftool('-overwrite_original', f'-XMP<={packet}', str(source))
+
+
+def exported_xmp(output):
+    result = run_exiftool_once([get_exiftool_executable_path(), '-b', '-XMP', str(output)],
+                              capture_output=True, timeout=30)
+    assert result.returncode == 0, result.stderr
+    return ET.fromstring(result.stdout)
+
+
+@pytest.mark.parametrize('suffix,format', [('png', 'PNG'), ('jpg', 'JPEG')])
+def test_embedded_custom_xmp_is_preserved_without_sidecar(original, tmp_path, suffix, format):
+    embed_xmp(original, xmp_packet('<custom:private>未知字段：翠鸟</custom:private>',
+                                  'sp:bird_species_cn="普通翠鸟"'), tmp_path)
+    output = tmp_path / f'成片.{suffix}'
+    with Image.new('RGB', (40, 30)) as image:
+        save_export_image(image, output, source_path=original, format=format)
+    root = exported_xmp(output)
+    assert root.find('.//custom:private', NS).text == '未知字段：翠鸟'
+    assert metadata(output)['ExifIFD:ISO'] == 1600
+    assert '普通翠鸟' in ET.tostring(root, encoding='unicode')
+
+
+@pytest.mark.parametrize('suffix,format', [('png', 'PNG'), ('jpg', 'JPEG')])
+def test_sidecar_merges_full_xmp_and_overrides_embedded_properties(original, tmp_path, suffix, format):
+    embed_xmp(original, xmp_packet(
+        '<custom:private>保留内嵌字段</custom:private>'
+        '<dc:subject><rdf:Bag><rdf:li>旧标签</rdf:li></rdf:Bag></dc:subject>'
+        '<dc:description><rdf:Alt><rdf:li xml:lang="x-default">旧描述</rdf:li></rdf:Alt></dc:description>',
+        'sp:bird_species_cn="旧鸟名" xmp:Rating="5"'), tmp_path)
+    sidecar = original.with_suffix('.XMP')
+    payload = xmp_packet(
+        '<sp:bird_species_cn>普通翠鸟</sp:bird_species_cn>'
+        '<sp:bird_sharpness_score>812.50</sp:bird_sharpness_score>'
+        '<dc:subject><rdf:Bag><rdf:li>中国鸟类</rdf:li><rdf:li>湿地</rdf:li></rdf:Bag></dc:subject>'
+        '<dc:description><rdf:Alt><rdf:li xml:lang="x-default"></rdf:li></rdf:Alt></dc:description>'
+        '<custom:structure rdf:parseType="Resource"><custom:child>结构字段</custom:child></custom:structure>',
+        'xmp:Rating="0" tiff:Orientation="6" tiff:ImageWidth="120" exif:PixelXDimension="120"',
+        '<rdf:Description rdf:about="https://example.test/resource"><custom:asset>资源信息</custom:asset></rdf:Description>')
+    sidecar.write_bytes(payload)
+    before = original.read_bytes()
+    output = tmp_path / f'新成片.{suffix}'
+    with Image.new('RGB', (40, 30)) as image:
+        save_export_image(image, output, source_path=original, format=format)
+    root = exported_xmp(output)
+    assert root.find('.//custom:private', NS).text == '保留内嵌字段'
+    assert root.find('.//sp:bird_species_cn', NS).text == '普通翠鸟'
+    assert root.find('.//sp:bird_sharpness_score', NS).text == '812.50'
+    assert root.find('.//custom:child', NS).text == '结构字段'
+    assert root.find('.//custom:asset', NS).text == '资源信息'
+    assert [node.text for node in root.findall('.//dc:subject/rdf:Bag/rdf:li', NS)] == ['中国鸟类', '湿地']
+    text = ET.tostring(root, encoding='unicode')
+    assert '旧鸟名' not in text and '旧描述' not in text
+    result = metadata(output)
+    assert result['XMP-xmp:Rating'] == 0
+    assert result['XMP-tiff:Orientation'] == 1
+    assert result['XMP-tiff:ImageWidth'] == result['XMP-exif:ExifImageWidth'] == 40
+    assert result['ExifIFD:ISO'] == 1600
+    assert original.read_bytes() == before and sidecar.read_bytes() == payload
+    assert not list(tmp_path.glob('.birdstamp-export-*'))
+
+
+def test_invalid_sidecar_fails_without_replacing_existing_output(original, tmp_path):
+    sidecar = original.with_suffix('.xmp')
+    sidecar.write_bytes(b'<broken>')
+    output = tmp_path / 'existing.jpg'
+    output.write_bytes(b'previous complete export')
+    with Image.new('RGB', (40, 30)) as image, pytest.raises(ValueError, match='XMP'):
+        save_export_image(image, output, source_path=original, format='JPEG')
+    assert output.read_bytes() == b'previous complete export'
+    assert sidecar.read_bytes() == b'<broken>'
+    assert not list(tmp_path.glob('.birdstamp-export-*'))
+
+
+def test_sidecar_changes_invalidate_export_cache_even_with_stale_metadata(original):
+    from birdstamp.export_stage import VideoFrameJob, source_frame_signature_for_job
+    job = VideoFrameJob(path=original, settings={}, raw_metadata={}, metadata_context={})
+    without = source_frame_signature_for_job(job)
+    sidecar = original.with_suffix('.XMP')
+    sidecar.write_bytes(xmp_packet('<custom:private>一</custom:private>'))
+    first = source_frame_signature_for_job(job)
+    assert first != without
+    sidecar.write_bytes(xmp_packet('<custom:private>第二次</custom:private>'))
+    assert source_frame_signature_for_job(job) not in {first, without}
+    sidecar.unlink()
+    assert source_frame_signature_for_job(job) == without
+
+
+def test_exiftool_rejected_xmp_is_not_reported_as_success(monkeypatch):
+    monkeypatch.setattr(export_metadata, 'run_exiftool', lambda *a, **kw: SimpleNamespace(
+        returncode=0, stdout='0 image files updated', stderr='Warning: Invalid XMP data for XMP:XMP'))
+    with pytest.raises(RuntimeError, match='Invalid XMP'):
+        export_metadata._run('exiftool', ['-XMP<=packet.xmp', 'output.jpg'])
+
+
+@pytest.mark.parametrize('identity', ['', 'filename', 'uuid'])
+def test_xmp_merge_handles_split_descriptions_and_namespace_prefixes(original, identity):
+    from birdstamp.export_xmp import merge_export_xmp
+    from app_common.exif_io.xmp_sidecar import _photo_descriptions
+
+    about = {'': '', 'filename': original.as_uri(), 'uuid': 'urn:uuid:550e8400-e29b-41d4-a716-446655440000'}[identity]
+    embedded = xmp_packet('<sp:bird_species_cn>旧鸟名</sp:bird_species_cn>', 'xmp:Rating="5"')
+    sidecar = (
+        f'<m:xmpmeta xmlns:m="adobe:ns:meta/" xmlns:r="{NS["rdf"]}" '
+        f'xmlns:p="{NS["sp"]}" xmlns:private="{NS["custom"]}" '
+        f'xmlns:xx="{NS["xmp"]}"><r:RDF>'
+        f'<r:Description r:about="{about}" p:bird_species_cn="普通翠鸟"/>'
+        f'<r:Description r:about="{about}"><xx:Rating>0</xx:Rating>'
+        '<private:typed r:datatype="private:custom">未知类型</private:typed></r:Description>'
+        '<r:Description r:about="https://example.test/other" xx:Rating="3"/>'
+        '</r:RDF></m:xmpmeta>'
+    ).encode('utf-8')
+    merged = merge_export_xmp(embedded, sidecar, source=original)
+    root = ET.fromstring(merged)
+    descriptions = _photo_descriptions(root, str(original.parent / 'export.jpg'))
+    bird_key = f'{{{NS["sp"]}}}bird_species_cn'
+    rating_key = f'{{{NS["xmp"]}}}Rating'
+    assert [node.attrib[bird_key] for node in descriptions if bird_key in node.attrib] == ['普通翠鸟']
+    assert not any(rating_key in node.attrib for node in descriptions)
+    assert [node.find('xmp:Rating', NS).text for node in descriptions
+            if node.find('xmp:Rating', NS) is not None] == ['0']
+    assert b'xmlns:private="https://example.test/private/"' in merged
+    assert '旧鸟名' not in merged.decode('utf-8')
+
+
+def test_sidecar_only_metadata_embeds_without_source_exif(tmp_path):
+    source, target = tmp_path / 'plain.png', tmp_path / 'export.jpg'
+    with Image.new('RGB', (30, 20)) as image:
+        image.save(source)
+        source.with_suffix('.xmp').write_bytes(xmp_packet('<sp:bird_species_cn>白鹭</sp:bird_species_cn>'))
+        save_export_image(image, target, source_path=source, format='JPEG')
+    assert exported_xmp(target).find('.//sp:bird_species_cn', NS).text == '白鹭'

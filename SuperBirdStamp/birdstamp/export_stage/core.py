@@ -548,7 +548,12 @@ def source_frame_signature_for_job(
     template_paths: Mapping[str, Path] | None = None,
     template_signature_state: Mapping[str, Mapping[str, Any]] | None = None,
 ) -> str:
+    from app_common.exif_io import find_same_stem_xmp_sidecar
+
     render_settings = _clone_render_settings(job.settings)
+    # 未知 XMP 属性不一定出现在模板元数据字典中，侧车增删改也必须使成片失效。
+    sidecar = find_same_stem_xmp_sidecar(str(job.path))
+    render_settings['_export_xmp_signature'] = path_signature(Path(sidecar)) if sidecar else None
     # The terminal exporter never changes source pixels.  Omitting it lets an
     # image, GIF and video share the same rendered-frame identity.
     render_settings.pop(EXPORT_STAGE_ID_KEY, None)

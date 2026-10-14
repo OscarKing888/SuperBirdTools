@@ -6,12 +6,13 @@ import argparse
 import os
 from pathlib import Path
 import tempfile
+from xml.etree import ElementTree as ET
 
 
 def check_export(directory: Path) -> dict:
     from PIL import Image
     from app_common.exif_io import get_exiftool_executable_path, close_exiftool_process
-    from app_common.exif_io.exiftool_runner import run_exiftool
+    from app_common.exif_io.exiftool_runner import run_exiftool, run_exiftool_once
     from birdstamp.export_metadata import save_export_image
 
     executable = get_exiftool_executable_path()
@@ -32,6 +33,15 @@ def check_export(directory: Path) -> dict:
             original.save(source)
         run("-overwrite_original", "-charset", "filename=UTF8", "-Make=SONY", "-ISO=1600",
             f"-UserComment<={text}", str(source))
+        sidecar = source.with_suffix('.XMP')
+        sidecar.write_text(
+            '<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF '
+            'xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">'
+            '<rdf:Description rdf:about="" '
+            'xmlns:sp="https://superbirdtools.local/xmp/superpicky/1.0/">'
+            '<sp:bird_species_cn>普通翠鸟</sp:bird_species_cn>'
+            '</rdf:Description></rdf:RDF></x:xmpmeta>', encoding='utf-8')
+        sidecar_before = sidecar.read_bytes()
         before = source.read_bytes()
         for suffix, format in (("jpg", "JPEG"), ("png", "PNG")):
             output = directory / f"中文 导出.{suffix}"
@@ -41,8 +51,14 @@ def check_export(directory: Path) -> dict:
             assert tags["UserComment"] == text.read_text(encoding="utf-8")
             assert tags["Make"] == "SONY" and tags["ISO"] == 1600
             assert tags["ExifImageWidth"] == 40 and tags["ExifImageHeight"] == 60
+            packet = run_exiftool_once([executable, '-b', '-XMP', str(output)],
+                                      capture_output=True, timeout=30)
+            assert packet.returncode == 0, packet.stderr
+            xmp = ET.fromstring(packet.stdout)
+            assert xmp.find('.//{https://superbirdtools.local/xmp/superpicky/1.0/}bird_species_cn').text == '普通翠鸟'
             assert source.read_bytes() == before
-        return {"exiftool": executable, "jpeg_png_export": "ok", "chinese_exif": "ok"}
+            assert sidecar.read_bytes() == sidecar_before
+        return {"exiftool": executable, "jpeg_png_export": "ok", "chinese_exif": "ok", "sidecar_xmp": "ok"}
     finally:
         close_exiftool_process()
 
