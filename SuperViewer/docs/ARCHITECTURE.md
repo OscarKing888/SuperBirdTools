@@ -82,6 +82,8 @@ Viewer 缩略图由 [`BirdThumbnailModel` / `BirdThumbnailDelegate`](../supervie
 
 `MetadataLoader.metadata_batch_ready` 进入 `_on_metadata_batch_ready()` 后先更新模型缓存，再经 `_enqueue_meta_apply()` / `_apply_meta_batch_tick()` 按数量和时间预算更新行。结果槽只入队，由定时器合并小批；批量应用以 `notify_burst_groups=False` 保留分组失效/重算、用视口重绘更新底色，避免整表背景信号反复穿过排序代理。普通单次模型编辑仍通知全部受影响行。新增字段应补齐缓存解析和模型显示，不能在结果槽里同步循环更新整目录控件。
 
+HIF/HEIF/HEIC 即使已有完整报告或 XMP 拍摄字段，仍在 `MetadataLoader._read_metadata_batch()` 的后台文件读取路径取得相机焦点及 `CameraOrientation`，不能把未读取的焦点标成不存在。缩略图和预览共用这份方向正确的焦点缓存，迟到批次不会清除原图焦点或用报告坐标覆盖它；RAW 的报告快速路径仍使用内嵌焦点读取器。回归见共享 [`test_file_browser_heif_focus.py`](../../app_common/tests/test_file_browser_heif_focus.py)。
+
 RAW 焦点读取（[`raw_focus_metadata.py`](../../app_common/raw_focus_metadata.py)）与文件拍摄信息快速读取（[`fast_reader.py`](../../app_common/exif_io/fast_reader.py)）共用 [`tiff_reader.read_tiff_exif_tags()`](../../app_common/exif_io/tiff_reader.py)。它保留 ExifRead 的标签/MakerNote 解码，只将 TIFF 无符号字节字段改为整块读取，避免大型 MakerNote 的逐字节 Python 循环拖住整个目录；每次调用独占文件句柄和解析器，不修改依赖的全局状态。不支持的容器或不兼容的 ExifRead 内部 API 回退原入口，过大或截断的字节块终止读取。回归见 [TIFF 读取测试](../../app_common/tests/test_tiff_reader.py)，覆盖标签等价、大小端、并发和损坏长度。
 
 ## 3. 预览与连续快切
@@ -139,7 +141,7 @@ BirdStamp 的 [`editor_shared_thumb_cache.py`](../../SuperBirdStamp/birdstamp/gu
 
 [`bird_body.py`](../superviewer/bird_body.py) 不依赖 Qt，复用现有模型位置和设备选择，惰性加载本地 YOLO（不自动下载），只识别 bird 类。识别图缩至长边 1280；RAW 优先使用足够大的相机内嵌预览，否则后台显影并将传感器鸟框逆映射到相机坐标。GPU 失败回退 CPU。首遍没有鸟时，由 `MissedBirdFinder` 调用鸟清晰度的 `find_missed_bird()` 做同一套伪装鸟复检（全分辨率解码、暗图提亮再识别、1024 px 输入再识别、焦点处弱候选/放大印证，见[鸟清晰度检测](../../docs/bird_sharpness.md)），只用识别模型、不加载鸟眼模型；复检出错不缓存“无鸟”。缺模型、解码或写入失败在状态栏和日志中说明；XMP 写入失败仍可使用本次内存结果。
 
-`XMP-superpicky:bird_body_cache_<扩展名>` 保存算法版本、源文件大小/纳秒修改时间/扩展名指纹、`camera` 坐标标记及归一化鸟框，`box:null` 明确缓存“无鸟”；多只鸟时另存 `boxes`（全部鸟框，主鸟在前，坐标保留 5 位小数，鸟群约 3 KB）。当前版本 `bird-body-v3`：v1/v2 只存了主鸟框，鸟群需要全部鸟，所以这些缓存在查看时重新识别一次。同名 RAW/JPEG 共用侧车但分别保存结果；源文件改变或缓存损坏后重新计算。写前再次核验指纹和取消状态，通过共享 `PhotoMetaDataXMP` 完整事务锁防止后台缓存覆盖同时发生的标签、备注等编辑，只写 XMP，不改原图和 report.db。
+`XMP-superpicky:bird_body_cache_<扩展名>` 保存算法版本、源文件大小/纳秒修改时间/扩展名指纹、`camera` 坐标标记及归一化鸟框，`box:null` 明确缓存“无鸟”；多只鸟时另存 `boxes`（全部鸟框，主鸟在前，坐标保留 5 位小数，鸟群约 3 KB）。当前版本 `bird-body-v4`：首遍也复用 `merge_bird_boxes()` 的 70% 包含度去重，保留排名靠前的主体框，避免遮挡鸟的局部胸腹被重复算作另一只鸟。v1/v2 缺少多鸟信息、v3 可能包含重复框，旧缓存在查看时重新识别一次。同名 RAW/JPEG 共用侧车但分别保存结果；源文件改变或缓存损坏后重新计算。写前再次核验指纹和取消状态，通过共享 `PhotoMetaDataXMP` 完整事务锁防止后台缓存覆盖同时发生的标签、备注等编辑，只写 XMP，不改原图和 report.db。
 
 快切 handler 只读取已显示源身份对应的内存结果，不读 XMP、不提交检测。Viewer 列表的 `playback_state_changed` 在第一帧之前暂停控制器，即使因缺少缩略图跳过全部帧，也不会启动停留任务。切回普通选中才重新校验缓存。蓝色框由 [`BirdBodyOverlayMixin`](../superviewer/bird_body_overlay.py) 通过共享画布绘制扩展点叠加；`PreviewPanel` 保存相机框，按当前实际 RAW/降噪像素的裁切几何重映射。普通小图、全图升级、A/B 与叠加导出均保留各自坐标。
 

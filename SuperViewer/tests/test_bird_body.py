@@ -267,10 +267,10 @@ def test_cancel_during_recheck_never_publishes(photo):
 
 
 def test_single_box_caches_from_older_versions_are_detected_again(photo):
-    # v1/v2 stored only the main bird; a flock needs every bird, so they are misses now.
+    # v1/v2 stored only the main bird; v3 could store duplicate partial birds.
     fingerprint = core.source_fingerprint(str(photo))
     field = core.cache_field(str(photo))
-    for version in ("bird-body-v1", "bird-body-v2"):
+    for version in ("bird-body-v1", "bird-body-v2", "bird-body-v3"):
         for box in ([0.1, 0.2, 0.6, 0.8], None):
             old = {field: json.dumps({"version": version, "source": fingerprint, "geometry": "camera", "box": box})}
             assert core.result_from_metadata(str(photo), old, fingerprint) is None
@@ -342,3 +342,16 @@ def test_ordinary_birds_skip_the_flock_pass(photo):
     outcome = worker.BirdBodyAction(str(photo), detector=detector, write_xmp=False).execute()
     assert [c[0] for c in detector.calls] == [None]
     assert outcome.result.overlay == (0.1, 0.1, 0.6, 0.8) and outcome.result.boxes == ()
+
+
+def test_first_pass_deduplicates_partial_body_of_same_bird(photo):
+    # DSC05051.HIF 的首遍结果：遮挡鸟的上半身和胸腹被当成两只鸟。
+    bird = (0.47089, 0.34082, 0.57942, 0.60364)
+    partial = (0.46561, 0.45448, 0.57861, 0.60375)
+    other = (0.1, 0.1, 0.25, 0.4)
+    detector = FlockDetector(first=(bird, partial, other))
+    outcome = worker.BirdBodyAction(str(photo), detector=detector).execute()
+    assert outcome.result.boxes == (bird, other)
+    assert outcome.result.box == bird
+    cached = worker.BirdBodyAction(str(photo), detector=detector).execute()
+    assert cached.cache_hit and cached.result.overlay == (bird, other)

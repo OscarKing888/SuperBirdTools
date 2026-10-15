@@ -96,6 +96,9 @@ class BirdBodyAction(WorkerAction):
             finally:
                 image.close()
             boxes = [b for b in (camera_box_from_raw(box, crop) for box in found) if b is not None]
+            # 遮挡鸟可能在首遍同时检出整鸟和局部胸腹；与补检共用包含度规则，
+            # 保留排名靠前的主体框，避免同一只鸟被重复绘制或计数。
+            boxes = merge_bird_boxes([], boxes, size[0] / max(1, size[1]))
             if boxes and has_small_birds(found, size) and not self.is_cancelled():
                 # 鸟群小鸟：首遍的框原样保留，高分辨率只补漏掉的鸟（与鸟清晰度同一规则）。
                 boxes = merge_bird_boxes(boxes, self._flock_boxes(path), size[0] / max(1, size[1]))

@@ -24,7 +24,8 @@ _log = get_logger("superviewer.bird_body")
 # v2: camouflaged-bird recheck when the first pass finds none.
 # v3: every bird's box (main bird first), small-bird pass for flocks; older
 #     single-box caches are re-detected.
-ALGORITHM_VERSION = "bird-body-v3"
+# v4: remove nested duplicate birds within the first pass as well as later passes.
+ALGORITHM_VERSION = "bird-body-v4"
 _COMPATIBLE_BOX_VERSIONS = ()
 MAX_CACHE_CHARS = 65536  # a flock of ~60 boxes is ~3 KB
 FIELD_CACHE = "bird_body_cache"
