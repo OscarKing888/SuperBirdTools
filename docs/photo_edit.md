@@ -20,6 +20,14 @@ SuperViewer 的「Camera RAW」「调色」两个图片信息页签共用一份�
 
 每个组标题右侧都有“＋”菜单，收起时仍可使用。从菜单选择任意处理类型，新步骤将在当前组之后执行，自动启用并展开，也可以重复添加同类处理。一次添加可一次撤销；打开或取消菜单不改变参数。如果当前组尚未使用，会保留为禁用步骤，以固定插入位置，其效果不会被启用。
 
+调色分组上方提供“自动调节”：选择模式后点击按钮，后台分析当前底图和已有调整，生成一个可继续微调的色阶步骤。
+
+- **自动色调**（默认）：分别调整 RGB 通道的黑白点，扩展明暗范围。
+- **自动对比度**：RGB 使用相同黑白点，统一调整反差。
+- **自动颜色**：在自动色调基础上，利用足够的近中性色校正中间调偏色。
+
+结果位于配方末尾，标题标明自动模式；可在色阶中微调、禁用或一次撤销。连续点击会重新计算末尾已启用的自动色阶，切换模式也会替换该步；移到中间或禁用的步骤保留。计算期间改参数或切底图时，旧结果不会覆盖新调整。纯色、透明或极低反差图片可能无需变化，面板会提示。自动算法是本项目实现，不保证与 Photoshop 结果相同。
+
 两页都有 RGB 直方图及阴影／高光溢出比例。曲线可点击添加、拖动调整、方向键微调，Delete 删除内部点；色轮支持鼠标和方向键。一次滑块拖动记作一次撤销。
 
 这是从 PhotoCraft 移植的 RGB 图像处理能力。RAW 继续由 rawpy／LibRaw 解码为 16 位数据，然后在 SDR/sRGB float32 管线中调整。色温是相对调整，不是相机绝对 Kelvin 标定；高光调整不等于传感器域高光恢复。首版不包含相机／镜头配置文件、HDR／广色域工作流、局部蒙版、匹配／替换颜色或 HDR 色调。Camera RAW 的细节降噪与已有 NAFNet AI 降噪是两项不同功能。
@@ -70,13 +78,14 @@ SuperViewer 的「Camera RAW」「调色」两个图片信息页签共用一份�
 ```bash
 .venv/bin/python3 -m app_common.photo_edit info
 .venv/bin/python3 -m app_common.photo_edit show /photos/IMG.ARW
+.venv/bin/python3 -m app_common.photo_edit auto-adjust /photos/IMG.ARW --mode tone
 .venv/bin/python3 -m app_common.photo_edit render /photos/IMG.ARW --format tiff --json
 .venv/bin/python3 -m app_common.photo_edit render /photos/IMG.ARW --input original --output-mode fixed -o /exports
 .venv/bin/python3 -m app_common.photo_edit import-settings /photos/IMG.ARW /settings/CameraRaw.xmp
 .venv/bin/python3 -m app_common.photo_edit export-settings /photos/IMG.ARW /settings/new.xmp
 ```
 
-`render` 可传多张照片、`--recipe` 显式配方 JSON 或单张 `--denoised` 验证输入；它不改源照片参数。`import-settings` 是明确写入照片 XMP 的命令。Ctrl+C 取消，已完成的成片保留。GUI、CLI 都调用同一核心：
+`render` 可传多张照片、`--recipe` 显式配方 JSON 或单张 `--denoised` 验证输入；它不改源照片参数。`import-settings` 和 `auto-adjust` 是明确写入照片 XMP 的命令；自动调节模式为 `tone`、`contrast`、`color`，处理已保存的当前底图，没有变化时不写入。Ctrl+C 取消，已完成的成片保留。GUI、CLI 都调用同一核心：
 
 ```python
 from app_common.photo_edit import RecipeStore

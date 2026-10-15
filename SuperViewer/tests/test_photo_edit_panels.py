@@ -71,6 +71,59 @@ def group_for(colors, kind):
     return next(group for group in colors.groups if group.kind == kind)
 
 
+def test_auto_adjust_keyboard_busy_state_result_and_shared_undo(panels, monkeypatch):
+    import threading
+    from app_common.photo_edit.auto_adjust import AutoAdjustmentResult
+    controller, camera, colors = panels
+    started, release = threading.Event(), threading.Event()
+    def analyze(snapshot, mode, **kwargs):
+        started.set()
+        assert release.wait(4)
+        recipe = snapshot.current.recipe.validated()
+        recipe.steps.append(AdjustmentStep("levels", id="auto-levels-" + mode + "-test"))
+        return AutoAdjustmentResult(recipe.validated(), mode, True)
+    monkeypatch.setattr("app_common.photo_edit.auto_adjust.prepare_auto_adjustment", analyze)
+    colors.show()
+    colors.auto_mode.setCurrentIndex(colors.auto_mode.findData("color"))
+    signals = QSignalSpy(colors.editing_started)
+    assert not controller.session().dirty  # Choosing a mode never edits.
+    try:
+        colors.auto_button.setFocus()
+        QTest.keyClick(colors.auto_button, Qt.Key.Key_Space)
+        assert wait_for(started.is_set)
+        assert not colors.auto_button.isEnabled() and not colors.auto_mode.isEnabled()
+    finally:
+        release.set()
+    assert wait_for(lambda: not controller._operations)
+    assert colors.auto_button.isEnabled() and len(signals) == 1
+    levels = group_for(colors, "levels")
+    assert "自动颜色" in levels.title() and levels.enabled.isChecked()
+    assert "继续微调" in colors.status.text()
+    recipe = controller.session().state.current.recipe.to_dict()
+    for _ in range(3):
+        colors.set_groups_expanded(False)
+        colors.set_groups_expanded(True)
+    assert controller.session().state.current.recipe.to_dict() == recipe
+    camera.undo_button.click()
+    assert controller.session().state.current.recipe.is_identity()
+    colors.redo_button.click()
+    assert controller.session().state.current.recipe.to_dict() == recipe
+    controller.begin_file_operation()
+    assert not colors.auto_button.isEnabled()
+    controller.end_file_operation()
+    assert colors.auto_button.isEnabled()
+
+
+def test_auto_adjust_empty_photo_and_step_limit_disable_action(panels):
+    controller, _, colors = panels
+    recipe = controller.session().state.current.recipe.validated()
+    recipe.steps = [AdjustmentStep("invert") for _ in range(64)]
+    controller.edit(recipe)
+    assert not colors.auto_button.isEnabled() and "64" in colors.auto_button.toolTip()
+    colors.on_photo_selected("")
+    assert not colors.auto_button.isEnabled()
+
+
 def test_flat_groups_start_expanded_without_editing_and_enable_in_display_order(panels):
     controller, _, colors = panels
     session = controller.session()
