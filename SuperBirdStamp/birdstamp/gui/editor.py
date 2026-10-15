@@ -2080,7 +2080,7 @@ class BirdStampEditorWindow(
         preview_toolbar.setContentsMargins(0, 0, 0, 0)
         preview_toolbar.setSpacing(8)
 
-        # 编辑模式切换：三个互斥图标按钮（选择 / 去抖动参考区 / 调整裁剪框）。
+        # 编辑模式切换：选择 / 调整裁剪框 / 编辑叠加层 / 去抖动参考区（仅去抖动页）。
         self._setup_edit_mode_buttons(preview_toolbar)
 
         mode_separator = QFrame()
@@ -3094,7 +3094,6 @@ class BirdStampEditorWindow(
         self.edit_mode_group.setExclusive(True)
 
         specs = (
-            ("overlay", "overlay", "编辑叠加层", "编辑叠加层：拖动移动，角手柄缩放，顶部手柄旋转。"),
             (
                 EDIT_MODE_NONE,
                 "selection",
@@ -3102,18 +3101,19 @@ class BirdStampEditorWindow(
                 "选择模式：移动/缩放预览（默认）。",
             ),
             (
+                EDIT_MODE_CROP_ADJUST,
+                "crop",
+                "调整裁剪框",
+                "调整裁剪框：拖动手柄即可显示分辨率参考线，靠近虚线框时吸附至配置的档位。",
+            ),
+            ("overlay", "overlay", "编辑叠加层", "编辑叠加层：拖动移动，角手柄缩放，顶部手柄旋转。"),
+            (
                 EDIT_MODE_REFERENCE_REGION,
                 "reference",
                 "去抖动参考区",
                 "去抖动参考区：拖拽框选特征参考区，导出去抖动以此为锚点；"
                 "框内拖动，手柄缩放（Shift 保持比例，Alt 对称）；"
                 "参考图空白处 Shift 追加，右键删除；其它原图右键恢复自动匹配。",
-            ),
-            (
-                EDIT_MODE_CROP_ADJUST,
-                "crop",
-                "调整裁剪框",
-                "调整裁剪框：拖动手柄即可显示分辨率参考线，靠近虚线框时吸附至配置的档位。",
             ),
         )
 
@@ -3131,6 +3131,7 @@ class BirdStampEditorWindow(
             toolbar.addWidget(btn)
 
         self._edit_mode_buttons[EDIT_MODE_NONE].setChecked(True)
+        self._edit_mode_buttons[EDIT_MODE_REFERENCE_REGION].setVisible(self._dejitter_tab_active())
         self._edit_mode_buttons[EDIT_MODE_REFERENCE_REGION].toggled.connect(
             self._sync_edit_reference_toggle)
         self._sync_edit_reference_toggle()
