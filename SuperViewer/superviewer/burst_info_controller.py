@@ -17,14 +17,21 @@ from app_common import burst_info
 from app_common.log import get_logger
 
 from .bird_sharpness_controller import BirdSharpnessProgressDialog
-from .qt_compat import QDialog, QDialogButtonBox, QLabel, QSpinBox, QThread, QVBoxLayout, pyqtSignal
+from .burst_fps import (
+    ALL_CAMERA_FPS, CAMERA_FPS_PRESETS, DEFAULT_BURST_FPS,
+    MAX_BURST_FPS, MIN_BURST_FPS, fps_to_max_gap_ms,
+)
+from .qt_compat import (
+    QDialog, QDialogButtonBox, QFrame, QHBoxLayout, QLabel, QMenu, QScrollArea,
+    QSizePolicy, QSpinBox, QThread, QToolButton, QVBoxLayout, QWidget, pyqtSignal,
+)
 
 try:
     from PyQt6.QtCore import QObject
-    from PyQt6.QtWidgets import QFormLayout
+    from PyQt6.QtWidgets import QDoubleSpinBox, QFormLayout
 except ImportError:  # pragma: no cover - PyQt5 fallback
     from PyQt5.QtCore import QObject
-    from PyQt5.QtWidgets import QFormLayout
+    from PyQt5.QtWidgets import QDoubleSpinBox, QFormLayout
 
 _log = get_logger("burst_info.viewer")
 
@@ -36,7 +43,7 @@ class BurstInfoJob:
     title: str
     directory: str
     recursive: bool = False
-    max_gap_ms: int = burst_info.DEFAULT_MAX_GAP_MS
+    max_gap_ms: float = burst_info.DEFAULT_MAX_GAP_MS
     min_count: int = burst_info.DEFAULT_MIN_COUNT
 
 
@@ -132,43 +139,126 @@ class BurstInfoWorker(QThread):
 
 
 class BurstInfoOptionsDialog(QDialog):
-    def __init__(self, parent, directory: str, recursive: bool, max_gap_ms: int, min_count: int) -> None:
+    def __init__(self, parent, directory: str, recursive: bool, fps: float, min_count: int) -> None:
         super().__init__(parent)
         self.setWindowTitle("计算连拍信息")
-        self.setMinimumWidth(420)
+        self.setMinimumSize(420, 260)
+        self.resize(520, 360)
         scope = "本目录及子目录（每个目录单独编号）" if recursive else "本目录"
         intro = QLabel(
             f"{directory}\n范围：{scope}\n\n"
             "按拍摄时间（含亚秒）排序，相邻间隔不超过阈值且张数达到下限的照片归为一组。"
-            "结果写入同名 XMP sidecar（XMP-superpicky:burst_id / burst_position），不修改原图；"
+            "结果保存到照片旁的 XMP 文件，不修改原图；"
             "已有的连拍信息会被重新计算覆盖。",
             self,
         )
+        intro.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Minimum)
         intro.setWordWrap(True)
-        self.gap_spin = QSpinBox(self)
-        self.gap_spin.setRange(10, 5000)
-        self.gap_spin.setSingleStep(10)
-        self.gap_spin.setSuffix(" 毫秒")
-        self.gap_spin.setValue(int(max_gap_ms))
-        self.gap_spin.setToolTip("连拍速度不低于 1000/阈值 张每秒。无亚秒时间的照片按 1 秒容差比较。")
+        self.fps_spin = QDoubleSpinBox(self)
+        self.fps_spin.setDecimals(2)
+        self.fps_spin.setRange(MIN_BURST_FPS, MAX_BURST_FPS)
+        self.fps_spin.setSingleStep(1.0)
+        self.fps_spin.setSuffix(" FPS")
+        self.fps_spin.setValue(float(fps))
+        self.fps_spin.setAccessibleName("最低连拍速度（FPS）")
+        self.fps_spin.setToolTip(
+            "FPS = 每秒照片张数，可直接输入小数。数值越小，允许的相邻间隔越大。\n"
+            "无亚秒时间的照片仍至少按 1 秒容差比较。"
+        )
+        self.presets_button = QToolButton(self)
+        self.presets_button.setText("相机档位")
+        self.presets_button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        self.presets_button.setToolTip("汇总各厂商不同机型的照片连拍档位；选择后仍可自定义输入。")
+        self.presets_menu = QMenu(self.presets_button)
+        self.presets_button.setMenu(self.presets_menu)
+        self._preset_actions = []
+        common = self.presets_menu.addMenu("常用档位")
+        self._add_fps_actions(common, (1, 3, 4, 5, 8, 10, 12, 15, 20, 30, 40, 60, 120))
+        all_speeds = self.presets_menu.addMenu("全部档位（按速度）")
+        self._add_grouped_fps_actions(all_speeds, ALL_CAMERA_FPS)
+        self.presets_menu.addSeparator()
+        for brand, speeds in CAMERA_FPS_PRESETS:
+            brand_menu = self.presets_menu.addMenu(brand)
+            if len(speeds) > 20:
+                self._add_grouped_fps_actions(brand_menu, speeds)
+            else:
+                self._add_fps_actions(brand_menu, speeds)
+        self.presets_menu.aboutToShow.connect(self._sync_preset_checks)
+        fps_row = QHBoxLayout()
+        fps_row.addWidget(self.fps_spin, 1)
+        fps_row.addWidget(self.presets_button)
+        self.gap_hint = QLabel(self)
+        self.gap_hint.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Minimum)
+        self.gap_hint.setWordWrap(True)
+        self.fps_spin.valueChanged.connect(self._update_gap_hint)
+        self._update_gap_hint(self.fps_spin.value())
         self.count_spin = QSpinBox(self)
         self.count_spin.setRange(2, 1000)
         self.count_spin.setSuffix(" 张")
         self.count_spin.setValue(int(min_count))
         form = QFormLayout()
-        form.addRow("相邻最大间隔", self.gap_spin)
+        form.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapLongRows)
+        form.addRow("最低连拍速度", fps_row)
+        form.addRow(self.gap_hint)
         form.addRow("每组最少张数", self.count_spin)
+        note = QLabel(
+            "档位汇总各品牌不同机型（含电子快门、裁切及短时高速模式）。"
+            "若实际连拍速度低于标称值，可适当调低 FPS，以免拆分同一组；"
+            "无亚秒时间时仍至少使用 1 秒容差。", self,
+        )
+        note.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Minimum)
+        note.setWordWrap(True)
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel, self)
         buttons.button(QDialogButtonBox.StandardButton.Ok).setText("开始计算")
+        buttons.button(QDialogButtonBox.StandardButton.Cancel).setText("取消")
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
+        body = QWidget(self)
+        body_layout = QVBoxLayout(body)
+        body_layout.setContentsMargins(0, 0, 0, 0)
+        body_layout.addWidget(intro)
+        body_layout.addLayout(form)
+        body_layout.addWidget(note)
+        body_layout.addStretch(1)
+        scroll = QScrollArea(self)
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll.setWidget(body)
         layout = QVBoxLayout(self)
-        layout.addWidget(intro)
-        layout.addLayout(form)
+        layout.addWidget(scroll, 1)
         layout.addWidget(buttons)
 
-    def values(self) -> tuple[int, int]:
-        return int(self.gap_spin.value()), int(self.count_spin.value())
+    def _add_grouped_fps_actions(self, menu, speeds: tuple[float, ...]) -> None:
+        for label, lower, upper in (
+            ("5 FPS 及以下", 0, 5),
+            ("大于 5 至 10 FPS", 5, 10),
+            ("大于 10 至 30 FPS", 10, 30),
+            ("30 FPS 以上", 30, MAX_BURST_FPS),
+        ):
+            values = tuple(f for f in speeds if lower < f <= upper)
+            if values:
+                self._add_fps_actions(menu.addMenu(label), values)
+
+    def _add_fps_actions(self, menu, speeds: tuple[float, ...]) -> None:
+        for fps in speeds:
+            action = menu.addAction(f"{fps:g} FPS")
+            action.setData(float(fps))
+            action.setCheckable(True)
+            action.triggered.connect(lambda checked=False, value=fps: self.fps_spin.setValue(value))
+            self._preset_actions.append(action)
+
+    def _sync_preset_checks(self) -> None:
+        value = self.fps_spin.value()
+        for action in self._preset_actions:
+            action.setChecked(abs(action.data() - value) < 0.0001)
+
+    def _update_gap_hint(self, fps: float) -> None:
+        self.gap_hint.setText(f"相邻照片最大间隔：{fps_to_max_gap_ms(fps):.3f} ms（1000 ÷ FPS）")
+
+    def values(self) -> tuple[float, int]:
+        self.fps_spin.interpretText()
+        self.count_spin.interpretText()
+        return float(self.fps_spin.value()), int(self.count_spin.value())
 
 
 def _summary_text(stats, written: int, write_failures: int) -> str:
@@ -196,7 +286,7 @@ class BurstInfoController(QObject):
         self._shutdown_requested = False
         self._stats = None
         self._failure_message = ""
-        self.max_gap_ms = burst_info.DEFAULT_MAX_GAP_MS
+        self.fps = DEFAULT_BURST_FPS
         self.min_count = burst_info.DEFAULT_MIN_COUNT
         if dir_browser is not None:
             dir_browser.add_context_menu_extender(self.extend_directory_menu)
@@ -217,14 +307,14 @@ class BurstInfoController(QObject):
             act.triggered.connect(lambda checked=False, r=recursive: self.prompt_and_start(directory, r))
 
     def prompt_and_start(self, directory: str, recursive: bool) -> bool:
-        dialog = BurstInfoOptionsDialog(self._main, directory, recursive, self.max_gap_ms, self.min_count)
+        dialog = BurstInfoOptionsDialog(self._main, directory, recursive, self.fps, self.min_count)
         if dialog.exec() != QDialog.DialogCode.Accepted:
             return False
-        self.max_gap_ms, self.min_count = dialog.values()
+        self.fps, self.min_count = dialog.values()
         name = os.path.basename(directory.rstrip("\\/")) or directory
         return self.start(BurstInfoJob(
             title=f"计算连拍信息 - {name}", directory=directory, recursive=recursive,
-            max_gap_ms=self.max_gap_ms, min_count=self.min_count,
+            max_gap_ms=fps_to_max_gap_ms(self.fps), min_count=self.min_count,
         ))
 
     # ── job lifecycle ─────────────────────────────────────────────────────
