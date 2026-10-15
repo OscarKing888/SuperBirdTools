@@ -590,6 +590,9 @@ class PreviewPanel(QWidget):
         self._show_raw = False
         self._preview_source_mode = "default"
         self._edit_before = False
+        # 每侧只保留当前照片的一张完整默认原图，Qt 隐式共享像素；不缓存编辑／降噪结果。
+        self._original_preview = None
+        self._original_preview_loading_key = None
         self._preview_note = ""
         self._denoised_display_path = ""
         self._source_focus_box = None
@@ -673,9 +676,45 @@ class PreviewPanel(QWidget):
         self._preview_request_token += 1
         self._full_preview_loaded = False
         self._cancel_pending_full_preview()
+        if self._edit_before and self._reuse_original_preview():
+            return
         self._preview_note = "正在加载原图…" if self._edit_before else "正在更新编辑预览…"
         self._refresh_preview_status_text()
         self._full_preview_timer.start(_FULL_PREVIEW_DELAY_MS)
+
+    @staticmethod
+    def _original_preview_key(path):
+        try:
+            stat = os.stat(path)
+            return (os.path.normcase(os.path.abspath(path)), stat.st_size, stat.st_mtime_ns)
+        except OSError:
+            return None
+
+    def _drop_original_preview_for_path(self, path):
+        # 快切只比较路径，不 stat／读取原图。缓存上限始终是一张，不随浏览累积。
+        if self._original_preview is not None:
+            if not path or self._original_preview[0][0] != os.path.normcase(os.path.abspath(path)):
+                self._original_preview = None
+
+    def _remember_original_preview(self, key, path, qimg):
+        if key is not None and key == self._original_preview_key(path):
+            self._original_preview = (key, QImage(qimg))
+
+    def _reuse_original_preview(self):
+        cached = self._original_preview
+        if cached is None:
+            return False
+        if cached[0] != self._original_preview_key(self._current_path):
+            self._original_preview = None
+            return False
+        return self._apply_original_edit_preview(self._preview_request_token, self._current_path, cached[1])
+
+    def _apply_original_edit_preview(self, token, path, qimg):
+        try:
+            camera_crop = json.loads(qimg.text(RAW_FOCUS_CROP_KEY) or "null")
+        except (ValueError, TypeError):
+            camera_crop = None
+        return self.apply_edited_preview(token, path, qimg, full=True, camera_crop=camera_crop)
 
     def apply_edited_preview(self, token, path, qimg, *, full=False, camera_crop=None):
         """Accept owned editing results using the same source/generation guard."""
@@ -777,6 +816,7 @@ class PreviewPanel(QWidget):
         self._last_quick_size = quick_size
         t0 = _time.perf_counter()
         norm_path = os.path.normpath(path) if path else path
+        self._drop_original_preview_for_path(norm_path)
         if _can_reuse_current_preview(
             same_path=bool(norm_path and self._is_current_path(norm_path)),
             has_pixmap=self._has_canvas_pixmap(),
@@ -823,10 +863,13 @@ class PreviewPanel(QWidget):
         # extracted and decoded by the owned full worker (two-stage display).
         if (load_full and path and self._preview_source_mode not in {"denoised", "edited"}
                 and not full_decode_busy and _should_load_full_preview_sync(path)):
+            original_key = self._original_preview_key(path) if self._preview_source_mode == "default" else None
             qimg = _load_full_preview_qimage(path)
             if qimg is not None and not qimg.isNull():
                 pix = QPixmap.fromImage(qimg)
                 direct_full = bool(pix is not None and not pix.isNull())
+                if direct_full:
+                    self._remember_original_preview(original_key, path, qimg)
         if pix is None or pix.isNull():
             pix = self._cached_quick_preview_pixmap(path, target_size)
         # HEIF thumbnailing through Pillow still decodes the full HEVC image, and
@@ -909,6 +952,7 @@ class PreviewPanel(QWidget):
         started_at = _time.perf_counter()
         self._preview_request_token += 1
         self._current_path = os.path.normpath(path) if path else path
+        self._drop_original_preview_for_path(self._current_path)
         self._source_identity_path = self._current_path or ""
         self._focus_cache_path = self._current_path
         self.source_changed.emit()
@@ -968,6 +1012,7 @@ class PreviewPanel(QWidget):
         self._fast_preview_perf_max_ms = 0.0
 
     def clear_image(self):
+        self._original_preview = None
         self._preview_request_token += 1
         self._fit_next_image = True
         self._first_image_fit_token = None
@@ -1078,6 +1123,7 @@ class PreviewPanel(QWidget):
             return
         # “调整前”直接沿用原图加载器，不能经过编辑底图、配方、LUT 或浮点渲染。
         source_mode = "default" if self._preview_source_mode == "edited" else self._preview_source_mode
+        self._original_preview_loading_key = (token, self._original_preview_key(path)) if source_mode == "default" else None
         loader = _FullPreviewLoader(token, path, self, source_mode=source_mode)
         loader.loaded.connect(self._on_full_preview_loaded)
         loader.finished.connect(self._on_full_preview_loader_finished)
@@ -1135,12 +1181,11 @@ class PreviewPanel(QWidget):
                 load_ms,
             )
             return
+        loading_key = self._original_preview_loading_key
+        if loading_key is not None and loading_key[0] == token:
+            self._remember_original_preview(loading_key[1], path, qimg)
         if self._preview_source_mode == "edited" and self._edit_before:
-            try:
-                camera_crop = json.loads(qimg.text(RAW_FOCUS_CROP_KEY) or "null")
-            except (ValueError, TypeError):
-                camera_crop = None
-            self.apply_edited_preview(token,path,qimg,full=True,camera_crop=camera_crop)
+            self._apply_original_edit_preview(token, path, qimg)
             return
         apply_t0 = _time.perf_counter()
         pix = QPixmap.fromImage(qimg)
@@ -1340,6 +1385,8 @@ class PreviewPanel(QWidget):
         if self._shutdown_requested:
             return
         self._shutdown_requested = True
+        self._original_preview = None
+        self._original_preview_loading_key = None
         self._preview_request_token += 1
         self._cancel_pending_full_preview()
 
