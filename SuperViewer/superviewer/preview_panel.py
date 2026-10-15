@@ -673,7 +673,7 @@ class PreviewPanel(QWidget):
         self._preview_request_token += 1
         self._full_preview_loaded = False
         self._cancel_pending_full_preview()
-        self._preview_note = "正在生成调整前预览…" if self._edit_before else "正在更新编辑预览…"
+        self._preview_note = "正在加载原图…" if self._edit_before else "正在更新编辑预览…"
         self._refresh_preview_status_text()
         self._full_preview_timer.start(_FULL_PREVIEW_DELAY_MS)
 
@@ -692,7 +692,7 @@ class PreviewPanel(QWidget):
         else:
             self._apply_individual_numbers()
             self._canvas.set_source_pixmap(pix,preserve_view=True,preserve_scale=True)
-        self._preview_note = ("调整前" if self._edit_before else "编辑效果")+ (" · 完整分辨率" if full else " · 交互预览")
+        self._preview_note = ("调整前 · 原图" if self._edit_before else "编辑效果")+ (" · 完整分辨率" if full else " · 交互预览")
         self._set_preview_status_text(pix.width(),pix.height())
         self._full_preview_loaded = bool(full)
         if full:
@@ -1041,13 +1041,13 @@ class PreviewPanel(QWidget):
     def _start_full_preview_loader(self) -> None:
         if self._shutdown_requested or self._navigation_playback_active:
             return
-        if self._preview_source_mode == "edited":
+        if self._preview_source_mode == "edited" and not self._edit_before:
             path = self.source_identity_path()
             if path:
                 self.edit_preview_requested.emit(self._preview_request_token,path)
             return
         path = os.path.normpath(str(self._current_path or ""))
-        if not path or not os.path.isfile(path):
+        if not path:
             return
         token = self._preview_request_token
         loader = self._full_preview_loader
@@ -1067,12 +1067,18 @@ class PreviewPanel(QWidget):
             return
         if int(token) != int(self._preview_request_token):
             return
-        if not path or not self._is_current_path(path) or not os.path.isfile(path):
+        if not path or not self._is_current_path(path):
             return
-        if self._preview_source_mode == "edited":
+        if not os.path.isfile(path):
+            if self._preview_source_mode == "edited" and self._edit_before:
+                self._on_full_preview_loaded(token,path,None,0)
+            return
+        if self._preview_source_mode == "edited" and not self._edit_before:
             self.edit_preview_requested.emit(token,path)
             return
-        loader = _FullPreviewLoader(token, path, self, source_mode=self._preview_source_mode)
+        # “调整前”直接沿用原图加载器，不能经过编辑底图、配方、LUT 或浮点渲染。
+        source_mode = "default" if self._preview_source_mode == "edited" else self._preview_source_mode
+        loader = _FullPreviewLoader(token, path, self, source_mode=source_mode)
         loader.loaded.connect(self._on_full_preview_loaded)
         loader.finished.connect(self._on_full_preview_loader_finished)
         self._full_preview_loader = loader
@@ -1112,6 +1118,8 @@ class PreviewPanel(QWidget):
         if not self._is_current_path(path):
             return
         if qimg is None or qimg.isNull():
+            if self._preview_source_mode == "edited" and self._edit_before:
+                self._preview_note = "原图预览失败，请检查原文件后重试"
             if self._preview_source_mode == "denoised":
                 self._preview_note = "降噪成片与原图均无法预览，可切换预览来源重试"
             if self._show_raw and Path(path).suffix.lower() in RAW_EXTENSIONS:
@@ -1126,6 +1134,13 @@ class PreviewPanel(QWidget):
                 token,
                 load_ms,
             )
+            return
+        if self._preview_source_mode == "edited" and self._edit_before:
+            try:
+                camera_crop = json.loads(qimg.text(RAW_FOCUS_CROP_KEY) or "null")
+            except (ValueError, TypeError):
+                camera_crop = None
+            self.apply_edited_preview(token,path,qimg,full=True,camera_crop=camera_crop)
             return
         apply_t0 = _time.perf_counter()
         pix = QPixmap.fromImage(qimg)

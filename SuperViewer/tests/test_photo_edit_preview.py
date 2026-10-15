@@ -2,6 +2,7 @@
 import time
 
 import pytest
+import numpy as np
 from PIL import Image
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QPixmap
@@ -18,6 +19,34 @@ def select(window,path):
 
 def rendered(preview):
     return preview.canvas._source_pixmap.toImage().pixelColor(5,5).red()
+
+
+@pytest.mark.parametrize("repeat",[False,True])
+def test_auto_adjust_shows_actual_result_when_before_was_selected(window,tmp_path,repeat):
+    pytest.importorskip("app_common.photo_edit._native")
+    from SuperViewer.superviewer.photo_edit_preview import render_for_viewer
+    path = tmp_path/"自动调整结果.png"
+    ramp = np.linspace(40,140,600).astype(np.uint8)
+    Image.fromarray(np.broadcast_to(ramp[None,:,None],(400,600,3))).save(path)
+    select(window,path)
+    panel,preview = window.color_adjust_panel,window.preview_panel
+    window.image_info_tabs.setCurrentWidget(panel)
+    if repeat:
+        panel.auto_button.click()
+        _wait_until(lambda:not window._photo_edit._operations and preview._full_preview_loaded)
+    preview.set_preview_source_mode("edited")
+    preview.set_edit_before(True)
+    _wait_until(lambda:preview._full_preview_loaded)
+    original = preview.canvas._source_pixmap.toImage()
+    panel.auto_button.click()
+    _wait_until(lambda:not window._photo_edit._operations)
+    assert not preview.edit_before()
+    assert not window.ab_preview.b_panel.before_button.isChecked()
+    _wait_until(lambda:preview._full_preview_loaded)
+    snapshot = window._photo_edit.session().snapshot()
+    expected = render_for_viewer(snapshot,proxy=False).display_image
+    actual = preview.canvas._source_pixmap.toImage().convertToFormat(expected.format())
+    assert actual==expected and actual!=original.convertToFormat(expected.format())
 
 
 def test_a_b_share_recipe_but_before_and_view_modes_are_independent(window,tmp_path):
@@ -103,8 +132,89 @@ def test_edit_preview_keeps_original_dimensions_and_view_through_edits_and_befor
     _wait_until(lambda:preview._full_preview_loaded and rendered(preview)==original)
     assert_view()
     assert requests and all(request["full"] for request in requests)
-    assert requests[-1]["before"]
+    assert all(not request.get("before",False) for request in requests)
     assert sizes and set(sizes)=={dimensions}
+
+
+def test_before_uses_original_loader_without_edit_renderer_or_denoised_input(window,tmp_path,monkeypatch):
+    from image_denoise.export import _prepare_sidecar
+    from SuperViewer.superviewer import preview_panel as module
+    path,denoised = tmp_path/"原图.png",tmp_path/"降噪.png"
+    Image.new("RGB",(1000,700),(40,80,120)).save(path)
+    Image.new("RGB",(1000,700),(180,150,100)).save(denoised)
+    _prepare_sidecar(path,denoised.with_suffix(".xmp"),1000,700)
+    select(window,path)
+    preview = window.preview_panel
+    expected = preview.canvas._source_pixmap.toImage()
+    window.image_info_tabs.setCurrentWidget(window.image_info_panel)
+    _wait_until(lambda:not window._photo_edit._workers)
+    # Even a selected denoised input with unavailable editing/LUT support must show the original.
+    window._photo_edit.session().add_denoised(denoised)
+    reads,renders = [],[]
+    load = module._load_full_preview_qimage
+    def tracked(source):
+        reads.append(source)
+        return load(source)
+    def forbidden(*args,**kwargs):
+        renders.append(True)
+        raise ValueError("编辑组件不可用")
+    monkeypatch.setattr(module,"_load_full_preview_qimage",tracked)
+    monkeypatch.setattr(window._photo_edit,"renderer",forbidden)
+    preview.set_edit_before(True)
+    preview.set_preview_source_mode("edited")
+    _wait_until(lambda:preview._full_preview_loaded)
+    assert reads==[str(path)] and not renders
+    assert preview.canvas._source_pixmap.toImage()==expected
+    assert "原图" in preview._preview_note
+    token = preview._preview_request_token
+    recipe = window._photo_edit.session().state.current.recipe.validated()
+    recipe.camera["exposure"] = 2
+    window._photo_edit.edit(recipe)
+    assert preview._preview_request_token==token and preview._full_preview_loaded
+    assert not preview._full_preview_timer.isActive()
+
+
+def test_before_raw_uses_owned_original_worker_and_rejects_late_results(tmp_path,monkeypatch):
+    import threading
+    from SuperViewer.superviewer import preview_panel as module
+    path = tmp_path/"原始 RAW.ARW"
+    path.touch()
+    started,release = threading.Event(),threading.Event()
+    reads = []
+    def original(source):
+        reads.append((source,threading.get_ident()))
+        started.set()
+        assert release.wait(4)
+        return module._qimage_from_pil_image(Image.new("RGB",(1600,1000),"red"))
+    monkeypatch.setattr(module,"_load_full_preview_qimage",original)
+    panel = module.PreviewPanel()
+    requests = []
+    panel.edit_preview_requested.connect(lambda *args:requests.append(args))
+    panel.set_edit_before(True)
+    panel.set_preview_source_mode("edited")
+    try:
+        panel.set_image(str(path))
+        _wait_until(started.is_set)
+        assert not requests
+        assert reads==[(str(path),reads[0][1])] and reads[0][1]!=threading.get_ident()
+        token = panel._preview_request_token
+        panel.set_edit_before(False)
+        _wait_until(lambda:bool(requests))
+        edited = module._qimage_from_pil_image(Image.new("RGB",(1600,1000),"blue"))
+        assert panel.apply_edited_preview(requests[-1][0],str(path),edited,full=True)
+        release.set()
+        _wait_until(lambda:panel._full_preview_loader is None)
+        panel._on_full_preview_loaded(token,str(path),module._qimage_from_pil_image(
+            Image.new("RGB",(1600,1000),"red")),0)
+        assert panel.canvas._source_pixmap.toImage().pixelColor(0,0).blue()==255
+        # Missing original must show an error, not remain stuck on the loading message.
+        path.unlink()
+        panel.set_edit_before(True)
+        _wait_until(lambda:"原图预览失败" in panel._preview_note)
+    finally:
+        release.set()
+        panel.shutdown()
+        panel.close()
 
 
 def test_full_edit_render_failure_retains_previous_frame_without_proxy_fallback(window,tmp_path,monkeypatch):

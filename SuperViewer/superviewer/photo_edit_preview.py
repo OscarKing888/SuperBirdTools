@@ -42,6 +42,8 @@ class PhotoEditPreviewBridge(QObject):
     def activate_editing(self,source):
         preview = self.ab.active_panel()
         if source_key(source)==source_key(preview.source_identity_path()):
+            # 用户执行编辑动作后必须看到结果，即使上一次停留在“调整前”。
+            preview.set_edit_before(False)
             preview.set_preview_source_mode("edited")
 
     def sync_target(self,source):
@@ -61,7 +63,8 @@ class PhotoEditPreviewBridge(QObject):
             self._descriptions.clear()
 
     def _source_changed(self,preview):
-        if preview.preview_source_mode()!="edited" or not preview.source_identity_path() or is_video(preview.source_identity_path()):
+        if (preview.preview_source_mode()!="edited" or preview.edit_before()
+                or not preview.source_identity_path() or is_video(preview.source_identity_path())):
             self.controller.cancel_render(preview)
             self._requests.pop(preview,None)
             self._descriptions.pop(preview,None)
@@ -77,17 +80,18 @@ class PhotoEditPreviewBridge(QObject):
         if self._suspended:
             return
         for preview in self._previews:
-            if preview.preview_source_mode()=="edited" and source_key(preview.source_identity_path())==source_key(source):
+            if (preview.preview_source_mode()=="edited" and not preview.edit_before()
+                    and source_key(preview.source_identity_path())==source_key(source)):
                 description = self._description(preview)
                 if description!=self._descriptions.get(preview):
                     self._descriptions[preview] = description
                     preview.refresh_edited_preview()
 
     def _request(self,preview,token,path):
-        if self._suspended or is_video(path) or preview.preview_source_mode()!="edited":
+        if self._suspended or is_video(path) or preview.preview_source_mode()!="edited" or preview.edit_before():
             return
         # 画布始终接收原尺寸像素；去抖、取消和串行后台渲染由控制器负责。
-        request_id = self.controller.request_render(path,preview,before=preview.edit_before(),full=True)
+        request_id = self.controller.request_render(path,preview,full=True)
         self._requests[preview] = (request_id,token,path)
         self._descriptions[preview] = self._description(preview)
 

@@ -170,14 +170,14 @@ class ImageInfoTabPanel_ColorAdjust(ImageInfoTabPanel_PhotoEdit):
             return super()._operation_finished(source, operation, value)
         if self._matches(source):
             self._operation_message = ("自动调节已完成，下方各组已显示参数，可继续微调。"
-                                       if value.changed else "当前照片无需进一步自动调节。")
+                                       if value.changed else "自动参数未改变，已切换到编辑效果。")
             self._update_state()
             for group in self.groups:
                 if group.step_id in value.step_ids:
                     group.set_expanded(True)
                     group.form.show_auto_values()
-            if value.changed:
-                self.editing_started.emit(source)
+            # 重复自动计算也要退出原图比较，否则参数未变时会一直显示“调整前”。
+            self.editing_started.emit(source)
 
     def apply_theme(self, colors=None):
         super().apply_theme(colors)

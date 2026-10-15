@@ -525,10 +525,13 @@ CLI：根 `.venv` 执行 `python -m SuperViewer.superviewer.image_png_export <�
   后台生命周期、源照片快照及 serial 校验。共享 `app_common.photo_edit.auto_adjust` 的
   `prepare_auto_adjustment(mode="all")` 按实际步骤顺序渲染前缀代理，调用 `auto_basic_parameters()`
   重算六类基础调节的首个组，原位保留身份，缺失组按面板次序插入；重复步骤和风格化效果保留。
+  曝光组的中间调 gamma 按实际残差估计，范围 0.5～2；解决已有黑白端点但主体仍偏暗／亮的问题。
   `AdjustmentForm.show_auto_values()` 只切换可见参数通道，各组绑定同一配方并在成功后展开。
   旧 `auto_levels()`／CLI 单模式保留兼容。结果单次撤销并走既有 XMP 保存、编辑预览与完整导出；
   `python -m app_common.photo_edit auto-adjust` 共用该 API，回归见共享 `test_photo_edit_auto_adjust.py`。
-- `photo_edit_preview.PhotoEditPreviewBridge`：A/B 独立请求、直接后台渲染底图完整尺寸、同底图原尺寸前后比较。
+- `photo_edit_preview.PhotoEditPreviewBridge`：A/B 独立请求、直接后台渲染底图完整尺寸；显式编辑与自动调节成功（含重复参数不变）时，活动侧退出“调整前”并显示结果。
+  “调整前”由 `PreviewPanel` 直接使用原图 `_FullPreviewLoader`，不读取编辑底图／配方／LUT，
+  不随参数改变重新渲染；RAW 沿用默认原图预览规则。取消、令牌和线程结束保护仍有效。
   进入编辑模式保留当前画面与视野；参数变动使用既有去抖／取消机制，完成后直接替换，
   不向画布提交 900 px 代理。直方图与自动分析仍可使用有界代理。
   `PreviewPanel` 的编辑来源分支仍遵守原有快速导航／请求令牌／几何及首次适配合同。
