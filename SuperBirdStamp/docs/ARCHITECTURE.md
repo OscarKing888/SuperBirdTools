@@ -79,7 +79,7 @@ A/B 的布局与显隐约定见 [A/B 预览工具栏布局](ux/AB_PREVIEW_LAYOUT
 
 普通格式解码在旋转/转色前缩小像素，并携带原尺寸和文件属性，避免再次打开 TIFF 读取尺寸。TIFF 原尺寸读取兼容 Pillow 已应用 Orientation 的情形，不能重复交换宽高。性能探针 `select.activate`、`select.render_preview`、`preview.cached_thumbnail`、`preview.source_size`、`preview.decode` 区分点击耗时和后台读取耗时。
 
-`BirdStampEditorWindow.closeEvent` 在视频导出仍运行时拒绝关闭并提示先停止；其他工作采用协作停止。元数据加载器通过独立 ExifTool 会话和取消回调中断批量读取，关闭请求会在后台终止 ExifTool 子进程。只要预览、检测、元数据（包括待结束的旧加载器）、发现线程或 ExifTool 清理仍在运行，窗口忽略本次关闭并通过定时器重试，不阻塞 GUI 等待。全部结束后才关闭工作区自动保存并接受关闭。修改这条路径时，应测试“业务完成信号已发出但线程尚未返回”的窗口期。
+`BirdStampEditorWindow.closeEvent` 在视频导出仍运行时拒绝关闭并提示先停止；确认已命名工作区的保存选择后，先提交未命名草稿并停止自动保存/恢复，再协作停止其他工作，避免保存半清理状态。元数据加载器通过独立 ExifTool 会话和取消回调中断批量读取，关闭请求会在后台终止 ExifTool 子进程。只要预览、检测、元数据（包括待结束的旧加载器）、发现线程或 ExifTool 清理仍在运行，窗口忽略本次关闭并通过定时器重试，不阻塞 GUI 等待。全部结束后才接受关闭，重试不重复询问保存。修改这条路径时，应测试“业务完成信号已发出但线程尚未返回”的窗口期。
 
 ExifTool 生命周期与 Viewer 共用 [`exiftool_runner.py`](../../app_common/exif_io/exiftool_runner.py)：并发清理必须等到子进程实际结束，失败保留所有权并记录错误；`aboutToQuit` 与 `atexit` 通过 `shutdown_exiftool_process()` 禁止再创建常驻会话并回收全部已注册会话。Windows 的 [`_windows_job.py`](../../app_common/exif_io/_windows_job.py) 给常驻进程配置独立 Job Object，宿主退出时系统回收这些进程；macOS 沿用共享的显式清理协议。回归见 [`test_exiftool_shutdown.py`](../../app_common/tests/test_exiftool_shutdown.py)，使用真实 ExifTool 验证并行会话和进程级退出，无需打开或改写用户工作区。
 
@@ -296,12 +296,16 @@ RAW 源图的去抖动分析、成片预览和导出统一优先读取长边至�
 
 [workspace.py](../birdstamp/workspace.py) 是不依赖窗口的 JSON 存取层。`serialize_workspace_path` 保存相对/绝对路径信息，`resolve_workspace_path` 优先使用可用的相对路径，再回退绝对路径。`read_workspace_json` 校验格式；`write_workspace_json` 在同目录写临时文件、flush/fsync 后原子替换，失败清理临时文件。
 
-[editor_workspace.py](../birdstamp/gui/editor_workspace.py) 把 UI 状态映射为工作区：照片顺序与逐图覆盖、report.db 路径、当前/选中照片、排序、全局设置、导出与预览状态。恢复是异步流程：
+[editor_workspace.py](../birdstamp/gui/editor_workspace.py) 把 UI 状态映射为工作区：照片顺序与逐图覆盖、report.db 路径、当前/选中照片、排序、全局设置、导出与预览状态。
+
+仅未命名工作区自动保存到用户配置目录的会话草稿；保存或打开已命名工作区后停止自动保存，编辑时标记 dirty，并在标题路径后显示 `*`。退出、新建、清空及打开其他工作区前，dirty 的已命名工作区通过原生 `QMessageBox` 提供保存／不保存／取消；手动保存成功才清除 dirty，失败或取消保留当前内容，退出确认在后台任务停止前执行且关闭重试不重复询问。照片列表「清空」与新建共用完整重置入口，清空照片、report.db、拼图及编辑设置，回到未命名工作区。空白草稿也参与启动恢复，避免清空后重新打开旧工作区；命名保存或加载成功会移除过时草稿。旧版含已命名路径的自动保存仍可恢复，但标为 dirty，等待用户决定是否写回。此功能仅管理当前 GUI 会话，不增加 CLI 参数；回归见 [test_workspace_restore_autosave.py](../tests/test_workspace_restore_autosave.py)。
+
+恢复是异步流程：
 
 1. `_restore_startup_workspace` 优先尝试自动保存，再尝试上次工作区。
 2. `_restore_workspace_payload` 安装恢复上下文和待恢复队列；定时器驱动 `_process_workspace_restore_photo_batch`，按数量与耗时预算添加照片。
 3. `_finish_workspace_restore_payload` 完成排序、选中项、元数据加载和剩余 UI 状态，清除恢复上下文后才重新允许保存。
-4. 恢复期间，自动保存和 `_save_workspace_to_path` 手动保存都受门控。中途关闭由 `_shutdown_workspace_autosave` 保留上一次完整 autosave、停止恢复定时器并屏蔽晚到回调，不能用半恢复的列表覆盖原工作区。
+4. 恢复期间，dirty 标记、自动保存和 `_save_workspace_to_path` 手动保存都受门控。中途关闭由 `_shutdown_workspace_autosave` 保留上一次完整 autosave、停止恢复定时器并屏蔽晚到回调，不能用半恢复的列表覆盖原工作区。
 
 工作区的 `editor_state.sequence_preview` 保存有效分析签名及去抖动页/编辑或成片视图状态。工作区照片和参数全部恢复后，[_BirdStampDejitterMixin._restore_sequence_workspace_state](../birdstamp/gui/editor_dejitter.py) 交给原有单 worker 后台加载 [SequencePreviewCache](../birdstamp/gui/sequence_preview_cache.py)，不会重新跟踪已缓存的分析。缓存保存整组跟踪诊断、原生裁切几何、原图/成片快速位图和已生成的清晰帧；只从匹配文件及参数签名的完整 manifest 恢复，旧工作区、丢失/损坏/过期缓存仍可正常打开。未缓存的清晰帧按需生成。关闭清理内存时保留工作区缓存引用，恢复中途关闭沿用原有自动保存门控。
 
