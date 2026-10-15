@@ -137,6 +137,8 @@ Badge 的 `badge_shape` 支持默认 `rounded_rect` 与 `circle`；缺失/无效
 
 [percent_editor.py](../birdstamp/gui/percent_editor.py) 的 `PercentEditor` 为叠加层的所有百分比参数组合滑动条与精确数值输入；常用滑动区间随超界输入扩展，同步配置不发出编辑信号。`OverlayPanel` 统一处理百分数与归一化值的转换，并把一次滑动手势合并为一条撤销记录，模板和实例共用。
 
+模板列表上方固定提供“导入 / 导出”原生按钮，列表独立滚动；无有效选择时禁用导出。`editor_template.import_template_file` 校验外部 JSON，兼容旧 `fields` 与新 `overlays`（含内嵌素材），按源文件名导入，遇到同名文件自动加序号并选中新模板。导出先提交待输入文字，经既有 `save_template_payload` 原子写入当前模板，文件对话框补全 `.json` 并负责覆盖确认。取消或导入失败保持当前模板。核心文件操作可直接复用；此入口用于窗口内模板交换，不扩展 CLI，现有 `render --template` 可直接使用导出文件。回归见 [test_template_transfer.py](../tests/test_template_transfer.py)。
+
 ## 4. 预览与导出图像管线
 
 ```mermaid

@@ -47,6 +47,7 @@ from birdstamp.gui.editor_utils import (
     template_banner_fill_color,
     template_font_path_from_type,
     normalize_template_banner_color,
+    sanitize_template_name,
 )
 
 _BANNER_BACKGROUND_STYLE_SOLID = "solid"
@@ -407,6 +408,34 @@ def save_template_payload(path: Path, payload: dict[str, Any]) -> None:
     normalized = _normalize_template_payload(payload, fallback_name=path.stem)
     from birdstamp.workspace import atomic_write_json
     atomic_write_json(path, normalized)
+
+
+def import_template_file(source_path: Path, template_dir: Path) -> Path:
+    """导入单个模板 JSON；校验后另存，同名模板自动加序号而不覆盖。"""
+    raw = json.loads(source_path.read_text(encoding="utf-8-sig"))
+    if not isinstance(raw, dict) or not ("fields" in raw or "overlays" in raw):
+        raise ValueError("请选择 BirdStamp 模板 JSON（需包含 fields 或 overlays）")
+    for key in ("fields", "overlays"):
+        if key in raw and (
+            not isinstance(raw[key], list)
+            or any(not isinstance(item, dict) for item in raw[key])
+        ):
+            raise ValueError(f"模板格式错误：{key} 必须为对象列表")
+    if "overlay_assets" in raw and not isinstance(raw["overlay_assets"], dict):
+        raise ValueError("模板格式错误：overlay_assets 必须为对象")
+    base_name = sanitize_template_name(source_path.stem) or "imported_template"
+    payload = _normalize_template_payload(raw, fallback_name=base_name)
+    # 跨平台按不区分大小写分配名称，包括目录及大小写不同的扩展名。
+    existing = {path.name.casefold() for path in template_dir.iterdir()} if template_dir.exists() else set()
+    name = base_name
+    suffix = 1
+    while f"{name}.json".casefold() in existing:
+        suffix += 1
+        name = f"{base_name}_{suffix}"
+    payload["name"] = name
+    target_path = template_dir / f"{name}.json"
+    save_template_payload(target_path, payload)
+    return target_path
 
 
 def ensure_template_repository(template_dir: Path) -> None:

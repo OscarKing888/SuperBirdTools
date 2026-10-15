@@ -26,6 +26,7 @@ from PyQt6.QtWidgets import (
     QComboBox,
     QDialog,
     QDoubleSpinBox,
+    QFileDialog,
     QFormLayout,
     QGridLayout,
     QHBoxLayout,
@@ -555,13 +556,27 @@ class TemplateManagerDialog(QDialog):
         splitter.setChildrenCollapsible(False)
 
     def _build_template_list_panel(self) -> QWidget:
-        """左侧面板：模板列表 + 新增/复制/删除按钮。"""
+        """左侧面板：固定导入/导出操作、模板列表及新增/复制/删除。"""
         panel = QWidget()
         layout = QVBoxLayout(panel)
         layout.setContentsMargins(8, 8, 8, 8)
         layout.setSpacing(8)
 
         layout.addWidget(QLabel("模板列表"))
+
+        transfer_buttons = QHBoxLayout()
+        self.import_template_btn = QPushButton("导入")
+        self.import_template_btn.setToolTip("从 JSON 文件导入模板；同名模板自动加序号")
+        self.import_template_btn.setAutoDefault(False)
+        self.import_template_btn.clicked.connect(self._import_template)
+        transfer_buttons.addWidget(self.import_template_btn)
+        self.export_template_btn = QPushButton("导出")
+        self.export_template_btn.setToolTip("将当前模板导出为 JSON 文件")
+        self.export_template_btn.setAutoDefault(False)
+        self.export_template_btn.setEnabled(False)
+        self.export_template_btn.clicked.connect(self._export_template)
+        transfer_buttons.addWidget(self.export_template_btn)
+        layout.addLayout(transfer_buttons)
 
         self.template_list = QListWidget()
         self.template_list.currentItemChanged.connect(self._on_template_selected)
@@ -586,6 +601,9 @@ class TemplateManagerDialog(QDialog):
         for button in panel.findChildren(QPushButton):
             button.setMinimumWidth(0)
             button.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
+        # 分栏缩小时仍保留完整按钮文字；列表自己滚动，操作区始终可达。
+        for button in (self.import_template_btn, self.export_template_btn):
+            button.setSizePolicy(QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Fixed)
         return panel
 
     def _build_editor_panel(self) -> QWidget:
@@ -1001,6 +1019,7 @@ class TemplateManagerDialog(QDialog):
     # ------------------------------------------------------------------
 
     def _reload_template_list(self, preferred: str | None) -> None:
+        self.export_template_btn.setEnabled(False)
         _ensure_template_repository(self.template_dir)
         names = _list_template_names(self.template_dir)
         self.template_paths = {name: self.template_dir / f"{name}.json" for name in names}
@@ -1113,6 +1132,7 @@ class TemplateManagerDialog(QDialog):
     def _on_template_selected(
         self, current: QListWidgetItem | None, _previous: QListWidgetItem | None
     ) -> None:
+        self.export_template_btn.setEnabled(False)
         if not current:
             return
         self.overlay_panel.flush_text()
@@ -1128,6 +1148,7 @@ class TemplateManagerDialog(QDialog):
 
         self.current_template_name = name
         self.current_payload = payload
+        self.export_template_btn.setEnabled(True)
         self.template_name_edit.setText(path.name)
         self._updating = True
         try:
@@ -1701,6 +1722,35 @@ class TemplateManagerDialog(QDialog):
     # ------------------------------------------------------------------
     # Template CRUD
     # ------------------------------------------------------------------
+
+    def _import_template(self) -> None:
+        filename, _ = QFileDialog.getOpenFileName(self, "导入模板", "", "模板 JSON (*.json)")
+        if not filename:
+            return
+        try:
+            self.overlay_panel.flush_text()
+            path = editor_template.import_template_file(Path(filename), self.template_dir)
+        except Exception as exc:
+            QMessageBox.warning(self, "导入模板失败", f"{filename}\n\n{exc}")
+            return
+        self._reload_template_list(preferred=path.stem)
+
+    def _export_template(self) -> None:
+        if not self.current_template_name or self.current_payload is None:
+            return
+        dialog = QFileDialog(self, "导出模板")
+        dialog.setAcceptMode(QFileDialog.AcceptMode.AcceptSave)
+        dialog.setNameFilter("模板 JSON (*.json)")
+        dialog.setDefaultSuffix("json")
+        dialog.selectFile(f"{self.current_template_name}.json")
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        filename = dialog.selectedFiles()[0]
+        try:
+            self.overlay_panel.flush_text()
+            _save_template_payload(Path(filename), self.current_payload)
+        except Exception as exc:
+            QMessageBox.warning(self, "导出模板失败", f"{filename}\n\n{exc}")
 
     def _create_template(self) -> None:
         name, ok = QInputDialog.getText(self, "新增模板", "模板名(仅文件名):")
