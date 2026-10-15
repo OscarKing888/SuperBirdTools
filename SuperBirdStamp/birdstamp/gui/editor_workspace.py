@@ -49,7 +49,7 @@ _workspace_log = get_logger("birdstamp.workspace")
 _LAST_WORKSPACE_PATH_KEY = "last_workspace_path"
 _RECENT_WORKSPACE_PATHS_KEY = "recent_workspace_paths"
 _RECENT_WORKSPACE_LIMIT = 10
-# 仅写入会话自动保存文件：记录它对应的已命名工作区，重启后继续自动保存到该文件。
+# 兼容旧版自动保存中的已命名工作区路径；新版只自动保存未命名工作区。
 _AUTOSAVE_CURRENT_WORKSPACE_KEY = "current_workspace_path"
 _PIPELINE_STAGE_ENABLED_VALUE_KEYS = (
     STAGE_TEMPLATE_CROP_ENABLED_KEY,
@@ -112,6 +112,9 @@ class _BirdStampWorkspaceMixin:
         # 新路径对应的文件刚写入或刚读取，与界面一致，因此清除待写回标记。
         self.__dict__["_workspace_path_value"] = value
         self._workspace_dirty = False
+        timer = getattr(self, "_workspace_autosave_timer", None)
+        if isinstance(value, Path) and timer is not None:
+            timer.stop()
         refresh = getattr(self, "_refresh_window_title", None)
         if callable(refresh):
             refresh()
@@ -164,6 +167,9 @@ class _BirdStampWorkspaceMixin:
         return get_config_path().parent / _WORKSPACE_AUTOSAVE_FILE_NAME
 
     def _workspace_autosave_enabled(self) -> bool:
+        return self._workspace_path is None and self._workspace_state_changes_enabled()
+
+    def _workspace_state_changes_enabled(self) -> bool:
         return (
             not getattr(self, "_workspace_autosave_shutdown", False)
             and int(getattr(self, "_workspace_autosave_suspend_depth", 0) or 0) <= 0
@@ -201,14 +207,15 @@ class _BirdStampWorkspaceMixin:
             self._workspace_autosave_suspend_depth = max(0, depth)
 
     def _schedule_workspace_autosave(self) -> None:
-        """参数修改：同时写回会话自动保存文件和当前已命名工作区。"""
-        if not self._workspace_autosave_enabled():
+        """记录未保存改动；只有未命名工作区启动自动保存。"""
+        if not self._workspace_state_changes_enabled():
             return
         self._workspace_dirty = True
+        self._refresh_window_title()
         self._schedule_session_autosave()
 
     def _schedule_session_autosave(self) -> None:
-        """仅刷新会话自动保存文件；打开工作区本身不改写用户的工作区文件。"""
+        """合并未命名工作区的自动保存请求。"""
         if not self._workspace_autosave_enabled():
             return
         timer = getattr(self, "_workspace_autosave_timer", None)
@@ -222,25 +229,19 @@ class _BirdStampWorkspaceMixin:
     def _autosave_workspace_now(self) -> None:
         if not self._workspace_autosave_enabled():
             return
-        current_path = self._workspace_path
         try:
             workspace_path = self._workspace_autosave_path()
             payload = self._collect_workspace_payload(workspace_path)
-            if isinstance(current_path, Path):
-                payload[_AUTOSAVE_CURRENT_WORKSPACE_KEY] = str(current_path)
             write_workspace_json(workspace_path, payload)
         except Exception as exc:
             _workspace_log.warning("workspace autosave failed: %s", exc)
-        if not (getattr(self, "_workspace_dirty", False) and isinstance(current_path, Path)):
-            return
+
+    def _remove_session_autosave(self) -> None:
+        """已保存或明确放弃旧会话后，避免下次启动恢复过时的草稿。"""
         try:
-            write_workspace_json(current_path, self._collect_workspace_payload(current_path))
-        except Exception as exc:
-            # 保留待写回标记，下一次参数修改或关闭窗口时重试。
-            _workspace_log.warning("workspace autosave to %s failed: %s", current_path, exc)
-            self._set_status(f"工作区自动保存失败：{exc}")
-            return
-        self._workspace_dirty = False
+            self._workspace_autosave_path().unlink(missing_ok=True)
+        except OSError as exc:
+            _workspace_log.warning("workspace autosave cleanup failed: %s", exc)
 
     def _flush_pending_workspace_autosave(self) -> None:
         timer = getattr(self, "_workspace_autosave_timer", None)
@@ -265,9 +266,7 @@ class _BirdStampWorkspaceMixin:
         except WorkspaceFormatError as exc:
             _workspace_log.warning("workspace autosave restore skipped: %s", exc)
             return False
-        if not self._workspace_payload_has_session_content(payload):
-            _workspace_log.info("workspace autosave restore skipped: empty session")
-            return False
+        # 空白新工作区和只有拼图/参数的草稿也有效，不能回退到上次已命名工作区。
         try:
             self._restore_workspace_payload(
                 payload,
@@ -281,15 +280,6 @@ class _BirdStampWorkspaceMixin:
             _workspace_log.warning("workspace autosave restore failed: %s", exc)
             return False
         return True
-
-    def _workspace_payload_has_session_content(self, payload: dict[str, Any]) -> bool:
-        if not isinstance(payload, dict):
-            return False
-        photos = payload.get("photos")
-        if isinstance(photos, list) and photos:
-            return True
-        report_databases = payload.get("report_databases")
-        return isinstance(report_databases, list) and bool(report_databases)
 
     def _restore_startup_workspace(self) -> bool:
         if self._restore_autosave_workspace_on_startup():
@@ -340,10 +330,12 @@ class _BirdStampWorkspaceMixin:
             target = workspace_path.expanduser().resolve(strict=False)
         except Exception:
             target = Path(workspace_path)
-        self._save_editor_export_state_value(_LAST_WORKSPACE_PATH_KEY, str(target))
-        self._save_workspace_last_dir(target.parent)
-        recent = _recent_workspace_paths(recent, newest=target)
-        self._save_editor_export_state_value(_RECENT_WORKSPACE_PATHS_KEY, [str(path) for path in recent])
+        # 最近文件与文件对话框目录是应用偏好，不是工作区内容修改。
+        with self._workspace_autosave_suspended():
+            self._save_editor_export_state_value(_LAST_WORKSPACE_PATH_KEY, str(target))
+            self._save_workspace_last_dir(target.parent)
+            recent = _recent_workspace_paths(recent, newest=target)
+            self._save_editor_export_state_value(_RECENT_WORKSPACE_PATHS_KEY, [str(path) for path in recent])
         self._refresh_recent_workspace_menu()
 
     def _load_recent_workspace_paths(self) -> list[Path]:
@@ -432,9 +424,11 @@ class _BirdStampWorkspaceMixin:
         return bool(self.photo_list.topLevelItemCount() or self._report_db_entries)
 
     def _confirm_replace_workspace_session(self, *, creating: bool = False) -> bool:
+        title = "新建工作区" if creating else "加载工作区"
+        if isinstance(self._workspace_path, Path):
+            return self._confirm_save_workspace_changes(title)
         if not self._has_workspace_session_content():
             return True
-        title = "新建工作区" if creating else "加载工作区"
         message = (
             "新建工作区会清空当前照片、report.db 和编辑设置，是否继续？"
             if creating else
@@ -448,6 +442,26 @@ class _BirdStampWorkspaceMixin:
             QMessageBox.StandardButton.No,
         )
         return answer == QMessageBox.StandardButton.Yes
+
+    def _flush_workspace_text_edits(self) -> None:
+        self.overlay_panel.flush_text()
+        self.collage.panel.flush_text()
+
+    def _confirm_save_workspace_changes(self, action: str) -> bool:
+        if self._workspace_restore_in_progress():
+            return True
+        self._flush_workspace_text_edits()
+        if self._workspace_path is None or not getattr(self, "_workspace_dirty", False):
+            return True
+        answer = QMessageBox.question(
+            self, action,
+            f"工作区有未保存的修改，是否保存？\n\n{self._workspace_path}",
+            QMessageBox.StandardButton.Save | QMessageBox.StandardButton.Discard | QMessageBox.StandardButton.Cancel,
+            QMessageBox.StandardButton.Save,
+        )
+        if answer == QMessageBox.StandardButton.Save:
+            return self.save_workspace()
+        return answer == QMessageBox.StandardButton.Discard
 
     def _current_workspace_selected_photo_paths(self) -> list[Path]:
         paths: list[Path] = []
@@ -851,7 +865,7 @@ class _BirdStampWorkspaceMixin:
             return
         self._workspace_restore_context = None
 
-        with birdstamp_perf.span("workspace.restore_finish"):
+        with self._workspace_autosave_suspended(), birdstamp_perf.span("workspace.restore_finish"):
             selection_state = context.get("selection_state")
             if not isinstance(selection_state, dict):
                 selection_state = {}
@@ -919,8 +933,12 @@ class _BirdStampWorkspaceMixin:
             if mark_as_current_workspace and isinstance(workspace_path, Path):
                 self._workspace_path = workspace_path
                 self._save_workspace_last_path(workspace_path)
+                self._remove_session_autosave()
             elif isinstance(recovered_workspace_path, Path):
                 self._workspace_path = recovered_workspace_path
+                # 旧版草稿可能在原文件写入失败后留下更新的数据，交由用户决定是否保存。
+                self._workspace_dirty = True
+                self._refresh_window_title()
             else:
                 self._workspace_path = None
 
@@ -952,8 +970,8 @@ class _BirdStampWorkspaceMixin:
                 QMessageBox.warning(self, "工作区加载完成", "\n\n".join(warning_lines))
 
             self._restore_sequence_workspace_state(context.get("sequence_preview_state"))
-            if bool(context.get("autosave_after_restore", True)):
-                self._schedule_session_autosave()
+        if bool(context.get("autosave_after_restore", True)):
+            self._schedule_session_autosave()
 
     def _restore_workspace_payload(
         self,
@@ -968,7 +986,7 @@ class _BirdStampWorkspaceMixin:
         if self._video_export_worker is not None and self._video_export_worker.isRunning():
             self._show_error("视频导出进行中", "请先中断当前视频导出，再加载工作区。")
             return
-        # 切换前把尚未写回的参数修改保存到原工作区。
+        # 切换前提交未命名工作区的待保存草稿；已命名工作区由确认对话框决定。
         self._flush_pending_workspace_autosave()
 
         self._cancel_workspace_restore_in_progress()
@@ -1148,14 +1166,13 @@ class _BirdStampWorkspaceMixin:
         self._workspace_path = None
         self._schedule_workspace_autosave()
 
-    def save_workspace(self) -> None:
+    def save_workspace(self) -> bool:
         workspace_path = getattr(self, "_workspace_path", None)
         if not isinstance(workspace_path, Path):
-            self.save_workspace_as()
-            return
-        self._save_workspace_to_path(workspace_path)
+            return self.save_workspace_as()
+        return self._save_workspace_to_path(workspace_path)
 
-    def save_workspace_as(self) -> None:
+    def save_workspace_as(self) -> bool:
         suggested_path = self._suggest_workspace_path()
         file_path, _selected = QFileDialog.getSaveFileName(
             self,
@@ -1164,22 +1181,25 @@ class _BirdStampWorkspaceMixin:
             self._workspace_dialog_filter(),
         )
         if not file_path:
-            return
-        self._save_workspace_to_path(self._normalize_workspace_target_path(file_path))
+            return False
+        return self._save_workspace_to_path(self._normalize_workspace_target_path(file_path))
 
-    def _save_workspace_to_path(self, workspace_path: Path) -> None:
+    def _save_workspace_to_path(self, workspace_path: Path) -> bool:
         if self._workspace_restore_in_progress():
             self._set_status("工作区仍在恢复，请等待恢复完成后再保存。")
-            return
+            return False
         try:
+            self._flush_workspace_text_edits()
             payload = self._collect_workspace_payload(workspace_path)
             written_path = write_workspace_json(workspace_path, payload)
         except WorkspaceFormatError as exc:
             self._show_error("保存工作区失败", str(exc))
-            return
+            return False
         self._workspace_path = written_path
         self._save_workspace_last_path(written_path)
+        self._remove_session_autosave()
         self._set_status(f"工作区已保存：{written_path}")
+        return True
 
     def load_workspace(self) -> None:
         if not self._confirm_replace_workspace_session():

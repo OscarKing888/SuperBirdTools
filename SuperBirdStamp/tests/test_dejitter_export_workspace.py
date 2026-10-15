@@ -82,9 +82,14 @@ def test_export_saves_original_then_loads_only_exported_images(window, monkeypat
         assert settings['crop_box'] is None
         assert settings['center_mode'] == 'image'
         assert settings['crop_padding_top'] == settings['crop_padding_left'] == 0
-    # 自动保存也必须保存完整的新列表，原工作区仍然独立可恢复。
+    # 成片已命名，定时保存不能再生成草稿或改写文件；两个工作区仍独立可恢复。
+    original_bytes = original.read_bytes()
+    target_bytes = target.read_bytes()
     window._autosave_workspace_now()
-    assert workspace_photos(window._workspace_autosave_path())[1] == outputs
+    assert not window._workspace_autosave_path().exists()
+    assert original.read_bytes() == original_bytes
+    assert target.read_bytes() == target_bytes
+    assert workspace_photos(target)[1] == outputs
     assert workspace_photos(original)[1] == paths
     finish(window)
 

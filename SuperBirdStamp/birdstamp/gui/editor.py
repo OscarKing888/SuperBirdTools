@@ -648,9 +648,12 @@ UNTITLED_WORKSPACE_TITLE = "Untitled*"
 def _build_birdstamp_main_window_title(
     about_info: dict[str, Any] | None = None,
     workspace_path: Path | None = None,
+    *, dirty: bool = False,
 ) -> str:
     """标题栏前缀显示当前工作区路径；从未保存过时显示 Untitled*。"""
     workspace_label = str(workspace_path) if isinstance(workspace_path, Path) else UNTITLED_WORKSPACE_TITLE
+    if isinstance(workspace_path, Path) and dirty:
+        workspace_label += "*"
     return f"{workspace_label} - {birdstamp.APP_INFO.window_title(about_info)}"
 
 
@@ -902,16 +905,18 @@ class BirdStampEditorWindow(
         self._pending_workspace_select_metadata_key = None
         if current_item is None:
             return
-        self.photo_list.setCurrentItem(current_item)
-        for idx in range(self.photo_list.topLevelItemCount()):
-            item = self.photo_list.topLevelItem(idx)
-            if item is not None:
-                item.setSelected(False)
-        current_item.setSelected(True)
-        for path in selected_paths:
-            item = self._find_photo_item_by_path(path)
-            if item is not None:
-                item.setSelected(True)
+        # 恢复后的延迟选中仍是加载流程，不应把刚打开的工作区标为已修改。
+        with self._workspace_autosave_suspended():
+            self.photo_list.setCurrentItem(current_item)
+            for idx in range(self.photo_list.topLevelItemCount()):
+                item = self.photo_list.topLevelItem(idx)
+                if item is not None:
+                    item.setSelected(False)
+            current_item.setSelected(True)
+            for path in selected_paths:
+                item = self._find_photo_item_by_path(path)
+                if item is not None:
+                    item.setSelected(True)
 
     def _maybe_apply_pending_workspace_photo_selection(self) -> None:
         pending_key = self._pending_workspace_select_metadata_key
@@ -2852,7 +2857,10 @@ class BirdStampEditorWindow(
 
     def _refresh_window_title(self) -> None:
         self.setWindowTitle(
-            _build_birdstamp_main_window_title(getattr(self, "_about_info", None), self._workspace_path)
+            _build_birdstamp_main_window_title(
+                getattr(self, "_about_info", None), self._workspace_path,
+                dirty=getattr(self, "_workspace_dirty", False),
+            )
         )
 
     def _show_about_dialog(self) -> None:
@@ -2896,6 +2904,16 @@ class BirdStampEditorWindow(
             QMessageBox.information(self, "视频导出进行中", "请先中断当前视频导出，或等待导出完成后再关闭窗口。")
             event.ignore()
             return
+        if not getattr(self, "_workspace_close_confirmed", False):
+            if not self._confirm_save_workspace_changes("退出"):
+                event.ignore()
+                return
+            self._workspace_close_confirmed = True
+            # 先保存完整草稿，再停止后台任务；重试关闭时不能重复询问或保存半清理状态。
+            restoring_workspace = self._workspace_restore_in_progress()
+            self._shutdown_workspace_autosave()
+            if isinstance(self._workspace_path, Path) and not restoring_workspace:
+                self._remove_session_autosave()
         if hasattr(self, "overlay_panel"):
             self.overlay_panel._context_generation += 1
         session = getattr(self.preview_label.canvas, "overlay_session", None)
@@ -2937,7 +2955,6 @@ class BirdStampEditorWindow(
             event.ignore()
             QTimer.singleShot(100, self.close)
             return
-        self._shutdown_workspace_autosave()
         super().closeEvent(event)
 
     def _on_auto_focus_center_toggled(self, enabled: bool) -> None:
@@ -5220,7 +5237,7 @@ class BirdStampEditorWindow(
             self._set_status(status_message)
 
     def _clear_photos(self) -> None:
-        self._clear_photos_state(status_message="已清空照片列表。")
+        self.new_workspace()
 
     def _on_photo_selected(self, current: QTreeWidgetItem | None, _previous: QTreeWidgetItem | None, *, target_view=None) -> None:
         if hasattr(self, "overlay_panel"):
