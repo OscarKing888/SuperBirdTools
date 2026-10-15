@@ -424,13 +424,13 @@ class PhotoEditController(QObject):
             return str(target)
         return self.run_operation("denoised",locate,apply=lambda session,path:session.add_denoised(path))
 
-    def auto_adjust(self, mode="tone", *, source=None):
+    def auto_adjust(self, mode="all", *, source=None):
         from app_common.photo_edit.auto_adjust import prepare_auto_adjustment, can_auto_adjust
         source = source or self.current_source
         session = self.session(source)
         if (not session or self._closing or self._suspended or self._file_busy or
                 self._operations.get(source_key(source)) or
-                not can_auto_adjust(session.state.current.recipe)):
+                not can_auto_adjust(session.state.current.recipe, mode)):
             return False
         session.finish_gesture()
         return self.run_operation("auto-adjust", lambda snapshot, cancelled:

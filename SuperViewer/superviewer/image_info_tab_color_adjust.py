@@ -3,14 +3,14 @@ from copy import deepcopy
 
 try:
     from PyQt6.QtCore import QSignalBlocker, QTimer
-    from PyQt6.QtWidgets import QCheckBox, QComboBox, QLabel, QPushButton, QToolButton, QMenu, QHBoxLayout, QVBoxLayout, QWidget, QFileDialog, QScrollArea
+    from PyQt6.QtWidgets import QCheckBox, QLabel, QPushButton, QToolButton, QMenu, QHBoxLayout, QVBoxLayout, QWidget, QFileDialog, QScrollArea
 except ImportError:
     from PyQt5.QtCore import QSignalBlocker, QTimer
-    from PyQt5.QtWidgets import QCheckBox, QComboBox, QLabel, QPushButton, QToolButton, QMenu, QHBoxLayout, QVBoxLayout, QWidget, QFileDialog, QScrollArea
+    from PyQt5.QtWidgets import QCheckBox, QLabel, QPushButton, QToolButton, QMenu, QHBoxLayout, QVBoxLayout, QWidget, QFileDialog, QScrollArea
 
 from app_common.collapsible_section import CollapsibleSection
 from app_common.photo_edit.catalog import ADJUSTMENT_TITLES, adjustment_defaults
-from app_common.photo_edit.auto_adjust import AUTO_MODES, auto_step_mode, can_auto_adjust
+from app_common.photo_edit.auto_adjust import auto_step_mode, can_auto_adjust
 from app_common.photo_edit.model import AdjustmentStep
 from .image_info_tab_photo_edit import ImageInfoTabPanel_PhotoEdit
 from .photo_edit_forms import AdjustmentForm
@@ -106,7 +106,7 @@ class AdjustmentGroup(CollapsibleSection):
         self.add_button.setToolTip("在此组之后添加处理" if can_add else "最多支持 64 个步骤，已无足够位置添加处理。")
         suffix = "" if enabled else "（未启用）"
         mode = auto_step_mode(step) if step else None
-        self.setTitle(ADJUSTMENT_TITLES[self.kind] + (" · " + AUTO_MODES[mode] if mode else "") + suffix)
+        self.setTitle(ADJUSTMENT_TITLES[self.kind] + (" · 自动" if mode else "") + suffix)
 
 
 class ImageInfoTabPanel_ColorAdjust(ImageInfoTabPanel_PhotoEdit):
@@ -117,18 +117,10 @@ class ImageInfoTabPanel_ColorAdjust(ImageInfoTabPanel_PhotoEdit):
         self._reveal_timer = QTimer(self)
         self._reveal_timer.setSingleShot(True)
         self._reveal_timer.timeout.connect(self._reveal_added_group)
-        auto_row = QHBoxLayout()
-        self.auto_mode = QComboBox(self)
-        self.auto_mode.setAccessibleName("自动调节模式")
-        for mode, title in AUTO_MODES.items():
-            self.auto_mode.addItem(title, mode)
-        self.auto_mode.setToolTip("自动色调：分别拉伸 RGB 色阶；自动对比度：统一拉伸；自动颜色：同时校正近中性色。")
-        self.auto_button = QPushButton("自动调节", self)
-        self.auto_button.setToolTip("分析当前效果并生成可微调的色阶；末尾已有自动色阶时重新计算。支持撤销。")
+        self.auto_button = QPushButton("一键自动调节", self)
+        self.auto_button.setToolTip("综合调整亮度、反差和颜色，并将结果填入下方基础编辑组。重复点击重新计算，支持一次撤销。")
         self.auto_button.clicked.connect(self._auto_adjust)
-        auto_row.addWidget(self.auto_mode, 1)
-        auto_row.addWidget(self.auto_button)
-        body.addLayout(auto_row)
+        body.addWidget(self.auto_button)
         note = QLabel("已启用的调整按下方顺序处理；收起分组不关闭效果。", self)
         note.setWordWrap(True)
         body.addWidget(note)
@@ -161,16 +153,15 @@ class ImageInfoTabPanel_ColorAdjust(ImageInfoTabPanel_PhotoEdit):
                          and not self.controller._suspended and not self.controller._closing
                          and can_auto_adjust(session.state.current.recipe))
         self.auto_button.setEnabled(available)
-        self.auto_mode.setEnabled(available)
-        self.auto_button.setText("处理中…" if busy else "自动调节")
+        self.auto_button.setText("自动调节中…" if busy else "一键自动调节")
         if session and not can_auto_adjust(session.state.current.recipe):
-            self.auto_button.setToolTip("最多支持 64 个步骤，请移除一个步骤后再自动调节。")
+            self.auto_button.setToolTip("最多支持 64 个步骤，请为缺少的基础调节组腾出位置后重试。")
         else:
-            self.auto_button.setToolTip("分析当前效果并生成可微调的色阶；末尾已有自动色阶时重新计算。支持撤销。")
+            self.auto_button.setToolTip("综合调整亮度、反差和颜色，并将结果填入下方基础编辑组。重复点击重新计算，支持一次撤销。")
 
     def _auto_adjust(self):
         self._operation_message = ""
-        if self.controller.auto_adjust(self.auto_mode.currentData(), source=self.current_photo_path()):
+        if self.controller.auto_adjust(source=self.current_photo_path()):
             self._operation_message = "正在分析照片并计算自动调节…"
             self._update_state()
 
@@ -178,9 +169,13 @@ class ImageInfoTabPanel_ColorAdjust(ImageInfoTabPanel_PhotoEdit):
         if operation != "auto-adjust":
             return super()._operation_finished(source, operation, value)
         if self._matches(source):
-            self._operation_message = (AUTO_MODES[value.mode] + "已完成，可在对应色阶组继续微调。"
+            self._operation_message = ("自动调节已完成，下方各组已显示参数，可继续微调。"
                                        if value.changed else "当前照片无需进一步自动调节。")
             self._update_state()
+            for group in self.groups:
+                if group.step_id in value.step_ids:
+                    group.set_expanded(True)
+                    group.form.show_auto_values()
             if value.changed:
                 self.editing_started.emit(source)
 

@@ -222,6 +222,7 @@ class AdjustmentForm(ParameterForm):
             self.check(body,"使用旧版算法","legacy")
         elif kind in {"levels","curves"}:
             channel = self.choice(body,"通道",(("master","RGB"),(0,"红"),(1,"绿"),(2,"蓝")))
+            self.channel_selector = channel
             def prefix():
                 return ("master",) if channel.currentData()=="master" else ("per_channel",channel.currentData())
             if kind=="curves":
@@ -239,6 +240,7 @@ class AdjustmentForm(ParameterForm):
                 self.scalar(body,label,lambda i=i:("ranges",channel.currentData(),"bounds",i),-360,720)
         elif kind=="colorBalance":
             channel = self.choice(body,"范围",(("shadows","阴影"),("midtones","中间调"),("highlights","高光")))
+            self.channel_selector = channel
             for i,label in enumerate(("青 ↔ 红","洋红 ↔ 绿","黄 ↔ 蓝")):
                 self.scalar(body,label,lambda i=i:(channel.currentData(),i))
             self.check(body,"保留明度","preserve_luminosity")
@@ -305,6 +307,13 @@ class AdjustmentForm(ParameterForm):
                 self.scalar(body,label,lambda i=i:("adjustments",channel.currentData(),i))
             self.check(body,"相对调整（关闭为绝对）","relative")
         self.refresh()
+
+    def show_auto_values(self):
+        """Expose the automatically estimated channel without editing the recipe."""
+        if self.kind in {"levels", "curves", "colorBalance"}:
+            value = "midtones" if self.kind == "colorBalance" else "master"
+            self.channel_selector.setCurrentIndex(self.channel_selector.findData(value))
+            self.refresh()
 
     def _gradient(self,body):
         stop = QComboBox(self)

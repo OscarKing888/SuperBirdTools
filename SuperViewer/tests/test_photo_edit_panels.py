@@ -74,30 +74,60 @@ def group_for(colors, kind):
 def test_auto_adjust_keyboard_busy_state_result_and_shared_undo(panels, monkeypatch):
     import threading
     from app_common.photo_edit.auto_adjust import AutoAdjustmentResult
+    from app_common.photo_edit.catalog import adjustment_defaults
     controller, camera, colors = panels
     started, release = threading.Event(), threading.Event()
     def analyze(snapshot, mode, **kwargs):
+        assert mode == "all"
         started.set()
         assert release.wait(4)
         recipe = snapshot.current.recipe.validated()
-        recipe.steps.append(AdjustmentStep("levels", id="auto-levels-" + mode + "-test"))
-        return AutoAdjustmentResult(recipe.validated(), mode, True)
+        values = {
+            "brightnessContrast": dict(brightness=14, contrast=6),
+            "levels": dict(master=dict(in_black=.13, in_white=.88, gamma=1.06, out_black=0, out_white=1)),
+            "curves": dict(master=[dict(input=0, output=0), dict(input=.5, output=.57), dict(input=1, output=1)]),
+            "exposure": dict(exposure=.25, gamma=1.04),
+            "vibrance": dict(vibrance=18),
+            "colorBalance": dict(midtones=[-8, 0, 9]),
+        }
+        for kind, changes in values.items():
+            params = adjustment_defaults(kind)
+            params.update(changes)
+            recipe.steps.append(AdjustmentStep(kind, params, id="auto-basic-" + kind))
+        return AutoAdjustmentResult(recipe.validated(), mode, True, tuple(step.id for step in recipe.steps))
     monkeypatch.setattr("app_common.photo_edit.auto_adjust.prepare_auto_adjustment", analyze)
     colors.show()
-    colors.auto_mode.setCurrentIndex(colors.auto_mode.findData("color"))
+    assert colors.auto_button.text() == "一键自动调节"
+    assert not hasattr(colors, "auto_mode")
+    colors.set_groups_expanded(False)
+    group_for(colors, "levels").form.channel_selector.setCurrentIndex(2)
     signals = QSignalSpy(colors.editing_started)
-    assert not controller.session().dirty  # Choosing a mode never edits.
+    assert not controller.session().dirty
     try:
         colors.auto_button.setFocus()
         QTest.keyClick(colors.auto_button, Qt.Key.Key_Space)
         assert wait_for(started.is_set)
-        assert not colors.auto_button.isEnabled() and not colors.auto_mode.isEnabled()
+        assert not colors.auto_button.isEnabled()
     finally:
         release.set()
     assert wait_for(lambda: not controller._operations)
     assert colors.auto_button.isEnabled() and len(signals) == 1
     levels = group_for(colors, "levels")
-    assert "自动颜色" in levels.title() and levels.enabled.isChecked()
+    assert "自动" in levels.title() and levels.enabled.isChecked()
+    for step in controller.session().state.current.recipe.steps:
+        group = group_for(colors, step.kind)
+        assert group.is_expanded() and group.form.isEnabled()
+        assert group.form.values == step.params
+    assert levels.form.channel_selector.currentData() == "master"
+    assert group_for(colors, "colorBalance").form.channel_selector.currentData() == "midtones"
+    def displayed(kind, label):
+        return next(editor.value() for editor in group_for(colors, kind).form.findChildren(ScalarEditor)
+                    if editor.accessibleName() == label)
+    assert displayed("brightnessContrast", "亮度") == 14
+    assert displayed("levels", "输入黑场") == .13
+    assert displayed("exposure", "曝光") == .25
+    assert displayed("vibrance", "自然饱和度") == 18
+    assert displayed("colorBalance", "青 ↔ 红") == -8
     assert "继续微调" in colors.status.text()
     recipe = controller.session().state.current.recipe.to_dict()
     for _ in range(3):
@@ -108,6 +138,10 @@ def test_auto_adjust_keyboard_busy_state_result_and_shared_undo(panels, monkeypa
     assert controller.session().state.current.recipe.is_identity()
     colors.redo_button.click()
     assert controller.session().state.current.recipe.to_dict() == recipe
+    editor = next(editor for editor in group_for(colors, "brightnessContrast").form.findChildren(ScalarEditor)
+                  if editor.accessibleName() == "亮度")
+    editor.spin.setValue(17)
+    assert controller.session().state.current.recipe.steps[0].params["brightness"] == 17
     controller.begin_file_operation()
     assert not colors.auto_button.isEnabled()
     controller.end_file_operation()

@@ -332,10 +332,11 @@ def test_real_auto_adjust_undo_redo_and_save(photo, controllers):
     controller = controllers()
     controller.select(photo)
     assert wait_for(lambda: controller.session() is not None)
-    assert controller.auto_adjust("color")
+    assert controller.auto_adjust()
     assert wait_for(lambda: not controller._operations)
     recipe = controller.session().state.current.recipe.validated()
-    assert auto_step_mode(recipe.steps[-1]) == "color"
+    assert {"brightnessContrast", "levels"} <= {step.kind for step in recipe.steps}
+    assert all(auto_step_mode(step) == "all" for step in recipe.steps)
     controller.undo()
     assert controller.session().state.current.recipe.is_identity()
     assert not controller.session().history.can_undo
@@ -344,7 +345,7 @@ def test_real_auto_adjust_undo_redo_and_save(photo, controllers):
     controller.flush()
     assert wait_for(lambda: not controller.session().dirty)
     assert RecipeStore().load(photo).current.recipe == recipe
-    assert controller.auto_adjust("color")
+    assert controller.auto_adjust()
     assert wait_for(lambda: not controller._operations)
     assert not controller.session().dirty
     controller.undo()

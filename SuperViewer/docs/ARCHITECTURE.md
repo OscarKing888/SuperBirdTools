@@ -521,10 +521,12 @@ CLI：根 `.venv` 执行 `python -m SuperViewer.superviewer.image_png_export <�
   不改已有顺序或重复步骤；首次启用按可见位置插入。刷新按步骤身份复用表单，折叠仅为会话视图状态。
   标题“＋”菜单经 `add_step_after()` 添加独立步骤；未配置锚点以禁用步骤保留，一次事务可撤销。
   新组定位由面板拥有的单次计时器等待布局完成，按照片、底图与步骤身份拒绝失效定位。
-- 调色页顶部自动模式／按钮调用 `PhotoEditController.auto_adjust()`，复用 `run_operation()` 的
+- 调色页顶部单个“一键自动调节”按钮调用 `PhotoEditController.auto_adjust()`，复用 `run_operation()` 的
   后台生命周期、源照片快照及 serial 校验。共享 `app_common.photo_edit.auto_adjust` 的
-  `prepare_auto_adjustment()` 从当前代理估计普通色阶，保留已有步骤并重算末尾自动色阶；
-  `auto_levels()` 为独立像素分析 API。结果单次撤销并走既有 XMP 保存、编辑预览与完整导出；
+  `prepare_auto_adjustment(mode="all")` 按实际步骤顺序渲染前缀代理，调用 `auto_basic_parameters()`
+  重算六类基础调节的首个组，原位保留身份，缺失组按面板次序插入；重复步骤和风格化效果保留。
+  `AdjustmentForm.show_auto_values()` 只切换可见参数通道，各组绑定同一配方并在成功后展开。
+  旧 `auto_levels()`／CLI 单模式保留兼容。结果单次撤销并走既有 XMP 保存、编辑预览与完整导出；
   `python -m app_common.photo_edit auto-adjust` 共用该 API，回归见共享 `test_photo_edit_auto_adjust.py`。
 - `photo_edit_preview.PhotoEditPreviewBridge`：A/B 独立请求、900 px 代理到完整结果、同底图前后比较。
   `PreviewPanel` 的编辑来源分支仍遵守原有快速导航／请求令牌／几何及首次适配合同。
