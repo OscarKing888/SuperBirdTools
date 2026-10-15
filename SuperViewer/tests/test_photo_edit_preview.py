@@ -136,7 +136,8 @@ def test_edit_preview_keeps_original_dimensions_and_view_through_edits_and_befor
     assert sizes and set(sizes)=={dimensions}
 
 
-def test_before_uses_original_loader_without_edit_renderer_or_denoised_input(window,tmp_path,monkeypatch):
+@pytest.mark.parametrize("reuse_loaded_original", [False, True])
+def test_before_uses_original_loader_without_edit_renderer_or_denoised_input(window,tmp_path,monkeypatch,reuse_loaded_original):
     from image_denoise.export import _prepare_sidecar
     from SuperViewer.superviewer import preview_panel as module
     path,denoised = tmp_path/"原图.png",tmp_path/"降噪.png"
@@ -146,6 +147,8 @@ def test_before_uses_original_loader_without_edit_renderer_or_denoised_input(win
     select(window,path)
     preview = window.preview_panel
     expected = preview.canvas._source_pixmap.toImage()
+    if not reuse_loaded_original:
+        preview._original_preview = None
     window.image_info_tabs.setCurrentWidget(window.image_info_panel)
     _wait_until(lambda:not window._photo_edit._workers)
     # Even a selected denoised input with unavailable editing/LUT support must show the original.
@@ -163,7 +166,7 @@ def test_before_uses_original_loader_without_edit_renderer_or_denoised_input(win
     preview.set_edit_before(True)
     preview.set_preview_source_mode("edited")
     _wait_until(lambda:preview._full_preview_loaded)
-    assert reads==[str(path)] and not renders
+    assert reads==([] if reuse_loaded_original else [str(path)]) and not renders
     assert preview.canvas._source_pixmap.toImage()==expected
     assert "原图" in preview._preview_note
     token = preview._preview_request_token
