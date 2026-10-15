@@ -528,7 +528,9 @@ CLI：根 `.venv` 执行 `python -m SuperViewer.superviewer.image_png_export <�
   `AdjustmentForm.show_auto_values()` 只切换可见参数通道，各组绑定同一配方并在成功后展开。
   旧 `auto_levels()`／CLI 单模式保留兼容。结果单次撤销并走既有 XMP 保存、编辑预览与完整导出；
   `python -m app_common.photo_edit auto-adjust` 共用该 API，回归见共享 `test_photo_edit_auto_adjust.py`。
-- `photo_edit_preview.PhotoEditPreviewBridge`：A/B 独立请求、900 px 代理到完整结果、同底图前后比较。
+- `photo_edit_preview.PhotoEditPreviewBridge`：A/B 独立请求、直接后台渲染底图完整尺寸、同底图原尺寸前后比较。
+  进入编辑模式保留当前画面与视野；参数变动使用既有去抖／取消机制，完成后直接替换，
+  不向画布提交 900 px 代理。直方图与自动分析仍可使用有界代理。
   `PreviewPanel` 的编辑来源分支仍遵守原有快速导航／请求令牌／几何及首次适配合同。
   `ViewerABPreview` 添加第四个源模式“编辑效果”和每侧独立的前后按钮。
 - `app_common.photo_edit.storage.RecipeStore` 经 `PhotoMetaDataXMP` 原子合并私有 XMP 字段；完整

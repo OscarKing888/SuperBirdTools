@@ -23,7 +23,7 @@ def rendered(preview):
 def test_a_b_share_recipe_but_before_and_view_modes_are_independent(window,tmp_path):
     pytest.importorskip("app_common.photo_edit._native")
     path = tmp_path/"同一底图.png"
-    Image.new("RGB",(96,72),(70,100,130)).save(path)
+    Image.new("RGB",(1440,960),(70,100,130)).save(path)
     select(window,path)
     window.ab_preview.enabled.setChecked(True)
     for preview in (window.preview_a,window.preview_panel):
@@ -38,33 +38,97 @@ def test_a_b_share_recipe_but_before_and_view_modes_are_independent(window,tmp_p
     window.ab_preview.b_panel.before_button.setChecked(True)
     _wait_until(lambda:window.preview_panel._full_preview_loaded and rendered(window.preview_panel)==original)
     assert rendered(window.preview_a)==adjusted
+    assert all(p.get_preview_image_size()==(1440,960) for p in (window.preview_a,window.preview_panel))
     assert window.preview_panel.edit_before() and not window.preview_a.edit_before()
     window.ab_preview.activate("a")
     assert window.camera_raw_panel._target_name=="A"
     assert window._photo_edit.session().state.current.recipe.camera["exposure"]==1
 
 
-def test_edited_proxy_upgrades_to_full_and_old_result_is_rejected(window,tmp_path):
+@pytest.mark.parametrize("keep_view_on_switch",[False,True])
+def test_edit_preview_keeps_original_dimensions_and_view_through_edits_and_before(
+        window,tmp_path,monkeypatch,keep_view_on_switch):
     pytest.importorskip("app_common.photo_edit._native")
     path = tmp_path/"大尺寸.png"
-    Image.new("RGB",(2400,120),(70,100,130)).save(path)
+    dimensions = (1800,1200)
+    Image.new("RGB",dimensions,(70,100,130)).save(path)
     select(window,path)
     preview = window.preview_panel
+    preview._keep_view_on_switch = keep_view_on_switch
+    preview.canvas.set_auto_focus_center(False)
+    preview.set_display_scale_percent(100)
+    preview.canvas.apply_viewport_state((preview.canvas.viewport_state()[0],(.6,.4)))
+    before_state = preview.canvas.viewport_state()
+    original = rendered(preview)
     sizes = []
     preview.canvas.viewport_content_changed.connect(lambda:sizes.append(preview.get_preview_image_size()))
+    requests = []
+    request_render = window._photo_edit.request_render
+    def tracked(source,consumer,**kwargs):
+        if consumer is preview:
+            requests.append(kwargs)
+        return request_render(source,consumer,**kwargs)
+    monkeypatch.setattr(window._photo_edit,"request_render",tracked)
+
+    def assert_view():
+        assert preview.get_preview_image_size()==dimensions
+        assert preview.canvas.current_display_scale_percent()==pytest.approx(100)
+        state = preview.canvas.viewport_state()
+        assert state[0]==pytest.approx(before_state[0])
+        assert state[1]==pytest.approx(before_state[1])
+
     preview.set_preview_source_mode("edited")
-    _wait_until(lambda:preview.get_preview_image_size()==(900,45))
+    # Entering edit mode must retain the original frame, even with switch-view reset enabled.
+    assert_view()
     assert not preview._full_preview_loaded and preview.source_pixmap_for_path(str(path)) is None
-    old_token = preview._preview_request_token
-    before_state = preview.canvas.viewport_state()
     _wait_until(lambda:preview._full_preview_loaded)
-    assert preview.get_preview_image_size()==(2400,120)
+    assert_view()
     assert preview.source_pixmap_for_path(str(path)) is not None
-    assert (900,45) in sizes and (2400,120) in sizes
-    assert preview.canvas.viewport_state()[0]==pytest.approx(before_state[0],rel=.02)
+
+    # Each slider update uses native-size pixels; the previous frame stays visible while pending.
+    for exposure in (.3,.6):
+        previous = rendered(preview)
+        recipe = window._photo_edit.session().state.current.recipe.validated()
+        recipe.camera["exposure"] = exposure
+        window._photo_edit.edit(recipe,commit=False)
+        assert_view()
+        assert rendered(preview)==previous
+        _wait_until(lambda:preview._full_preview_loaded and rendered(preview)>previous)
+        assert_view()
+    window._photo_edit.finish_gesture()
+    old_token = preview._preview_request_token
     preview.set_edit_before(True)
     image = preview.canvas._source_pixmap.toImage()
     assert not preview.apply_edited_preview(old_token,str(path),image,full=True)
+    _wait_until(lambda:preview._full_preview_loaded and rendered(preview)==original)
+    assert_view()
+    assert requests and all(request["full"] for request in requests)
+    assert requests[-1]["before"]
+    assert sizes and set(sizes)=={dimensions}
+
+
+def test_full_edit_render_failure_retains_previous_frame_without_proxy_fallback(window,tmp_path,monkeypatch):
+    path = tmp_path/"保留完整画面.png"
+    Image.new("RGB",(1800,1200),(70,100,130)).save(path)
+    select(window,path)
+    preview = window.preview_panel
+    preview.set_display_scale_percent(100)
+    before_state = preview.canvas.viewport_state()
+    original = preview.canvas._source_pixmap.toImage()
+    calls = []
+    def fail(_snapshot,**kwargs):
+        calls.append(kwargs["proxy"])
+        raise ValueError("完整渲染内存不足")
+    # Hide the histogram consumer so these are only the viewport's requests.
+    window.image_info_tabs.setCurrentWidget(window.image_info_panel)
+    _wait_until(lambda:not window._photo_edit._workers)
+    monkeypatch.setattr(window._photo_edit,"renderer",fail)
+    preview.set_preview_source_mode("edited")
+    _wait_until(lambda:"编辑预览失败" in preview._preview_note)
+    assert calls==[False]
+    assert preview.canvas._source_pixmap.toImage()==original
+    assert preview.canvas.viewport_state()==before_state
+    assert not preview._full_preview_loaded
 
 
 def test_held_navigation_blocks_edit_render_until_final_committed_selection(window,tmp_path,monkeypatch):

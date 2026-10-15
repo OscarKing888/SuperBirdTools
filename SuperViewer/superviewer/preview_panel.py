@@ -673,6 +673,8 @@ class PreviewPanel(QWidget):
         self._preview_request_token += 1
         self._full_preview_loaded = False
         self._cancel_pending_full_preview()
+        self._preview_note = "正在生成调整前预览…" if self._edit_before else "正在更新编辑预览…"
+        self._refresh_preview_status_text()
         self._full_preview_timer.start(_FULL_PREVIEW_DELAY_MS)
 
     def apply_edited_preview(self, token, path, qimg, *, full=False, camera_crop=None):
@@ -742,12 +744,17 @@ class PreviewPanel(QWidget):
                 self._cancel_pending_full_preview()
                 self.source_changed.emit()
                 return
-            focus_box = self._source_focus_box
-            bird_box = self._source_bird_box
-            self._current_path = None
-            self.set_image(path, load_full=True, quick_size=self._last_quick_size)
-            self.set_focus_box(focus_box)
-            self.set_bird_box(bird_box)
+            if mode == "edited" and self._is_current_path(path) and self._has_canvas_pixmap():
+                # 同一照片进入调色时保留当前像素和视野，完整编辑结果就绪后直接替换。
+                # 不能重新加载缩略图，否则 100% 查看细节时画面会突然缩小。
+                self.refresh_edited_preview()
+            else:
+                focus_box = self._source_focus_box
+                bird_box = self._source_bird_box
+                self._current_path = None
+                self.set_image(path, load_full=True, quick_size=self._last_quick_size)
+                self.set_focus_box(focus_box)
+                self.set_bird_box(bird_box)
         self.source_changed.emit()
 
     def refresh_denoised_preview(self, source: str) -> None:

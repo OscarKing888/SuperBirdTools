@@ -59,7 +59,7 @@ class ImageInfoTabPanel_PhotoEdit(ImageInfoTabPanel):
         body.setContentsMargins(0,0,0,0)
         self.histogram = HistogramView(self.content)
         body.addWidget(self.histogram)
-        self.preview_note = QLabel("交互预览；细节和颗粒以完整分辨率结果为准。",self.content)
+        self.preview_note = QLabel("编辑预览使用底图完整分辨率，可放大至 100% 检查细节。",self.content)
         self.preview_note.setWordWrap(True)
         body.addWidget(self.preview_note)
         self.create_editor(body)
