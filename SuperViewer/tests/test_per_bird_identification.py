@@ -136,6 +136,62 @@ def test_source_formats_are_decoded_once_and_sent_as_jpg(tmp_path, monkeypatch, 
     assert json.loads(metadata[core.INFO_FIELD])["source_extension"] == extension.lower()
 
 
+@pytest.mark.parametrize("image_source", ["raw", "jpeg"])
+@pytest.mark.parametrize("orientation", [1, 3, 6, 8])
+@pytest.mark.parametrize("bit_depth", [8, 10])
+def test_heif_rotation_crop_pixels_and_saved_coordinates(tmp_path, monkeypatch, image_source, orientation, bit_depth):
+    """真实 HEIF 容器旋转：不同色块防止尺寸正确、实际裁错区域的假通过。"""
+    pillow_heif = pytest.importorskip("pillow_heif")
+    source = tmp_path / "旋转鸟片.HIF"
+    pixels = Image.new("RGB", (320, 240))
+    for color, box in (("red", (0, 0, 160, 120)), ("lime", (160, 0, 320, 120)),
+                       ("blue", (0, 120, 160, 240)), ("yellow", (160, 120, 320, 240))):
+        pixels.paste(color, box)
+    exif = Image.Exif()
+    exif[274] = orientation
+    # 从未旋转的像素编码；容器负责方向，不预先把 EXIF 旋转烘焙进测试图。
+    data = pixels.tobytes() if bit_depth == 8 else (np.asarray(pixels).astype("<u2") * 257).tobytes()
+    pillow_heif.from_bytes("RGB" if bit_depth == 8 else "RGB;16", pixels.size, data).save(
+        source, quality=95, exif=exif.tobytes())
+    pillow_heif.register_heif_opener()
+    with Image.open(source) as encoded:
+        assert encoded.info["bit_depth"] == bit_depth
+    original = source.read_bytes()
+    size = (240, 320) if orientation in (6, 8) else (320, 240)
+    expected = {1: (255, 0, 0), 3: (255, 255, 0), 6: (0, 0, 255), 8: (0, 255, 0)}[orientation]
+    analyzer = Analyzer([(0, 0, size[0] // 2, size[1] // 2)])
+    # 使用正式参数选择的加载器；HIF 的 raw/jpeg 来源都应读取完整 HIF 像素。
+    load = core.make_analyzer({"image_source": image_source}).image_loader()
+    decoded, requested = [], []
+
+    def decode(path):
+        decoded.append(path)
+        analyzer.image = load(path)
+        assert analyzer.image.rgb8.shape[:2] == size[::-1]
+        return analyzer.image
+
+    def recognize(path):
+        requested.append(Path(path))
+        with Image.open(path) as crop:
+            assert crop.format == "JPEG" and crop.mode == "RGB"
+            assert crop.size == (size[0] // 2, size[1] // 2)
+            assert crop.getexif().get(274, 1) == 1
+            assert crop.getpixel((30, 30)) == pytest.approx(expected, abs=5)
+        return response()
+
+    monkeypatch.setattr(analyzer, "image_loader", lambda: decode)
+    result = core.identify_individuals(source, client(monkeypatch, recognize), analyzer)
+    assert result.status == "success", result.message
+    assert decoded == [str(source)] and analyzer.calls == 1 and len(requested) == 1
+    metadata = PhotoMetaDataXMP().read(str(source))
+    bird = core.read_individuals(metadata)[0]
+    assert bird["cn_name"] == "白鹭" and bird["box"] == [0, 0, .5, .5]
+    assert bird["box_px"] == bird["crop_px"] == [0, 0, size[0] // 2, size[1] // 2]
+    assert json.loads(metadata[core.INFO_FIELD])["image_size"] == list(size)
+    assert source.read_bytes() == original
+    assert not requested[0].parent.exists()
+
+
 @pytest.mark.parametrize("filename, message", [
     ("DSC09382.HIF", "找不到照片原文件"),
     ("unsupported.txt", "不支持的照片格式"),
