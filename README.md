@@ -133,6 +133,8 @@ GUI 测试默认以 Qt `offscreen` 运行，不在桌面弹出窗口：根目录
 
 推荐的全量打包入口：
 
+首次构建需要 [照片编辑原生依赖](docs/photo_edit.md#源码构建与上游更新)：Rust 1.95.0、平台 C/C++ 工具与 `maturin==1.9.6`。根目录 `init_dev.py` 安装 Python 构建依赖；已有环境可用 `.venv/bin/python3 -m pip install -r build_tools/requirements-photo-edit.txt` 补齐（Windows 使用 `.venv\Scripts\python.exe`），并通过 rustup 安装固定 Rust 工具链。
+
 macOS：
 
 ```bash

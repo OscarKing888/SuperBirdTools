@@ -41,9 +41,10 @@ def _reexec_if_needed(target_python: Path) -> None:
     raise SystemExit(subprocess.run(cmd, check=False).returncode)
 
 
-def _run(cmd: list[str], *, cwd: Path) -> None:
+def _run(cmd: list[str], *, cwd: Path, dry_run: bool = False) -> None:
     print("$", " ".join(cmd))
-    subprocess.run(cmd, cwd=str(cwd), check=True)
+    if not dry_run:
+        subprocess.run(cmd, cwd=str(cwd), check=True)
 
 
 def _app_init_scripts(repo_root: Path) -> list[Path]:
@@ -65,6 +66,13 @@ def main() -> None:
     repo_python = _ensure_repo_venv(repo_root, dry_run=args.dry_run)
     if not args.dry_run:
         _reexec_if_needed(repo_python)
+
+    # 原生照片编辑模块由打包入口编译，构建依赖也安装到同一个共享虚拟环境。
+    _run(
+        [str(repo_python), "-m", "pip", "install", "-r",
+         str(repo_root / "build_tools" / "requirements-photo-edit.txt")],
+        cwd=repo_root, dry_run=args.dry_run,
+    )
 
     scripts = _app_init_scripts(repo_root)
     for script_path in scripts:

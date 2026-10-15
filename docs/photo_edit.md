@@ -93,6 +93,8 @@ output = export_recipe(state, ImageOutputOptions())
 
 安装版自带原生组件，不需要 Rust。源码开发需 Rust 1.95.0、平台 C/C++ 构建工具及共享虚拟环境中的 `maturin==1.9.6`：
 
+根目录 `init_dev.py` 会安装固定的 Python 原生构建依赖；已有 `.venv` 可只执行下方的 pip 命令补齐。Rust 工具链仍需单独准备。打包仅在原生二进制缺失或过期时检查依赖，错误会给出当前构建解释器对应的安装命令，不在构建中自动安装工具链。入口会查找 PATH 或 `CARGO_HOME/bin`（默认 `~/.cargo/bin`）中的 rustup，再只为编译子进程选择固定工具链，兼容系统 PATH 中已有旧版 Rust 的情况。
+
 ```powershell
 rustup toolchain install 1.95.0 --profile minimal
 .\.venv\Scripts\python.exe -m pip install -r build_tools/requirements-photo-edit.txt
