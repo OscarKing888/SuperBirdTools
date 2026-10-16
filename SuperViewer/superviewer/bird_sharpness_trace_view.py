@@ -427,7 +427,12 @@ class BirdSharpnessTraceDialog(QDialog):
             self.source_combo.setItemData(self.source_combo.count() - 1, tip, _TOOLTIP_ROLE)
         self.source_combo.setCurrentIndex(max(0, self.source_combo.findData(image_source)))
         self.source_combo.currentIndexChanged.connect(self._on_source_changed)
+        self.add_model_btn = QPushButton("＋ 添加模型（实验）", self)
+        self.add_model_btn.setAutoDefault(False)
+        self.add_model_btn.setToolTip("在右侧模型链末尾添加实验窗口，可选择 YOLO / SAM 模型并串联结果；计算完成后可用")
+        self.add_model_btn.setEnabled(False)
         top = QHBoxLayout()
+        top.addWidget(self.add_model_btn)
         top.addStretch(1)
         top.addWidget(QLabel("图像：", self))
         top.addWidget(self.source_combo)
@@ -440,6 +445,9 @@ class BirdSharpnessTraceDialog(QDialog):
         root.addLayout(top)
         root.addWidget(self.stack)
         self._build_content()
+        self.add_model_btn.clicked.connect(lambda: self.preview_host.add_action.trigger())
+        self.stack.currentChanged.connect(
+            lambda _index: self.add_model_btn.setEnabled(self.stack.currentWidget() is self.content))
 
     # ── layout ────────────────────────────────────────────────────────────
     def _build_content(self) -> None:
@@ -522,7 +530,7 @@ class BirdSharpnessTraceDialog(QDialog):
         body = QSplitter(_HORIZONTAL, self.content)
         body.addWidget(self.views)
         body.addWidget(self.side_tabs)
-        # Model chain (参数 tab 「预览」 / 「＋ 添加窗口」): windows side by side at the right edge.
+        # Model chain (top 「添加模型」 / 参数 tab 「预览」): windows side by side at the right edge.
         from .model_preview import ModelChainHost
 
         self.preview_host = ModelChainHost(self._preview_image, self._preview_boxes,

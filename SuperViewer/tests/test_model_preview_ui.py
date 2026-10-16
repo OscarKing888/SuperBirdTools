@@ -120,6 +120,48 @@ def test_preview_buttons_live_only_where_there_is_a_photo(dialog) -> None:
     settings.deleteLater()
 
 
+def test_add_model_entry_opens_and_reopens_chain_from_steps(dialog) -> None:
+    """An empty/closed chain is reachable without discovering 参数 → 预览 first."""
+    from PyQt6.QtCore import Qt
+    from PyQt6.QtTest import QTest
+
+    from bird_sharpness.trace import AnalysisTrace, TraceStep
+
+    d, calls, _fail = dialog
+    host = d.preview_host
+    trace = AnalysisTrace(d.path, common=[TraceStep("decode", "解码", "", d._preview_image().rgb8, "full")],
+                          result=SimpleNamespace(score=None, sigma=None, region="bird", bird_count=2,
+                                                 elapsed_s=0, birds=d.trace.result.birds))
+    d.set_loading()
+    assert d.add_model_btn.isVisible() and not d.add_model_btn.isEnabled()
+    d.add_model_btn.click()
+    assert host.stages == [] and calls["detector"] == []
+    d.set_error("无法解码")
+    assert d.add_model_btn.isVisible() and not d.add_model_btn.isEnabled()
+    d.set_trace(trace)
+    assert _wait(lambda: d.add_model_btn.isEnabled())
+    assert d.side_tabs.currentIndex() == 0 and host.isHidden()
+    params = d.selected_params()
+    d.add_model_btn.click()
+    assert _idle(host) and len(host.stages) == 1 and host.isVisible()
+    assert host.stages[0].kind == DETECTOR and len(calls["detector"]) == 1
+    assert host.image is d.image_cache.latest(d.image_source)
+    d.add_model_btn.click()
+    assert _idle(host) and len(host.stages) == 2
+    assert host.stages[1].kind == SAM and host.stages[1].input == INPUT_PREVIOUS
+    host.close_all_action.trigger()
+    assert host.isHidden() and not host.stages and d.add_model_btn.isVisible()
+    d.add_model_btn.setFocus()
+    QTest.keyClick(d.add_model_btn, Qt.Key.Key_Space)
+    assert _idle(host) and len(host.stages) == 1 and host.isVisible()
+    assert d.selected_params() == params and d.side_tabs.currentIndex() == 0
+    d.set_loading()
+    d.add_model_btn.click()
+    assert not d.add_model_btn.isEnabled() and len(host.stages) == 1
+    d.set_trace(trace)
+    assert d.add_model_btn.isEnabled()
+
+
 def test_measured_pixels_and_grey_fill_are_form_options(dialog) -> None:
     from SuperViewer.superviewer.bird_sharpness_params_form import params_summary
 

@@ -150,6 +150,12 @@ def test_step_chips_remain_unclipped_after_bird_switch(monkeypatch, dark, font_s
         assert _wait(lambda: dialog.view_a._has_image and chips_fit())
         for width, height in ((1320, 840), (dialog.minimumSizeHint().width(), 640)):
             dialog.resize(width, height)
+            _APP.processEvents()
+            entry = dialog.add_model_btn
+            assert entry.isVisible() and entry.isEnabled()
+            assert entry.width() >= entry.sizeHint().width() and entry.height() >= entry.sizeHint().height()
+            assert dialog.rect().contains(QRect(entry.mapTo(dialog, QPoint()), entry.size()))
+            assert entry.geometry().right() < dialog.source_combo.geometry().left()
             for selection in (1, 0, 4, 0, 2, 0):
                 dialog.bird_combo.setCurrentIndex(selection)
                 assert _wait(chips_fit, timeout=1.0), "切鸟后步骤按钮被压缩或超出滚动视口"
