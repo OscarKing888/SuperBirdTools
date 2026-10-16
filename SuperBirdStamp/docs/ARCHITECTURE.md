@@ -247,6 +247,8 @@ RAW 源图的去抖动分析、成片预览和导出统一优先读取长边至�
 
 保留模式使用输出目录下的 `birdstamp_export_cache/<类型>/<桶>/frames` 与 manifest；临时模式在输出目录创建独立临时目录。`dirty_path_keys` 强制相关源图重渲染，manifest 验证命中条件。终端导出类型不进入源帧签名。视频两级缓存用 `ThrottledFrameManifestWriter` 节流写 manifest（每 32 帧或 1 秒一次），并在 `finally` 中 flush，完成、取消与失败时已完成的帧都会记录。GIF 的 `_ensure_gif_frame_cache` 也使用渲染源帧缓存；视频由 `_ensure_source_frame_cache`、`_ensure_video_frame_cache` 分两步准备。缓存帧 manifest 记录其来源导出图；当前最佳导出图（PNG 优先）变化或消失时重建该帧。源 PNG 已符合视频尺寸时原子复制完整文件，保持像素和 EXIF，免去第二次编码。
 
+`reusable_frame_path` 同时校验缓存 PNG 自身的路径、大小和修改时间（`file_signature`），被替换、截断或删除时只重建该帧。旧 manifest 没有此字段时先用 Pillow 校验文件结构，再补入指纹并随清单保存；不提升源帧算法版本，不因升级而把正常旧缓存的 HIF 全部重新解码。清单版本字段损坏或记录指向桶外文件均视为未命中；热缓存只做文件状态检查，不逐帧重读 PNG。回归 [test_gif_frame_cache.py](../tests/test_gif_frame_cache.py) 覆盖完整两次 GIF 导出、改文件名/FPS/重复遍/缩放版本仍零次原图解码，逐帧源文件/XMP/设置/dirty 失效、旧清单升级、损坏缓存修复，以及 GIF 与视频共用源帧。跨次复用需要开启“保留单帧图片”并使用同一输出目录；关闭时临时帧在导出结束后清理。日志 `gif frame cache` 记录命中帧数、待准备帧数、可复用导出图候选数及缓存目录。此缓存保存的是渲染后的 RGB PNG，后续 GIF 的调色板量化和编码仍按本次参数执行。
+
 [export_video](../birdstamp/export_stage/core.py) 在每个缓存目录创建后立即接管所有权，不能等准备函数成功返回后才记录目录。成功时先在工作目录编码，再用 `os.replace` 放到最终目标；普通异常清理未完成视频，并按 `preserve_temp_files` 决定是否保留帧缓存。即使异常发生在首帧或 manifest 准备期间，临时目录也有清理责任方。
 
 取消与普通失败的语义不同：取消会保留已完成帧，并通过 [VideoExportCancelledError](../birdstamp/export_stage/video_export_cancelled_error.py) 返回保留目录；已经有规范化视频帧时尝试生成部分视频，只有源帧时报告源帧目录。调用方应展示恢复路径。创建线程池的工作线程在 `finally` 中负责停止提交和等待池结束。

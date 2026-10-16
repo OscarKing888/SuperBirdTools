@@ -554,6 +554,9 @@ class _BirdStampExporterMixin:
             if candidate is not None:
                 reuse_sources[target] = candidate
 
+        _LOG.info("gif frame cache total=%s cached_frames=%s pending_frames=%s export_candidates=%s "
+                  "persistent=%s cache=%s",
+                  total, reused_count, len(missing_jobs), len(reuse_sources), persistent, cache_plan.cache_dir)
         if reused_count > 0:
             self._set_status(f"GIF 导出复用缓存帧 {reused_count}/{total}")
 
