@@ -158,6 +158,41 @@ def test_auto_adjust_empty_photo_and_step_limit_disable_action(panels):
     assert not colors.auto_button.isEnabled()
 
 
+def test_auto_replaces_old_cast_and_displays_neutral_values_with_one_undo(panels):
+    pytest.importorskip("app_common.photo_edit._native")
+    from app_common.photo_edit.catalog import adjustment_defaults
+    controller, camera, colors = panels
+    recipe = controller.session().state.current.recipe.validated()
+    recipe.steps = [
+        AdjustmentStep("brightnessContrast", dict(brightness=-12, contrast=8)),
+        AdjustmentStep("exposure", dict(exposure=-.5, gamma=1.2)),
+        AdjustmentStep("vibrance", dict(vibrance=15, saturation=4)),
+        AdjustmentStep("colorBalance", dict(midtones=[18, -3, -18])),
+    ]
+    controller.edit(recipe)
+    old = controller.session().state.current.recipe.validated()
+    forms = {group.kind: group.form for group in colors.groups}
+    colors.auto_button.click()
+    assert wait_for(lambda: not controller._operations)
+    result = controller.session().state.current.recipe
+    # 单色测试照片没有自动调节依据，旧的强校色及叠加增强必须清零，并同步实际控件。
+    assert result.is_identity()
+    assert [step.id for step in result.steps] == [step.id for step in old.steps]
+    for step in result.steps:
+        group = group_for(colors, step.kind)
+        assert not step.enabled and step.params == adjustment_defaults(step.kind)
+        assert group.form is forms[step.kind] and group.form.values == step.params
+        assert not group.enabled.isChecked()
+        for editor in group.form.findChildren(ScalarEditor):
+            expected = 1 if editor.accessibleName() == "灰度系数" else 0
+            assert editor.value() == expected
+    camera.undo_button.click()
+    assert controller.session().state.current.recipe == old
+    assert group_for(colors, "colorBalance").form.values["midtones"] == [18, -3, -18]
+    colors.redo_button.click()
+    assert controller.session().state.current.recipe == result
+
+
 def test_flat_groups_start_expanded_without_editing_and_enable_in_display_order(panels):
     controller, _, colors = panels
     session = controller.session()

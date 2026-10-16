@@ -527,10 +527,15 @@ CLI：根 `.venv` 执行 `python -m SuperViewer.superviewer.image_png_export <�
   后台生命周期、源照片快照及 serial 校验。共享 `app_common.photo_edit.auto_adjust` 的
   `prepare_auto_adjustment(mode="all")` 按实际步骤顺序渲染前缀代理，调用 `auto_basic_parameters()`
   重算六类基础调节的首个组，原位保留身份，缺失组按面板次序插入；重复步骤和风格化效果保留。
-  曝光组的中间调 gamma 按实际残差估计，范围 0.5～2；解决已有黑白端点但主体仍偏暗／亮的问题。
+  `_natural_levels()` 合并 RGB 样本取 0.1%／99.9% 共用黑白点，最多两倍反差拉伸；不按通道分别拉伸。
+  `_natural_curve()` 仅在中位亮度偏离 .35～.65 时按剩余偏差生成一条总通道曲线（等效 gamma 0.5～2），
+  保留黑白端点。亮度／对比度、曝光、自然饱和度组保持中性，消除重复增强和固定饱和度目标。
   `_is_backlit()` 从首个自动组的输入识别亮背景／暗主体分离（中位数 > .65、P10 < .25、P90 > .8、
   .3～.65 中间调占比 < 15%）；整轮固定判断，防止前组提亮暗部后，后组又压回。
-  这类场景亮度／对比度保持中性，色阶不减黑位且白点不低于 .98，曲线抬升暗调并锚定中高光，gamma 不低于 1。
+  这类场景色阶不减黑位且白点不低于 .98，曲线抬升暗调并锚定中高光，色彩平衡不介入。
+  `_neutral_color_balance()` 要求 .15～.75 内近灰样本占比、三个亮度区间支持度及色偏一致性均达标，
+  才等权拟合中间调通道 gamma、半量校正并整体限幅至 ±6；排除高光天空、零散色块与混合色偏。
+  首组输入和当前校色组输入都需通过判断，防止明暗变换制造中性色依据；这不是语义白平衡识别。
   `AdjustmentForm.show_auto_values()` 只切换可见参数通道，各组绑定同一配方并在成功后展开。
   旧 `auto_levels()`／CLI 单模式保留兼容。结果单次撤销并走既有 XMP 保存、编辑预览与完整导出；
   `python -m app_common.photo_edit auto-adjust` 共用该 API，回归见共享 `test_photo_edit_auto_adjust.py`。
