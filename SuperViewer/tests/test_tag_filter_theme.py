@@ -48,7 +48,7 @@ def panel_factory(qt_app, tmp_path: Path, monkeypatch):
 
 def _assert_colors(panel, scheme):
     colors = panel_theme_colors(scheme)
-    for button in (panel._tag_filter_menu_button, panel._rarity_filter_button):
+    for button in (panel._tag_filter_menu_button, panel._rarity_filter_button, panel._species_filter_button):
         assert colors.chip_bg in button.styleSheet()
         assert colors.chip_text in button.styleSheet()
         assert "#1769c2" in button.styleSheet()
@@ -74,6 +74,8 @@ def test_palette_changes_restyle_existing_controls_without_data_or_selection_wor
     panel._active_tag_filters = {"飞行", "湿地"}
     panel._tag_filter_partial_match = False
     panel._sync_tag_filter_widgets()
+    panel._active_species_filters = {"白鹭", "苍鹭"}
+    panel._sync_species_filter_widgets()
     path = str(tmp_path / "selected.jpg")
     panel._photo_tag_cache[path] = {"飞行"}
     panel._meta_cache[path] = {"photo_tags": ["飞行"], "comment": "草地"}
@@ -86,7 +88,7 @@ def test_palette_changes_restyle_existing_controls_without_data_or_selection_wor
     selection.blockSignals(False)
     qt_app.processEvents()
 
-    controls = [panel._tag_filter_menu_button, panel._rarity_filter_button]
+    controls = [panel._tag_filter_menu_button, panel._rarity_filter_button, panel._species_filter_button]
     calls = []
     for method in (
         "_rebuild_tag_filter_bar", "_load_tag_config_if_changed", "_sync_tag_filter_widgets",
@@ -101,7 +103,10 @@ def test_palette_changes_restyle_existing_controls_without_data_or_selection_wor
         qt_app.setPalette(build_palette(scheme))
         qt_app.processEvents()
         _assert_colors(panel, scheme)
-        assert controls == [panel._tag_filter_menu_button, panel._rarity_filter_button]
+        assert controls == [panel._tag_filter_menu_button, panel._rarity_filter_button, panel._species_filter_button]
+        assert panel._active_species_filters == {"白鹭", "苍鹭"}
+        assert panel._species_filter_button.text() == "鸟种名(2)"
+        assert panel._species_filter_button.isChecked()
         assert panel._active_tag_filters == {"飞行", "湿地"}
         assert panel._tag_filter_partial_match is False
         assert panel._tag_filter_menu_button.isChecked()
