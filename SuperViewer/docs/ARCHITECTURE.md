@@ -123,6 +123,10 @@ RAW 焦点读取（[`raw_focus_metadata.py`](../../app_common/raw_focus_metadata
 
 快速缓存 provider 是 `SuperViewerTaggedFileListPanel.cached_quick_preview_for_path()`：优先使用当前档位已解码的 `QPixmap`，再用共享 `_resolve_existing_sized_preview_image_path(..., exact_size_only=True)` 读取已有缓存。它不生成缓存、不返回原图冒充缩略图。缓存根和文件命名由 `_browser_core.py` 按每个源文件解析：检查源文件所在目录及向上最多 6 层，取最近的 `.superpicky`，不要求 `report.db`，也不限制距卷根的深度。目录选择不改变缓存归属；报告数据库查找独立保留原规则。没有缓存根时 Viewer 仍询问创建。
 
+Viewer 通过 `fast_thumbnail_cache_check=True` 启用文件存在检查：后台预生成和快速预览选址只检查对应尺寸缓存文件是否存在，不打开 JPEG 读取尺寸，也不以源文件时间戳自动失效。源图变化、缓存过旧或损坏时，用户在列表/缩略图网格多选后右键“刷新缩略图”，调用共享 `FileListPanel.refresh_thumbnails(paths)`；无需重载目录或重置模型。后台直接解码实际源图，原子替换当前启用档位及已有其他档位；不读取旧的临时预览/哈希缓存来生成刷新结果，不改原图、XMP、report.db。无缓存作用域时使用本机回退缓存，不自行创建 `.superpicky`。
+
+刷新复用 `PersistentThumbCacheWorker` 和有界共享池，与同源文件的自动生成串行；重复请求只保留最新代次，切换目录仍完成已明确请求的文件，关窗协作取消并等待实际线程结束。失败保留旧文件并计入原进度条的失败数，成功分批失效对应内存/模型缩略图，旧解码的内存写回受版本保护；列表选择、排序、滚动与元数据保持。显示持久 JPEG 时直接读取该文件，不再生成同尺寸哈希副本。BirdStamp 默认继续严格尺寸/时间校验。入口为 UI 菜单及共享 Python API，不新增 CLI。回归见共享 `test_thumbnail_refresh.py` 与 Viewer [`test_viewer_thumbnail_refresh.py`](../tests/test_viewer_thumbnail_refresh.py)。
+
 BirdStamp 的 [`editor_shared_thumb_cache.py`](../../SuperBirdStamp/birdstamp/gui/editor_shared_thumb_cache.py) 复用同一 `_browser_core.py` 作用域、精确档位校验和原子写入接口，读取并生成 `.superpicky/thumb_cache/256`，也能读取 Viewer 的本地 256 缓存。Viewer 因此可直接使用 BirdStamp 生成的共享 256 档；缺少 `.superpicky` 时 BirdStamp 自动在照片所在目录创建；创建失败记录日志并在本窗口会话避免重复尝试，创建或共享写入失败均回退自己的本地缓存，不弹框、不创建 `report.db`。
 
 初始化及切换目录时，A/B 各侧的 `PreviewPanel` 标记 `_fit_next_image`。首个有效小图或完整图显式适应窗口，不套用“保持切图视野”的旧像素倍率；加载占位不消耗此标记。同一请求的清晰图升级再次适应，确保相机预览与 RAW 比例略有差异时仍完整显示。`viewport_interacted` 取消该请求的自动适应，保护用户在等待升级时的手动缩放/平移；后续选图继续遵守既有保持视野策略。回归见 [`test_first_preview_fit.py`](../tests/test_first_preview_fit.py)。
