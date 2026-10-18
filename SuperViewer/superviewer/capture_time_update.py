@@ -39,6 +39,7 @@ class CaptureTimeResult:
     saved_fingerprint: tuple | None = None
     raw_source: str = ''
     missing_raw: bool = False
+    metadata_by_path: dict = field(default_factory=dict)
 
 
 def _check_cancelled(cancelled):

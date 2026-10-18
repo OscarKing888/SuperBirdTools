@@ -27,6 +27,7 @@ def wait_for(predicate):
 
 class Files(QObject):
     photo_metadata_cache_updated = pyqtSignal(object)
+    photo_tags_cache_updated = pyqtSignal(object)
     file_selected = pyqtSignal(str)
 
     def __init__(self, paths):
@@ -50,6 +51,12 @@ class Files(QObject):
 
     def deselect_display_paths_silently(self, paths):
         self.selected = [path for path in self.selected if path not in paths]
+
+    def replace_photo_metadata_for_paths(self, updates):
+        self.sync_metadata_edits_for_paths(updates)
+
+    def clear_tag_history(self):
+        pass
 
 
 @pytest.fixture
@@ -84,11 +91,11 @@ def test_menu_formats_choose_directory_all_success_without_popup(env, monkeypatc
         raw = raws / (Path(path).stem + '.ARW')
         raw.rename(nested / raw.name)
     empty = QMenu()
-    files.extender(empty, ['file.ARW', 'file.webp', 'file.hif'])
+    files.extender(empty, ['file.mp4', 'file.txt'])
     assert not empty.actions()
     menu = QMenu()
     files.extender(menu, paths + ['file.ARW'])
-    assert len(menu.actions()) == 1
+    assert len(menu.actions()) == 2
     asked = []
     def choose(*args):
         asked.append(args)
@@ -160,17 +167,22 @@ def test_unresolved_source_reported_without_aborting_other_photos(env):
     assert files.selected == []
 
 
-def test_shutdown_preserves_commits_and_waits_for_actual_finished(env, monkeypatch):
+@pytest.mark.parametrize('all_information', [False, True])
+def test_shutdown_preserves_commits_and_waits_for_actual_finished(env, monkeypatch, all_information):
     controller, files, paths, raws = env
     started, gate = threading.Event(), threading.Event()
-    original = ui.update_capture_times
+    update_name = 'update_all_information' if all_information else 'update_capture_times'
+    if all_information:
+        for raw in raws.glob('*.ARW'):
+            assert PhotoMetaDataXMP().write(str(raw), {'XMP-superpicky:date_time_original': '2025-08-19T09:10:11.045+08:00'})
+    original = getattr(ui, update_name)
     def update(*args, **kwargs):
         for result in original(*args, **kwargs):
             started.set()
             assert gate.wait(5)
             yield result
-    monkeypatch.setattr(ui, 'update_capture_times', update)
-    assert controller.start(paths, str(raws))
+    monkeypatch.setattr(ui, update_name, update)
+    assert controller.start(paths, str(raws), all_information=all_information)
     assert started.wait(3)
     try:
         worker = controller._worker
@@ -185,3 +197,70 @@ def test_shutdown_preserves_commits_and_waits_for_actual_finished(env, monkeypat
     assert not files.updates
     assert files.selected == paths
     assert PhotoMetaDataXMP().read(paths[0])['date_time_original'] == '2025-08-19T09:10:11.045+08:00'
+
+
+def test_all_information_menu_copies_xmp_and_reports_missing_sidecar(env, monkeypatch):
+    controller, files, paths, raws = env
+    store = PhotoMetaDataXMP()
+    raw = raws / (Path(paths[0]).stem + '.ARW')
+    assert store.write(str(raw), {'XMP-dc:Title': '更新后的鸟名', 'XMP-dc:Subject': ['观鸟'],
+                                  'XMP-xmp:Rating': 5, 'XMP-dc:Description': '新备注'})
+    (raws / (Path(paths[2]).stem + '.ARW')).unlink()
+    monkeypatch.setattr(ui.QFileDialog, 'getExistingDirectory', lambda *a: str(raws))
+    menu = QMenu()
+    files.extender(menu, paths)
+    assert menu.actions()[1].text() == '从同名 RAW 更新所有信息…'
+    menu.actions()[1].trigger()
+    busy_menu = QMenu()
+    files.extender(busy_menu, paths)
+    assert all(not a.isEnabled() for a in busy_menu.actions())
+    assert wait_for(lambda: not controller.busy)
+    assert controller._succeeded == 1 and len(controller._failures) == 2
+    assert files.selected == [paths[2]]
+    assert '更新所有信息' in controller._report.windowTitle()
+    assert '缺少 XMP' in controller._report.details.toPlainText()
+    assert Path(paths[0]).with_suffix('.xmp').read_bytes() == raw.with_suffix('.xmp').read_bytes()
+    meta = files.updates[-1][paths[0]]
+    assert meta['title'] == '更新后的鸟名' and meta['tags'] == ['观鸟'] and meta['rating'] == 5
+
+
+def test_all_information_supports_other_image_formats_but_not_video(env):
+    controller, files, paths, raws = env
+    for path in ('file.psd', 'file.webp', 'file.hif', 'file.ARW'):
+        menu = QMenu()
+        files.extender(menu, [path])
+        assert len(menu.actions()) == 1 and '更新所有信息' in menu.actions()[0].text()
+
+
+def test_full_copy_result_cannot_overwrite_newer_sidecar_cache(env, monkeypatch):
+    controller, files, paths, raws = env
+    raw = raws / (Path(paths[0]).stem + '.ARW')
+    store = PhotoMetaDataXMP()
+    assert store.write_title(str(raw), '来自 RAW')
+    original = ui.update_all_information
+    def update(*args, **kwargs):
+        for result in original(*args, **kwargs):
+            assert store.write_title(result.source, '复制后最新编辑')
+            yield result
+    monkeypatch.setattr(ui, 'update_all_information', update)
+    assert controller.start(paths[:1], str(raws), all_information=True)
+    assert wait_for(lambda: not controller.busy)
+    assert not files.updates
+    assert store.read(paths[0])['Title'] == '复制后最新编辑'
+
+
+def test_shared_sidecar_refresh_preserves_each_images_dimensions(env):
+    controller, files, paths, raws = env
+    photo = Path(paths[0])
+    sibling = photo.with_suffix('.jpg')
+    Image.new('RGB', (80, 60)).save(sibling)
+    files._all_files = [*paths, str(sibling)]
+    raw = raws / (photo.stem + '.ARW')
+    assert PhotoMetaDataXMP().write_title(str(raw), '共同标题')
+    # 未选中的同侧车图像也刷新，并保留自己的内嵌宽高。
+    assert controller.start(paths[:1], str(raws), all_information=True)
+    assert wait_for(lambda: not controller.busy)
+    updates = files.updates[-1]
+    assert updates[str(photo)]['PNG:ImageWidth'] == 24
+    assert updates[str(sibling)]['File:ImageWidth'] == 80
+    assert updates[str(photo)]['title'] == updates[str(sibling)]['title'] == '共同标题'
