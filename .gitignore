@@ -19,6 +19,7 @@
 **/*.egg-info/
 
 # Runtime artifacts
+/test-tmp/
 **/output/
 **/*.log
 /super_viewer.cfg

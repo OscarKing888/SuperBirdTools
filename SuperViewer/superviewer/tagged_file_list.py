@@ -258,6 +258,7 @@ class SuperViewerTaggedFileListPanel(FileListPanel):
     video_playback_stop_requested = pyqtSignal()
     playback_state_changed = pyqtSignal(bool)
     use_preview_cache = True
+    fast_thumbnail_cache_check = True
     enable_key_navigation_playback = True
     enable_range_mark_shortcuts = True
     enable_in_memory_fast_preview = True
