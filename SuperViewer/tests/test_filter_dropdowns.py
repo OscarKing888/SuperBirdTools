@@ -326,3 +326,37 @@ def test_species_menu_search_keyboard_reopen_directory_change_and_clear(panel, t
     _APP.processEvents()
     assert any(a.text() == "当前照片暂无鸟种名" and not a.isEnabled() for a in menu.actions())
     menu.close()
+
+
+@pytest.mark.parametrize("mode", [FileListPanel._MODE_LIST, FileListPanel._MODE_THUMB])
+def test_species_status_variants_merge_into_one_option_and_match_all_photos(panel, tmp_path, mode):
+    from copy import deepcopy
+
+    paths = seed(panel, tmp_path)
+    for path, name in zip(paths, ["反嘴鹬", "反嘴鹬（待确定 33%）", "反嘴鹬 (待确认 40%)",
+                                  "反嘴鹬（疑似）", "白鹭", "白鹭（待确定 28%）", "大白鹭"]):
+        panel._meta_cache[path]["title"] = name
+    before = deepcopy(panel._meta_cache)
+    panel._set_view_mode(mode)
+    panel.set_species_filters({"反嘴鹬", "反嘴鹬（待确定 33%）"})
+    assert panel._active_species_filters == {"反嘴鹬"}
+    assert visible(panel) == paths[:4]
+    menu = panel._species_filter_button.menu()
+    menu.popup(QPoint(100, 100))
+    _APP.processEvents()
+    actions = {a.data(): a for a in menu.actions() if a.isCheckable()}
+    assert set(actions) == {"反嘴鹬", "白鹭", "大白鹭"}
+    assert actions["反嘴鹬"].isChecked()
+    assert panel._species_filter_button.text() == "鸟种名(1)"
+    QTest.mouseClick(menu, _LEFT, pos=menu.actionGeometry(actions["白鹭"]).center())
+    assert visible(panel) == paths[:6]
+    assert panel._species_filter_button.text() == "鸟种名(2)"
+    assert panel._meta_cache == before
+    menu.close()
+    # 待确定变为已确认后仍属于同一个过滤集合；新到的待确定记录也可命中。
+    panel.sync_metadata_edits_for_paths({paths[1]: {"title": "反嘴鹬"}})
+    assert visible(panel) == paths[:6]
+    panel._on_metadata_batch_ready({paths[7]: {"title": "反嘴鹬（待确定 12%）"}})
+    panel._apply_meta_batch_tick()
+    panel._flush_meta_filter_refresh()
+    assert visible(panel) == paths[:6] + [paths[7]]

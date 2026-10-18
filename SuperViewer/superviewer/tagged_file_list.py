@@ -27,6 +27,7 @@ from app_common.qt_theme import is_theme_change_event, scheme_from_palette
 from app_common.toggle_button import TOGGLE_CHECKED_STYLE
 
 from .filter_controls import FilterDropdown, FilterFlowLayout
+from .species_filter import species_filter_name
 from .directory_selection import DirectorySelectionCache
 from .rarity_badge import rarity_badge_style
 from .file_context_menu import build_file_context_menu, species_shortcut_sequence
@@ -1093,7 +1094,7 @@ class SuperViewerTaggedFileListPanel(FileListPanel):
 
     def _species_for_path(self, path: str) -> str:
         """与列表鸟名列共用字段优先级；过滤和打开菜单只读已有缓存。"""
-        return _metadata_species_text(self._meta_cache.get(os.path.normpath(path)))
+        return species_filter_name(_metadata_species_text(self._meta_cache.get(os.path.normpath(path))))
 
     def _species_filter_options(self) -> list[str]:
         # 从未过滤的全集取选项；换目录后保留已选鸟名，仍可取消或清除。
@@ -1131,7 +1132,7 @@ class SuperViewerTaggedFileListPanel(FileListPanel):
         self.set_species_filters(names)
 
     def set_species_filters(self, names: Iterable[str]) -> None:
-        selected = {str(name or "").strip() for name in names} - {""}
+        selected = {species_filter_name(name) for name in names} - {""}
         if selected == self._active_species_filters:
             return
         self._active_species_filters = selected
@@ -1148,6 +1149,7 @@ class SuperViewerTaggedFileListPanel(FileListPanel):
         selected = "、".join(sorted(self._active_species_filters, key=str.casefold))
         button.setToolTip(
             "多选鸟种名，命中任一鸟种即可；与其他过滤条件同时生效。\n"
+            "同一鸟名的待确定等状态和置信度标注合并过滤。\n"
             f"已选：{selected or '不限'}\n选项来自当前目录的全部照片；可搜索或清除过滤"
         )
         if self._species_filter_clear_action is not None:
