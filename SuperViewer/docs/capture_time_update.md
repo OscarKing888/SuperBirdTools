@@ -21,3 +21,30 @@ RAW 时间读取优先级为 EXIF `DateTimeOriginal`，缺失时使用 `CreateDa
 ```
 
 macOS 使用 `.venv/bin/python3` 及对应路径。每个文件输出一行 JSON，包含 `source`、`success`、`raw_source` 和 `error`；全部成功退出码为 0，有失败为 1。
+
+## 从同名 RAW 更新所有信息
+
+列表或缩略图多选图像后，右键 **拍摄信息 → 从同名 RAW 更新所有信息…**，选择 RAW 目录。
+程序沿用上述递归同名匹配规则，把匹配 RAW 旁的整份 XMP 原样复制到每张选中图像的目录，
+使用选中图像的同名 `.xmp`；已有大小写不同的 `.XMP` 会原位替换。
+支持共享格式表中的全部图像格式（包括 PNG/JPEG、PSD、HEIF、TIFF 和 RAW），不处理视频。
+
+**目标已有 XMP 的全部内容会被覆盖**，包括鸟名、标签、评分、备注、拍摄信息和编辑参数；
+不是逐字段合并，也不会额外从 RAW 内嵌 EXIF 提取信息。未知命名空间、中文和文件格式保持字节一致，
+源 RAW、源 XMP、选中图像及 `report.db` 不被改写。同目录同名图像共用的 XMP 只复制一次；
+源与目标已是同一份 XMP 时保持原文件。
+
+复制先写入同目录临时文件，检查源 XMP 的 XML/RDF，再原子替换目标。无 RAW、多个同名 RAW、
+无 XMP、源 XMP 无效、符号链接侧车、并发修改或复制失败均逐张报告，保留未完成替换的目标文件。
+已损坏的目标 XMP 可以被有效的源 XMP 整份替换。
+成功后同步列表、标签及信息面板，清除旧字段缓存与旧标签撤销历史，保留预览和未提交的备注草稿。
+选中状态与拍摄时间操作相同：未找到 RAW 的保留选择，便于更换目录重试。两种更新任务互斥，
+全部成功不弹框，部分失败显示可复制报告。
+
+CLI（macOS；Windows 使用根 `.venv\\Scripts\\python.exe`）：
+
+```sh
+.venv/bin/python3 -m SuperViewer.superviewer.raw_xmp_update --raw-directory "/Photos/RAW" "/Photos/Export/DSC01234.jpg"
+```
+
+CLI 使用同一复制核心和上述 JSON/退出码规则，不需要图形界面或 ExifTool。

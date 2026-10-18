@@ -205,6 +205,14 @@ EXIF 页直接列出 ExifTool 从 RAW 及其他图像读取的已知标签，包
 
 无 Qt 核心 [`capture_time_update.py`](../superviewer/capture_time_update.py) 扫描一次目录，直接读取 RAW 内嵌 EXIF 原始拍摄时间（缺失时回退数字化时间），保留亚秒与时区，通过 `PhotoMetaDataXMP` 原子写同名 XMP 的标准时间和 `date_time_original` 私有字段。同侧车去重，保护损坏侧车和扫描/读取期间发生的并发修改。原图、RAW 和 report.db 保持只读。[`CaptureTimeController`](../superviewer/capture_time_controller.py) 管理后台线程、有界结果队列、定时分批 `MetadataResultSync` 及真实线程退出等待；更新列表/信息页。每批结果按 `CaptureTimeResult.missing_raw` 保留未找到 RAW 的选择，通过 [`deselect_display_paths_silently()`](../superviewer/tagged_file_list.py) 取消本轮其他已返回结果项的选择（含成功项），不重载预览或覆盖编辑草稿；其他失败仍展示报告。回归见 [核心读写](../tests/test_capture_time_update.py)、[菜单及生命周期](../tests/test_capture_time_controller.py) 与 `test_bird_identification_controller.py` 的列表/缩略图实窗验证。
 
+同一控制器在“拍摄信息”中并列提供“从同名 RAW 更新所有信息…”，支持共享格式表中的全部图像。
+[`raw_xmp_update.update_all_information()`](../superviewer/raw_xmp_update.py) 复用 RAW 递归匹配，
+将 RAW 旁的 XMP 原样复制到选中图像旁，同侧车去重；固定顺序获取源/目标事务锁，验证源 XML/RDF、
+复制前后文件指纹，以同目录临时文件原子替换，不重写 XML 或图像。GUI worker 读取更新后的完整元数据，
+经 `MetadataResultSync.sync(replace=True)` 和 `replace_photo_metadata_for_paths()` 清除旧字段、同步标签及
+本地代次保护，丢弃旧标签撤销历史；已有预览/备注草稿保留。CLI 直接调用复制核心；无新依赖，
+打包沿用模块收集。回归见 [`test_raw_xmp_update.py`](../tests/test_raw_xmp_update.py) 及上述控制器/实窗测试。
+
 ### 拍摄地点
 
 图片信息页的“拍摄地点”输入框显示并编辑独立文本，回车或失焦保存，留空清除；支持原生文本复制粘贴。照片列表和缩略图的右键“拍摄地点”菜单提供单张/多选修改、复制单张地点和向所选照片粘贴剪贴板文本。

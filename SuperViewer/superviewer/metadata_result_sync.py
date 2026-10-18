@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 
 from app_common.exif_io.photo_meta import PhotoMetaDataXMP
+from app_common.exif_io.xmp_sidecar import same_stem_key
 from .bird_identification import _fingerprint
 try:
     from PyQt6.QtCore import QSignalBlocker
@@ -17,7 +18,7 @@ class MetadataResultSync:
         self.files = files
         self._stamp = None
 
-    def sync(self, results, display_paths=()):
+    def sync(self, results, display_paths=(), *, replace=False):
         files = self.files
         all_files = getattr(files, "_all_files", ())
         stamp = (id(all_files), len(all_files))
@@ -26,7 +27,7 @@ class MetadataResultSync:
             self._listed = set(all_files)
             self._by_stem = {}
             for path in all_files:
-                key = os.path.normcase(os.path.splitext(os.path.abspath(path))[0])
+                key = same_stem_key(os.path.abspath(path))
                 self._by_stem.setdefault(key, []).append(path)
         aliases = {}
         for display, source in display_paths:
@@ -38,16 +39,25 @@ class MetadataResultSync:
                 continue
             if result.saved_fingerprint != _fingerprint(PhotoMetaDataXMP().sidecar_path_for(result.source)):
                 continue
-            key = os.path.normcase(os.path.splitext(result.source)[0])
+            key = same_stem_key(os.path.abspath(result.source))
             paths = [*self._by_stem.get(key, []), *aliases.get(os.path.normcase(result.source), [])]
             if paths:
                 for path in [*paths, result.source]:
-                    updates.setdefault(path, {}).update(result.updates)
+                    fresh = result.metadata_by_path.get(path, result.updates) if replace else result.updates
+                    updates.setdefault(path, {}).update(fresh)
         if not updates:
             return
         blocker = QSignalBlocker(files)
         try:
-            files.sync_metadata_edits_for_paths(updates)
+            if replace:
+                files.replace_photo_metadata_for_paths(updates)
+            else:
+                files.sync_metadata_edits_for_paths(updates)
         finally:
             del blocker
+        if replace:
+            # 整份替换改变了标签快照，旧撤销记录不再适用于新侧车。
+            files.clear_tag_history()
         files.photo_metadata_cache_updated.emit(list(updates))
+        if replace:
+            files.photo_tags_cache_updated.emit(list(updates))

@@ -724,6 +724,25 @@ class SuperViewerTaggedFileListPanel(FileListPanel):
                     overrides.setdefault(key, {}).update(values)
         return updated
 
+    def replace_photo_metadata_for_paths(self, metadata_by_path: dict) -> int:
+        """整份 XMP 被替换后清除旧字段和标签；晚到的后台批次不能恢复旧值。"""
+        updates = {}
+        allowed_tags = set(self._available_tags)
+        overrides = getattr(self, '_local_metadata_updates_by_path', {})
+        for path, metadata in metadata_by_path.items():
+            norm = os.path.normpath(path)
+            previous = {**(self.get_report_row_for_path(norm) or {}),
+                        **self._meta_cache.get(norm, {}),
+                        **overrides.get(os.path.normcase(norm), {})}
+            # 用显式空值覆盖旧字段，同时保留重新读到的原图/报告回退信息。
+            fresh = {key: '' for key in previous}
+            fresh.update({key: value if value is not None else '' for key, value in metadata.items()})
+            fresh['SourceFile'] = norm
+            updates[norm] = fresh
+            self._photo_tag_cache[norm] = set(fresh.get('tags') or ()).intersection(allowed_tags)
+        self._bump_photo_tag_generations(updates)
+        return self.sync_metadata_edits_for_paths(updates)
+
     def _start_key_navigation_playback(self, event, *, view_name: str) -> None:
         self.video_playback_stop_requested.emit()
         super()._start_key_navigation_playback(event, view_name=view_name)
