@@ -678,9 +678,10 @@ class MainWindow(QMainWindow):
         self._file_list.set_include_subdirectories(enabled)
         path = self._file_list.get_current_dir()
         if path:
-            self._on_directory_selected(path, force_reload=True)
+            self._on_directory_selected(path, force_reload=True, preserve_meta_cache=True)
 
-    def _on_directory_selected(self, path: str, *, force_reload: bool = False):
+    def _on_directory_selected(self, path: str, *, force_reload: bool = False,
+                               preserve_meta_cache: bool = False):
         """目录树选中目录后，保存路径到设置与 .last_folder.txt，并刷新文件列表。"""
         # 只重置响应列表选择的视口，另一侧保留原图和视野以便跨目录对照。
         panel = self._active_preview_panel()
@@ -694,7 +695,11 @@ class MainWindow(QMainWindow):
         self.file_label.setToolTip('')
         self._stop_focus_loader()
         save_last_selected_directory_to_settings(path)
-        self._file_list.load_directory(path, force_reload=force_reload)
+        if preserve_meta_cache:
+            self._file_list.load_directory(path, force_reload=force_reload,
+                                           preserve_meta_cache=True, reuse_cached_listing=True)
+        else:
+            self._file_list.load_directory(path, force_reload=force_reload)
 
     def _restore_last_selected_directory(self) -> None:
         """启动时从 .last_folder.txt 或设置恢复并展开上次选中的目录。"""

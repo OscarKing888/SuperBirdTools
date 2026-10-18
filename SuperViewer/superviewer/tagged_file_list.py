@@ -614,7 +614,8 @@ class SuperViewerTaggedFileListPanel(FileListPanel):
         self.tag_library.dirty_paths.clear()
         tag_config_scope_changed = self._set_tag_config_directory(path)
         self._load_tag_config_if_changed(force=tag_config_scope_changed)
-        if force_reload or os.path.normcase(os.path.normpath(path)) != os.path.normcase(self.get_current_dir() or ""):
+        if ((force_reload and not preserve_meta_cache)
+                or os.path.normcase(os.path.normpath(path)) != os.path.normcase(self.get_current_dir() or "")):
             self._local_metadata_updates_by_path = {}
         self._photo_tag_cache = {}
         self._photo_tag_generation_by_path = {}

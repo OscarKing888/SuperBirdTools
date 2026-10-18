@@ -84,6 +84,10 @@ Viewer 缩略图由 [`BirdThumbnailModel` / `BirdThumbnailDelegate`](../supervie
 
 HIF/HEIF/HEIC 即使已有完整报告或 XMP 拍摄字段，仍在 `MetadataLoader._read_metadata_batch()` 的后台文件读取路径取得相机焦点及 `CameraOrientation`，不能把未读取的焦点标成不存在。缩略图和预览共用这份方向正确的焦点缓存，迟到批次不会清除原图焦点或用报告坐标覆盖它；RAW 的报告快速路径仍使用内嵌焦点读取器。回归见共享 [`test_file_browser_heif_focus.py`](../../app_common/tests/test_file_browser_heif_focus.py)。
 
+每个 `FileListPanel` 还持有独立的 [`MetadataMemoryCache`](../../app_common/file_browser/_metadata_memory.py)，跨目录保留已合并的浏览器元数据（包括自定义标签集的 HIF 与 RAW 焦点结果），与当前视图的 `_meta_cache` 分开管理。上限为 20,000 条和估算 128 MiB，优先淘汰当前目录范围外的 LRU，再淘汰范围内 LRU；闲置 15 分钟的条目在下一次缓存操作时清理。`MetadataLoader` 在后台核验源文件、实际解析到的 XMP 路径及两者的纳秒时间/大小/文件身份，并比较标签集和报告行；命中不再解析 XMP、查询元数据磁盘缓存或读取原图 EXIF。侧车查找仍沿用大小写及派生图片父目录规则。读取前后指纹变化、取消及已知失败不进入缓存，返回深副本，显式清理的代次防止旧 worker 回填。
+
+“包含子目录”只改变显示范围，保留本地编辑保护和已加载的元数据，并复用当前目录的 shallow/recursive 列表；切回其他目录仍重新扫描文件列表，元数据在 worker 中按指纹复用。显式刷新使该目录及后代的会话缓存失效，重新加载报告；关闭窗口清空缓存。`[metadata.memory]` 日志记录命中/未命中、条目数、估算字节数和耗时。此策略无新增 GUI 或 CLI 参数，回归见 [`test_metadata_memory_cache.py`](../../app_common/tests/test_metadata_memory_cache.py) 及 [`test_directory_scope.py`](../tests/test_directory_scope.py)。
+
 RAW 焦点读取（[`raw_focus_metadata.py`](../../app_common/raw_focus_metadata.py)）与文件拍摄信息快速读取（[`fast_reader.py`](../../app_common/exif_io/fast_reader.py)）共用 [`tiff_reader.read_tiff_exif_tags()`](../../app_common/exif_io/tiff_reader.py)。它保留 ExifRead 的标签/MakerNote 解码，只将 TIFF 无符号字节字段改为整块读取，避免大型 MakerNote 的逐字节 Python 循环拖住整个目录；每次调用独占文件句柄和解析器，不修改依赖的全局状态。不支持的容器或不兼容的 ExifRead 内部 API 回退原入口，过大或截断的字节块终止读取。回归见 [TIFF 读取测试](../../app_common/tests/test_tiff_reader.py)，覆盖标签等价、大小端、并发和损坏长度。
 
 ## 3. 预览与连续快切
@@ -213,7 +217,7 @@ EXIF 页直接列出 ExifTool 从 RAW 及其他图像读取的已知标签，包
 
 - 备注入口是 `MainWindow._save_photo_comment_from_info_panel()`；标题及 EXIF 表入口是 `_save_exif_value()`。原始照片和 RAW 不承接这些用户元数据编辑。
 - 成功后必须同步显示层。`sync_saved_xmp_edit()` 只读刚保存的侧车，将 title、comment、rating、pick 和相机字段映射到列表显示字段；标签 Subject 修改另外刷新标签缓存/版本号并清理旧标签历史。
-- `SuperViewerTaggedFileListPanel.sync_metadata_edit_for_path()` 将本轮目录内的编辑字段记录在 `_local_metadata_updates_by_path`，合并后续后台批次时优先采用这些字段；这避免旧备注、标题或评级覆盖刚保存的值。`load_directory()` 在目录变化或 `force_reload=True` 时清理这层保护，重新以磁盘为准。
+- `SuperViewerTaggedFileListPanel.sync_metadata_edit_for_path()` 将本轮目录内的编辑字段记录在 `_local_metadata_updates_by_path`，合并后续后台批次时优先采用这些字段；这避免旧备注、标题或评级覆盖刚保存的值。`load_directory()` 在目录变化或显式刷新磁盘时清理这层保护；仅切换范围的 `preserve_meta_cache=True` 重载保留它。
 - 清除字段也是一次明确编辑：需清理显示别名，不能因 XMP 节点被删除就留下旧缓存值。XMP 格式、命名空间、同名侧车与 XML 写入规则集中在 [`xmp_sidecar.py`](../../app_common/exif_io/xmp_sidecar.py) / `PhotoMetaDataXMP`。
 
 通用字段由 `PhotoMetaDataXMP._write_exiftool_fields()` 在同目录临时副本中写入，收齐 ExifTool 的错误/警告后才原子提交；混合标签/标题等直接 XML 字段也随同提交。命令标签与 XML 字段名不同，例如 ISO 命令写入 `ISOSpeedRatings`，镜头使用 `Lens`。UTF-8 参数与实际读回回归见 [通用 XMP 写入测试](../../app_common/tests/test_xmp_exiftool_writes.py)。
