@@ -88,6 +88,20 @@ HIF/HEIF/HEIC 即使已有完整报告或 XMP 拍摄字段，仍在 `MetadataLoa
 
 “包含子目录”只改变显示范围，保留本地编辑保护和已加载的元数据，并复用当前目录的 shallow/recursive 列表；切回其他目录仍重新扫描文件列表，元数据在 worker 中按指纹复用。显式刷新使该目录及后代的会话缓存失效，重新加载报告；关闭窗口清空缓存。`[metadata.memory]` 日志记录命中/未命中、条目数、估算字节数和耗时。此策略仅用于浏览器会话缓存，无 CLI 参数；回归见 [`test_metadata_memory_cache.py`](../../app_common/tests/test_metadata_memory_cache.py) 及 [`test_directory_scope.py`](../tests/test_directory_scope.py)。
 
+[`MetadataSQLiteCache`](../../app_common/exif_io/metadata_sqlite.py) 在内存未命中后批量读取合并结果，命中跳过 XML、RAW 焦点提取与视频 ffprobe。`xmp-v1` 另存逐资源的解析行，`browser-v1` 保存合并后的拍摄/XMP/report/焦点/视频信息；改变字段解释时应升级对应 namespace。签名包含源文件和实际侧车的设备/文件身份、纳秒 mtime/ctime、大小，以及请求标签集、报告行。SQL 内采用 JSON 序列化，不使用 pickle。XMP、原图和只读 `report.db` 仍是数据源。
+
+缓存存于本机 `~/Library/Caches/SuperBirdTools/metadata-v1.sqlite3`（macOS）或 `%LOCALAPPDATA%/SuperBirdTools/Cache/metadata-v1.sqlite3`（Windows）；诊断可用 `SUPERBIRD_METADATA_CACHE_DIR` 覆盖。独立只读连接批量查询，[WAL](https://www.sqlite.org/wal.html) 写入由一个后台线程执行，GUI 保存只入队；16 MiB 待写预算防止慢盘积压，最多 100,000 条/估算 512 MiB 数据，超额按最早写入淘汰，数据库页面复用。退出通过 `close_cache()` / atexit 排空队列并关闭连接；损坏、权限或锁冲突降级为源读取，不影响 XMP 保存。旧 `meta_disk_cache.py` 仍只缓存原图派生字段。
+
+`PhotoMetaDataXMP` 成功写入后异步重建该 XMP 的 SQL 解析行，按实际侧车依赖失效已登记的 RAW/JPEG/派生图合并缓存；保留逐资源 `rdf:about` 规则，空值/零值也按实际 XML 解析。外部工具修改、删除或原子替换在下次读取时由指纹发现并重建，不依赖进程内通知。显式目录刷新同步提升读取代次并异步清除 SQL 子树，旧任务不能回填；读取途中变化、失败或取消不持久化。每个 loader 的 [`XmpDirectoryIndex`](../../app_common/exif_io/xmp_sidecar.py) 由各 worker 共用，按目录指纹发现侧车新增/删除，最多缓存 128 个目录，避免每个小批重新扫描整个目录。
+
+回归见 [`test_metadata_sqlite.py`](../../app_common/tests/test_metadata_sqlite.py)。只读诊断入口 [`metadata_cache_benchmark.py`](../scripts_dev/metadata_cache_benchmark.py) 使用真实扫描/worker 流程，必须指定图库外的缓存目录；以两个独立进程运行同一命令比较首次构建与跨进程命中（不清 OS 文件缓存、不包含缩略图和 GUI 行应用）：
+
+```sh
+.venv/bin/python3 SuperViewer/scripts_dev/metadata_cache_benchmark.py "<照片目录>" --cache-dir "<图库外的诊断缓存目录>" --workers 12
+```
+
+2026-10-19 在外置盘目录“2026-10-17-崇明沙锥”的 10,633 个文件上以 12 个 worker 实测：空应用缓存首次读取 177.95 秒，SQLite 已建立后另一进程读取 6.99 秒（目录扫描另计 2.88/1.72 秒）。第二轮 XML、RAW 焦点和视频探测调用均为 0，仅建立 22 次目录索引；两轮鸟名 5,648、焦点 9,145、视频信息 605 条一致。系统文件缓存未清空，此结果不包含 GUI/缩略图，也不代表全新目录首次打开可直接达到 7 秒。
+
 RAW 焦点读取（[`raw_focus_metadata.py`](../../app_common/raw_focus_metadata.py)）与文件拍摄信息快速读取（[`fast_reader.py`](../../app_common/exif_io/fast_reader.py)）共用 [`tiff_reader.read_tiff_exif_tags()`](../../app_common/exif_io/tiff_reader.py)。它保留 ExifRead 的标签/MakerNote 解码，只将 TIFF 无符号字节字段改为整块读取，避免大型 MakerNote 的逐字节 Python 循环拖住整个目录；每次调用独占文件句柄和解析器，不修改依赖的全局状态。不支持的容器或不兼容的 ExifRead 内部 API 回退原入口，过大或截断的字节块终止读取。回归见 [TIFF 读取测试](../../app_common/tests/test_tiff_reader.py)，覆盖标签等价、大小端、并发和损坏长度。
 
 ## 3. 预览与连续快切

@@ -11,6 +11,7 @@ is imported before any test module, i.e. before PyQt creates a QApplication.
 """
 
 import os
+import pytest
 
 SHOW_WINDOWS_ENV = "SUPERBIRD_TEST_SHOW_WINDOWS"
 
@@ -21,3 +22,15 @@ def _show_windows_requested() -> bool:
 
 if not _show_windows_requested():
     os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+
+
+@pytest.fixture(autouse=True)
+def isolated_metadata_sqlite_cache(tmp_path_factory, monkeypatch):
+    """元数据测试始终使用临时 SQLite，并在删除目录前排空写队列/关闭连接。"""
+    from app_common.exif_io import metadata_sqlite
+    cache = metadata_sqlite.MetadataSQLiteCache(tmp_path_factory.mktemp("metadata-cache") / "metadata.sqlite3")
+    monkeypatch.setenv("SUPERBIRD_METADATA_CACHE_DIR", str(cache.path.parent))
+    monkeypatch.setattr(metadata_sqlite, "_default", cache)
+    yield cache
+    metadata_sqlite.close_cache()
+    cache.close()

@@ -89,6 +89,8 @@ ExifTool 生命周期与 Viewer 共用 [`exiftool_runner.py`](../../app_common/e
 
 ## 3. 元数据与模板 provider
 
+共享批量 XMP 读取通过 [`metadata_sqlite.py`](../../app_common/exif_io/metadata_sqlite.py) 复用本机 SQLite 解析缓存；所有 `PhotoMetaDataXMP` 成功写入都会异步刷新，外部修改在读取时核验侧车指纹。原始 XMP 仍为数据源，缓存失效/失败按原流程重新解析；容量、后台写入生命周期与诊断入口见 [Viewer 元数据缓存](../../SuperViewer/docs/ARCHITECTURE.md)。
+
 “拍摄地点” `location` 使用共享 [shooting_location.py](../../app_common/shooting_location.py) 的 `XMP-superpicky:shooting_location` 文本，与 Viewer 编辑字段一致。[meta/normalize.py](../birdstamp/meta/normalize.py) 供模板、Overlay 预览/导出和 CLI 共用；不再拼接存储分析结果的 City/State/Country，也不以 GPS 代替地点，坐标仍由 `gps_text` 提供。自动字段路由固定读取已合并 XMP 的规范地点，清空侧车属性后不能回退到旧照片快照；空值沿用既有缺失字段显示规则。真实中文写入、修改/清空、原图及清晰度保留、Overlay 绘制回归见 [test_template_shooting_location.py](../tests/test_template_shooting_location.py)。
 
 [template_context.py](../birdstamp/gui/template_context.py) 是模板字段的主要定位入口：
