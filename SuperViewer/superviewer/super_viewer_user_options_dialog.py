@@ -12,6 +12,10 @@ from app_common.superviewer_user_options import (
     KEY_NAVIGATION_FPS_OPTIONS,
     KEY_PERF_PROBES_ENABLED,
     KEY_BIRD_HOVER_COLOR,
+    KEY_METADATA_MEMORY_MB,
+    METADATA_MEMORY_DEFAULT_MB,
+    METADATA_MEMORY_MIN_MB,
+    METADATA_MEMORY_MAX_MB,
     PERSISTENT_THUMB_SIZE_LEVELS,
     USER_OPTIONS_FILENAME,
     get_runtime_user_options,
@@ -98,6 +102,21 @@ class SuperViewerUserOptionsDialog(SettingsDialog):
         grid.addWidget(QLabel(f"默认 {metadata_default}"), row, 2)
 
         row += 1
+        grid.addWidget(QLabel("元数据内存缓存"), row, 0)
+        self._spin_metadata_memory = QSpinBox(self)
+        self._spin_metadata_memory.setRange(METADATA_MEMORY_MIN_MB, METADATA_MEMORY_MAX_MB)
+        self._spin_metadata_memory.setSuffix(" MiB")
+        self._spin_metadata_memory.setSingleStep(64)
+        self._spin_metadata_memory.setValue(int(opts[KEY_METADATA_MEMORY_MB]))
+        self._spin_metadata_memory.setAccessibleName("元数据内存缓存")
+        self._spin_metadata_memory.setToolTip(
+            "跨目录保留已读取元数据的估算内存上限，最多 20,000 条。\n"
+            "确认后立即生效；缩小上限时优先淘汰当前目录范围外的缓存。"
+        )
+        grid.addWidget(self._spin_metadata_memory, row, 1)
+        grid.addWidget(QLabel(f"默认 {METADATA_MEMORY_DEFAULT_MB} MiB"), row, 2)
+
+        row += 1
         grid.addWidget(QLabel("小缩略图生成线程数"), row, 0)
         self._spin_persistent_thumb_workers = QSpinBox(self)
         self._spin_persistent_thumb_workers.setRange(1, max_workers)
@@ -170,7 +189,7 @@ class SuperViewerUserOptionsDialog(SettingsDialog):
         note = QLabel("缩略视图会根据当前缩略图大小自动匹配最合适的一档预览图。")
         note.setWordWrap(True)
         note.setStyleSheet("color: #aaa; font-size: 12px;")
-        self.option_groups["加载与缓存"].body.layout().addWidget(note, 4, 0, 1, 3)
+        self.option_groups["加载与缓存"].body.layout().addWidget(note, 5, 0, 1, 3)
 
         denoise = QWidget(tabs)
         denoise_layout = QVBoxLayout(denoise)
@@ -353,6 +372,7 @@ class SuperViewerUserOptionsDialog(SettingsDialog):
         return {
             "thumbnail_loader_workers": int(self._spin_thumb_loader_workers.value()),
             "metadata_loader_workers": int(self._spin_metadata_loader_workers.value()),
+            KEY_METADATA_MEMORY_MB: self._spin_metadata_memory.value(),
             "persistent_thumb_workers": int(self._spin_persistent_thumb_workers.value()),
             "persistent_thumb_max_size": int(self._combo_persistent_thumb_size.currentData()),
             "key_navigation_fps": int(self._combo_key_navigation_fps.currentData()),

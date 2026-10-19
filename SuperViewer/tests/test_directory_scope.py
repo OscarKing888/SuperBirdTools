@@ -108,3 +108,49 @@ def test_metadata_reused_for_scope_and_directory_return_but_refresh_reloads(
     panel.load_directory(str(directory), force_reload=True)
     wait_for(all_paths)
     assert len(reads) == 4
+
+
+def test_metadata_memory_option_applies_saves_restores_and_cancel_keeps_cache(window, tmp_path, monkeypatch):
+    import importlib
+    from PyQt6.QtWidgets import QDialog
+    from app_common import superviewer_user_options as options
+    from SuperViewer.superviewer import bird_archive_ui
+
+    main = importlib.import_module("SuperViewer.main")
+    monkeypatch.setattr(bird_archive_ui, "settings_path", lambda: tmp_path / "archive.json")
+    monkeypatch.setattr(main.QMessageBox, "information", lambda *args: None)
+    cache = window._file_list._metadata_memory_cache
+    assert cache.max_bytes == 256 * 1024 * 1024
+    path = str(tmp_path / "白鹭.HIF")
+    _, generation = cache.lookup(path, (1,))
+    cache.store(path, (1,), {"title": "白鹭"}, generation)
+    previous = options.get_runtime_user_options()
+    requested = [512, QDialog.DialogCode.Accepted]
+
+    def edit(dialog):
+        dialog._spin_metadata_memory.setValue(requested[0])
+        return requested[1]
+
+    monkeypatch.setattr(main.SuperViewerUserOptionsDialog, "exec", edit)
+    try:
+        window._open_user_options_dialog()
+        assert cache.max_bytes == 512 * 1024 * 1024
+        assert cache.lookup(path, (1,)) == ({"title": "白鹭"}, generation)
+        assert options.load_user_options()[options.KEY_METADATA_MEMORY_MB] == 512
+        # 取消不修改当前额度或已保存值。
+        requested[:] = [64, QDialog.DialogCode.Rejected]
+        window._open_user_options_dialog()
+        assert cache.max_bytes == 512 * 1024 * 1024
+        assert options.load_user_options()[options.KEY_METADATA_MEMORY_MB] == 512
+        # 模拟程序启动：清空运行时选项，再从用户文件恢复。
+        options.apply_runtime_user_options(None)
+        options.reload_runtime_user_options()
+        restored = type(window)(initial_received_files=["skip-restore"])
+        try:
+            assert restored._file_list._metadata_memory_cache.max_bytes == 512 * 1024 * 1024
+        finally:
+            restored.close()
+            _wait_until(lambda: restored._shutdown_finalized)
+            restored.deleteLater()
+    finally:
+        options.apply_runtime_user_options(previous)
