@@ -3170,6 +3170,17 @@ class BirdStampEditorWindow(
             return
         if self._sequence_result_mode():
             self._set_dejitter_view('edit')
+        if (
+            self._current_edit_mode_id() == EDIT_MODE_CROP_ADJUST
+            and self.current_path is not None
+            and _is_ratio_no_crop(self._selected_ratio())
+        ):
+            # 显式进入裁剪时启用当前照片的竖幅裁切，沿用比例变更的逐图保存流程。
+            ratio_index = self._ratio_combo_index_for_value(9 / 16)
+            if ratio_index < 0:
+                self.ratio_combo.addItem("9:16", 9 / 16)
+                ratio_index = self.ratio_combo.count() - 1
+            self.ratio_combo.setCurrentIndex(ratio_index)
         self._refresh_preview_label(preserve_view=True)
         self._schedule_workspace_autosave()
 
