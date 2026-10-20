@@ -53,6 +53,10 @@ def _reexec_into_repo_venv_if_needed(repo_root: Path) -> None:
 def main() -> None:
     repo_root = _bootstrap_repo_root()
     _reexec_into_repo_venv_if_needed(repo_root)
+    if len(sys.argv) > 1 and sys.argv[1] == "--check-exiftool":
+        from exiftool_diagnostics import main as check_exiftool
+        from birdstamp.runtime_diagnostics import check_export
+        raise SystemExit(check_exiftool("SuperBirdStamp", sys.argv[2:], check_export=check_export))
     if len(sys.argv) > 1 and sys.argv[1] == "--check-about":
         from about_diagnostics import main as check_about
         raise SystemExit(check_about("SuperBirdStamp", sys.argv[2:]))
