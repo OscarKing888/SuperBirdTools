@@ -3131,11 +3131,18 @@ class BirdStampEditorWindow(
             toolbar.addWidget(btn)
 
         self._edit_mode_buttons[EDIT_MODE_NONE].setChecked(True)
-        self._edit_mode_buttons[EDIT_MODE_REFERENCE_REGION].setVisible(self._dejitter_tab_active())
+        self._sync_edit_mode_button_visibility()
         self._edit_mode_buttons[EDIT_MODE_REFERENCE_REGION].toggled.connect(
             self._sync_edit_reference_toggle)
         self._sync_edit_reference_toggle()
         self.edit_mode_group.buttonClicked.connect(self._on_edit_mode_changed)
+
+    def _sync_edit_mode_button_visibility(self) -> None:
+        """按处理页面显示对应工具，保留各页的选中模式与编辑参数。"""
+        image_processing = self.export_tabs.currentIndex() == 0
+        for mode_id in (EDIT_MODE_CROP_ADJUST, "overlay"):
+            self._edit_mode_buttons[mode_id].setVisible(image_processing)
+        self._edit_mode_buttons[EDIT_MODE_REFERENCE_REGION].setVisible(self._dejitter_tab_active())
 
     def _current_edit_mode_id(self) -> str:
         buttons = getattr(self, "_edit_mode_buttons", None)

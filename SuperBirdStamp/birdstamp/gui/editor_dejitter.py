@@ -550,7 +550,7 @@ class _BirdStampDejitterMixin:
                 self._dejitter_edit_mode = self._current_edit_mode_id()
                 self._set_edit_mode_button_checked(self._ordinary_edit_mode)
         self._edit_mode_buttons.get('crop_adjust', self._edit_mode_buttons[EDIT_MODE_NONE]).setEnabled(not active)
-        self._edit_mode_buttons[EDIT_MODE_REFERENCE_REGION].setVisible(active)
+        self._sync_edit_mode_button_visibility()
         self._last_dejitter_tab = active
         self.dejitter_view_bar.setVisible(active)
         if hasattr(self, 'dejitter_hud'):

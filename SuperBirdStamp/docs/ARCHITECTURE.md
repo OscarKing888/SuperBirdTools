@@ -374,7 +374,7 @@ Windows 合并构建由 [`stage_windows_exiftool.py`](../../build_tools/stage_wi
 
 ### 视口显示选项归属
 
-主工具栏编辑按钮按「选择模式 → 调整裁剪框 → 编辑叠加层 → 去抖动参考区」排列；`_setup_edit_mode_buttons` 初始化参考区按钮显隐，`_on_export_tab_changed` 仅在去抖动页激活时显示它，沿用普通编辑页与去抖动页各自的工具选择和参考区参数。
+主工具栏编辑按钮按「选择模式 → 调整裁剪框 → 编辑叠加层 → 去抖动参考区」排列；`_setup_edit_mode_buttons` 与 `_on_export_tab_changed` 共用 `_sync_edit_mode_button_visibility` 初始化及切页时的显隐：调整裁剪框、编辑叠加层仅在「图片处理」页显示，去抖动参考区仅在「去抖动」页显示。沿用普通编辑页与去抖动页各自的工具选择和参考区参数。
 
 显式点击「调整裁剪框」时，`_on_edit_mode_changed` 将当前照片的「不裁切」比例切换为 9:16，复用 `_on_ratio_changed` 更新裁剪框、逐图参数及工作区自动保存。其它比例、其它照片和模板文件保持原值；静默恢复编辑模式不会改比例。这是 GUI 工具激活行为，CLI 继续使用已保存的裁切设置。回归见 [test_crop_adjust_default_ratio.py](../tests/test_crop_adjust_default_ratio.py)。
 
