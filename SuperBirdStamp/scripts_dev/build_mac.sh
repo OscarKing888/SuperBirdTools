@@ -121,36 +121,9 @@ if [[ -f "$PLIST_FILE" ]] && command -v plutil &>/dev/null; then
 echo "Bundle sanity check PASSED (foreground GUI app)."
 fi
 
-# ── exiftool availability check (Finder-like env) ────────────────────────────
-echo ""
-echo "Metadata smoke test — checking exiftool discovery under app-like PATH ..."
-SMOKE_PYTHONPATH="$REPO_ROOT:$PROJECT_ROOT"
-if env -i HOME="$HOME" PATH="/usr/bin:/bin:/usr/sbin:/sbin" PYTHONPATH="$SMOKE_PYTHONPATH" "$PYTHON" - <<'PY'
-from app_common.exif_io.exiftool_path import get_exiftool_executable_path
-
-path = get_exiftool_executable_path()
-if not path:
-    raise SystemExit(1)
-print(path)
-PY
-then
-    echo "  Metadata smoke test PASSED"
-else
-    echo "  WARNING: Finder-like environment could not resolve exiftool."
-    echo "           打包后的 app 可能无法读取焦点元数据；请安装 exiftool 到常见绝对路径。"
-fi
-
-# ── smoke test ────────────────────────────────────────────────────────────────
-echo ""
-echo "Smoke test — checking executable launches ..."
-EXEC="$APP_DIR/Contents/MacOS/SuperBirdStamp"
-if [[ -x "$EXEC" ]]; then
-    timeout 10 "$EXEC" --help &>/dev/null \
-        && echo "  Smoke test PASSED (--help exit 0)" \
-        || echo "  Smoke test note: non-zero exit (normal for GUI-only builds)"
-else
-    echo "  WARNING: executable not found at $EXEC"
-fi
+# ── bundled ExifTool + real metadata/export check ──────────────────────────
+# 校验实际 .app；缺库、误用系统工具或中文元数据/导出失败都必须终止构建。
+"$PYTHON" "$REPO_ROOT/build_tools/macos_exiftool.py" --app "$APP_DIR"
 
 # ── create zip ────────────────────────────────────────────────────────────────
 echo ""

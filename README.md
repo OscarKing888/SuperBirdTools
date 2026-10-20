@@ -224,6 +224,19 @@ bash SuperViewer/scripts_dev/build_mac.sh
 bash SuperBirdStamp/scripts_dev/build_mac.sh
 ```
 
+macOS 两个应用均携带完整的 `app_common/exif_io/exiftools_mac`（入口脚本和同版本
+`lib/`），接收方无需安装 Homebrew 或 ExifTool。三份 macOS spec 在收集前使用
+[`build_tools/macos_exiftool.py`](build_tools/macos_exiftool.py) 检查入口执行权限、库文件、
+版本一致性，并用系统 `/usr/bin/perl` 验证；缺失或损坏时立即终止构建。构建脚本还会
+检查实际 `.app` 内的副本，在临时用户目录、精简 PATH、清除 Perl/ExifTool 环境覆盖的
+条件下运行包内 `--check-exiftool`，验证中文 XMP 读写和实际图片导出，失败即停止。
+这些检查不打开主窗口，也不读取用户工作区。复制后的包可用同一门禁重新验证：
+
+```bash
+.venv/bin/python3 build_tools/macos_exiftool.py --app dist/SuperViewer.app
+.venv/bin/python3 build_tools/macos_exiftool.py --app dist/SuperBirdStamp.app
+```
+
 Windows：
 
 ```bat

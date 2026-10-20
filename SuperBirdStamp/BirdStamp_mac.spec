@@ -31,6 +31,7 @@ for candidate in (REPO_ROOT, APP_ROOT):
 
 from app_identity import load_app_identity
 from build_tools.set_build_version import prepare_build_metadata
+from build_tools.macos_exiftool import collect_macos_exiftool
 from build_tools.photo_edit_native import collect_photo_edit
 
 edit_datas, edit_binaries, edit_imports = collect_photo_edit(REPO_ROOT)
@@ -83,7 +84,7 @@ project_datas = [
     *collect_tree(APP_ROOT / "scripts_dev" / "install_ffmpeg_tool.py", "scripts_dev"),
     *collect_tree(APP_COMMON_ROOT / "about_dialog" / "about.cfg", "app_common/about_dialog"),
     *collect_tree(APP_COMMON_ROOT / "about_dialog" / "images", "app_common/about_dialog/images"),
-    *collect_tree(APP_COMMON_ROOT / "exif_io" / "exiftools_mac", "app_common/exif_io/exiftools_mac"),
+    *collect_macos_exiftool(REPO_ROOT),
 ]
 
 # --------------------------------------------------------------------------- #

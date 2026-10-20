@@ -23,8 +23,10 @@ The following components remain subject to their own upstream licenses and notic
 
 ## 3. Bundled ExifTool for macOS
 
-- Path: `app_common/exif_io/exiftools_mac/exiftool`
-- Notice: This executable is a third-party upstream binary/script and should continue to follow its original upstream license terms.
+- Path: `app_common/exif_io/exiftools_mac/`
+- Version: ExifTool 13.50, including the entry script and complete Perl `lib/` tree.
+- Source, pinned revision, and file checksums: `app_common/exif_io/exiftools_mac/UPSTREAM.md` and `SHA256SUMS`.
+- Notice: These unmodified upstream files retain their original license terms; see the bundled `LICENSE` and `README.upstream`.
 
 ## 4. Python dependencies
 

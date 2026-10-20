@@ -36,6 +36,7 @@ bird_datas, bird_binaries, bird_hiddenimports = collect_viewer_bird_body(REPO_RO
 
 from app_identity import load_app_identity
 from build_tools.set_build_version import prepare_build_metadata
+from build_tools.macos_exiftool import collect_macos_exiftool
 from build_tools.photo_edit_native import collect_photo_edit
 
 edit_datas, edit_binaries, edit_imports = collect_photo_edit(REPO_ROOT)
@@ -71,7 +72,7 @@ datas.extend(collect_tree(APP_ROOT / "icons", "icons"))
 datas.extend(collect_tree(APP_ROOT / "images", "images"))
 datas.extend(collect_tree(APP_COMMON_ROOT / "about_dialog" / "about.cfg", "app_common/about_dialog"))
 datas.extend(collect_tree(APP_COMMON_ROOT / "about_dialog" / "images", "app_common/about_dialog/images"))
-datas.extend(collect_tree(APP_COMMON_ROOT / "exif_io" / "exiftools_mac", "app_common/exif_io/exiftools_mac"))
+datas.extend(collect_macos_exiftool(REPO_ROOT))
 
 
 datas.extend(edit_datas)

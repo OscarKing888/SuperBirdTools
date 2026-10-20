@@ -17,6 +17,12 @@ def _bootstrap_repo_root() -> Path:
 
 def main() -> None:
     _bootstrap_repo_root()
+    if len(sys.argv) > 1 and sys.argv[1] == "--check-exiftool":
+        from functools import partial
+        from exiftool_diagnostics import main as check_exiftool, check_viewer_export
+        from superviewer.image_png_export import export_image_png
+        raise SystemExit(check_exiftool("SuperViewer", sys.argv[2:],
+                                       check_export=partial(check_viewer_export, export_png=export_image_png)))
     if len(sys.argv) > 1 and sys.argv[1] == "--check-photo-edit":
         from app_common.photo_edit.diagnostics import main as check_photo_edit
         raise SystemExit(check_photo_edit(sys.argv[2:]))
