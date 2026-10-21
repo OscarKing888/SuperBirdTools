@@ -613,7 +613,7 @@ class MainWindow(QMainWindow):
         self._photo_edit = PhotoEditController(self,renderer=render_for_viewer)
         self._file_list.file_operation_guard = self._photo_edit_file_guard
         self.camera_raw_panel = ImageInfoTabPanel_CameraRaw(self._photo_edit,self.image_info_tabs)
-        self.color_adjust_panel = ImageInfoTabPanel_ColorAdjust(self._photo_edit,self.image_info_tabs)
+        self.color_adjust_panel = ImageInfoTabPanel_ColorAdjust(self._photo_edit,self.image_info_tabs,files=self._file_list)
         self.image_info_tabs.add_info_panel(self.camera_raw_panel)
         self.image_info_tabs.add_info_panel(self.color_adjust_panel)
         self._photo_edit_preview = PhotoEditPreviewBridge(self,self._photo_edit,self.ab_preview,

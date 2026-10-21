@@ -552,6 +552,12 @@ CLI：根 `.venv` 执行 `python -m SuperViewer.superviewer.image_png_export <�
 - `photo_edit_controller.PhotoEditController`：后台载入、有界会话、800 ms 自动保存、恢复草稿、
   外部冲突、每底图撤销历史、合并渲染请求、真实 QThread 结束及关闭等待。文件操作 guard
   先保存同 stem 的参数，后台移动／归档期间暂停编辑，完成后重新读取受影响路径。
+- `photo_edit_batch.PhotoEditBatch`：调色页底部“应用到全部图片”固定筛选后列表、实际源路径缓存与
+  当前调色步骤，后台逐张载入、复制 LUT、替换当前底图的步骤并等待既有 XMP 保存完成；保留
+  Camera RAW、底图选择和其他底图配方。控制器持有 QThread，计时器交接每张，保持会话上限；
+  批次涉及照片暂禁编辑和同 stem 文件操作，导航暂停期间不派发新工作。过期 serial、冲突、
+  失败草稿、停止及退出遵循既有保护。UI 复用 `BirdIDProgressDialog` 展示进度和逐张结果。
+  列表变化不重定向批次，空筛选不回退全部文件；回归见 `test_photo_edit_batch.py`。
 - `image_info_tab_color_adjust.AdjustmentGroup` 复用 `CollapsibleSection` 和 `AdjustmentForm`，
   将所有调色类型平铺，独立启用、默认展开。`adjustment_sections()` 在真实步骤间插入未使用类型，
   不改已有顺序或重复步骤；首次启用按可见位置插入。刷新按步骤身份复用表单，折叠仅为会话视图状态。

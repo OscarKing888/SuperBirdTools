@@ -34,6 +34,7 @@ class ImageInfoTabPanel_PhotoEdit(ImageInfoTabPanel):
         controller.render_failed.connect(self._render_failed)
         controller.error_changed.connect(self._error_changed)
         controller.operation_finished.connect(self._operation_finished)
+        controller.batch.busy_changed.connect(self._update_state)
         self._update_state()
 
     def create_ui(self):
@@ -133,7 +134,7 @@ class ImageInfoTabPanel_PhotoEdit(ImageInfoTabPanel):
             self.more.setEnabled(session is not None or bool(self.current_photo_path()))
             self.undo_button.setEnabled(bool(session and session.history.can_undo))
             self.redo_button.setEnabled(bool(session and session.history.can_redo))
-            if self.controller._file_busy:
+            if self.controller._file_busy or self.controller.batch.locks(self.current_photo_path()):
                 for widget in (self.content,self.input,self.reset_button,self.export_button,
                                self.more,self.undo_button,self.redo_button):
                     widget.setEnabled(False)
@@ -156,6 +157,8 @@ class ImageInfoTabPanel_PhotoEdit(ImageInfoTabPanel):
                 self.status.setText(error or self._operation_message or saved)
                 if self.controller._file_busy:
                     self.status.setText("文件操作进行中，完成后可继续编辑。")
+                elif self.controller.batch.locks(self.current_photo_path()):
+                    self.status.setText("正在批量应用调色参数，完成或停止后可继续编辑。")
                 self.update_editor(session.state.current.recipe)
             else:
                 self.status.setText(error or ("正在读取编辑参数…" if self.current_photo_path() else ""))
