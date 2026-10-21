@@ -1,5 +1,6 @@
 import importlib
 import os
+import time
 from types import SimpleNamespace
 
 import pytest
@@ -38,6 +39,11 @@ def test_paste_bird_name_keeps_new_pinyin_when_old_batch_arrives(tmp_path, mode)
     }
     try:
         files._paste_species_to_paths([path])
+        deadline = time.monotonic() + 8
+        while files._species_paste_controller.busy:
+            assert time.monotonic() < deadline
+            _APP.processEvents()
+            time.sleep(.001)
         files._on_metadata_batch_ready({path: {
             "title": "家燕", "pinyin_name": "jiā yàn",
             "pinyin_name_source": "家燕", "iso": "800",

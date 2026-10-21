@@ -65,6 +65,7 @@ def test_edit_copy_paste_batch_and_stale_metadata(env, monkeypatch, mode):
     actions[0].trigger()
     assert wait_for(controller.is_shutdown_done)
     controller.copy(paths[0])
+    assert wait_for(lambda: not controller._copy.busy)
     assert QApplication.clipboard().text() == '上海东滩'
     multi = QMenu()
     controller.extend_file_menu(multi, paths)
@@ -148,7 +149,8 @@ def test_shutdown_waits_for_real_finished_and_rejects_stale_callback(env, monkey
     gate.set()
     assert wait_for(controller.is_shutdown_done)
     assert shooting_location(PhotoMetaDataXMP().read(paths[0])) == '北京'
-    assert shooting_location(PhotoMetaDataXMP().read(paths[-1])) == ''
+    # 已开始的并行写入允许完成，取消只阻止尚未执行的 action。
+    assert shooting_location(PhotoMetaDataXMP().read(paths[-1])) in ('', '北京')
 
 
 def test_exif_location_clear_updates_canonical_cache(env):
@@ -157,3 +159,48 @@ def test_exif_location_clear_updates_canonical_cache(env):
     assert PhotoMetaDataXMP().write(paths[0], {LOCATION_TAG: ''})
     sync_saved_xmp_edit(files, paths[0], LOCATION_TAG)
     assert shooting_location(files.cached_photo_metadata_for_path(paths[0])) == ''
+
+
+def test_location_actions_share_browser_pool_and_run_concurrently(env, monkeypatch):
+    controller, files, paths = env
+    original = ui.LocationWriteAction.execute
+    barrier, gate = threading.Barrier(2), threading.Event()
+    threads = []
+
+    def execute(action):
+        threads.append(threading.get_ident())
+        barrier.wait(5)
+        assert gate.wait(5)
+        return original(action)
+
+    monkeypatch.setattr(ui.LocationWriteAction, 'execute', execute)
+    assert controller.start(paths, '上海东滩')
+    try:
+        assert controller._worker.pool is files._browser_work_pool
+        assert wait_for(lambda: len(threads) == 2)
+        assert len(set(threads)) == 2 and threading.get_ident() not in threads
+    finally:
+        gate.set()
+    assert wait_for(controller.is_shutdown_done)
+    assert controller._done == 2
+    assert all(shooting_location(PhotoMetaDataXMP().read(path)) == '上海东滩' for path in paths)
+
+
+def test_immediate_location_paste_waits_for_copy(env, monkeypatch):
+    controller, files, paths = env
+    controller.save_one(paths[0], '云南·高黎贡山')
+    QApplication.clipboard().setText('旧地点')
+    original = ui.LocationCopyAction.execute
+    gate = threading.Event()
+
+    def execute(action):
+        assert gate.wait(5)
+        return original(action)
+
+    monkeypatch.setattr(ui.LocationCopyAction, 'execute', execute)
+    controller.copy(paths[0])
+    controller.paste(paths[-1:])
+    assert not Path(paths[-1]).with_suffix('.xmp').exists()
+    gate.set()
+    assert wait_for(controller.is_shutdown_done)
+    assert shooting_location(PhotoMetaDataXMP().read(paths[-1])) == '云南·高黎贡山'
