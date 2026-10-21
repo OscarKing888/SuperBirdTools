@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait as _wait_futures
+import logging
 import queue
 from dataclasses import dataclass
 from pathlib import Path
@@ -63,6 +64,7 @@ from birdstamp.export_stage.sequence_export_workers import resolve_sequence_expo
 
 OUTPUT_FORMAT_OPTIONS = editor_options.OUTPUT_FORMAT_OPTIONS
 _IMAGE_EXPORT_PROGRESS_HIDE_DELAY_MS = 600
+_LOG = logging.getLogger(__name__)
 
 
 @dataclass(slots=True)
@@ -552,6 +554,9 @@ class _BirdStampExporterMixin:
             if candidate is not None:
                 reuse_sources[target] = candidate
 
+        _LOG.info("gif frame cache total=%s cached_frames=%s pending_frames=%s export_candidates=%s "
+                  "persistent=%s cache=%s",
+                  total, reused_count, len(missing_jobs), len(reuse_sources), persistent, cache_plan.cache_dir)
         if reused_count > 0:
             self._set_status(f"GIF 导出复用缓存帧 {reused_count}/{total}")
 
@@ -623,11 +628,13 @@ class _BirdStampExporterMixin:
                 prefer_current_ui_for_current_path=True,
                 progress_callback=_on_prepare_progress,
             )
+            jobs_ready_at = time.perf_counter()
             frame_paths, frame_output_dir = self._ensure_gif_frame_cache(
                 jobs,
                 output_path=output_path,
                 persistent=gif_request.keep_frame_images,
             )
+            frames_ready_at = time.perf_counter()
             gif_paths = self._export_gif_from_frame_paths(
                 frame_paths,
                 output_path,
@@ -637,6 +644,9 @@ class _BirdStampExporterMixin:
                 wechat_sticker=gif_request.wechat_sticker,
                 repeat_fps=list(getattr(gif_request, "repeat_fps", None) or ()),
             )
+            _LOG.info("gif export photos=%s prepare_s=%.3f render_cache_s=%.3f encode_s=%.3f output=%s",
+                      len(paths), jobs_ready_at - started_at, frames_ready_at - jobs_ready_at,
+                      time.perf_counter() - frames_ready_at, output_path)
         except Exception:
             self._reset_image_export_progress(expected_token=prepare_token)
             raise

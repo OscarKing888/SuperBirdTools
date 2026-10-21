@@ -43,4 +43,7 @@ if [[ -d "${COLLECT_DIR}" ]]; then
   rm -rf "${COLLECT_DIR}"
 fi
 
+# 必须验证产物内的工具及实际导出链路，不能被开发机的 Homebrew ExifTool 掩盖。
+"${SELECTED_PYTHON}" "${REPO_ROOT}/build_tools/macos_exiftool.py" --app "${APP_DIR}"
+
 echo "[OK] 打包完成: ${APP_DIR}"

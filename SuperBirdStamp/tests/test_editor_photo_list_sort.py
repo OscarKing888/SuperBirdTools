@@ -247,3 +247,35 @@ def test_remove_shortcuts_only_affect_focused_photo_list(monkeypatch, platform):
         host.close()
         host.deleteLater()
         _APP.processEvents()
+
+
+def test_photo_list_status_tracks_model_and_selection_with_blocked_widget_signals():
+    from PyQt6.QtCore import QSignalBlocker
+
+    widget = PhotoListWidget()
+    try:
+        status = widget._selection_status_label
+        assert status.text() == "共 0 张 | 当前未选中"
+        widget.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
+        first = _make_item(1, "z.jpg", (0, 1))
+        second = _make_item(2, "a.jpg", (0, 2))
+        with QSignalBlocker(widget), QSignalBlocker(widget._tree_widget):
+            widget.addTopLevelItem(first)
+            assert status.text() == "共 1 张 | 当前未选中"
+            widget.addTopLevelItem(second)
+            assert status.text() == "共 2 张 | 当前未选中"
+            widget.setCurrentItem(first)
+            assert status.text() == "共 2 张 | 当前 1/2"
+            second.setSelected(True)
+            assert status.text() == "共 2 张 | 已选 2 张 | 当前 1/2"
+        widget.header().setSortIndicator(PHOTO_COL_NAME, Qt.SortOrder.AscendingOrder)
+        assert status.text() == "共 2 张 | 已选 2 张 | 当前 2/2"
+        widget.takeTopLevelItem(widget.indexOfTopLevelItem(second))
+        assert status.text() == "共 1 张 | 当前 1/1"
+        widget.clear()
+        assert status.text() == "共 0 张 | 当前未选中"
+        widget.addTopLevelItem(_make_item(3, "new.jpg", (0, 3)))
+        assert status.text() == "共 1 张 | 当前未选中"
+    finally:
+        widget.deleteLater()
+        _app().processEvents()

@@ -89,6 +89,8 @@ ExifTool 生命周期与 Viewer 共用 [`exiftool_runner.py`](../../app_common/e
 
 ## 3. 元数据与模板 provider
 
+共享批量 XMP 读取通过 [`metadata_sqlite.py`](../../app_common/exif_io/metadata_sqlite.py) 复用本机 SQLite 解析缓存；所有 `PhotoMetaDataXMP` 成功写入都会异步刷新，外部修改在读取时核验侧车指纹。原始 XMP 仍为数据源，缓存失效/失败按原流程重新解析；容量、后台写入生命周期与诊断入口见 [Viewer 元数据缓存](../../SuperViewer/docs/ARCHITECTURE.md)。
+
 “拍摄地点” `location` 使用共享 [shooting_location.py](../../app_common/shooting_location.py) 的 `XMP-superpicky:shooting_location` 文本，与 Viewer 编辑字段一致。[meta/normalize.py](../birdstamp/meta/normalize.py) 供模板、Overlay 预览/导出和 CLI 共用；不再拼接存储分析结果的 City/State/Country，也不以 GPS 代替地点，坐标仍由 `gps_text` 提供。自动字段路由固定读取已合并 XMP 的规范地点，清空侧车属性后不能回退到旧照片快照；空值沿用既有缺失字段显示规则。真实中文写入、修改/清空、原图及清晰度保留、Overlay 绘制回归见 [test_template_shooting_location.py](../tests/test_template_shooting_location.py)。
 
 [template_context.py](../birdstamp/gui/template_context.py) 是模板字段的主要定位入口：
@@ -247,6 +249,8 @@ RAW 源图的去抖动分析、成片预览和导出统一优先读取长边至�
 
 保留模式使用输出目录下的 `birdstamp_export_cache/<类型>/<桶>/frames` 与 manifest；临时模式在输出目录创建独立临时目录。`dirty_path_keys` 强制相关源图重渲染，manifest 验证命中条件。终端导出类型不进入源帧签名。视频两级缓存用 `ThrottledFrameManifestWriter` 节流写 manifest（每 32 帧或 1 秒一次），并在 `finally` 中 flush，完成、取消与失败时已完成的帧都会记录。GIF 的 `_ensure_gif_frame_cache` 也使用渲染源帧缓存；视频由 `_ensure_source_frame_cache`、`_ensure_video_frame_cache` 分两步准备。缓存帧 manifest 记录其来源导出图；当前最佳导出图（PNG 优先）变化或消失时重建该帧。源 PNG 已符合视频尺寸时原子复制完整文件，保持像素和 EXIF，免去第二次编码。
 
+`reusable_frame_path` 同时校验缓存 PNG 自身的路径、大小和修改时间（`file_signature`），被替换、截断或删除时只重建该帧。旧 manifest 没有此字段时先用 Pillow 校验文件结构，再补入指纹并随清单保存；不提升源帧算法版本，不因升级而把正常旧缓存的 HIF 全部重新解码。清单版本字段损坏或记录指向桶外文件均视为未命中；热缓存只做文件状态检查，不逐帧重读 PNG。回归 [test_gif_frame_cache.py](../tests/test_gif_frame_cache.py) 覆盖完整两次 GIF 导出、改文件名/FPS/重复遍/缩放版本仍零次原图解码，逐帧源文件/XMP/设置/dirty 失效、旧清单升级、损坏缓存修复，以及 GIF 与视频共用源帧。跨次复用需要开启“保留单帧图片”并使用同一输出目录；关闭时临时帧在导出结束后清理。日志 `gif frame cache` 记录命中帧数、待准备帧数、可复用导出图候选数及缓存目录。此缓存保存的是渲染后的 RGB PNG，后续 GIF 的调色板量化和编码仍按本次参数执行。
+
 [export_video](../birdstamp/export_stage/core.py) 在每个缓存目录创建后立即接管所有权，不能等准备函数成功返回后才记录目录。成功时先在工作目录编码，再用 `os.replace` 放到最终目标；普通异常清理未完成视频，并按 `preserve_temp_files` 决定是否保留帧缓存。即使异常发生在首帧或 manifest 准备期间，临时目录也有清理责任方。
 
 取消与普通失败的语义不同：取消会保留已完成帧，并通过 [VideoExportCancelledError](../birdstamp/export_stage/video_export_cancelled_error.py) 返回保留目录；已经有规范化视频帧时尝试生成部分视频，只有源帧时报告源帧目录。调用方应展示恢复路径。创建线程池的工作线程在 `finally` 中负责停止提交和等待池结束。
@@ -266,10 +270,12 @@ RAW 源图的去抖动分析、成片预览和导出统一优先读取长边至�
 - GIF 时间粒度为 10 ms。请求不超过 100 FPS 时保留所有输入帧，按累计时间量化每帧时长，避免逐帧取整累计误差；例如 24 FPS 使用不同的 10 ms 倍数时长组合。
 - [GifExportPanel](../birdstamp/gui/editor_gif_panel.py) 保留 1–240 FPS 输入。超过 100 FPS 时按原始总时长采样到 100 FPS，部分输入帧不会进入 GIF，编码帧数会改变，不能再假设一张输入图对应一帧 GIF。
 - 总时长通常与请求时长相差不超过 5 ms；非空片段最少是一帧 10 ms，极短片段受此下限约束。所有帧时长均非零，主输出与缩放变体复用同一时间计划。
-- 重复播放：`GifExportOptions.repeat_fps`（`build_gif_frame_timing` 的 `repeat_fps`）在主 FPS 那一遍之后，按各自 FPS 把完整序列再追加若干遍，例如 15 张照片按 20 → 10 → 5 FPS 得到 45 个编码帧。每遍独立按上述规则量化/采样，`GifFrameTiming.segment_fps` 记录各遍 FPS，`effective_fps` 为整段平均值；`input_frame_count` 仍是输入图片数。编码时同一输入帧只解码缩放一次，内存不随遍数增长。面板「重复播放」逐行添加（默认取上一遍 FPS 的一半，最多 16 遍），随导出偏好和工作区的 `gif_repeat_fps` 保存，旧工作区恢复为只播放一遍；CLI 用可重复的 `--repeat-fps`。回归见 [test_gif_timing.py](../tests/test_gif_timing.py)、[test_gif_export_panel.py](../tests/test_gif_export_panel.py)。
+- 重复播放：`GifExportOptions.repeat_fps`（`build_gif_frame_timing` 的 `repeat_fps`）在主 FPS 那一遍之后，按各自 FPS 把完整序列再追加若干遍，例如 15 张照片按 20 → 10 → 5 FPS 得到 45 个编码帧。每遍独立按上述规则量化/采样，`GifFrameTiming.segment_fps` 记录各遍 FPS，`effective_fps` 为整段平均值；`input_frame_count` 仍是输入图片数。编码准备时同一输入帧只解码、缩放和量化一次，准备缓存不随遍数增长。面板「重复播放」逐行添加（默认取上一遍 FPS 的一半，最多 16 遍），随导出偏好和工作区的 `gif_repeat_fps` 保存，旧工作区恢复为只播放一遍；CLI 用可重复的 `--repeat-fps`。回归见 [test_gif_timing.py](../tests/test_gif_timing.py)、[test_gif_export_panel.py](../tests/test_gif_export_panel.py)。
 - `GifExportProgress` 的 `current` / `total` 使用计划编码帧数，另有 `input_frame_count`、`encoded_frame_count`、`requested_fps`、`effective_fps`、`duration_ms` 和变体序号。非 GUI 调用方也应展示实际 FPS 与时长；GUI 的进度和完成摘要已展示这些信息。
 
-当前 Pillow GIF 编码会在内存中保留一个变体的全部采样帧，尚非流式编码。编码器可能合并相同帧，播放器也可能施加自身最小时长；上述进度表达导出的时间计划，不能用来假设文件必然包含同等数量的独立帧记录或所有播放器具有相同播放策略。
+GIF 的 `_prepare_gif_palette_frames` 按源路径去重，在有界线程池中完成 PNG 解码、尺寸归一化和 Pillow 默认的自适应 256 色量化，再按原时间表编码。每个变体只缓存每张源图的 P 帧（1 字节/像素），重复播放复用该帧，不重复量化；RGB 临时图处理后立即关闭。线程数取可用 CPU、8 线程上限、独立帧数和内存预算的最小值；预算为当前可用内存的四分之一、最多 2 GiB，探测失败用 512 MiB，按最大输入或输出画幅每像素 24 字节估算，因此微信小图也计入原 PNG 解码成本。进度在协调线程按已完成路径对应的时间表帧数累计；失败停止提交、等待在途任务并关闭已完成/未交接图像。GUI 和 CLI 共用该入口，不新增参数。回归 [test_gif_preparation.py](../tests/test_gif_preparation.py) 比较旧 RGB 编码与新 P 帧编码的完整 GIF 字节，并覆盖真实并发、重复量化次数、内存预算和异常清理。
+
+当前 Pillow GIF 编码仍会在内存中保留一个变体的全部采样调色板帧，尚非流式编码；在途预算不代表整段 GIF 的总内存上限，编码器内部仍会为重复段创建帧副本。编码器可能合并相同帧，播放器也可能施加自身最小时长；上述进度表达导出的时间计划，不能用来假设文件必然包含同等数量的独立帧记录或所有播放器具有相同播放策略。日志 `gif export` 分开记录作业准备、渲染/帧缓存、GIF 编码耗时，`gif encode` 记录每个尺寸变体的量化准备和最终写入耗时、线程数及独立帧数，用于区分 HIF 解码/渲染与后续编码瓶颈。
 
 “缩小版本”首位的“微信表情”默认开启，默认值读取 `editor_options.json.default_gif_wechat_sticker`；选择随导出偏好和工作区的 `gif_wechat_sticker` 保存，旧工作区使用配置默认值。核心 `GifExportOptions.wechat_sticker` 为可选附加输出，不改变主 GIF 和比例版本；生成 `__wechat.gif`，初始长边最多 480 像素、不放大小图。`_save_wechat_gif_variant` 开启调色板优化，实际编码并检查文件大小；超出 5,000,000 字节时按面积估算下一轮尺寸、等比缩小重试，保留相同帧顺序和时间计划。只有通过大小检查的临时文件才原子替换目标，失败清理临时目录并保留原有微信版本；即使缩到 1×1 仍超限则明确报错，要求减少照片。体积限制采用十进制 5 MB，以同时满足 5 MiB 的上限。回归见 [test_gif_wechat.py](../tests/test_gif_wechat.py) 与 [test_gif_export_panel.py](../tests/test_gif_export_panel.py)。CLI 可用 `python -m birdstamp gif frame1.png frame2.png -o clip.gif --wechat` 对已渲染帧使用同一编码算法（按传入顺序，CLI 默认不附加微信版本）。
 
@@ -358,6 +364,8 @@ macOS 使用 `.venv/bin/python3` 执行相同的 `-m pytest` 参数。先运行�
 GUI 测试必须在构造窗口前将 `birdstamp.config.get_user_data_dir` patch 到临时目录，并按需隔离缓存。构造后才禁用保存不能防止启动读取或初始化真实配置。使用进程级强引用保留 `QApplication`，按实际状态/定时器/线程完成条件等待，不能只增加固定 sleep。自动保存、模板与导出状态的真实用户文件不应成为测试输入或清理对象；离屏测试也不替代 Windows/macOS 打包后启动验证。
 ## 独立更新器接入
 
+两个应用的 [`entry.py`](../entry.py) 均提供 `--check-exiftool [--output 报告.json]`，根 [`exiftool_diagnostics.py`](../../exiftool_diagnostics.py) 在主窗口、工作区恢复及更新登记前核验真实 ExifTool 解析路径。macOS 必须命中模块内的工具，打包态还核对其真实路径位于当前 `.app`；系统安装、环境覆盖和包外符号链接不能掩盖缺失组件。诊断全程使用临时 HOME 和系统 PATH 并清除 PERL 环境变量（结束恢复），库树每个真实文件均须留在同一 ExifTool 目录；保留 EXIFTOOL_EXE/PATH 覆盖，以便明确拒绝外部回退。BirdStamp 复用 [`runtime_diagnostics.check_export()`](../birdstamp/runtime_diagnostics.py) 在临时目录验证 JPEG/PNG 实际导出、中文 EXIF 和自定义侧车 XMP，保持原图与侧车不变并关闭 stay-open 进程。完整 `--check-runtime` 在 macOS 打包态同样执行路径核验，防止本机 Homebrew 造成假阳性；两项诊断均不加载用户工作区。
+
 Windows 合并构建由 [`stage_windows_exiftool.py`](../../build_tools/stage_windows_exiftool.py) 在发布清单生成前为两个应用各复制完整 ExifTool（含 `exiftool_files`），并检查安装副本的版本；失败即停止打包。[`pyi_rthook_cwd.py`](../scripts_dev/pyi_rthook_cwd.py) 优先配置 BirdStamp 安装目录中的副本，避免依赖 MERGE 的临时解压路径，并保留显式 `EXIFTOOL_EXE` / `EXIFTOOL_PATH` 覆盖。`SuperBirdStamp.exe --check-runtime --output <报告.json>` 在临时目录验证中文 EXIF、侧车自定义 XMP 的 JPEG/PNG 实际导出与 CPU 模型推理，不加载用户工作区；加 `--export-only` 可独立检查 ExifTool 导出，不加载模型。
 
 [`entry.py`](../entry.py) 在业务模块导入前进行 `SuperBirdUpdater.runtime.admit_startup()` 登记。`launch_gui()` 在窗口显示后接入更新菜单、后台检查及独立 IPC；图片/GIF、序列和视频导出中的实例拒绝更新退出。通过准备检查后冻结窗口输入，再调用原 `closeEvent`，保留工作区保存及线程/ExifTool 清理语义。
@@ -366,7 +374,9 @@ Windows 合并构建由 [`stage_windows_exiftool.py`](../../build_tools/stage_wi
 
 ### 视口显示选项归属
 
-主工具栏编辑按钮按「选择模式 → 调整裁剪框 → 编辑叠加层 → 去抖动参考区」排列；`_setup_edit_mode_buttons` 初始化参考区按钮显隐，`_on_export_tab_changed` 仅在去抖动页激活时显示它，沿用普通编辑页与去抖动页各自的工具选择和参考区参数。
+主工具栏编辑按钮按「选择模式 → 调整裁剪框 → 编辑叠加层 → 去抖动参考区」排列；`_setup_edit_mode_buttons` 与 `_on_export_tab_changed` 共用 `_sync_edit_mode_button_visibility` 初始化及切页时的显隐：调整裁剪框、编辑叠加层仅在「图片处理」页显示，去抖动参考区仅在「去抖动」页显示。沿用普通编辑页与去抖动页各自的工具选择和参考区参数。
+
+显式点击「调整裁剪框」时，`_on_edit_mode_changed` 将当前照片的「不裁切」比例切换为 9:16，复用 `_on_ratio_changed` 更新裁剪框、逐图参数及工作区自动保存。其它比例、其它照片和模板文件保持原值；静默恢复编辑模式不会改比例。这是 GUI 工具激活行为，CLI 继续使用已保存的裁切设置。回归见 [test_crop_adjust_default_ratio.py](../tests/test_crop_adjust_default_ratio.py)。
 
 [PreviewViewportPanel](../birdstamp/gui/editor_preview_viewport.py) 复用共享 [ViewportOverlayTools](../../app_common/preview_toolbar.py)，将原主工具栏显示选项移入每侧：裁切遮罩/透明度、焦点框、鸟体框、构图线/线宽均独立；构图菜单一级列出类型单选，下方的滑动条与输入框同步设置 1–32 px 整数线宽。来源、原图/成片、焦点居中、适应、缩放也统一为图标。主工具栏只保留编辑工具、A/B 和视野同步。`_build_preview_overlay_options(controls)` 接受指定侧控件；无参数沿用 B 以兼容编辑与模板管线，A 显式传入自己的选项。工作区通过 `a_overlays` 保存 A，旧字段保持 B，旧工作区初始化两侧相同后各自调整。详细布局见 [AB_PREVIEW_LAYOUT.md](ux/AB_PREVIEW_LAYOUT.md)，回归见 [test_editor_viewport_toolbar.py](../tests/test_editor_viewport_toolbar.py)。纯交互控件无独立 CLI 参数。
 

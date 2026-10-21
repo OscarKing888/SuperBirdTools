@@ -254,6 +254,10 @@ def build_file_context_menu(panel, paths, primary, *, log_prefix):
         sub.menuAction().setVisible(bool(sub.actions()))
 
     menu.addSeparator()
+    refresh = menu.addAction("刷新缩略图", lambda checked=False, p=list(paths): panel.refresh_thumbnails(p))
+    refresh.setObjectName("refreshThumbnailsAction")
+    refresh.setEnabled(bool(paths) and not panel._background_shutdown_requested)
+    refresh.setToolTip("从源文件重新生成所选文件的预览缩略图")
     send_menu = _submenu(menu, "发送到", "send")
     panel._add_send_to_external_app_actions(send_menu, paths)
     locate_menu = _submenu(menu, "定位文件", "folder")

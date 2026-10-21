@@ -3131,11 +3131,18 @@ class BirdStampEditorWindow(
             toolbar.addWidget(btn)
 
         self._edit_mode_buttons[EDIT_MODE_NONE].setChecked(True)
-        self._edit_mode_buttons[EDIT_MODE_REFERENCE_REGION].setVisible(self._dejitter_tab_active())
+        self._sync_edit_mode_button_visibility()
         self._edit_mode_buttons[EDIT_MODE_REFERENCE_REGION].toggled.connect(
             self._sync_edit_reference_toggle)
         self._sync_edit_reference_toggle()
         self.edit_mode_group.buttonClicked.connect(self._on_edit_mode_changed)
+
+    def _sync_edit_mode_button_visibility(self) -> None:
+        """按处理页面显示对应工具，保留各页的选中模式与编辑参数。"""
+        image_processing = self.export_tabs.currentIndex() == 0
+        for mode_id in (EDIT_MODE_CROP_ADJUST, "overlay"):
+            self._edit_mode_buttons[mode_id].setVisible(image_processing)
+        self._edit_mode_buttons[EDIT_MODE_REFERENCE_REGION].setVisible(self._dejitter_tab_active())
 
     def _current_edit_mode_id(self) -> str:
         buttons = getattr(self, "_edit_mode_buttons", None)
@@ -3170,6 +3177,17 @@ class BirdStampEditorWindow(
             return
         if self._sequence_result_mode():
             self._set_dejitter_view('edit')
+        if (
+            self._current_edit_mode_id() == EDIT_MODE_CROP_ADJUST
+            and self.current_path is not None
+            and _is_ratio_no_crop(self._selected_ratio())
+        ):
+            # 显式进入裁剪时启用当前照片的竖幅裁切，沿用比例变更的逐图保存流程。
+            ratio_index = self._ratio_combo_index_for_value(9 / 16)
+            if ratio_index < 0:
+                self.ratio_combo.addItem("9:16", 9 / 16)
+                ratio_index = self.ratio_combo.count() - 1
+            self.ratio_combo.setCurrentIndex(ratio_index)
         self._refresh_preview_label(preserve_view=True)
         self._schedule_workspace_autosave()
 

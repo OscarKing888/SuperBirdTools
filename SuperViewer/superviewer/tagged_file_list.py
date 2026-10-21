@@ -15,6 +15,7 @@ from app_common.file_browser._browser_core import (
     _get_cached_actual_path,
     _metadata_comment_from_meta,
     _metadata_lens_model_text,
+    _metadata_species_text,
     _report_row_candidate_paths,
     _report_row_from_cache_for_path,
 )
@@ -26,6 +27,7 @@ from app_common.qt_theme import is_theme_change_event, scheme_from_palette
 from app_common.toggle_button import TOGGLE_CHECKED_STYLE
 
 from .filter_controls import FilterDropdown, FilterFlowLayout
+from .species_filter import species_filter_name
 from .directory_selection import DirectorySelectionCache
 from .rarity_badge import rarity_badge_style
 from .file_context_menu import build_file_context_menu, species_shortcut_sequence
@@ -256,6 +258,7 @@ class SuperViewerTaggedFileListPanel(FileListPanel):
     video_playback_stop_requested = pyqtSignal()
     playback_state_changed = pyqtSignal(bool)
     use_preview_cache = True
+    fast_thumbnail_cache_check = True
     enable_key_navigation_playback = True
     enable_range_mark_shortcuts = True
     enable_in_memory_fast_preview = True
@@ -337,6 +340,9 @@ class SuperViewerTaggedFileListPanel(FileListPanel):
         self._active_rarity_filters: set[str] = set()
         self._rarity_filter_button: FilterDropdown | None = None
         self._rarity_filter_clear_action = None
+        self._active_species_filters: set[str] = set()
+        self._species_filter_button: FilterDropdown | None = None
+        self._species_filter_clear_action = None
         self._tag_filter_theme_applying = False
         self._lens_filter_value = ""
         self._lens_filter_combo: FilterableComboBox | None = None
@@ -422,6 +428,7 @@ class SuperViewerTaggedFileListPanel(FileListPanel):
             styled_widgets = [
                 (self._tag_filter_menu_button, button_style),
                 (self._rarity_filter_button, button_style),
+                (self._species_filter_button, button_style),
             ]
             for widget, style in styled_widgets:
                 if widget is not None and widget.styleSheet() != style:
@@ -608,7 +615,8 @@ class SuperViewerTaggedFileListPanel(FileListPanel):
         self.tag_library.dirty_paths.clear()
         tag_config_scope_changed = self._set_tag_config_directory(path)
         self._load_tag_config_if_changed(force=tag_config_scope_changed)
-        if force_reload or os.path.normcase(os.path.normpath(path)) != os.path.normcase(self.get_current_dir() or ""):
+        if ((force_reload and not preserve_meta_cache)
+                or os.path.normcase(os.path.normpath(path)) != os.path.normcase(self.get_current_dir() or "")):
             self._local_metadata_updates_by_path = {}
         self._photo_tag_cache = {}
         self._photo_tag_generation_by_path = {}
@@ -716,6 +724,25 @@ class SuperViewerTaggedFileListPanel(FileListPanel):
                     key = os.path.normcase(os.path.normpath(path))
                     overrides.setdefault(key, {}).update(values)
         return updated
+
+    def replace_photo_metadata_for_paths(self, metadata_by_path: dict) -> int:
+        """整份 XMP 被替换后清除旧字段和标签；晚到的后台批次不能恢复旧值。"""
+        updates = {}
+        allowed_tags = set(self._available_tags)
+        overrides = getattr(self, '_local_metadata_updates_by_path', {})
+        for path, metadata in metadata_by_path.items():
+            norm = os.path.normpath(path)
+            previous = {**(self.get_report_row_for_path(norm) or {}),
+                        **self._meta_cache.get(norm, {}),
+                        **overrides.get(os.path.normcase(norm), {})}
+            # 用显式空值覆盖旧字段，同时保留重新读到的原图/报告回退信息。
+            fresh = {key: '' for key in previous}
+            fresh.update({key: value if value is not None else '' for key, value in metadata.items()})
+            fresh['SourceFile'] = norm
+            updates[norm] = fresh
+            self._photo_tag_cache[norm] = set(fresh.get('tags') or ()).intersection(allowed_tags)
+        self._bump_photo_tag_generations(updates)
+        return self.sync_metadata_edits_for_paths(updates)
 
     def _start_key_navigation_playback(self, event, *, view_name: str) -> None:
         self.video_playback_stop_requested.emit()
@@ -859,7 +886,8 @@ class SuperViewerTaggedFileListPanel(FileListPanel):
 
     def _has_any_filter(self) -> bool:
         return (super()._has_any_filter() or bool(self._active_tag_filters)
-                or bool(self._lens_filter_value) or bool(self._active_rarity_filters))
+                or bool(self._lens_filter_value) or bool(self._active_rarity_filters)
+                or bool(self._active_species_filters))
 
     def _filter_text_tokens(self) -> list[str]:
         if not getattr(self, "_filter_edit", None):
@@ -887,6 +915,8 @@ class SuperViewerTaggedFileListPanel(FileListPanel):
         ):
             return False
         if self._lens_filter_value and self._lens_model_for_path(path) != self._lens_filter_value:
+            return False
+        if self._active_species_filters and self._species_for_path(path) not in self._active_species_filters:
             return False
         if self._active_rarity_filters:
             meta = self._meta_cache.get(os.path.normpath(path), {})
@@ -1018,6 +1048,9 @@ class SuperViewerTaggedFileListPanel(FileListPanel):
         row = FilterFlowLayout(self._filter_controls)
         self._tag_filter_bar = row
         self._install_lens_filter_combo(row)
+        self._species_filter_button = FilterDropdown(self)
+        self._species_filter_button.menu().aboutToShow.connect(self._populate_species_filter_menu)
+        row.addWidget(self._species_filter_button)
         self._rarity_filter_button = FilterDropdown(self)
         self._rarity_filter_button.menu().aboutToShow.connect(self._populate_rarity_filter_menu)
         row.addWidget(self._rarity_filter_button)
@@ -1030,6 +1063,7 @@ class SuperViewerTaggedFileListPanel(FileListPanel):
         else:
             layout.addWidget(self._filter_controls)
         self._rebuild_tag_filter_bar()
+        self._sync_species_filter_widgets()
         self._sync_rarity_filter_widgets()
 
     def _rebuild_tag_filter_bar(self) -> None:
@@ -1079,11 +1113,78 @@ class SuperViewerTaggedFileListPanel(FileListPanel):
         else:
             menu.addAction("tags.cfg 未配置标签").setEnabled(False)
 
+    def _species_for_path(self, path: str) -> str:
+        """与列表鸟名列共用字段优先级；过滤和打开菜单只读已有缓存。"""
+        return species_filter_name(_metadata_species_text(self._meta_cache.get(os.path.normpath(path))))
+
+    def _species_filter_options(self) -> list[str]:
+        # 从未过滤的全集取选项；换目录后保留已选鸟名，仍可取消或清除。
+        names = {self._species_for_path(path) for path in self._all_files}
+        return sorted((names - {""}) | self._active_species_filters, key=str.casefold)
+
+    def _populate_species_filter_menu(self) -> None:
+        menu = self._species_filter_button.menu()
+        self._species_filter_clear_action = None
+        menu.clear()
+        clear = menu.addAction("清除鸟种名过滤")
+        clear.setEnabled(bool(self._active_species_filters))
+        clear.triggered.connect(lambda checked=False: self.set_species_filters(set()))
+        self._species_filter_clear_action = clear
+        menu.addSeparator()
+        names = self._species_filter_options()
+        if not names:
+            menu.addAction("当前照片暂无鸟种名").setEnabled(False)
+            return
+        # FilterMenu 已支持连续勾选，使用原生动作保留长菜单滚动和键盘导航。
+        actions = add_filterable_tag_actions(
+            menu, names, self._on_species_filter_toggled,
+            checkable=True, checked_provider=lambda name: name in self._active_species_filters,
+            filter_placeholder="搜索鸟种名…", no_match_text="没有匹配的鸟种名",
+        )
+        for action, name in zip(actions, names):
+            action.setData(name)
+
+    def _on_species_filter_toggled(self, name: str, checked: bool) -> None:
+        names = set(self._active_species_filters)
+        if checked:
+            names.add(name)
+        else:
+            names.discard(name)
+        self.set_species_filters(names)
+
+    def set_species_filters(self, names: Iterable[str]) -> None:
+        selected = {species_filter_name(name) for name in names} - {""}
+        if selected == self._active_species_filters:
+            return
+        self._active_species_filters = selected
+        self._sync_species_filter_widgets()
+        self._refresh_filter_scope()
+
+    def _sync_species_filter_widgets(self) -> None:
+        button = self._species_filter_button
+        if button is None:
+            return
+        count = len(self._active_species_filters)
+        button.setText(f"鸟种名({count})" if count else "全部鸟种名")
+        button.setChecked(bool(count))
+        selected = "、".join(sorted(self._active_species_filters, key=str.casefold))
+        button.setToolTip(
+            "多选鸟种名，命中任一鸟种即可；与其他过滤条件同时生效。\n"
+            "同一鸟名的待确定等状态和置信度标注合并过滤。\n"
+            f"已选：{selected or '不限'}\n选项来自当前目录的全部照片；可搜索或清除过滤"
+        )
+        if self._species_filter_clear_action is not None:
+            self._species_filter_clear_action.setEnabled(bool(count))
+        for action in button.menu().actions():
+            if action.isCheckable():
+                with QSignalBlocker(action):
+                    action.setChecked(action.data() in self._active_species_filters)
+
     def _populate_rarity_filter_menu(self) -> None:
         menu = self._rarity_filter_button.menu()
         self._rarity_filter_clear_action = None
         menu.clear()
-        clear = menu.addAction("清除稀有等级过滤")
+        clear = menu.addAction("清除稀有度过滤")
         clear.setEnabled(bool(self._active_rarity_filters))
         clear.triggered.connect(lambda checked=False: self.set_rarity_filters(set()))
         self._rarity_filter_clear_action = clear
@@ -1118,11 +1219,11 @@ class SuperViewerTaggedFileListPanel(FileListPanel):
         if button is None:
             return
         count = len(self._active_rarity_filters)
-        button.setText(f"稀有等级({count})" if count else "全部稀有等级")
+        button.setText(f"稀有度({count})" if count else "全部稀有度")
         button.setChecked(bool(count))
         selected = "、".join(rarity_badge_style(None, level=key)[0]
                             for key, *_ in RARITY_LEVELS if key in self._active_rarity_filters)
-        button.setToolTip(f"多选稀有等级，命中任一等级即可；与其他过滤条件同时生效。\n已选：{selected or '不限'}")
+        button.setToolTip(f"多选稀有度，命中任一等级即可；与其他过滤条件同时生效。\n已选：{selected or '不限'}")
         if self._rarity_filter_clear_action is not None:
             self._rarity_filter_clear_action.setEnabled(bool(count))
         for action in button.menu().actions():
@@ -1135,7 +1236,8 @@ class SuperViewerTaggedFileListPanel(FileListPanel):
         # 手动改等级/识鸟结果也可能使照片进入或离开当前过滤集合。
         if super()._filters_require_rebuild_after_metadata_refresh(paths):
             return True
-        if not (self._active_rarity_filters or self._active_tag_filters or self._lens_filter_value):
+        if not (self._active_species_filters or self._active_rarity_filters
+                or self._active_tag_filters or self._lens_filter_value):
             return False
         visible = {os.path.normcase(os.path.normpath(path)) for path in self._filtered_files}
         listed = {os.path.normcase(os.path.normpath(path)) for path in self._all_files}

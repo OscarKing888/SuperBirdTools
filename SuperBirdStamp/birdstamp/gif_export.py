@@ -1,11 +1,15 @@
 from __future__ import annotations
 
+from collections import Counter
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from dataclasses import dataclass
 from fractions import Fraction
+import logging
 import math
 import os
 from pathlib import Path
 import tempfile
+from time import perf_counter
 from typing import Callable, Iterable, Sequence
 
 from PIL import Image, ImageColor
@@ -13,6 +17,7 @@ from PIL import Image, ImageColor
 DEFAULT_GIF_BACKGROUND_COLOR = "#000000"
 WECHAT_GIF_MAX_BYTES = 5_000_000
 WECHAT_GIF_MAX_LONG_EDGE = 480
+_LOG = logging.getLogger(__name__)
 
 
 @dataclass(slots=True)
@@ -222,12 +227,15 @@ def normalize_gif_frame_size(
     resized_width = max(1, min(target_width, int(round(frame.width * scale))))
     resized_height = max(1, min(target_height, int(round(frame.height * scale))))
     if (resized_width, resized_height) != frame.size:
-        frame = frame.resize((resized_width, resized_height), Image.Resampling.LANCZOS)
+        resized = frame.resize((resized_width, resized_height), Image.Resampling.LANCZOS)
+        frame.close()
+        frame = resized
 
     background = Image.new("RGB", (target_width, target_height), ImageColor.getrgb(_safe_background_color(background_color)))
     offset_x = max(0, (target_width - frame.width) // 2)
     offset_y = max(0, (target_height - frame.height) // 2)
     background.paste(frame, (offset_x, offset_y))
+    frame.close()
     return background
 
 
@@ -348,6 +356,78 @@ def _save_wechat_gif_variant(
             size = _scaled_target_size(target_size, long_edge / max(target_size))
 
 
+def _gif_prepare_memory_budget() -> int:
+    # 只限制在途 RGB/量化临时像素；Pillow 最终仍需持有全部调色板帧。
+    try:
+        import psutil
+
+        return min(2 * 1024**3, max(0, int(psutil.virtual_memory().available)) // 4)
+    except (ImportError, OSError, AttributeError, ValueError, TypeError):
+        return 512 * 1024**2
+
+
+def _gif_prepare_workers(frame_paths: Sequence[Path], target_size: tuple[int, int]) -> int:
+    # 小尺寸变体也必须计入原 PNG 的解码内存，不能只按 480px 成片估算。
+    max_pixels = max(1, target_size[0] * target_size[1])
+    for path in frame_paths:
+        with Image.open(path) as source:
+            max_pixels = max(max_pixels, source.width * source.height)
+    cpu_count = max(1, getattr(os, "process_cpu_count", os.cpu_count)() or 1)
+    memory_workers = max(1, _gif_prepare_memory_budget() // (max_pixels * 24))
+    return max(1, min(8, cpu_count, memory_workers, len(frame_paths)))
+
+
+def _prepare_gif_palette_frame(
+    path: Path, target_size: tuple[int, int], background_color: str,
+) -> Image.Image:
+    with Image.open(path) as source:
+        with normalize_gif_frame_size(source, target_size, background_color=background_color) as frame:
+            # 与 Pillow GIF 的 RGB 默认转换完全相同；提前量化才能并行，
+            # 重复播放复用 P 帧，避免 save_all 对每一遍重新执行昂贵的量化。
+            return frame.convert("P", palette=Image.Palette.ADAPTIVE)
+
+
+def _prepare_gif_palette_frames(
+    frame_paths: Sequence[Path], target_size: tuple[int, int], background_color: str,
+    prepared: dict[Path, Image.Image], frame_prepared_callback: Callable[[int], None] | None,
+) -> int:
+    counts = Counter(frame_paths)
+    workers = _gif_prepare_workers(list(counts), target_size)
+    paths = iter(counts)
+    pending = {}
+    completed = 0
+    pool = ThreadPoolExecutor(max_workers=workers, thread_name_prefix="birdstamp-gif-palette")
+    try:
+        def refill() -> None:
+            while len(pending) < workers:
+                path = next(paths, None)
+                if path is None:
+                    break
+                pending[pool.submit(_prepare_gif_palette_frame, path, target_size, background_color)] = path
+
+        refill()
+        while pending:
+            done, _ = wait(tuple(pending), return_when=FIRST_COMPLETED)
+            for future in done:
+                path = pending[future]
+                prepared[path] = future.result()
+                del pending[future]
+                completed += counts[path]
+                # 回调只在协调线程执行；完成顺序不影响最后按时间表排列的帧序。
+                if frame_prepared_callback is not None:
+                    frame_prepared_callback(completed)
+            refill()
+    finally:
+        for future in pending:
+            future.cancel()
+        pool.shutdown(wait=True, cancel_futures=True)
+        # 失败/进度回调异常时，等待在途任务，再关闭未交接给调用方的图像。
+        for future in pending:
+            if not future.cancelled() and future.exception() is None:
+                future.result().close()
+    return workers
+
+
 def _save_gif_variant(
     frame_paths: Sequence[Path],
     output_path: Path,
@@ -359,25 +439,17 @@ def _save_gif_variant(
     frame_prepared_callback: Callable[[int], None] | None = None,
     optimize: bool = False,
 ) -> None:
-    frames: list[Image.Image] = []
-    # 重复段会多次引用同一输入帧：每个路径只解码、缩放一次，避免内存随遍数增长。
+    # 一个变体只保留每张源图的 P 帧（1 字节/像素），不保留整组 RGB 副本。
     prepared: dict[Path, Image.Image] = {}
+    started = perf_counter()
     try:
-        for frame_path in frame_paths:
-            frame = prepared.get(frame_path)
-            if frame is None:
-                with Image.open(frame_path) as image:
-                    frame = normalize_gif_frame_size(
-                        image,
-                        target_size,
-                        background_color=background_color,
-                    )
-                prepared[frame_path] = frame
-            frames.append(frame)
-            if frame_prepared_callback is not None:
-                frame_prepared_callback(len(frames))
-        if not frames:
+        if not frame_paths:
             raise ValueError("GIF 帧为空。")
+        workers = _prepare_gif_palette_frames(
+            frame_paths, target_size, background_color, prepared, frame_prepared_callback,
+        )
+        prepared_at = perf_counter()
+        frames = [prepared[path] for path in frame_paths]
 
         primary = frames[0]
         append_frames = frames[1:]
@@ -391,6 +463,10 @@ def _save_gif_variant(
             optimize=optimize,
             disposal=2,
         )
+        _LOG.info("gif encode frames=%s unique_frames=%s size=%sx%s workers=%s "
+                  "prepare_s=%.3f write_s=%.3f output=%s",
+                  len(frames), len(prepared), *target_size, workers,
+                  prepared_at - started, perf_counter() - prepared_at, output_path)
     finally:
         for frame in prepared.values():
             try:

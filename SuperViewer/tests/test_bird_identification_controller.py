@@ -189,7 +189,7 @@ def test_saved_result_queued_before_new_edit_does_not_clobber_ui(env, monkeypatc
     assert wait_for(lambda: not controller.busy)
 
 
-@pytest.mark.parametrize('operation', ['bird_id', 'per_bird', 'pinyin', 'location', 'rarity', 'catalog', 'capture_time'])
+@pytest.mark.parametrize('operation', ['bird_id', 'per_bird', 'pinyin', 'location', 'rarity', 'catalog', 'capture_time', 'raw_xmp'])
 @pytest.mark.parametrize('mode', ['list', 'thumbnail'])
 def test_real_window_result_refresh_preserves_preview_and_comment_draft(tmp_path, monkeypatch, mode, operation):
     import importlib
@@ -220,7 +220,7 @@ def test_real_window_result_refresh_preserves_preview_and_comment_draft(tmp_path
     Image.new('RGB', (320, 240) if operation == 'per_bird' else (24, 18), 'blue').save(photo)
     source = str(photo)
     capture_paths = [source]
-    if operation == 'capture_time':
+    if operation in ('capture_time', 'raw_xmp'):
         missing = library / '未找到原片.jpg'
         Image.new('RGB', (24, 18), 'green').save(missing)
         capture_paths.append(str(missing))
@@ -228,8 +228,11 @@ def test_real_window_result_refresh_preserves_preview_and_comment_draft(tmp_path
     monkeypatch.setattr(BirdIDClient, 'recognize', lambda *_: {
         'success': True, 'results': [{'cn_name': '白头鹎', 'en_name': 'Light-vented Bulbul', 'confidence': 93, 'gbif_rarity_100': 80, 'iucn_category': 'NT'},
         {'cn_name': '红耳鹎', 'en_name': 'Red-whiskered Bulbul', 'confidence': 40, 'gbif_rarity_100': 10, 'iucn_category': 'LC'}]})
-    if operation in ('pinyin', 'location', 'rarity', 'capture_time', 'per_bird'):
+    if operation in ('pinyin', 'location', 'rarity', 'capture_time', 'per_bird', 'raw_xmp'):
         assert PhotoMetaDataXMP().write_title(source, '白头鹎')
+    if operation == 'raw_xmp':
+        assert PhotoMetaDataXMP().write(source, {'XMP-superpicky:obsolete': '需要清除的旧字段',
+                                                'XMP-dc:Subject': ['白头鹎'], 'XMP-xmp:Rating': 5})
     if operation == 'per_bird':
         from SuperViewer.tests.test_per_bird_identification import Analyzer, response
         monkeypatch.setattr(ui, 'make_analyzer', lambda *a, **k: Analyzer([(0, 0, 100, 100), (160, 80, 320, 240)]))
@@ -254,14 +257,19 @@ def test_real_window_result_refresh_preserves_preview_and_comment_draft(tmp_path
         elif operation == 'per_bird':
             controller = window._bird_id
             assert controller.start_for_paths([source], options=BirdIDOptions(), per_bird=True)
-        elif operation == 'capture_time':
+        elif operation in ('capture_time', 'raw_xmp'):
             from SuperViewer.superviewer import capture_time_update
             raws = tmp_path / 'raws'
             raws.mkdir()
             (raws / (photo.stem + '.ARW')).write_bytes(b'raw')
             monkeypatch.setattr(capture_time_update, 'read_raw_capture_time', lambda *a, **k: '2025-08-19T09:10:11.045+08:00')
+            if operation == 'raw_xmp':
+                raw_path = raws / (photo.stem + '.ARW')
+                assert PhotoMetaDataXMP().write(str(raw_path), {'XMP-dc:Title': '白头鹎',
+                    'XMP-superpicky:date_time_original': '2025-08-19T09:10:11.045+08:00'})
+                files._local_metadata_updates_by_path[source] = {'obsolete': '旧缓存字段'}
             controller = window._capture_time
-            assert controller.start(capture_paths, str(raws))
+            assert controller.start(capture_paths, str(raws), all_information=operation == 'raw_xmp')
         elif operation == 'catalog':
             from SuperViewer.superviewer.bird_catalog import BirdCatalogClient
             bird = dict(bird_id=2, version_id=10, version_name='IOC 14.2', cn_name='白头鹎',
@@ -304,7 +312,7 @@ def test_real_window_result_refresh_preserves_preview_and_comment_draft(tmp_path
             assert window.preview_panel.canvas._individual_highlight is not None
             birds._set_hovered(None)
             assert window.preview_panel.canvas._individual_highlight is None
-        if operation == 'capture_time':
+        if operation in ('capture_time', 'raw_xmp'):
             assert controller._report is not None and controller._succeeded == 1
             assert files._active_view_selected_paths() == [str(missing)]
             assert not reselections
@@ -312,12 +320,21 @@ def test_real_window_result_refresh_preserves_preview_and_comment_draft(tmp_path
             assert window.image_info_panel.comment_edit.toPlainText() == '用户未保存的备注'
             # 下一轮直接处理保留下来的选择，全部成功后选择为空。
             (raws / (missing.stem + '.ARW')).write_bytes(b'raw')
-            assert controller.start(files._active_view_selected_paths(), str(raws))
+            if operation == 'raw_xmp':
+                metadata = files.cached_photo_metadata_for_path(source)
+                assert metadata.get('obsolete') == '' and metadata['rating'] == 0
+                assert files._photo_tag_cache[source] == set()
+                assert files._merge_metadata_batch_with_photo_tag_cache({source: {
+                    'obsolete': '晚到的旧字段', 'tags': ['白头鹎'], 'rating': 5}})[source]['obsolete'] == ''
+                assert PhotoMetaDataXMP().write_title(str(raws / (missing.stem + '.ARW')), '白头鹎')
+            assert controller.start(files._active_view_selected_paths(), str(raws), all_information=operation == 'raw_xmp')
             assert wait_for(lambda: not controller.busy)
             assert files._active_view_selected_paths() == []
             assert controller._report is None and controller._succeeded == 1
             assert '2025' in window.image_info_panel.basic_rows['拍摄时间'].text()
-            assert files.cached_photo_metadata_for_path(source)['date_time_original'] == '2025-08-19T09:10:11.045+08:00'
+            expected_time = '2025-08-19 09:10' if operation == 'raw_xmp' else '2025-08-19T09:10:11.045+08:00'
+            assert files.cached_photo_metadata_for_path(source)['date_time_original'] == expected_time
+            assert PhotoMetaDataXMP().read(source)['date_time_original'] == '2025-08-19T09:10:11.045+08:00'
         if operation == 'catalog':
             assert window.image_info_panel.basic_rows['拼音'].text() == 'bái tóu bēi'
             assert window.image_info_panel.basic_rows['保护等级'].text() == 'NT · 近危'
@@ -373,7 +390,7 @@ def test_real_window_result_refresh_preserves_preview_and_comment_draft(tmp_path
         assert not reselections
         assert window.preview_panel.source_pixmap_for_path(source).cacheKey() == cache_key
         assert window.image_info_panel.comment_edit.toPlainText() == '用户未保存的备注'
-        if operation != 'capture_time':
+        if operation not in ('capture_time', 'raw_xmp'):
             assert controller._dialog.grab().save(str(tmp_path / f'{operation}-{mode}.png'))
     finally:
         window.close()

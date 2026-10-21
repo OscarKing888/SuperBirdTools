@@ -335,7 +335,7 @@ def test_real_auto_adjust_undo_redo_and_save(photo, controllers):
     assert controller.auto_adjust()
     assert wait_for(lambda: not controller._operations)
     recipe = controller.session().state.current.recipe.validated()
-    assert {"brightnessContrast", "levels"} <= {step.kind for step in recipe.steps}
+    assert {step.kind for step in recipe.steps} == {"levels"}
     assert all(auto_step_mode(step) == "all" for step in recipe.steps)
     controller.undo()
     assert controller.session().state.current.recipe.is_identity()

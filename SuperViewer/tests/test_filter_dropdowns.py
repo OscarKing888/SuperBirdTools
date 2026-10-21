@@ -138,7 +138,7 @@ def test_rarity_menu_mouse_keyboard_reopen_clear_and_custom_labels(panel, monkey
     QTest.keyClick(menu, _KEY.Key_Space)
     assert menu.isVisible()
     assert panel._active_rarity_filters == {"rare", "epic"}
-    assert panel._rarity_filter_button.text() == "稀有等级(2)"
+    assert panel._rarity_filter_button.text() == "稀有度(2)"
     QTest.keyClick(menu, _KEY.Key_Escape)
     assert not menu.isVisible()
     menu.popup(QPoint(100, 100))
@@ -209,13 +209,15 @@ def test_filter_geometry_wraps_without_clipping(panel, scheme, width, font_size)
     font = host.font()
     font.setPointSize(font_size)
     host.setFont(font)
-    for control in (panel._lens_filter_combo, panel._rarity_filter_button, panel._tag_filter_menu_button):
+    for control in (panel._lens_filter_combo, panel._species_filter_button,
+                    panel._rarity_filter_button, panel._tag_filter_menu_button):
         control.setFont(font)
     host.resize(width, layout.heightForWidth(width))
     host.show()
     try:
         _APP.processEvents()
-        controls = [panel._lens_filter_combo, panel._rarity_filter_button, panel._tag_filter_menu_button]
+        controls = [panel._lens_filter_combo, panel._species_filter_button,
+                    panel._rarity_filter_button, panel._tag_filter_menu_button]
         for control in controls:
             assert host.rect().contains(control.geometry())
             assert control.width() >= control.minimumSizeHint().width()
@@ -227,3 +229,134 @@ def test_filter_geometry_wraps_without_clipping(panel, scheme, width, font_size)
         host.hide()
         panel.layout().insertWidget(0, host)
         _APP.setPalette(original_palette)
+
+
+@pytest.mark.parametrize("mode", [FileListPanel._MODE_LIST, FileListPanel._MODE_THUMB])
+def test_species_multiselect_matches_list_aliases_and_combines_with_rarity(panel, tmp_path, mode):
+    paths = seed(panel, tmp_path)
+    aliases = [
+        {"bird_species_cn": "白鹭"}, {"XMP-superpicky:bird_species_cn": "白鹭"},
+        {"report.bird_species_cn": "苍鹭"}, {"XMP-dc:Title": "苍鹭"},
+        {"title": "白鹭"}, {"Title": "大白鹭"},
+        {"bird_species_cn": "苍鹭", "XMP-superpicky:bird_species_cn": "白鹭"},
+    ]
+    for path, meta in zip(paths, aliases):
+        panel._meta_cache[path].update(meta)
+    panel._set_view_mode(mode)
+    panel.set_species_filters({"白鹭", "苍鹭"})
+    assert panel._has_any_filter()
+    assert visible(panel) == paths[:5] + [paths[6]]
+    # 精确匹配鸟种，不把“大白鹭”归到“白鹭”；空鸟名不命中。
+    panel.set_rarity_filters({"rare", "epic"})
+    assert visible(panel) == [paths[4], paths[6]]
+    assert panel._species_filter_options() == sorted({"白鹭", "苍鹭", "大白鹭"})
+    panel.set_lens_filter("镜头甲")
+    panel._on_tag_filter_toggled("飞行", True)
+    panel._filter_edit.setText("白鹭_04 湿地")
+    panel._filter_min_rating = 3
+    panel._filter_pick = True
+    assert panel._compute_filtered_files() == [paths[4]]
+    panel.set_species_filters(set())
+    assert panel._compute_filtered_files() == [paths[4]]
+
+
+@pytest.mark.parametrize("mode", [FileListPanel._MODE_LIST, FileListPanel._MODE_THUMB])
+def test_species_metadata_arrival_edits_and_late_batches(panel, tmp_path, mode):
+    paths = seed(panel, tmp_path)
+    panel._set_view_mode(mode)
+    panel.set_species_filters({"白鹭"})
+    assert visible(panel) == []
+    panel._on_metadata_batch_ready({paths[0]: {"title": "白鹭"}, paths[1]: {"title": "苍鹭"}})
+    panel._apply_meta_batch_tick()
+    panel._flush_meta_filter_refresh()
+    assert visible(panel) == [paths[0]]
+    panel.sync_metadata_edits_for_paths({paths[0]: {"title": "苍鹭"}, paths[1]: {"title": "白鹭"}})
+    assert visible(panel) == [paths[1]]
+    panel._on_metadata_batch_ready({paths[0]: {"title": "白鹭"}, paths[1]: {"title": "苍鹭"}})
+    panel._apply_meta_batch_tick()
+    panel._flush_meta_filter_refresh()
+    assert visible(panel) == [paths[1]]
+    panel.set_species_filters(set())
+    assert not panel._has_any_filter()
+    assert visible(panel) == paths
+
+
+def test_species_menu_search_keyboard_reopen_directory_change_and_clear(panel, tmp_path, monkeypatch):
+    paths = seed(panel, tmp_path)
+    panel._meta_cache[paths[0]]["title"] = "白鹭"
+    panel._meta_cache[paths[1]]["report.bird_species_cn"] = "苍鹭"
+    panel._meta_cache[paths[2]]["title"] = "大白鹭"
+
+    def unexpected_read(*args, **kwargs):
+        pytest.fail("鸟种与稀有度过滤不应触发同步元数据读取")
+
+    monkeypatch.setattr(panel._meta_proxy, "read", unexpected_read)
+    monkeypatch.setattr(panel._photo_tag_store, "load_tags_for_paths", unexpected_read)
+    menu = panel._species_filter_button.menu()
+    for _ in range(3):
+        menu.popup(QPoint(100, 100))
+        _APP.processEvents()
+        actions = {a.data(): a for a in menu.actions() if a.isCheckable()}
+        assert set(actions) == {"白鹭", "苍鹭", "大白鹭"}
+        edit = menu.findChild(QLineEdit)
+        edit.setText("白鹭")
+        assert actions["白鹭"].isVisible() and not actions["苍鹭"].isVisible()
+        if not actions["白鹭"].isChecked():
+            QTest.mouseClick(menu, _LEFT, pos=menu.actionGeometry(actions["白鹭"]).center())
+        edit.clear()
+        if not actions["苍鹭"].isChecked():
+            menu.setActiveAction(actions["苍鹭"])
+            QTest.keyClick(menu, _KEY.Key_Space)
+        assert menu.isVisible()
+        assert panel._active_species_filters == {"白鹭", "苍鹭"}
+        assert panel._species_filter_button.text() == "鸟种名(2)"
+        edit.setText("不存在的鸟")
+        assert any(a.isVisible() and a.text() == "没有匹配的鸟种名" for a in menu.actions())
+        QTest.keyClick(menu, _KEY.Key_Escape)
+    # 换目录后不沿用旧缓存中的未选鸟名，但已选项仍可见、可取消。
+    panel._all_files = [paths[3]]
+    menu.popup(QPoint(100, 100))
+    _APP.processEvents()
+    assert {a.data() for a in menu.actions() if a.isCheckable()} == {"白鹭", "苍鹭"}
+    QTest.mouseClick(menu, _LEFT, pos=menu.actionGeometry(panel._species_filter_clear_action).center())
+    assert not panel._active_species_filters
+    assert panel._species_filter_button.text() == "全部鸟种名"
+    assert not menu.isVisible()
+    menu.popup(QPoint(100, 100))
+    _APP.processEvents()
+    assert any(a.text() == "当前照片暂无鸟种名" and not a.isEnabled() for a in menu.actions())
+    menu.close()
+
+
+@pytest.mark.parametrize("mode", [FileListPanel._MODE_LIST, FileListPanel._MODE_THUMB])
+def test_species_status_variants_merge_into_one_option_and_match_all_photos(panel, tmp_path, mode):
+    from copy import deepcopy
+
+    paths = seed(panel, tmp_path)
+    for path, name in zip(paths, ["反嘴鹬", "反嘴鹬（待确定 33%）", "反嘴鹬 (待确认 40%)",
+                                  "反嘴鹬（疑似）", "白鹭", "白鹭（待确定 28%）", "大白鹭"]):
+        panel._meta_cache[path]["title"] = name
+    before = deepcopy(panel._meta_cache)
+    panel._set_view_mode(mode)
+    panel.set_species_filters({"反嘴鹬", "反嘴鹬（待确定 33%）"})
+    assert panel._active_species_filters == {"反嘴鹬"}
+    assert visible(panel) == paths[:4]
+    menu = panel._species_filter_button.menu()
+    menu.popup(QPoint(100, 100))
+    _APP.processEvents()
+    actions = {a.data(): a for a in menu.actions() if a.isCheckable()}
+    assert set(actions) == {"反嘴鹬", "白鹭", "大白鹭"}
+    assert actions["反嘴鹬"].isChecked()
+    assert panel._species_filter_button.text() == "鸟种名(1)"
+    QTest.mouseClick(menu, _LEFT, pos=menu.actionGeometry(actions["白鹭"]).center())
+    assert visible(panel) == paths[:6]
+    assert panel._species_filter_button.text() == "鸟种名(2)"
+    assert panel._meta_cache == before
+    menu.close()
+    # 待确定变为已确认后仍属于同一个过滤集合；新到的待确定记录也可命中。
+    panel.sync_metadata_edits_for_paths({paths[1]: {"title": "反嘴鹬"}})
+    assert visible(panel) == paths[:6]
+    panel._on_metadata_batch_ready({paths[7]: {"title": "反嘴鹬（待确定 12%）"}})
+    panel._apply_meta_batch_tick()
+    panel._flush_meta_filter_refresh()
+    assert visible(panel) == paths[:6] + [paths[7]]

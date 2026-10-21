@@ -150,6 +150,34 @@ class PhotoListWidget(FileListPanel):
         self._tree_widget.currentItemChanged.connect(self._emit_current_item_changed)
         self._tree_widget.itemSelectionChanged.connect(self.itemSelectionChanged.emit)
 
+        # 适配层独立维护树模型，统计不能读取共享浏览器的 _filtered_files。
+        # 监听模型信号，批量导入/恢复屏蔽树控件信号时也能同步状态。
+        model = self._tree_widget.model()
+        for signal in (model.rowsInserted, model.rowsRemoved, model.modelReset, model.layoutChanged):
+            signal.connect(self._update_selection_status)
+        selection = self._tree_widget.selectionModel()
+        selection.currentChanged.connect(self._update_selection_status)
+        selection.selectionChanged.connect(self._update_selection_status)
+        self._update_selection_status()
+
+    def _update_selection_status(self, *_args) -> None:
+        label = getattr(self, "_selection_status_label", None)
+        tree = getattr(self, "_tree_widget", None)
+        # 基类初始化时尚未替换为编辑器的 QTreeWidget。
+        if label is None or not isinstance(tree, QTreeWidget):
+            return
+        total = tree.topLevelItemCount()
+        selected_count = len(tree.selectedItems())
+        current_row = tree.indexOfTopLevelItem(tree.currentItem())
+        parts = [f"共 {total} 张"]
+        if selected_count > 1:
+            parts.append(f"已选 {selected_count} 张")
+        if current_row >= 0:
+            parts.append(f"当前 {current_row + 1}/{total}")
+        else:
+            parts.append("当前未选中")
+        label.setText(" | ".join(parts))
+
     # ------------------------------------------------------------------
     # Compatibility setup
     # ------------------------------------------------------------------

@@ -6,6 +6,8 @@
 
 ## 1. 启动与模块边界
 
+[`entry.py`](../entry.py) 的 `--check-exiftool [--output 报告.json]` 在主窗口与更新登记前运行根 [`exiftool_diagnostics.py`](../../exiftool_diagnostics.py)。macOS 检查真实解析结果必须是模块自带 ExifTool，打包态还须位于正在运行的 `.app` 内；Homebrew、环境覆盖或包外符号链接均不能替代缺失组件。诊断隔离 PERL 环境、HOME 与 PATH 并核对整个库树没有包外依赖，保留 EXIFTOOL_EXE/PATH 以拒绝实际外部覆盖。临时样本经过 `PhotoMetaDataXMP` 中文侧车写入、ExifTool 读回及 [`export_image_png()`](../superviewer/image_png_export.py) 实际 PNG 导出，核对原图和侧车未改，结束显式关闭 stay-open 进程；不构造主窗口或读取用户工作区。源码可执行 `python SuperViewer/entry.py --check-exiftool`，打包检查由 `build_tools/macos_exiftool.py` 在系统路径隔离后调用。
+
 Windows 下，`main.py` 在导入任何 Qt 控件前调用 [`preload_windows_runtime()`](../superviewer/windows_runtime.py)，预加载系统 `System32` 的 MSVC 运行库并保留句柄，避免 Qt 附带的旧运行库导致随后在识鸟/清晰度工作线程加载 Torch 时出现 `c10.dll / WinError 1114`。包入口的提前导入及无父包的脚本入口都经过此处；Torch 仍按需加载，非 Windows 跳过。回归见 [`test_windows_runtime.py`](../tests/test_windows_runtime.py) 的独立进程 Qt → Torch/Ultralytics 工作线程检查。已经启动的旧进程须完全退出后重启。
 
 [`main.py`](../main.py) 的 `main()` 加载运行选项与应用身份，建立支持 macOS FileOpen 的 `QApplication`，处理已有实例转发，安装主题，再创建 `MainWindow`。`SingleInstanceReceiver` 和 FileOpen 回调最终进入 `_on_received_file_list()` / `_open_received_file_list()`；普通启动恢复上次目录。窗口组装、信号接线、文件操作及关闭协调由 `MainWindow` 负责。
@@ -72,7 +74,7 @@ Viewer 切换目录前通过 `_remember_directory_selection()` 保存活动列�
 
 目录切换立即启动新扫描；旧扫描取消后仍由面板持有，直到其真正的 `QThread.finished` 被处理。扫描进度和结果校验 worker 身份，排队的列表应用还校验请求代次，防止 A → B → A 时旧 A 的结果覆盖新请求。窗口关闭也等待这些扫描完成交接。
 
-`FileTableModel` / `FileTableSortProxyModel` 和 `ThumbnailListModel` 展示同一套过滤数据。文本、评级、精选、排除、焦点及标签条件组合后重建数据集，不靠逐行隐藏控件。过滤栏通过 [`FilterFlowLayout`](../superviewer/filter_controls.py) 按实际字体与可用宽度换行，依次显示镜头、稀有等级和标签下拉。镜头过滤是最前的可搜索下拉框：每次展开时从当前列表全部照片（不受其它过滤影响）的 `_meta_cache` 镜头型号汇总选项和张数，加载过程中不做额外工作；当前选中的镜头即使不在新列表中也保留为 0 张选项，便于看到和清除。编号列只表示当前自然顺序。列表模式不触发缩略图工作；缩略图模式依据可见区域加载。连拍分组底框由两个模型共享的 `_BurstGroupMixin` 按模型行序惰性计算（同目录 + 同 `burst_id`、至少 2 张），两种配色交替；列表模式走 `BackgroundRole`，缩略图模式由 `ThumbnailItemDelegate` 读取 `_MetaBurstGroupRole` 画色带。`_apply_filter()` / `_rebuild_views()` 调用 `_sync_burst_group_display()`，任何过滤（含标签过滤）激活时关闭底框。
+`FileTableModel` / `FileTableSortProxyModel` 和 `ThumbnailListModel` 展示同一套过滤数据。文本、评级、精选、排除、焦点及标签条件组合后重建数据集，不靠逐行隐藏控件。过滤栏通过 [`FilterFlowLayout`](../superviewer/filter_controls.py) 按实际字体与可用宽度换行，依次显示镜头、鸟种名、稀有度和标签下拉。镜头过滤是最前的可搜索下拉框：每次展开时从当前列表全部照片（不受其它过滤影响）的 `_meta_cache` 镜头型号汇总选项和张数，加载过程中不做额外工作；当前选中的镜头即使不在新列表中也保留为 0 张选项，便于看到和清除。编号列只表示当前自然顺序。列表模式不触发缩略图工作；缩略图模式依据可见区域加载。连拍分组底框由两个模型共享的 `_BurstGroupMixin` 按模型行序惰性计算（同目录 + 同 `burst_id`、至少 2 张），两种配色交替；列表模式走 `BackgroundRole`，缩略图模式由 `ThumbnailItemDelegate` 读取 `_MetaBurstGroupRole` 画色带。`_apply_filter()` / `_rebuild_views()` 调用 `_sync_burst_group_display()`，任何过滤（含标签过滤）激活时关闭底框。
 
 Viewer 缩略图由 [`BirdThumbnailModel` / `BirdThumbnailDelegate`](../superviewer/thumbnail_metadata.py) 扩展共享模型与委托：照片下方固定鸟名、稀有度/IUCN 徽章、筛片状态三层，文件名和连拍编号仍独立置底；128 档也显示鸟名，长文本省略后可悬停查看完整鸟名、等级、已保存拼音与地点。徽章复用 `metadata_badges` 的配置和来源校验，缺失等级留空、0 分有效。标题字段解析与列表一致，初次加载和增量修改都会更新。`FileListPanel.thumbnail_model_class` / `thumbnail_delegate_class` 提供宿主扩展点，`ThumbnailItemDelegate.grid_size()` 将新增的 52 px 同时加到卡片与信息区高度，保留照片显示尺寸；滚动步长跟随新网格。绘制只读缓存，无逐项控件或文件读取，共享默认布局及 BirdStamp 不增加身份行。悬停通过模型 ToolTipRole 取得完整信息；测试见 [test_thumbnail_metadata.py](../tests/test_thumbnail_metadata.py) 与 [test_thumbnail_species_metadata.py](../../app_common/tests/test_thumbnail_species_metadata.py)。
 
@@ -84,15 +86,35 @@ Viewer 缩略图由 [`BirdThumbnailModel` / `BirdThumbnailDelegate`](../supervie
 
 HIF/HEIF/HEIC 即使已有完整报告或 XMP 拍摄字段，仍在 `MetadataLoader._read_metadata_batch()` 的后台文件读取路径取得相机焦点及 `CameraOrientation`，不能把未读取的焦点标成不存在。缩略图和预览共用这份方向正确的焦点缓存，迟到批次不会清除原图焦点或用报告坐标覆盖它；RAW 的报告快速路径仍使用内嵌焦点读取器。回归见共享 [`test_file_browser_heif_focus.py`](../../app_common/tests/test_file_browser_heif_focus.py)。
 
+每个 `FileListPanel` 还持有独立的 [`MetadataMemoryCache`](../../app_common/file_browser/_metadata_memory.py)，跨目录保留已合并的浏览器元数据（包括自定义标签集的 HIF 与 RAW 焦点结果），与当前视图的 `_meta_cache` 分开管理。上限为 20,000 条和默认估算 256 MiB；“用户选项 → 浏览与性能 → 加载与缓存 → 元数据内存缓存”通过共享 `superviewer_user_options` 的配置键 `metadata_memory_mb` 设置 64–4096 MiB。确认后由 `FileListPanel.apply_user_options()` 调用 `set_max_bytes()` 即时调整，调大保留已有条目，调小按原策略淘汰，不重读元数据、不改变读取代次；取消不生效。优先淘汰当前目录范围外的 LRU，再淘汰范围内 LRU；闲置 15 分钟的条目在下一次缓存操作时清理。`MetadataLoader` 在后台核验源文件、实际解析到的 XMP 路径及两者的纳秒时间/大小/文件身份，并比较标签集和报告行；命中不再解析 XMP、查询元数据磁盘缓存或读取原图 EXIF。侧车查找仍沿用大小写及派生图片父目录规则。读取前后指纹变化、取消及已知失败不进入缓存，返回深副本，显式清理的代次防止旧 worker 回填。
+
+“包含子目录”只改变显示范围，保留本地编辑保护和已加载的元数据，并复用当前目录的 shallow/recursive 列表；切回其他目录仍重新扫描文件列表，元数据在 worker 中按指纹复用。显式刷新使该目录及后代的会话缓存失效，重新加载报告；关闭窗口清空缓存。`[metadata.memory]` 日志记录命中/未命中、条目数、估算字节数和耗时。此策略仅用于浏览器会话缓存，无 CLI 参数；回归见 [`test_metadata_memory_cache.py`](../../app_common/tests/test_metadata_memory_cache.py) 及 [`test_directory_scope.py`](../tests/test_directory_scope.py)。
+
+[`MetadataSQLiteCache`](../../app_common/exif_io/metadata_sqlite.py) 在内存未命中后批量读取合并结果，命中跳过 XML、RAW 焦点提取与视频 ffprobe。`xmp-v1` 另存逐资源的解析行，`browser-v1` 保存合并后的拍摄/XMP/report/焦点/视频信息；改变字段解释时应升级对应 namespace。签名包含源文件和实际侧车的设备/文件身份、纳秒 mtime/ctime、大小，以及请求标签集、报告行。SQL 内采用 JSON 序列化，不使用 pickle。XMP、原图和只读 `report.db` 仍是数据源。
+
+缓存存于本机 `~/Library/Caches/SuperBirdTools/metadata-v1.sqlite3`（macOS）或 `%LOCALAPPDATA%/SuperBirdTools/Cache/metadata-v1.sqlite3`（Windows）；诊断可用 `SUPERBIRD_METADATA_CACHE_DIR` 覆盖。独立只读连接批量查询，[WAL](https://www.sqlite.org/wal.html) 写入由一个后台线程执行，GUI 保存只入队；16 MiB 待写预算防止慢盘积压，最多 100,000 条/估算 512 MiB 数据，超额按最早写入淘汰，数据库页面复用。退出通过 `close_cache()` / atexit 排空队列并关闭连接；损坏、权限或锁冲突降级为源读取，不影响 XMP 保存。旧 `meta_disk_cache.py` 仍只缓存原图派生字段。
+
+`PhotoMetaDataXMP` 成功写入后异步重建该 XMP 的 SQL 解析行，按实际侧车依赖失效已登记的 RAW/JPEG/派生图合并缓存；保留逐资源 `rdf:about` 规则，空值/零值也按实际 XML 解析。外部工具修改、删除或原子替换在下次读取时由指纹发现并重建，不依赖进程内通知。显式目录刷新同步提升读取代次并异步清除 SQL 子树，旧任务不能回填；读取途中变化、失败或取消不持久化。每个 loader 的 [`XmpDirectoryIndex`](../../app_common/exif_io/xmp_sidecar.py) 由各 worker 共用，按目录指纹发现侧车新增/删除，最多缓存 128 个目录，避免每个小批重新扫描整个目录。
+
+回归见 [`test_metadata_sqlite.py`](../../app_common/tests/test_metadata_sqlite.py)。只读诊断入口 [`metadata_cache_benchmark.py`](../scripts_dev/metadata_cache_benchmark.py) 使用真实扫描/worker 流程，必须指定图库外的缓存目录；以两个独立进程运行同一命令比较首次构建与跨进程命中（不清 OS 文件缓存、不包含缩略图和 GUI 行应用）：
+
+```sh
+.venv/bin/python3 SuperViewer/scripts_dev/metadata_cache_benchmark.py "<照片目录>" --cache-dir "<图库外的诊断缓存目录>" --workers 12
+```
+
+2026-10-19 在外置盘目录“2026-10-17-崇明沙锥”的 10,633 个文件上以 12 个 worker 实测：空应用缓存首次读取 177.95 秒，SQLite 已建立后另一进程读取 6.99 秒（目录扫描另计 2.88/1.72 秒）。第二轮 XML、RAW 焦点和视频探测调用均为 0，仅建立 22 次目录索引；两轮鸟名 5,648、焦点 9,145、视频信息 605 条一致。系统文件缓存未清空，此结果不包含 GUI/缩略图，也不代表全新目录首次打开可直接达到 7 秒。
+
 RAW 焦点读取（[`raw_focus_metadata.py`](../../app_common/raw_focus_metadata.py)）与文件拍摄信息快速读取（[`fast_reader.py`](../../app_common/exif_io/fast_reader.py)）共用 [`tiff_reader.read_tiff_exif_tags()`](../../app_common/exif_io/tiff_reader.py)。它保留 ExifRead 的标签/MakerNote 解码，只将 TIFF 无符号字节字段改为整块读取，避免大型 MakerNote 的逐字节 Python 循环拖住整个目录；每次调用独占文件句柄和解析器，不修改依赖的全局状态。不支持的容器或不兼容的 ExifRead 内部 API 回退原入口，过大或截断的字节块终止读取。回归见 [TIFF 读取测试](../../app_common/tests/test_tiff_reader.py)，覆盖标签等价、大小端、并发和损坏长度。
 
 ## 3. 预览与连续快切
 
 列表上方的评级（含星级）徽章保留原布局，标签徽章整理为单个“全部标签”下拉，激活后显示“标签(N)”。菜单复用 [`add_filterable_tag_actions`](../superviewer/tag_menu.py) 的搜索、分组与持续勾选，完全匹配和清除操作放在菜单内；部分匹配仍为任一标签命中，完全匹配仍要求同时包含全部已选标签。空标签库显示提示，关闭或重新展开保留条件。
 
-稀有等级下拉支持普通/少见/稀有/史诗/传奇/未知多选，多个等级按 OR、与其它条件按 AND 组合；空选择表示不限。复用共享 `rarity_metadata()` / `rarity_level()`，保留 0 分与缺失/过期鸟名的区分，显示名称跟随徽章配置，选择身份使用稳定等级键。`_has_any_filter()` 与 `_path_matches_active_filters()` 驱动同一过滤数据源，后台元数据及手动等级更新沿用增量刷新，只在成员资格改变时重建。菜单只读缓存，不额外读取照片/XMP，也不改变等级写入或清晰度流程。
+鸟种名下拉由 `SuperViewerTaggedFileListPanel._species_filter_options()` 从当前目录全部照片的内存缓存收集，复用共享 `_metadata_species_text()`，与列表鸟名列的 XMP/报告/标题别名及优先级一致。通过无 Qt 的 [`species_filter_name()`](../superviewer/species_filter.py) 去掉末尾的待确定/待确认/疑似等识别状态与百分比置信度（兼容中英文括号），按主要鸟名去重并匹配；例如“反嘴鹬（待确定 33%）”与“反嘴鹬”合为一个选项，选中后覆盖两类照片，原始鸟名与元数据保持不变。支持搜索和连续多选，主要鸟名精确匹配；同项按 OR、与稀有度/镜头/标签等条件按 AND。菜单搜索与切换目录保留已选鸟名，当前目录没有的已选项仍可取消；空选择表示不限。元数据流入和手动鸟名修改通过既有增量过滤刷新进入/移出照片，迟到批次保留本地编辑。
 
-两种下拉通过 [`FilterDropdown / FilterMenu`](../superviewer/filter_controls.py) 使用原生 Qt 菜单，鼠标及空格/回车可连续勾选，Esc/点外部关闭。激活摘要沿用共享 [`TOGGLE_CHECKED_STYLE`](../../app_common/toggle_button.py) 的蓝底白字选中态。标签库变更、主题和窗口尺寸变化保留控件与选择状态，无新增持久化配置或 CLI。回归见 [`test_filter_dropdowns.py`](../tests/test_filter_dropdowns.py)、`test_tag_filter_theme.py`、`test_tag_tree_menu.py` 和 `test_lens_filter.py`。
+稀有度下拉支持普通/少见/稀有/史诗/传奇/未知多选，多个等级按 OR、与其它条件按 AND 组合；空选择表示不限。复用共享 `rarity_metadata()` / `rarity_level()`，保留 0 分与缺失/过期鸟名的区分，显示名称跟随徽章配置，选择身份使用稳定等级键。`_has_any_filter()` 与 `_path_matches_active_filters()` 驱动同一过滤数据源，后台元数据及手动等级更新沿用增量刷新，只在成员资格改变时重建。菜单只读缓存，不额外读取照片/XMP，也不改变等级写入或清晰度流程。
+
+鸟种名、稀有度和标签下拉通过 [`FilterDropdown / FilterMenu`](../superviewer/filter_controls.py) 使用原生 Qt 菜单，鼠标及空格/回车可连续勾选，Esc/点外部关闭。激活摘要沿用共享 [`TOGGLE_CHECKED_STYLE`](../../app_common/toggle_button.py) 的蓝底白字选中态。标签库变更、主题和窗口尺寸变化保留控件与选择状态，此处只控制浏览列表，复用现有缓存和过滤 API，无新增持久化配置或 CLI。回归见 [`test_filter_dropdowns.py`](../tests/test_filter_dropdowns.py)、`test_tag_filter_theme.py`、`test_tag_tree_menu.py` 和 `test_lens_filter.py`。
 
 ### A/B 对照
 
@@ -116,6 +138,10 @@ RAW 焦点读取（[`raw_focus_metadata.py`](../../app_common/raw_focus_metadata
 | RAW | 两段式：GUI 线程只显示当前档位缓存，未命中时显示“正在加载预览”，不提取、不解码 RAW；随后 `_FullPreviewLoader` 经 `_load_full_preview_qimage_raw()` 加载原生尺寸清晰图。默认使用可解码且长边至少 1600 的内嵌 JPEG，并按 JPEG 自身 EXIF 方向显示；缺失、损坏或过小时回退 `_load_sensor_raw_qimage()` 完整解码。提取仍复用 `thumb_stream.get_raw_preview_jpeg()`：先用进程内 LibRaw（长边 ≥1600 直接采用），否则按 ExifTool `JpgFromRaw → PreviewImage → ThumbnailImage` 补查并取较大者 |
 
 快速缓存 provider 是 `SuperViewerTaggedFileListPanel.cached_quick_preview_for_path()`：优先使用当前档位已解码的 `QPixmap`，再用共享 `_resolve_existing_sized_preview_image_path(..., exact_size_only=True)` 读取已有缓存。它不生成缓存、不返回原图冒充缩略图。缓存根和文件命名由 `_browser_core.py` 按每个源文件解析：检查源文件所在目录及向上最多 6 层，取最近的 `.superpicky`，不要求 `report.db`，也不限制距卷根的深度。目录选择不改变缓存归属；报告数据库查找独立保留原规则。没有缓存根时 Viewer 仍询问创建。
+
+Viewer 通过 `fast_thumbnail_cache_check=True` 启用文件存在检查：后台预生成和快速预览选址只检查对应尺寸缓存文件是否存在，不打开 JPEG 读取尺寸，也不以源文件时间戳自动失效。源图变化、缓存过旧或损坏时，用户在列表/缩略图网格多选后右键“刷新缩略图”，调用共享 `FileListPanel.refresh_thumbnails(paths)`；无需重载目录或重置模型。后台直接解码实际源图，原子替换当前启用档位及已有其他档位；不读取旧的临时预览/哈希缓存来生成刷新结果，不改原图、XMP、report.db。无缓存作用域时使用本机回退缓存，不自行创建 `.superpicky`。
+
+刷新复用 `PersistentThumbCacheWorker` 和有界共享池，与同源文件的自动生成串行；重复请求只保留最新代次，切换目录仍完成已明确请求的文件，关窗协作取消并等待实际线程结束。失败保留旧文件并计入原进度条的失败数，成功分批失效对应内存/模型缩略图，旧解码的内存写回受版本保护；列表选择、排序、滚动与元数据保持。显示持久 JPEG 时直接读取该文件，不再生成同尺寸哈希副本。BirdStamp 默认继续严格尺寸/时间校验。入口为 UI 菜单及共享 Python API，不新增 CLI。回归见共享 `test_thumbnail_refresh.py` 与 Viewer [`test_viewer_thumbnail_refresh.py`](../tests/test_viewer_thumbnail_refresh.py)。
 
 BirdStamp 的 [`editor_shared_thumb_cache.py`](../../SuperBirdStamp/birdstamp/gui/editor_shared_thumb_cache.py) 复用同一 `_browser_core.py` 作用域、精确档位校验和原子写入接口，读取并生成 `.superpicky/thumb_cache/256`，也能读取 Viewer 的本地 256 缓存。Viewer 因此可直接使用 BirdStamp 生成的共享 256 档；缺少 `.superpicky` 时 BirdStamp 自动在照片所在目录创建；创建失败记录日志并在本窗口会话避免重复尝试，创建或共享写入失败均回退自己的本地缓存，不弹框、不创建 `report.db`。
 
@@ -199,6 +225,14 @@ EXIF 页直接列出 ExifTool 从 RAW 及其他图像读取的已知标签，包
 
 无 Qt 核心 [`capture_time_update.py`](../superviewer/capture_time_update.py) 扫描一次目录，直接读取 RAW 内嵌 EXIF 原始拍摄时间（缺失时回退数字化时间），保留亚秒与时区，通过 `PhotoMetaDataXMP` 原子写同名 XMP 的标准时间和 `date_time_original` 私有字段。同侧车去重，保护损坏侧车和扫描/读取期间发生的并发修改。原图、RAW 和 report.db 保持只读。[`CaptureTimeController`](../superviewer/capture_time_controller.py) 管理后台线程、有界结果队列、定时分批 `MetadataResultSync` 及真实线程退出等待；更新列表/信息页。每批结果按 `CaptureTimeResult.missing_raw` 保留未找到 RAW 的选择，通过 [`deselect_display_paths_silently()`](../superviewer/tagged_file_list.py) 取消本轮其他已返回结果项的选择（含成功项），不重载预览或覆盖编辑草稿；其他失败仍展示报告。回归见 [核心读写](../tests/test_capture_time_update.py)、[菜单及生命周期](../tests/test_capture_time_controller.py) 与 `test_bird_identification_controller.py` 的列表/缩略图实窗验证。
 
+同一控制器在“拍摄信息”中并列提供“从同名 RAW 更新所有信息…”，支持共享格式表中的全部图像。
+[`raw_xmp_update.update_all_information()`](../superviewer/raw_xmp_update.py) 复用 RAW 递归匹配，
+将 RAW 旁的 XMP 原样复制到选中图像旁，同侧车去重；固定顺序获取源/目标事务锁，验证源 XML/RDF、
+复制前后文件指纹，以同目录临时文件原子替换，不重写 XML 或图像。GUI worker 读取更新后的完整元数据，
+经 `MetadataResultSync.sync(replace=True)` 和 `replace_photo_metadata_for_paths()` 清除旧字段、同步标签及
+本地代次保护，丢弃旧标签撤销历史；已有预览/备注草稿保留。CLI 直接调用复制核心；无新依赖，
+打包沿用模块收集。回归见 [`test_raw_xmp_update.py`](../tests/test_raw_xmp_update.py) 及上述控制器/实窗测试。
+
 ### 拍摄地点
 
 图片信息页的“拍摄地点”输入框显示并编辑独立文本，回车或失焦保存，留空清除；支持原生文本复制粘贴。照片列表和缩略图的右键“拍摄地点”菜单提供单张/多选修改、复制单张地点和向所选照片粘贴剪贴板文本。
@@ -211,7 +245,7 @@ EXIF 页直接列出 ExifTool 从 RAW 及其他图像读取的已知标签，包
 
 - 备注入口是 `MainWindow._save_photo_comment_from_info_panel()`；标题及 EXIF 表入口是 `_save_exif_value()`。原始照片和 RAW 不承接这些用户元数据编辑。
 - 成功后必须同步显示层。`sync_saved_xmp_edit()` 只读刚保存的侧车，将 title、comment、rating、pick 和相机字段映射到列表显示字段；标签 Subject 修改另外刷新标签缓存/版本号并清理旧标签历史。
-- `SuperViewerTaggedFileListPanel.sync_metadata_edit_for_path()` 将本轮目录内的编辑字段记录在 `_local_metadata_updates_by_path`，合并后续后台批次时优先采用这些字段；这避免旧备注、标题或评级覆盖刚保存的值。`load_directory()` 在目录变化或 `force_reload=True` 时清理这层保护，重新以磁盘为准。
+- `SuperViewerTaggedFileListPanel.sync_metadata_edit_for_path()` 将本轮目录内的编辑字段记录在 `_local_metadata_updates_by_path`，合并后续后台批次时优先采用这些字段；这避免旧备注、标题或评级覆盖刚保存的值。`load_directory()` 在目录变化或显式刷新磁盘时清理这层保护；仅切换范围的 `preserve_meta_cache=True` 重载保留它。
 - 清除字段也是一次明确编辑：需清理显示别名，不能因 XMP 节点被删除就留下旧缓存值。XMP 格式、命名空间、同名侧车与 XML 写入规则集中在 [`xmp_sidecar.py`](../../app_common/exif_io/xmp_sidecar.py) / `PhotoMetaDataXMP`。
 
 通用字段由 `PhotoMetaDataXMP._write_exiftool_fields()` 在同目录临时副本中写入，收齐 ExifTool 的错误/警告后才原子提交；混合标签/标题等直接 XML 字段也随同提交。命令标签与 XML 字段名不同，例如 ISO 命令写入 `ISOSpeedRatings`，镜头使用 `Lens`。UTF-8 参数与实际读回回归见 [通用 XMP 写入测试](../../app_common/tests/test_xmp_exiftool_writes.py)。
@@ -527,10 +561,15 @@ CLI：根 `.venv` 执行 `python -m SuperViewer.superviewer.image_png_export <�
   后台生命周期、源照片快照及 serial 校验。共享 `app_common.photo_edit.auto_adjust` 的
   `prepare_auto_adjustment(mode="all")` 按实际步骤顺序渲染前缀代理，调用 `auto_basic_parameters()`
   重算六类基础调节的首个组，原位保留身份，缺失组按面板次序插入；重复步骤和风格化效果保留。
-  曝光组的中间调 gamma 按实际残差估计，范围 0.5～2；解决已有黑白端点但主体仍偏暗／亮的问题。
+  `_natural_levels()` 合并 RGB 样本取 0.1%／99.9% 共用黑白点，最多两倍反差拉伸；不按通道分别拉伸。
+  `_natural_curve()` 仅在中位亮度偏离 .35～.65 时按剩余偏差生成一条总通道曲线（等效 gamma 0.5～2），
+  保留黑白端点。亮度／对比度、曝光、自然饱和度组保持中性，消除重复增强和固定饱和度目标。
   `_is_backlit()` 从首个自动组的输入识别亮背景／暗主体分离（中位数 > .65、P10 < .25、P90 > .8、
   .3～.65 中间调占比 < 15%）；整轮固定判断，防止前组提亮暗部后，后组又压回。
-  这类场景亮度／对比度保持中性，色阶不减黑位且白点不低于 .98，曲线抬升暗调并锚定中高光，gamma 不低于 1。
+  这类场景色阶不减黑位且白点不低于 .98，曲线抬升暗调并锚定中高光，色彩平衡不介入。
+  `_neutral_color_balance()` 要求 .15～.75 内近灰样本占比、三个亮度区间支持度及色偏一致性均达标，
+  才等权拟合中间调通道 gamma、半量校正并整体限幅至 ±6；排除高光天空、零散色块与混合色偏。
+  首组输入和当前校色组输入都需通过判断，防止明暗变换制造中性色依据；这不是语义白平衡识别。
   `AdjustmentForm.show_auto_values()` 只切换可见参数通道，各组绑定同一配方并在成功后展开。
   旧 `auto_levels()`／CLI 单模式保留兼容。结果单次撤销并走既有 XMP 保存、编辑预览与完整导出；
   `python -m app_common.photo_edit auto-adjust` 共用该 API，回归见共享 `test_photo_edit_auto_adjust.py`。

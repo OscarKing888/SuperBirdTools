@@ -11,13 +11,13 @@ from xml.etree import ElementTree as ET
 
 def check_export(directory: Path) -> dict:
     from PIL import Image
-    from app_common.exif_io import get_exiftool_executable_path, close_exiftool_process
+    from app_common.exif_io import close_exiftool_process
     from app_common.exif_io.exiftool_runner import run_exiftool, run_exiftool_once
     from birdstamp.export_metadata import save_export_image
+    from exiftool_diagnostics import check_exiftool
 
-    executable = get_exiftool_executable_path()
-    if not executable:
-        raise RuntimeError("Packaged ExifTool unavailable")
+    # macOS 打包态的完整诊断同样禁止以系统安装的 ExifTool 冒充包内副本。
+    executable = check_exiftool()["exiftool"]
 
     def run(*args):
         result = run_exiftool(executable, list(args), timeout=30)

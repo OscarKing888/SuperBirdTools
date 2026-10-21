@@ -313,7 +313,11 @@ def load_frame_manifest(plan: FrameCachePlan) -> dict[str, Any]:
         return empty_frame_manifest(plan)
     if not isinstance(raw, dict):
         return empty_frame_manifest(plan)
-    if int(raw.get("version") or 0) != FRAME_CACHE_MANIFEST_VERSION:
+    try:
+        version = int(raw.get("version") or 0)
+    except (TypeError, ValueError, OverflowError):
+        return empty_frame_manifest(plan)
+    if version != FRAME_CACHE_MANIFEST_VERSION:
         return empty_frame_manifest(plan)
     if str(raw.get("bucket_kind") or "").strip() != plan.bucket_kind:
         return empty_frame_manifest(plan)
@@ -386,7 +390,27 @@ def reusable_frame_path(
     if not relative_path:
         return None
     frame_path = plan.cache_dir / relative_path
-    if not frame_path.is_file():
+    try:
+        # 缓存记录只允许引用本桶内的文件，损坏的清单按未命中处理。
+        frame_path.resolve(strict=False).relative_to(plan.cache_dir.resolve(strict=False))
+        if not frame_path.is_file():
+            return None
+        file_signature = path_signature(frame_path)
+        recorded_signature = record.get("file_signature")
+        if recorded_signature is not None:
+            if recorded_signature != file_signature:
+                return None
+        else:
+            # 旧清单没有输出文件指纹：首次复用只校验 PNG，不重解码 HIF。
+            # 调用方随后保存清单，后续热缓存只需 stat，避免每次重读整组 PNG。
+            from PIL import Image
+
+            with Image.open(frame_path) as image:
+                image.verify()
+            if path_signature(frame_path) != file_signature:
+                return None
+            record["file_signature"] = file_signature
+    except (OSError, ValueError, SyntaxError):
         return None
     return frame_path
 
@@ -410,6 +434,7 @@ def update_frame_manifest_record(
         "source_signature": str(source_signature or "").strip(),
         "frame_signature": str(frame_signature or "").strip(),
         "relative_path": frame_path.resolve(strict=False).relative_to(plan.cache_dir.resolve(strict=False)).as_posix(),
+        "file_signature": path_signature(frame_path),
     }
 
 

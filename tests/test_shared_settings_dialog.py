@@ -38,7 +38,7 @@ def test_real_options_pages_resize_and_cancel_without_writes(tmp_path, monkeypat
     try:
         assert isinstance(dialog, SettingsDialog)
         assert dialog.isSizeGripEnabled()
-        expected = (['浏览与性能', '批量降噪', '视频处理', '珍禽入册', '稀有度徽章', '保护等级徽章', '鸟清晰度']
+        expected = (['浏览与性能', '批量降噪', '照片编辑', '视频处理', '珍禽入册', '稀有度徽章', '保护等级徽章', '鸟清晰度']
                     if dialog_class is SuperViewerUserOptionsDialog else ['安全区'])
         assert [dialog.tabs.tabText(i) for i in range(dialog.tabs.count())] == expected
         dialog.show()
@@ -65,11 +65,16 @@ def test_real_options_pages_resize_and_cancel_without_writes(tmp_path, monkeypat
             from PyQt6.QtWidgets import QColorDialog
             monkeypatch.setattr(QColorDialog, 'getColor', lambda *a: QColor('#12AB34'))
             dialog.tabs.setCurrentIndex(0)
+            dialog._spin_metadata_memory.setFocus()
+            dialog._spin_metadata_memory.selectAll()
+            QTest.keyClicks(dialog._spin_metadata_memory, '512')
+            QTest.keyClick(dialog._spin_metadata_memory, Qt.Key.Key_Tab)
             dialog._bird_hover_color.setFocus()
             QTest.keyClick(dialog._bird_hover_color, Qt.Key.Key_Space)
             before = dialog.selected_options()
             assert before['bird_hover_color'] == '#12AB34'
             assert before['thumbnail_loader_workers'] == 3
+            assert before[superviewer_user_options.KEY_METADATA_MEMORY_MB] == 512
             for group in dialog.findChildren(CollapsibleSection):
                 state = group.is_expanded()
                 group.set_expanded(not state)
