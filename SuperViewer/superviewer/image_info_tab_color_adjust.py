@@ -1,5 +1,7 @@
 """Flat adjustment groups backed by the existing ordered, repeatable recipe."""
 from copy import deepcopy
+import html
+from pathlib import Path
 
 try:
     from PyQt6.QtCore import QSignalBlocker, QTimer
@@ -9,6 +11,7 @@ except ImportError:
     from PyQt5.QtWidgets import QCheckBox, QLabel, QPushButton, QToolButton, QMenu, QHBoxLayout, QVBoxLayout, QWidget, QFileDialog, QScrollArea
 
 from app_common.collapsible_section import CollapsibleSection
+from app_common.file_browser._browser_core import _get_cached_actual_path
 from app_common.photo_edit.catalog import ADJUSTMENT_TITLES, adjustment_defaults
 from app_common.photo_edit.auto_adjust import auto_step_mode, can_auto_adjust
 from app_common.photo_edit.model import AdjustmentStep
@@ -112,6 +115,74 @@ class AdjustmentGroup(CollapsibleSection):
 class ImageInfoTabPanel_ColorAdjust(ImageInfoTabPanel_PhotoEdit):
     tab_title = "调色"
 
+    def __init__(self, controller, parent=None, *, files=None):
+        self._files = files
+        self._batch_dialog = None
+        super().__init__(controller, parent)
+        controller.batch.progress.connect(self._batch_progress)
+        controller.batch.item_finished.connect(self._batch_item_finished)
+        controller.batch.finished.connect(self._batch_finished)
+
+    def create_ui(self):
+        super().create_ui()
+        self.apply_all_button = QPushButton("应用到全部图片", self)
+        self.apply_all_button.setToolTip(
+            "用当前照片的调色步骤替换当前列表（筛选后）全部图片的调色步骤，包括顺序和启用状态；"
+            "各图片的 Camera RAW 参数和编辑底图保持不变。仅写 XMP，不修改原图。")
+        self.apply_all_button.clicked.connect(self._apply_all)
+        self.layout().insertWidget(self.layout().count() - 1, self.apply_all_button)
+
+    def _apply_all(self):
+        batch = self.controller.batch
+        if batch.busy:
+            if self._batch_dialog is not None:
+                self._batch_dialog.show()
+                self._batch_dialog.raise_()
+            return
+        if self._files is None or not batch.can_start(self.current_photo_path()):
+            return
+        # The filtered dataset includes rows not yet materialized in the view.
+        # An empty filtered list must never fall back to all unfiltered files.
+        paths = [_get_cached_actual_path(path) or path
+                 for path in tuple(self._files._filtered_files)]
+        if not batch.start(self.current_photo_path(), paths):
+            self._operation_message = "当前列表中没有可应用的图片。"
+            self._update_state()
+            return
+        from .bird_identification_controller import BirdIDProgressDialog
+        if self._batch_dialog is not None:
+            self._batch_dialog.close()
+            self._batch_dialog.deleteLater()
+        dialog = self._batch_dialog = BirdIDProgressDialog(self)
+        dialog.setWindowTitle("调色 · 应用到全部图片")
+        dialog.label.setText("准备应用调色参数…")
+        dialog.bar.setRange(0, len(batch.paths))
+        dialog.summary.setWordWrap(True)
+        dialog.summary.setText(
+            "已固定当前列表与调色参数；保留每张照片的 Camera RAW 和编辑底图。"
+            "停止后保留已完成的结果。")
+        dialog.cancel_requested.connect(batch.stop)
+        dialog.rejected.connect(batch.stop)
+        dialog.show()
+        self.editing_started.emit(self.current_photo_path())
+
+    def _batch_progress(self, done, total, source):
+        if self._batch_dialog is not None:
+            self._batch_dialog.bar.setValue(done)
+            self._batch_dialog.label.setText(f"已处理 {done}/{total} 张：{Path(source).name}")
+
+    def _batch_item_finished(self, source, outcome):
+        if self._batch_dialog is not None:
+            self._batch_dialog.details.append(html.escape(f"{source}\n{outcome}").replace("\n", "<br>"))
+
+    def _batch_finished(self, message):
+        if self._batch_dialog is not None:
+            self._batch_dialog.finish(message)
+            if self.controller._closing:
+                self._batch_dialog.close()
+        self._operation_message = message
+        self._update_state()
+
     def create_editor(self, body):
         self._reveal_request = None
         self._reveal_timer = QTimer(self)
@@ -151,9 +222,14 @@ class ImageInfoTabPanel_ColorAdjust(ImageInfoTabPanel_PhotoEdit):
         busy = bool(self.controller._operations.get(source_key(self.current_photo_path())))
         available = bool(session and not busy and not self.controller._file_busy
                          and not self.controller._suspended and not self.controller._closing
+                         and not self.controller.batch.locks(self.current_photo_path())
                          and can_auto_adjust(session.state.current.recipe))
         self.auto_button.setEnabled(available)
         self.auto_button.setText("自动调节中…" if busy else "一键自动调节")
+        batch = self.controller.batch
+        self.apply_all_button.setText("查看全部应用进度…" if batch.busy else "应用到全部图片")
+        self.apply_all_button.setEnabled(batch.busy or
+            self._files is not None and batch.can_start(self.current_photo_path()))
         if session and not can_auto_adjust(session.state.current.recipe):
             self.auto_button.setToolTip("最多支持 64 个步骤，请为缺少的基础调节组腾出位置后重试。")
         else:

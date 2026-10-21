@@ -97,6 +97,8 @@ class PhotoEditController(QObject):
         self._render_timer.setSingleShot(True)
         self._render_timer.setInterval(60)
         self._render_timer.timeout.connect(self._start_render)
+        from .photo_edit_batch import PhotoEditBatch
+        self.batch = PhotoEditBatch(self)
 
     def session(self, source=None):
         return self.sessions.get(source_key(source or self.current_source))
@@ -201,12 +203,14 @@ class PhotoEditController(QObject):
         for key,session in list(self.sessions.items()):
             if len(self.sessions)<=24:
                 break
-            if key!=source_key(self.current_source) and key not in self._saving and not session.dirty:
+            if (key!=source_key(self.current_source) and key not in self._saving and not session.dirty
+                    and not self.batch.retains(key)):
                 del self.sessions[key]
 
     def edit(self, recipe, *, commit=True):
         session = self.session()
-        if not session or self._closing or self._suspended or self._file_busy:
+        if (not session or self._closing or self._suspended or self._file_busy
+                or self.batch.locks(self.current_source)):
             return False
         changed = session.edit(recipe,commit=commit)
         if changed or commit:
@@ -228,17 +232,20 @@ class PhotoEditController(QObject):
 
     def undo(self):
         session = self.session()
-        if session and not self._closing and not self._suspended and not self._file_busy and session.undo():
+        if (session and not self._closing and not self._suspended and not self._file_busy
+                and not self.batch.locks(self.current_source) and session.undo()):
             self._changed(session)
 
     def redo(self):
         session = self.session()
-        if session and not self._closing and not self._suspended and not self._file_busy and session.redo():
+        if (session and not self._closing and not self._suspended and not self._file_busy
+                and not self.batch.locks(self.current_source) and session.redo()):
             self._changed(session)
 
     def select_input(self, key):
         session = self.session()
-        if session and not self._closing and not self._suspended and not self._file_busy and session.select_input(key):
+        if (session and not self._closing and not self._suspended and not self._file_busy
+                and not self.batch.locks(self.current_source) and session.select_input(key)):
             self._changed(session)
 
     def flush(self):
@@ -297,7 +304,7 @@ class PhotoEditController(QObject):
         """Explicit user action discards this session's unsaved draft."""
         source = source or self.current_source
         key = source_key(source)
-        if key in self._saving or key in self._loading or self._closing:
+        if key in self._saving or key in self._loading or self._closing or self.batch.locks(source):
             return False
         self.sessions.pop(key,None)
         self._load_errors.pop(key,None)
@@ -374,12 +381,14 @@ class PhotoEditController(QObject):
             # the previously selected photo merely because playback stopped.
             if any(session.dirty for session in self.sessions.values()):
                 self._save_timer.start()
+            self.batch.wake()
 
     def run_operation(self, operation, function, *, source=None, apply=None):
         """Run imports/input validation/exports against a captured photograph."""
         source = source or self.current_source
         session = self.session(source)
-        if not session or self._closing or self._suspended or self._file_busy:
+        if (not session or self._closing or self._suspended or self._file_busy
+                or self.batch.locks(source)):
             return False
         snapshot = session.snapshot()
         serial = session.serial
@@ -463,6 +472,7 @@ class PhotoEditController(QObject):
         if self._closing:
             return
         self._closing = True
+        self.batch.stop()
         self._save_timer.stop()
         self._render_timer.stop()
         self._render_pending.clear()
@@ -478,10 +488,10 @@ class PhotoEditController(QObject):
         if wait_timeout_ms:
             for worker in list(self._workers):
                 worker.wait(wait_timeout_ms)
-        return not self._workers
+        return not self._workers and not self.batch.busy
 
     def is_shutdown_done(self):
-        return self._closing and not self._workers
+        return self._closing and not self._workers and not self.batch.busy
 
     def unsafe_drafts(self):
         """A close flow must keep the window alive if even recovery writing failed."""
@@ -491,6 +501,8 @@ class PhotoEditController(QObject):
         """Keep same-stem XMP saves and edits out of file transfers."""
         if self._file_busy:
             return "文件操作正在进行，完成后可继续编辑或移动。"
+        if self.batch.affects_files(paths):
+            return "正在批量应用调色参数，请完成或停止后重试文件操作。"
         stems = {str(Path(source_key(path)).with_suffix('')) for path in paths}
         affected = lambda key:str(Path(key).with_suffix('')) in stems
         if self._render_active and affected(source_key(self._render_active[1].source)):
