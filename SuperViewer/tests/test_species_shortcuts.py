@@ -69,6 +69,11 @@ def press(view, kind):
     key = Qt.Key.Key_C if kind == "copy" else Qt.Key.Key_V
     QTest.keyClick(view, key, Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.ShiftModifier)
     _APP.processEvents()
+    widget = view
+    while not isinstance(widget, FileListPanel):
+        widget = widget.parent()
+    wait_for(lambda: not ((widget._metadata_copy_controller and widget._metadata_copy_controller.busy)
+                         or (widget._species_paste_controller and widget._species_paste_controller.busy)))
 
 
 def select(panel, view, paths, current):
@@ -145,6 +150,7 @@ def test_open_menu_without_cached_bird_name_never_waits_for_exif(panel, monkeypa
         assert copy.isEnabled()
         # 菜单展示可以暂用文件名；实际点击仍必须取得源照片侧车中的最新鸟名。
         copy.trigger()
+        wait_for(lambda: not widget._metadata_copy_controller.busy)
         assert QApplication.clipboard().text() == "白头鹎"
     finally:
         menu.deleteLater()

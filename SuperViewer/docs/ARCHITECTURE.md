@@ -239,7 +239,7 @@ EXIF 页直接列出 ExifTool 从 RAW 及其他图像读取的已知标签，包
 
 共享 [`shooting_location.py`](../../app_common/shooting_location.py) 定义 `XMP-superpicky:shooting_location`、读取优先级与 `write_shooting_location()`；仅通过 `PhotoMetaDataXMP` 写同名 XMP，不读取/推导/更改 GPS，不复用 City/State/Country 等分析字段，不写原图或 report.db。`MetadataLoader._parse_rec()` 将地点传入浏览器缓存，重新加载目录后仍可显示。核心写入函数可供脚本批处理调用；当前入口集中于 GUI 编辑和剪贴板，不另设 CLI 命令。
 
-[`ShootingLocationController`](../superviewer/shooting_location_controller.py) 注册菜单并管理后台批次：按实际侧车去重，有界结果队列、定时分批刷新、取消保留已写结果、退出等待真实 `QThread.finished`。复用 `MetadataResultSync` 校验侧车指纹并同步同侧车照片；本地字段覆盖保护编辑结果免受晚到旧批次影响。刷新只改地点，不重选照片，不覆盖备注、文件名和地点草稿。读写/清空、中文、GPS 保留、部分失败和 Qt 生命周期回归见共享 [test_shooting_location.py](../../app_common/tests/test_shooting_location.py)、[test_shooting_location_ui.py](../tests/test_shooting_location_ui.py) 和 [实窗回归](../tests/test_bird_identification_controller.py)。
+[`ShootingLocationController`](../superviewer/shooting_location_controller.py) 注册菜单并管理后台批次：按实际侧车去重，有界结果队列、定时分批刷新、取消保留已写结果、退出等待真实 `QThread.finished`。批量入口复用共享 `MetadataBatchController`，`LocationWriteAction` 按照片提交到浏览器的有界线程池；独立侧车并行，共用侧车只写一次。单张信息框保存仍复用 `MetadataResultSync`；两者都校验侧车指纹并同步同侧车照片；本地字段覆盖保护编辑结果免受晚到旧批次影响。刷新只改地点，不重选照片，不覆盖备注、文件名和地点草稿。读写/清空、中文、GPS 保留、部分失败和 Qt 生命周期回归见共享 [test_shooting_location.py](../../app_common/tests/test_shooting_location.py)、[test_shooting_location_ui.py](../tests/test_shooting_location_ui.py) 和 [实窗回归](../tests/test_bird_identification_controller.py)。
 
 ### 写入层
 
@@ -528,6 +528,21 @@ CLI：根 `.venv` 执行 `python -m SuperViewer.superviewer.image_png_export <�
 批量保存去重 RAW/JPEG 共用侧车，后台线程使用有界结果队列，GUI 定时分批通过 `MetadataResultSync` 同步缓存，保留预览及备注草稿；单张失败继续后续照片，取消保留已保存结果，关窗等待真实线程完成。CLI 复用核心：`python -m SuperViewer.superviewer.rarity_edit <照片...> --score 75`（使用根 `.venv`）。验证见 `test_rarity_edit.py`、`test_rarity_controller.py` 和 `test_bird_identification_controller.py` 的列表/缩略图实窗回归。
 
 ## 鸟名拼音
+
+复制和粘贴通过共享 [`_metadata_actions.py`](../../app_common/file_browser/_metadata_actions.py) 的
+`SpeciesCopyAction` / `MetadataWriteAction` 执行。`MetadataBatchWorker` 只协调有界 Future 窗口，
+完成一个 action 就补充一个；复用 `BrowserWorkPool` 的元数据额度和每线程 ExifTool 会话，
+显式编辑优先于目录元数据读取。未启用统一池的共享浏览器按需创建四线程编辑池，不改变
+普通缩略图/方向键策略。复制只在 GUI 线程取得内存快照和提交剪贴板，侧车/EXIF 读取在池中进行；
+请求代次和系统剪贴板版本拒绝旧结果，紧接复制的粘贴等待新快照。
+
+[`MetadataBatchController`](../../app_common/file_browser/_metadata_tasks.py) 按实际侧车去重、持有选择快照，
+以有界队列和定时器分批同步成功结果；写入前检查源文件，侧车锁保护并发合并。
+失败保留原文件并显示路径，取消保留已提交写入，退出等待真实线程结束。
+同侧车照片同步、侧车指纹及 Viewer 本地字段覆盖保护迟到结果；刷新不重新选择照片或加载预览。
+进度窗口和验证清单见[设计记录](../../docs/ui-design/metadata-worker-actions.md)。共享
+`test_metadata_worker_actions.py` 验证并发、剪贴板代次、取消与退出；实际字段仍由无 Qt 的
+`bird_species_copy` 提供，现有脚本 API 不变，无新增 CLI 交互。
 
 共享文件列表的“复制鸟名 / 粘贴鸟名”通过 [`bird_species_copy.py`](../../app_common/bird_species_copy.py) 保存中英文鸟名、拼音、稀有度、IUCN 保护等级和拍摄地点的复制时快照；点击复制时读取实际源图的 XMP，优先于列表缓存和只读报告，同一鸟名才沿用低优先级来源的鸟种字段。系统剪贴板仍提供纯文本鸟名。粘贴单张或多张时，将这些字段、标准兼容字段与来源/缺失标记一次写入各照片的 XMP；优先保留源照片已保存拼音，缺失时查带声调词表，未知名称清除旧拼音及别名。源照片没有的关联信息清空目标旧值，0 分稀有度保留；不复制相机参数、照片评分、备注或识别候选/置信度。成功后通过 `sync_metadata_edits_for_paths()` 更新列表缓存并保护本地修改，避免晚到批次恢复旧值。核心不依赖 Qt；复制快照属于列表交互，不新增 CLI。模块由现有 `collect_submodules("app_common")` 收集。回归见共享 `test_file_browser_species_pinyin.py` 和 Viewer `test_main_window_metadata_sync.py`。
 
