@@ -229,3 +229,49 @@ def test_shutdown_stops_tag_refresh_and_does_not_start_pending_batch(tag_panel, 
         assert panel._photo_tag_cache == {}
     finally:
         release.set()
+
+
+@pytest.mark.parametrize("missing_tags", [False, True], ids=["complete", "partial"])
+def test_large_directory_tag_batches_do_not_rescan_listing(tag_panel, tmp_path, monkeypatch, missing_tags):
+    """Eight-photo worker batches must remain independent of directory size."""
+    _, panel = tag_panel
+
+    class CountedListing(list):
+        traversals = 0
+
+        def __iter__(self):
+            self.traversals += 1
+            return super().__iter__()
+
+    paths = [os.path.normpath(str(tmp_path / f"photo-{i:05d}.jpg")) for i in range(25682)]
+    panel._all_files = listing = CountedListing(paths)
+    # Exercise the real metadata/tag callbacks without file I/O or model paint.
+    monkeypatch.setattr(panel, "_enqueue_meta_apply", lambda batch: None)
+    monkeypatch.setattr(panel, "_finish_meta_apply", lambda: None)
+    current, previous = _MetadataEmitter(), _MetadataEmitter()
+    current.batch_ready.connect(panel._on_metadata_batch_ready)
+    current.finished.connect(panel._on_metadata_loader_finished)
+    previous.finished.connect(panel._on_metadata_loader_finished)
+    panel._metadata_loader = current
+    try:
+        for start in range(0, len(paths), 8):
+            current.batch_ready.emit({path: {"tags": ["飞行"]} for path in paths[start:start + 8]})
+            assert listing.traversals == 0, "metadata batch scanned the full directory"
+        assert len(panel._photo_tag_cache) == len(paths)
+        assert panel._photo_tag_cache[paths[-1]] == {"飞行"}
+        if missing_tags:
+            panel._photo_tag_cache.pop(paths[-1])
+        previous.finished.emit()
+        assert listing.traversals == 0
+        assert panel._metadata_loader is current
+        current.finished.emit()
+        assert listing.traversals == 1
+        assert panel._photo_tag_cache_complete is (not missing_tags)
+        assert panel._metadata_loader is None
+        panel.request_shutdown()
+        current.finished.emit()
+        assert listing.traversals == 1
+    finally:
+        panel._metadata_loader = None
+        current.deleteLater()
+        previous.deleteLater()

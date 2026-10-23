@@ -36,6 +36,12 @@ Windows 下，`main.py` 在导入任何 Qt 控件前调用 [`preload_windows_run
 
 ## 2. 目录选择到可见列表
 
+元数据工作线程按小批返回时，`SuperViewerTaggedFileListPanel._on_metadata_batch_ready()`
+只更新本批照片的标签缓存；目录标签缓存的完整性由 `_on_metadata_loader_finished()` 在当前
+加载器结束时核对一次，拒绝旧加载器和退出后的回调。不能在每批或单张标签查询中重新
+标准化并遍历 `_all_files`，否则递归大目录会让 GUI 队列积压数十秒。回归见
+`test_photo_tag_concurrency.py::test_large_directory_tag_batches_do_not_rescan_listing`（25,682 张、每批 8 张）。
+
 Viewer 通过 `FileListPanel.show_cut_state` 启用待剪切反馈：共享 [`FileCutState`](../../app_common/file_browser/_cut_state.py) 监听系统剪贴板，只解析内部剪切 payload 的源路径与旧显示路径，查询已缓存的实际路径，不访问文件系统。两个模型通过 `_CutPendingRole` 提供同一状态；[`ThumbnailItemDelegate` / `CutFileNameDelegate`](../../app_common/file_browser/_models.py) 分别将照片淡化到 40% 不透明度并叠加“待剪切”、给列表文件名前加提示及斜体。选中边框、鸟名/评级和原排序值不变。剪贴板更新只重绘视口，切目录、排序、筛选、图片异步到达和多窗口保持一致；复制其他内容、清空剪贴板或成功剪切粘贴恢复普通状态，事务失败保留提示。共享浏览器默认关闭此显示能力，BirdStamp 外观不变；不新增持久化设置或 CLI。回归见 [`test_cut_state.py`](../tests/test_cut_state.py) 和共享 [`test_file_browser_cut_state.py`](../../app_common/tests/test_file_browser_cut_state.py)。
 
 目录标题栏的“包含子目录”复选框默认开启，状态通过 [`paths_settings.py`](../superviewer/paths_settings.py) 的 `include_subdirectories` 保存到用户配置。`MainWindow._on_include_subdirectories_changed()` 更新共享 `FileListPanel.set_include_subdirectories()` 后，沿用目录切换流程取消旧扫描、清空旧预览并刷新当前目录。关闭时，普通扫描、report.db 范围筛选、旧路径补充、空报告回退和视频枚举都只保留当前目录；文本/评级/标签过滤及刷新继续遵守该范围。共享目录组件仅在宿主显式传入 `include_subdirectories` 时显示此控件，BirdStamp 保持原有界面与默认扫描行为。此项为浏览界面偏好，无新增 CLI。

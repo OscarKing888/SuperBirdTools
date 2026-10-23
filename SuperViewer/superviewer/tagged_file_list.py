@@ -682,6 +682,15 @@ class SuperViewerTaggedFileListPanel(FileListPanel):
         if meta_dict:
             self.photo_metadata_cache_updated.emit(list(meta_dict))
 
+    def _on_metadata_loader_finished(self) -> None:
+        if self._background_shutdown_requested or self.sender() is not self._metadata_loader:
+            return
+        all_norm = _norm_paths(self._all_files)
+        self._photo_tag_cache_complete = bool(all_norm) and all(
+            path in self._photo_tag_cache for path in all_norm
+        )
+        super()._on_metadata_loader_finished()
+
     def cached_photo_metadata_for_path(self, path: str) -> dict:
         """Return current browser/report fields without waiting for EXIF I/O."""
         metadata = dict(self.get_report_row_for_path(path) or {})
@@ -1340,11 +1349,9 @@ class SuperViewerTaggedFileListPanel(FileListPanel):
                 continue
             self._photo_tag_cache[path] = tags
             changed.append(path)
-        if self._all_files:
-            all_norm = _norm_paths(self._all_files)
-            self._photo_tag_cache_complete = bool(all_norm) and all(
-                path in self._photo_tag_cache for path in all_norm
-            )
+        # Called for every small metadata batch and individual tag lookup.
+        # Scanning the directory here turns N files into O(N * batch_count)
+        # GUI-thread work. Reconcile completeness once when metadata finishes.
         return changed
 
     def _start_photo_tag_cache_loader_if_needed(
