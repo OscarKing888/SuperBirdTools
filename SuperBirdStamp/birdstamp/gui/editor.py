@@ -9,7 +9,7 @@ import sys
 import threading
 import time
 import xml.etree.ElementTree as ET
-from collections import defaultdict, deque
+from collections import OrderedDict, defaultdict, deque
 from datetime import datetime
 from functools import lru_cache
 from pathlib import Path
@@ -282,6 +282,8 @@ _BANNER_GRADIENT_BOTTOM_COLOR_DEFAULT = editor_template.BANNER_GRADIENT_BOTTOM_C
 _DEFAULT_TEMPLATE_CENTER_MODE = editor_template.DEFAULT_TEMPLATE_CENTER_MODE
 _DEFAULT_TEMPLATE_MAX_LONG_EDGE = editor_template.DEFAULT_TEMPLATE_MAX_LONG_EDGE
 _path_key = editor_utils.path_key
+_PHOTO_LIST_METADATA_APPLY_MAX = 16
+_PHOTO_LIST_METADATA_APPLY_BUDGET_S = 0.008
 
 
 def _is_complete_list_metadata(metadata: dict[str, Any] | None) -> bool:
@@ -754,6 +756,11 @@ class BirdStampEditorWindow(
         self._exiftool_shutdown_done = threading.Event()
         self._photo_list_metadata_restart_pending = False
         self._photo_list_metadata_loading = False
+        self._photo_list_metadata_updates: OrderedDict[str, tuple[str, dict[str, Any]]] = OrderedDict()
+        self._photo_list_metadata_discard_results = False
+        self._photo_list_metadata_apply_timer = QTimer(self)
+        self._photo_list_metadata_apply_timer.setInterval(0)
+        self._photo_list_metadata_apply_timer.timeout.connect(self._process_photo_list_metadata_updates)
         self._photo_list_header_fast_mode = False
         self._next_photo_sequence_number: int = 0
         self._received_photo_import_pending_paths: deque[Path] = deque()
@@ -3787,10 +3794,12 @@ class BirdStampEditorWindow(
         return ""
 
     def _display_filename_from_photo_info(self, photo_info: _template_context.PhotoInfo) -> str:
-        return self._provider_text_candidates(
-            photo_info,
-            ["{filename}"],
-        )
+        # List rows only consume the worker's merged metadata. Keep the provider
+        # priority, but never let an unrelated missing field probe the original
+        # RAW/HEIF or reread XMP on the GUI thread. Cache parsing for this row only.
+        snapshot = _template_context.preview_photo_info(photo_info)
+        with _template_context.template_render_context():
+            return self._provider_text_candidates(snapshot, ["{filename}"])
 
     def _extract_display_capture_time_from_metadata(
         self,
@@ -4148,6 +4157,7 @@ class BirdStampEditorWindow(
         except Exception:
             return
         self._photo_item_map.pop(key, None)
+        self._photo_list_metadata_updates.pop(key, None)
         self.photo_list_metadata_cache.pop(key, None)
         self._photo_list_metadata_pending_keys.discard(key)
 
@@ -4299,6 +4309,7 @@ class BirdStampEditorWindow(
         wait: bool = False,
         reset_progress: bool = False,
     ) -> bool:
+        self._discard_photo_list_metadata_updates()
         loader = self._photo_list_metadata_loader
         self._photo_list_metadata_restart_pending = False
         stopped = True
@@ -4329,7 +4340,9 @@ class BirdStampEditorWindow(
 
     def _restart_photo_list_metadata_loader(self) -> None:
         active_loader = self._photo_list_metadata_loader
-        if active_loader is not None and active_loader.isRunning():
+        # Even after run() returns, retain ownership until its queued finished
+        # signal is handled; otherwise the old completion can steal a new load.
+        if active_loader is not None:
             self._photo_list_metadata_restart_pending = True
             active_loader.stop()
             return
@@ -4337,12 +4350,14 @@ class BirdStampEditorWindow(
         pending_paths = [
             path for path in self._list_photo_paths()
             if _path_key(path) in self._photo_list_metadata_pending_keys
+            and _path_key(path) not in self._photo_list_metadata_updates
         ]
         self._photo_list_metadata_restart_pending = False
         if not pending_paths:
             self._finish_photo_list_metadata_loading()
             return
         self._photo_list_metadata_loading = True
+        self._photo_list_metadata_discard_results = False
         self._set_photo_list_header_fast_mode(True)
         self.photo_list.setSortingEnabled(False)
         self._set_photo_list_progress(0, len(pending_paths))
@@ -4363,6 +4378,7 @@ class BirdStampEditorWindow(
         if not paths:
             self._set_status("照片列表为空，无需刷新。")
             return
+        self._discard_photo_list_metadata_updates()
         # report.db 可能被 SuperPicky 等外部工具更新，重新读取行缓存。
         self._rebuild_report_db_cache()
         # 自动 FPS 等路径经 read_batch_metadata 的进程级缓存读取，同样需要失效。
@@ -4381,6 +4397,8 @@ class BirdStampEditorWindow(
         self._set_status(f"正在重新读取 {len(paths)} 张照片信息...")
 
     def _finish_photo_list_metadata_loading(self) -> None:
+        if self._photo_list_metadata_updates:
+            return
         self._photo_list_metadata_loading = False
         self._set_photo_list_header_fast_mode(False)
         self.photo_list.setSortingEnabled(True)
@@ -4440,13 +4458,47 @@ class BirdStampEditorWindow(
                 ab._display()
         self._maybe_apply_pending_workspace_photo_selection()
 
+    def _discard_photo_list_metadata_updates(self) -> None:
+        self._photo_list_metadata_discard_results = True
+        self._photo_list_metadata_apply_timer.stop()
+        self._photo_list_metadata_updates.clear()
+
+    def _queue_photo_list_metadata_batch(self, batch: dict[str, dict[str, Any]]) -> None:
+        if self._photo_list_metadata_discard_results:
+            return
+        for norm_path, metadata in batch.items():
+            key = _path_key(Path(norm_path))
+            self._photo_list_metadata_updates[key] = (norm_path, dict(metadata))
+        if self._photo_list_metadata_updates:
+            self._photo_list_metadata_apply_timer.start()
+
+    def _process_photo_list_metadata_updates(self) -> None:
+        started = time.perf_counter()
+        applied = 0
+        self._begin_photo_list_item_display_batch()
+        try:
+            while self._photo_list_metadata_updates:
+                _key, (path, metadata) = self._photo_list_metadata_updates.popitem(last=False)
+                self._apply_photo_list_metadata_batch({path: metadata})
+                applied += 1
+                if (applied >= _PHOTO_LIST_METADATA_APPLY_MAX
+                        or time.perf_counter() - started >= _PHOTO_LIST_METADATA_APPLY_BUDGET_S):
+                    break
+        finally:
+            self._end_photo_list_item_display_batch(resort=False)
+        if not self._photo_list_metadata_updates:
+            self._photo_list_metadata_apply_timer.stop()
+            if self._photo_list_metadata_loader is None and self._photo_list_metadata_loading:
+                self._finish_photo_list_metadata_loading()
+                self._maybe_apply_pending_workspace_photo_selection()
+
     def _on_photo_list_metadata_batch_ready(self, batch: dict[str, dict[str, Any]]) -> None:
         if self.sender() is not self._photo_list_metadata_loader:
             return
-        self._apply_photo_list_metadata_batch(batch)
+        self._queue_photo_list_metadata_batch(batch)
 
     def _on_photo_list_metadata_progress(self, current: int, total: int) -> None:
-        if self.sender() is not self._photo_list_metadata_loader:
+        if self.sender() is not self._photo_list_metadata_loader or self._photo_list_metadata_discard_results:
             return
         self._set_photo_list_progress(current, total)
 
@@ -4457,6 +4509,8 @@ class BirdStampEditorWindow(
         if self._photo_list_metadata_restart_pending:
             self._photo_list_metadata_restart_pending = False
             self._restart_photo_list_metadata_loader()
+            return
+        if self._photo_list_metadata_discard_results:
             return
         self._finish_photo_list_metadata_loading()
         self._maybe_apply_pending_workspace_photo_selection()

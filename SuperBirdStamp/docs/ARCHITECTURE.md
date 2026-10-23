@@ -21,6 +21,8 @@
 
 Hot-received photos switch the B preview from result view to source/edit view before the import queue starts, including when the photo list is empty. The IPC receiver reports transfer completion before the import callback, so a late transfer event cannot replace the final import status. File > New Workspace (Ctrl+N) reuses the empty workspace restore path and the editor defaults captured before startup workspace restoration; it clears photos, report databases, sequence results and workspace settings, then returns to source/edit view. The previous named workspace is not overwritten by this action.
 
+热接收后的完整元数据经 `BirdStampEditorWindow._queue_photo_list_metadata_batch` 合并到逐路径队列，由窗口持有的定时器按 16 行 / 8 ms 双重预算增量应用（每轮至少一行）。后台读取结束后仍须等 UI 队列排空才恢复排序并完成加载；刷新、清空、关闭取消队列并拒绝旧 worker 结果，worker 交接等实际 `QThread.finished`。列表文件名保留模板 provider 优先级，但使用后台 EXIF/XMP 快照和单行解析缓存，不探测 RAW/HEIF 原图或同步补读侧车。`birdstamp/__init__.py` 在 detector 导入前禁用 Ultralytics 运行时依赖自动安装，避免其全局 PIL hook 遇到不支持的图片后启动 pip。回归见 [test_photo_list_metadata_refresh.py](../tests/test_photo_list_metadata_refresh.py)。
+
 ## 2. 编辑器状态与线程归属
 
 处理管线参数分组由 `_sync_pipeline_stage_option_group_order()` 重排：移除布局项时保留控件父对象，禁用组仅隐藏，新建组先加入布局再显示。启动、工作区恢复与阶段启停不得让 `CollapsibleSection` 短暂成为独立顶层窗口（Windows 会显示标题为 `pythonw` 的闪现窗口）。回归 [test_editor_startup_windows.py](../tests/test_editor_startup_windows.py) 在窗口构造前记录 `Show` 事件，并检查重排、启停和恢复期间的窗口归属与参数保留。

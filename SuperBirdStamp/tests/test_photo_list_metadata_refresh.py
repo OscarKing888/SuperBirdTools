@@ -1,16 +1,22 @@
 from __future__ import annotations
 
+import os
+from pathlib import Path
+import subprocess
+import sys
+import threading
 import time
 
 import pytest
 from PIL import Image
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import Qt, QThread, QTimer, pyqtSignal
 from PyQt6.QtWidgets import QApplication, QPushButton
 
 from app_common.exif_io.photo_meta import PhotoMetaDataXMP
 from birdstamp import config
 from birdstamp.gui import editor
-from birdstamp.gui.editor_photo_list import PHOTO_COL_TITLE
+from birdstamp.gui import template_context
+from birdstamp.gui.editor_photo_list import PHOTO_COL_NAME, PHOTO_COL_ROW, PHOTO_COL_TITLE, PHOTO_LIST_PHOTO_INFO_ROLE
 from birdstamp.gui.editor_utils import path_key
 
 
@@ -127,3 +133,171 @@ def test_refresh_ignored_for_empty_list_and_during_restore(window, monkeypatch):
     monkeypatch.setattr(window, "_workspace_restore_in_progress", lambda: True)
     window._refresh_photo_list_metadata()
     assert started == []
+
+
+def test_hot_received_raw_rows_never_probe_images_or_reread_sidecars(window, tmp_path, monkeypatch):
+    paths = [tmp_path / f"bird_{index:03d}.ARW" for index in range(20)]
+    for path in paths:
+        path.write_bytes(b"RAW test fixture; pixel decode must stay off the list callback")
+    image_opens = []
+
+    def forbidden_image_open(path, *args, **kwargs):
+        image_opens.append(path)
+        raise RuntimeError("Simulated unsupported RAW / Ultralytics PIL hook")
+
+    def read_chunk(loader, chunk):
+        return {
+            path: {"SourceFile": path, "File:FileName": Path(path).name,
+                   "XMP-superpicky:filename": "侧车-" + Path(path).name,
+                   "XMP-dc:Title": "普通翠鸟", "EXIF:ImageWidth": 8640, "EXIF:ImageHeight": 5760}
+            for path in chunk
+        }
+
+    monkeypatch.setattr(Image, "open", forbidden_image_open)
+    monkeypatch.setattr(template_context, "_read_sidecar_metadata_cached",
+                        lambda *args: pytest.fail("GUI reread sidecar instead of using worker snapshot"))
+    monkeypatch.setattr(editor.EditorPhotoListMetadataLoader, "_read_chunk", read_chunk)
+    window.add_received_file_paths([str(path) for path in paths])
+    deadline = time.monotonic() + 10
+    while time.monotonic() < deadline:
+        _APP.processEvents()
+        if (window.photo_list.topLevelItemCount() == len(paths)
+                and not window._photo_list_metadata_pending_keys
+                and not window._photo_list_metadata_loading):
+            break
+        time.sleep(0.001)
+    assert window.photo_list.topLevelItemCount() == len(paths)
+    assert not window._photo_list_metadata_pending_keys
+    assert not window._photo_list_metadata_updates
+    assert not image_opens
+    for path in paths:
+        item = window._find_photo_item_by_path(path)
+        assert item.text(PHOTO_COL_NAME) == "侧车-" + path.name
+        assert item.text(PHOTO_COL_TITLE) == "普通翠鸟"
+        # Display snapshots must not change later export/metadata-read policy.
+        assert not item.data(PHOTO_COL_ROW, PHOTO_LIST_PHOTO_INFO_ROLE).metadata_is_snapshot
+
+
+@pytest.mark.parametrize("max_rows,budget,expected", [(2, 10.0, 2), (20, 0.025, 3)])
+def test_metadata_ui_tick_obeys_item_and_time_limits(window, tmp_path, monkeypatch, max_rows, budget, expected):
+    applied = []
+    clock = [0.0]
+
+    def apply(batch):
+        applied.extend(batch)
+        clock[0] += 0.01
+
+    monkeypatch.setattr(editor, "_PHOTO_LIST_METADATA_APPLY_MAX", max_rows)
+    monkeypatch.setattr(editor, "_PHOTO_LIST_METADATA_APPLY_BUDGET_S", budget)
+    monkeypatch.setattr(editor.time, "perf_counter", lambda: clock[0])
+    monkeypatch.setattr(window, "_apply_photo_list_metadata_batch", apply)
+    window._queue_photo_list_metadata_batch({str(tmp_path / f"{i}.ARW"): {"ISO": i} for i in range(20)})
+    assert applied == []
+    window._process_photo_list_metadata_updates()
+    assert len(applied) == expected
+    assert len(window._photo_list_metadata_updates) == 20 - expected
+    assert window.photo_list.updatesEnabled()
+
+
+def test_metadata_queue_yields_and_finishes_only_after_rows_are_applied(window, tmp_path, monkeypatch):
+    applied, event_observations = [], []
+    monkeypatch.setattr(editor, "_PHOTO_LIST_METADATA_APPLY_MAX", 1)
+
+    def apply(batch):
+        applied.extend(batch)
+        if len(applied) == 1:
+            QTimer.singleShot(0, lambda: event_observations.append(len(applied)))
+
+    monkeypatch.setattr(window, "_apply_photo_list_metadata_batch", apply)
+    window._photo_list_metadata_loading = True
+    window._queue_photo_list_metadata_batch({str(tmp_path / f"{i}.ARW"): {"ISO": i} for i in range(20)})
+    window._finish_photo_list_metadata_loading()
+    assert window._photo_list_metadata_loading
+    _wait_metadata_loaded(window)
+    assert len(applied) == 20
+    assert event_observations and event_observations[0] < 20
+    assert not window._photo_list_metadata_apply_timer.isActive()
+
+
+@pytest.mark.parametrize("cancel", ["clear", "refresh", "close"])
+def test_metadata_queue_discards_pending_and_late_results(window, tmp_path, monkeypatch, cancel):
+    photo = tmp_path / "bird.ARW"
+    photo.write_bytes(b"raw")
+    _add_photo(window, photo)
+    batch = {str(photo): {"SourceFile": str(photo), "XMP-dc:Title": "旧结果"}}
+    window._queue_photo_list_metadata_batch(batch)
+    assert window._photo_list_metadata_updates
+    monkeypatch.setattr(window, "_restart_photo_list_metadata_loader", lambda: None)
+    if cancel == "clear":
+        window._clear_photos_state(show_placeholder=False)
+    elif cancel == "refresh":
+        window._refresh_photo_list_metadata()
+    else:
+        window.close()
+    window._queue_photo_list_metadata_batch(batch)
+    assert not window._photo_list_metadata_updates
+    assert not window._photo_list_metadata_apply_timer.isActive()
+    assert window.raw_metadata_cache.get(path_key(photo), {}).get("XMP-dc:Title") != "旧结果"
+
+
+def test_metadata_loader_handoff_waits_for_finished_and_keeps_queued_rows(window, tmp_path, monkeypatch):
+    entered, release = threading.Event(), threading.Event()
+    loads = []
+    first = tmp_path / "first.ARW"
+    second = tmp_path / "second.ARW"
+    for photo in (first, second):
+        photo.write_bytes(b"raw")
+        _add_photo(window, photo)
+
+    class Loader(QThread):
+        metadata_batch_ready = pyqtSignal(object)
+        progress_updated = pyqtSignal(int, int)
+
+        def __init__(self, paths, parent=None):
+            super().__init__(parent)
+            self.paths = paths
+            loads.append(self)
+
+        def stop(self):
+            pass
+
+        def run(self):
+            entered.set()
+            assert release.wait(5)
+            self.metadata_batch_ready.emit({p: {"SourceFile": p, "File:FileName": Path(p).name} for p in self.paths})
+
+    monkeypatch.setattr(editor, "EditorPhotoListMetadataLoader", Loader)
+    # The first photo already has a queued result; the next worker must only read second.
+    window._queue_photo_list_metadata_batch({str(first): {"File:FileName": first.name, "ISO": 100}})
+    window._restart_photo_list_metadata_loader()
+    first_loader = window._photo_list_metadata_loader
+    assert first_loader.paths == [str(second)]
+    try:
+        assert entered.wait(3)
+        release.set()
+        assert first_loader.wait(3000)
+        # run() returned but GUI has not dispatched the real finished signal yet.
+        window._restart_photo_list_metadata_loader()
+        assert window._photo_list_metadata_loader is first_loader
+        assert len(loads) == 1
+        _wait_metadata_loaded(window)
+        assert not window._photo_list_metadata_pending_keys
+        assert len(loads) == 1
+    finally:
+        release.set()
+        if window._photo_list_metadata_loader is first_loader:
+            first_loader.wait(3000)
+
+
+def test_birdstamp_entry_disables_dependency_autoinstall_before_detector_import():
+    root = Path(__file__).resolve().parents[2]
+    env = dict(os.environ, PYTHONPATH=os.pathsep.join((str(root), str(root / "SuperBirdStamp"))),
+               YOLO_AUTOINSTALL="true", ULTRALYTICS_SKIP_REQUIREMENTS_CHECKS="0")
+    result = subprocess.run(
+        [sys.executable, "-c", "import birdstamp, os, sys; "
+         "assert os.environ['YOLO_AUTOINSTALL'] == 'false'; "
+         "assert os.environ['ULTRALYTICS_SKIP_REQUIREMENTS_CHECKS'] == '1'; "
+         "assert 'ultralytics' not in sys.modules"],
+        cwd=root, env=env, capture_output=True, text=True, timeout=15,
+    )
+    assert result.returncode == 0, result.stderr
