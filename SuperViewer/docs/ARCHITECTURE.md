@@ -112,6 +112,8 @@ HIF/HEIF/HEIC 即使已有完整报告或 XMP 拍摄字段，仍在 `MetadataLoa
 
 RAW 焦点读取（[`raw_focus_metadata.py`](../../app_common/raw_focus_metadata.py)）与文件拍摄信息快速读取（[`fast_reader.py`](../../app_common/exif_io/fast_reader.py)）共用 [`tiff_reader.read_tiff_exif_tags()`](../../app_common/exif_io/tiff_reader.py)。它保留 ExifRead 的标签/MakerNote 解码，只将 TIFF 无符号字节字段改为整块读取，避免大型 MakerNote 的逐字节 Python 循环拖住整个目录；每次调用独占文件句柄和解析器，不修改依赖的全局状态。不支持的容器或不兼容的 ExifRead 内部 API 回退原入口，过大或截断的字节块终止读取。回归见 [TIFF 读取测试](../../app_common/tests/test_tiff_reader.py)，覆盖标签等价、大小端、并发和损坏长度。
 
+缩略图滚动由共享 `FileListPanel._schedule_visible_thumbnail_update()` 使用 25 ms 精确定时器合并事件：已有待执行更新时不重启计时器，回调按最新视口计算需求，连续滚动无需等松手。`_apply_cached_thumbs_to_items()` 直接访问可见项；`ThumbnailListModel.pixmap_rows()` 通过模型维护的图片路径集合定位已持有 QPixmap 的行，供 `_evict_offscreen_item_pixmaps()` 回收远处图片，避免每次滚动扫描整目录。路径集合在图片设置、清除、过滤移除和模型重建时同步，排序和插入后使用当前行映射；保留原有四行回收缓冲、分档 QImage 缓存、预取限额、后台持久化及预览选择策略。此项仅调整视口调度和显示图片维护，无新增控件、设置或 CLI。回归见共享 [`test_thumbnail_scroll_streaming.py`](../../app_common/tests/test_thumbnail_scroll_streaming.py) 和 Viewer [`test_viewer_scroll_streaming.py`](../tests/test_viewer_scroll_streaming.py)，覆盖持续滚动、两万行维护边界、筛选排序、冷缓存工作池、选择保持及关闭。
+
 ## 3. 预览与连续快切
 
 列表上方的评级（含星级）徽章保留原布局，标签徽章整理为单个“全部标签”下拉，激活后显示“标签(N)”。菜单复用 [`add_filterable_tag_actions`](../superviewer/tag_menu.py) 的搜索、分组与持续勾选，完全匹配和清除操作放在菜单内；部分匹配仍为任一标签命中，完全匹配仍要求同时包含全部已选标签。空标签库显示提示，关闭或重新展开保留条件。
