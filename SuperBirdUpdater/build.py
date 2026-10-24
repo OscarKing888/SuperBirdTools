@@ -130,11 +130,23 @@ def generate(root: Path, output: Path, identity: dict, target: str, arch: str,
     return data
 
 
+def package_name(root: Path, version: str, target: str, arch: str) -> str:
+    """Name Windows packages from the emitted Torch DLLs, never the host GPU."""
+    name = f"SuperBirdTools-{version}-{target}-{arch}"
+    if target == "windows":
+        libraries = root / "SuperViewer" / "_internal" / "torch" / "lib"
+        if not (libraries / "torch_cpu.dll").is_file():
+            raise UpdateError(f"Cannot identify packaged Torch runtime: {libraries}")
+        variant = "cuda" if (libraries / "torch_cuda.dll").is_file() else "cpu"
+        name += f"-{variant}"
+    return name
+
+
 def package_suite(root: Path, output: Path, manifest: dict, repo: Path, *,
-                  include_update_metadata: bool = True) -> Path:
+                  include_update_metadata: bool = True, allow_large: bool = False) -> Path:
     """完整安装包与增量清单来自同一份最终产物，保留 macOS 链接和权限。"""
     version = manifest.get("release_version", manifest["version"])
-    name = f"SuperBirdTools-{version}-{manifest['platform']}-{manifest['arch']}"
+    name = package_name(root, version, manifest['platform'], manifest['arch'])
     result = output / f"{name}.zip"
     output.mkdir(parents=True, exist_ok=True)
     # zipfile 不自动保存 symlink，因此显式编码 Unix 类型和链接目标。
@@ -162,7 +174,7 @@ def package_suite(root: Path, output: Path, manifest: dict, repo: Path, *,
                              ("SuperBirdStamp/LICENSE", "LICENSE-SuperBirdStamp")):
             if (repo / source).is_file():
                 archive.write(repo / source, f"{name}/{dest}")
-    if result.stat().st_size > MAX_ASSET_SIZE:
+    if not allow_large and result.stat().st_size > MAX_ASSET_SIZE:
         result.unlink()
         raise UpdateError("完整安装包超过 GitHub 单附件限制；请缩减打包依赖后重建")
     return result

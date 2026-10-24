@@ -147,6 +147,36 @@ Windows：
 build_all.bat
 ```
 
+Windows CUDA 版使用独立入口：
+
+```bat
+build_all_cuda.bat
+build_all_cuda.bat --apps-only
+build_all_cuda.bat --check-only
+```
+
+`build_all_cuda.bat` 在共享 `.venv` 中按需安装固定的 `torch==2.10.0+cu128`、
+`torchvision==0.25.0+cu128`，对应 [PyTorch 官方 CUDA 12.8 安装源](https://pytorch.org/get-started/previous-versions/#v2100)。
+这会将该环境的 CPU Torch 切换为 CUDA Torch；重复运行时已匹配的版本不会重新安装。
+先验证 Torch/torchvision 原生算子，再调用 `build_all.bat --clean`，支持其模型选择等参数。
+`--check-only` 只检查当前环境，不安装依赖、不清理或构建。构建机无可用 GPU 时仍可打包 CUDA
+运行库，但会明确提示未验证 GPU 推理；有 GPU 时同时验证 CUDA 算子，失败则停止。
+运行 CUDA 加速仍需接收方具备兼容的 NVIDIA GPU 和驱动。
+
+CUDA 入口默认输出 `dist/cuda/SuperViewer`、`dist/cuda/SuperBirdStamp`、
+`dist/cuda/SuperBirdUpdater` 和 `dist/cuda/updates`，缓存为 `build/cuda`；
+可用 `SUPERBIRDTOOLS_DIST_ROOT` / `SUPERBIRDTOOLS_BUILD_ROOT` 覆盖。
+普通 `build_all.bat` 继续输出根目录 `dist/`，其 `--clean` 会清空整个 `dist/`，包括其中的 CUDA 产物。
+CUDA 入口为本地完整包启用 ZIP64 大包输出（`SUPERBIRDTOOLS_ALLOW_LARGE_PACKAGE=1`），
+允许超过 2 GiB；CI 的 `package_release.py` 和发布校验仍保留 GitHub 单附件大小限制。
+
+Windows 完整 ZIP 按 **成品中实际的 Torch DLL** 命名，与构建机是否有 GPU 无关：
+`SuperBirdTools-<版本>-windows-x86_64-cpu.zip` 或
+`SuperBirdTools-<版本>-windows-x86_64-cuda.zip`，ZIP 内顶层目录同名。
+普通构建入口使用 CUDA 环境时也会正确标为 `-cuda`；macOS 命名及更新分卷协议保持原样。
+本地完整构建和 CI 的 `package_release.py` 共用这套规则，发布校验支持 Windows CPU/CUDA
+任一种或同时提供两种，且仍要求 macOS 包。
+
 本地只需验证应用时，可跳过更新清单、更新分卷和完整安装 ZIP：
 
 ```bash

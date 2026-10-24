@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 from pathlib import Path
 import shutil
 import sys
@@ -28,7 +29,8 @@ def main() -> None:
     if not config.exists():
         shutil.copy2(args.repo / "SuperBirdUpdater" / CONFIG_NAME, config)
     if args.package:
-        print(package_suite(args.dist, output, data, args.repo))
+        print(package_suite(args.dist, output, data, args.repo,
+                            allow_large=os.environ.get("SUPERBIRDTOOLS_ALLOW_LARGE_PACKAGE") == "1"))
     print(f"Update {data['version']}: {len(data['files'])} entries, {len(data['assets'])} volumes → {output}")
 
 

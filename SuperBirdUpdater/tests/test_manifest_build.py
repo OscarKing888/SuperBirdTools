@@ -119,7 +119,8 @@ def test_hash_release_keeps_old_manifest_compatibility_and_names_package(version
         assert all(name.startswith("SuperBirdTools-1.2.22222222-linux-x86_64/") for name in archive.namelist())
 
 
-def test_release_validation_checks_full_package_names_and_matching_prefixes(tmp_path):
+@pytest.mark.parametrize("cuda", [False, True])
+def test_release_validation_checks_full_package_names_and_matching_prefixes(tmp_path, cuda):
     from SuperBirdUpdater.common import APPS, atomic_json, executable
     from build_tools.validate_update_release import validate_release
 
@@ -131,6 +132,12 @@ def test_release_validation_checks_full_package_names_and_matching_prefixes(tmp_
             entry = executable(root, app, platform)
             entry.parent.mkdir(parents=True, exist_ok=True)
             entry.write_bytes(b"test executable")
+        if platform == "windows":
+            library = root / "SuperViewer/_internal/torch/lib/torch_cpu.dll"
+            library.parent.mkdir(parents=True)
+            library.write_bytes(b"CPU runtime")
+            if cuda:
+                library.with_name("torch_cuda.dll").write_bytes(b"CUDA runtime")
         (root / CONFIG_NAME).write_text("{}", encoding="utf-8")
         info = {**identity(2), "release_version": "1.2.22222222"}
         manifest = generate(root, release, info, platform, arch, workers=1)

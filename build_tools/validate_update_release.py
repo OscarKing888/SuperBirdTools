@@ -25,7 +25,11 @@ def validate_release(directory: Path) -> None:
             if any(hashes[k] != asset[k] for k in ("size", "sha256")):
                 raise UpdateError(f"更新附件损坏: {name}")
         version = manifest.get("release_version", manifest["version"])
-        package = directory / f"SuperBirdTools-{version}-{manifest['platform']}-{manifest['arch']}.zip"
+        suffix = ""
+        if manifest["platform"] == "windows":
+            cuda_dll = "SuperViewer/_internal/torch/lib/torch_cuda.dll"
+            suffix = "-cuda" if any(entry["path"] == cuda_dll for entry in manifest["files"]) else "-cpu"
+        package = directory / f"SuperBirdTools-{version}-{manifest['platform']}-{manifest['arch']}{suffix}.zip"
         if not package.is_file():
             raise UpdateError(f"缺少首次安装包: {package.name}")
 

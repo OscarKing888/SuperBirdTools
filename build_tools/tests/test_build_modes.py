@@ -245,3 +245,53 @@ def test_bundle_models_requires_a_value(build_entry, trailing):
     _, run = build_entry
     result, calls = run("--bundle-models", *trailing)
     assert result.returncode != 0 and not calls
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows batch entry")
+@pytest.mark.parametrize("mode", ["build", "check", "prepare_failure", "build_failure"])
+def test_cuda_entry_checks_before_clean_and_propagates_failures(build_entry, mode):
+    repo, _ = build_entry
+    shutil.copy2(REPO_ROOT / "build_all_cuda.bat", repo / "build_all_cuda.bat")
+    (repo / "build_tools/prepare_windows_cuda.py").write_text(STUB, encoding="utf-8")
+    sentinel = repo / "dist/previous.zip"
+    sentinel.parent.mkdir()
+    sentinel.write_text("previous build")
+    env = {**os.environ, **_entry_env(repo)}
+    if mode == "prepare_failure":
+        env["SBT_FAIL_STAGE"] = "prepare_windows_cuda"
+    elif mode == "build_failure":
+        env["SBT_FAIL_STAGE"] = "merged"
+    args = ["--check-only"] if mode == "check" else ["--apps-only", "--bundle-models", "yolo11l-seg.pt,sam2.1_b.pt"]
+    result = subprocess.run(["cmd", "/d", "/c", "build_all_cuda.bat", *args],
+                            cwd=repo, env=env, capture_output=True, text=True, timeout=30)
+    calls = [json.loads(line) for line in (repo / "calls.jsonl").read_text().splitlines()]
+    assert calls[0]["stage"] == "prepare_windows_cuda"
+    assert calls[0]["args"] == ([] if mode == "check" else ["--install"])
+    if mode in ("check", "prepare_failure"):
+        assert len(calls) == 1 and sentinel.read_text() == "previous build"
+    else:
+        assert not sentinel.exists(), "CUDA builds must clean the old cache/output"
+        assert next(c for c in calls if c["stage"] == "merged")["bundle"] == "yolo11l-seg.pt,sam2.1_b.pt"
+        if mode == "build":
+            assert (repo / "dist/SuperViewer/SuperViewer.exe").is_file()
+            assert "generate_update_manifest" not in [c["stage"] for c in calls]
+    assert (result.returncode == 0) == (mode in ("build", "check")), result.stdout + result.stderr
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows batch entry")
+def test_cuda_entry_has_separate_default_outputs(build_entry):
+    repo, _ = build_entry
+    shutil.copy2(REPO_ROOT / "build_all_cuda.bat", repo / "build_all_cuda.bat")
+    (repo / "build_tools/prepare_windows_cuda.py").write_text(STUB, encoding="utf-8")
+    env = {**os.environ, **_entry_env(repo)}
+    env.pop("SUPERBIRDTOOLS_DIST_ROOT")
+    env.pop("SUPERBIRDTOOLS_BUILD_ROOT")
+    sentinel = repo / "dist/cpu.zip"
+    sentinel.parent.mkdir()
+    sentinel.write_text("CPU package")
+    result = subprocess.run(["cmd", "/d", "/c", "build_all_cuda.bat", "--apps-only"],
+                            cwd=repo, env=env, capture_output=True, text=True, timeout=30)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert sentinel.read_text() == "CPU package"
+    for app in ("SuperViewer", "SuperBirdStamp", "SuperBirdUpdater"):
+        assert (repo / "dist/cuda" / app / f"{app}.exe").is_file()

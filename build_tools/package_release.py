@@ -19,14 +19,22 @@ RELEASE_TARGETS = (("windows", "x86_64"), ("macos", "arm64"))
 
 def validate_packages(directory: Path, version: str) -> None:
     version = normalize_version(version)
-    expected = {f"SuperBirdTools-{version}-{target}-{arch}.zip"
-                for target, arch in RELEASE_TARGETS}
     actual = {p.name for p in directory.iterdir() if p.name != "SHA256SUMS.txt"}
-    if actual != expected:
-        raise UpdateError(f"Release packages mismatch: missing={expected - actual}, extra={actual - expected}")
+    selected = []
+    allowed = set()
+    missing = set()
     for target, arch in RELEASE_TARGETS:
-        stem = f"SuperBirdTools-{version}-{target}-{arch}"
-        package = directory / f"{stem}.zip"
+        suffixes = ("-cpu", "-cuda") if target == "windows" else ("",)
+        candidates = {f"SuperBirdTools-{version}-{target}-{arch}{suffix}.zip" for suffix in suffixes}
+        allowed.update(candidates)
+        present = actual & candidates
+        if not present:
+            missing.add(f"{target}-{arch}")
+        selected.extend((directory / name, target) for name in sorted(present))
+    if missing or actual - allowed:
+        raise UpdateError(f"Release packages mismatch: missing={missing}, extra={actual - allowed}")
+    for package, target in selected:
+        stem = package.stem
         if not package.is_file() or not 0 < package.stat().st_size <= MAX_ASSET_SIZE:
             raise UpdateError(f"Invalid release package size: {package.name}")
         with zipfile.ZipFile(package) as archive:
