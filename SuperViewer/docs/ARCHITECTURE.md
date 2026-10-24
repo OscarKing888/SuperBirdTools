@@ -616,6 +616,9 @@ CLI：根 `.venv` 执行 `python -m SuperViewer.superviewer.image_png_export <�
   文件名区分同 stem RAW/JPEG，input key 区分原始／固定降噪版本，revision 检测外部配方变化。
 - `app_common.image_pixels` 共用既有降噪的高位深解码；`image_output_paths` 统一五种目录策略；
   `image_export` 共用成片像素、元数据及成对发布。降噪公开模块保留兼容接口。
+  降噪和照片编辑导出均只在配套 `.xmp` 保存 XMP，图片仅保留既有 EXIF/ICC；共享
+  `exif_io.export_xmp.read_export_xmp` 合并原图内嵌字段与优先侧车，之后各流程校正几何、
+  清理已烘焙配方并记录来源。图片容器不再重复内嵌侧车字段，超大 XMP 不受 JPEG 段容量限制。
 - `app_common.photo_edit.file_assets` 在共享文件事务与系统原生拖放前携带 LUT。资源按内容寻址，
   源目录可能共享而不删除。降噪资产不自动搬移，来源不匹配报错。
 - `build_tools.photo_edit_native.collect_photo_edit` 为全部应用 spec 校验／构建当前 ABI 的 Rust 组件，

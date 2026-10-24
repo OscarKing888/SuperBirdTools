@@ -59,10 +59,14 @@ def test_full_exif_chinese_and_geometry_survive_export(original, tmp_path, suffi
     for tag in ('IFD0:Make', 'IFD0:Model', 'ExifIFD:ISO', 'ExifIFD:FNumber', 'ExifIFD:ExposureTime',
                 'ExifIFD:FocalLength', 'ExifIFD:LensModel', 'ExifIFD:DateTimeOriginal',
                 'ExifIFD:SubSecTimeOriginal', 'ExifIFD:OffsetTimeOriginal', 'ExifIFD:SerialNumber',
-                'ExifIFD:UserComment', 'GPS:GPSLatitude', 'GPS:GPSLongitude', 'XMP-dc:Description'):
+                'ExifIFD:UserComment', 'GPS:GPSLatitude', 'GPS:GPSLongitude'):
         assert b[tag] == a[tag], tag
     assert b['ExifIFD:UserComment'] == '小勺子，原始拍摄信息。'
-    assert b['IFD0:Orientation'] == b['IFD1:Orientation'] == b['XMP-tiff:Orientation'] == 1
+    assert b['IFD0:Orientation'] == b['IFD1:Orientation'] == 1
+    sidecar_tags = metadata(output.with_suffix('.xmp'))
+    assert sidecar_tags['XMP-dc:Description'] == a['XMP-dc:Description']
+    assert sidecar_tags['XMP-tiff:Orientation'] == 1
+    exported_xmp(output)
     assert b['ExifIFD:ExifImageWidth'] == b['IFD0:ImageWidth'] == 40
     assert b['ExifIFD:ExifImageHeight'] == b['IFD0:ImageHeight'] == 60
     assert b['IFD1:ImageWidth'] == 40 and b['IFD1:ImageHeight'] == 60
@@ -199,7 +203,7 @@ def test_matching_video_frame_copies_complete_png_and_chinese_exif(original, tmp
     assert result['ExifIFD:UserComment'] == '小勺子，原始拍摄信息。'
 
 
-def test_dejitter_export_renames_uppercase_xmp_and_keeps_exact_bytes(sequence, tmp_path):
+def test_dejitter_export_renames_uppercase_xmp_and_corrects_geometry(sequence, tmp_path):
     from birdstamp.export_stage.sequence_preview import prepare_sequence_preview
     from birdstamp.export_stage.sequence_export import export_aligned_sequence
     seeds, _ = sequence
@@ -210,10 +214,11 @@ def test_dejitter_export_renames_uppercase_xmp_and_keeps_exact_bytes(sequence, t
     result = prepare_sequence_preview(seeds, cancel_event=threading.Event())
     folder = export_aligned_sequence(result, tmp_path, cancel_event=threading.Event())
     images = sorted(folder.glob('*.png'))
-    assert images[0].with_suffix('.xmp').read_bytes() == payload
+    assert '中文小勺子' in images[0].with_suffix('.xmp').read_text(encoding='utf-8')
+    assert metadata(images[0].with_suffix('.xmp'))['XMP-tiff:Orientation'] == 1
     assert metadata(images[0])['ExifIFD:ISO'] == 1250
     assert sidecar.read_bytes() == payload
-    assert not images[1].with_suffix('.xmp').exists()
+    assert images[1].with_suffix('.xmp').is_file()
 
 
 def test_sidecar_added_or_changed_after_analysis_invalidates_sequence(sequence):
@@ -232,7 +237,7 @@ def test_sidecar_copy_failure_rolls_back_whole_dejitter_export(sequence, tmp_pat
     from birdstamp.export_stage import sequence_export
     _, result = sequence
     before = set(tmp_path.iterdir())
-    monkeypatch.setattr(sequence_export, 'copy_export_sidecar', lambda *a: (_ for _ in ()).throw(OSError('XMP 失败')))
+    monkeypatch.setattr(export_metadata, 'read_export_xmp', lambda *a: (_ for _ in ()).throw(OSError('XMP 失败')))
     with pytest.raises(OSError, match='XMP'):
         sequence_export.export_aligned_sequence(result, tmp_path, cancel_event=threading.Event())
     assert set(tmp_path.iterdir()) == before
@@ -280,7 +285,8 @@ def exported_xmp(output):
     result = run_exiftool_once([get_exiftool_executable_path(), '-b', '-XMP', str(output)],
                               capture_output=True, timeout=30)
     assert result.returncode == 0, result.stderr
-    return ET.fromstring(result.stdout)
+    assert result.stdout == b'', '成片必须只用 sidecar XMP'
+    return ET.parse(output.with_suffix('.xmp')).getroot()
 
 
 @pytest.mark.parametrize('suffix,format', [('png', 'PNG'), ('jpg', 'JPEG')])
@@ -326,11 +332,11 @@ def test_sidecar_merges_full_xmp_and_overrides_embedded_properties(original, tmp
     assert [node.text for node in root.findall('.//dc:subject/rdf:Bag/rdf:li', NS)] == ['中国鸟类', '湿地']
     text = ET.tostring(root, encoding='unicode')
     assert '旧鸟名' not in text and '旧描述' not in text
-    result = metadata(output)
+    result = metadata(output.with_suffix('.xmp'))
     assert result['XMP-xmp:Rating'] == 0
     assert result['XMP-tiff:Orientation'] == 1
     assert result['XMP-tiff:ImageWidth'] == result['XMP-exif:ExifImageWidth'] == 40
-    assert result['ExifIFD:ISO'] == 1600
+    assert metadata(output)['ExifIFD:ISO'] == 1600
     assert original.read_bytes() == before and sidecar.read_bytes() == payload
     assert not list(tmp_path.glob('.birdstamp-export-*'))
 
@@ -398,7 +404,7 @@ def test_xmp_merge_handles_split_descriptions_and_namespace_prefixes(original, i
     assert '旧鸟名' not in merged.decode('utf-8')
 
 
-def test_sidecar_only_metadata_embeds_without_source_exif(tmp_path):
+def test_sidecar_only_metadata_survives_without_source_exif(tmp_path):
     source, target = tmp_path / 'plain.png', tmp_path / 'export.jpg'
     with Image.new('RGB', (30, 20)) as image:
         image.save(source)

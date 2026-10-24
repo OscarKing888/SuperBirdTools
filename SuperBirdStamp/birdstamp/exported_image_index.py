@@ -8,7 +8,6 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
-import shutil
 import tempfile
 import threading
 import time
@@ -18,6 +17,7 @@ from PIL import Image
 
 from birdstamp.config import get_config_path
 from birdstamp.export_frame_cache import hash_payload, normalized_path_text, path_signature
+from birdstamp.export_image_pair import copy_export_image, sidecar_signature
 
 
 INDEX_VERSION = 1
@@ -83,7 +83,8 @@ class ExportedImageIndex:
                 try:
                     output = Path(item["path"])
                     if (_format(output) == image_format and output.is_file()
-                            and path_signature(output) == item.get("signature")):
+                            and path_signature(output) == item.get("signature")
+                            and sidecar_signature(output) == item.get("sidecar_signature")):
                         return output
                 except (OSError, TypeError, ValueError, KeyError):
                     continue
@@ -104,6 +105,7 @@ class ExportedImageIndex:
                 item = {
                     "path": str(output.resolve(strict=False)),
                     "signature": path_signature(output),
+                    "sidecar_signature": sidecar_signature(output),
                     "updated_ns": now,
                 }
                 earlier = [old for old in records.get(key, ())
@@ -159,15 +161,9 @@ def materialize_exported_image(exported: Path, target: Path, *, original: Path) 
             rgb.close()
         return True
 
-    target.parent.mkdir(parents=True, exist_ok=True)
-    descriptor, temp_name = tempfile.mkstemp(prefix=".birdstamp-frame-", suffix=".png", dir=target.parent)
-    os.close(descriptor)
     try:
-        shutil.copyfile(exported, temp_name)
-        os.replace(temp_name, target)
+        copy_export_image(exported, target)
     except OSError:
         # 导出图被删除、锁定（Windows）或无权限时退回原图渲染，不让整次导出失败。
         return False
-    finally:
-        Path(temp_name).unlink(missing_ok=True)
     return True

@@ -29,7 +29,7 @@ SuperViewer 使用本地 NAFNet-SIDD width64 模型对照片进行 RGB 降噪。
 
 每张照片通过 `DenoiseAction` 提交到浏览器已有 `WorkKind.ANALYSIS` 低优先级任务池。协调器提交前预留估算内存，不让已启动的浏览器线程等待内存额度。CPU 照片可并行推理，GPU 按分块互斥；解码、颜色处理和编码仍在不同照片间并行。不会运行时修改 Torch 全局线程配置；CPU 模式需要减少原生运算线程时，可在启动前设置 `OMP_NUM_THREADS=2`、`MKL_NUM_THREADS=2`。
 
-输出使用 `tifffile`/`imagecodecs` 真正写出 16 位数组；8 位原图转成 16 位不会恢复原本不存在的信息。成片保存标准拍摄 EXIF 和原侧车用户字段，自定义 namespace 保存在新 XMP 中。方向和尺寸按最终像素校正，ICC 固定为与输出匹配的 sRGB。源 RAW/TIFF 的像素数据偏移、压缩与位深结构不能拷贝覆盖成片；含原文件偏移的二进制 MakerNotes 也不复制，避免生成无法再次读取的 TIFF/JPEG。
+输出使用 `tifffile`/`imagecodecs` 真正写出 16 位数组；8 位原图转成 16 位不会恢复原本不存在的信息。成片图片保存标准拍摄 EXIF 和 sRGB ICC，XMP 只保存在配套同名侧车，不再内嵌到图片。共享 `exif_io.export_xmp.read_export_xmp` 合并只读原图 XMP（含扩展段）与优先侧车，保留自定义 namespace；方向和尺寸按最终像素校正，超大 XMP 不受 JPEG 单段容量限制。源 RAW/TIFF 的像素数据偏移、压缩与位深结构不能拷贝覆盖成片；含原文件偏移的二进制 MakerNotes 也不复制，避免生成无法再次读取的 TIFF/JPEG。
 
 图片和 XMP 先在目标目录的临时子目录完成，再无覆盖发布。写入失败或取消会清理本次未完成输出；如果清理也失败，错误中列出残留路径。ExifTool 写出用有超时的独立进程，不占用浏览器元数据全局读取锁。
 

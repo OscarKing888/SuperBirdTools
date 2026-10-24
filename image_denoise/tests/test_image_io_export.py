@@ -57,8 +57,10 @@ def test_real_chinese_metadata_orientation_and_source_unchanged(photo, format, s
     assert metadata["ExifIFD:ISO"] == 3200
     assert metadata["IFD0:Make"] == "SONY"
     assert metadata["ExifIFD:UserComment"] == "原始中文备注，白鹭"
-    assert metadata["XMP-dc:Title"] == "侧车中的中文新标题"
-    assert metadata["IFD0:Orientation"] == metadata["XMP-tiff:Orientation"] == 1
+    assert not any(key.startswith("XMP-") for key in metadata)
+    sidecar_tags = json.loads(exiftool("-j", "-s", "-G1", "-n", str(target.with_suffix(".xmp"))))[0]
+    assert sidecar_tags["XMP-dc:Title"] == "侧车中的中文新标题"
+    assert metadata["IFD0:Orientation"] == sidecar_tags["XMP-tiff:Orientation"] == 1
     assert metadata["ExifIFD:ExifImageWidth"] == 48
     assert metadata["ExifIFD:ExifImageHeight"] == 64
     tree = ET.parse(target.with_suffix(".xmp"))
