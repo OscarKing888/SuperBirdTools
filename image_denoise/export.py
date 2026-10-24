@@ -15,6 +15,7 @@ from PIL import Image
 from app_common.exif_io import get_exiftool_executable_path, find_same_stem_xmp_sidecar
 from app_common.exif_io.exiftool_runner import run_exiftool_utf8_args
 from app_common.exif_io.photo_meta import PhotoMetaDataXMP
+from app_common.exif_io.export_xmp import read_export_xmp
 from app_common.exif_io.xmp_sidecar import _photo_descriptions
 from .image_io import srgb_profile
 from .types import DenoiseOptions, check_cancelled
@@ -33,7 +34,7 @@ _exiftool = _shared._exiftool
 def _prepare_sidecar(source: Path, staged: Path, width: int, height: int, *, camera_crop=None,
                      source_stat=None) -> None:
     existing = find_same_stem_xmp_sidecar(str(source))
-    tree = ET.parse(existing) if existing else PhotoMetaDataXMP._new_xmp_tree()
+    tree = ET.ElementTree(ET.fromstring(read_export_xmp(source)))
     root = tree.getroot()
     descriptions = _photo_descriptions(root, str(source), sidecar_path=existing)
     if not descriptions:

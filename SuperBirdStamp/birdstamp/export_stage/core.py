@@ -1748,14 +1748,8 @@ def _normalize_and_cache_video_frame(
 
 
 def _copy_complete_frame(source: Path, target: Path) -> None:
-    target.parent.mkdir(parents=True, exist_ok=True)
-    descriptor, temp_name = tempfile.mkstemp(prefix=".birdstamp-frame-", suffix=target.suffix, dir=target.parent)
-    os.close(descriptor)
-    try:
-        shutil.copyfile(source, temp_name)
-        os.replace(temp_name, target)
-    finally:
-        Path(temp_name).unlink(missing_ok=True)
+    from birdstamp.export_image_pair import copy_export_image
+    copy_export_image(source, target)
 
 
 class _SourceFrameRenderAction(WorkerAction):
@@ -1808,6 +1802,8 @@ def _prune_cache_frames(frames_dir: Path, manifest: dict[str, Any], *, total: in
         if index <= 0 or index > int(total):
             try:
                 frame_path.unlink()
+                from birdstamp.export_image_pair import sidecar_for
+                sidecar_for(frame_path).unlink(missing_ok=True)
             except Exception:
                 _log.debug("prune stale cache frame failed: %s", frame_path, exc_info=True)
 

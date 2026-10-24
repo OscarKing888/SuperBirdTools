@@ -54,7 +54,8 @@ def check_export(directory: Path) -> dict:
             packet = run_exiftool_once([executable, '-b', '-XMP', str(output)],
                                       capture_output=True, timeout=30)
             assert packet.returncode == 0, packet.stderr
-            xmp = ET.fromstring(packet.stdout)
+            assert packet.stdout == b'', '导出图片不应内嵌 XMP'
+            xmp = ET.parse(output.with_suffix('.xmp')).getroot()
             assert xmp.find('.//{https://superbirdtools.local/xmp/superpicky/1.0/}bird_species_cn').text == '普通翠鸟'
             assert source.read_bytes() == before
             assert sidecar.read_bytes() == sidecar_before

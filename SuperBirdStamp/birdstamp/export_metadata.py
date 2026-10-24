@@ -4,13 +4,13 @@ from __future__ import annotations
 import logging
 import os
 from pathlib import Path
-import shutil
 import tempfile
 
 from PIL import Image
-from app_common.exif_io import get_exiftool_executable_path, find_same_stem_xmp_sidecar
-from app_common.exif_io.exiftool_runner import run_exiftool, run_exiftool_once
-from birdstamp.export_xmp import merge_export_xmp
+from app_common.exif_io import get_exiftool_executable_path
+from app_common.exif_io.exiftool_runner import run_exiftool
+from app_common.exif_io.export_xmp import read_export_xmp, export_xmp_geometry
+from birdstamp.export_image_pair import check_export_destination, publish_image_pair
 
 _LOG = logging.getLogger(__name__)
 
@@ -37,27 +37,15 @@ def _run(executable: str, args: list[str], *, allow_empty_source: bool = False) 
 
 
 def copy_export_metadata(source: Path, target: Path, image: Image.Image) -> None:
-    """复制完整 EXIF 和 XMP，合并侧车，再校正成片方向、尺寸和缩略图。"""
+    """只复制 EXIF/ICC 等原生元数据；XMP 独立保存为同名侧车。"""
     executable = get_exiftool_executable_path()
     if not executable:
         raise RuntimeError('无法使用 ExifTool（程序缺失或捆绑组件不完整），不能完整保留原图 EXIF，已取消此图片导出。')
     # 直接从原文件复制，不能用模板用的筛选后元数据字典重建 EXIF。
     # EXIF 块保留未知标签；all:all 兼容 TIFF/RAW 标签复制并保留其他可写元数据。
-    # XMP 也按块复制；all:all 单独使用会丢弃未知/自定义 XMP 字段。
-    _run(executable, ['-TagsFromFile', str(source), '-all:all', '-EXIF', '-XMP', '-ICC_Profile', '-IFD0:Orientation#=1', str(target)], allow_empty_source=True)
+    # all:all 必须排除整个 XMP 组；删除成片可能从 Pillow info 继承的内嵌包。
+    _run(executable, ['-TagsFromFile', str(source), '-all:all', '--XMP:all', '-EXIF', '-ICC_Profile', '-XMP=', '-IFD0:Orientation#=1', str(target)], allow_empty_source=True)
     with tempfile.TemporaryDirectory(prefix='birdstamp-exif-') as directory:
-        sidecar = find_same_stem_xmp_sidecar(str(source))
-        if sidecar is not None:
-            # 二进制包可能没有尾换行，不能混入 stay_open 的按行 ready 协议。
-            result = run_exiftool_once(
-                [executable, '-charset', 'filename=UTF8', '-b', '-XMP', str(target)],
-                capture_output=True, timeout=60,
-            )
-            if result.returncode:
-                raise RuntimeError(f'导出 XMP 读取失败：{result.stderr.decode("utf-8", errors="replace")}')
-            xmp_path = Path(directory) / 'merged.xmp'
-            xmp_path.write_bytes(merge_export_xmp(result.stdout, Path(sidecar).read_bytes(), source=source))
-            _run(executable, [f'-XMP<={xmp_path}', str(target)])
         thumbnail_path = Path(directory) / 'thumbnail.jpg'
         with image.convert('RGB') as thumbnail:
             thumbnail.thumbnail((160, 160), Image.Resampling.LANCZOS)
@@ -69,11 +57,9 @@ def copy_export_metadata(source: Path, target: Path, image: Image.Image) -> None
         # 成片缩略图要重建整个 IFD1；只替换 ThumbnailImage 仍会解析原图的
         # 损坏目录并报 Truncated IFD1，且可能留下原缩略图的旧布局标签。
         _run(executable, [
-            '-m', '-IFD1:all=', '-IFD0:Orientation#=1', '-XMP-tiff:Orientation#=1',
+            '-m', '-IFD1:all=', '-IFD0:Orientation#=1',
             f'-IFD0:ImageWidth={width}', f'-IFD0:ImageHeight={height}',
             f'-ExifIFD:ExifImageWidth={width}', f'-ExifIFD:ExifImageHeight={height}',
-            f'-XMP-tiff:ImageWidth={width}', f'-XMP-tiff:ImageHeight={height}',
-            f'-XMP-exif:ExifImageWidth={width}', f'-XMP-exif:ExifImageHeight={height}',
             f'-ThumbnailImage<={thumbnail_path}', '-IFD1:Orientation#=1',
             f'-IFD1:ImageWidth={tw}', f'-IFD1:ImageHeight={th}', str(target),
         ])
@@ -81,30 +67,22 @@ def copy_export_metadata(source: Path, target: Path, image: Image.Image) -> None
 
 def save_export_image(image: Image.Image, target: Path, *, source_path: Path,
                       format: str, **save_options) -> None:
-    """先完成图片及 EXIF/XMP 临时文件，再替换目标；失败不留下元数据不全的半成品。"""
+    """先准备图片与独立 XMP，再配对提交；失败恢复已有成片和侧车。"""
     target = Path(target)
     source = Path(source_path).resolve()
     if not source.is_file():
         raise FileNotFoundError(f'无法读取原图 EXIF：{source}')
-    if target.resolve() == source or (target.exists() and os.path.samefile(source, target)):
-        raise ValueError('导出目标不能覆盖原图，请选择其他文件名。')
+    check_export_destination(source, target)
     target.parent.mkdir(parents=True, exist_ok=True)
     fd, name = tempfile.mkstemp(prefix='.birdstamp-export-', suffix=target.suffix, dir=target.parent)
     os.close(fd)
     temporary = Path(name)
+    temporary_sidecar = temporary.with_suffix('.xmp')
     try:
+        temporary_sidecar.write_bytes(export_xmp_geometry(read_export_xmp(source), source=source, size=image.size))
         image.save(temporary, format=format, **save_options)
         copy_export_metadata(source, temporary, image)
-        os.replace(temporary, target)
+        publish_image_pair(temporary, temporary_sidecar, target)
     finally:
         temporary.unlink(missing_ok=True)
-
-
-def copy_export_sidecar(source: Path, target: Path) -> Path | None:
-    """只复制原图同目录同名 XMP，保持字节内容并按导出图片命名。"""
-    sidecar = find_same_stem_xmp_sidecar(str(source))
-    if sidecar is None:
-        return None
-    destination = target.with_suffix('.xmp')
-    shutil.copy2(sidecar, destination)
-    return destination
+        temporary_sidecar.unlink(missing_ok=True)

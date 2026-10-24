@@ -16,8 +16,8 @@ FRAME_CACHE_ROOT_NAME = "birdstamp_export_cache"
 SOURCE_FRAME_BUCKET_KIND = "rendered_source_frames"
 VIDEO_FRAME_BUCKET_KIND = "video_frames"
 # v10 保留完整 EXIF；v11 支持图像着色；v12 支持圆角 Badge；v13 支持嵌套行/列布局。
-# v17 按块保留内嵌 XMP，并合并源照片同名侧车。
-SOURCE_FRAME_CACHE_VERSION = 17
+# v18 每帧配套独立 XMP，不复用旧的内嵌 XMP 输出。
+SOURCE_FRAME_CACHE_VERSION = 18
 VIDEO_FRAME_CACHE_VERSION = 2
 _DEFAULT_PIPELINE_STAGE_ORDER = (
     "template_crop",
@@ -395,6 +395,9 @@ def reusable_frame_path(
         frame_path.resolve(strict=False).relative_to(plan.cache_dir.resolve(strict=False))
         if not frame_path.is_file():
             return None
+        from birdstamp.export_image_pair import sidecar_signature
+        if sidecar_signature(frame_path) != record.get("sidecar_signature"):
+            return None
         file_signature = path_signature(frame_path)
         recorded_signature = record.get("file_signature")
         if recorded_signature is not None:
@@ -425,6 +428,7 @@ def update_frame_manifest_record(
     frame_signature: str,
     frame_path: Path,
 ) -> None:
+    from birdstamp.export_image_pair import sidecar_signature
     frames = manifest.setdefault("frames", {})
     if not isinstance(frames, dict):
         frames = {}
@@ -435,6 +439,7 @@ def update_frame_manifest_record(
         "frame_signature": str(frame_signature or "").strip(),
         "relative_path": frame_path.resolve(strict=False).relative_to(plan.cache_dir.resolve(strict=False)).as_posix(),
         "file_signature": path_signature(frame_path),
+        "sidecar_signature": sidecar_signature(frame_path),
     }
 
 

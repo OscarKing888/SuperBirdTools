@@ -11,7 +11,7 @@ from app_common.file_browser._work_action import WorkerAction
 from app_common.file_browser._work_pool import BrowserWorkPool
 from app_common.file_browser._work_policy import WorkKind
 from app_common.log import get_logger
-from birdstamp.export_metadata import save_export_image, copy_export_sidecar
+from birdstamp.export_metadata import save_export_image
 
 from .sequence_export_workers import resolve_sequence_export_workers
 from .png_export_stage import PngExportStage
@@ -54,8 +54,6 @@ class SequenceExportAction(WorkerAction):
                 **({'quality': 95, 'subsampling': 0} if self.output_format == 'jpg'
                    else {'compress_level': 1}),
             )
-        self._check_cancelled()
-        copy_export_sidecar(self.path, self.target)
         self._check_cancelled()
         return rendered - started, monotonic() - rendered
 

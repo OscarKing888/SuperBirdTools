@@ -143,6 +143,7 @@ Follow [ai_rules/AI_CODING_RULES.md](ai_rules/AI_CODING_RULES.md) as the cross-t
 ## Metadata And Sidecars
 
 - XMP sidecar is the only writable metadata sidecar path. Do not reintroduce `.superviewer.json`, JSON sidecar helpers/tests, or JSON sidecar copy/move/delete behavior.
+- Exported/derived images and retained GIF/video frames must also use same-stem XMP sidecars. Never embed or copy XMP back into JPEG/PNG/TIFF output containers. Preserve native camera EXIF/ICC under the existing export policy; merge read-only embedded XMP with sidecar-priority edits into the output sidecar, correct output geometry there, and carry the image/XMP pair through cache reuse, publication and rollback. A missing/changed exported sidecar invalidates that cached pair.
 - Do not write user metadata back into RAW/original image files. EXIF/XMP writes for title, description/comment, tags, rating, pick, camera-related editable fields, and other SuperViewer/SuperBirdStamp metadata must go through `PhotoMetaDataXMP` sidecar helpers.
 - `report.db` is read-only fallback/hydration input for these apps. Do not restore old report.db write-back paths for user edits, and do not remove existing report.db compatibility reads.
 - When a sidecar is created or modified and lacks a bird-species marker, `PhotoMetaDataXMP` should hydrate missing non-empty `PHOTO_COLUMNS` values from the matching `report.db` row into `XMP-superpicky:<column>` without overwriting existing sidecar fields or the current user edit. Numeric `0` and `False` are valid values.
