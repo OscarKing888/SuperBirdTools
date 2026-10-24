@@ -2,9 +2,38 @@
 
 功能简介：
 SuperViewer：打开 慧眼选鸟 处理后的目录会有各种鸟的信息显示和修改，自带二次识别鸟、多鸟识别、连拍信息重新计算，实验性功能：内置降噪算法、清晰度计算（识别运动模糊，未合焦，或合焦不在鸟身上）
-SupverBirdStamp：批量自动裁切、添加照片信息转换的文本、贴图（签名）、去抖动、连拍生成Gif、视频等
+SuperBirdStamp：批量自动裁切、添加照片信息转换的文本、贴图（签名）、去抖动、连拍生成Gif、视频等
 
 此百度盘分享链接永久有效，请先收藏，后续版本更新直接删除旧版本。目前尚处于测试版本阶段，有问题可在群里反馈：
 https://pan.baidu.com/s/1nxDqy4R7hwwyYkJddJDW5Q?pwd=bh4u
 
 需要下载对应平台的版本在Win/Mac目录中。
+
+Windows CPU / CUDA 版本怎么选：
+
+CPU版（文件名以 -cpu.zip 结尾）
+适合没有兼容 NVIDIA 显卡的电脑，包括使用 Intel/AMD 核显或 AMD 独显的电脑。不确定显卡是否支持时，可先选择 CPU 版。
+鸟体识别、降噪等模型推理由 CPU 完成，不使用 CUDA 加速；安装包较小，处理大量照片时可能需要更长时间。
+
+CUDA版（文件名以 -cuda.zip 结尾）
+适合配备兼容 NVIDIA 显卡、希望使用 GPU 加速模型推理的电脑。当前 CUDA 版使用 CUDA 12.8 运行库，需要显卡及 NVIDIA 驱动与之兼容。
+CUDA 运行库随包提供，使用打包版无需另装 Python 或 CUDA 开发工具包；NVIDIA 显卡驱动需在电脑上正确安装。
+CUDA 版安装包较大。实际加速效果取决于显卡、显存和处理任务，照片浏览、文件操作等并非所有功能都会因 CUDA 而加速。
+下载 CUDA 版不代表一定启用 GPU；若显卡或驱动不兼容，可能回退到 CPU 或报错，可改用 CPU 版。
+
+两版提供相同的应用功能，主要区别是模型推理使用的运行库及硬件加速能力。模型是否齐全仍会影响相应功能的可用性。
+macOS 用户请选择 Mac 目录中的对应版本，上述 CPU/CUDA 文件名区分用于 Windows 版。
+
+文件名示例：
+SuperBirdTools-<版本号>-windows-x86_64-cpu.zip
+SuperBirdTools-<版本号>-windows-x86_64-cuda.zip
+
+解压与启动：
+请先完整解压 ZIP，再运行 SuperViewer 文件夹中的 SuperViewer.exe，或 SuperBirdStamp 文件夹中的 SuperBirdStamp.exe。
+SuperViewer、SuperBirdStamp、SuperBirdUpdater 三个文件夹需保持在同一层级，运行库存在共享引用，请勿只复制某一个 EXE 或单独移动应用文件夹。
+切换 CPU/CUDA 版本时，请关闭正在运行的软件，将新包完整解压到独立目录，不要把两版文件混合覆盖。
+
+源码打包（开发者）：
+普通打包使用 build_all.bat，输出到 dist；CUDA 打包使用 build_all_cuda.bat，输出到 dist\cuda。
+CUDA 入口会按需将共享 .venv 中的 Torch 切换为 CUDA 版，再执行干净构建。普通入口沿用当前环境，不会自动切回 CPU 版。
+完整 ZIP 的 -cpu / -cuda 后缀由成品实际包含的 Torch 运行库决定。详细打包参数和输出清理说明见 README.md。
