@@ -273,12 +273,16 @@ def test_mouse_drag_preserves_multiple_selection(window, photos, monkeypatch, mo
     payloads = []
     class Drag:
         def __init__(self, parent):
-            pass
+            self.cursors = {}
         def setMimeData(self, mime):
             self.mime = mime
+        def setDragCursor(self, pixmap, action):
+            self.cursors[action] = pixmap
         def exec(self, actions, default):
             payloads.append([u.toLocalFile() for u in self.mime.urls()])
             assert default == Qt.DropAction.MoveAction
+            assert set(self.cursors) == {Qt.DropAction.CopyAction, Qt.DropAction.MoveAction}
+            assert all(not pixmap.isNull() for pixmap in self.cursors.values())
             return Qt.DropAction.IgnoreAction
         def deleteLater(self):
             pass

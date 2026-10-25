@@ -7,6 +7,7 @@ from app_common.file_browser import DirectoryBrowserWidget
 from app_common.file_browser._models import FileTableView
 from .rarity_file_table import RarityFileTableModel
 from .thumbnail_metadata import BirdThumbnailModel
+from .file_drag_feedback import file_drag_cursor
 
 try:
     from PyQt6.QtCore import QPersistentModelIndex, QTimer, Qt
@@ -59,6 +60,8 @@ class _DragView:
         drag = QDrag(self)
         drag.setMimeData(mime)
         try:
+            for action in (Qt.DropAction.CopyAction, Qt.DropAction.MoveAction):
+                drag.setDragCursor(file_drag_cursor(action, self.palette(), self.font(), self.devicePixelRatioF()), action)
             execute = getattr(drag, "exec", None) or drag.exec_
             execute(Qt.DropAction.CopyAction | Qt.DropAction.MoveAction, Qt.DropAction.MoveAction)
         finally:
@@ -107,11 +110,16 @@ class DirectoryDropTree(QTreeWidget):
         return self.accepts_file_drag is not None and self.accepts_file_drag(event.mimeData())
 
     def dragEnterEvent(self, event):
-        if self._accepts(event):
-            event.setDropAction(drop_action(event.modifiers() if hasattr(event, "modifiers") else event.keyboardModifiers()))
-            event.accept()
-        else:
+        # 进入时也校验落点，避免空白/占位行短暂显示可复制/移动光标。
+        if not self._accepts(event):
+            self.clear_drop_target()
             event.ignore()
+            return
+        self.dragMoveEvent(event)
+        if not event.isAccepted():
+            # 保留后续 DragMove 的接收资格；IgnoreAction 仍显示禁止落下。
+            event.setDropAction(Qt.DropAction.IgnoreAction)
+            event.accept()
 
     def _update_target(self, pos):
         index = self.indexAt(pos)

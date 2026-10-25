@@ -52,6 +52,14 @@ Viewer 的 [`DirectoryFileController`](../superviewer/directory_file_controller.
 
 拖放移动的撤销/重做使用 [`file_move_history.py`](../superviewer/file_move_history.py) 的有界会话日志（最多 100 批），记录系统实际完成的原名、无覆盖移动；同卷按文件身份确认，跨卷在 worker 用内容摘要验证。`MoveReplayWorker` 验证源身份、空闲目标和目录后仍调用系统移动；当前 XMP 随照片往返，取消/失败保留已完成逆操作及可重试余项，复制/空操作不破坏历史。覆盖或系统改名等无法确认完整还原的结果明确提示、不伪造历史。恢复实际路径后解除对应报告会话删除标记并重新读取报告，保留其它路径标记，数据库只读。[`FileMoveHistoryActions`](../superviewer/file_move_actions.py) 的“撤销移动 / 重做移动”由编辑菜单和目录右键共用，执行中禁用；标签和文本撤销入口不变。覆盖见 [`test_file_move_history.py`](../tests/test_file_move_history.py)。
 
+目录菜单的“粘贴到此文件夹”由 `DirectoryFileController.paste_to_directory()` 固定右击目标，
+复用剪贴板解析及 `NativeTransferWorker` 的系统复制/移动、XMP、撤销和关闭生命周期。
+保留当前浏览位置，剪切全批（含 XMP）成功且剪贴板代次未改变才清除剪贴板；外部文件 URL
+按复制处理。原列表粘贴事务不变。拖动视图通过
+[`file_drag_feedback.file_drag_cursor()`](../superviewer/file_drag_feedback.py) 注册“＋ 复制 / → 移动”
+光标，Qt 按目标实际接受动作切换，无效目标使用系统禁止提示。绘制只依赖主题、字体和 DPR，
+无新增图片读取或全局光标状态；回归见 [`test_directory_paste_feedback.py`](../tests/test_directory_paste_feedback.py)。
+
 Viewer 的列表/缩略图由 [`file_context_menu.build_file_context_menu()`](../superviewer/file_context_menu.py) 组装分组菜单：顶部依次为复制、粘贴、剪切，分隔线后紧接复制/粘贴鸟名，再用分隔线与“珍禽入册”、星级和标签区分；“鸟种信息”“拍摄信息”“分析与处理”收纳控制器动作；“发送到”“定位文件”收纳外部应用与路径操作，删除独立置底。控制器用 `@file_menu_group("bird", order=10)` 声明分组和组内顺序（另外两组为 `capture` / `process`），进度/停止入口随所属功能归组；未声明的扩展仍在主菜单，空组隐藏。动作仍使用共享浏览器和控制器原有实现，保留多选、实际源路径、快捷键及禁用状态；不改变 BirdStamp 菜单。复制/粘贴鸟名快捷键为 macOS `⌘⇧C` / `⌘⇧V`、Windows `Ctrl+Shift+C` / `Ctrl+Shift+V`，菜单显示与 `tagged_file_list._install_species_shortcuts()` 共用 `species_shortcut_sequence()`；仅照片列表/缩略图自身有焦点时启用，过滤框和行编辑器不触发，关闭后及无选择时不操作。复制优先当前选中的照片，粘贴复用原有快照/XMP 流程作用于全部选中照片，禁用按键自动重复。回归见 [`test_species_shortcuts.py`](../tests/test_species_shortcuts.py)。菜单及子菜单增加条目上下留白与分隔线间距，显式用主题 Highlight/HighlightedText 绘制悬停和键盘选中态，禁用项不高亮；根菜单拥有独立 `QProxyStyle`，将整个菜单树的子菜单展开等待设为 100 ms，不修改应用全局样式。菜单展示鸟名只取报告/内存缓存，通过共享 `_get_species_payload_for_path(allow_metadata_read=False)` 避免缺失鸟名时同步查询 EXIF；真正复制仍读取最新侧车及兼容回退。性能探针记录 `[context-menu] build_ms`。常用入口用随主题/状态绘制的 Qt 线条图标，无额外图片资源；现有 `collect_submodules("superviewer")` 收集新模块。此变更仅涉及菜单呈现，无 CLI 或算法流程变化。
 
 ```mermaid

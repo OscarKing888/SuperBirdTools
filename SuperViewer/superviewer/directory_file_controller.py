@@ -1,4 +1,4 @@
-"""目录新建和文件拖放协调；系统拥有文件冲突与操作进度。"""
+"""目录新建、文件拖放和目录粘贴协调；系统拥有文件冲突与操作进度。"""
 from __future__ import annotations
 
 import os
@@ -10,10 +10,10 @@ from .file_move_history import MoveHistory, completed_moves, is_sidecar, path_ke
 
 try:
     from PyQt6.QtCore import QMimeData, QObject, QThread, Qt, QUrl, pyqtSignal
-    from PyQt6.QtWidgets import QAbstractItemView, QInputDialog, QMessageBox
+    from PyQt6.QtWidgets import QAbstractItemView, QApplication, QInputDialog, QMessageBox
 except ImportError:  # pragma: no cover
     from PyQt5.QtCore import QMimeData, QObject, QThread, Qt, QUrl, pyqtSignal
-    from PyQt5.QtWidgets import QAbstractItemView, QInputDialog, QMessageBox
+    from PyQt5.QtWidgets import QAbstractItemView, QApplication, QInputDialog, QMessageBox
 
 _DRAG_MIME = "application/x-superviewer-file-drag"
 
@@ -32,6 +32,8 @@ class NativeTransferWorker(QThread):
         self.untracked = ()
         self.destinations = [destination]
         self.targets = ()
+        self.clipboard_revision = None
+        self.clipboard_cut_complete = False
 
     def run(self):
         snapshots = ()
@@ -51,6 +53,8 @@ class NativeTransferWorker(QThread):
             if not self.copy:
                 self.moved = [path for path in self.sources if path in self.paths and not os.path.exists(path)]
                 self.inverse, self.untracked = completed_moves(snapshots)
+                self.clipboard_cut_complete = (bool(self.paths) and len(self.moved) == len(self.sources)
+                                               and all(not os.path.exists(path) for path in self.paths))
 
 
 class MoveReplayWorker(NativeTransferWorker):
@@ -103,6 +107,8 @@ class DirectoryFileController(QObject):
         self._shutdown_requested = False
         self._drag_token = b""
         self._drag_sources = ()
+        self._clipboard_revision = 0
+        QApplication.clipboard().dataChanged.connect(self._clipboard_changed)
         self._history = MoveHistory()
         self.history_actions = window._move_history_actions
         self.history_actions.set_controller(self)
@@ -120,7 +126,44 @@ class DirectoryFileController(QObject):
     def extend_directory_menu(self, menu, path):
         action = menu.addAction("新建子目录…", lambda: self.create_directory(path))
         action.setEnabled(not self._shutdown_requested)
+        paste = menu.addAction("粘贴到此文件夹", lambda: self.paste_to_directory(path))
+        paste.setEnabled(self.can_paste_to_directory(path))
+        paste.setStatusTip("将剪贴板文件和同名 XMP 粘贴到此文件夹；剪切的文件会移动。")
         self.history_actions.add_to_menu(menu)
+
+    def _clipboard_changed(self):
+        self._clipboard_revision += 1
+
+    def can_paste_to_directory(self, destination):
+        if self._shutdown_requested or self._worker is not None or not os.path.isdir(destination):
+            return False
+        if not self._files.file_writes_allowed():
+            return False
+        _, entries = self._files._clipboard_file_payload()
+        sources = [entry["source"] for entry in entries]
+        targets = [str(Path(destination) / Path(p).name) for p in sources]
+        return bool(sources) and self._files.file_operation_paths_allowed(sources + targets)
+
+    def paste_to_directory(self, destination):
+        # 菜单打开后剪贴板、目标或运行状态可能变化，执行前重新检查。
+        if not self.can_paste_to_directory(destination):
+            return False
+        action, entries = self._files._clipboard_file_payload()
+        clipboard_revision = self._clipboard_revision
+        if not entries:
+            return False
+        sources = tuple(entry["source"] for entry in entries)
+        targets = [str(Path(destination) / Path(p).name) for p in sources]
+        if not self._files._file_operation_paths_allowed(list(sources) + targets, "粘贴", warn=True):
+            return False
+        self._displays = {path: path for path in sources}
+        self._scopes = {path: self._files._report_scope_path_key(self._files.get_report_row_for_path(path)) for path in sources}
+        worker = NativeTransferWorker(sources, os.path.abspath(destination), action != "cut", 0)
+        if action == "cut":
+            # 保存编辑的守卫可能弹出对话框，代次必须与操作前的文件快照绑定。
+            worker.clipboard_revision = clipboard_revision
+        self._start(worker, "正在由系统粘贴文件…")
+        return True
 
     @property
     def can_undo(self):
@@ -229,6 +272,12 @@ class DirectoryFileController(QObject):
         if worker is not self._worker:
             return
         self._worker = None
+        # 仅整批剪切完成且剪贴板未换内容时清除；失败/部分完成可继续粘贴。
+        if (worker.clipboard_revision is not None
+                and worker.clipboard_revision == self._clipboard_revision
+                and worker.clipboard_cut_complete
+                and not worker.result.error and not worker.result.cancelled):
+            QApplication.clipboard().clear()
         editor = getattr(self._main,"_photo_edit",None)
         if editor:
             editor.end_file_operation([*worker.paths,*worker.targets])
