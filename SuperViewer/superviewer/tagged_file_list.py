@@ -245,6 +245,7 @@ class SuperViewerTaggedFileListPanel(FileListPanel):
     photo_metadata_cache_updated = pyqtSignal(object)
     command_history_changed = pyqtSignal()
     tag_library_changed = pyqtSignal()
+    photo_selection_changed = pyqtSignal()
     use_report_db = True
     include_videos = True
     use_unified_worker_pool = True
@@ -263,6 +264,17 @@ class SuperViewerTaggedFileListPanel(FileListPanel):
     enable_range_mark_shortcuts = True
     enable_in_memory_fast_preview = True
     skip_uncached_fast_preview = True
+
+    def selected_photo_paths(self) -> list[str]:
+        """Snapshot selected sources using cached path repairs, never preview assets."""
+        return self._unique_norm_paths([
+            _get_cached_actual_path(path) or path
+            for path in self._active_view_selected_paths()
+        ])
+
+    def _update_selection_status(self) -> None:
+        super()._update_selection_status()
+        self.photo_selection_changed.emit()
 
     def select_display_path_silently(self, path: str) -> bool:
         """Reflect an A/B viewport activation in both views without loading a photo."""
@@ -1795,10 +1807,18 @@ class SuperViewerTaggedFileListPanel(FileListPanel):
             return TagWriteResult(failed_paths={path: "当前无法写入标签。" for path in states})
         started_at = perf_counter()
         result = self._photo_tag_store.apply_tag_states(states, allowed_tags=self._available_tags)
-        updated_paths = list(result.current_tags)
+        cache_tags = dict(result.current_tags)
+        if cache_tags:
+            by_source = {os.path.normcase(path): tags for path, tags in cache_tags.items()}
+            # 实际源文件写入成功后，同步仍以报告旧路径展示的行；不扫描或修改 report.db。
+            for display in self._all_files:
+                actual = _get_cached_actual_path(display)
+                if actual and os.path.normcase(actual) in by_source:
+                    cache_tags[display] = by_source[os.path.normcase(actual)]
+        updated_paths = list(cache_tags)
         if updated_paths:
             try:
-                self._photo_tag_cache.update({path: set(tags) for path, tags in result.current_tags.items()})
+                self._photo_tag_cache.update({path: set(tags) for path, tags in cache_tags.items()})
                 self._bump_photo_tag_generations(updated_paths)
             except Exception as exc:
                 _log.warning("[tag.write] saved tags but tag cache update failed: %s", exc)
