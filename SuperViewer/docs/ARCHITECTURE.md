@@ -276,6 +276,9 @@ EXIF 页直接列出 ExifTool 从 RAW 及其他图像读取的已知标签，包
 
 标签管理页的“编辑标签…”由 [`tag_library_dialog.py`](../superviewer/tag_library_dialog.py) 提供树形草稿编辑；[`TagLibraryDraft`](../superviewer/tag_library_model.py) 按节点身份记录增删、改名和移动，支持同名叶子统一改名，保留配置注释和换行风格。空分组不能保存，以免旧格式读回时被解释成照片标签。`PhotoTagConfig.read_bytes()` / `save_bytes()` 对配置做严格快照检查和原子提交。
 
+[`ImageInfoTabPanel_Tags`](../superviewer/image_info_tab_tags.py) 的勾选/清除作用于列表或缩略图的实际多选快照，空选择不回退到仍保留的预览图，视频不参与。顶部显示选中数量；复选框区分全选、部分选中和未选中，点击部分选中项会统一添加，再次点击会统一移除。沿用列表公开 set/clear 方法与逐照片撤销/重做，保留配置外关键词和无关元数据。Viewer 的 `photo_selection_changed` 在选择、视图切换及恢复后通知标签页，页内单次计时器合并刷新；非当前照片的标签缓存更新也会刷新多选汇总，隐藏页/长按播放/关闭期间不派发刷新。独立使用页面时保留单图 API；业务写入 API 已支持批量，无新增 CLI。回归见 [`test_tag_multi_selection.py`](../tests/test_tag_multi_selection.py)。
+选择快照复用已有实际路径缓存，不把预览 JPEG 当作写入源；标签写入及撤销后，同时刷新实际源路径和仍使用报告旧路径的列表行及标签代次，不扫描或修改 `report.db`。
+
 [`prepare_tag_edit()` / `apply_tag_edit()`](../superviewer/tag_library_transaction.py) 是不依赖 Qt 的事务接口：扫描当前目录及全部子目录的实际照片，跳过缓存和目录链接，同一 XMP 只写一次；分组/排序/新增词表不写照片，删除仅在最后一个同名叶子消失时移除 Subject。当前生效配置可能由父目录或应用共享，界面明确显示配置位置和照片同步范围。事务先严格检查配置及涉及的标签成员关系，在配置旁创建 `.tag-edit-recovery-*` 恢复目录，保存照片后才提交配置；失败或取消恢复原文件，恢复失败保留副本和清单并阻止后续标签编辑，可通过“重试恢复”继续。恢复记录不是照片元数据侧车。
 
 [`TagLibraryController` / `TagLibraryCommand`](../superviewer/tag_library_controller.py) 将配置和照片同步作为一个整体接入现有 `CommandHistory`；模态进度窗口持有 worker 直到真实 `finished`，取消和退出等待回滚。撤销/重做只针对原文件集合和涉及的标签成员，保留无关关键词/元数据，外部冲突会停止操作。内部配置刷新保留历史；普通外部配置变更继续执行既有失效规则。刷新按 GUI 时间片更新缓存，以版本号、待重读路径和 worker 身份拒绝旧结果，随后刷新筛选及信息面板。服务函数可供批处理调用；本轮不增加独立 CLI，保存前的目录范围与影响数量确认保留在 GUI。

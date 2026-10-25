@@ -600,6 +600,12 @@ class MainWindow(QMainWindow):
             self._sidecar_writes_allowed,
             self.image_info_tabs,
             edit_tags_callback=self._file_list.tag_library.edit,
+            selected_paths_provider=self._file_list.selected_photo_paths,
+            refresh_enabled_provider=lambda: (
+                not self._shutdown_requested
+                and not self._file_list._key_navigation_playback_active
+                and self.image_info_tabs.currentWidget() is self.tags_info_panel
+            ),
         )
         self.exif_info_panel = ImageInfoTabPanel_EXIF(
             self._load_metadata_rows_for_current_path,
@@ -620,6 +626,8 @@ class MainWindow(QMainWindow):
                                                         (self.camera_raw_panel,self.color_adjust_panel))
         self._file_list.playback_state_changed.connect(self._photo_edit_preview.set_suspended)
         self._file_list.photo_tags_cache_updated.connect(self._on_photo_tags_cache_updated)
+        self._file_list.photo_selection_changed.connect(self.tags_info_panel.schedule_refresh)
+        self.image_info_tabs.currentChanged.connect(lambda _index: self.tags_info_panel.schedule_refresh())
         self._file_list.tag_library_changed.connect(self.tags_info_panel.refresh_current_photo)
         self._file_list.tag_library_changed.connect(self.image_info_panel.refresh_photo_tags)
         self._file_list.photo_metadata_cache_updated.connect(self._on_photo_metadata_cache_updated)
@@ -1365,6 +1373,12 @@ class MainWindow(QMainWindow):
         )
 
     def _on_photo_tags_cache_updated(self, paths: object) -> None:
+        if self.image_info_tabs.currentWidget() is self.tags_info_panel:
+            updated = _norm_paths_for_compare(paths)
+            selected = _norm_paths_for_compare(self.tags_info_panel.selected_photo_paths())
+            if updated & selected:
+                self.tags_info_panel.schedule_refresh()
+            return
         current = os.path.normpath(self._current_exif_path) if self._current_exif_path else ""
         if not current:
             return
@@ -1372,15 +1386,12 @@ class MainWindow(QMainWindow):
         if os.path.normcase(current) not in updated:
             return
         panel = self.image_info_tabs.currentWidget()
-        if panel not in (self.image_info_panel, self.tags_info_panel):
+        if panel is not self.image_info_panel:
             return
         try:
             panel_path = os.path.normpath(panel.current_photo_path()) if panel.current_photo_path() else ""
             if panel_path and os.path.normcase(panel_path) == os.path.normcase(current):
-                if panel is self.image_info_panel:
-                    panel.refresh_photo_tags()
-                else:
-                    panel.refresh_current_photo()
+                panel.refresh_photo_tags()
         except Exception:
             pass
 
