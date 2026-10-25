@@ -16,7 +16,7 @@ from .filmstrip_slider import FilmstripSlider
 from .video_playback import FrameClock
 from .qt_compat import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QSlider, QComboBox,
-    QStackedWidget, QTableWidget, QTableWidgetItem, QThread, QImage, QPixmap,
+    QStackedWidget, QTableWidget, QTableWidgetItem, QThread, QTimer, QImage, QPixmap,
     pyqtSignal, Qt, _Horizontal, _AlignCenter, _KeepAspectRatio, _SmoothTransformation,
     _NoEditTriggers,
 )
@@ -169,6 +169,11 @@ class VideoPlayerView(QWidget):
         self._source_set = False
         self._pending_seek = None
         self._pending_play = False
+        self._scrub_value = None
+        self._scrub_timer = QTimer(self)
+        self._scrub_timer.setSingleShot(True)
+        self._scrub_timer.setInterval(33)
+        self._scrub_timer.timeout.connect(self._flush_scrub_seek)
         self._fps = 0.0
         self._step_frame = None
         self.setFocusPolicy(_FOCUS.StrongFocus)
@@ -195,12 +200,12 @@ class VideoPlayerView(QWidget):
         self.filmstrip = FilmstripSlider()
         self.filmstrip.setEnabled(False)
         self.filmstrip.position_selected.connect(self._filmstrip_seek)
-        self.filmstrip.sliderMoved.connect(self._scrub_time)
+        self.filmstrip.position_scrubbed.connect(self._scrub_time)
         timeline.addWidget(self.filmstrip)
         self.seek = WaveformSlider()
         self.seek.setEnabled(False)
         self.seek.position_selected.connect(self._seek)
-        self.seek.sliderMoved.connect(self._scrub_time)
+        self.seek.position_scrubbed.connect(self._scrub_time)
         timeline.addWidget(self.seek)
         layout.addLayout(timeline)
         controls = QHBoxLayout()
@@ -379,6 +384,7 @@ class VideoPlayerView(QWidget):
     def _media_status(self, status):
         if not self._source_set:
             return
+        self._update_seek_controls()
         if status == self.player.MediaStatus.LoadedMedia:
             if self.player.audioTracks():
                 # 波形读取首条音轨，播放使用同一音轨，避免多音轨素材错位。
@@ -399,6 +405,7 @@ class VideoPlayerView(QWidget):
 
     def _error(self, *_args):
         if self._source_set:
+            self._cancel_scrub_seek()
             self._pending_play = False
             detail = self.player.errorString() or '当前系统无法解码此视频'
             self.message.setText('无法播放：' + detail)
@@ -415,9 +422,7 @@ class VideoPlayerView(QWidget):
             self.player.setPlaybackRate(float(self.speed.currentData()))
 
     def _seek(self, *_args):
-        if not self._duration:
-            return
-        self._seek_preserving_state(round(self.seek.value() / 10000 * self._duration))
+        self._filmstrip_seek(self.seek.value())
 
     def _filmstrip_seek(self, value):
         if not self._duration:
@@ -445,6 +450,8 @@ class VideoPlayerView(QWidget):
         self._seek_to(position, play=playing, paused=not playing)
 
     def _seek_to(self, position, *, play=False, paused=False):
+        # 松开、键盘定位等显式操作立即提交，不能被上一轮拖动的尾请求覆盖。
+        self._cancel_scrub_seek()
         self._position = max(0, min(max(0, self._duration - 1), position))
         self._pending_seek = self._position
         self._pending_play = play
@@ -485,11 +492,30 @@ class VideoPlayerView(QWidget):
         self.next_frame.setEnabled(enabled)
 
     def _scrub_time(self, value):
+        if not self._duration or not self.play.isEnabled():
+            return
         position = round(value / 10000 * self._duration)
         # 两条时间轴共用位置；拖动时播放器回调不能覆盖鼠标位置。
         self.seek.setValue(value)
         self.filmstrip.setValue(value)
         self._update_time(position)
+        self._scrub_value = value
+        if not self._scrub_timer.isActive():
+            self._flush_scrub_seek()
+
+    def _flush_scrub_seek(self):
+        value = self._scrub_value
+        if value is None:
+            return
+        # 按下立即取帧；连续移动每 33 ms 只提交最新位置，不等待鼠标停下。
+        # 复用首次加载、帧内定位及播放意图处理，解码仍由 Qt 后台完成。
+        self._filmstrip_seek(value)
+        if self._source_set:
+            self._scrub_timer.start()
+
+    def _cancel_scrub_seek(self):
+        self._scrub_timer.stop()
+        self._scrub_value = None
 
     def set_duration_hint(self, milliseconds):
         if not self._source_set or not self._duration:
@@ -503,10 +529,18 @@ class VideoPlayerView(QWidget):
 
     def _seekable_changed(self, enabled):
         if self._source_set:
-            self.seek.setEnabled(enabled and self._duration > 0)
-            self.filmstrip.setEnabled(enabled and self._duration > 0)
-            self._update_frame_controls()
+            self._update_seek_controls()
             self._apply_pending_seek()
+
+    def _update_seek_controls(self):
+        # 首次按下即开始加载；已知时长时允许继续拖动并更新待定位位置。
+        # 加载中临时禁用 QSlider 会触发 sliderReleased，提前结束这次拖动。
+        loading = self.player.mediaStatus() in (
+            self.player.MediaStatus.NoMedia, self.player.MediaStatus.LoadingMedia)
+        enabled = self._duration > 0 and (loading or self.player.isSeekable())
+        self.seek.setEnabled(enabled)
+        self.filmstrip.setEnabled(enabled)
+        self._update_frame_controls()
 
     def _apply_pending_seek(self):
         # seekableChanged 在 LoadedMedia 前到达时，Qt 仍可能丢弃 setPosition。
@@ -540,11 +574,9 @@ class VideoPlayerView(QWidget):
         if self._source_set and value > 0:
             self._duration = value
             self.seek.set_duration(value)
-            self.seek.setEnabled(self.player.isSeekable())
             self.filmstrip.set_duration(value)
-            self.filmstrip.setEnabled(self.player.isSeekable())
+            self._update_seek_controls()
             self._update_time()
-            self._update_frame_controls()
 
     def _update_time(self, position=None):
         position = self._position if position is None else position
@@ -556,6 +588,7 @@ class VideoPlayerView(QWidget):
         self.time_label.setText(f'{format_duration(position / 1000)}.{int(position) % 1000:03d} / {duration}')
 
     def stop(self):
+        self._cancel_scrub_seek()
         had_source = self._source_set
         self._source_set = False
         self._pending_seek = None

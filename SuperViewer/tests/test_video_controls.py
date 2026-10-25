@@ -2,8 +2,8 @@
 import math
 
 import pytest
-from PyQt6.QtCore import QEvent, QPoint, Qt
-from PyQt6.QtGui import QKeyEvent
+from PyQt6.QtCore import QEvent, QPoint, QPointF, Qt
+from PyQt6.QtGui import QKeyEvent, QMouseEvent
 from PyQt6.QtTest import QTest
 from PyQt6.QtWidgets import QLineEdit
 
@@ -25,6 +25,15 @@ def load(panel, clip):
     panel.set_image(str(clip))
     wait_until(lambda: panel._video_worker is None)
     return panel.video_view
+
+
+def move_held_mouse(slider, fraction):
+    point = QPoint(slider._MARGIN + round(fraction * slider._span()), slider.height() // 2)
+    # 不处理事件循环地模拟密集移动，验证定时合并而非逐事件解码。
+    _APP.sendEvent(slider, QMouseEvent(
+        QEvent.Type.MouseMove, QPointF(point), QPointF(slider.mapToGlobal(point)),
+        Qt.MouseButton.NoButton, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier))
+    return point
 
 
 @pytest.mark.parametrize('fps', [24, 25, 30000 / 1001, 60000 / 1001])
@@ -160,6 +169,90 @@ def test_timeline_click_and_drag_preserve_playback_state(panel, clip, timeline, 
     wait_until(lambda: 23 <= shown_frame(view) <= 26)
     assert view.player.playbackState() == state
     assert all(value == state for value in states)
+
+
+@pytest.mark.parametrize('timeline', ['filmstrip', 'seek'])
+@pytest.mark.parametrize('initial', ['unloaded', 'paused', 'playing'])
+def test_timeline_drag_refreshes_decoded_frames_before_release(panel, clip, timeline, initial):
+    view = load(panel, clip)
+    if initial != 'unloaded':
+        view.step_frame(1)
+        wait_until(lambda: shown_frame(view) == 1)
+        if initial == 'playing':
+            view.toggle_play()
+    slider = getattr(view, timeline)
+    point = lambda part: QPoint(slider._MARGIN + round(part * slider._span()), slider.height() // 2)
+    QTest.mousePress(slider, Qt.MouseButton.LeftButton, pos=point(.25))
+    try:
+        # 始终按住鼠标：按下、向前拖动和向后拖动都必须收到真实解码帧。
+        for part, target in ((.25, 12), (.75, 36), (.5, 24), (.125, 6)):
+            if part != .25:
+                QTest.mouseMove(slider, point(part))
+            expected = FrameClock(view._duration, view._fps).frame_at(
+                round(slider._value_at(point(part).x()) / 10000 * view._duration))
+            assert abs(expected - target) <= 1
+            wait_until(lambda: expected <= shown_frame(view) <= expected + (2 if initial == 'playing' else 0))
+            assert slider.isSliderDown()
+            assert view.filmstrip.value() == view.seek.value()
+            state = view.player.PlaybackState
+            assert view.player.playbackState() == (state.PlayingState if initial == 'playing' else state.PausedState)
+    finally:
+        QTest.mouseRelease(slider, Qt.MouseButton.LeftButton, pos=point(.125))
+
+
+@pytest.mark.parametrize('timeline', ['filmstrip', 'seek'])
+def test_drag_coalesces_moves_and_release_commits_latest_frame(panel, clip, monkeypatch, timeline):
+    view = load(panel, clip)
+    view.step_frame(1)
+    wait_until(lambda: shown_frame(view) == 1)
+    positions = []
+    original = view._set_player_position
+
+    def record(position):
+        positions.append(position)
+        original(position)
+
+    monkeypatch.setattr(view, '_set_player_position', record)
+    slider = getattr(view, timeline)
+    QTest.mousePress(slider, Qt.MouseButton.LeftButton, pos=QPoint(slider._MARGIN, slider.height() // 2))
+    for part in (.2, .3, .4, .6, .75):
+        move_held_mouse(slider, part)
+    assert len(positions) == 1
+    expected = FrameClock(view._duration, view._fps).frame_at(round(slider.value() / 10000 * view._duration))
+    wait_until(lambda: shown_frame(view) == expected)
+    assert len(positions) == 2 and slider.isSliderDown()
+    before = len(positions)
+    for part in (.6, .4, .2):
+        end = move_held_mouse(slider, part)
+    assert len(positions) <= before + 1
+    before_release = len(positions)
+    expected = FrameClock(view._duration, view._fps).frame_at(round(slider.value() / 10000 * view._duration))
+    QTest.mouseRelease(slider, Qt.MouseButton.LeftButton, pos=end)
+    wait_until(lambda: shown_frame(view) == expected)
+    assert len(positions) == before_release + 1
+    assert view._scrub_value is None and not view._scrub_timer.isActive()
+    assert view.player.playbackState() == view.player.PlaybackState.PausedState
+
+
+@pytest.mark.parametrize('action', ['switch', 'fast', 'shutdown'])
+def test_queued_drag_does_not_seek_after_source_is_cancelled(panel, clip, action):
+    view = load(panel, clip)
+    view.step_frame(1)
+    wait_until(lambda: shown_frame(view) == 1)
+    slider = view.filmstrip
+    QTest.mousePress(slider, Qt.MouseButton.LeftButton, pos=QPoint(slider._MARGIN, slider.height() // 2))
+    end = move_held_mouse(slider, .75)
+    assert view._scrub_value is not None and view._scrub_timer.isActive()
+    if action == 'shutdown':
+        panel.request_shutdown()
+    else:
+        panel.set_image(str(clip), load_full=action != 'fast')
+    QTest.mouseRelease(slider, Qt.MouseButton.LeftButton, pos=end)
+    wait_until(lambda: panel._video_worker is None and panel._filmstrip_worker is None)
+    assert view.player.source().isEmpty() and not view._source_set
+    assert view._pending_seek is None and not view._pending_play
+    assert view._scrub_value is None and not view._scrub_timer.isActive()
+    assert not slider.isSliderDown()
 
 
 @pytest.mark.parametrize('target', ['poster', 'filmstrip', 'seek', 'play'])

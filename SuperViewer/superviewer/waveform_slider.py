@@ -12,8 +12,9 @@ from .qt_compat import (
 
 class WaveformSlider(QSlider):
     position_selected = pyqtSignal(int)
+    position_scrubbed = pyqtSignal(int)
     _MARGIN = 8
-    _SEEK_HINT = ('点击或拖动定位（保持播放状态） · Home/End 首尾帧'
+    _SEEK_HINT = ('点击定位，拖动实时预览（保持播放状态） · Home/End 首尾帧'
                   ' · ←/→ 逐帧 · 空格播放/暂停')
 
     def __init__(self, parent=None):
@@ -63,6 +64,8 @@ class WaveformSlider(QSlider):
             self._dragging = True
             self.setSliderDown(True)
             self.setValue(self._value_at(self._event_x(event)))
+            # 独立的鼠标信号避免播放器同步 setValue 时再次发起定位。
+            self.position_scrubbed.emit(self.value())
             event.accept()
             return
         super().mousePressEvent(event)
@@ -70,7 +73,10 @@ class WaveformSlider(QSlider):
     def mouseMoveEvent(self, event):
         x = self._event_x(event)
         if self._dragging:
-            self.setValue(self._value_at(x))
+            value = self._value_at(x)
+            if value != self.value():
+                self.setValue(value)
+                self.position_scrubbed.emit(value)
         elif self._duration_ms:
             milliseconds = round(self._value_at(x) / max(1, self.maximum()) * self._duration_ms)
             seconds, fraction = divmod(milliseconds, 1000)
