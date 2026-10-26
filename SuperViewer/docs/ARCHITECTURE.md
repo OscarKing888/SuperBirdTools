@@ -237,11 +237,11 @@ EXIF 页直接列出 ExifTool 从 RAW 及其他图像读取的已知标签，包
 
 ### 从 RAW 更新拍摄时间
 
-照片列表/缩略图右键“从同名 RAW 更新拍摄时间…”仅处理所选 PNG/JPG/JPEG，选择 RAW 目录后递归扫描所有层级的子目录（含隐藏目录，跳过符号链接），匹配同名文件（忽略扩展名、大小写，Unicode NFC）。缺少匹配、存在多个匹配、时间无效或写入失败均逐文件记录；全部成功无弹框，部分失败显示可复制的文件路径及原因。操作与 CLI 用法见 [拍摄时间更新](capture_time_update.md)。
+单独更新拍摄时间保留核心 API、CLI 和控制器兼容调用，照片列表/缩略图不再提供对应菜单项。该操作仅处理 PNG/JPG/JPEG，指定 RAW 目录后递归扫描所有层级的子目录（含隐藏目录，跳过符号链接），匹配同名文件（忽略扩展名、大小写，Unicode NFC）。缺少匹配、存在多个匹配、时间无效或写入失败均逐文件记录；控制器调用全部成功无弹框，部分失败显示可复制的文件路径及原因。操作与 CLI 用法见 [拍摄时间更新](capture_time_update.md)。
 
 无 Qt 核心 [`capture_time_update.py`](../superviewer/capture_time_update.py) 扫描一次目录，直接读取 RAW 内嵌 EXIF 原始拍摄时间（缺失时回退数字化时间），保留亚秒与时区，通过 `PhotoMetaDataXMP` 原子写同名 XMP 的标准时间和 `date_time_original` 私有字段。同侧车去重，保护损坏侧车和扫描/读取期间发生的并发修改。原图、RAW 和 report.db 保持只读。[`CaptureTimeController`](../superviewer/capture_time_controller.py) 管理后台线程、有界结果队列、定时分批 `MetadataResultSync` 及真实线程退出等待；更新列表/信息页。每批结果按 `CaptureTimeResult.missing_raw` 保留未找到 RAW 的选择，通过 [`deselect_display_paths_silently()`](../superviewer/tagged_file_list.py) 取消本轮其他已返回结果项的选择（含成功项），不重载预览或覆盖编辑草稿；其他失败仍展示报告。回归见 [核心读写](../tests/test_capture_time_update.py)、[菜单及生命周期](../tests/test_capture_time_controller.py) 与 `test_bird_identification_controller.py` 的列表/缩略图实窗验证。
 
-同一控制器在“拍摄信息”中并列提供“从同名 RAW 更新所有信息…”，支持共享格式表中的全部图像。
+同一控制器在“拍摄信息”中提供“从同名 RAW 更新所有信息…”，支持共享格式表中的全部图像。
 [`raw_xmp_update.update_all_information()`](../superviewer/raw_xmp_update.py) 复用 RAW 递归匹配，
 将 RAW 旁的 XMP 原样复制到选中图像旁，同侧车去重；固定顺序获取源/目标事务锁，验证源 XML/RDF、
 复制前后文件指纹，以同目录临时文件原子替换，不重写 XML 或图像。GUI worker 读取更新后的完整元数据，
@@ -251,7 +251,7 @@ EXIF 页直接列出 ExifTool 从 RAW 及其他图像读取的已知标签，包
 
 ### 拍摄地点
 
-图片信息页的“拍摄地点”输入框显示并编辑独立文本，回车或失焦保存，留空清除；支持原生文本复制粘贴。照片列表和缩略图的右键“拍摄地点”菜单提供单张/多选修改、复制单张地点和向所选照片粘贴剪贴板文本。
+图片信息页的“拍摄地点”输入框显示并编辑独立文本，回车或失焦保存，留空清除；支持原生文本复制粘贴。照片列表和缩略图的右键“拍摄信息”菜单直接平铺“修改拍摄地点…”、“复制拍摄地点”和“粘贴拍摄地点”，支持单张/多选修改、复制单张地点和向所选照片粘贴剪贴板文本。
 
 共享 [`shooting_location.py`](../../app_common/shooting_location.py) 定义 `XMP-superpicky:shooting_location`、读取优先级与 `write_shooting_location()`；仅通过 `PhotoMetaDataXMP` 写同名 XMP，不读取/推导/更改 GPS，不复用 City/State/Country 等分析字段，不写原图或 report.db。`MetadataLoader._parse_rec()` 将地点传入浏览器缓存，重新加载目录后仍可显示。核心写入函数可供脚本批处理调用；当前入口集中于 GUI 编辑和剪贴板，不另设 CLI 命令。
 

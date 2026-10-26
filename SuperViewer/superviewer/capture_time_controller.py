@@ -109,21 +109,15 @@ class CaptureTimeController(QObject):
 
     @file_menu_group("capture")
     def extend_file_menu(self, menu, paths):
-        for all_information, extensions, operation in (
-            (False, TARGET_EXTENSIONS, '更新拍摄时间'),
-            (True, SUPPORTED_IMAGE_EXTENSIONS, '更新所有信息'),
-        ):
-            photos = [p for p in paths if Path(p).suffix.lower() in extensions]
-            if not photos:
-                continue
-            running = self.busy and self._worker.all_information == all_information
-            label = f'正在{operation}…' if running else f'从同名 RAW {operation}…'
-            action = menu.addAction(label, lambda checked=False, p=photos, full=all_information:
-                                    self.choose_directory(p, all_information=full))
-            if all_information:
-                action.setToolTip('递归查找同名 RAW，将其整份 XMP 复制到选中图像旁；覆盖已有 XMP 的全部信息')
-            action.setEnabled(not self.busy and not self._shutdown_requested and
-                              self._files._file_writes_allowed(operation))
+        photos = [p for p in paths if Path(p).suffix.lower() in SUPPORTED_IMAGE_EXTENSIONS]
+        if not photos:
+            return
+        running = self.busy and self._worker.all_information
+        label = '正在更新所有信息…' if running else '从同名 RAW 更新所有信息…'
+        action = menu.addAction(label, lambda checked=False: self.choose_directory(photos, all_information=True))
+        action.setToolTip('递归查找同名 RAW，将其整份 XMP 复制到选中图像旁；覆盖已有 XMP 的全部信息')
+        action.setEnabled(not self.busy and not self._shutdown_requested and
+                          self._files._file_writes_allowed('更新所有信息'))
 
     def choose_directory(self, paths, *, all_information=False):
         title = '选择 RAW 目录（包含子目录）'

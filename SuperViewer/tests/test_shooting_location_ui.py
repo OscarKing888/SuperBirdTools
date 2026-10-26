@@ -59,7 +59,7 @@ def test_edit_copy_paste_batch_and_stale_metadata(env, monkeypatch, mode):
     files.file_selected.connect(selected.append)
     menu = QMenu()
     controller.extend_file_menu(menu, paths[:1])
-    actions = menu.actions()[0].menu().actions()
+    actions = menu.actions()
     assert [a.text() for a in actions] == ['修改拍摄地点…', '复制拍摄地点', '粘贴拍摄地点']
     monkeypatch.setattr(ui.QInputDialog, 'getText', lambda *a, **k: ('上海东滩', True))
     actions[0].trigger()
@@ -69,7 +69,7 @@ def test_edit_copy_paste_batch_and_stale_metadata(env, monkeypatch, mode):
     assert QApplication.clipboard().text() == '上海东滩'
     multi = QMenu()
     controller.extend_file_menu(multi, paths)
-    multi_actions = multi.actions()[0].menu().actions()
+    multi_actions = multi.actions()
     assert not multi_actions[1].isEnabled()
     multi_actions[2].trigger()
     assert wait_for(controller.is_shutdown_done)

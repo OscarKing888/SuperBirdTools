@@ -95,7 +95,7 @@ def test_menu_formats_choose_directory_all_success_without_popup(env, monkeypatc
     assert not empty.actions()
     menu = QMenu()
     files.extender(menu, paths + ['file.ARW'])
-    assert len(menu.actions()) == 2
+    assert [action.text() for action in menu.actions()] == ['从同名 RAW 更新所有信息…']
     asked = []
     def choose(*args):
         asked.append(args)
@@ -103,7 +103,7 @@ def test_menu_formats_choose_directory_all_success_without_popup(env, monkeypatc
     monkeypatch.setattr(ui.QFileDialog, 'getExistingDirectory', choose)
     selected = []
     files.file_selected.connect(selected.append)
-    menu.actions()[0].trigger()
+    controller.choose_directory(paths)
     assert wait_for(lambda: not controller.busy)
     assert asked and controller._succeeded == 3 and not controller._failures
     assert controller._report is None and files.updates and not selected
@@ -209,8 +209,8 @@ def test_all_information_menu_copies_xmp_and_reports_missing_sidecar(env, monkey
     monkeypatch.setattr(ui.QFileDialog, 'getExistingDirectory', lambda *a: str(raws))
     menu = QMenu()
     files.extender(menu, paths)
-    assert menu.actions()[1].text() == '从同名 RAW 更新所有信息…'
-    menu.actions()[1].trigger()
+    assert [action.text() for action in menu.actions()] == ['从同名 RAW 更新所有信息…']
+    menu.actions()[0].trigger()
     busy_menu = QMenu()
     files.extender(busy_menu, paths)
     assert all(not a.isEnabled() for a in busy_menu.actions())

@@ -55,10 +55,9 @@ class ShootingLocationController(MetadataBatchController):
         photos = [p for p in paths if Path(p).suffix.lower() in SUPPORTED_IMAGE_EXTENSIONS]
         if not photos:
             return
-        sub = menu.addMenu("拍摄地点")
-        edit = sub.addAction("修改拍摄地点…", lambda: self.edit(photos))
-        copy = sub.addAction("复制拍摄地点", lambda: self.copy(photos[0]))
-        paste = sub.addAction("粘贴拍摄地点", lambda: self.paste(photos))
+        edit = menu.addAction("修改拍摄地点…", lambda: self.edit(photos))
+        copy = menu.addAction("复制拍摄地点", lambda: self.copy(photos[0]))
+        paste = menu.addAction("粘贴拍摄地点", lambda: self.paste(photos))
         copy.setEnabled(len(photos) == 1)
         edit.setEnabled(self._worker is None)
         paste.setEnabled(self._worker is None and (self._copy.pending or bool(QApplication.clipboard().text().strip())))

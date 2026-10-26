@@ -64,7 +64,7 @@ L0 应用外壳：主窗口、菜单、状态栏
 | L5 面板布尔选项 | `QCheckBox` | 启用/禁用与展开/收起分开；折叠不取消功能 |
 | L5 工具栏显示开关 | [`ToggleToolButton`](../app_common/toggle_button.py) | 蓝底白字选中态；与根规范一致。折叠标题是 disclosure，不使用蓝色开关样式 |
 | L5 动作 | `QPushButton` / `QToolButton`、已有菜单动作 | 主次动作位置一致，保留忙碌、取消及键盘行为 |
-| L5/L3 Viewer 同名 RAW 信息更新 | [`CaptureTimeController / CaptureTimeReport`](../SuperViewer/superviewer/capture_time_controller.py)、原生 `QAction` / `QFileDialog` / `QPlainTextEdit` | “拍摄信息”内并列更新拍摄时间/更新所有信息；后者提示整份 XMP 覆盖，任务互斥，运行中禁用两项。失败报告使用可缩放滚动正文和固定关闭按钮，全部成功不弹窗；不改变主窗口布局，预览与备注草稿保留，未找到 RAW 的保留选择 |
+| L5/L3 Viewer 同名 RAW 信息更新 | [`CaptureTimeController / CaptureTimeReport`](../SuperViewer/superviewer/capture_time_controller.py)、原生 `QAction` / `QFileDialog` / `QPlainTextEdit` | “拍摄信息”内提供“从同名 RAW 更新所有信息…”，提示整份 XMP 覆盖；单独更新拍摄时间不再提供菜单项，兼容任务互斥、运行中禁用。地点修改/复制/粘贴直接平铺在同级。失败报告使用可缩放滚动正文和固定关闭按钮，全部成功不弹窗；不改变主窗口布局，预览与备注草稿保留，未找到 RAW 的保留选择 |
 | L1/L5 Viewer 清晰度模型实验入口 | [`BirdSharpnessTraceDialog`](../SuperViewer/superviewer/bird_sharpness_trace_view.py) + 原生 `QPushButton`；既有 `ModelChainHost.add_action` | 顶部左侧常驻「＋ 添加模型（实验）」，右侧保留图像来源；加载/失败时禁用，结果就绪后启用。复用模型链添加动作，空链或全部关闭后仍可直接打开；右侧停靠窗口与滚动保持原布局，参数页「预览」入口、链状态保存和正式计算参数保留 |
 | L4/L5 Viewer 视频回放 | [`VideoPlayerView`](../SuperViewer/superviewer/video_preview.py)、`FilmstripSlider` / `WaveformSlider`、原生 `QPushButton` | 预览伸缩、两条时间轴满行；常驻单行控制：左侧上一帧/播放/下一帧/重播，中间弹性空白，右侧倍速/静音/音量；时间读数放在时间轴上方状态行右侧。视频区域空格切换播放、左右键暂停并逐帧，Home/End 定位首尾帧，时间轴按下即定位、按住拖动持续刷新目标帧，密集移动只提交最新位置，松开立即提交最终帧；点击/拖动及首尾定位均保持播放状态，首次定位显示目标帧并暂停，加载中保留拖动；音量和倍速保留原生键盘操作。状态由每侧播放器拥有，无新增持久化或滚动区 |
 | L5 反馈 | `QLabel` / `QProgressBar`、现有状态组件 | 反馈靠近所属操作；不能因折叠把唯一取消入口藏掉 |
