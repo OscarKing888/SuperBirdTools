@@ -36,6 +36,10 @@ Windows 下，`main.py` 在导入任何 Qt 控件前调用 [`preload_windows_run
 
 ## 2. 目录选择到可见列表
 
+文件夹改名在共享 `meta_disk_cache.directory_file_operation()` 的短暂连接保护范围内执行，释放 Windows 下目录内的 SQLite 缓存句柄；过期缓存请求不会复建旧目录。成功后登记实际照片路径别名，报告查询跟随连续别名匹配新路径，原始报告字段和数据库保持只读。共享覆盖见 `app_common/tests/test_directory_file_operation.py`。
+
+目录右键“重命名文件夹…”由 `DirectoryFileController` 调用无 Qt 的 `native_file_transfer.rename_directory()`，复用目录名校验，拒绝覆盖与根目录改名；执行前检查目录内已知照片编辑输入。`ViewerDirectoryBrowser.directory_renamed()` 增量更新已加载子树路径并保留选中和展开；当前浏览目录在改名目录内时沿新路径加载，父目录列表按需刷新，无关目录不切换。照片与 XMP 随目录整体移动，report.db 只读，失败明确提示。回归见 [`test_directory_rename.py`](../tests/test_directory_rename.py)，交互见[目录操作设计](../../docs/ui-design/viewer-directory-file-operations.md)。
+
 元数据工作线程按小批返回时，`SuperViewerTaggedFileListPanel._on_metadata_batch_ready()`
 只更新本批照片的标签缓存；目录标签缓存的完整性由 `_on_metadata_loader_finished()` 在当前
 加载器结束时核对一次，拒绝旧加载器和退出后的回调。不能在每批或单张标签查询中重新

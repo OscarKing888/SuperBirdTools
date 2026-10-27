@@ -1,11 +1,11 @@
-"""目录新建、文件拖放和目录粘贴协调；系统拥有文件冲突与操作进度。"""
+"""目录新建/重命名、文件拖放和目录粘贴协调；系统拥有移动/复制冲突与进度。"""
 from __future__ import annotations
 
 import os
 from pathlib import Path
 import uuid
 
-from .native_file_transfer import create_child_directory, native_transfer, transfer_paths_with_sidecars, TransferResult
+from .native_file_transfer import create_child_directory, rename_directory, native_transfer, transfer_paths_with_sidecars, TransferResult
 from .file_move_history import MoveHistory, completed_moves, is_sidecar, path_key, prepare_replay, snapshot_move
 
 try:
@@ -126,6 +126,8 @@ class DirectoryFileController(QObject):
     def extend_directory_menu(self, menu, path):
         action = menu.addAction("新建子目录…", lambda: self.create_directory(path))
         action.setEnabled(not self._shutdown_requested)
+        rename = menu.addAction("重命名文件夹…", lambda: self.rename_directory(path))
+        rename.setEnabled(self.can_rename_directory(path))
         paste = menu.addAction("粘贴到此文件夹", lambda: self.paste_to_directory(path))
         paste.setEnabled(self.can_paste_to_directory(path))
         paste.setStatusTip("将剪贴板文件和同名 XMP 粘贴到此文件夹；剪切的文件会移动。")
@@ -212,6 +214,59 @@ class DirectoryFileController(QObject):
                     item.sortChildren(0, Qt.SortOrder.AscendingOrder)
                 item.setExpanded(True)
             self._main.statusBar().showMessage(f"已创建目录：{created}", 5000)
+            return
+
+    def can_rename_directory(self, path):
+        return (not self._shutdown_requested and self._worker is None
+                and self._files.file_writes_allowed() and os.path.isdir(path)
+                and not os.path.ismount(path) and Path(os.path.abspath(path)).parent != Path(os.path.abspath(path)))
+
+    def rename_directory(self, source):
+        source = os.path.abspath(source)
+        name = Path(source).name
+        while self.can_rename_directory(source):
+            name, accepted = QInputDialog.getText(self._main, "重命名文件夹", "文件夹名称：", text=name)
+            if not accepted or not self.can_rename_directory(source):
+                return
+            if name == Path(source).name:
+                return
+            browser, files = self._directories, self._files
+            affected = [p for p in files._all_files if browser._is_same_or_parent_path(source, p)]
+            editor = getattr(self._main, "_photo_edit", None)
+            if editor:
+                affected = list(set(affected) | set(editor.directory_operation_paths(source)))
+            for panel in (self._main.preview_a, self._main.preview_panel):
+                path = panel.source_identity_path()
+                if path and browser._is_same_or_parent_path(source, path):
+                    affected.append(path)
+            if not files._file_operation_paths_allowed([source, *affected], "重命名文件夹", warn=True):
+                return
+            if editor:
+                editor.begin_file_operation()
+            try:
+                from app_common.exif_io.meta_disk_cache import directory_file_operation
+                with directory_file_operation(source):
+                    renamed = rename_directory(source, name)
+            except (OSError, ValueError) as exc:
+                QMessageBox.warning(self._main, "无法重命名文件夹", str(exc))
+                continue
+            finally:
+                if editor:
+                    editor.end_file_operation(affected)
+            browser.directory_renamed(source, renamed)
+            from app_common.file_browser._browser_core import _set_cached_actual_path
+            for path in affected:
+                _set_cached_actual_path(path, os.path.join(renamed, os.path.relpath(path, source)))
+            files.clear_tag_history()
+            self.photos_moved.emit(affected)
+            current = files.get_current_dir()
+            if current and browser._is_same_or_parent_path(source, current):
+                relative = os.path.relpath(current, source)
+                current = renamed if relative == "." else os.path.join(renamed, relative)
+                self._main._on_directory_selected(current, force_reload=True)
+            elif current and browser._is_same_or_parent_path(current, source):
+                files.load_directory(current, force_reload=True)
+            self._main.statusBar().showMessage(f"已重命名文件夹：{renamed}", 5000)
             return
 
     def create_drag_mime(self):

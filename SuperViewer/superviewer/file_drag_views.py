@@ -1,6 +1,7 @@
 """Viewer 专用拖放视图；共享浏览器与 BirdStamp 默认不启用。"""
 from __future__ import annotations
 
+import os
 import sys
 
 from app_common.file_browser import DirectoryBrowserWidget
@@ -189,3 +190,19 @@ class DirectoryDropTree(QTreeWidget):
 
 class ViewerDirectoryBrowser(DirectoryBrowserWidget):
     directory_tree_class = DirectoryDropTree
+
+    def directory_renamed(self, source, target):
+        """只更新已加载节点的路径，保留选中节点、展开与滚动状态。"""
+        def update(item):
+            path = item.data(0, Qt.ItemDataRole.UserRole)
+            if path and self._is_same_or_parent_path(source, path):
+                relative = os.path.relpath(path, source)
+                renamed = target if relative == "." else os.path.join(target, relative)
+                item.setData(0, Qt.ItemDataRole.UserRole, renamed)
+                if relative == ".":
+                    item.setText(0, os.path.basename(target))
+            for index in range(item.childCount()):
+                update(item.child(index))
+
+        for index in range(self._tree.topLevelItemCount()):
+            update(self._tree.topLevelItem(index))

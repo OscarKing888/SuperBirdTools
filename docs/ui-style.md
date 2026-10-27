@@ -28,6 +28,7 @@ L0 应用外壳：主窗口、菜单、状态栏
 
 | 层级 / 用途 | 组件与来源 | 规范 |
 | --- | --- | --- |
+| L5 Viewer 文件夹重命名 | `DirectoryFileController`、`ViewerDirectoryBrowser`、原生 `QMenu` / `QInputDialog` | 目录右键“重命名文件夹…”预填原名；取消不修改，非法名称/重名/权限错误提示并允许重试。磁盘根、系统文件操作中或关闭时禁用；执行前保护目录内已知编辑输入。增量更新已加载子树路径，保留选择、展开与滚动，当前目录受影响时沿新路径刷新；照片/XMP 随目录整体移动，report.db 保持只读，无新增保存选项 |
 | L0 外壳 | 现有 `QMainWindow`、应用菜单/状态栏 | 不因分组重排改启动、后台线程和关闭行为 |
 | L1 用户选项 | [`SettingsDialog / SettingsPage`](../app_common/settings_dialog.py) | 用 `add_page` 注册页面；确认/取消固定在滚动区外 |
 | L2 左侧页面导航 | [`SidebarTabWidget`](../app_common/sidebar_tabs.py) | 复用统一的左侧图标/文字页签 |

@@ -497,6 +497,16 @@ class PhotoEditController(QObject):
         """A close flow must keep the window alive if even recovery writing failed."""
         return [s.state.source for s in self.sessions.values() if s.dirty and s.recovery_serial<s.serial]
 
+    def directory_operation_paths(self, directory):
+        """Snapshot known edit inputs below a folder without scanning its contents."""
+        root = source_key(directory)
+        known = (set(self.sessions) | self._loading | self._saving | set(self._operations)
+                 | set(self._load_pending) | self.batch._keys)
+        if self._render_active:
+            known.add(source_key(self._render_active[1].source))
+        return [path for path in known
+                if path and Path(path).is_relative_to(Path(root))] if root else []
+
     def file_operation_reason(self, paths, *, prepare=False):
         """Keep same-stem XMP saves and edits out of file transfers."""
         if self._file_busy:

@@ -17,15 +17,51 @@ class TransferResult:
     error: str = ""
 
 
-def create_child_directory(parent, name):
-    """只创建一级目录；两平台统一拒绝路径、保留设备名和不可移植名称。"""
+def _validate_directory_name(name):
     if (not name or name in (".", "..") or name != name.strip()
             or name.endswith(".") or re.search(r'[<>:"/\\|?*\x00-\x1f]', name)
             or re.fullmatch(r"(?i)(CON|PRN|AUX|NUL|COM[1-9¹²³]|LPT[1-9¹²³])(?:\..*)?", name)):
         raise ValueError("请输入有效的子目录名称，不要包含路径、特殊字符或末尾空格/句点。")
+
+
+def create_child_directory(parent, name):
+    """只创建一级目录；两平台统一拒绝路径、保留设备名和不可移植名称。"""
+    _validate_directory_name(name)
     path = Path(parent).absolute() / name
     path.mkdir()  # 不接受已存在目录，也不递归创建父目录。
     return str(path)
+
+
+def rename_directory(source, name):
+    """同一父目录内重命名，拒绝覆盖；大小写改名失败时保留并报告恢复路径。"""
+    _validate_directory_name(name)
+    source = Path(os.path.abspath(source))
+    if source == source.parent or os.path.ismount(source):
+        raise ValueError("不能重命名磁盘或挂载根目录。")
+    if not source.is_dir():
+        raise FileNotFoundError(f"目录不存在：{source}")
+    target = source.with_name(name)
+    if str(source) == str(target):
+        return str(source)
+    if os.path.lexists(target):
+        # samefile 也能识别大小写不敏感的 macOS 卷；不同名字的符号链接不能当作同一入口。
+        case_only = source.name.casefold() == name.casefold()
+        if not case_only or target.is_symlink() or not os.path.samefile(source, target):
+            raise FileExistsError(f"已存在同名文件或文件夹：{target}")
+        import uuid
+        temporary = source.with_name(f".folder-rename-{uuid.uuid4().hex}")
+        os.rename(source, temporary)
+        try:
+            os.rename(temporary, target)
+        except OSError as exc:
+            try:
+                os.rename(temporary, source)
+            except OSError as restore_exc:
+                raise OSError(f"重命名失败：{exc}；恢复失败：{restore_exc}；目录保留在：{temporary}") from exc
+            raise
+    else:
+        os.rename(source, target)
+    return str(target)
 
 
 def transfer_paths_with_sidecars(sources, destination, *, copy=False):
