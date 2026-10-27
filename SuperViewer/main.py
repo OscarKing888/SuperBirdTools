@@ -430,7 +430,7 @@ class MainWindow(QMainWindow):
         self._bird_sharpness = BirdSharpnessController(self, self._file_list, self._dir_browser)
         self._bird_archive = BirdArchiveController(self, self._file_list)
         self._bird_pinyin = PinyinController(self, self._file_list, self._dir_browser)
-        self._shooting_location = ShootingLocationController(self, self._file_list)
+        self._shooting_location = ShootingLocationController(self, self._file_list, self._dir_browser)
         self._capture_time = CaptureTimeController(self, self._file_list)
         self._rarity_edit = RarityController(self, self._file_list)
         self._bird_id = BirdIDController(self, self._file_list, self._dir_browser)

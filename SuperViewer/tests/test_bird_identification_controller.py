@@ -295,8 +295,14 @@ def test_real_window_result_refresh_preserves_preview_and_comment_draft(tmp_path
             window.image_info_panel._rarity_edit_callback = choose
             window.image_info_panel.rarity_edit_button.click()
         elif operation == 'location':
+            from PyQt6.QtWidgets import QMenu
+            from SuperViewer.superviewer.shooting_location_controller import QInputDialog
             controller = window._shooting_location
-            assert controller.start([source], '崇明东滩')
+            assert controller.extend_directory_menu in window._dir_browser._context_menu_extenders
+            monkeypatch.setattr(QInputDialog, 'getText', lambda *a, **k: ('崇明东滩', True))
+            menu = QMenu()
+            controller.extend_directory_menu(menu, str(library))
+            menu.actions()[0].menu().actions()[0].trigger()
         else:
             controller = window._bird_pinyin
             panel = window.image_info_panel

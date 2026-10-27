@@ -5,6 +5,8 @@ from pathlib import Path
 
 import pytest
 from PIL import Image
+from PyQt6.QtCore import QPoint, Qt
+from PyQt6.QtTest import QTest
 from PyQt6.QtWidgets import QApplication, QMenu, QWidget
 from app_common.exif_io.photo_meta import PhotoMetaDataXMP
 from app_common.shooting_location import LOCATION_FIELD, LOCATION_TAG, shooting_location
@@ -27,7 +29,14 @@ def wait_for(predicate):
 
 
 @pytest.fixture
-def env(tmp_path):
+def env(tmp_path, monkeypatch):
+    from app_common import superviewer_user_options
+    from SuperViewer.superviewer import paths_settings
+    monkeypatch.setattr(paths_settings, '_get_app_dir', lambda: str(tmp_path))
+    monkeypatch.setattr(paths_settings, '_get_user_state_dir', lambda: str(tmp_path / 'state'))
+    monkeypatch.setattr(superviewer_user_options, '_get_app_dir', lambda: str(tmp_path))
+    monkeypatch.setattr(superviewer_user_options, 'get_user_config_dir', lambda: str(tmp_path))
+    monkeypatch.setenv('LOCALAPPDATA', str(tmp_path / 'cache'))
     paths = []
     for name in ('白鹭.jpg', '白鹭.png', '苍鹭.jpg'):
         photo = tmp_path / name
@@ -204,3 +213,163 @@ def test_immediate_location_paste_waits_for_copy(env, monkeypatch):
     gate.set()
     assert wait_for(controller.is_shutdown_done)
     assert shooting_location(PhotoMetaDataXMP().read(paths[-1])) == '云南·高黎贡山'
+
+
+@pytest.mark.parametrize('mode', ['list', 'thumb'])
+@pytest.mark.parametrize('recursive', [False, True])
+def test_directory_location_scope_ignores_selection_and_filter(env, tmp_path, monkeypatch, mode, recursive):
+    controller, files, unselected = env
+    files._view_mode = files._MODE_LIST if mode == 'list' else files._MODE_THUMB
+    files._current_dir = str(tmp_path)
+    files._all_files = unselected[:1]  # Only an unrelated, filtered photo is listed.
+    clicked = tmp_path / '右击目录'
+    nested = clicked / '子目录'
+    nested.mkdir(parents=True)
+    photos = [clicked / '白鹭.jpg', clicked / '白鹭.png', nested / '苍鹭.jpg']
+    for photo in photos:
+        Image.new('RGB', (16, 16)).save(photo)
+    (clicked / '视频.mp4').write_bytes(b'video')
+    (clicked / '说明.txt').write_text('非照片', encoding='utf-8')
+    prompts, selected = [], []
+    files.file_selected.connect(selected.append)
+    monkeypatch.setattr(ui.QInputDialog, 'getText',
+                        lambda *a, **k: (prompts.append(a[2]) or '云南·高黎贡山', True))
+    menu = QMenu()
+    controller.extend_directory_menu(menu, str(clicked))
+    assert menu.actions()[0].text() == '批量修改拍摄地点'
+    sub = menu.actions()[0].menu()
+    assert [a.text() for a in sub.actions()] == ['仅当前目录…', '目录及子目录…']
+    sub.popup(QPoint(20, 20))
+    sub.setActiveAction(sub.actions()[int(recursive)])
+    QTest.keyClick(sub, Qt.Key.Key_Return)
+    switched = str(tmp_path / '切换后的目录')
+    files._current_dir = switched
+    assert wait_for(lambda: not controller.busy)
+    assert len(prompts) == 1
+    assert controller._done == (2 if recursive else 1)
+    assert all(shooting_location(PhotoMetaDataXMP().read(str(p))) == '云南·高黎贡山' for p in photos[:2])
+    assert shooting_location(PhotoMetaDataXMP().read(str(photos[-1]))) == ('云南·高黎贡山' if recursive else '')
+    assert not any(Path(p).with_suffix('.xmp').exists() for p in unselected)
+    assert not (clicked / '视频.xmp').exists() and not (clicked / '说明.xmp').exists()
+    assert files._current_dir == switched and files._all_files == unselected[:1]
+    assert not selected
+
+
+@pytest.mark.parametrize('accepted', [False, True])
+def test_directory_location_input_cancel_or_clear(env, tmp_path, monkeypatch, accepted):
+    controller, files, paths = env
+    controller.save_one(paths[0], '上海东滩')
+    old_xmp = Path(paths[0]).with_suffix('.xmp').read_bytes()
+    monkeypatch.setattr(ui.QInputDialog, 'getText', lambda *a, **k: ('', accepted))
+    assert controller.edit_directory(str(tmp_path))
+    assert wait_for(lambda: not controller.busy)
+    assert shooting_location(PhotoMetaDataXMP().read(paths[0])) == ('' if accepted else '上海东滩')
+    if not accepted:
+        assert Path(paths[0]).with_suffix('.xmp').read_bytes() == old_xmp
+        assert not Path(paths[-1]).with_suffix('.xmp').exists()
+    else:
+        assert all(shooting_location(files.cached_photo_metadata_for_path(p)) == '' for p in paths)
+
+
+@pytest.mark.parametrize('outcome', ['empty', 'scan_error', 'submit_error'])
+def test_directory_location_empty_and_scan_failures(env, tmp_path, monkeypatch, outcome):
+    controller, files, _ = env
+    empty = tmp_path / '空目录'
+    empty.mkdir()
+    messages = []
+    monkeypatch.setattr(ui.QMessageBox, 'information', lambda *a: messages.append(a[-1]))
+    monkeypatch.setattr(ui.QMessageBox, 'warning', lambda *a: messages.append(a[-1]))
+    monkeypatch.setattr(ui.QInputDialog, 'getText', lambda *a, **k: pytest.fail('Unexpected location input'))
+    def fail(*a, **k):
+        raise OSError('测试扫描失败')
+    if outcome == 'scan_error':
+        monkeypatch.setattr(ui, 'collect_paths', fail)
+    elif outcome == 'submit_error':
+        monkeypatch.setattr(files, 'metadata_work_pool', fail)
+    assert controller.edit_directory(str(empty)) == (outcome != 'submit_error')
+    assert wait_for(lambda: not controller.busy)
+    assert messages == ['没有找到受支持的照片' if outcome == 'empty' else '测试扫描失败']
+
+
+@pytest.mark.parametrize('shutdown', [False, True])
+def test_directory_scan_cancel_waits_and_never_opens_editor(env, tmp_path, monkeypatch, shutdown):
+    controller, files, paths = env
+    entered, release = threading.Event(), threading.Event()
+    original = ui.collect_paths
+    scan_threads = []
+    def scan(*args, **kwargs):
+        scan_threads.append(threading.get_ident())
+        entered.set()
+        assert release.wait(5)
+        assert kwargs['cancelled']()
+        return original(*args, **kwargs)
+    monkeypatch.setattr(ui, 'collect_paths', scan)
+    monkeypatch.setattr(ui.QInputDialog, 'getText', lambda *a, **k: pytest.fail('Cancelled scan opened editor'))
+    assert controller.edit_directory(str(tmp_path), recursive=True)
+    try:
+        assert entered.wait(5)
+        assert scan_threads != [threading.get_ident()]
+        future = controller._scan_future
+        assert not controller.edit_directory(str(tmp_path))
+        assert not controller.start(paths, '不应写入')
+        with pytest.raises(RuntimeError):
+            controller.save_one(paths[0], '不应写入')
+        controller.paste(paths)
+        controller.edit(paths)
+        for extend, target in ((controller.extend_directory_menu, str(tmp_path)), (controller.extend_file_menu, paths)):
+            menu = QMenu()
+            extend(menu, target)
+            actions = menu.actions()[0].menu().actions() if isinstance(target, str) else menu.actions()[::2]
+            assert all(not action.isEnabled() for action in actions)
+        if shutdown:
+            # Browser shutdown may already reject new pool lookups.
+            monkeypatch.setattr(files, 'metadata_work_pool', lambda: pytest.fail('Pool reacquired during shutdown'))
+            controller.request_shutdown()
+        else:
+            controller._scan_dialog.reject()
+        controller._finish_scan()
+        assert controller._scan_future is future and controller.busy
+        assert not controller.is_shutdown_done()
+    finally:
+        release.set()
+    assert wait_for(controller.is_shutdown_done)
+    assert not any(Path(p).with_suffix('.xmp').exists() for p in paths)
+
+
+def test_directory_extender_registration_and_writes_disabled(env, tmp_path, monkeypatch):
+    controller, files, _ = env
+    class DirectoryBrowser:
+        def add_context_menu_extender(self, callback):
+            self.extender = callback
+    browser = DirectoryBrowser()
+    extra = ui.ShootingLocationController(controller._main, files, browser)
+    try:
+        assert browser.extender == extra.extend_directory_menu
+        monkeypatch.setattr(files, '_file_writes_allowed', lambda *a, **k: False)
+        assert not extra.edit_directory(str(tmp_path))
+        assert not extra.busy and extra._scan_dialog is None
+    finally:
+        extra.request_shutdown()
+
+
+@pytest.mark.parametrize('theme,point_size', [('light', 10), ('dark', 18)])
+def test_directory_menu_rendered_geometry(env, tmp_path, theme, point_size):
+    from SuperViewer.superviewer.ui_theme import build_palette
+    controller, _, _ = env
+    menu = QMenu()
+    controller.extend_directory_menu(menu, str(tmp_path))
+    sub = menu.actions()[0].menu()
+    for widget in (menu, sub):
+        font = widget.font()
+        font.setPointSize(point_size)
+        widget.setFont(font)
+        widget.setPalette(build_palette(theme))
+        widget.popup(QPoint(20, 20))
+        _APP.processEvents()
+        for action in widget.actions():
+            geometry = widget.actionGeometry(action)
+            assert widget.rect().contains(geometry)
+            assert geometry.width() >= widget.fontMetrics().horizontalAdvance(action.text())
+            assert geometry.height() >= widget.fontMetrics().height()
+        assert widget.grab().save(str(tmp_path / f'location-menu-{theme}-{point_size}-{widget is sub}.png'))
+        widget.close()
