@@ -219,7 +219,7 @@ def pooled(env, monkeypatch, tmp_path):
         Image.new("RGB", (16, 12), "gray").save(extra)
         paths.append(str(extra))
     pool = BrowserWorkPool(6, 2, analysis_workers=3)
-    file_list.background_work_pool = lambda: pool
+    file_list.background_work_pool = lambda **_kwargs: pool
     analyzer = _PeakAnalyzer()
     monkeypatch.setattr(controller, "analyzer", lambda: analyzer)
     yield controller, file_list, analyzer, folder, paths, pool
@@ -266,6 +266,103 @@ def test_stop_withdraws_queued_actions_and_waits_for_running_ones(pooled) -> Non
     assert file_list.synced == {}  # results finished after stop are dropped, not written
     assert not any(PhotoMetaDataXMP().read(p).get("bird_sharpness_verdict") for p in paths)
     assert controller._dialog.label.text() == "已停止。"
+
+
+def test_configured_twelve_workers_and_next_job_setting(env, monkeypatch):
+    from app_common import superviewer_user_options as options
+    from app_common.file_browser._work_pool import BrowserWorkPool
+    import bird_sharpness.xmp_store as store
+
+    controller, file_list, _analyzer, folder, paths = env
+    for i in range(13):
+        path = folder / f"parallel{i}.jpg"
+        Image.new("RGB", (16, 12), "gray").save(path)
+        paths.append(str(path))
+    monkeypatch.delenv("SuperViewer_ANALYSIS_WORKERS", raising=False)
+    monkeypatch.setattr(options, "_RUNTIME_OPTIONS", options.normalize_user_options({options.KEY_BIRD_SHARPNESS_WORKERS: 12}))
+    # Scheduling regression: sidecar round trips are covered by the other controller tests.
+    monkeypatch.setattr(store, "write_result", lambda *_args: True)
+    pool = BrowserWorkPool(12, 3, analysis_workers=6)
+    requested = []
+
+    def get_pool(*, analysis_workers=None):
+        requested.append(analysis_workers)
+        pool.configure_analysis_workers(analysis_workers)
+        return pool
+
+    file_list.background_work_pool = get_pool
+    gate = threading.Event()
+    analyzer = _PeakAnalyzer(gate=gate, delay=0)
+    monkeypatch.setattr(controller, "analyzer", lambda: analyzer)
+    job = BirdSharpnessJob(title="并行设置", items=[(p, p) for p in paths])
+    try:
+        assert controller.start(job)
+        assert _wait(lambda: analyzer.active == 12)
+        assert requested == [12] and pool.analysis_workers == 12
+        assert controller._worker.max_parallel == 12
+        assert pool.snapshot()["total"] == 16  # 12 photos + 3 metadata + 1 thumbnail
+        options.apply_runtime_user_options({options.KEY_BIRD_SHARPNESS_WORKERS: 2})
+        assert pool.analysis_workers == 12  # changing settings cannot resize an in-flight batch
+        gate.set()
+        assert _wait(lambda: not controller.busy)
+        assert analyzer.peak == 12 and len(analyzer.analyzed) == len(paths)
+
+        analyzer = _PeakAnalyzer(gate=threading.Event(), delay=0)
+        assert controller.start(job)
+        assert _wait(lambda: analyzer.active == 2)
+        assert requested == [12, 2] and controller._worker.max_parallel == 2
+        analyzer.gate.set()
+        assert _wait(lambda: not controller.busy)
+        assert analyzer.peak == 2 and len(analyzer.analyzed) == len(paths)
+    finally:
+        gate.set()
+        analyzer.gate.set()
+        controller.stop()
+        _wait(lambda: not controller.busy)
+        pool.shutdown(timeout=5)
+
+
+def test_existing_batch_budget_is_explained_in_progress(env, monkeypatch):
+    from app_common import superviewer_user_options as options
+    from app_common.file_browser._work_pool import BrowserWorkPool
+    from app_common.file_browser._work_policy import WorkKind
+
+    controller, file_list, analyzer, _folder, paths = env
+    monkeypatch.delenv("SuperViewer_ANALYSIS_WORKERS", raising=False)
+    monkeypatch.setattr(options, "_RUNTIME_OPTIONS", options.normalize_user_options({options.KEY_BIRD_SHARPNESS_WORKERS: 12}))
+    pool = BrowserWorkPool(6, 2, analysis_workers=3)
+    other_batch = pool.begin_producer(WorkKind.ANALYSIS)
+
+    def get_pool(*, analysis_workers=None):
+        pool.configure_analysis_workers(analysis_workers)
+        return pool
+
+    file_list.background_work_pool = get_pool
+    analyzer.gate = threading.Event()
+    try:
+        controller.start_for_paths(paths)
+        assert _wait(lambda: "本次沿用 3 个并发" in controller._dialog.label.text())
+        assert "设置的 12 个并发" in controller._dialog.label.text()
+        assert pool.analysis_workers == 3
+    finally:
+        controller.stop()
+        analyzer.gate.set()
+        _wait(lambda: not controller.busy)
+        pool.end_producer(WorkKind.ANALYSIS, other_batch)
+        pool.shutdown(timeout=5)
+
+
+def test_pool_configuration_failure_does_not_start_batch(env):
+    controller, file_list, analyzer, _folder, paths = env
+
+    def get_pool(**_kwargs):
+        raise RuntimeError("cannot create thread")
+
+    file_list.background_work_pool = get_pool
+    assert not controller.start(BirdSharpnessJob(title="配置失败", items=[(p, p) for p in paths]))
+    assert controller.messages == ["无法调整清晰度检测并发数：cannot create thread"]
+    assert not controller.busy and controller._dialog is None
+    assert not analyzer.loaded
 
 
 def test_browser_pool_shutdown_ends_job_and_releases_models(pooled) -> None:

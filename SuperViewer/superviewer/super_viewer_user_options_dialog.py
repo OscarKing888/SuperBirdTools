@@ -9,6 +9,8 @@ from app_common.settings_dialog import SettingsDialog
 from app_common.collapsible_section import CollapsibleSection
 from app_common.superviewer_user_options import (
     BIRD_SHARPNESS_PARAM_KEYS,
+    BIRD_SHARPNESS_WORKERS_MAX,
+    KEY_BIRD_SHARPNESS_WORKERS,
     KEY_NAVIGATION_FPS_OPTIONS,
     KEY_PERF_PROBES_ENABLED,
     KEY_BIRD_HOVER_COLOR,
@@ -37,6 +39,7 @@ from .qt_compat import (
     QFileDialog,
     QMessageBox,
     QPushButton,
+    QSizePolicy,
     QSpinBox,
     QWidget,
     QVBoxLayout,
@@ -300,6 +303,43 @@ class SuperViewerUserOptionsDialog(SettingsDialog):
 
         sharpness = QWidget(tabs)
         sharpness_layout = QVBoxLayout(sharpness)
+        parallel_grid = grid_group("并行处理")
+        parallel_grid.setColumnStretch(2, 1)
+        parallel_grid.addWidget(QLabel("同时检测照片数"), 0, 0)
+        self._spin_bird_sharpness_workers = QSpinBox(sharpness)
+        self._spin_bird_sharpness_workers.setRange(0, BIRD_SHARPNESS_WORKERS_MAX)
+        automatic_workers = min(6, max(1, cpu_count // 2))
+        self._spin_bird_sharpness_workers.setSpecialValueText(f"自动（{automatic_workers} 张）")
+        self._spin_bird_sharpness_workers.setSuffix(" 张")
+        self._spin_bird_sharpness_workers.setValue(int(opts[KEY_BIRD_SHARPNESS_WORKERS]))
+        self._spin_bird_sharpness_workers.setAccessibleName("同时检测照片数")
+        self._spin_bird_sharpness_workers.setToolTip(
+            "0 为自动：CPU 逻辑核心数的一半，最多 6 张。\n"
+            f"可手动设置 1–{BIRD_SHARPNESS_WORKERS_MAX} 张；保存后在下一次检测生效。\n"
+            "若设置了 SuperViewer_ANALYSIS_WORKERS 环境变量，优先使用该值。"
+        )
+        parallel_grid.addWidget(self._spin_bird_sharpness_workers, 0, 1)
+        parallel_note = QLabel(
+            "保存后在下一次检测生效。\n"
+            "提高并行数会占用更多内存。\n"
+            "速度也取决于解码、识别和读写。\n"
+            "不会改变清晰度分数或已检测结果。", sharpness)
+        parallel_note.setWordWrap(True)
+        parallel_note.setForegroundRole(getattr(QPalette, "ColorRole", QPalette).PlaceholderText)
+        parallel_grid.addWidget(parallel_note, 1, 0, 1, 2)
+        try:
+            override = int(os.environ.get("SuperViewer_ANALYSIS_WORKERS", "0"))
+        except ValueError:
+            override = 0
+        if override > 0:
+            override_note = QLabel(
+                f"当前环境变量覆盖此选项：同时检测 {min(override, BIRD_SHARPNESS_WORKERS_MAX)} 张。", sharpness)
+            override_note.setWordWrap(True)
+            parallel_grid.addWidget(override_note, 2, 0, 1, 2)
+        parallel_group = self.option_groups["并行处理"]
+        policy = getattr(QSizePolicy, "Policy", QSizePolicy)
+        parallel_group.setSizePolicy(policy.Maximum, policy.Preferred)
+        sharpness_layout.addWidget(parallel_group)
         from .bird_sharpness_params_form import AnalysisParamsForm
 
         # The same form as the trace window's 参数 tab: one pipeline, parameters from here for batch runs.
@@ -317,7 +357,7 @@ class SuperViewerUserOptionsDialog(SettingsDialog):
                                 "识别模型：可换用其他 YOLO 检测模型，或用 SAM 重新抠出被枝叶挡住的鸟；未下载的模型可在此下载。\n"
                                 "增强找鸟：没找到鸟时放大窗口再找，放大后的树叶也会被认成鸟，建议先在计算过程窗口里试门槛。\n"
                                 "无鸟时的分块：没有鸟、没有焦点框时测全图；相机记录为手动对焦时测画面中心的焦平面（不是鸟）。\n"
-                                "所有非默认的参数（以及 RAW 以外的图像来源）都以单独的算法版本记录，「跳过已检测」不会把不同设置的结果混用。"
+                                "所有非默认的清晰度参数（以及 RAW 以外的图像来源）都以单独的算法版本记录，「跳过已检测」不会把不同设置的结果混用。"
                                 "新的设置用于下一次检测和计算过程查看；计算过程窗口的「参数」页可临时改用其他参数对比。", sharpness)
         sharpness_note.setWordWrap(True)
         sharpness_note.setForegroundRole(getattr(QPalette, "ColorRole", QPalette).PlaceholderText)
@@ -379,6 +419,7 @@ class SuperViewerUserOptionsDialog(SettingsDialog):
             "keep_view_on_switch": int(self._chk_keep_view.isChecked()),
             KEY_PERF_PROBES_ENABLED: int(self._chk_perf_probes.isChecked()),
             KEY_BIRD_HOVER_COLOR: self._bird_hover_color.color,
+            KEY_BIRD_SHARPNESS_WORKERS: self._spin_bird_sharpness_workers.value(),
             "denoise_output_mode": str(self._combo_denoise_mode.currentData()),
             "denoise_subdir": self._edit_denoise_subdir.text().strip(),
             "denoise_output_directory": self._edit_denoise_directory.text().strip(),

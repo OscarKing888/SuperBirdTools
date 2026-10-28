@@ -74,13 +74,15 @@ class BirdSharpnessWorker(QThread):
     timing_ready = pyqtSignal(object)  # PhotoTiming of every finished (or skipped) photo
     setup_timed = pyqtSignal(float)    # seconds spent loading the models before the first photo
 
-    def __init__(self, job: BirdSharpnessJob, analyzer_holder: "BirdSharpnessController", pool=None) -> None:
+    def __init__(self, job: BirdSharpnessJob, analyzer_holder: "BirdSharpnessController", pool=None,
+                 *, requested_parallel: int | None = None) -> None:
         super().__init__()
         self.job = job
         self._holder = analyzer_holder
         self._pool = pool
         self._cancel = threading.Event()
         self.max_parallel = 0
+        self.requested_parallel = requested_parallel
         self._source_label = ""  # image source of this job, shown in the status line
 
     def stop(self) -> None:
@@ -194,17 +196,22 @@ class BirdSharpnessWorker(QThread):
 
         pool = self._pool
         total = len(items)
-        workers = max(1, int(getattr(pool, "analysis_workers", 1)))
-        self.max_parallel = workers
-        window = workers * 2
-        source = f"，图像：{self._source_label}" if self._source_label else ""
-        self.status_changed.emit(f"正在检测（{workers} 线程并行{source}）…")
-        self.progress_changed.emit(0, total, "")
         try:
             token = pool.begin_producer(WorkKind.ANALYSIS)
         except BrowserPoolClosed:
             self._cancel.set()
             return
+        # The producer lease freezes this budget until the batch has drained.
+        workers = max(1, int(getattr(pool, "analysis_workers", 1)))
+        self.max_parallel = workers
+        window = workers * 2
+        source = f"，图像：{self._source_label}" if self._source_label else ""
+        status = f"正在检测（{workers} 线程并行{source}）…"
+        if self.requested_parallel is not None and workers != self.requested_parallel:
+            status += (f"\n其他批量分析正在运行，本次沿用 {workers} 个并发。"
+                       f"设置的 {self.requested_parallel} 个并发将在其他批次结束后的新检测生效。")
+        self.progress_changed.emit(0, total, "")
+        self.status_changed.emit(status)
         pending: dict = {}  # future -> (item, action)
         lane_of: dict = {}  # running future -> stable worker slot index
         next_index = 0
@@ -631,9 +638,17 @@ class BirdSharpnessController(QObject):
         self._write_failures = 0
         self._failure_message = ""
         self._timing = TimingStats()
+        from app_common.superviewer_user_options import get_bird_sharpness_workers
+
         pool_getter = getattr(self._file_list, "background_work_pool", None)
-        pool = pool_getter() if callable(pool_getter) else None
-        worker = BirdSharpnessWorker(job, self, pool)
+        requested_parallel = get_bird_sharpness_workers()
+        try:
+            pool = pool_getter(analysis_workers=requested_parallel) if callable(pool_getter) else None
+        except Exception as exc:
+            _log.exception("[BirdSharpness] cannot configure worker pool")
+            self._show_message(f"无法调整清晰度检测并发数：{exc}")
+            return False
+        worker = BirdSharpnessWorker(job, self, pool, requested_parallel=requested_parallel)
         self._worker = worker
         dialog = BirdSharpnessProgressDialog(self._main, job.title, running_text="正在检测鸟清晰度…")
         self._dialog = dialog

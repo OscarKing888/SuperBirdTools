@@ -7,7 +7,7 @@
 ## 目录
 
 1. [总流程](#1-总流程)
-2. [入口与任务调度](#2-入口与任务调度)（含 [2.1 分阶段计时](#21-分阶段计时单张与批量)）
+2. [入口与任务调度](#2-入口与任务调度)（含 [2.1 分阶段计时](#21-分阶段计时单张与批量)、[2.2 并发设置](#22-并发设置与共享池额度)）
 3. [解码全分辨率图像](#3-解码全分辨率图像)
 4. [鸟体识别：首遍、鸟群补检、去重与限数](#4-鸟体识别首遍鸟群补检去重与限数)
 5. [无鸟复检：提亮、1024 px、焦点处弱候选与放大](#5-无鸟复检提亮1024-px焦点处弱候选与放大)
@@ -86,13 +86,19 @@ flowchart LR
     V2 --> P
     V3 --> P
     V4 --> P
-    P --> AN["BirdSharpnessAnalyzer<br/>共享模型 shared_models(detector)"]
-    AN --> POOL["BrowserWorkPool，WorkKind.ANALYSIS<br/>最低优先级，并发 ≤ CPU/2（最多 6）"]
-    POOL --> ACT["每张一个 BirdSharpnessAction<br/>模型推理在锁内串行，解码/测量并行"]
+    P --> ENTRY{"执行入口"}
+    ENTRY -->|Viewer 批次| W["新批次读取并发设置<br/>用户选项 0 自动 / 1–64 张，环境变量优先<br/>申请共享池额度，见 2.2"]
+    W --> POOL["BrowserWorkPool，WorkKind.ANALYSIS<br/>最低优先级，只用浏览任务暂不需要的线程"]
+    ENTRY -->|CLI| CLI["自有有界执行器<br/>-j / --workers 控制并发"]
+    POOL --> ACT["每张一个 BirdSharpnessAction"]
+    CLI --> AN
+    ENTRY -->|计算过程| TRACE["共享池现有额度<br/>BirdSharpnessTraceAction 只读"]
+    ACT --> AN["同一 BirdSharpnessAnalyzer<br/>shared_models(detector)<br/>模型推理锁内串行，解码/测量并行"]
+    TRACE --> AN
 ```
 
 - 目录树菜单由 [`BirdSharpnessController.extend_directory_menu()`](../SuperViewer/superviewer/bird_sharpness_controller.py) 创建：跳过已检测与全部重新检测均提供本目录和包含所有子目录两种范围。「重新检测本目录及子目录全部照片」使用 `recursive=True, skip_existing=False`，由后台扫描所有层级子目录，不跳过已有结果；单张清晰度计算流程不变。
-- 三处入口共用同一套 `AnalysisParams`（[params.py](../bird_sharpness/params.py)），只是来源不同。`AnalysisParams` 默认值下结果和版本号不变。
+- 各入口共用同一套 `AnalysisParams`（[params.py](../bird_sharpness/params.py)），只是来源不同。`AnalysisParams` 默认值下结果和版本号不变。并发设置独立于该参数对象，只决定任务调度，不改变结果、版本或跳过已有结果的规则。
 - 例外：图像来源 `image_source` 的库 / CLI 默认是 RAW 解码，而 SuperViewer 用户选项（设置 → 鸟清晰度 → 图像来源）默认 **相机内嵌 JPEG**，所以 SuperViewer 默认写入的版本带 `-jpeg` 后缀（见第 3 节、第 13 节）。计算过程窗口按用户选项的图像来源打开，窗口顶部可切换，「保存为默认设置」连同当前来源一起保存。
 - 模型推理（YOLO / 关键点 / SAM）在 `BirdSharpnessModels` 的锁内串行执行，RAW 解码、预处理和 σ 计算并行。
 
@@ -129,6 +135,36 @@ flowchart TD
 - **单张**：每个阶段边界由 `on_stage` 触发，同一阶段进入两次会累加；`stage_s` 之和约等于 `elapsed_s`（阶段外的零星开销不计）。计算过程窗口复用已解码图像时，解码一栏就是这次的实际开销。
 - **批量 / 并行**：各阶段的「累计」是所有线程工作时间之和，会超过墙钟时间，约为并行度倍；`累计处理 ÷ 总用时` 即实际并行度（×N）。「平均每张」= 单张工作时间均值（一个线程处理一张要多久）；「并行后每张」= 总用时 ÷ 张数（用户实际等待的每张时间）。总用时从第一张开始算，不含加载模型（单列）。
 - 被「跳过已检测」的照片只计 `check`，不进每张平均；被停止的不计。
+
+### 2.2 并发设置与共享池额度
+
+代码：[`get_bird_sharpness_workers()`](../app_common/superviewer_user_options.py)、[`BirdSharpnessController`](../SuperViewer/superviewer/bird_sharpness_controller.py)、[`FileListPanel.background_work_pool()`](../app_common/file_browser/_panel.py)、[`BrowserWorkPool.configure_analysis_workers()`](../app_common/file_browser/_work_pool.py)。
+
+```mermaid
+flowchart TD
+    A["开始新的 Viewer 清晰度批次"] --> E{"SuperViewer_ANALYSIS_WORKERS<br/>可解析为正整数？"}
+    E -->|是| ENV["请求并发 = min(环境变量, 64)"]
+    E -->|否| U{"用户设置 bird_sharpness_workers"}
+    U -->|0 自动| AUTO["请求并发 = min(6, max(1, CPU // 2))"]
+    U -->|1–64| MANUAL["请求并发 = 用户设置"]
+    ENV --> GET["background_work_pool(analysis_workers=请求并发)"]
+    AUTO --> GET
+    MANUAL --> GET
+    GET --> IDLE{"ANALYSIS 没有生产者批次租约？<br/>单条运行 / 排队任务不阻止改配"}
+    IDLE -->|是| CONFIG["configure_analysis_workers<br/>总线程数至少为 请求并发 + 元数据保留额度 + 1<br/>只增线程；分析额度设为请求值<br/>已有单条任务继续，降额后等待自然完成"]
+    IDLE -->|否| KEEP["保留当前分析额度<br/>进度提示实际 / 请求并发及后续生效时机"]
+    CONFIG -->|成功| LEASE["新批次先 begin_producer<br/>再读取实际分析额度"]
+    CONFIG -->|异常| ERROR["提示配置失败原因<br/>不启动新批次"]
+    KEEP --> LEASE
+    LEASE --> RUN["按实际分析额度提交任务<br/>在途上限 = 2 × 额度，元数据 / 缩略图仍优先"]
+    RUN --> FIXED["本批运行中保持线程总数和分析额度<br/>设置保存不会改动正在运行的批次"]
+```
+
+设置入口是「鸟清晰度 → 并行处理 → 同时检测照片数」，保存后在下一次新检测读取。只有其他分析批次的生产者租约会阻止改配，单条计算过程 / 鸟体预览即使正在运行或排队，也会保留任务并允许新批次改配；降低额度后，已有任务自然完成到新额度以下才接续。其他批次仍持有租约时，本批沿用原额度，进度显示「其他批量分析正在运行，本次沿用 X 个并发。设置的 Y 个并发将在其他批次结束后的新检测生效。」
+
+池总线程数、分析额度和当前活跃数是不同值：例如总池有 12 个线程，自动分析仍最多 6 张；手动请求 12 张且无其他批次租约时，共享池扩容以保留元数据额度和 1 个缩略图名额，浏览工作与未完成的单条分析仍可让本批暂时不足 12 张。降低设置只收紧分析额度，不回收已有线程。调用 `background_work_pool()` 时不传并发参数，保留现有额度；配置失败时提示原因，不启动新批次。
+
+CLI 使用独立的 `-j/--workers N` 和自有执行器，默认也是 `min(6, max(1, CPU // 2))`，不读取上述 Viewer 设置或环境变量。计算过程窗口只提交单张只读任务，使用共享池已有额度。
 
 ---
 
@@ -567,6 +603,15 @@ flowchart TD
 ---
 
 ## 13. 参数、版本后缀与关键阈值速查
+
+### 运行并发（不属于 `AnalysisParams`，无版本后缀）
+
+| 设置 | 默认 / 范围 | 作用与生效时机 |
+| --- | --- | --- |
+| Viewer `bird_sharpness_workers` | 0 自动；手动 1–64 | 「同时检测照片数」；自动为 `min(6, max(1, CPU // 2))`，新检测读取，运行中不改配 |
+| `SuperViewer_ANALYSIS_WORKERS` | 未设置 | 正整数优先于 Viewer 用户值，最大 64；非法或非正值回退用户值 |
+| CLI `-j/--workers N` | `min(6, max(1, CPU // 2))` | 独立控制 CLI 自有执行器，不读取 Viewer 设置或环境变量 |
+| 共享池扩容条件与容量 | 没有分析生产者持有批次租约 | 总线程数至少为请求并发 + 元数据保留额度 + 1；只增线程，降低设置只收紧额度，已有单条任务自然完成；其他批次占用时沿用原额度并明确提示 |
 
 ### 可调参数（`AnalysisParams`，用户选项 / Debug / CLI / 逐只识别覆盖共用）
 

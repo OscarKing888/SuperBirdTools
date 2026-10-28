@@ -354,9 +354,23 @@ flowchart LR
 生产者通过 `begin_producer()` / `end_producer()` 声明未提交完的任务需求，避免小批次
 补位间隙误判整类工作结束；持久缩略图协调器进入空闲时就释放需求，不等 QThread 退出。
 最后一项缩略图完成且需求释放后，元数据自动占用全部空闲 worker；反向也一样。
-总线程数有界且不变，新缩略图到来时，借出的线程完成当前小批次后优先转回缩略图。
+总线程数有界；分析批次运行中保持线程总数与分析额度不变。新缩略图到来时，借出的线程完成当前小批次后优先转回缩略图。
 Qt 进度回调只更新界面/初始需求提示，实际任务完成和需求释放直接唤醒调度。
 小批次（最多 8 文件）完成即回传、补位，不等待同批最慢文件。
+
+清晰度批次由 [`BirdSharpnessController`](../superviewer/bird_sharpness_controller.py) 在启动时读取
+[`get_bird_sharpness_workers()`](../../app_common/superviewer_user_options.py)，再调用
+[`FileListPanel.background_work_pool(analysis_workers=...)`](../../app_common/file_browser/_panel.py)。
+用户选项 `bird_sharpness_workers` 为 0 时自动取 `min(6, max(1, CPU // 2))`，手动范围 1–64；
+正整数环境变量 `SuperViewer_ANALYSIS_WORKERS` 优先（最大 64），非法或非正值回退用户设置。
+池的 `configure_analysis_workers()` 仅在 `ANALYSIS` 没有生产者持有批次租约时改额度，
+按需把同一个池扩展到至少「请求并发 + 元数据保留额度 + 1」，保留浏览配额；降低设置只收紧额度，不缩线程。
+单条计算过程 / 鸟体预览即使运行或排队也不阻止改配，已有任务继续；降额后等待它们自然完成再调度到新额度。
+若仍有其他分析批次租约，本批沿用当前额度，进度明确提示实际 / 请求并发及其他批次结束后的新检测才生效。
+配置失败时提示原因，不启动新批次。协调线程先 `begin_producer()` 再读取实际额度，租约保持到真实完成；
+无参数的 `background_work_pool()` 保留现额度。
+分析仍为最低优先级，进度窗口的并发额度与共享池总线程数分别显示。该执行设置不进入
+`AnalysisParams`，不改变算法结果、版本或已检测结果的复用；CLI 的 `-j/--workers` 独立控制自有执行器。
 
 每个池线程拥有独立的 ExifTool 读取会话，避免多个元数据线程竞争全局执行锁。
 20 秒逐命令超时和目录取消同时覆盖 stay-open 与 RAW 二进制预览读取。
@@ -589,7 +603,7 @@ CLI：根 `.venv` 执行 `python -m SuperViewer.superviewer.image_png_export <�
 
 ### 通用参数分组
 
-[SuperViewerUserOptionsDialog](../superviewer/super_viewer_user_options_dialog.py) 使用共享 [CollapsibleSection](../../app_common/collapsible_section.py)：浏览与性能拆成加载与缓存/浏览行为/诊断，降噪拆成输出文件/降噪处理，归档与两类徽章复用原表单，清晰度参数与可收起说明分开。`option_groups` 保存视图容器，选项仍由原控件和 `selected_options()` 读取，不新增保存字段或改变检测流程；共享外部应用设置也采用同一分组。主浏览器、导航与视口保持原有职责。组件可独立使用，Qt5/Qt6 导入与枚举回退保留；样式由组件负责，设计先查根 [UI 规范](../../docs/ui-style.md) 与 [skill](../../.agents/skills/superbird-ui-design/SKILL.md)。
+[SuperViewerUserOptionsDialog](../superviewer/super_viewer_user_options_dialog.py) 使用共享 [CollapsibleSection](../../app_common/collapsible_section.py)：浏览与性能拆成加载与缓存/浏览行为/诊断，降噪拆成输出文件/降噪处理，归档与两类徽章复用原表单；鸟清晰度分为并行处理、清晰度参数和可收起说明。并行处理的原生 `QSpinBox` 提供「同时检测照片数」，范围 0–64，0 显示当前自动值；旁注说明内存影响、下次新检测生效，有有效环境变量时显示覆盖提示。`option_groups` 保存视图容器，`selected_options()` 在确认时统一保存控件草稿，包括独立的 `bird_sharpness_workers` 执行设置；取消不写配置。共享外部应用设置也采用同一分组。主浏览器、导航与视口保持原有职责。组件可独立使用，Qt5/Qt6 导入与枚举回退保留；样式由组件负责，设计先查根 [UI 规范](../../docs/ui-style.md) 与 [skill](../../.agents/skills/superbird-ui-design/SKILL.md)。
 
 
 ## Camera RAW 与调色
