@@ -30,6 +30,14 @@ def metadata_revision(record):
     return None
 
 
+def has_display_metadata(record):
+    """Partial committed edits remain displayable while full reads retry."""
+    return isinstance(record, dict) and any(
+        key != "SourceFile" and key != "Error" and not str(key).endswith(":Error")
+        and not str(key).startswith("_metadata_") for key in record
+    )
+
+
 def complete_metadata(record):
     if not isinstance(record, dict) or not record:
         return False

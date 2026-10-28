@@ -377,3 +377,35 @@ def test_birdstamp_entry_disables_dependency_autoinstall_before_detector_import(
         cwd=root, env=env, capture_output=True, text=True, timeout=15,
     )
     assert result.returncode == 0, result.stderr
+
+
+def test_pending_edit_stays_visible_while_full_source_snapshot_is_unavailable(window, tmp_path):
+    from app_common.exif_io.metadata_store import get_store
+    from birdstamp.gui.editor_photo_list import PHOTO_COL_ISO, PHOTO_COL_RATING
+
+    photo = (tmp_path / "待同步白鹭.png").resolve()
+    with Image.new("RGB", (16, 12), "white") as image:
+        image.save(photo)
+    _add_photo(window, photo)
+    window._metadata_store_watch._timer.stop()
+    store = get_store()
+    old = store.remember_many({str(photo): {
+        "SourceFile": str(photo), "Title": "旧鸟名", "ISO": 640,
+    }}, profile="full").result(5)[str(photo)]
+    window._apply_photo_list_metadata_batch({str(photo): old})
+    item = window._find_photo_item_by_path(photo)
+    assert item.text(PHOTO_COL_ISO) == "640"
+
+    # Invalidate the full source row, as after an external sidecar write. The
+    # next accepted edit is durable even if a RAW/network-volume read must retry.
+    store.note_sidecar_write(str(photo)).result(5)
+    committed = store.submit_edit(str(photo), {"title": "最新白鹭", "rating": 4}).result(5).record
+    assert committed["_metadata_complete"] is False
+    window._queue_photo_list_metadata_batch({str(photo): committed})
+    window._process_photo_list_metadata_updates()
+
+    assert item.text(PHOTO_COL_TITLE) == "最新白鹭"
+    assert item.text(PHOTO_COL_RATING) == window._format_rating_display(4)
+    assert item.text(PHOTO_COL_ISO) == "640"
+    assert path_key(photo) in window._photo_list_metadata_pending_keys
+    assert window.raw_metadata_cache[path_key(photo)]["_metadata_complete"] is False

@@ -1729,7 +1729,7 @@ class SuperViewerTaggedFileListPanel(FileListPanel):
         def committed(result):
             for source, display in aliases.items():
                 if source != display:
-                    for mapping in (result.current_tags, result.inverse_states, result.failed_paths):
+                    for mapping in (result.current_tags, result.inverse_states, result.failed_paths, result.revisions):
                         if source in mapping:
                             mapping[display] = mapping.pop(source)
             self._sync_photo_tag_result(result)
@@ -1742,19 +1742,30 @@ class SuperViewerTaggedFileListPanel(FileListPanel):
             lambda: commit_photo_tag_states(targets, allowed_tags=allowed), committed, failed)
 
     def _sync_photo_tag_result(self, result: TagWriteResult) -> None:
-        cache_tags = dict(result.current_tags)
+        from .metadata_edit_sync import metadata_receipt_is_current
+        cache_tags = {path: tags for path, tags in result.current_tags.items()
+                      if metadata_receipt_is_current(self, path, result.revisions.get(path))}
+        revisions = {path: result.revisions[path] for path in cache_tags if path in result.revisions}
         if cache_tags:
             by_source = {os.path.normcase(path): tags for path, tags in cache_tags.items()}
+            by_source_revision = {os.path.normcase(path): value for path, value in revisions.items()}
             # 实际源文件写入成功后，同步仍以报告旧路径展示的行；不扫描或修改 report.db。
             for display in self._all_files:
                 actual = _get_cached_actual_path(display)
                 if actual and os.path.normcase(actual) in by_source:
+                    revision = by_source_revision.get(os.path.normcase(actual))
+                    if not metadata_receipt_is_current(self, display, revision):
+                        continue
                     cache_tags[display] = by_source[os.path.normcase(actual)]
+                    if revision is not None:
+                        revisions[display] = revision
         updated_paths = list(cache_tags)
         if updated_paths:
             try:
                 self._photo_tag_cache.update({path: set(tags) for path, tags in cache_tags.items()})
                 self._bump_photo_tag_generations(updated_paths)
+                for path, revision in revisions.items():
+                    self._meta_cache.setdefault(path, {})["_metadata_revision"] = revision
             except Exception as exc:
                 _log.warning("[tag.write] saved tags but tag cache update failed: %s", exc)
             for component, refresh in (

@@ -214,3 +214,57 @@ def test_large_directory_tag_batches_do_not_rescan_listing(tag_panel, tmp_path, 
         panel._metadata_loader = None
         current.deleteLater()
         previous.deleteLater()
+
+
+@pytest.mark.parametrize("use_actual_path", [False, True])
+def test_delayed_tag_commit_preserves_newer_tags_and_filter(tag_panel, tmp_path, monkeypatch, use_actual_path):
+    from app_common.exif_io.metadata_store import get_store
+    from app_common.file_browser._browser_core import _set_cached_actual_path
+    from app_common.file_browser._workers import MetadataLoader
+    from SuperViewer.superviewer.photo_tags import commit_photo_tag_states
+
+    _, panel = tag_panel
+    panel._metadata_store_watch._timer.stop()
+    source = str(tmp_path / "原图.jpg")
+    display = str(tmp_path / "旧路径.jpg") if use_actual_path else source
+    Path(source).write_bytes(b"original photo")
+    if use_actual_path:
+        _set_cached_actual_path(display, source)
+    panel._all_files = [display]
+    monkeypatch.setattr(panel, "_refresh_metadata_state_for_paths", lambda *_: None)
+    store = get_store()
+    monkeypatch.setattr(store, "attach_pool", lambda *_: None)
+    result = commit_photo_tag_states({source: {"飞行": True}}, allowed_tags=panel._available_tags)
+    assert not result.failed_paths
+    latest = store.submit_edit(source, {"XMP-dc:Subject": ["捕食"]}).result(5)
+    panel._meta_cache[display] = MetadataLoader._parse_rec(latest.record)
+    panel._photo_tag_cache[display] = {"捕食"}
+    panel._active_tag_filters = {"捕食"}
+    # Reproduce the alias mapping done by the queued callback.
+    if use_actual_path:
+        for mapping in (result.current_tags, result.inverse_states, result.revisions):
+            mapping[display] = mapping.pop(source)
+    updated = []
+    panel.photo_tags_cache_updated.connect(updated.append)
+    panel._sync_photo_tag_result(result)
+    assert panel._photo_tag_cache[display] == {"捕食"}
+    assert panel._meta_cache[display]["tags"] == ["捕食"]
+    assert panel._path_matches_active_filters(display)
+    assert not updated
+
+
+def test_tag_receipt_records_revision_before_next_loader_batch(tag_panel, tmp_path, monkeypatch):
+    from SuperViewer.superviewer.photo_tags import commit_photo_tag_states
+
+    _, panel = tag_panel
+    panel._metadata_store_watch._timer.stop()
+    path = str(tmp_path / "标签版本.jpg")
+    Path(path).write_bytes(b"original photo")
+    panel._all_files = [path]
+    monkeypatch.setattr(panel, "_refresh_metadata_state_for_paths", lambda *_: None)
+    result = commit_photo_tag_states({path: {"飞行": True}}, allowed_tags=panel._available_tags)
+    panel._sync_photo_tag_result(result)
+    assert panel._meta_cache[path]["_metadata_revision"] == result.revisions[path]
+    panel._on_metadata_batch_ready({path: {"tags": [], "rating": 0,
+                                         "_metadata_revision": result.revisions[path] - 1}})
+    assert panel._photo_tag_cache[path] == {"飞行"}

@@ -471,3 +471,57 @@ def test_exiftool_teardown_is_deferred_off_the_gui_thread(monkeypatch) -> None:
         release_close.set()
         window.close()
         app.processEvents()
+
+
+@pytest.mark.parametrize("switch_directory", [False, True])
+def test_async_rename_repairs_history_and_listing_after_selection_changes(tmp_path, monkeypatch, switch_directory):
+    from concurrent.futures import Future
+    from types import SimpleNamespace
+    from app_common.file_browser import _metadata_commit
+    from app_common.file_browser._browser_core import _get_cached_actual_path
+
+    photo = tmp_path / "原名.jpg"
+    photo.write_bytes(b"photo")
+    photo.with_suffix(".xmp").write_text("中文元数据", encoding="utf-8")
+    directory = str(tmp_path)
+    source, target = str(photo), str(tmp_path / "新名.jpg")
+    selected = str(tmp_path / "另一张.jpg")
+    callbacks = {}
+    future = Future()
+    def execute(operation, finished):
+        callbacks.update(operation=operation, finished=finished)
+        return future
+    monkeypatch.setattr(_metadata_commit, "get_metadata_commit_bridge",
+                        lambda _: SimpleNamespace(execute=execute))
+    cleared, reloaded, pending, previews = [], [], [], []
+    files = SimpleNamespace(
+        get_current_dir=lambda: directory,
+        clear_tag_history=lambda: cleared.append(True),
+        is_listed_path=lambda path: not switch_directory and path == source,
+        _active_view_selected_paths=lambda: [selected],
+        _active_view_current_path=lambda: selected,
+        set_pending_selection=lambda *args, **kwargs: pending.append((args, kwargs)),
+        load_directory=lambda *args, **kwargs: reloaded.append((args, kwargs)),
+    )
+    window = SimpleNamespace(_file_list=files, _current_exif_path=source,
+                             _file_writes_allowed=lambda _: True,
+                             _apply_photo_rename=previews.append)
+    assert MainWindow._rename_photo_from_info_panel(window, source, "新名") is future
+    window._current_exif_path = selected
+    if switch_directory:
+        directory = str(tmp_path / "其他目录")
+    # The real file/XMP transaction completes after the newer GUI selection.
+    renamed = callbacks["operation"]()
+    callbacks["finished"](renamed)
+    future.set_result(renamed)
+    assert Path(target).read_bytes() == b"photo"
+    assert Path(target).with_suffix(".xmp").read_text(encoding="utf-8") == "中文元数据"
+    assert _get_cached_actual_path(source) == target
+    assert cleared == [True]
+    assert previews == []
+    assert window._current_exif_path == selected
+    if switch_directory:
+        assert reloaded == [] and pending == []
+    else:
+        assert reloaded == [((directory,), {"force_reload": True})]
+        assert pending == [(([selected],), {"current_path": selected, "apply_immediately": False})]

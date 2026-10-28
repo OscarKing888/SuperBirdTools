@@ -4626,7 +4626,9 @@ class BirdStampEditorWindow(
             if isinstance(raw_metadata, dict)
             else self._photo_list_display_metadata_for_path(path)
         )
-        use_fast_display = _is_complete_list_metadata(metadata)
+        from birdstamp.gui.editor_metadata_state import has_display_metadata
+        # 完整性只控制后台重试；已提交的局部编辑和保留字段仍应立即显示。
+        use_fast_display = has_display_metadata(metadata)
         active_settings = (
             settings
             if isinstance(settings, dict)

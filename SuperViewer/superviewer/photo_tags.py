@@ -33,6 +33,7 @@ class TagWriteResult:
     inverse_states: TagStates = field(default_factory=dict)
     failed_paths: dict[str, str] = field(default_factory=dict)
     current_tags: dict[str, set[str]] = field(default_factory=dict)
+    revisions: dict[str, int] = field(default_factory=dict)
 
 
 @dataclass
@@ -303,6 +304,7 @@ def commit_photo_tag_states(states, *, allowed_tags=None):
                 store.remember_many({path: record}, profile="subjects", signatures=signatures,
                                     expected_revisions=before_revision).result()
             receipt = store.submit_edit(path, {}, subject_states=desired).result()
+            result.revisions[path] = receipt.revision
             before = set(receipt.before.get("tags", receipt.before.get("XMP-dc:Subject", [])) or [])
             current = set(receipt.record.get("tags", []) or [])
             inverse = {tag: tag in before for tag in desired if (tag in before) != (tag in current)}

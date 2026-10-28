@@ -61,12 +61,14 @@ def test_cold_direct_metadata_read_and_fallback_stay_off_gui(tmp_path, monkeypat
 
 
 def test_batch_uses_new_committed_full_snapshot_before_old_editor_cache(tmp_path, monkeypatch):
+    from birdstamp.gui.editor_utils import path_key
+
     path = str(tmp_path / "中文.jpg")
     store = metadata_store.get_store()
     store.remember_many({path: {"SourceFile": path, "XMP-dc:Title": "旧鸟名", "Model": "相机"}}, profile="full").result()
     store.submit_edit(path, {"XMP-dc:Title": "白鹭"}).result()
     window = MetadataHarness()
-    key = os.path.normcase(os.path.abspath(path))
+    key = path_key(Path(path))
     window.raw_metadata_cache[key] = {"XMP-dc:Title": "旧窗口鸟名"}
     monkeypatch.setattr(editor_module, "extract_many_with_xmp_priority", lambda *a, **k: pytest.fail("warm source read"))
     try:

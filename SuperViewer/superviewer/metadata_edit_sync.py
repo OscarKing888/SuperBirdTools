@@ -1,6 +1,8 @@
 """Synchronize successful EXIF-table sidecar edits with browser state."""
 from __future__ import annotations
 
+import os
+
 from app_common.exif_io.photo_meta import (
     PhotoMetaDataXMP,
     _is_xmp_description_key,
@@ -37,6 +39,11 @@ _DISPLAY_FIELDS = {
 
 def sync_saved_xmp_edit(file_list, path: str, tag_key: str, *, record=None) -> None:
     """Apply a committed snapshot; GUI notifications perform no metadata I/O."""
+    if record is None:
+        from app_common.exif_io.metadata_store import get_store
+        record = get_store().peek(path) or {}
+    if not metadata_receipt_is_current(file_list, path, record.get("_metadata_revision")):
+        return
     blocker = QSignalBlocker(file_list) if isinstance(file_list, QObject) else None
     try:
         _apply_saved_xmp_edit(file_list, path, tag_key, record=record)
@@ -48,6 +55,20 @@ def sync_saved_xmp_edit(file_list, path: str, tag_key: str, *, record=None) -> N
         if signal is not None and (name == "photo_metadata_cache_updated" or
                                    _is_xmp_subject_key(_xmp_sidecar_write_key(tag_key))):
             signal.emit([path])
+
+
+def metadata_receipt_is_current(file_list, path: str, revision) -> bool:
+    """Queued GUI receipts must not restore fields from an older transaction."""
+    if revision is None:
+        return True
+    from app_common.exif_io.metadata_store import get_store
+    source = display._get_cached_actual_path(path) or path
+    cache = getattr(file_list, "_meta_cache", {})
+    return int(revision) >= max(
+        get_store().current_revision(source),
+        int(cache.get(os.path.normpath(path), {}).get("_metadata_revision", 0)),
+        int(cache.get(os.path.normpath(source), {}).get("_metadata_revision", 0)),
+    )
 
 
 def _apply_saved_xmp_edit(file_list, path: str, tag_key: str, *, record=None) -> None:
@@ -64,6 +85,8 @@ def _apply_saved_xmp_edit(file_list, path: str, tag_key: str, *, record=None) ->
         file_list._photo_tag_cache[path] = set(tags or []).intersection(file_list._available_tags)
         file_list._bump_photo_tag_generations([path])
         file_list._sync_photo_tags_to_meta_cache([path])
+        if "_metadata_revision" in record:
+            file_list._meta_cache[path]["_metadata_revision"] = record["_metadata_revision"]
         file_list.clear_tag_history()
         file_list._refresh_metadata_state_for_paths([path])
         if file_list._photo_tag_lookup_needed_for_filters():
@@ -104,4 +127,6 @@ def _apply_saved_xmp_edit(file_list, path: str, tag_key: str, *, record=None) ->
     else:
         # Preserve clears for arbitrary fields, even when XML omits the node.
         updates.setdefault(key, "")
+    if "_metadata_revision" in record:
+        updates["_metadata_revision"] = record["_metadata_revision"]
     file_list.sync_metadata_edit_for_path(path, meta_updates=updates)

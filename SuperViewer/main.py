@@ -1240,6 +1240,7 @@ class MainWindow(QMainWindow):
         if not source_path:
             raise FileNotFoundError("当前图片不存在，无法重命名。")
         from app_common.file_browser._metadata_commit import get_metadata_commit_bridge
+        requested_dir = self._file_list.get_current_dir()
 
         def rename():
             from app_common.exif_io.metadata_store import get_store
@@ -1251,9 +1252,26 @@ class MainWindow(QMainWindow):
                 return renamed_path
 
         def renamed(target_path):
-            if os.path.normcase(self._current_exif_path or "") != os.path.normcase(source_path):
+            files = self._file_list
+            from app_common.file_browser._browser_core import _set_cached_actual_path
+            _set_cached_actual_path(source_path, target_path)
+            current_dir = files.get_current_dir()
+            if (os.path.normcase(self._current_exif_path or "") == os.path.normcase(source_path)
+                    and current_dir == requested_dir):
+                self._apply_photo_rename(target_path)
                 return
-            self._apply_photo_rename(target_path)
+            # Selection can change while the worker waits for pending XMP writes.
+            # Repair the listing/history even then, without selecting the renamed
+            # photo or navigating back to its former directory.
+            files.clear_tag_history()
+            if current_dir and files.is_listed_path(source_path):
+                selected = [target_path if os.path.normcase(p) == os.path.normcase(source_path) else p
+                            for p in files._active_view_selected_paths()]
+                current = files._active_view_current_path()
+                if os.path.normcase(current or "") == os.path.normcase(source_path):
+                    current = target_path
+                files.set_pending_selection(selected, current_path=current, apply_immediately=False)
+                files.load_directory(current_dir, force_reload=True)
 
         return get_metadata_commit_bridge(self._file_list).execute(rename, renamed)
 

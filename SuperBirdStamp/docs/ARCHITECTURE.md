@@ -1,6 +1,6 @@
 # SuperBirdStamp 架构与开发定位
 
-导出版本由 [`export_snapshot.py`](../birdstamp/export_snapshot.py) 在 worker 中固定：完整元数据、模板/显式 provider 输入、XMP 与 revision 共用一次快照，图片和 GIF/video 源帧缓存签名及保存端都消费它。每次新导出重新捕获，JPEG 复用转码仍传递固定 XMP。列表批次由 [`editor_metadata_state.py`](../birdstamp/gui/editor_metadata_state.py) 在入队和应用时校验版本与完整性，源读取失败可继续重试。
+导出版本由 [`export_snapshot.py`](../birdstamp/export_snapshot.py) 在 worker 中固定：完整元数据、模板/显式 provider 输入、XMP 与 revision 共用一次快照，图片和 GIF/video 源帧缓存签名及保存端都消费它。每次新导出重新捕获，JPEG 复用转码仍传递固定 XMP。列表批次由 [`editor_metadata_state.py`](../birdstamp/gui/editor_metadata_state.py) 在入队和应用时校验版本与完整性，源读取失败可继续重试；完整性只决定是否继续补读，已提交的局部编辑及保留字段仍立即显示。
 
 ## 元数据 SQLite 首响应与后台同步
 

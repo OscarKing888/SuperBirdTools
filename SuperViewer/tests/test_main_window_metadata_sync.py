@@ -249,3 +249,68 @@ def test_background_tag_signal_keeps_comment_and_filename_drafts(tmp_path):
         panel.deleteLater()
         files.deleteLater()
         _APP.processEvents()
+
+
+@pytest.mark.parametrize("tag_key,old_value,new_value,field", [
+    ("XMP-dc:Description", "先前备注", "最新备注", "comment"),
+    ("XMP-dc:Subject", ["飞行"], ["捕食"], "tags"),
+])
+def test_delayed_edit_receipt_cannot_replace_newer_store_snapshot(
+    tmp_path, monkeypatch, tag_key, old_value, new_value, field,
+):
+    photo = tmp_path / "迟到回执.jpg"
+    Image.new("RGB", (8, 6)).save(photo)
+    path = str(photo)
+    cfg = tmp_path / "tags.cfg"
+    cfg.write_text("飞行\n捕食\n", encoding="utf-8")
+    files = SuperViewerTaggedFileListPanel(tag_config_path=cfg)
+    files._metadata_store_watch._timer.stop()
+    store = get_store()
+    monkeypatch.setattr(store, "attach_pool", lambda *_: None)
+    monkeypatch.setattr(files, "_refresh_metadata_state_for_paths", lambda *_: None)
+    try:
+        first = store.submit_edit(path, {tag_key: old_value}).result(5)
+        latest = store.submit_edit(path, {tag_key: new_value}).result(5)
+        files._meta_cache[path] = MetadataLoader._parse_rec(latest.record)
+        files._photo_tag_cache[path] = set(latest.record.get("tags", []))
+        updates = []
+        files.photo_metadata_cache_updated.connect(updates.append)
+        sync_saved_xmp_edit(files, path, tag_key, record=first.record)
+        assert files._meta_cache[path][field] == new_value
+        assert files._meta_cache[path]["_metadata_revision"] == latest.revision
+        assert not updates
+    finally:
+        files.shutdown()
+        files.deleteLater()
+        _APP.processEvents()
+
+
+def test_edit_receipt_keeps_revision_in_local_cache(tmp_path, monkeypatch):
+    photo = tmp_path / "版本.jpg"
+    Image.new("RGB", (8, 6)).save(photo)
+    path = str(photo)
+    files = SuperViewerTaggedFileListPanel(tag_config_path=tmp_path / "tags.cfg")
+    files._metadata_store_watch._timer.stop()
+    monkeypatch.setattr(files, "_refresh_metadata_state_for_paths", lambda *_: None)
+    try:
+        receipt = get_store().submit_edit(path, {"XMP-dc:Description": "中文备注"}).result(5)
+        sync_saved_xmp_edit(files, path, "XMP-dc:Description", record=receipt.record)
+        assert files._meta_cache[path]["_metadata_revision"] == receipt.revision
+    finally:
+        files.shutdown()
+        files.deleteLater()
+        _APP.processEvents()
+
+
+def test_receipt_version_check_uses_repaired_actual_path_without_disk_io(tmp_path, monkeypatch):
+    from app_common.file_browser._browser_core import _set_cached_actual_path
+    from SuperViewer.superviewer.metadata_edit_sync import metadata_receipt_is_current
+
+    source = str(tmp_path / "实际照片.jpg")
+    display = str(tmp_path / "报告旧路径.jpg")
+    _set_cached_actual_path(display, source)
+    first = get_store().submit_edit(source, {"XMP-dc:Description": "先前备注"}).result(5)
+    get_store().submit_edit(source, {"XMP-dc:Description": "最新备注"}).result(5)
+    with monkeypatch.context() as guarded:
+        guarded.setattr(os, "stat", lambda *_a, **_k: pytest.fail("GUI receipt accessed photo disk"))
+        assert not metadata_receipt_is_current(SimpleNamespace(_meta_cache={}), display, first.revision)
