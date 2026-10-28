@@ -21,7 +21,7 @@ from .qt_compat import QDialog, QHBoxLayout, QLabel, QPushButton, QTimer, QVBoxL
 try:
     from PyQt6.QtCore import QRectF, Qt
     from PyQt6.QtGui import QColor, QFont, QPainter, QPalette
-    from PyQt6.QtWidgets import QProgressBar, QSizePolicy
+    from PyQt6.QtWidgets import QFrame, QProgressBar, QScrollArea, QSizePolicy
 
     _ROLE_TEXT = QPalette.ColorRole.Text
     _ROLE_WINDOW_TEXT = QPalette.ColorRole.WindowText
@@ -37,10 +37,11 @@ try:
     _RICH_TEXT = Qt.TextFormat.RichText
     _FIXED_HEIGHT = QSizePolicy.Policy.Fixed
     _EXPANDING = QSizePolicy.Policy.Expanding
+    _NO_FRAME = QFrame.Shape.NoFrame
 except ImportError:  # pragma: no cover - PyQt5 fallback
     from PyQt5.QtCore import QRectF, Qt
     from PyQt5.QtGui import QColor, QFont, QPainter, QPalette
-    from PyQt5.QtWidgets import QProgressBar, QSizePolicy
+    from PyQt5.QtWidgets import QFrame, QProgressBar, QScrollArea, QSizePolicy
 
     _ROLE_TEXT = QPalette.Text
     _ROLE_WINDOW_TEXT = QPalette.WindowText
@@ -56,6 +57,7 @@ except ImportError:  # pragma: no cover - PyQt5 fallback
     _RICH_TEXT = Qt.RichText
     _FIXED_HEIGHT = QSizePolicy.Fixed
     _EXPANDING = QSizePolicy.Expanding
+    _NO_FRAME = QFrame.NoFrame
 
 
 # Stage keys published by bird_sharpness actions -> (label, step index of 4).
@@ -69,8 +71,6 @@ STAGE_DISPLAY = {
     "write": ("写入", 4),
 }
 STAGE_STEPS = 4
-# Above this many lanes only the aggregate meter is shown.
-MAX_LANES = 8
 
 
 @dataclass(frozen=True)
@@ -146,7 +146,7 @@ class WorkerLoadView(QWidget):
         return self._load
 
     def shows_lanes(self) -> bool:
-        return not self._finished and self._load is not None and 0 < self._load.capacity <= MAX_LANES
+        return not self._finished and self._load is not None and self._load.capacity > 0
 
     def headline(self) -> str:
         load = self._load
@@ -157,6 +157,9 @@ class WorkerLoadView(QWidget):
         return f"工作线程：{load.busy} / {load.capacity} 个在工作"
 
     def _update_height(self) -> None:
+        # Follow the application font while retaining the original compact rows.
+        self.HEADER_H = max(22, self.fontMetrics().height() + 4)
+        self.LANE_H = max(26, self.fontMetrics().height() + 8)
         lanes = self._load.capacity if self.shows_lanes() else 0
         height = self.HEADER_H + (lanes * (self.LANE_H + self.LANE_GAP) + 6 if lanes else 4)
         self.setFixedHeight(height)
@@ -184,11 +187,12 @@ class WorkerLoadView(QWidget):
         header_font.setBold(True)
         painter.setFont(header_font)
         painter.setPen(text)
-        painter.drawText(QRectF(0, 0, width * 0.55, self.HEADER_H), _ALIGN_LEFT, self.headline())
+        header_w = min(width, painter.fontMetrics().horizontalAdvance(self.headline()) + 12)
+        painter.drawText(QRectF(0, 0, header_w, self.HEADER_H), _ALIGN_LEFT, self.headline())
         if load is not None and load.capacity > 0:
-            meter_w = min(220.0, width * 0.42)
-            gap = 3.0 if load.capacity <= 16 else 1.0
-            seg_w = max(2.0, (meter_w - gap * (load.capacity - 1)) / load.capacity)
+            meter_w = min(220.0, max(0.0, width - header_w))
+            gap = min(3.0 if load.capacity <= 16 else 1.0, meter_w / (load.capacity * 2))
+            seg_w = (meter_w - gap * (load.capacity - 1)) / load.capacity
             x = width - meter_w
             y = (self.HEADER_H - 10) / 2.0
             painter.setPen(_NO_PEN)
@@ -206,6 +210,12 @@ class WorkerLoadView(QWidget):
         body_font = QFont(self.font())
         small_font = QFont(self.font())
         small_font.setPointSizeF(max(7.0, self.font().pointSizeF() - 1.0))
+        painter.setFont(small_font)
+        metrics = painter.fontMetrics()
+        thread_w = max(48, metrics.horizontalAdvance(f"线程 {load.capacity}") + 4)
+        name_left = 24.0 + thread_w + 4
+        elapsed_w = max(44.0, metrics.horizontalAdvance("9999.9s"))
+        label_w = max(34.0, max(metrics.horizontalAdvance(label) for label, _step in STAGE_DISPLAY.values()) + 4)
         y = self.HEADER_H + 6
         for index, lane in enumerate(load.lanes):
             rect = QRectF(0, y, width, self.LANE_H)
@@ -226,15 +236,14 @@ class WorkerLoadView(QWidget):
             painter.drawEllipse(QRectF(10, cy - 4, 8, 8))
             painter.setFont(small_font)
             painter.setPen(muted)
-            painter.drawText(QRectF(24, y, 48, self.LANE_H), _ALIGN_LEFT, f"线程 {index + 1}")
+            painter.drawText(QRectF(24, y, thread_w, self.LANE_H), _ALIGN_LEFT, f"线程 {index + 1}")
             if lane is None:
-                painter.drawText(QRectF(76, y, width - 86, self.LANE_H), _ALIGN_LEFT, "空闲")
+                painter.drawText(QRectF(name_left, y, width - name_left - 10, self.LANE_H), _ALIGN_LEFT, "空闲")
                 y += self.LANE_H + self.LANE_GAP
                 continue
             stage_label, step = STAGE_DISPLAY.get(lane.stage, (lane.stage, 0))
             elapsed = max(0.0, now - lane.started_at)
             # right block: stage pips + stage label + elapsed
-            elapsed_w, label_w = 44.0, 34.0
             pip_w, pip_gap = 14.0, 3.0
             pips_w = STAGE_STEPS * pip_w + (STAGE_STEPS - 1) * pip_gap
             right = width - 10
@@ -257,7 +266,6 @@ class WorkerLoadView(QWidget):
             # file name in the remaining middle space
             painter.setFont(body_font)
             painter.setPen(text)
-            name_left = 76.0
             name_w = max(10.0, right - pips_w - 12 - name_left)
             shown = painter.fontMetrics().elidedText(lane.name, _ELIDE_MIDDLE, int(name_w))
             painter.drawText(QRectF(name_left, y, name_w, self.LANE_H), _ALIGN_LEFT, shown)
@@ -300,6 +308,7 @@ class BirdSharpnessProgressDialog(QDialog):
         self.bar.setFormat("%v / %m（%p%）")
 
         self.stats = QLabel("", self)
+        self.stats.setWordWrap(True)
         self._last_name = ""
         self.warning = QLabel("", self)
         self.warning.setWordWrap(True)
@@ -331,17 +340,29 @@ class BirdSharpnessProgressDialog(QDialog):
         row = QHBoxLayout()
         row.addWidget(self.summary, 1)
         row.addWidget(self.button)
+        # One scroll owner for potentially 64 worker rows and the timing table.
+        # Keep progress and the stop/close action reachable at every scroll position.
+        details = QWidget(self)
+        details_layout = QVBoxLayout(details)
+        details_layout.setContentsMargins(0, 0, 0, 0)
+        details_layout.setSpacing(8)
+        details_layout.addWidget(self.warning)
+        details_layout.addWidget(self.load_view)
+        details_layout.addWidget(self.pool_note)
+        details_layout.addWidget(self.timing)
+        details_layout.addStretch(1)
+        self.details_scroll = QScrollArea(self)
+        self.details_scroll.setFrameShape(_NO_FRAME)
+        self.details_scroll.setWidgetResizable(True)
+        self.details_scroll.setWidget(details)
+        self.details_scroll.setMinimumHeight(80)
+        self.details_scroll.setVisible(False)
         layout = QVBoxLayout(self)
         layout.setSpacing(8)
         layout.addWidget(self.label)
         layout.addWidget(self.bar)
         layout.addWidget(self.stats)
-        layout.addWidget(self.warning)
-        layout.addSpacing(4)
-        layout.addWidget(self.load_view)
-        layout.addWidget(self.pool_note)
-        layout.addSpacing(4)
-        layout.addWidget(self.timing)
+        layout.addWidget(self.details_scroll, 1)
         layout.addSpacing(4)
         layout.addLayout(row)
 
@@ -382,11 +403,24 @@ class BirdSharpnessProgressDialog(QDialog):
         self._refresh_stats()
 
     def set_load(self, load: WorkerLoad) -> None:
+        first_load = self.load_view.load() is None
+        self.details_scroll.setVisible(True)
         self.load_view.setVisible(True)
         self.load_view.set_load(load)
         note = self._pool_note(load)
         self.pool_note.setText(note)
         self.pool_note.setVisible(bool(note))
+        if first_load:
+            # Only jobs publishing worker details need the taller initial window.
+            # Later snapshots preserve both the user's size and scroll position.
+            screen = self.screen()
+            available = screen.availableGeometry() if screen is not None else None
+            height = min(640, int(available.height() * 0.85)) if available is not None else 640
+            self.resize(max(self.width(), 640), max(self.height(), height))
+            if available is not None and self.isVisible():
+                frame = self.frameGeometry()
+                self.move(max(available.left(), min(frame.left(), available.right() - frame.width() + 1)),
+                          max(available.top(), min(frame.top(), available.bottom() - frame.height() + 1)))
 
     def set_timing(self, stats: TimingStats) -> None:
         """Show the job's per-stage timing (work time summed over all workers, mean, longest)."""
@@ -413,6 +447,7 @@ class BirdSharpnessProgressDialog(QDialog):
         self._timing_plain = "\n".join(stats.lines(wall))
         self.timing.setText(self._timing_html(stats, wall))
         self.timing.setVisible(True)
+        self.details_scroll.setVisible(True)
 
     @staticmethod
     def _timing_html(stats: TimingStats, wall: Optional[float]) -> str:
@@ -460,6 +495,8 @@ class BirdSharpnessProgressDialog(QDialog):
     def set_warning(self, text: str) -> None:
         self.warning.setText(f"⚠ {text}" if text else "")
         self.warning.setVisible(bool(text))
+        if text:
+            self.details_scroll.setVisible(True)
 
     def set_summary(self, text: str) -> None:
         """Plain-text summary for jobs without verdict counts."""
