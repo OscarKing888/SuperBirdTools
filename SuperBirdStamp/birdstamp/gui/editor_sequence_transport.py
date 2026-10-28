@@ -11,7 +11,7 @@ from PyQt6.QtWidgets import (
 
 from . import editor_options
 from .editor_fps_combo import FpsComboBox
-from .editor_utils import path_key
+from .editor_metadata_state import cached_path_key as path_key
 from .editor_photo_list import PHOTO_COL_ROW, PHOTO_LIST_PATH_ROLE
 from .editor_source_quick_loader import SourceQuickLoader
 from .editor_shared_thumb_cache import SharedThumbnailScope

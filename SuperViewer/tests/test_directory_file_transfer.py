@@ -442,3 +442,90 @@ def test_default_shared_browser_does_not_enable_dragging():
 def test_physical_ctrl_means_copy(monkeypatch, platform, modifier, copy):
     monkeypatch.setattr(views.sys, "platform", platform)
     assert views.physical_ctrl_pressed(modifier) == copy
+
+
+def test_native_replace_flushes_destination_edits_before_new_photo_arrives(tmp_path, monkeypatch):
+    from app_common.exif_io.metadata_store import get_store
+    from app_common.exif_io.photo_meta import PhotoMetaDataXMP
+    source = tmp_path / "source/白鹭.jpg"
+    destination = tmp_path / "destination/白鹭.jpg"
+    for path, color in ((source, "red"), (destination, "blue")):
+        path.parent.mkdir()
+        Image.new("RGB", (12, 8), color).save(path)
+    writer = PhotoMetaDataXMP()
+    assert writer.write_title(str(source), "新照片的白鹭")
+    assert writer.write_title(str(destination), "原照片")
+    store = get_store()
+    store.submit_edit(str(destination), {"title": "原照片待同步编辑"}).result(3)
+
+    def replace(paths, folder, **kwargs):
+        assert writer.read(str(destination))["Title"] == "原照片待同步编辑"
+        assert not store.pending_status()
+        for path in paths:
+            shutil.copy2(path, Path(folder) / Path(path).name)
+        return ui.TransferResult()
+
+    monkeypatch.setattr(ui, "native_transfer", replace)
+    worker = ui.NativeTransferWorker([str(source)], str(destination.parent), True, 0)
+    worker.run()
+    assert not worker.result.error
+    assert store.flush_paths([str(destination)])
+    assert destination.read_bytes() == source.read_bytes()
+    assert writer.read(str(destination))["Title"] == "新照片的白鹭"
+
+
+def test_native_target_directory_guard_protects_keep_both_names(tmp_path, monkeypatch):
+    from app_common.exif_io.metadata_store import get_store
+    source = tmp_path / "source/bird.jpg"
+    other_name = tmp_path / "destination/bird (2).jpg"
+    for path in (source, other_name):
+        path.parent.mkdir()
+        path.write_bytes(b"photo")
+    store = get_store()
+    store.submit_edit(str(other_name), {"title": "保留两份候选名称的旧编辑"}).result(3)
+    other_name.unlink()
+    called = []
+    monkeypatch.setattr(ui, "native_transfer", lambda *args, **kwargs: called.append(args))
+    worker = ui.NativeTransferWorker([str(source)], str(other_name.parent), True, 0)
+    worker.run()
+    assert "元数据未同步" in worker.result.error
+    assert not called
+    assert source.read_bytes() == b"photo"
+    assert store.pending_edits(str(other_name))["fields"]["XMP-dc:Title"] == "保留两份候选名称的旧编辑"
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows short-name alias")
+def test_native_short_filename_uses_physical_name_and_original_selection_keys(tmp_path, monkeypatch):
+    from app_common.exif_io.metadata_store import get_store
+    from app_common.exif_io.photo_meta import PhotoMetaDataXMP
+
+    source = tmp_path / "source/Long Bird Filename.JPG"
+    destination = tmp_path / "destination"
+    source.parent.mkdir()
+    destination.mkdir()
+    source.write_bytes(b"photo")
+    buffer = ctypes.create_unicode_buffer(32768)
+    if not ctypes.windll.kernel32.GetShortPathNameW(str(source), buffer, len(buffer)):
+        pytest.skip("short names unavailable on this volume")
+    short = buffer.value
+    if Path(short).name == source.name:
+        pytest.skip("8.3 aliases are disabled on this volume")
+    store = get_store()
+    store.submit_edit(short, {"title": "短名称访问的白鹭"}).result(3)
+
+    def move(paths, folder, **kwargs):
+        assert source.name in [Path(path).name for path in paths]
+        for path in paths:
+            shutil.move(path, Path(folder) / Path(path).name)
+        return ui.TransferResult()
+
+    monkeypatch.setattr(ui, "native_transfer", move)
+    worker = ui.NativeTransferWorker([short], str(destination), False, 0)
+    worker.run()
+    assert not worker.result.error
+    assert worker.moved == [short]
+    assert not worker.untracked
+    assert (destination / source.name).exists()
+    assert Path(short).name not in {path.name for path in destination.iterdir()}
+    assert PhotoMetaDataXMP().read(str(destination / source.name))["Title"] == "短名称访问的白鹭"
+    assert any(Path(entry.source).name == source.name for entry in worker.inverse)

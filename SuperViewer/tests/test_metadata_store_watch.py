@@ -16,6 +16,10 @@ def capture_qt_errors(monkeypatch):
     errors = []
     monkeypatch.setattr(sys, "excepthook", lambda *error: errors.append(error))
     yield
+    # Window shutdown can race the intentionally blocked background health
+    # probe. Do not leak that temporary negative result into later test windows.
+    from app_common.exif_io.exiftool_path import _is_usable_exiftool
+    _is_usable_exiftool.cache_clear()
     assert not errors, [repr(error[1]) for error in errors]
 
 

@@ -7,6 +7,7 @@
 - GUI 只读取 `peek()` 内存快照。后台 `read_many()` 读取本机 SQLite，不访问照片盘；`browser`、`full` 和显示用 profile 分别记录字段完整性，只有编辑字段的记录不能冒充完整 EXIF。
 - 目录先展示有界内存/SQLite 列表及元数据快照，随后扫描、核验并增量补齐。筛选、排序及标签下拉只使用内存；活动标签过滤不再启动独立的 XML 全量 loader。
 - `submit_edit()` 返回 Future；只有 SQLite 事务提交后 UI 才更新为已保存。补丁保留显式清空、零值和标签增删；未同步编辑优先于侧车、原图和报告回退。
+- 完整读取记录区分“成功且没有 EXIF”与读取失败；失败占位不进入完整 profile，旧版未标记成功状态的记录在后台重新核验。BirdStamp 在批次入队和 GUI 应用两处校验 revision，迟到旧批次不能覆盖已提交编辑。
 - `remember_many()` 导入后台读取结果，校验读取起始版本，拒绝用晚到旧结果覆盖新编辑。`refresh_scope()` 只重建缓存，不删除 outbox。跨应用变化由 [`MetadataStoreWatch`](../app_common/file_browser/_metadata_watch.py) 和 BirdStamp 的 `EditorMetadataStoreWatch` 每 500 毫秒在所属工作池查询 `changes_since()`，Qt 接收后局部更新，保留备注/文件名草稿、光标、选择和预览视野。
 - 清空字段在同次 XML 发布中记录 `XMP-superpicky:metadata_cleared_fields`，防止同步完成后原图或 report.db 的旧值重新出现；再次赋值清除相应记录，外部程序写入的非空侧车字段优先于残留的清空记录。数字 `0`、`False` 不是空值。
 
@@ -14,7 +15,7 @@
 
 数据库为 `metadata-store-v1.sqlite3`：Windows 位于 `%LOCALAPPDATA%/SuperBirdTools/Data`，macOS 位于 `~/Library/Application Support/SuperBirdTools`；测试用 `SUPERBIRD_METADATA_STORE_DIR` 隔离。不可把它当作可随意删除的 Cache 数据库。
 
-一个 SQL 所有者线程处理短事务，WAL + FULL 提交；源文件读取、ExifTool 和侧车锁均不占用 SQL 写事务。`snapshots` 有容量与访问淘汰边界；`resources`、`outbox` 保存版本与待同步补丁，不受缓存清理影响。`changes` 为两应用提供版本变化记录，落后于保留范围的消费者重新获取快照。
+一个 SQL 所有者线程处理短事务，WAL + FULL 提交；源文件读取、ExifTool 和侧车锁均不占用 SQL 写事务。`snapshots` 有容量与访问淘汰边界；`resources`、`outbox` 保存版本与待同步补丁，不受缓存清理影响。`identity_aliases` 记录 worker 规范化的路径身份；Windows 长短文件名、目录别名共用同侧车资源。读取只查已有内存/SQLite 映射，写入及文件操作前在后台重新确认身份。`edit_intents` 按字段和标签保存事务序号，合并别名待同步记录时按字段决定新旧；旧数据库中无法确定顺序的冲突保留待同步并报告，不猜测覆盖。`changes` 为两应用提供版本变化记录，落后于保留范围的消费者重新获取快照。
 
 `SidecarSyncAction` 在已有 `metadata_work_pool()` 执行：取得同 stem 跨进程锁，重取最新待写版本，严格读取并合并 XML，原子发布，再确认该版本。新编辑不会被旧确认清除；失败保存错误并退避重试，重启恢复。关闭先停止协调/投递，等运行中的应用 worker 真正结束，未执行编辑保留在 SQLite。
 
@@ -22,7 +23,7 @@
 
 ## 文件操作与导出
 
-`file_operation()` 在短 SQL 事务中保护源路径/目录，拒绝该范围的新编辑，再同步受影响的 pending；整个复制、移动、改名、删除事务结束才解除保护。它在 worker 中调用，可重入，异常保留原文件和待同步编辑。生成侧车后重新解析文件配对，避免漏掉原先不存在的 XMP；目录保护包含未在当前列表中的 pending。
+`file_operation()` 在短 SQL 事务中保护源和目标路径/目录，拒绝该范围的新编辑，再同步受影响的 pending；整个复制、移动、改名、删除事务结束才解除保护。它在 worker 中调用，可重入，异常保留原文件和待同步编辑。生成侧车后重新解析文件配对，避免漏掉原先不存在的 XMP；目录保护包含未在当前列表中的 pending。Native Replace/Keep Both 保护目标目录；归档在读鸟名、规划目标和获取 XMP 锁之前进入屏障。超时预算涵盖等待锁和工作池调度；已经开始的原子发布完成后再返回。
 
 低层直接写入器也登记跨进程写入租约，并持同一侧车锁；文件操作等待此前写入结束，旧路径晚到写入被拒绝。直接分析结果发布后通知共享 Store 使相关快照失效。标签库迁移保留原有多文件恢复日志，准备、提交和恢复都遵守此屏障，事务结束后导入新的标签快照。
 
@@ -32,13 +33,13 @@
 
 导出通过 `read_export_xmp()` 在侧车锁内取得 XML 与已提交补丁的固定快照，把补丁应用到输出 XML，不要求源目录可写。保留未知 XML 属性与标签，只将成片 XMP 写入独立侧车。
 
-BirdStamp 成片缓存签名包含已提交元数据 revision 和侧车内容摘要，因此 XMP 尚未同步的编辑也使旧成片失效；输出侧车的摘要参与配对缓存校验。
+BirdStamp 的 [`export_snapshot.py`](../SuperBirdStamp/birdstamp/export_snapshot.py) 在导出 worker 中同时固定原始元数据、模板上下文、PhotoInfo、report 行、XMP 字节与 revision，校验期间发生编辑则重试。图片、保留 GIF/video 帧及 CLI 渲染都携带这份快照到保存端，JPEG 缓存转码也使用同一 XMP。每轮导出重新捕获；渲染过程中的新编辑不能改变本轮签名或输出侧车。成片缓存签名包含已提交 revision 和 XMP 内容摘要，输出侧车的摘要也参与配对缓存校验。
 
 首次写入相机字段先从原图生成临时 XMP，再单独执行赋值及语义回读，最后原子发布，避免 ExifTool 初次格式转换覆盖用户赋值。
 
 ## 诊断与回归
 
-分别观察目录缓存首屏、扫描、指纹校验、SQLite/内存命中、源文件/XML 实读及 GUI 应用耗时；worker 总完成时间不代表首屏等待时间。热目录首屏测试阻塞扫描及源文件检查，确认缓存仍先可用；后台解除阻塞后再断言外部增删改。
+分别观察目录缓存首屏、扫描、指纹校验、SQLite/内存命中、源文件/XML 实读及 GUI 应用耗时；worker 总完成时间不代表首屏等待时间。目录完整列表快照由扫描 worker 生成；GUI 只按变更记录增量维护元数据和预算，切目录只触碰 LRU，不再次深拷贝整目录。热目录首屏测试阻塞扫描及源文件检查，确认缓存仍先可用；后台解除阻塞后再断言外部增删改。
 
 性能日志入口包括 `[metadata.store.read]` / `[metadata.store.commit]` 的 SQL 和排队总耗时、`[metadata.snapshot]` 首批快照、`[metadata.read_batch]` 的各来源读取时间，以及浏览器 `apply_listing.*` / `_meta_apply`。缓存恢复阶段只恢复列表选择，自动完整预览在校验后提交一次；用户主动点击仍遵守原预览加载策略。
 
@@ -55,3 +56,17 @@ BirdStamp 成片缓存签名包含已提交元数据 revision 和侧车内容摘
 Viewer 原 main 上另外确认的已有失败是：`test_badge_text_editor.py` 六项离屏控件命中，`test_bird_body_integration.py::test_fast_body_identity_reuses_cached_actual_path_repair` 两项路径用例，`test_bird_identification_controller.py::test_table_candidates_buttons_and_background_adoption` 的 Return/Enter 两项，以及 `test_video_frame_options.py` 两项离屏布局。这些问题未混入本轮修复。
 
 Viewer 最终分批验证 **1398 passed**：目录拖放文件 40 项，其余集合 1358 项；上述 12 项 main 既有失败单独排除。一次先前合跑在目录拖放期间长时间等待，该测试存在未替换的原生警告对话框路径，现改为收集警告并严格失败，避免模态窗口挂住测试；具体警告未再重现，目录拖放与移动历史、安全检查合跑另有 78 项通过。以上为 Windows 源码环境验证，未进行 macOS 或打包产物验证。
+
+
+### 2026-10-28 复审修正验证
+
+本轮复审修正资源别名与字段提交顺序、源/目标文件屏障、归档锁顺序、跨 profile 失效通知、迟到批次、导出固定版本、失败占位缓存、同步锁截止时间和目录快照更新开销。复审追加了别名重定向、别名 LRU 淘汰、失败无新通知时重试、JPEG 缓存转码、显式 provider 冻结及元数据回调的路径查询问题，并为实际时序增加隔离用例。
+
+Windows 共享层全套 **1040 passed、1 skipped、1 deselected**（沿用上文已确认的日志轮换排除）；Viewer 归档、文件转移/历史、watch、SQLite 消费者、信息页和 EXIF 状态整合集合 **170 passed**；BirdStamp 导出、模板、GIF/video 缓存、JPEG 复用和去抖动导出集合 **161 passed、1 deselected**（沿用已确认的 PNG/JPG 跨目录复用排除）。中文修改、SQLite 未同步导出、CLI 渲染期间编辑及两个 JPEG 转码入口均实际写入临时文件并读回。完整 BirdStamp 全套及 macOS/打包验证仍未完成，不将这些专项结果表述为全平台全套通过。
+
+一万条合成目录快照下，连续一百次单条 GUI 元数据更新约 **1.10 ms**，仅深拷贝一百个变更记录，无 stat/scandir；此前同规模单次整目录复制约 288 ms。该数据只衡量缓存维护，不包含 Qt 绘制和源盘校验。真实窗口回调另封禁源路径 resolve/realpath/stat，验证列表及等待像素状态下的元数据更新使用内存；已解码预览按原渲染流程交接，元数据刷新不重扫序列条带。
+
+测试中 Native 移动替代后端与缩略图读取的竞争已在 fixture 隔离；窗口退出期间的 ExifTool 健康检查缓存也在 fixture 清理，避免污染后续用例。去抖动导出的旧逐字节 XMP 断言改为检查中文内容与输出尺寸，符合成片侧车几何校正契约。
+
+
+BirdStamp GUI 元数据、选择及模板组合 **136 passed**；最后刷新/标准化/接力组合 **43 passed**；播放、预览及去抖动独立组合 **71 passed**。各组有重叠，不累加为全套数量。预览夹具在构造窗口前替换实际模型入口，验证进程先加载 Torch；最后 71 项没有访问冲突或挂起。生产检测代码未改动。

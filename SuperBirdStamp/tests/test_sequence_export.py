@@ -1,6 +1,7 @@
 """独立去抖动批量导出的并发、预计算复用与写入生命周期。"""
 from collections import Counter
 import threading
+from xml.etree import ElementTree as ET
 
 from PIL import Image
 import pytest
@@ -34,6 +35,15 @@ def prepared_sequence(tmp_path, count=6):
         boxes[key], sizes[key] = (4, 2, 92, 62), (96, 64)
     return SequencePreview('prepared', jobs, file_signatures(sequence_files(jobs.values())),
                            pixel_boxes=boxes, source_sizes=sizes, output_size=(88, 60))
+
+
+def assert_export_metadata(target, index):
+    # Exported XMP must preserve text while recording the transformed geometry;
+    # its packet formatting is intentionally different from the source sidecar.
+    root = ET.parse(target.with_suffix('.xmp')).getroot()
+    assert root.find('.//{http://purl.org/dc/elements/1.1/}description').text == f'中文元数据 {index}'
+    assert root.find('.//{http://ns.adobe.com/tiff/1.0/}ImageWidth').text == '88'
+    assert root.find('.//{http://ns.adobe.com/tiff/1.0/}ImageLength').text == '60'
 
 
 @pytest.mark.parametrize('output_format', ['png', 'jpg'])
@@ -112,7 +122,7 @@ def test_parallel_export_reuses_plans_and_worker_sessions(tmp_path, monkeypatch,
     assert len(list(folder.iterdir())) == 12
     for index, job in enumerate(sequence.jobs.values(), 1):
         path = folder / f'{index:04d}_{job.path.stem}.{output_format}'
-        assert path.with_suffix('.xmp').read_bytes() == job.path.with_suffix('.XMP').read_bytes()
+        assert_export_metadata(path, index - 1)
         with Image.open(path) as exported, Image.open(job.path) as source:
             assert exported.size == (88, 60)
             assert exported.getexif()[271] == f'Camera {index - 1}'
@@ -261,4 +271,26 @@ def test_default_export_really_runs_more_than_eight_actions_and_reuses_pixels(tm
         with Image.open(target) as exported, Image.open(job.path) as source:
             with source.crop((4, 2, 92, 62)) as expected:
                 assert exported.tobytes() == expected.tobytes()
-        assert target.with_suffix('.xmp').read_bytes() == job.path.with_suffix('.XMP').read_bytes()
+        assert_export_metadata(target, index - 1)
+
+
+def test_aligned_export_freezes_pending_metadata_before_render(tmp_path, monkeypatch):
+    from app_common.exif_io.metadata_store import get_store
+    sequence = prepared_sequence(tmp_path, count=1)
+    path = next(iter(sequence.jobs.values())).path
+    store = get_store()
+    store.submit_edit(str(path), {"description": "导出前中文"}).result(3)
+    original = sequence_export.render_sequence_preview_frame
+
+    def render(*args, **kwargs):
+        store.submit_edit(str(path), {"description": "导出期间新值"}).result(3)
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(sequence_export, "render_sequence_preview_frame", render)
+    target = tmp_path / 'aligned.png'
+    sequence_export.SequenceExportAction(sequence, path, target, 'png', (path,),
+                                        cancelled=lambda: False).execute()
+    root = ET.parse(target.with_suffix('.xmp')).getroot()
+    values = ''.join(root.find('.//{http://purl.org/dc/elements/1.1/}description').itertext())
+    assert values == '导出前中文'
+    assert store.pending_edits(str(path))['fields']['XMP-dc:Description'] == '导出期间新值'

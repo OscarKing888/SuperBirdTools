@@ -52,7 +52,11 @@ class _BirdStampDejitterRelayMixin:
         self._dejitter_relay_cache = None
 
     def _relay_position(self, path):
-        return self._relay_plan()[1].get(path_key(Path(path))) if path is not None else None
+        positions = self._relay_plan()[1]
+        if path is None or not positions:
+            return None
+        from .editor_metadata_state import cached_path_key
+        return positions.get(cached_path_key(path))
 
     def _relay_anchor_for_path(self, path):
         """path 本身是有效接力参考图时返回 RelayAnchor（可能尚未框选）。"""

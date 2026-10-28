@@ -107,6 +107,9 @@ class PhotoInfo:
     # GUI 预览只消费已读取的快照，导出/模板编辑仍可按原规则补读 metadata。
     metadata_is_snapshot: bool = field(default=False, kw_only=True)
     _snapshot_contexts: dict = field(default_factory=dict, kw_only=True, repr=False, compare=False)
+    report_row_is_snapshot: bool = field(default=False, kw_only=True)
+    report_row_snapshot: dict | None = field(default=None, kw_only=True, repr=False)
+    sidecar_metadata_snapshot: dict | None = field(default=None, kw_only=True, repr=False)
 
     @classmethod
     def from_path(
@@ -307,6 +310,9 @@ def ensure_editor_photo_info(
         sidecar_path=base.sidecar_path,
         raw_metadata=dict(base.raw_metadata) if isinstance(base.raw_metadata, dict) else {},
         metadata_is_snapshot=base.metadata_is_snapshot,
+        report_row_is_snapshot=base.report_row_is_snapshot,
+        report_row_snapshot=base.report_row_snapshot,
+        sidecar_metadata_snapshot=base.sidecar_metadata_snapshot,
         crop_box=normalized_crop_box,
         editor_row_number=normalized_editor_row_number,
     )
@@ -411,6 +417,8 @@ def _extract_capture_datetime(photo_info: PhotoInfo, raw_metadata: Dict[str, Any
     dt = _extract_capture_datetime_from_metadata(raw_metadata)
     if dt is not None:
         return dt
+    if photo_info.metadata_is_snapshot:
+        return _extract_file_created_datetime(photo_info)
     try:
         return datetime.fromtimestamp(photo_info.path.stat().st_ctime)
     except Exception:
@@ -619,6 +627,9 @@ def _stat_timestamp_to_datetime(timestamp: Any) -> datetime | None:
 
 
 def _extract_file_created_datetime(photo_info: PhotoInfo) -> datetime | None:
+    if photo_info.metadata_is_snapshot:
+        return _parse_datetime_value(_lookup_metadata_text(
+            _photo_raw_metadata(photo_info), "File:FileCreateDate", "FileCreateDate"))
     try:
         stat_result = photo_info.path.stat()
     except Exception:
@@ -632,6 +643,9 @@ def _extract_file_created_datetime(photo_info: PhotoInfo) -> datetime | None:
 
 
 def _extract_file_modified_datetime(photo_info: PhotoInfo) -> datetime | None:
+    if photo_info.metadata_is_snapshot:
+        return _parse_datetime_value(_lookup_metadata_text(
+            _photo_raw_metadata(photo_info), "File:FileModifyDate", "FileModifyDate"))
     try:
         return _stat_timestamp_to_datetime(photo_info.path.stat().st_mtime)
     except Exception:
@@ -965,6 +979,8 @@ def _extract_file_modified_time_text(photo_info: PhotoInfo) -> str:
 
 
 def _extract_file_size_text(photo_info: PhotoInfo, raw_metadata: Dict[str, Any]) -> str:
+    if photo_info.metadata_is_snapshot:
+        return _format_file_size_text(_lookup_metadata_text(raw_metadata, "File:FileSize", "FileSize"))
     try:
         return _format_file_size_text(photo_info.path.stat().st_size)
     except Exception:
@@ -982,6 +998,7 @@ def _extract_normalized_file_entries(photo_info: PhotoInfo, raw_metadata: Dict[s
         normalized = normalize_metadata(
             photo_info.path,
             raw_metadata,
+            allow_stat=not photo_info.metadata_is_snapshot,
             bird_arg=None,
             bird_priority=["meta", "filename"],
             bird_regex=r"(?P<bird>[^_]+)_",
@@ -1199,7 +1216,7 @@ def _read_sidecar_metadata_cached(
 
 def _read_sidecar_metadata(photo_info: PhotoInfo) -> Dict[str, Any]:
     if photo_info.metadata_is_snapshot:
-        return {}
+        return dict(photo_info.sidecar_metadata_snapshot or {})
     from app_common.exif_io.metadata_store import get_store
     snapshot = get_store().peek(str(photo_info.path), profile="full")
     if snapshot is not None:
@@ -2463,6 +2480,7 @@ class ExifTemplateContextProvider(TemplateContextProvider):
             normalized = normalize_metadata(
                 photo_info.path,
                 metadata,
+                allow_stat=not photo_info.metadata_is_snapshot,
                 bird_arg=None,
                 bird_priority=["meta", "filename"],
                 bird_regex=r"(?P<bird>[^_]+)_",
@@ -2723,6 +2741,8 @@ class ReportDBTemplateContextProvider(TemplateContextProvider):
 
     @classmethod
     def _resolve_row(cls, photo_info: PhotoInfo) -> dict[str, Any] | None:
+        if photo_info.report_row_is_snapshot:
+            return photo_info.report_row_snapshot
         row = get_report_db_row_for_path(photo_info.path)
         return row if isinstance(row, dict) else None
 

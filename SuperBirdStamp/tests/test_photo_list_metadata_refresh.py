@@ -50,7 +50,12 @@ def _wait_metadata_loaded(window, timeout: float = 30.0) -> None:
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         _APP.processEvents()
-        if window._photo_list_metadata_loader is None and not window._photo_list_metadata_loading:
+        # A finished first source attempt may leave failed rows for the watch's
+        # bounded retry. Wait for a complete applied snapshot, not just QThread.
+        if (window._photo_list_metadata_loader is None
+                and not window._photo_list_metadata_loading
+                and not window._photo_list_metadata_updates
+                and not window._photo_list_metadata_pending_keys):
             return
         time.sleep(0.01)
     raise AssertionError("照片信息后台读取未在限定时间内完成")
@@ -82,7 +87,11 @@ def test_refresh_rereads_changed_xmp_without_touching_files(window, tmp_path):
     window._restart_photo_list_metadata_loader()
     _wait_metadata_loaded(window)
     item = window._find_photo_item_by_path(photo)
-    assert item.text(PHOTO_COL_TITLE) == "普通翠鸟"
+    assert item.text(PHOTO_COL_TITLE) == "普通翠鸟", {
+        "raw": window.raw_metadata_cache.get(path_key(photo)),
+        "pending": window._photo_list_metadata_pending_keys,
+        "queued": window._photo_list_metadata_updates,
+    }
 
     # 外部工具（SuperViewer/SuperPicky）修改侧车后，列表需要手动刷新才能看到。
     assert xmp.write_title(str(photo), "斑鱼狗（雌）")
@@ -123,6 +132,69 @@ def test_refresh_forces_current_photo_context_rebuild(window, tmp_path, monkeypa
     window._apply_photo_list_metadata_batch({str(photo): dict(metadata)})
     assert applied == ["label"]
     assert not window._photo_list_metadata_forced_refresh_keys
+
+
+@pytest.mark.parametrize("selected", ["none", "pending", "decoded"])
+def test_metadata_queue_apply_and_item_lookup_never_resolve_photo_paths(window, tmp_path, monkeypatch, selected):
+    from app_common.exif_io.metadata_store import get_store
+
+    photo = (tmp_path / "MixedCase白鹭.png").resolve()
+    Image.new("RGB", (16, 12), "white").save(photo)
+    _add_photo(window, photo)
+    get_store().prepare_paths([str(photo)])
+    # App-bundled routing is loaded once independently of photo-volume reads.
+    template_context.AutoProxyTemplateContextProvider.route_definitions()
+    item = window._find_photo_item_by_path(photo)
+    window._photo_item_map.clear()  # Exercise the Qt-role lookup fallback too.
+    window._metadata_store_watch._timer.stop()
+    if selected != "none":
+        window.current_path = photo
+        window.current_raw_metadata = {"SourceFile": str(photo), "Title": "旧鸟名", "_metadata_revision": 0}
+    render_requests = []
+    if selected == "decoded":
+        window.current_source_image = Image.new("RGB", (16, 12), "white")
+        window.current_source_full_size = (16, 12)
+        # The metadata callback hands already-decoded pixels to the renderer;
+        # its image pipeline is covered separately by preview regressions.
+        monkeypatch.setattr(window, "render_preview", lambda **kwargs:
+                            render_requests.append((window.current_raw_metadata["Title"], kwargs)))
+    metadata = {"SourceFile": str(photo), "Title": "新白鹭", "XMP-dc:Title": "新白鹭",
+                "ImageWidth": 16, "ImageHeight": 12, "_metadata_read_ok": True,
+                "_metadata_complete": True, "_metadata_revision": 1}
+    probes = []
+
+    def forbidden(*args, **kwargs):
+        frame, callers = sys._getframe(1), []
+        while frame is not None and len(callers) < 8:
+            callers.append(f"{frame.f_code.co_name}:{frame.f_lineno}")
+            frame = frame.f_back
+        probes.append((args, callers))
+        raise AssertionError(f"metadata delivery queried the source filesystem: {args!r}; {callers}")
+
+    def protect_photo_volume(original):
+        def guarded(path, *args, **kwargs):
+            candidate = Path(os.path.abspath(os.fspath(path)))
+            if candidate == photo.parent or candidate.parent == photo.parent:
+                return forbidden(path, *args, **kwargs)
+            # Rendering can inspect its local template/font resources; those
+            # are separate from the source-volume metadata delivery contract.
+            return original(path, *args, **kwargs)
+        return guarded
+
+    with monkeypatch.context() as blocked:
+        blocked.setattr(Path, "resolve", protect_photo_volume(Path.resolve))
+        blocked.setattr(Path, "stat", protect_photo_volume(Path.stat))
+        blocked.setattr(os.path, "realpath", protect_photo_volume(os.path.realpath))
+        window._queue_photo_list_metadata_batch({str(photo): metadata})
+        window._process_photo_list_metadata_updates()
+    assert not probes, "\n".join(str(probe) for probe in probes[:8])
+    assert item.text(PHOTO_COL_TITLE) == "新白鹭"
+    assert not window._photo_list_metadata_updates
+    assert not item.data(PHOTO_COL_ROW, PHOTO_LIST_PHOTO_INFO_ROLE).metadata_is_snapshot
+    if selected != "none":
+        assert window.current_raw_metadata["Title"] == "新白鹭"
+    if selected == "decoded":
+        assert render_requests == [("新白鹭", {"sync_transport": False})]
 
 
 def test_refresh_ignored_for_empty_list_and_during_restore(window, monkeypatch):
@@ -191,6 +263,8 @@ def test_metadata_ui_tick_obeys_item_and_time_limits(window, tmp_path, monkeypat
     monkeypatch.setattr(editor, "_PHOTO_LIST_METADATA_APPLY_BUDGET_S", budget)
     monkeypatch.setattr(editor.time, "perf_counter", lambda: clock[0])
     monkeypatch.setattr(window, "_apply_photo_list_metadata_batch", apply)
+    # This test isolates scheduling after the list-membership guard.
+    monkeypatch.setattr(window, "_find_photo_item_by_path", lambda path: object())
     window._queue_photo_list_metadata_batch({str(tmp_path / f"{i}.ARW"): {"ISO": i} for i in range(20)})
     assert applied == []
     window._process_photo_list_metadata_updates()
@@ -209,6 +283,8 @@ def test_metadata_queue_yields_and_finishes_only_after_rows_are_applied(window, 
             QTimer.singleShot(0, lambda: event_observations.append(len(applied)))
 
     monkeypatch.setattr(window, "_apply_photo_list_metadata_batch", apply)
+    # This test isolates scheduling after the list-membership guard.
+    monkeypatch.setattr(window, "_find_photo_item_by_path", lambda path: object())
     window._photo_list_metadata_loading = True
     window._queue_photo_list_metadata_batch({str(tmp_path / f"{i}.ARW"): {"ISO": i} for i in range(20)})
     window._finish_photo_list_metadata_loading()

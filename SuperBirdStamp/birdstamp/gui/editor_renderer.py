@@ -130,9 +130,10 @@ class _BirdStampRendererMixin:
         )
 
     def _visible_dejitter_reference_regions(self):
+        from birdstamp.gui.editor_metadata_state import cached_path_key
         source = getattr(self, "_dejitter_reference_source", None)
         current = getattr(self, "current_path", None)
-        if source and current and _path_key(Path(source)) == _path_key(current):
+        if source and current and cached_path_key(source) == cached_path_key(current):
             return getattr(self, "_dejitter_reference_regions", ())
         relay = getattr(self, "_relay_anchor_for_path", None)
         anchor = relay(current) if callable(relay) and current else None
@@ -311,7 +312,8 @@ class _BirdStampRendererMixin:
             keys = self._source_path_key_cache = {}
         key = keys.get(path)
         if key is None:
-            key = keys[path] = _path_key(path)
+            from birdstamp.gui.editor_metadata_state import cached_path_key
+            key = keys[path] = cached_path_key(path)
         try:
             stat = path.stat()
             return f"{key}:{stat.st_size}:{stat.st_mtime_ns}"
@@ -940,10 +942,11 @@ class _BirdStampRendererMixin:
         reset_view: bool = False,
         preserve_view: bool = False,
         force_fit: bool = False,
+        sync_transport: bool = True,
     ) -> None:
         if hasattr(self, "ab_preview"):
             self.ab_preview.sync()
-        if hasattr(self, "sequence_transport") and not self.sequence_transport.selecting:
+        if sync_transport and hasattr(self, "sequence_transport") and not self.sequence_transport.selecting:
             self.sequence_transport.sync()
         if self._show_dejitter_edit_preview(reset_view=reset_view, preserve_view=preserve_view) or self._show_sequence_preview_result(reset_view=reset_view, preserve_view=preserve_view):
             self.preview_label.canvas.set_crop_pixel_context(None)
@@ -1266,11 +1269,12 @@ class _BirdStampRendererMixin:
         return settings
 
     def _render_settings_for_path(self, path: Path | None, *, prefer_current_ui: bool) -> dict[str, Any]:
+        from birdstamp.gui.editor_metadata_state import cached_path_key
         fallback = self._build_current_render_settings()
         if path is None:
             return fallback
-        key = _path_key(path)
-        if prefer_current_ui and self.current_path is not None and key == _path_key(self.current_path):
+        key = cached_path_key(path)
+        if prefer_current_ui and self.current_path is not None and key == cached_path_key(self.current_path):
             return fallback
         settings = self._normalize_render_settings(self.photo_render_overrides.get(key), fallback=fallback)
         getter = getattr(self, "_photo_crop_box_for_path", None)
@@ -1710,7 +1714,7 @@ class _BirdStampRendererMixin:
             apply_ratio_crop=True,
         )
 
-    def render_preview(self, *_args: Any) -> None:
+    def render_preview(self, *_args: Any, sync_transport: bool = True) -> None:
         session = getattr(getattr(getattr(self, "preview_label", None), "canvas", None), "overlay_session", None)
         if session is not None and session.drag:
             return
@@ -1847,7 +1851,10 @@ class _BirdStampRendererMixin:
             fit_reset = self._pending_preview_fit_reset
             self._pending_preview_fit_reset = False
             with birdstamp_perf.span("render_preview.refresh_label"):
-                self._refresh_preview_label(reset_view=True, force_fit=fit_reset)
+                if sync_transport:
+                    self._refresh_preview_label(reset_view=True, force_fit=fit_reset)
+                else:
+                    self._refresh_preview_label(reset_view=True, force_fit=fit_reset, sync_transport=False)
             output_size = self._preview_crop_size
             output_text = f" | 输出 {output_size[0]}x{output_size[1]}" if output_size is not None else ""
             if pad_top or pad_bottom or pad_left or pad_right:

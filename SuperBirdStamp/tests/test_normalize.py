@@ -29,3 +29,19 @@ def test_normalize_metadata_prefers_datetimeoriginal_and_filename_bird() -> None
     assert metadata.settings_text == "f/4  1/2000s  ISO800  600mm"
     assert metadata.location is None
     assert metadata.gps_text == "39.12345, 116.12345"
+
+
+def test_snapshot_normalization_does_not_probe_missing_capture_time(monkeypatch):
+    calls = []
+    def forbidden(*args, **kwargs):
+        calls.append(args)
+        raise AssertionError("snapshot normalization queried the source volume")
+
+    monkeypatch.setattr(Path, "stat", forbidden)
+    metadata = normalize_metadata(
+        Path("白鹭_001.ARW"), {}, bird_arg=None, bird_priority=["filename", "meta"],
+        bird_regex=r"(?P<bird>[^_]+)_", allow_stat=False,
+    )
+    assert metadata.capture_text is None
+    assert metadata.bird == "白鹭"
+    assert calls == []

@@ -489,6 +489,8 @@ class _BirdStampExporterMixin:
         output_path: Path,
         persistent: bool,
     ) -> tuple[list[Path], Path]:
+        from birdstamp.export_snapshot import prepare_export_jobs
+        self._run_blocking_task_off_gui_thread(prepare_export_jobs, jobs, refresh=True)
         total = len(jobs)
         bucket_key = build_source_frame_bucket_key(
             global_export_settings=global_export_settings_from_settings(jobs[0].settings if jobs else {})
@@ -822,9 +824,12 @@ class _BirdStampExporterMixin:
         bird_box_cache: dict[str, tuple[float, float, float, float] | None],
         bird_box_lock: threading.Lock,
     ) -> Path:
+        from birdstamp.export_snapshot import prepare_export_job
+        prepare_export_job(task.job)
         if task.fast_png and task.reuse_source is not None:
             if materialize_exported_image(
                 task.reuse_source, task.target_path, original=task.job.path,
+                xmp_snapshot=task.job.export_metadata.xmp,
             ):
                 return task.target_path
             task.reuse_source = None
@@ -835,7 +840,8 @@ class _BirdStampExporterMixin:
             bird_box_lock=bird_box_lock,
         )
         try:
-            self._save_image(rendered, task.target_path, fast_png=task.fast_png, source_path=task.job.path)
+            self._save_image(rendered, task.target_path, fast_png=task.fast_png, source_path=task.job.path,
+                             xmp_snapshot=task.job.export_metadata.xmp)
         finally:
             try:
                 rendered.close()
@@ -950,16 +956,17 @@ class _BirdStampExporterMixin:
             raise RuntimeError(failed[0])
         return (ok_paths, failed)
 
-    def _save_image(self, image: Image.Image, path: Path, *, fast_png: bool = False, source_path: Path) -> None:
+    def _save_image(self, image: Image.Image, path: Path, *, fast_png: bool = False, source_path: Path,
+                    xmp_snapshot: bytes | None = None) -> None:
         from birdstamp.export_metadata import save_export_image
         suffix = path.suffix.lower()
         if suffix == ".png":
             if fast_png:
-                save_export_image(image, path, source_path=source_path, format="PNG", compress_level=1)
+                save_export_image(image, path, source_path=source_path, xmp_snapshot=xmp_snapshot, format="PNG", compress_level=1)
             else:
-                save_export_image(image, path, source_path=source_path, format="PNG", optimize=True)
+                save_export_image(image, path, source_path=source_path, xmp_snapshot=xmp_snapshot, format="PNG", optimize=True)
             return
 
         if suffix not in {".jpg", ".jpeg"}:
             raise ValueError(f"不支持的图片导出格式: {path.suffix}")
-        save_export_image(image, path, source_path=source_path, format="JPEG", quality=92, optimize=True, progressive=True)
+        save_export_image(image, path, source_path=source_path, xmp_snapshot=xmp_snapshot, format="JPEG", quality=92, optimize=True, progressive=True)

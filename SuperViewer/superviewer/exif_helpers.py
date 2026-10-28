@@ -687,13 +687,16 @@ def load_exif_exifread(path: str) -> list[tuple[str, str, str]]:
     return rows
 
 
-def load_exif_pillow(path: str) -> list[tuple[str, str, str]]:
+def load_exif_pillow(path: str, *, read_status: dict | None = None) -> list[tuple[str, str, str]]:
     """使用 Pillow 加载 EXIF。返回 [(ifd, name, value), ...]。"""
     rows = []
+    img = None
     try:
         img = Image.open(path)
         exif = img.getexif()
         if not exif:
+            if read_status is not None:
+                read_status["ok"] = True
             return rows
         for tag_id, value in exif.items():
             name = PIL_TAGS.get(tag_id, f"Tag {tag_id}")
@@ -708,9 +711,13 @@ def load_exif_pillow(path: str) -> list[tuple[str, str, str]]:
             else:
                 value = _sanitize_display_string(str(value))
             rows.append(("Pillow Exif", str(name), value))
-        img.close()
+        if read_status is not None:
+            read_status["ok"] = True
     except Exception:
         pass
+    finally:
+        if img is not None:
+            img.close()
     return rows
 
 
@@ -1008,17 +1015,25 @@ def load_all_exif_exiftool(path: str, tag_label_chinese: bool = False) -> list[t
         for source in paths:
             rows = run_exiftool_json(str(source)) if get_exiftool_executable_path() else []
             if rows and isinstance(rows[0], dict):
-                records[source] = rows[0]
+                record = dict(rows[0])
+                record["_metadata_read_ok"] = not any(
+                    key == "Error" or str(key).endswith(":Error") for key in record
+                )
+                records[source] = record
             else:
                 # Fallback fields use the same semantic keys, so sidecar and
                 # pending SQLite edits retain precedence without ExifTool too.
                 record = {"SourceFile": str(source)}
-                for row in _load_all_exif_fallback(str(source), tag_label_chinese=False):
+                read_status = {}
+                for row in _load_all_exif_fallback(
+                    str(source), tag_label_chinese=False, read_status=read_status,
+                ):
                     if row[0] == META_IFD_NAME and row[1] in {META_TITLE_TAG_ID, META_DESCRIPTION_TAG_ID}:
                         key = "XMP-dc:" + str(row[1])
                     else:
                         key = row[6] or f"{row[2]}:{row[3]}"
                     record[key] = row[4]
+                record["_metadata_read_ok"] = read_status.get("ok", False)
                 records[source] = record
         return records
 
@@ -1096,11 +1111,15 @@ def load_all_exif(path: str, tag_label_chinese: bool = False) -> list[tuple]:
     return load_all_exif_exiftool(path, tag_label_chinese=tag_label_chinese)
 
 
-def _load_all_exif_fallback(path: str, tag_label_chinese: bool = False) -> list[tuple]:
+def _load_all_exif_fallback(
+    path: str, tag_label_chinese: bool = False, *, read_status: dict | None = None,
+) -> list[tuple]:
     """Source-only fallback when ExifTool is unavailable; called on cache miss."""
     rows = []
     names_zh = load_exif_tag_names_zh_from_settings() if tag_label_chinese else None
     data = load_exif_piexif(path) or (load_exif_heic(path) if Path(path).suffix.lower() in HEIF_EXTENSIONS else None)
+    if read_status is not None:
+        read_status["ok"] = data is not None
     if data:
         _log.info("[load_all_exif] 来源=文件内(%s) path=%r", "heic" if Path(path).suffix.lower() in HEIF_EXTENSIONS else "piexif", path)
     title_value = load_display_title(path, exif_data=data)
@@ -1165,10 +1184,12 @@ def _load_all_exif_fallback(path: str, tag_label_chinese: bool = False) -> list[
                 continue
             rows.append((None, None, group, name, value, None, None))
         if len(rows) > n_before:
+            if read_status is not None:
+                read_status["ok"] = True
             _log.info("[load_all_exif] 补充 来源=exifread path=%r 新增条数=%s", path, len(rows) - n_before)
     n_before = len(rows)
     if len(rows) <= 2:
-        for group, name, value in load_exif_pillow(path):
+        for group, name, value in load_exif_pillow(path, read_status=read_status):
             if has_front_desc and _is_image_description_name(name):
                 continue
             rows.append((None, None, group, name, value, None, None))

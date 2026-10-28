@@ -282,17 +282,16 @@ _BANNER_GRADIENT_BOTTOM_COLOR_DEFAULT = editor_template.BANNER_GRADIENT_BOTTOM_C
 _DEFAULT_TEMPLATE_CENTER_MODE = editor_template.DEFAULT_TEMPLATE_CENTER_MODE
 _DEFAULT_TEMPLATE_MAX_LONG_EDGE = editor_template.DEFAULT_TEMPLATE_MAX_LONG_EDGE
 _path_key = editor_utils.path_key
+from birdstamp.gui.editor_metadata_state import cached_path_key as _metadata_path_key
+from birdstamp.gui.editor_metadata_state import photo_info_from_snapshot as _metadata_photo_info
 _PHOTO_LIST_METADATA_APPLY_MAX = 16
 _PHOTO_LIST_METADATA_APPLY_BUDGET_S = 0.008
 
 
 def _is_complete_list_metadata(metadata: dict[str, Any] | None) -> bool:
     """列表 metadata 是否已完成后台加载（非仅 SourceFile 占位）。"""
-    if not isinstance(metadata, dict) or not metadata:
-        return False
-    if len(metadata) <= 1:
-        return False
-    return True
+    from birdstamp.gui.editor_metadata_state import complete_metadata
+    return complete_metadata(metadata)
 
 
 def _metadata_digest_for_cache(raw_metadata: dict[str, Any]) -> str:
@@ -3740,10 +3739,7 @@ class BirdStampEditorWindow(
                 self._photo_list_metadata_pending_keys.add(key)
                 if self._photo_list_metadata_loader is None:
                     self._restart_photo_list_metadata_loader()
-        photo_info = _template_context.ensure_editor_photo_info(
-            existing if isinstance(existing, _template_context.PhotoInfo) else path,
-            raw_metadata=metadata,
-        )
+        photo_info = _metadata_photo_info(path, metadata, existing)
         if item is not None:
             item.setData(PHOTO_COL_ROW, PHOTO_LIST_PHOTO_INFO_ROLE, photo_info)
         return photo_info
@@ -3751,8 +3747,8 @@ class BirdStampEditorWindow(
     def _photo_crop_box_for_path(self, path: Path | None) -> tuple[float, float, float, float] | None:
         if path is None:
             return _template_context.photo_crop_box(self.current_photo_info)
-        key = _path_key(path)
-        if self.current_path is not None and key == _path_key(self.current_path):
+        key = _metadata_path_key(path)
+        if self.current_path is not None and key == _metadata_path_key(self.current_path):
             current_crop_box = _template_context.photo_crop_box(self.current_photo_info)
             if current_crop_box is not None:
                 return current_crop_box
@@ -4168,7 +4164,7 @@ class BirdStampEditorWindow(
 
     def _forget_photo_item(self, path: Path | str) -> None:
         try:
-            key = _path_key(path if isinstance(path, Path) else Path(str(path)))
+            key = _metadata_path_key(path)
         except Exception:
             return
         self._photo_item_map.pop(key, None)
@@ -4177,7 +4173,7 @@ class BirdStampEditorWindow(
         self._photo_list_metadata_pending_keys.discard(key)
 
     def _photo_list_display_metadata_for_path(self, path: Path) -> dict[str, Any]:
-        key = _path_key(path)
+        key = _metadata_path_key(path)
         cached = self.raw_metadata_cache.get(key)
         if isinstance(cached, dict) and cached:
             return cached
@@ -4430,14 +4426,17 @@ class BirdStampEditorWindow(
             return
         current_metadata_refresh: tuple[Path, dict[str, Any]] | None = None
         force_current_refresh = False
-        current_key = _path_key(self.current_path) if self.current_path is not None else ""
+        current_key = _metadata_path_key(self.current_path) if self.current_path is not None else ""
         self._begin_photo_list_item_display_batch()
         try:
             for norm_path, raw_metadata in batch.items():
                 path = Path(norm_path)
-                key = _path_key(path)
+                key = _metadata_path_key(path)
                 if not self._find_photo_item_by_path(path):
                     self._forget_photo_item(path)
+                    continue
+                raw_metadata = self._prepare_photo_metadata_snapshot(path, raw_metadata)
+                if raw_metadata is None:
                     continue
                 if isinstance(raw_metadata, dict):
                     merged = dict(raw_metadata)
@@ -4445,7 +4444,10 @@ class BirdStampEditorWindow(
                     self.raw_metadata_cache[key] = merged
                     if current_key and key == current_key:
                         current_metadata_refresh = (path, merged)
-                self._photo_list_metadata_pending_keys.discard(key)
+                if _is_complete_list_metadata(raw_metadata):
+                    self._photo_list_metadata_pending_keys.discard(key)
+                else:
+                    self._photo_list_metadata_pending_keys.add(key)
                 if key in self._photo_list_metadata_forced_refresh_keys:
                     self._photo_list_metadata_forced_refresh_keys.discard(key)
                     if current_key and key == current_key:
@@ -4468,7 +4470,7 @@ class BirdStampEditorWindow(
             )
         ab = getattr(self, "ab_preview", None)
         if ab is not None and ab.enabled.isChecked() and ab.path is not None:
-            if _path_key(ab.path) in {_path_key(Path(path)) for path in batch}:
+            if _metadata_path_key(ab.path) in {_metadata_path_key(path) for path in batch}:
                 # A 的焦点可晚于快速图到达；只重绘已显示像素，不启动解码。
                 ab._display()
         self._maybe_apply_pending_workspace_photo_selection()
@@ -4482,10 +4484,33 @@ class BirdStampEditorWindow(
         if self._photo_list_metadata_discard_results:
             return
         for norm_path, metadata in batch.items():
-            key = _path_key(Path(norm_path))
+            path = Path(norm_path)
+            key = _metadata_path_key(path)
+            if not self._find_photo_item_by_path(path):
+                continue
+            queued = self._photo_list_metadata_updates.get(key)
+            metadata = self._prepare_photo_metadata_snapshot(
+                path, metadata, queued[1] if queued else None,
+            )
+            if metadata is None:
+                continue
             self._photo_list_metadata_updates[key] = (norm_path, dict(metadata))
         if self._photo_list_metadata_updates:
             self._photo_list_metadata_apply_timer.start()
+
+    def _prepare_photo_metadata_snapshot(self, path, metadata, queued=None):
+        from app_common.exif_io.metadata_store import get_store
+        from birdstamp.gui.editor_metadata_state import metadata_candidate
+        # The version guard must only consult known identities. Do not add a
+        # realpath/stat for every queued delivery on the GUI thread.
+        key = _metadata_path_key(path)
+        current = (self.current_raw_metadata if self.current_path is not None
+                   and key == _metadata_path_key(self.current_path) else None)
+        return metadata_candidate(
+            metadata,
+            (self.raw_metadata_cache.get(key), self.photo_list_metadata_cache.get(key), current, queued),
+            current_revision=get_store().current_revision(str(path)),
+        )
 
     def _process_photo_list_metadata_updates(self) -> None:
         started = time.perf_counter()
@@ -4570,7 +4595,7 @@ class BirdStampEditorWindow(
         return sequence_value
 
     def _find_photo_item_by_path(self, path: Path) -> QTreeWidgetItem | None:
-        key = _path_key(path)
+        key = _metadata_path_key(path)
         item = self._photo_item_map.get(key)
         if item is not None:
             return item
@@ -4579,7 +4604,7 @@ class BirdStampEditorWindow(
             if item is None:
                 continue
             raw = item.data(PHOTO_COL_ROW, PHOTO_LIST_PATH_ROLE)
-            if isinstance(raw, str) and _path_key(Path(raw)) == key:
+            if isinstance(raw, str) and _metadata_path_key(raw) == key:
                 self._photo_item_map[key] = item
                 return item
         return None
@@ -5603,7 +5628,7 @@ class BirdStampEditorWindow(
 
     def _metadata_snapshot_for_selection(self, path: Path) -> dict[str, Any]:
         """Return already-known metadata only; never block selection on ExifTool."""
-        key = _path_key(path)
+        key = _metadata_path_key(path)
         for cache in (self.raw_metadata_cache, self.photo_list_metadata_cache):
             cached = cache.get(key)
             if isinstance(cached, dict) and cached:
@@ -5618,7 +5643,7 @@ class BirdStampEditorWindow(
         refresh_preview: bool,
         force: bool = False,
     ) -> None:
-        if self.current_path is None or _path_key(path) != _path_key(self.current_path):
+        if self.current_path is None or _metadata_path_key(path) != _metadata_path_key(self.current_path):
             return
         if not isinstance(raw_metadata, dict):
             return
@@ -5627,11 +5652,9 @@ class BirdStampEditorWindow(
         self.current_raw_metadata = dict(raw_metadata)
         item = self._find_photo_item_by_path(path)
         existing = item.data(PHOTO_COL_ROW, PHOTO_LIST_PHOTO_INFO_ROLE) if item is not None else None
-        self.current_photo_info = _template_context.ensure_editor_photo_info(
-            existing if isinstance(existing, _template_context.PhotoInfo) else path,
-            raw_metadata=self.current_raw_metadata,
-            crop_box=self._render_settings_for_path(path, prefer_current_ui=True).get("crop_box"),
-        )
+        self.current_photo_info = _metadata_photo_info(path, self.current_raw_metadata, existing)
+        self.current_photo_info.crop_box = _template_context.normalize_crop_box(
+            self._render_settings_for_path(path, prefer_current_ui=True).get("crop_box"))
         if item is not None:
             item.setData(PHOTO_COL_ROW, PHOTO_LIST_PHOTO_INFO_ROLE, self.current_photo_info)
         self.current_metadata_context = self._cached_metadata_context(
@@ -5640,10 +5663,11 @@ class BirdStampEditorWindow(
         )
         if refresh_preview:
             if self.current_source_image is not None:
-                self.render_preview()
+                self.render_preview(sync_transport=False)
             else:
                 # 播放/长按可能直接显示序列小图，并没有 current_source_image。
-                self._refresh_preview_label(preserve_view=True)
+                # 元数据没有改变条带的照片或像素，不重新查询整组源文件状态。
+                self._refresh_preview_label(preserve_view=True, sync_transport=False)
 
     def _cached_metadata_context(
         self,
@@ -5653,7 +5677,7 @@ class BirdStampEditorWindow(
         if not _is_complete_list_metadata(raw_metadata):
             return self._fast_metadata_context(photo_info, raw_metadata)
         cache_key = (
-            f"{_path_key(photo_info.path)}:{_metadata_digest_for_cache(raw_metadata)}"
+            f"{_metadata_path_key(photo_info.path)}:{_metadata_digest_for_cache(raw_metadata)}"
             f":{getattr(photo_info, 'editor_row_number', None)}"
         )
         cached = self._metadata_context_cache.get(cache_key)
@@ -5669,7 +5693,7 @@ class BirdStampEditorWindow(
         photo_info: _template_context.PhotoInfo,
         raw_metadata: dict[str, Any],
     ) -> dict[str, str]:
-        path = _template_context.ensure_photo_info(photo_info).path
+        path = photo_info.path
         context: dict[str, str] = {
             "stem": path.stem,
             "filename": path.name,
@@ -5693,10 +5717,10 @@ class BirdStampEditorWindow(
         key = _path_key(path)
         from app_common.exif_io.metadata_store import get_store
         snapshot = get_store().peek(str(path), profile="full")
-        if snapshot:
+        if _is_complete_list_metadata(snapshot):
             self.raw_metadata_cache[key] = snapshot
             return snapshot
-        if key in self.raw_metadata_cache:
+        if _is_complete_list_metadata(self.raw_metadata_cache.get(key)):
             birdstamp_perf.plog("metadata cache_hit path=%s", path)
             return self.raw_metadata_cache[key]
 
@@ -5746,7 +5770,10 @@ class BirdStampEditorWindow(
         )
         self.raw_metadata_cache[key] = raw_metadata
         self.photo_list_metadata_cache[key] = dict(raw_metadata)
-        self._photo_list_metadata_pending_keys.discard(key)
+        if _is_complete_list_metadata(raw_metadata):
+            self._photo_list_metadata_pending_keys.discard(key)
+        else:
+            self._photo_list_metadata_pending_keys.add(key)
         return raw_metadata
 
     def _load_raw_metadata_batch(self, paths: list[Path]) -> dict[str, dict[str, Any]]:
@@ -5766,13 +5793,13 @@ class BirdStampEditorWindow(
             seen_keys.add(key)
 
             snapshot = store.peek(str(path), profile="full")
-            if snapshot:
+            if _is_complete_list_metadata(snapshot):
                 self.raw_metadata_cache[key] = snapshot
                 metadata_by_key[key] = snapshot
                 continue
 
             cached = self.raw_metadata_cache.get(key)
-            if isinstance(cached, dict) and cached:
+            if _is_complete_list_metadata(cached):
                 metadata_by_key[key] = cached
                 continue
 
@@ -5786,7 +5813,7 @@ class BirdStampEditorWindow(
                 metadata_by_key[key] = reused
                 continue
 
-            if key == current_key and isinstance(self.current_raw_metadata, dict) and self.current_raw_metadata:
+            if key == current_key and _is_complete_list_metadata(self.current_raw_metadata):
                 current_metadata = dict(self.current_raw_metadata)
                 self.raw_metadata_cache[key] = current_metadata
                 self.photo_list_metadata_cache[key] = dict(current_metadata)
@@ -5815,7 +5842,7 @@ class BirdStampEditorWindow(
                 merged = dict(raw_metadata)
             else:
                 list_cached = self.photo_list_metadata_cache.get(key)
-                if isinstance(list_cached, dict) and list_cached:
+                if _is_complete_list_metadata(list_cached):
                     merged = dict(list_cached)
                 else:
                     merged = BirdStampEditorWindow._load_raw_metadata(self, path)
@@ -5826,7 +5853,10 @@ class BirdStampEditorWindow(
 
             self.raw_metadata_cache[key] = merged
             self.photo_list_metadata_cache[key] = dict(merged)
-            self._photo_list_metadata_pending_keys.discard(key)
+            if _is_complete_list_metadata(merged):
+                self._photo_list_metadata_pending_keys.discard(key)
+            else:
+                self._photo_list_metadata_pending_keys.add(key)
             metadata_by_key[key] = merged
 
         return metadata_by_key

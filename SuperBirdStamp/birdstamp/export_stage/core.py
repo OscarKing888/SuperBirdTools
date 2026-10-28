@@ -479,10 +479,14 @@ def _photo_info_signature_payload(job: VideoFrameJob) -> dict[str, Any]:
     if photo_info is None:
         return {}
     payload: dict[str, Any] = {}
-    for field_name in ("path", "sidecar_path", "raw_metadata", "crop_box", "editor_row_number"):
+    for field_name in ("path", "sidecar_path", "raw_metadata", "crop_box", "editor_row_number",
+                       "report_row_snapshot"):
         try:
             value = getattr(photo_info, field_name)
         except Exception:
+            continue
+        if field_name == "sidecar_path" and job.export_metadata is not None:
+            # Its frozen payload is hashed above; never re-stat a later XMP.
             continue
         if field_name in {"path", "sidecar_path"} and value is not None:
             path = Path(value)
@@ -553,12 +557,15 @@ def source_frame_signature_for_job(
     from app_common.exif_io.metadata_store import get_store
 
     render_settings = _clone_render_settings(job.settings)
-    # 未知 XMP 属性不一定出现在模板元数据字典中，侧车增删改也必须使成片失效。
-    sidecar = find_same_stem_xmp_sidecar(str(job.path))
-    render_settings['_export_xmp_signature'] = sidecar_stamp(sidecar) if sidecar else None
-    # Accepted edits change export identity before an unavailable/slow source
-    # volume receives XMP. Never reuse a rendered pair from an older revision.
-    render_settings['_export_metadata_revision'] = get_store().revisions([str(job.path)]).get(str(job.path), 0)
+    if job.export_metadata is not None:
+        render_settings['_export_xmp_signature'] = job.export_metadata.xmp_digest
+        render_settings['_export_metadata_revision'] = job.export_metadata.revision
+    else:
+        # Standalone signature probes preserve their supplied metadata/context.
+        # Real exports prepare a frozen job in a worker before cache lookup.
+        sidecar = find_same_stem_xmp_sidecar(str(job.path))
+        render_settings['_export_xmp_signature'] = sidecar_stamp(sidecar) if sidecar else None
+        render_settings['_export_metadata_revision'] = get_store().revisions([str(job.path)]).get(str(job.path), 0)
     # The terminal exporter never changes source pixels.  Omitting it lets an
     # image, GIF and video share the same rendered-frame identity.
     render_settings.pop(EXPORT_STAGE_ID_KEY, None)
@@ -1590,13 +1597,15 @@ def _save_normalized_temp_frame(
             pass
 
 
-def _save_rendered_source_frame(image: Image.Image, frame_path: Path, *, source_path: Path) -> None:
+def _save_rendered_source_frame(image: Image.Image, frame_path: Path, *, source_path: Path,
+                                xmp_snapshot: bytes | None = None) -> None:
     from birdstamp.export_metadata import save_export_image
     frame_path.parent.mkdir(parents=True, exist_ok=True)
     source_frame = image.convert("RGB")
     try:
         # 渲染源帧作为缓存中间产物，优先保留复用速度。
-        save_export_image(source_frame, frame_path, source_path=source_path, format="PNG", compress_level=1)
+        save_export_image(source_frame, frame_path, source_path=source_path, format="PNG",
+                          xmp_snapshot=xmp_snapshot, compress_level=1)
     finally:
         try:
             source_frame.close()
@@ -1683,11 +1692,14 @@ def _render_and_cache_source_frame(
 ) -> tuple[int, str, Path, str, str, Path | None]:
     """返回值末项为实际复用的用户导出图；为 None 表示本帧由原图渲染。"""
     _raise_if_cancel_requested(cancel_event, message="视频导出已中断，正在保留已完成源帧。")
+    from birdstamp.export_snapshot import prepare_export_job
+    prepare_export_job(job)
     frame_path = _cache_frame_output_path(source_plan, index, suffix="png")
     source_signature = _source_signature(job.path)
     if exported_image is not None:
         with stats.measure("writing") if stats else nullcontext():
-            materialized = materialize_exported_image(exported_image, frame_path, original=job.path)
+            materialized = materialize_exported_image(exported_image, frame_path, original=job.path,
+                                                      xmp_snapshot=job.export_metadata.xmp)
         if materialized:
             if stats:
                 stats.frame_completed()
@@ -1702,7 +1714,8 @@ def _render_and_cache_source_frame(
     try:
         _raise_if_cancel_requested(cancel_event, message="视频导出已中断，正在保留已完成源帧。")
         with stats.measure("writing") if stats else nullcontext():
-            _save_rendered_source_frame(rendered, frame_path, source_path=job.path)
+            _save_rendered_source_frame(rendered, frame_path, source_path=job.path,
+                                        xmp_snapshot=job.export_metadata.xmp)
         if stats:
             stats.frame_completed()
     finally:
@@ -1828,6 +1841,8 @@ def _ensure_source_frame_cache(
     on_cache_created: Callable[[FrameCachePlan], None] | None = None,
     stats: VideoStageStats,
 ) -> tuple[str, Any, list[Path]]:
+    from birdstamp.export_snapshot import prepare_export_jobs
+    prepare_export_jobs(jobs, cancel_event=cancel_event, refresh=True)
     total = len(jobs)
     # 缓存桶只由全局导出设置决定，与裁切计划无关；先建立它以便复用已保存的预计算结果。
     source_bucket_key = _render_cache_key(jobs, options)

@@ -24,8 +24,14 @@ def window(transfer_window, monkeypatch):
     # and change a same-volume file ID. Keep these history-focused tests clear
     # of unrelated preview/metadata reads while retaining real Qt selection,
     # directory loading, metadata file-operation barriers and filesystem moves.
-    monkeypatch.setattr(transfer_window._file_list, "_start_metadata_loader", lambda *_: None)
-    transfer_window._file_list.file_selected.disconnect()
+    panel = transfer_window._file_list
+    monkeypatch.setattr(panel, "_start_metadata_loader", lambda *_: None)
+    monkeypatch.setattr(panel, "_start_thumbnail_loader", lambda *_: None)
+    monkeypatch.setattr(panel, "_schedule_persistent_thumb_cache_build", lambda *_: None)
+    # Switching to thumbnail mode and refresh notifications have independent
+    # readers; neither is part of the native-move identity behavior under test.
+    panel._metadata_store_watch.request_shutdown()
+    panel.file_selected.disconnect()
     return transfer_window
 
 

@@ -87,7 +87,7 @@ class EditorPhotoListMetadataLoader(QThread):
             if isinstance(record, dict):
                 normalized = dict(record)
             else:
-                normalized = {}
+                normalized = {"_metadata_read_ok": False, "_metadata_complete": False}
             normalized.setdefault("SourceFile", raw_path)
             normalized_batch[norm_path] = normalized
         return normalized_batch

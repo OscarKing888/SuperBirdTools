@@ -134,7 +134,8 @@ class ExportedImageIndex:
                 Path(temp_name).unlink(missing_ok=True)
 
 
-def materialize_exported_image(exported: Path, target: Path, *, original: Path) -> bool:
+def materialize_exported_image(exported: Path, target: Path, *, original: Path,
+                               xmp_snapshot: bytes | None = None) -> bool:
     """Make a PNG cache frame from a validated user export; false if unreadable."""
     image_format = _format(exported)
     if not image_format:
@@ -156,7 +157,8 @@ def materialize_exported_image(exported: Path, target: Path, *, original: Path) 
         from birdstamp.export_metadata import save_export_image
 
         try:
-            save_export_image(rgb, target, source_path=original, format="PNG", compress_level=1)
+            save_export_image(rgb, target, source_path=original, format="PNG",
+                              xmp_snapshot=xmp_snapshot, compress_level=1)
         finally:
             rgb.close()
         return True

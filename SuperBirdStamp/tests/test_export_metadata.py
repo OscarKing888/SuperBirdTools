@@ -237,7 +237,8 @@ def test_sidecar_copy_failure_rolls_back_whole_dejitter_export(sequence, tmp_pat
     from birdstamp.export_stage import sequence_export
     _, result = sequence
     before = set(tmp_path.iterdir())
-    monkeypatch.setattr(export_metadata, 'read_export_xmp', lambda *a: (_ for _ in ()).throw(OSError('XMP 失败')))
+    from app_common.exif_io import export_xmp
+    monkeypatch.setattr(export_xmp, 'read_export_xmp', lambda *a: (_ for _ in ()).throw(OSError('XMP 失败')))
     with pytest.raises(OSError, match='XMP'):
         sequence_export.export_aligned_sequence(result, tmp_path, cancel_event=threading.Event())
     assert set(tmp_path.iterdir()) == before
@@ -438,3 +439,91 @@ def test_sidecar_only_metadata_survives_without_source_exif(tmp_path):
         source.with_suffix('.xmp').write_bytes(xmp_packet('<sp:bird_species_cn>白鹭</sp:bird_species_cn>'))
         save_export_image(image, target, source_path=source, format='JPEG')
     assert exported_xmp(target).find('.//sp:bird_species_cn', NS).text == '白鹭'
+
+
+@pytest.mark.parametrize("pipeline", ["image", "retained_frame"])
+def test_export_keeps_render_signature_and_xmp_at_one_committed_version(
+    original, tmp_path, monkeypatch, pipeline,
+):
+    from app_common.exif_io.metadata_store import get_store
+    from birdstamp import export_stage
+    from birdstamp.export_stage import core
+    from birdstamp.export_snapshot import prepare_export_job
+    from birdstamp.gui import editor_exporter, template_context
+    from birdstamp.export_frame_cache import create_frame_cache_plan
+
+    store = get_store()
+    store.submit_edit(str(original), {"title": "旧标题·苍鹭"}).result(3)
+    job = export_stage.VideoFrameJob(original, {}, {}, {})
+    prepare_export_job(job)
+    signature = export_stage.source_frame_signature_for_job(job)
+    assert job.raw_metadata["XMP-dc:Title"] == "旧标题·苍鹭"
+
+    def render(frozen_job, **kwargs):
+        assert frozen_job.photo_info.metadata_is_snapshot
+        store.submit_edit(str(original), {"title": "新标题·白鹭"}).result(3)
+        assert store.flush_paths([str(original)], timeout=5)
+        provider = template_context.ExifTemplateContextProvider("Title")
+        assert provider.get_text_content(frozen_job.photo_info) == "旧标题·苍鹭"
+        return Image.new("RGB", (40, 30), "red")
+
+    # Saving must consume the prepared packet even after the source XMP changes.
+    monkeypatch.setattr(export_metadata, "read_export_xmp",
+                        lambda *_: pytest.fail("save re-read live XMP"))
+    if pipeline == "image":
+        monkeypatch.setattr(editor_exporter, "render_video_frame", render)
+        output = tmp_path / "固定快照.png"
+        editor_exporter._BirdStampExporterMixin()._render_and_save_image_task(
+            editor_exporter._ImageExportTask(job, output), template_paths={},
+            bird_box_cache={}, bird_box_lock=threading.Lock())
+    else:
+        monkeypatch.setattr(export_stage, "render_video_frame", render)
+        plan = create_frame_cache_plan(tmp_path / "movie.mp4", bucket_kind="source",
+                                       bucket_key="snapshot", persistent=True)
+        result = core._render_and_cache_source_frame(
+            job=job, index=1, source_plan=plan, template_paths={}, frame_signature=signature,
+            bird_box_cache={}, bird_box_lock=threading.Lock(), cancel_event=None)
+        output = result[2]
+        assert result[4] == signature
+    assert export_stage.source_frame_signature_for_job(job) == signature
+    assert metadata(output.with_suffix('.xmp'))['XMP-dc:Title'] == "旧标题·苍鹭"
+    assert metadata(original.with_suffix('.xmp'))['XMP-dc:Title'] == "新标题·白鹭"
+
+
+def test_export_provider_report_row_is_frozen(original, monkeypatch):
+    from birdstamp.export_snapshot import export_photo_info
+    from birdstamp.gui import template_context as tc
+    row = {"bird_species_cn": "苍鹭"}
+    monkeypatch.setattr(tc, "get_report_db_row_for_path", lambda _: row)
+    info = export_photo_info(original, {"SourceFile": str(original)})
+    row["bird_species_cn"] = "白鹭"
+    assert tc.ReportDBTemplateContextProvider._resolve_row(info)["bird_species_cn"] == "苍鹭"
+    editor_info = tc.ensure_editor_photo_info(info)
+    assert tc.ReportDBTemplateContextProvider._resolve_row(editor_info)["bird_species_cn"] == "苍鹭"
+
+
+def test_cli_render_saves_the_version_used_for_pixels(original, tmp_path, monkeypatch):
+    from typer.testing import CliRunner
+    from app_common.exif_io.metadata_store import get_store
+    from birdstamp import cli
+    from birdstamp.gui import editor_template, editor_core
+
+    store = get_store()
+    store.submit_edit(str(original), {"title": "命令行旧标题"}).result(3)
+    monkeypatch.setattr(cli, "load_config", lambda: {})
+    monkeypatch.setattr(cli, "_find_template_path", lambda *_: None)
+    monkeypatch.setattr(editor_core, "apply_full_crop", lambda image, **kwargs: image)
+
+    def render(image, *, raw_metadata, photo_info, **kwargs):
+        assert raw_metadata["XMP-dc:Title"] == "命令行旧标题"
+        assert photo_info.metadata_is_snapshot
+        store.submit_edit(str(original), {"title": "命令行新标题"}).result(3)
+        return image
+
+    monkeypatch.setattr(editor_template, "render_template_overlay", render)
+    output = tmp_path / "cli-output"
+    result = CliRunner().invoke(cli.app, ["render", str(original), "--out", str(output),
+                                         "--format", "png", "--name", "result.{ext}"])
+    assert result.exit_code == 0, result.output
+    assert metadata(output / "result.xmp")["XMP-dc:Title"] == "命令行旧标题"
+    assert store.pending_edits(str(original))["fields"]["XMP-dc:Title"] == "命令行新标题"

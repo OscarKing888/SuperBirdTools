@@ -44,7 +44,9 @@ def _jobs(tmp_path: Path, count: int = 2) -> list[VideoFrameJob]:
             raw_metadata={"ImageWidth": 24, "ImageHeight": 16},
             metadata_context={},
         ))
-    return jobs
+    # The exporter registers completed jobs after the worker captured metadata.
+    from birdstamp.export_snapshot import prepare_export_jobs
+    return prepare_export_jobs(jobs)
 
 
 @pytest.fixture

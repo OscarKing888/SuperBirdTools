@@ -18,8 +18,13 @@ _APP = QApplication.instance() or QApplication([])
 
 @pytest.fixture
 def window(tmp_path, monkeypatch):
+    from birdstamp.gui import bird_detect_worker, editor_core
     monkeypatch.setattr(config, 'get_user_data_dir', lambda: tmp_path / 'user')
     monkeypatch.setenv('LOCALAPPDATA', str(tmp_path / 'cache'))
+    # These GUI/transport tests exercise pixel handoff, not the detector. Patch
+    # both the core entry and the worker's imported alias before any Qt work.
+    monkeypatch.setattr(editor_core, 'detect_primary_bird_box', lambda *args, **kwargs: None)
+    monkeypatch.setattr(bird_detect_worker, 'detect_primary_bird_box', lambda *args, **kwargs: None)
     for method in ('_start_bird_detector_preload', '_run_deferred_startup_tasks',
                    '_restart_photo_list_metadata_loader', '_schedule_workspace_photo_selection'):
         monkeypatch.setattr(editor.BirdStampEditorWindow, method, lambda *args, **kwargs: None)

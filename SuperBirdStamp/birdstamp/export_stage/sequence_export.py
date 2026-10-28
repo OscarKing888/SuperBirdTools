@@ -43,13 +43,17 @@ class SequenceExportAction(WorkerAction):
     def execute(self):
         self._check_cancelled()
         started = monotonic()
+        # Alignment uses already prepared pixel transforms. Freeze its output
+        # metadata before rendering; later edits belong to the next export.
+        from app_common.exif_io.export_xmp import read_export_xmp
+        xmp_snapshot = read_export_xmp(self.path)
         context = PngExportStage().process(render_sequence_preview_frame(
             self.sequence, self.path, validate_files=False, source_paths=self.source_paths))
         rendered = monotonic()
         with context.image as image:
             self._check_cancelled()
             save_export_image(
-                image, self.target, source_path=self.path,
+                image, self.target, source_path=self.path, xmp_snapshot=xmp_snapshot,
                 format='PNG' if self.output_format == 'png' else 'JPEG',
                 **({'quality': 95, 'subsampling': 0} if self.output_format == 'jpg'
                    else {'compress_level': 1}),

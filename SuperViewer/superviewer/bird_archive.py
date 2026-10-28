@@ -221,6 +221,14 @@ class ArchiveSession:
         return folders, candidate
 
     def archive_group(self, paths: tuple[Path, ...], report_rows: dict) -> ArchiveResult:
+        from app_common.exif_io.metadata_store import get_store
+
+        # Complete accepted edits before reading the species/date and before
+        # taking the sidecar lock: a pool sync worker needs that same lock.
+        with get_store().file_operation([str(p) for p in paths]):
+            return self._archive_group_reserved(paths, report_rows)
+
+    def _archive_group_reserved(self, paths: tuple[Path, ...], report_rows: dict) -> ArchiveResult:
         sources = tuple(str(p) for p in paths)
         if any(not p.is_file() or p.is_symlink() for p in paths):
             raise ValueError("源照片缺失或为符号链接，请检查后重试")

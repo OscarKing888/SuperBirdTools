@@ -1,5 +1,7 @@
 # SuperBirdStamp 架构与开发定位
 
+导出版本由 [`export_snapshot.py`](../birdstamp/export_snapshot.py) 在 worker 中固定：完整元数据、模板/显式 provider 输入、XMP 与 revision 共用一次快照，图片和 GIF/video 源帧缓存签名及保存端都消费它。每次新导出重新捕获，JPEG 复用转码仍传递固定 XMP。列表批次由 [`editor_metadata_state.py`](../birdstamp/gui/editor_metadata_state.py) 在入队和应用时校验版本与完整性，源读取失败可继续重试。
+
 ## 元数据 SQLite 首响应与后台同步
 
 两款应用的用户元数据读写统一经共享 `MetadataStore`：内存/SQLite 快照先显示，源文件校验在后台执行；SQLite 事务提交后刷新界面，XMP 同步由持久 outbox 驱动。目录列表、普通信息、标签和完整 EXIF 使用明确完整性的快照，筛选仍只读内存。跨目录、跨应用和退出恢复、文件操作屏障及输出侧车规则见 [元数据服务说明](../../docs/metadata-store.md)，界面状态见 [设计与验证](../../docs/ui-design/metadata-sqlite-first.md)。下文旧解析缓存和历史基准描述的是后台验证层，不能作为 GUI 首响应耗时或待同步编辑持久化的依据。

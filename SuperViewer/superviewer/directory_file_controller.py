@@ -38,20 +38,29 @@ class NativeTransferWorker(QThread):
     def run(self):
         from app_common.exif_io.metadata_store import get_store
         try:
-            with get_store().file_operation(self.sources):
+            # The OS may choose Replace or Keep Both after its dialog opens.
+            # Reserve the whole destination so neither name inherits old edits.
+            with get_store().file_operation([*self.sources, self.destination]):
                 self._run_reserved()
         except Exception as exc:
             self.result = TransferResult(error=str(exc))
 
     def _run_reserved(self):
         snapshots = ()
+        physical_sources = dict.fromkeys(self.sources)
         try:
-            self.paths = transfer_paths_with_sidecars(self.sources, self.destination, copy=self.copy)
-            self.targets = tuple(str(Path(self.destination) / Path(p).name) for p in self.paths)
+            # Resolve Windows short filenames before the shell chooses output
+            # basenames and before move history predicts those destinations.
+            # Keep original selection keys for report/UI reconciliation below.
+            physical_sources = {path: os.path.realpath(path) if os.name == "nt" and not os.path.islink(path) else path
+                                for path in self.sources}
+            destination = os.path.realpath(self.destination) if os.name == "nt" else self.destination
+            self.paths = transfer_paths_with_sidecars(physical_sources.values(), destination, copy=self.copy)
+            self.targets = tuple(str(Path(destination) / Path(p).name) for p in self.paths)
             if not self.copy:
-                snapshots = snapshot_move(self.paths, self.destination, self.isInterruptionRequested)
+                snapshots = snapshot_move(self.paths, destination, self.isInterruptionRequested)
             if not self.isInterruptionRequested():
-                self.result = native_transfer(self.paths, self.destination, copy=self.copy, owner=self.owner)
+                self.result = native_transfer(self.paths, destination, copy=self.copy, owner=self.owner)
         except InterruptedError:
             self.result = TransferResult(cancelled=True)
         except Exception as exc:
@@ -59,7 +68,8 @@ class NativeTransferWorker(QThread):
         finally:
             # 取消/跳过可能只完成一部分；只移除确实不再存在的源文件，不猜测成功。
             if not self.copy:
-                self.moved = [path for path in self.sources if path in self.paths and not os.path.exists(path)]
+                self.moved = [path for path in self.sources
+                              if physical_sources[path] in self.paths and not os.path.exists(path)]
                 self.inverse, self.untracked = completed_moves(snapshots)
                 self.clipboard_cut_complete = (bool(self.paths) and len(self.moved) == len(self.sources)
                                                and all(not os.path.exists(path) for path in self.paths))
@@ -75,7 +85,8 @@ class MoveReplayWorker(NativeTransferWorker):
     def run(self):
         from app_common.exif_io.metadata_store import get_store
         try:
-            with get_store().file_operation(self.sources):
+            affected = [path for entry in self.remaining for path in (entry.source, entry.target)]
+            with get_store().file_operation(affected):
                 self._run_reserved()
         except Exception as exc:
             self.result = TransferResult(error=str(exc))
@@ -86,8 +97,11 @@ class MoveReplayWorker(NativeTransferWorker):
             self.remaining = prepare_replay(self.remaining)
             groups = {}
             for entry in self.remaining:
-                groups.setdefault(str(Path(entry.target).parent), []).append(entry)
-            for destination, entries in groups.items():
+                destination = str(Path(entry.target).parent)
+                # Canonical sidecar lookup may spell Windows parent paths with
+                # different casing; keep each photo/XMP in the same shell batch.
+                groups.setdefault(path_key(destination), (destination, []))[1].append(entry)
+            for destination, entries in groups.values():
                 if self.isInterruptionRequested():
                     self.result = TransferResult(cancelled=True)
                     break

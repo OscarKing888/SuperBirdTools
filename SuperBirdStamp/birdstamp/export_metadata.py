@@ -66,7 +66,7 @@ def copy_export_metadata(source: Path, target: Path, image: Image.Image) -> None
 
 
 def save_export_image(image: Image.Image, target: Path, *, source_path: Path,
-                      format: str, **save_options) -> None:
+                      format: str, xmp_snapshot: bytes | None = None, **save_options) -> None:
     """先准备图片与独立 XMP，再配对提交；失败恢复已有成片和侧车。"""
     target = Path(target)
     source = Path(source_path).resolve()
@@ -79,7 +79,8 @@ def save_export_image(image: Image.Image, target: Path, *, source_path: Path,
     temporary = Path(name)
     temporary_sidecar = temporary.with_suffix('.xmp')
     try:
-        temporary_sidecar.write_bytes(export_xmp_geometry(read_export_xmp(source), source=source, size=image.size))
+        payload = read_export_xmp(source) if xmp_snapshot is None else xmp_snapshot
+        temporary_sidecar.write_bytes(export_xmp_geometry(payload, source=source, size=image.size))
         image.save(temporary, format=format, **save_options)
         copy_export_metadata(source, temporary, image)
         publish_image_pair(temporary, temporary_sidecar, target)

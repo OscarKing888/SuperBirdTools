@@ -140,7 +140,7 @@ def test_only_invalidated_frame_is_rendered_again(cache_case, change):
         with Image.new("RGB", (32, 24), "green") as image:
             image.save(job.path)
     elif change == "xmp":
-        job.path.with_suffix(".xmp").write_text('<x:xmpmeta xmlns:x="adobe:ns:meta/"/>', encoding="utf-8")
+        job.path.with_suffix(".xmp").write_text('<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"/></x:xmpmeta>', encoding="utf-8")
     elif change == "dirty":
         exporter.dirty.add(str(job.path.resolve()).casefold())
     decoded.clear()

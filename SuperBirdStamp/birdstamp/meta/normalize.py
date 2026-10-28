@@ -205,6 +205,7 @@ def normalize_metadata(
     bird_priority: list[str],
     bird_regex: str,
     time_format: str = "%Y-%m-%d %H:%M",
+    allow_stat: bool = True,
 ) -> NormalizedMetadata:
     lookup = _normalize_lookup(raw_metadata)
 
@@ -219,7 +220,7 @@ def normalize_metadata(
         ],
     )
     capture_dt = _parse_datetime(dt_value)
-    if capture_dt is None:
+    if capture_dt is None and allow_stat:
         try:
             capture_dt = datetime.fromtimestamp(source.stat().st_ctime)
         except Exception:

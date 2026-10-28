@@ -184,13 +184,13 @@ def _resolve_output_format(fmt: str) -> tuple[str, str]:
     raise ValueError(f"output format must be jpeg/jpg or png, got: {fmt!r}")
 
 
-def _save_image(image, path: Path, pil_format: str, quality: int, *, source_path: Path) -> None:
+def _save_image(image, path: Path, pil_format: str, quality: int, *, source_path: Path, xmp_snapshot: bytes | None = None) -> None:
     from birdstamp.export_metadata import save_export_image
     path.parent.mkdir(parents=True, exist_ok=True)
     if pil_format == "JPEG":
-        save_export_image(image, path, source_path=source_path, format="JPEG", quality=max(1, min(100, quality)), optimize=True, progressive=True)
+        save_export_image(image, path, source_path=source_path, xmp_snapshot=xmp_snapshot, format="JPEG", quality=max(1, min(100, quality)), optimize=True, progressive=True)
     else:
-        save_export_image(image, path, source_path=source_path, format="PNG", optimize=True)
+        save_export_image(image, path, source_path=source_path, xmp_snapshot=xmp_snapshot, format="PNG", optimize=True)
 
 
 def _find_template_path(template_arg: str | None) -> Path | None:
@@ -306,18 +306,14 @@ def render(
     out_dir.mkdir(parents=True, exist_ok=True)
 
     # Batch metadata extraction
-    resolved_files = [p.resolve(strict=False) for p in files]
-    try:
-        raw_meta_map = extract_many_with_xmp_priority(resolved_files, mode=exiftool_mode)
-    except Exception as exc:
-        typer.secho(f"Metadata extraction setup failed: {exc}", err=True, fg=typer.colors.RED)
-        raise typer.Exit(1)
-
     def process_one(source: Path) -> _Result:
         t0 = time.perf_counter()
         try:
             resolved = source.resolve(strict=False)
-            raw_meta = raw_meta_map.get(resolved) or extract_metadata_with_xmp_priority(source, mode=exiftool_mode)
+            from birdstamp.export_snapshot import capture_export_metadata, export_photo_info
+            snapshot = capture_export_metadata(resolved, mode=exiftool_mode)
+            raw_meta = snapshot.raw_metadata
+            photo_info = export_photo_info(resolved, raw_meta)
             norm_meta = normalize_metadata(
                 source,
                 raw_meta,
@@ -355,11 +351,12 @@ def render(
                 custom_center=(template_payload["custom_center_x"], template_payload["custom_center_y"]),
             )
 
-            metadata_ctx = build_metadata_context(source, raw_meta)
+            metadata_ctx = build_metadata_context(photo_info, raw_meta)
             rendered = render_template_overlay(
                 image,
                 raw_metadata=raw_meta,
                 metadata_context=metadata_ctx,
+                photo_info=photo_info,
                 template_payload=template_payload,
                 draw_banner=draw_banner,
                 draw_text=draw_text,
@@ -368,7 +365,7 @@ def render(
                 platform_safe_area=platform_safe_area,
             )
             rendered = rendered.convert("RGB")
-            _save_image(rendered, output_file, pil_format=pil_format, quality=quality_val, source_path=source)
+            _save_image(rendered, output_file, pil_format=pil_format, quality=quality_val, source_path=source, xmp_snapshot=snapshot.xmp)
             return _Result(source=source, status="ok", output=output_file, elapsed=time.perf_counter() - t0)
         except Exception as exc:
             return _Result(source=source, status="failed", error=str(exc), elapsed=time.perf_counter() - t0)

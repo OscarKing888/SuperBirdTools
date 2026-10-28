@@ -443,3 +443,36 @@ def test_invalid_acr_keeps_source_bundle(tmp_path, kind):
     result, = run([source], tmp_path / 'archive')
     assert result.status == 'failed' and 'ACR' in result.message
     assert all(p.read_bytes() == content for p, content in originals.items())
+
+
+@pytest.mark.parametrize("shared_sibling", [False, True])
+def test_pending_bird_name_is_synced_before_archive_planning_and_sidecar_lock(tmp_path, monkeypatch, shared_sibling):
+    from concurrent.futures import ThreadPoolExecutor
+    from app_common.exif_io import metadata_store
+    from app_common.file_browser._work_pool import BrowserWorkPool
+
+    store = metadata_store.MetadataStore(tmp_path / "edits.sqlite3", start_scheduler=False)
+    monkeypatch.setattr(metadata_store, "_default", store)
+    source = photo(tmp_path / "source", bird="旧鸟名")
+    sibling = photo(source.parent, "DSC01234.ARW", bird=None) if shared_sibling else None
+    store.submit_edit(str(source), {"title": "新鸟名白鹭"}).result(3)
+    pool = BrowserWorkPool(3)
+    pool.set_thumbnail_mode(False)
+    store.attach_pool(pool)
+    try:
+        # ArchiveWorker is outside the metadata pool in the actual app. A sync
+        # queued from under its XMP lock used to deadlock until flush timeout.
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            result, = executor.submit(run, [source], tmp_path / "archive", "move", False).result(5)
+        assert result.status == "success", result.message
+        destination = Path(result.destinations[0])
+        assert destination.parent == tmp_path / "archive/新鸟名白鹭/Export"
+        assert PhotoMetaDataXMP().read(str(destination))["Title"] == "新鸟名白鹭"
+        assert not store.pending_status()
+        if sibling:
+            assert sibling.exists()
+            assert PhotoMetaDataXMP().read(str(sibling))["Title"] == "新鸟名白鹭"
+    finally:
+        store.detach_pool(pool)
+        assert pool.shutdown(timeout=5)
+        store.close()
