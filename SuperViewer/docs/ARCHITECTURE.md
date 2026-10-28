@@ -12,6 +12,8 @@ Windows 下，`main.py` 在导入任何 Qt 控件前调用 [`preload_windows_run
 
 后台异常通过共享 [`log.py`](../../app_common/log.py) 的 `_Logger.exception()` 将原始 traceback 写入轮转日志；窗口打包态 `sys.stderr=None` 也必须正常工作。对焦点的 `report.db` 只读回退遇到数据库锁定时，关闭连接、记录错误并返回无焦点结果，不能因日志接口缺失让异常逸出 `QThread.run()`。回归见 [`test_focus_report_lock.py`](../tests/test_focus_report_lock.py)（真实 SQLite 排他锁、独立进程 Qt 线程）及共享 `test_log_exception.py`。
 
+照片目录的可选文件元数据缓存 [`meta_disk_cache.py`](../../app_common/exif_io/meta_disk_cache.py) 在连接注册或单库读写繁忙时直接跳过缓存，继续原图读取，不能让故障盘上的缓存初始化占满浏览器工作池。SQLite 锁等待设为 50 ms（不保证底层磁盘 I/O 的耗时）；缓存失败按库暂停重试 60 秒，最多记住 128 个故障库并记录警告。初始化失败显式关闭连接，写入失败回滚，恢复后可再次缓存；目录改名仍通过 `directory_file_operation()` 释放句柄并阻止操作期间重开。回归见共享 `test_meta_disk_cache_failures.py` 和 `test_directory_file_operation.py`。
+
 [`main.py`](../main.py) 的 `main()` 加载运行选项与应用身份，建立支持 macOS FileOpen 的 `QApplication`，处理已有实例转发，安装主题，再创建 `MainWindow`。`SingleInstanceReceiver` 和 FileOpen 回调最终进入 `_on_received_file_list()` / `_open_received_file_list()`；普通启动恢复上次目录。窗口组装、信号接线、文件操作及关闭协调由 `MainWindow` 负责。
 
 | 层 | 主要入口 | 职责 |
