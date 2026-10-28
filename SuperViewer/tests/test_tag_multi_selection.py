@@ -9,6 +9,15 @@ from PyQt6.QtTest import QTest
 from app_common.exif_io.photo_meta import PhotoMetaDataXMP
 from SuperViewer.superviewer.image_info_tab_tags import ImageInfoTabPanel_Tags
 from SuperViewer.tests.test_directory_selection_responsiveness import window, _APP, _wait_until
+from SuperViewer.tests.test_photo_tag_history import reject_edits
+
+
+def _settle_tags(files, paths=None):
+    """Wait for the SQL commit/UI result, then verify deferred XMP publication."""
+    from app_common.exif_io.metadata_store import get_store
+    _wait_until(lambda: not files._command_history.busy)
+    assert get_store().flush_paths(files._all_files if paths is None else paths)
+    _APP.processEvents()
 
 
 @pytest.fixture(params=["list", "thumb"])
@@ -58,25 +67,32 @@ def test_batch_add_remove_clear_and_undo_keep_per_photo_membership(selection_win
     assert check.checkState() == Qt.CheckState.PartiallyChecked
     check.setFocus()
     QTest.keyClick(check, Qt.Key.Key_Space)
+    _settle_tags(files)
     assert check.checkState() == Qt.CheckState.Checked
     assert set(meta.read_subjects(paths[0], strict=True)) == {"飞行", "库外关键词"}
     assert set(meta.read_subjects(paths[1], strict=True)) == {"飞行", "捕食"}
     files.undo()
+    _settle_tags(files)
     _wait_until(lambda: check.checkState() == Qt.CheckState.PartiallyChecked)
     assert meta.read_subjects(paths[1], strict=True) == ["捕食"]
     files.redo()
+    _settle_tags(files)
     _wait_until(lambda: check.checkState() == Qt.CheckState.Checked)
     check.click()
+    _settle_tags(files)
     assert meta.read_subjects(paths[0], strict=True) == ["库外关键词"]
     assert meta.read_subjects(paths[1], strict=True) == ["捕食"]
     assert check.checkState() == Qt.CheckState.Unchecked
     files.undo()
+    _settle_tags(files)
     _wait_until(lambda: check.checkState() == Qt.CheckState.Checked)
     panel.btn_clear.click()
+    _settle_tags(files)
     assert meta.read_subjects(paths[0], strict=True) == ["库外关键词"]
     assert meta.read_subjects(paths[1], strict=True) == []
     assert not panel.btn_clear.isEnabled()
     files.undo()
+    _settle_tags(files)
     _wait_until(lambda: panel.btn_clear.isEnabled())
     assert set(meta.read_subjects(paths[1], strict=True)) == {"飞行", "捕食"}
     assert meta.read_subjects(paths[2], strict=True) == ["飞行"]
@@ -134,18 +150,21 @@ def test_playback_and_shutdown_cancel_pending_tag_refresh(selection_window, monk
 
 def test_partial_failure_refreshes_truth_and_preserves_successful_undo(selection_window, monkeypatch):
     window, files, paths, model, index_for, meta = selection_window
-    damaged = b'<x:xmpmeta xmlns:x="adobe:ns:meta/"><damaged'
-    Path(paths[1]).with_suffix(".xmp").write_bytes(damaged)
+    unchanged = Path(paths[1]).with_suffix(".xmp").read_bytes()
+    reject_edits(monkeypatch, {paths[1]})
     failures = []
     monkeypatch.setattr(files, "_show_tag_write_error", lambda action, exc: failures.append(str(exc)))
     check = window.tags_info_panel._tag_checks["捕食"]
     check.click()
+    _settle_tags(files)
     assert failures
     assert "捕食" in meta.read_subjects(paths[0], strict=True)
-    assert Path(paths[1]).with_suffix(".xmp").read_bytes() == damaged
+    assert Path(paths[1]).with_suffix(".xmp").read_bytes() == unchanged
+    assert files._photo_tag_cache[paths[1]] == {"捕食"}
     files.undo()
+    _settle_tags(files)
     assert meta.read_subjects(paths[0], strict=True) == ["飞行", "库外关键词"]
-    assert Path(paths[1]).with_suffix(".xmp").read_bytes() == damaged
+    assert Path(paths[1]).with_suffix(".xmp").read_bytes() == unchanged
 
 
 def test_resolved_report_path_writes_source_and_refreshes_display_alias(selection_window):
@@ -162,11 +181,13 @@ def test_resolved_report_path_writes_source_and_refreshes_display_alias(selectio
     panel.refresh_ui()
     assert set(panel.selected_photo_paths()) == {str(actual), paths[1]}
     panel._tag_checks["捕食"].click()
+    _settle_tags(files, [str(actual), paths[1]])
     assert "捕食" in meta.read_subjects(str(actual), strict=True)
     assert not old.with_suffix(".xmp").exists()
     assert files._photo_tag_cache[str(old)] == {"飞行", "捕食"}
     assert set(files._meta_cache[str(old)]["tags"]) == {"飞行", "捕食"}
     files.undo()
+    _settle_tags(files, [str(actual), paths[1]])
     assert meta.read_subjects(str(actual), strict=True) == ["飞行", "库外关键词"]
     assert files._photo_tag_cache[str(old)] == {"飞行"}
 

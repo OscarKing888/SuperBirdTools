@@ -1,5 +1,9 @@
 # SuperViewer 架构与代码定位
 
+## 元数据 SQLite 首响应与后台同步
+
+两款应用的用户元数据读写统一经共享 `MetadataStore`：内存/SQLite 快照先显示，源文件校验在后台执行；SQLite 事务提交后刷新界面，XMP 同步由持久 outbox 驱动。目录列表、普通信息、标签和完整 EXIF 使用明确完整性的快照，筛选仍只读内存。跨目录、跨应用和退出恢复、文件操作屏障及输出侧车规则见 [元数据服务说明](../../docs/metadata-store.md)，界面状态见 [设计与验证](../../docs/ui-design/metadata-sqlite-first.md)。下文旧解析缓存和历史基准描述的是后台验证层，不能作为 GUI 首响应耗时或待同步编辑持久化的依据。
+
 本文按运行中的数据流说明代码入口，供新增功能和排查问题时定位。行为约束以仓库 [AGENTS](../../AGENTS.md) 和 [AI_CODING_RULES](../../ai_rules/AI_CODING_RULES.md) 为准；安装与使用见 [README](../README.md)。共享浏览器、XMP 和画布位于 `app_common` 子模块，同时服务 BirdStamp，修改时需检查两端调用。
 
 删除后的选择由 `SuperViewerTaggedFileListPanel._reload_after_trash()` 恢复：当前图片成功删除后，按活动列表/缩略图的过滤及排序结果向前寻找未删除图片；没有前项则选剩余首项，删空则无选择。多选时跳过同批已删除项，当前图片未删除则保留。共享浏览器仅在成功删除后调用此扩展点，仍使用垃圾桶和 XMP 联动；Viewer 在清空旧模型后、异步扫描返回前设置待选路径，由原有选择机制同步预览和滚动。BirdStamp 保持默认重载行为。回归见 [`test_delete_selection.py`](../tests/test_delete_selection.py)，此交互无新增 CLI。
@@ -18,13 +22,13 @@ Windows 下，`main.py` 在导入任何 Qt 控件前调用 [`preload_windows_run
 | --- | --- | --- |
 | 窗口协调 | [`main.py`](../main.py)：`MainWindow` | 目录、列表、预览、信息页的连接；编辑回调、焦点任务、关闭状态 |
 | 目录与列表 | [`_directory_browser.py`](../../app_common/file_browser/_directory_browser.py)、[`_panel.py`](../../app_common/file_browser/_panel.py) | 目录选择、报告范围、实际路径解析、过滤、选择、导航、剪贴板与缓存 |
-| Viewer 列表扩展 | [`tagged_file_list.py`](../superviewer/tagged_file_list.py)：`SuperViewerTaggedFileListPanel` | 标签库、标签/镜头过滤、标签历史、异步标签缓存、Viewer 快切开关、只读缓存 provider |
+| Viewer 列表扩展 | [`tagged_file_list.py`](../superviewer/tagged_file_list.py)：`SuperViewerTaggedFileListPanel` | 标签库、标签/镜头过滤、标签历史、共享元数据标签快照、Viewer 快切开关、只读缓存 provider |
 | 数据模型与后台任务 | [`_models.py`](../../app_common/file_browser/_models.py)、[`_workers.py`](../../app_common/file_browser/_workers.py)、[`_thumbnail.py`](../../app_common/file_browser/_thumbnail.py) | 列表/缩略图模型，扫描、元数据、路径查找和缩略图任务 |
 | 预览 | [`preview_panel.py`](../superviewer/preview_panel.py)：`PreviewPanel`；[`viewer_ab_preview.py`](../superviewer/viewer_ab_preview.py)：`ViewerABPreview`；[`canvas.py`](../../app_common/preview_canvas/canvas.py)：`PreviewCanvas` | 面板决定加载策略和线程交接；A/B 控制激活侧、工具行及视野联动；画布负责缩放、平移、构图线、焦点叠加和输出 |
 | 焦点 | [`focus_box_loader.py`](../superviewer/focus_box_loader.py)、[`focus_preview_loader.py`](../superviewer/focus_preview_loader.py) | 来源选择、不同格式的元数据提取、方向变换、报告保底 |
 | 右侧信息页 | [`image_info_tab_widget.py`](../superviewer/image_info_tab_widget.py) 及各 `image_info_tab_*` | 活动页按需刷新；信息编辑、标签管理、异步 EXIF 表 |
 | 标签模型/命令 | [`photo_tags.py`](../superviewer/photo_tags.py)、[`photo_tag_commands.py`](../superviewer/photo_tag_commands.py) | 配置树、XMP subject 读写、逐照片逆操作 |
-| 元数据编辑同步 | [`metadata_edit_sync.py`](../superviewer/metadata_edit_sync.py)：`sync_saved_xmp_edit()` | EXIF 表写入成功后，将 XMP 字段映射回列表及标签缓存 |
+| 元数据编辑同步 | [`metadata_edit_sync.py`](../superviewer/metadata_edit_sync.py)：`sync_saved_xmp_edit()` | SQLite 提交成功后，将字段快照映射回列表及标签缓存 |
 | 主题与设置 | [`ui_theme.py`](../superviewer/ui_theme.py)、[`paths_settings.py`](../superviewer/paths_settings.py) | 系统深浅色、语义颜色、资源路径、窗口状态与上次目录 |
 | 鸟清晰度检测 | [`bird_sharpness_controller.py`](../superviewer/bird_sharpness_controller.py)：`BirdSharpnessController`；算法包 [`bird_sharpness`](../../bird_sharpness/)；字段 [`bird_sharpness_fields.py`](../../app_common/bird_sharpness_fields.py) | 目录树/文件右键菜单 → 协调线程把每张照片的 `BirdSharpnessAction` 提交到共享 `BrowserWorkPool`（`WorkKind.ANALYSIS`，低优先级并行；进度窗口 [`bird_sharpness_progress.py`](../superviewer/bird_sharpness_progress.py) 显示逐线程负载和分阶段计时（`bird_sharpness.timing.TimingStats`，每张的 `PhotoTiming` 由控制器在 GUI 线程汇总）；右键「查看清晰度计算过程…」以只读 `BirdSharpnessTraceAction` 计算并在 [`bird_sharpness_trace_view.py`](../superviewer/bird_sharpness_trace_view.py) 逐步展示；批量检测与计算过程窗口共用 `AnalysisParams` 和同一个参数表单 [`bird_sharpness_params_form.py`](../superviewer/bird_sharpness_params_form.py)（检测模型/SAM 精修/增强找鸟/分块，模型确认后下载到用户模型目录）；顶部常驻「＋ 添加模型（实验）」在结果就绪后可用，复用模型链的添加动作，空链或全部关闭后仍可重新打开；「参数」页模型旁的「预览」也可在窗口右侧的模型链 [`model_preview.py`](../superviewer/model_preview.py)（`ModelChainHost` 停靠多个 `ChainStage`）末尾加一个窗口：每个窗口选 YOLO/SAM 模型并切换参数，输入为上一窗口结果（逐框放大、只留轮廓，或抠出这些像素成一张新图再运行）、计算过程的鸟或原图（SAM 画框与点选），结果依次传给下一窗口；模型串行运行，复用窗口的已解码图像；控制器给窗口挂 [`model_chain_state.py`](../superviewer/model_chain_state.py) 的 `ModelChainStore`，链的每次改动（含停靠窗口宽度、浮动窗口的位置和大小）写入用户目录 `model_chain.json`，下一个计算过程窗口拿到首个计算过程后重建；窗口的「测清晰度」用 `preview.analysis_input` 把结果裁成临时图和 `GivenBirds`，控制器 `show_trace_for_given` 开新计算过程窗口，`BirdSharpnessTraceAction(given_input=…)` 不解码、不识别，直接测这些鸟）→ 写 XMP → `sync_metadata_edit_for_path()` 刷新列表「鸟清晰」列、缩略图底栏与信息页。算法与字段见 [鸟清晰度检测](../../docs/bird_sharpness.md) |
 | 鸟体显示 | [`bird_body_controller.py`](../superviewer/bird_body_controller.py)、[`bird_body_worker.py`](../superviewer/bird_body_worker.py)、[`bird_body.py`](../superviewer/bird_body.py) | 停留选中 → 共享池 `BirdBodyAction` → 有版本及源指纹的 XMP 缓存 → 各视口按实际像素几何绘制，长按仅查内存 |
@@ -72,11 +76,13 @@ Viewer 的列表/缩略图由 [`file_context_menu.build_file_context_menu()`](..
 flowchart TD
     D[DirectoryBrowserWidget.directory_selected] --> M[MainWindow._on_directory_selected]
     M --> L[TaggedFileListPanel.load_directory]
-    L --> S[共享 FileListPanel：报告缓存 / DirectoryScanWorker]
+    L --> K[内存 / SQLite 目录快照]
+    K --> A
+    L --> S[后台 DirectoryScanWorker 校验 / 报告修复]
     S --> A[_apply_directory_listing_result]
     A --> V[过滤数据集 → 列表模型 / 缩略图模型]
     V --> P[file_selected → 预览与活动信息页]
-    A --> B[MetadataLoader / PhotoTagCacheWorker]
+    A --> B[MetadataLoader：SQLite 快照先发，后台校验]
     B --> C[校验来源和本地编辑状态 → 更新缓存]
     C --> T[计时器分批更新行和过滤结果]
     C --> I[当前信息页局部刷新]
@@ -84,7 +90,7 @@ flowchart TD
 
 `SuperViewerTaggedFileListPanel.load_directory()` 先切换标签配置范围、取消旧标签请求，再调用共享 `FileListPanel.load_directory()`。共享层负责复用同根报告缓存、扫描范围和取消旧任务；`_apply_directory_listing_result()` 拒绝过期目录结果，建立 `_all_files`、报告映射与视图。Viewer 在这里建立同目录同名 RAW/HEIF 的焦点来源索引。
 
-Viewer 切换目录前通过 `_remember_directory_selection()` 保存活动列表/缩略图的当前照片路径和显示行号；无 Qt 的 [`DirectorySelectionCache`](../superviewer/directory_selection.py) 按规范化目录路径保存最近 256 个目录，使用 LRU 淘汰，仅当前窗口会话有效。两种视图共用同一照片记忆，切换视图继续沿用共享选择同步。返回目录时，`_select_first_file_if_needed()` 等活动模型分批填充和排序完成，优先按路径恢复原图；若原图被外部删除或过滤，则把旧行号限制在新列表范围内并查找邻近有效源文件，全部不可用时保持无选择。报告旧路径仍通过原有只读实际源路径解析验证，不保存 Qt 索引或复用旧目录文件列表。
+Viewer 切换目录前通过 `_remember_directory_selection()` 保存活动列表/缩略图的当前照片路径和显示行号；无 Qt 的 [`DirectorySelectionCache`](../superviewer/directory_selection.py) 按规范化目录路径保存最近 256 个目录，使用 LRU 淘汰，仅当前窗口会话有效。两种视图共用同一照片记忆，切换视图继续沿用共享选择同步。返回目录时，`_select_first_file_if_needed()` 等活动模型分批填充和排序完成，优先按路径恢复原图；若原图被外部删除或过滤，则把旧行号限制在新列表范围内并查找邻近有效源文件，全部不可用时保持无选择。报告旧路径仍通过原有只读实际源路径解析验证，不保存 Qt 索引；有界目录快照先恢复列表，随后扫描纠正外部变化。
 
 恢复沿用原有滚动机制并只提交一次正常预览选择；用户在填充期间主动选图、外部指定待选文件以及删除后选前一张的行为优先。中途切走时空模型不覆盖目录记忆，扫描仍由共享请求代次拒绝过期结果。此功能属于浏览会话状态，无新增配置、控件或 CLI。回归见 [`test_directory_selection_memory.py`](../tests/test_directory_selection_memory.py) 与删除选择测试。
 
@@ -92,7 +98,7 @@ Viewer 切换目录前通过 `_remember_directory_selection()` 保存活动列�
 
 多报告目录通过 `_build_report_scope_maps_for_files()` 按文件所属报告范围建立 `_IndexedReportCache` 路径索引；未命中的旧路径不能为每张照片重新遍历整份报告。索引随目录缓存保存和释放，保留同名照片的完整路径区分。扫描 worker 分别报告文件枚举与报告匹配进度，记录报告读取、文件枚举、报告匹配耗时，并在匹配期间响应取消。
 
-目录切换立即启动新扫描；旧扫描取消后仍由面板持有，直到其真正的 `QThread.finished` 被处理。扫描进度和结果校验 worker 身份，排队的列表应用还校验请求代次，防止 A → B → A 时旧 A 的结果覆盖新请求。窗口关闭也等待这些扫描完成交接。
+目录切换先恢复可用目录快照，再启动可取消的新扫描；旧扫描取消后仍由面板持有，直到其真正的 `QThread.finished` 被处理。扫描进度和结果校验 worker 身份，排队的列表应用还校验请求代次，防止 A → B → A 时旧 A 的结果覆盖新请求。窗口关闭也等待这些扫描完成交接。
 
 `FileTableModel` / `FileTableSortProxyModel` 和 `ThumbnailListModel` 展示同一套过滤数据。文本、评级、精选、排除、焦点及标签条件组合后重建数据集，不靠逐行隐藏控件。过滤栏通过 [`FilterFlowLayout`](../superviewer/filter_controls.py) 按实际字体与可用宽度换行，依次显示镜头、鸟种名、稀有度和标签下拉。镜头过滤是最前的可搜索下拉框：每次展开时从当前列表全部照片（不受其它过滤影响）的 `_meta_cache` 镜头型号汇总选项和张数，加载过程中不做额外工作；当前选中的镜头即使不在新列表中也保留为 0 张选项，便于看到和清除。编号列只表示当前自然顺序。列表模式不触发缩略图工作；缩略图模式依据可见区域加载。连拍分组底框由两个模型共享的 `_BurstGroupMixin` 按模型行序惰性计算（同目录 + 同 `burst_id`、至少 2 张），两种配色交替；列表模式走 `BackgroundRole`，缩略图模式由 `ThumbnailItemDelegate` 读取 `_MetaBurstGroupRole` 画色带。`_apply_filter()` / `_rebuild_views()` 调用 `_sync_burst_group_display()`，任何过滤（含标签过滤）激活时关闭底框。
 
@@ -110,7 +116,7 @@ HIF/HEIF/HEIC 即使已有完整报告或 XMP 拍摄字段，仍在 `MetadataLoa
 
 “包含子目录”只改变显示范围，保留本地编辑保护和已加载的元数据，并复用当前目录的 shallow/recursive 列表；切回其他目录仍重新扫描文件列表，元数据在 worker 中按指纹复用。显式刷新使该目录及后代的会话缓存失效，重新加载报告；关闭窗口清空缓存。`[metadata.memory]` 日志记录命中/未命中、条目数、估算字节数和耗时。此策略仅用于浏览器会话缓存，无 CLI 参数；回归见 [`test_metadata_memory_cache.py`](../../app_common/tests/test_metadata_memory_cache.py) 及 [`test_directory_scope.py`](../tests/test_directory_scope.py)。
 
-[`MetadataSQLiteCache`](../../app_common/exif_io/metadata_sqlite.py) 在内存未命中后批量读取合并结果，命中跳过 XML、RAW 焦点提取与视频 ffprobe。`xmp-v1` 另存逐资源的解析行，`browser-v1` 保存合并后的拍摄/XMP/report/焦点/视频信息；改变字段解释时应升级对应 namespace。签名包含源文件和实际侧车的设备/文件身份、纳秒 mtime/ctime、大小，以及请求标签集、报告行。SQL 内采用 JSON 序列化，不使用 pickle。XMP、原图和只读 `report.db` 仍是数据源。
+[`MetadataSQLiteCache`](../../app_common/exif_io/metadata_sqlite.py) 在内存未命中后批量读取合并结果，命中跳过 XML、RAW 焦点提取与视频 ffprobe。`xmp-v1` 另存逐资源的解析行，`browser-v1` 保存合并后的拍摄/XMP/report/焦点/视频信息；改变字段解释时应升级对应 namespace。签名包含源文件和实际侧车的设备/文件身份、纳秒 mtime/ctime、大小，以及请求标签集、报告行。SQL 内采用 JSON 序列化，不使用 pickle。这层保存可重建的来源数据；已提交未同步编辑由独立 `MetadataStore` 持久保存并覆盖这些来源。
 
 缓存存于本机 `~/Library/Caches/SuperBirdTools/metadata-v1.sqlite3`（macOS）或 `%LOCALAPPDATA%/SuperBirdTools/Cache/metadata-v1.sqlite3`（Windows）；诊断可用 `SUPERBIRD_METADATA_CACHE_DIR` 覆盖。独立只读连接批量查询，[WAL](https://www.sqlite.org/wal.html) 写入由一个后台线程执行，GUI 保存只入队；16 MiB 待写预算防止慢盘积压，最多 100,000 条/估算 512 MiB 数据，超额按最早写入淘汰，数据库页面复用。退出通过 `close_cache()` / atexit 排空队列并关闭连接；损坏、权限或锁冲突降级为源读取，不影响 XMP 保存。旧 `meta_disk_cache.py` 仍只缓存原图派生字段。
 
@@ -231,13 +237,13 @@ RAW 完整解码可能保留内嵌 JPEG 裁掉的传感器边缘。共享 [`raw_
 
 ### 读取层
 
-共享 [`photo_meta.py`](../../app_common/exif_io/photo_meta.py) 的 `PhotoMetaDataProxy` 组合原图 EXIF、只读 ReportDB 和 XMP；可编辑字段由 XMP 最后覆盖。`PhotoMetaDataProxy.write()` 统一写 XMP。[`writer.py`](../../app_common/exif_io/writer.py) 除写入工具还包含 `read_batch_metadata()` 与内存缓存；[`exiftool_runner.py`](../../app_common/exif_io/exiftool_runner.py) 管理共享 stay-open 进程及串行执行锁。
+共享 [`photo_meta.py`](../../app_common/exif_io/photo_meta.py) 的 `PhotoMetaDataProxy` 组合原图 EXIF、只读 ReportDB 和 XMP；可编辑字段由 XMP 最后覆盖。`PhotoMetaDataProxy.write()` 是后台直接侧车写入器；用户编辑入口经 `MetadataCommitBridge` 提交 `MetadataStore`，SQLite 成功后才确认，后台 action 再调用侧车写入器。[`writer.py`](../../app_common/exif_io/writer.py) 除写入工具还包含 `read_batch_metadata()` 与内存缓存；[`exiftool_runner.py`](../../app_common/exif_io/exiftool_runner.py) 管理共享 stay-open 进程及串行执行锁。
 
 选中文件时，图片信息页使用列表注入的 `cached_photo_metadata_for_path()`，只查报告/浏览器缓存。这里不能改回同步 `PhotoMetaDataProxy.read()`：即使单张读取很快，也可能在 GUI 线程等待之前的目录批处理占用 ExifTool 锁。
 
 后台数据到达后，`photo_metadata_cache_updated(paths)` 仅让当前活动图片信息页执行 `refresh_metadata_fields()`。它更新基本信息和已保存备注基线，保留未保存备注与文件名；文本没有变化时也保留光标和选区。标签到达另走 `photo_tags_cache_updated(paths)` 与 `refresh_photo_tags()`。
 
-[`ImageInfoTabWidget`](../superviewer/image_info_tab_widget.py) 仅刷新活动页。非活动页更新逻辑路径并进入 `_pending_panels`，在用户打开时刷新。EXIF 页的 `_ExifRowsLoader` 在后台调用 [`exif_helpers.py`](../superviewer/exif_helpers.py) 的 `load_all_exif()`，表格配置与标签显示顺序也在该模块处理。
+[`ImageInfoTabWidget`](../superviewer/image_info_tab_widget.py) 仅刷新活动页。非活动页更新逻辑路径并进入 `_pending_panels`，在用户打开时刷新。EXIF 页的 `_ExifRowsLoader` 先在后台读取 `full-display` SQLite 快照并发出首批，再在后台调用 [`exif_helpers.py`](../superviewer/exif_helpers.py) 的 `load_all_exif()`，表格配置与标签显示顺序也在该模块处理。
 
 EXIF 页直接列出 ExifTool 从 RAW 及其他图像读取的已知标签，包含相机 MakerNote。若有对焦距离，`_camera_focus_distance_from_exiftool()` 将其提到优先区，Canon 的上下界保留各自标签和原值；Sony 仅有 ExifTool 合成距离时会明确标为估算。没有距离时不生成占位值。超焦距计算及 ExifTool 的合成超焦距均不显示。
 
@@ -268,9 +274,9 @@ EXIF 页直接列出 ExifTool 从 RAW 及其他图像读取的已知标签，包
 ### 写入层
 
 - 备注入口是 `MainWindow._save_photo_comment_from_info_panel()`；标题及 EXIF 表入口是 `_save_exif_value()`。原始照片和 RAW 不承接这些用户元数据编辑。
-- 成功后必须同步显示层。`sync_saved_xmp_edit()` 只读刚保存的侧车，将 title、comment、rating、pick 和相机字段映射到列表显示字段；标签 Subject 修改另外刷新标签缓存/版本号并清理旧标签历史。
-- `SuperViewerTaggedFileListPanel.sync_metadata_edit_for_path()` 将本轮目录内的编辑字段记录在 `_local_metadata_updates_by_path`，合并后续后台批次时优先采用这些字段；这避免旧备注、标题或评级覆盖刚保存的值。`load_directory()` 在目录变化或显式刷新磁盘时清理这层保护；仅切换范围的 `preserve_meta_cache=True` 重载保留它。
-- 清除字段也是一次明确编辑：需清理显示别名，不能因 XMP 节点被删除就留下旧缓存值。XMP 格式、命名空间、同名侧车与 XML 写入规则集中在 [`xmp_sidecar.py`](../../app_common/exif_io/xmp_sidecar.py) / `PhotoMetaDataXMP`。
+- 成功后必须同步显示层。`sync_saved_xmp_edit()` 读取刚提交的内存快照，将 title、comment、rating、pick 和相机字段映射到列表显示字段；标签 Subject 修改另外刷新标签缓存/版本号并清理旧标签历史。
+- `SuperViewerTaggedFileListPanel.sync_metadata_edit_for_path()` 将本轮目录内的编辑字段记录在 `_local_metadata_updates_by_path`，合并后续后台批次时优先采用这些字段；这避免旧备注、标题或评级覆盖刚保存的值。UI 临时映射随目录生命周期更新，真正的已提交编辑受共享资源 revision/outbox 保护，目录切换和显式刷新都不能丢弃。
+- 清除字段也是一次明确编辑：需清理显示别名；同次 XMP 提交维护 `metadata_cleared_fields`，防止删除属性后原图/report 的旧值复活。XMP 格式、命名空间、同名侧车与 XML 写入规则集中在 [`xmp_sidecar.py`](../../app_common/exif_io/xmp_sidecar.py) / `PhotoMetaDataXMP`。
 
 通用字段由 `PhotoMetaDataXMP._write_exiftool_fields()` 在同目录临时副本中写入，收齐 ExifTool 的错误/警告后才原子提交；混合标签/标题等直接 XML 字段也随同提交。命令标签与 XML 字段名不同，例如 ISO 命令写入 `ISOSpeedRatings`，镜头使用 `Lens`。UTF-8 参数与实际读回回归见 [通用 XMP 写入测试](../../app_common/tests/test_xmp_exiftool_writes.py)。
 
@@ -309,7 +315,7 @@ flowchart LR
     R --> H
 ```
 
-`TagStates` 是 `path → tag → bool`。`PhotoTagSidecarStore.apply_tag_states()` 在 store 的锁内逐路径严格读取完整 subjects，只改请求的标签，每路径最多写一次。未配置关键词与其他 XMP 属性保留；缺失源照片、损坏 XML、权限错误产生失败路径，不能当空标签继续覆盖。
+`TagStates` 是 `path → tag → bool`。`PhotoTagCommandHistory` 将 `commit_photo_tag_states()` 送入所属池：已知 subjects 先用 SQLite 快照，不等 XML；冷状态在后台补齐，再提交成员增删补丁。后台同步严格合并当前 subjects，保留未配置关键词与其他属性；缺失源照片、损坏 XML、权限错误保留 outbox 并提示，不能当空标签覆盖。
 
 `TagWriteResult.inverse_states` 只记录成功且实际变化的成员。例如 A 已有“飞行”、B 没有，批量添加后撤销只删除 B 的“飞行”。`RestorePhotoTagStatesCommand.execute()` 将成功逆状态与失败剩余命令交给共享 [`CommandHistory`](../../app_common/command_history.py) / `PartialCommandError`，部分失败可重试，无变化操作不会抹掉 redo。
 
@@ -319,7 +325,7 @@ flowchart LR
 
 `editToolBar` 与 `sendToToolBar` 之间是 `processToolBar`（[`process_toolbar.py`](../superviewer/process_toolbar.py) 的 `ProcessToolbar`，在控制器创建后用 `insertToolBar()` 插入）：识鸟组为“识别鸟种…”（箭头菜单“逐只识别…”）、“选择候选鸟名…”、“手动指定鸟名…”，处理组为“鸟清晰度检测”（箭头菜单“查看清晰度计算过程…”）和“批量降噪”。按钮只是右键菜单同名动作的入口，调用 `BirdIDController.start_for_paths()`、`BirdIDController.catalog.open()`、`BirdSharpnessController.start_for_paths()/show_trace()` 与 `DenoiseController.start_for_paths()`，作用于 `get_selected_file_paths()`；无选择时提示先选照片，手动指定鸟名先做带提示的写入许可检查，写入中禁用。任务也可从右键或目录菜单启动，因此工具栏连接控制器的运行状态信号 `BirdIDController/BirdSharpnessController/DenoiseController.busy_changed(bool)` 与 `BirdCatalogController.applying_changed(bool)`，不轮询。信号由 [`task_state.TaskSlot`](../superviewer/task_state.py) 保证：保存 worker 的属性（`_worker`、识鸟的 `_adopt_worker`、名录的 `_apply_worker`）是描述符，每次赋值后重算 `busy`/`applying`，仅在真正变化时发信号，启动、完成、失败、停止和关窗路径都经过同一赋值，不会漏发；识鸟批量进行中再采纳不会重复通知，停止请求在线程真正退出时才发 `False`。状态变化时工具栏换图标：运行中图标右上角加系统强调色圆点，悬停为“…进行中：点击查看进度或停止”，点击弹出与右键菜单相同的“查看…进度 / 停止…”（只读的清晰度计算过程运行中仍可打开）。关窗时 `request_shutdown()` 断开这些信号并禁用工具栏。图标是 [`file_context_menu.menu_icon()`](../superviewer/file_context_menu.py) 的线条图标（新增 `candidates`、`pencil`、`focus`、`gear` 与 `busy` 标记），随主题着色、无图片资源。回归见 [test_process_toolbar.py](../tests/test_process_toolbar.py)、[test_task_state.py](../tests/test_task_state.py)，以及识鸟/清晰度/降噪/名录控制器测试中真实启动、停止、完成与采纳路径上的信号断言。
 
-异步读取由 `PhotoTagCacheWorker` 分批执行。每路径 `_photo_tag_generation_by_path` 防止读取早于本地写入的 tag/metadata 批次回退新标签；未知路径会排队补读，GUI 查询不做整批 XMP I/O。`finished_summary` 只报告逻辑进度，真正的线程释放和下一批启动必须等 `QThread.finished`。
+标签筛选统一消费 `MetadataLoader` 供给的内存快照；不再启动独立 `PhotoTagCacheWorker` 全目录补读。缺失字段由共享 loader 补齐；未知标签与已知为空分别处理。跨进程变更轮询后按资源 revision 局部应用，并清除被新版本取代的 UI 保护，避免旧批次覆盖新编辑。
 
 ## 7. 状态所有权、线程与关闭
 

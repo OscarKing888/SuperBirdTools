@@ -712,8 +712,8 @@ def _extract_lens_model_text(raw_metadata: Dict[str, Any]) -> str:
         "Composite:LensModel",
         "Lens",
         "LensID",
-        "XMP-aux:LensModel",
         "XMP-aux:Lens",
+        "XMP-aux:LensModel",
     )
 
 
@@ -1043,6 +1043,17 @@ def _overlay_first_non_empty(
     *source_keys: str,
     overwrite: bool = False,
 ) -> None:
+    if overwrite:
+        # Sidecar tombstones and committed clears are present-but-empty fields.
+        # Preserve them before considering an embedded camera/report fallback.
+        if target_key.startswith("XMP") and target_key in mapping and mapping[target_key] == "":
+            return
+        for key in source_keys:
+            if key.startswith("XMP") and key in mapping:
+                mapping[target_key] = mapping[key]
+                return
+        if target_key in mapping and mapping[target_key] == "":
+            return
     if not overwrite and _clean_text(mapping.get(target_key)):
         return
     value = _first_non_empty_value(mapping, *source_keys)
@@ -1097,8 +1108,8 @@ def _overlay_template_metadata_aliases(metadata: Dict[str, Any], *, prefer_xmp: 
     _overlay_first_non_empty(
         metadata,
         "ISO",
-        "XMP-exif:PhotographicSensitivity",
         "XMP-exif:ISOSpeedRatings",
+        "XMP-exif:PhotographicSensitivity",
         "ExifIFD:ISO",
         "EXIF:ISO",
         "PhotographicSensitivity",
@@ -1189,6 +1200,12 @@ def _read_sidecar_metadata_cached(
 def _read_sidecar_metadata(photo_info: PhotoInfo) -> Dict[str, Any]:
     if photo_info.metadata_is_snapshot:
         return {}
+    from app_common.exif_io.metadata_store import get_store
+    snapshot = get_store().peek(str(photo_info.path), profile="full")
+    if snapshot is not None:
+        metadata = {key: value for key, value in snapshot.items() if key.startswith("XMP")}
+        _overlay_template_metadata_aliases(metadata, prefer_xmp=True)
+        return metadata
     sidecar_path = photo_info.sidecar_path or _resolve_sidecar_path(photo_info.path)
     if sidecar_path is None:
         return {}
@@ -1230,6 +1247,11 @@ def _metadata_with_xmp_priority(photo_info: PhotoInfo) -> Dict[str, Any]:
         # 列表后台读取已经合并 XMP；缺失字段等待下一批，不在点击回调抢 ExifTool 锁。
         _overlay_template_metadata_aliases(metadata, prefer_xmp=True)
         return metadata
+    from app_common.exif_io.metadata_store import get_store
+    snapshot = get_store().peek(str(photo_info.path), profile="full")
+    if snapshot is not None:
+        _overlay_template_metadata_aliases(snapshot, prefer_xmp=True)
+        return snapshot
     if not _metadata_has_content(metadata):
         path_text, mtime_ns, size = _path_cache_signature(photo_info.path)
         sidecar_path = photo_info.sidecar_path or _resolve_sidecar_path(photo_info.path)

@@ -38,6 +38,18 @@ class _ExifRowsLoader(QThread):
         if self.isInterruptionRequested():
             return
         try:
+            from app_common.exif_io.metadata_store import get_store
+            from .exif_helpers import exif_rows_from_metadata, apply_tag_priority, load_tag_priority_from_settings
+            snapshot = get_store().read_many([self._path], profile="full-display").get(self._path)
+            if snapshot and not self.isInterruptionRequested():
+                rows = apply_tag_priority(exif_rows_from_metadata(snapshot, self._tag_label_chinese),
+                                          load_tag_priority_from_settings())
+                self.loaded.emit(self._request_token, self._path, rows)
+        except Exception:
+            pass
+        if self.isInterruptionRequested():
+            return
+        try:
             rows = list(self._rows_loader(self._path, self._tag_label_chinese) or [])
         except Exception:
             rows = []
@@ -56,9 +68,12 @@ class ImageInfoTabPanel_EXIF(ImageInfoTabPanel):
         metadata_rows_loader: Callable[[str, bool], list[tuple]],
         save_callback: Callable[[str, object, str, object, object], None],
         parent=None,
+        *,
+        cached_rows_loader=None,
     ) -> None:
         self._metadata_rows_loader = metadata_rows_loader
         self._save_callback = save_callback
+        self._cached_rows_loader = cached_rows_loader
         self._last_rows: list[tuple] = []
         self._request_sequence = 0
         self._display_request_token = 0
@@ -117,7 +132,7 @@ class ImageInfoTabPanel_EXIF(ImageInfoTabPanel):
         if self._shutdown_requested:
             return []
         path = self.current_photo_path()
-        if not path or not os.path.isfile(path):
+        if not path:
             self._invalidate_requests()
             self._last_rows = []
             self.exif_table.set_exif([])
@@ -130,8 +145,9 @@ class ImageInfoTabPanel_EXIF(ImageInfoTabPanel):
             os.path.normpath(path),
             bool(load_tag_label_chinese_from_settings()),
         )
-        self._last_rows = []
-        self.exif_table.set_exif([])
+        cached = self._cached_rows_loader(path, request[2]) if self._cached_rows_loader else []
+        self._last_rows = list(cached or [])
+        self.exif_table.set_exif(self._last_rows)
         loader = self._loader
         if loader is not None:
             loader.requestInterruption()

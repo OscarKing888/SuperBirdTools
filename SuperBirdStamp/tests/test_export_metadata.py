@@ -367,6 +367,33 @@ def test_sidecar_changes_invalidate_export_cache_even_with_stale_metadata(origin
     assert source_frame_signature_for_job(job) == without
 
 
+def test_pending_sql_edit_invalidates_export_before_sidecar_write(original):
+    from app_common.exif_io.metadata_store import get_store
+    from birdstamp.export_stage import VideoFrameJob, source_frame_signature_for_job
+    job = VideoFrameJob(path=original, settings={}, raw_metadata={}, metadata_context={})
+    first = source_frame_signature_for_job(job)
+    store = get_store()
+    store.submit_edit(str(original), {"title": "新导出标题"}).result(3)
+    assert not original.with_suffix('.xmp').exists()
+    assert source_frame_signature_for_job(job) != first
+
+
+def test_export_sidecar_digest_detects_preserved_mtime_edit(original):
+    import os
+    from birdstamp.export_stage import VideoFrameJob, source_frame_signature_for_job
+    from birdstamp.export_image_pair import sidecar_signature
+    job = VideoFrameJob(path=original, settings={}, raw_metadata={}, metadata_context={})
+    sidecar = original.with_suffix('.xmp')
+    sidecar.write_bytes(xmp_packet('<custom:private>一</custom:private>'))
+    stamp = sidecar.stat()
+    first = source_frame_signature_for_job(job)
+    pair_first = sidecar_signature(original)
+    sidecar.write_bytes(xmp_packet('<custom:private>二</custom:private>'))
+    os.utime(sidecar, ns=(stamp.st_atime_ns, stamp.st_mtime_ns))
+    assert source_frame_signature_for_job(job) != first
+    assert sidecar_signature(original) != pair_first
+
+
 def test_exiftool_rejected_xmp_is_not_reported_as_success(monkeypatch):
     monkeypatch.setattr(export_metadata, 'run_exiftool', lambda *a, **kw: SimpleNamespace(
         returncode=0, stdout='0 image files updated', stderr='Warning: Invalid XMP data for XMP:XMP'))

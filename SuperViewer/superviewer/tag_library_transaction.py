@@ -5,6 +5,7 @@ import hashlib
 import json
 import os
 import tempfile
+from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -76,7 +77,29 @@ class TagEditPlan:
                            {new: old for old, new in self.filter_mapping.items() if new})
 
 
+@contextmanager
+def _locked_sidecars(paths):
+    """One deterministic lock order also handles shared lock stripes."""
+    from app_common.exif_io.sidecar_lock import xmp_sidecar_write_lock
+    locks = {lock.identity: lock for lock in map(xmp_sidecar_write_lock, paths)}
+    with ExitStack() as stack:
+        for identity in sorted(locks):
+            stack.enter_context(locks[identity])
+        yield
+
+
 def prepare_tag_edit(config: PhotoTagConfig, before, after, directory: str,
+                     mapping: dict[str, str | None], *, cancel=lambda: False,
+                     progress=lambda *args: None) -> TagEditPlan:
+    from app_common.exif_io.metadata_store import get_store
+    # The existing controller runs this on its worker. Pending ordinary edits
+    # must become part of the migration preview before subjects are examined.
+    with get_store().file_operation([directory] if directory and mapping else []):
+        return _prepare_tag_edit(config, before, after, directory, mapping,
+                                 cancel=cancel, progress=progress)
+
+
+def _prepare_tag_edit(config: PhotoTagConfig, before, after, directory: str,
                      mapping: dict[str, str | None], *, cancel=lambda: False,
                      progress=lambda *args: None) -> TagEditPlan:
     if config.read_bytes() != before:
@@ -243,10 +266,45 @@ def recover_tag_edits(config: PhotoTagConfig, *, progress=lambda *args: None):
                 state = directory / f"{index}.state"
                 if state.exists():
                     entry.update(json.loads(state.read_text(encoding="utf-8")))
-            journal.rollback(progress)
+            from app_common.exif_io.metadata_store import get_store
+            aliases = [alias for entry in journal.data["entries"] for alias in entry["aliases"]]
+            sidecars = [entry["path"] for entry in journal.data["entries"] if entry["aliases"]]
+            with get_store().file_operation(aliases), _locked_sidecars(sidecars):
+                journal.rollback(progress)
 
 
 def apply_tag_edit(plan: TagEditPlan, *, cancel=lambda: False, progress=lambda *args: None,
+                   metadata=None) -> dict[str, set[str]]:
+    from app_common.exif_io.metadata_store import get_store, apply_fields
+    store = get_store()
+    aliases = list(dict.fromkeys(path for patch in plan.patches for path in patch.aliases))
+    # Library edits retain their existing multi-file recovery journal. Hold the
+    # same edit barrier and cross-process locks through commit or rollback.
+    with store.file_operation(aliases), _locked_sidecars([p.sidecar for p in plan.patches]):
+        previous = {profile: store.read_many(aliases, profile=profile)
+                    for profile in ("browser", "full", "full-display")}
+        result = _apply_tag_edit(plan, cancel=cancel, progress=progress, metadata=metadata)
+        for profile, records in previous.items():
+            updated = {}
+            for path, subjects in result.items():
+                record = records.get(path)
+                if record is None and profile != "browser":
+                    continue
+                updated[path] = apply_fields(record or {"_metadata_complete": False},
+                                             {"XMP-dc:Subject": sorted(subjects)})
+            if updated:
+                try:
+                    store.remember_many(updated, profile=profile).result()
+                except Exception:
+                    # The existing recovery journal has committed the library
+                    # and sidecars. Cache refill cannot turn that into a failed
+                    # transaction or discard its undo result.
+                    import logging
+                    logging.getLogger(__name__).exception("Tag migration snapshot refill failed")
+        return result
+
+
+def _apply_tag_edit(plan: TagEditPlan, *, cancel=lambda: False, progress=lambda *args: None,
                    metadata=None) -> dict[str, set[str]]:
     config = PhotoTagConfig(plan.config_path)
     assert_no_recovery(config)

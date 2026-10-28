@@ -34,3 +34,13 @@ def isolated_metadata_sqlite_cache(tmp_path_factory, monkeypatch):
     yield cache
     metadata_sqlite.close_cache()
     cache.close()
+
+
+@pytest.fixture(autouse=True)
+def isolated_metadata_store(tmp_path_factory, monkeypatch):
+    """Durable edit tests must never open or replay the user's pending edits."""
+    from app_common.exif_io import metadata_store
+    metadata_store.close_store()
+    monkeypatch.setenv("SUPERBIRD_METADATA_STORE_DIR", str(tmp_path_factory.mktemp("metadata-store")))
+    yield
+    metadata_store.close_store()

@@ -33,6 +33,22 @@ def snapshots(config, photos):
     return {config.path: config.read_bytes(), **{p.with_suffix('.xmp'): p.with_suffix('.xmp').read_bytes() for p in photos}}
 
 
+def test_library_migration_includes_sql_committed_tags_and_updates_snapshots(library):
+    from app_common.exif_io.metadata_store import get_store
+    cfg, photos, meta, old_plan = library
+    store = get_store()
+    path = str(photos[0])
+    store.remember_many({path: meta.read(path)}, profile="full").result(3)
+    store.submit_edit(path, {}, subject_states={"待同步中文标签": True}).result(3)
+    plan = tx.prepare_tag_edit(cfg, old_plan.before, old_plan.after, str(photos[0].parent),
+                               old_plan.filter_mapping)
+    assert "待同步中文标签" in meta.read_subjects(path, strict=True)
+    tx.apply_tag_edit(plan)
+    assert set(store.read_many([path], profile="browser")[path]["tags"]) == {
+        "外部关键词", "盘旋", "待同步中文标签"}
+    assert "盘旋" in store.read_many([path], profile="full")[path]["XMP-dc:Subject"]
+
+
 def test_recursive_chinese_roundtrip_undo_preserves_other_fields(library):
     cfg, photos, meta, plan = library
     originals = {p: p.read_bytes() for p in photos}

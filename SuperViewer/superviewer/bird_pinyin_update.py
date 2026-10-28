@@ -23,6 +23,7 @@ class PinyinResult:
     message: str
     updates: dict = field(default_factory=dict)
     saved_fingerprint: tuple | None = None
+    revision: int | None = None
 
 
 class PinyinUpdater:
@@ -77,11 +78,13 @@ class PinyinUpdater:
                     return PinyinResult(path, "cancelled", "已取消")
                 if before != (_fingerprint(path), _fingerprint(self.store.sidecar_path_for(path))):
                     return PinyinResult(path, "skipped", "照片或 XMP 已变化，请重试")
-                if not self.store.write(path, fields):
+                from app_common.exif_io.metadata_store import write_with_published_revision
+                revision = write_with_published_revision(self.store, path, fields)
+                if revision is None:
                     raise OSError("XMP 保存失败，原有数据已保留")
                 saved = _fingerprint(self.store.sidecar_path_for(path))
             updates = {**fields, PINYIN_FIELD: text, PINYIN_SOURCE_FIELD: name}
-            return PinyinResult(path, "success", f"{name}：{text}", updates, saved)
+            return PinyinResult(path, "success", f"{name}：{text}", updates, saved, revision)
         except Exception as exc:
             return PinyinResult(path, "failed", f"[BirdPinyin] {exc}")
 

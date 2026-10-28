@@ -49,7 +49,8 @@ def test_chinese_fields_full_response_and_existing_metadata_roundtrip(photo, res
     assert json.loads(values["birdid_response"]) == response
     assert values["Description"] == "我的拍摄笔记" and values["rating"] == 4
     assert store.read_subjects(str(photo)) == ["观鸟", "收藏"]
-    assert "alt_species_cn" not in values
+    assert values["alt_species_cn"] == ""
+    assert "XMP-superpicky:alt_species_cn" in json.loads(values["metadata_cleared_fields"])
     assert "白头鹎" in photo.with_suffix(".xmp").read_text(encoding="utf-8")
     assert photo.read_bytes() == before
 
@@ -349,7 +350,7 @@ def test_adopt_non_top_candidate_roundtrip_and_switch_again(photo, response, mon
     assert float(values['birdid_confidence']) == 51.2
     assert float(values['gbif_rarity_100']) == 0
     assert values['iucn_category'] == 'LC'
-    assert 'alt_species_cn' not in values
+    assert values['alt_species_cn'] == ''
     assert values['Description'] == '拍鸟笔记' and values['rating'] == 3
     assert json.loads(values['birdid_response']) == response
     assert photo.read_bytes() == before

@@ -7,6 +7,7 @@ import pytest
 from PIL import Image
 
 from app_common.exif_io.photo_meta import PhotoMetaDataXMP
+from app_common.exif_io.metadata_store import get_store
 from app_common.file_browser._workers import MetadataLoader
 from app_common.file_browser import FileListPanel
 from SuperViewer.main import MainWindow
@@ -18,6 +19,15 @@ from SuperViewer.superviewer.metadata_edit_sync import sync_saved_xmp_edit
 
 _APP = QApplication.instance() or QApplication([])
 main = importlib.import_module("SuperViewer.main")
+
+
+def wait_for(condition):
+    deadline = time.monotonic() + 8
+    while not condition():
+        assert time.monotonic() < deadline
+        _APP.processEvents()
+        time.sleep(.002)
+    _APP.processEvents()
 
 
 @pytest.mark.parametrize("mode", [FileListPanel._MODE_LIST, FileListPanel._MODE_THUMB])
@@ -53,6 +63,7 @@ def test_paste_bird_name_keeps_new_pinyin_when_old_batch_arrives(tmp_path, mode)
         assert files._meta_cache[path]["iso"] == "800"
         assert rarity_metadata(files.cached_photo_metadata_for_path(path)) == (0, "LC")
         assert shooting_location(files.cached_photo_metadata_for_path(path)) == "深圳湾"
+        assert get_store().flush_paths([path])
         assert stored_pinyin(PhotoMetaDataXMP().read(path)) == "bái tóu bēi"
     finally:
         files.shutdown()
@@ -62,7 +73,7 @@ def test_paste_bird_name_keeps_new_pinyin_when_old_batch_arrives(tmp_path, mode)
 
 @pytest.mark.parametrize("entry", ["info", "exif"])
 @pytest.mark.parametrize("new_text", ["中文新备注", ""])
-def test_comment_save_updates_parsed_cache_and_readback(tmp_path, entry, new_text):
+def test_comment_save_updates_parsed_cache_and_readback(tmp_path, entry, new_text, monkeypatch):
     photo = tmp_path / "白鹭.png"
     Image.new("RGB", (8, 6)).save(photo)
     path = os.path.normpath(str(photo))
@@ -76,14 +87,20 @@ def test_comment_save_updates_parsed_cache_and_readback(tmp_path, entry, new_tex
     harness = SimpleNamespace(
         _file_list=panel,
         _file_writes_allowed=lambda _path: True,
+        _current_exif_path=path,
+        exif_info_panel=SimpleNamespace(refresh_current_photo=lambda: None),
     )
+    monkeypatch.setattr(main.QMessageBox, "critical", lambda *args: pytest.fail(str(args)))
     try:
         assert _metadata_comment(panel._meta_cache[path]) == "原来的备注"
         if entry == "info":
-            assert MainWindow._save_photo_comment_from_info_panel(harness, path, new_text)
+            future = MainWindow._save_photo_comment_from_info_panel(harness, path, new_text)
         else:
-            assert MainWindow._write_xmp_meta_value(harness, path, main.META_DESCRIPTION_TAG_ID, new_text)
-            MainWindow._sync_metadata_after_exif_save(harness, path, main.META_DESCRIPTION_TAG_ID, new_text)
+            future = MainWindow._save_exif_value(harness, main.META_IFD_NAME,
+                main.META_DESCRIPTION_TAG_ID, new_text, "原来的备注")
+        wait_for(future.done)
+        future.result()
+        assert get_store().flush_paths([path])
         assert _metadata_comment(xmp.read(path)) == new_text
         assert _metadata_comment(panel._meta_cache[path]) == new_text
         # A batch that read before the edit must still fill unrelated fields
@@ -117,11 +134,15 @@ def test_exif_subject_edit_refreshes_filters_and_rejects_stale_tag_results(tmp_p
     )
     try:
         files.set_photo_tag_for_paths([path], "飞行", True)
+        wait_for(lambda: not files._command_history.busy)
         assert files.can_undo
         generation = files._photo_tag_generation(path)
-        MainWindow._save_exif_value(window, None, None, "捕食", "飞行", "XMP-dc:Subject")
-        assert messages == ["saved"]
+        future = MainWindow._save_exif_value(window, None, None, "捕食", "飞行", "XMP-dc:Subject")
+        wait_for(future.done)
+        future.result()
+        assert messages == []
         assert refreshes == [path]
+        assert get_store().flush_paths([path])
         assert PhotoMetaDataXMP().read_subjects(path, strict=True) == ["捕食"]
         assert files.photo_tags_for_path(path) == {"捕食"}
         assert files._photo_tag_generation(path) > generation
@@ -152,11 +173,10 @@ def test_generic_xmp_edits_update_canonical_fields_without_source_read(tmp_path,
     photo = tmp_path / "元数据.png"
     Image.new("RGB", (8, 6)).save(photo)
     path = str(photo)
-    metadata = PhotoMetaDataXMP()
-    assert metadata.write(path, {key: value})
+    receipt = get_store().submit_edit(path, {key: value}).result()
     calls = []
     files = SimpleNamespace(sync_metadata_edit_for_path=lambda path, **kwargs: calls.append(kwargs["meta_updates"]))
-    sync_saved_xmp_edit(files, path, key)
+    sync_saved_xmp_edit(files, path, key, record=receipt.record)
     assert calls[0][field] == expected
 
 

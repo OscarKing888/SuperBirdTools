@@ -193,6 +193,17 @@ class _GroupEntry:
 _MenuEntry = _LeafEntry | _GroupEntry
 
 
+class _TagMenuStateRefresh(QObject):
+    """Qt owns the subscription for exactly the lifetime of its menu."""
+    def __init__(self, menu, signal, refresh):
+        super().__init__(menu)
+        self._refresh = refresh
+        signal.connect(self.refresh)
+
+    def refresh(self, *_):
+        self._refresh()
+
+
 def _apply_entry_filter(entry: _MenuEntry, needle: str) -> bool:
     """Show/hide entry for *needle*; return whether anything visible remains."""
     if isinstance(entry, _LeafEntry):
@@ -224,6 +235,8 @@ def add_filterable_tag_actions(
     leaf_filter: Callable[[str], bool] | None = None,
     filter_placeholder: str = "过滤标签…",
     no_match_text: str = "没有匹配的标签",
+    state_changed=None,
+    after_state_refresh: Callable[[], None] | None = None,
 ) -> list:
     """Add tag actions to ``menu`` with a filter edit at the top.
 
@@ -234,6 +247,8 @@ def add_filterable_tag_actions(
     When ``keep_open`` and ``checkable`` are both True, leaf tags use embedded
     checkbox widgets so clicks do not dismiss the parent ``QMenu``. Clicks
     outside the whole context-menu tree still close every open menu.
+    ``state_changed`` refreshes checked states after an asynchronous model commit
+    without rebuilding menus or changing their search/expansion state.
     """
     if on_triggered is None:
         raise TypeError("on_triggered is required")
@@ -269,6 +284,21 @@ def add_filterable_tag_actions(
     checkboxes_by_tag: dict[str, list] = {}
     checked_state: dict[str, bool] = {}
 
+    def set_checked(tag, current):
+        checked_state[tag] = current
+        for checkbox_ref in checkboxes_by_tag.get(tag, []):
+            checkbox = checkbox_ref()
+            if checkbox is None:
+                continue
+            try:
+                blocker = QSignalBlocker(checkbox)
+                try:
+                    checkbox.setChecked(current)
+                finally:
+                    del blocker
+            except RuntimeError:
+                continue
+
     def on_leaf_toggled(tag: str, checked: bool) -> None:
         before = checked_state.get(tag, not checked)
         succeeded = False
@@ -285,20 +315,7 @@ def add_filterable_tag_actions(
                 except Exception as exc:
                     current = before
                     _log.warning("[tag_menu] tag state refresh failed tag=%r: %s", tag, exc)
-            checked_state[tag] = current
-            for checkbox_ref in checkboxes_by_tag.get(tag, []):
-                checkbox = checkbox_ref()
-                if checkbox is None:
-                    continue
-                try:
-                    blocker = QSignalBlocker(checkbox)
-                    try:
-                        checkbox.setChecked(current)
-                    finally:
-                        del blocker
-                except RuntimeError:
-                    # A callback may legitimately close and destroy its menu.
-                    continue
+            set_checked(tag, current)
 
     entries, leaf_actions = _populate_tag_tree_menu(
         menu,
@@ -318,6 +335,13 @@ def add_filterable_tag_actions(
                     checkboxes_by_tag.setdefault(entry.tag, []).append(weakref.ref(entry.action))
 
         collect_checkboxes(entries)
+        if state_changed is not None and checked_provider is not None:
+            def refresh_states():
+                for tag in checked_state:
+                    set_checked(tag, bool(checked_provider(tag)))
+                if after_state_refresh is not None:
+                    after_state_refresh()
+            menu._sv_tag_state_refresh = _TagMenuStateRefresh(menu, state_changed, refresh_states)
 
     empty_match_action = menu.addAction(no_match_text)
     empty_match_action.setEnabled(False)

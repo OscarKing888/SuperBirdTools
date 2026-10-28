@@ -12,7 +12,7 @@ from app_common.file_browser._work_action import WorkerAction, CallableAction
 from app_common.file_browser._work_policy import WorkKind
 from app_common.file_browser._metadata_actions import MetadataResult as LocationResult, LocationCopyAction
 from app_common.file_browser._metadata_tasks import MetadataBatchController, MetadataCopyController, MetadataProgressDialog
-from app_common.shooting_location import shooting_location, write_shooting_location
+from app_common.shooting_location import shooting_location, write_shooting_location, location_updates, LOCATION_TAG
 from .file_context_menu import file_menu_group
 from .bird_identification import _fingerprint, collect_paths
 from .metadata_result_sync import MetadataResultSync
@@ -27,10 +27,9 @@ except ImportError:  # pragma: no cover
 
 def save_location(path, text):
     source = os.path.normpath(os.path.abspath(path))
-    with xmp_sidecar_write_lock(source):
-        updates = write_shooting_location(source, text)
-        stamp = _fingerprint(PhotoMetaDataXMP().sidecar_path_for(source))
-    return LocationResult(source, updates=updates, saved_fingerprint=stamp)
+    from app_common.exif_io.metadata_store import get_store
+    receipt = get_store().submit_edit(source, {LOCATION_TAG: str(text or "").strip()}).result()
+    return LocationResult(source, updates=location_updates(text), revision=receipt.revision)
 
 
 class LocationWriteAction(WorkerAction):
@@ -39,10 +38,9 @@ class LocationWriteAction(WorkerAction):
         self.path, self.text = path, text
 
     def execute(self):
-        with xmp_sidecar_write_lock(self.path):
-            if self.is_cancelled():
-                return None
-            return save_location(self.path, self.text)
+        if self.is_cancelled():
+            return None
+        return save_location(self.path, self.text)
 
 
 class ShootingLocationController(MetadataBatchController):
@@ -136,7 +134,8 @@ class ShootingLocationController(MetadataBatchController):
                          (self._copy.pending or bool(QApplication.clipboard().text().strip())))
 
     def _source(self, path):
-        source = self._files._resolve_source_path_for_action(path)
+        from app_common.file_browser._browser_core import _get_cached_actual_path
+        source = os.path.normpath(_get_cached_actual_path(path) or path) if path else ""
         if not source:
             raise FileNotFoundError(f"找不到照片原文件：{path}")
         return source
@@ -188,9 +187,13 @@ class ShootingLocationController(MetadataBatchController):
         if self._shutdown_requested or self.busy:
             raise RuntimeError("正在批量修改拍摄地点，请稍后再试。")
         source = self._source(path)
-        result = save_location(source, text)
-        self._sync.sync([result], [(path, source)])
-        return True
+        from app_common.file_browser._metadata_commit import get_metadata_commit_bridge
+        from .metadata_edit_sync import sync_saved_xmp_edit
+        return get_metadata_commit_bridge(self._files).submit_edits(
+            [(source, {LOCATION_TAG: str(text or "").strip()}, None)],
+            lambda receipts: sync_saved_xmp_edit(self._files, source, LOCATION_TAG,
+                                                 record=receipts[-1].record),
+        )
 
     def start(self, paths, text):
         if self._shutdown_requested or self.busy:

@@ -9,6 +9,7 @@ from PyQt6.QtCore import QObject, pyqtSignal
 from PyQt6.QtWidgets import QApplication, QMenu, QWidget
 
 from app_common.exif_io.photo_meta import PhotoMetaDataXMP
+from app_common.exif_io.metadata_store import get_store
 from SuperViewer.superviewer import bird_identification_controller as ui
 from SuperViewer.superviewer.bird_identification import BirdIDClient, BirdIDOptions
 
@@ -189,6 +190,24 @@ def test_saved_result_queued_before_new_edit_does_not_clobber_ui(env, monkeypatc
     assert wait_for(lambda: not controller.busy)
 
 
+def test_raw_snapshot_queued_before_new_sql_edit_does_not_clobber_ui(env):
+    from SuperViewer.superviewer.capture_time_update import CaptureTimeResult
+    from SuperViewer.superviewer.metadata_result_sync import MetadataResultSync
+
+    _controller, files, paths, _state = env
+    source = paths[0]
+    store = get_store()
+    store.remember_many({source: {"XMP-dc:Title": "原片鸟名"}}, profile="full").result()
+    snapshot = store.read_many([source], profile="full")[source]
+    result = CaptureTimeResult(source, updates=snapshot, metadata_by_path={source: snapshot},
+                               revision=snapshot["_metadata_revision"])
+    files.replace_photo_metadata_for_paths = files.updates.append
+    store.submit_edit(source, {"XMP-dc:Title": "用户最新鸟名"}).result()
+    # XMP 尚未同步，文件指纹不足以拒绝这个已过期的整份替换结果。
+    MetadataResultSync(files).sync([result], replace=True)
+    assert not files.updates
+
+
 @pytest.mark.parametrize('operation', ['bird_id', 'per_bird', 'pinyin', 'location', 'rarity', 'catalog', 'capture_time', 'raw_xmp'])
 @pytest.mark.parametrize('mode', ['list', 'thumbnail'])
 def test_real_window_result_refresh_preserves_preview_and_comment_draft(tmp_path, monkeypatch, mode, operation):
@@ -197,6 +216,11 @@ def test_real_window_result_refresh_preserves_preview_and_comment_draft(tmp_path
     from app_common import superviewer_user_options
     from SuperViewer.superviewer import paths_settings
     from SuperViewer.superviewer.tagged_file_list import SuperViewerTaggedFileListPanel
+    from SuperViewer.superviewer import metadata_result_sync
+    legacy_gui_reads = []
+    original_xmp = metadata_result_sync.PhotoMetaDataXMP
+    monkeypatch.setattr(metadata_result_sync, "PhotoMetaDataXMP",
+                        lambda: legacy_gui_reads.append(True) or original_xmp())
     main = importlib.import_module('SuperViewer.main')
     settings = tmp_path / 'settings'
     settings.mkdir()
@@ -247,6 +271,7 @@ def test_real_window_result_refresh_preserves_preview_and_comment_draft(tmp_path
         files.set_pending_selection(capture_paths, source)
         assert wait_for(lambda: window.preview_panel.source_pixmap_for_path(source) is not None)
         assert wait_for(lambda: files._metadata_loader is None and files._photo_tag_loader is None and window._focus_loader is None)
+        previous_metadata = dict(files.cached_photo_metadata_for_path(source))
         cache_key = window.preview_panel.source_pixmap_for_path(source).cacheKey()
         window.image_info_panel.comment_edit.setPlainText('用户未保存的备注')
         reselections = []
@@ -328,18 +353,21 @@ def test_real_window_result_refresh_preserves_preview_and_comment_draft(tmp_path
             (raws / (missing.stem + '.ARW')).write_bytes(b'raw')
             if operation == 'raw_xmp':
                 metadata = files.cached_photo_metadata_for_path(source)
-                assert metadata.get('obsolete') == '' and metadata['rating'] == 0
+                assert not metadata.get('obsolete') and metadata['rating'] == 0
                 assert files._photo_tag_cache[source] == set()
-                assert files._merge_metadata_batch_with_photo_tag_cache({source: {
-                    'obsolete': '晚到的旧字段', 'tags': ['白头鹎'], 'rating': 5}})[source]['obsolete'] == ''
+                # 完整快照可省略已删除字段；旧读取必须按版本拒绝，不能恢复它们。
+                files._on_metadata_batch_ready({source: {
+                    **previous_metadata, 'obsolete': '晚到的旧字段', 'tags': ['白头鹎'], 'rating': 5}})
+                current = files.cached_photo_metadata_for_path(source)
+                assert not current.get('obsolete') and current['rating'] == 0
+                assert files._photo_tag_cache[source] == set()
                 assert PhotoMetaDataXMP().write_title(str(raws / (missing.stem + '.ARW')), '白头鹎')
             assert controller.start(files._active_view_selected_paths(), str(raws), all_information=operation == 'raw_xmp')
             assert wait_for(lambda: not controller.busy)
             assert files._active_view_selected_paths() == []
             assert controller._report is None and controller._succeeded == 1
             assert '2025' in window.image_info_panel.basic_rows['拍摄时间'].text()
-            expected_time = '2025-08-19 09:10' if operation == 'raw_xmp' else '2025-08-19T09:10:11.045+08:00'
-            assert files.cached_photo_metadata_for_path(source)['date_time_original'] == expected_time
+            assert files.cached_photo_metadata_for_path(source)['date_time_original'] == '2025-08-19 09:10'
             assert PhotoMetaDataXMP().read(source)['date_time_original'] == '2025-08-19T09:10:11.045+08:00'
         if operation == 'catalog':
             assert window.image_info_panel.basic_rows['拼音'].text() == 'bái tóu bēi'
@@ -356,6 +384,9 @@ def test_real_window_result_refresh_preserves_preview_and_comment_draft(tmp_path
             assert window.image_info_panel.location_edit.text() == '崇明东滩'
             window.image_info_panel.location_edit.setText('云南高黎贡山')
             window.image_info_panel.location_edit.editingFinished.emit()
+            assert wait_for(lambda: window.image_info_panel._current_location == '云南高黎贡山')
+            assert files.cached_photo_metadata_for_path(source)['shooting_location'] == '云南高黎贡山'
+            assert get_store().flush_paths([source])
             assert PhotoMetaDataXMP().read(source)['shooting_location'] == '云南高黎贡山'
         if operation == 'pinyin':
             assert window.image_info_panel.basic_rows['拼音'].text() == 'bái tóu bēi'
@@ -398,6 +429,7 @@ def test_real_window_result_refresh_preserves_preview_and_comment_draft(tmp_path
         assert window.image_info_panel.comment_edit.toPlainText() == '用户未保存的备注'
         if operation not in ('capture_time', 'raw_xmp'):
             assert controller._dialog.grab().save(str(tmp_path / f'{operation}-{mode}.png'))
+        assert not legacy_gui_reads, "GUI result delivery must compare revisions without sidecar I/O"
     finally:
         window.close()
         assert wait_for(lambda: window._shutdown_finalized)

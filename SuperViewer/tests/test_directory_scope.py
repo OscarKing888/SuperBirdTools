@@ -154,3 +154,47 @@ def test_metadata_memory_option_applies_saves_restores_and_cancel_keeps_cache(wi
             restored.deleteLater()
     finally:
         options.apply_runtime_user_options(previous)
+
+
+@pytest.mark.parametrize("mode", ["list", "thumb"])
+def test_directory_return_displays_metadata_before_reconcile_scan(window, tmp_path, monkeypatch, mode):
+    import threading
+    from app_common.file_browser import _workers
+
+    directory, other = tmp_path / "温缓存", tmp_path / "另一个目录"
+    directory.mkdir()
+    other.mkdir()
+    photo = directory / "白鹭.HIF"
+    photo.write_bytes(b"source")
+    path = str(photo)
+    panel = window._file_list
+    panel._view_mode = panel._MODE_LIST if mode == "list" else panel._MODE_THUMB
+    monkeypatch.setattr(panel, "_schedule_persistent_thumb_cache_build", lambda *_: None)
+    monkeypatch.setattr(panel, "_schedule_visible_thumbnail_update", lambda *a, **kw: None)
+    monkeypatch.setattr(panel, "_emit_file_selected_for_path", lambda *a, **kw: None)
+    monkeypatch.setattr(_workers.MetadataLoader, "_read_metadata_batch_uncached",
+                        lambda self, paths, **kw: {p: {"SourceFile": p, "XMP-dc:Title": "白鹭",
+                                                       "ExifIFD:ISO": 800, "XMP-xmp:Rating": 5}
+                                                  for p in paths})
+    window._on_directory_selected(str(directory))
+    _wait_until(lambda: not panel.has_pending_directory_scans() and panel._metadata_loader is None
+                and panel._meta_cache.get(path, {}).get("iso") == "800")
+    window._on_directory_selected(str(other))
+    _wait_until(lambda: not panel.has_pending_directory_scans() and not panel._all_files)
+    started, release = threading.Event(), threading.Event()
+
+    def blocked_scan(self):
+        started.set()
+        release.wait(3)
+
+    monkeypatch.setattr(_workers.DirectoryScanWorker, "run", blocked_scan)
+    panel._filter_min_rating = 5
+    try:
+        window._on_directory_selected(str(directory))
+        # No queued scan result or metadata validation has run at this point.
+        assert panel._meta_cache[path]["iso"] == "800"
+        assert panel._filtered_files == [path]
+        assert started.wait(1)
+    finally:
+        release.set()
+        _wait_until(lambda: not panel.has_pending_directory_scans())

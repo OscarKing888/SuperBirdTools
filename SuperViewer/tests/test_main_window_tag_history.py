@@ -20,6 +20,16 @@ from SuperViewer.superviewer.tagged_file_list import SuperViewerTaggedFileListPa
 _APP = QApplication.instance() or QApplication([])
 
 
+def settle_tags(panel):
+    deadline = time.monotonic() + 5
+    while panel._command_history.busy and time.monotonic() < deadline:
+        QApplication.processEvents()
+        time.sleep(.002)
+    assert not panel._command_history.busy
+    from app_common.exif_io.metadata_store import get_store
+    assert get_store().flush_paths([row["path"] for row in get_store().pending_status()])
+
+
 def test_toolbar_undo_redo_preserves_original_tags_and_survives_menu_rebuild(tmp_path, monkeypatch):
     main = importlib.import_module("SuperViewer.main")
     settings = tmp_path / "settings"
@@ -66,6 +76,7 @@ def test_toolbar_undo_redo_preserves_original_tags_and_survives_menu_rebuild(tmp
         assert not redo_button.isEnabled()
         assert not actions.undo_action.isEnabled()
         window._file_list.set_photo_tag_for_paths([str(path) for path in photos], "白鹭", True)
+        settle_tags(window._file_list)
         assert actions.undo_action.isEnabled()
         # Saving external-app settings rebuilds the menu using these same actions.
         window.menuBar().clear()
@@ -91,12 +102,14 @@ def test_toolbar_undo_redo_preserves_original_tags_and_survives_menu_rebuild(tmp
         assert window.findChildren(QToolBar, "editToolBar") == [toolbar]
         assert toolbar.actions() == edit.actions()[:2]
         QTest.mouseClick(undo_button, Qt.MouseButton.LeftButton)
-        assert metadata.read_subjects(str(photos[0]), strict=True) == ["白鹭", "库外关键词"]
+        settle_tags(window._file_list)
+        assert set(metadata.read_subjects(str(photos[0]), strict=True)) == {"白鹭", "库外关键词"}
         assert metadata.read_subjects(str(photos[1]), strict=True) == []
         assert actions.redo_action.isEnabled()
         assert not undo_button.isEnabled()
         assert redo_button.isEnabled()
         QTest.mouseClick(redo_button, Qt.MouseButton.LeftButton)
+        settle_tags(window._file_list)
         assert metadata.read_subjects(str(photos[1]), strict=True) == ["白鹭"]
         assert undo_button.isEnabled()
         assert not redo_button.isEnabled()

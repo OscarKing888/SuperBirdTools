@@ -43,6 +43,15 @@ class EditorPhotoListMetadataLoader(QThread):
                         _log.info("[EditorPhotoListMetadataLoader.run] interrupted before chunk")
                         return
                     chunk = self._paths[index : index + chunk_size]
+                    # First response is the complete local snapshot. Validation
+                    # and source fallback continue in this same owned worker.
+                    from app_common.exif_io.metadata_store import get_store
+                    try:
+                        cached = get_store().read_many(chunk, profile="full")
+                    except Exception:
+                        cached = {}
+                    if cached and not self._should_stop():
+                        self.metadata_batch_ready.emit(cached)
                     batch = self._read_chunk(chunk)
                     if self._should_stop():
                         _log.info("[EditorPhotoListMetadataLoader.run] interrupted after chunk")
@@ -92,7 +101,7 @@ class EditorPhotoListMetadataLoader(QThread):
         seen: set[str] = set()
         for raw_path in paths or []:
             try:
-                resolved = Path(raw_path).resolve(strict=False)
+                resolved = os.path.abspath(os.fspath(raw_path))
             except Exception:
                 continue
             norm_path = os.path.normpath(str(resolved))

@@ -9,10 +9,10 @@ from .native_file_transfer import create_child_directory, rename_directory, nati
 from .file_move_history import MoveHistory, completed_moves, is_sidecar, path_key, prepare_replay, snapshot_move
 
 try:
-    from PyQt6.QtCore import QMimeData, QObject, QThread, Qt, QUrl, pyqtSignal
+    from PyQt6.QtCore import QMimeData, QObject, QThread, QSignalBlocker, Qt, QUrl, pyqtSignal
     from PyQt6.QtWidgets import QAbstractItemView, QApplication, QInputDialog, QMessageBox
 except ImportError:  # pragma: no cover
-    from PyQt5.QtCore import QMimeData, QObject, QThread, Qt, QUrl, pyqtSignal
+    from PyQt5.QtCore import QMimeData, QObject, QThread, QSignalBlocker, Qt, QUrl, pyqtSignal
     from PyQt5.QtWidgets import QAbstractItemView, QApplication, QInputDialog, QMessageBox
 
 _DRAG_MIME = "application/x-superviewer-file-drag"
@@ -36,6 +36,14 @@ class NativeTransferWorker(QThread):
         self.clipboard_cut_complete = False
 
     def run(self):
+        from app_common.exif_io.metadata_store import get_store
+        try:
+            with get_store().file_operation(self.sources):
+                self._run_reserved()
+        except Exception as exc:
+            self.result = TransferResult(error=str(exc))
+
+    def _run_reserved(self):
         snapshots = ()
         try:
             self.paths = transfer_paths_with_sidecars(self.sources, self.destination, copy=self.copy)
@@ -65,6 +73,14 @@ class MoveReplayWorker(NativeTransferWorker):
         self.destinations = list(dict.fromkeys(str(Path(e.target).parent) for e in entries))
 
     def run(self):
+        from app_common.exif_io.metadata_store import get_store
+        try:
+            with get_store().file_operation(self.sources):
+                self._run_reserved()
+        except Exception as exc:
+            self.result = TransferResult(error=str(exc))
+
+    def _run_reserved(self):
         snapshots = []
         try:
             self.remaining = prepare_replay(self.remaining)
@@ -104,6 +120,7 @@ class DirectoryFileController(QObject):
         super().__init__(window)
         self._main, self._files, self._directories = window, files, directories
         self._worker = None
+        self._rename_pending = False
         self._shutdown_requested = False
         self._drag_token = b""
         self._drag_sources = ()
@@ -137,7 +154,7 @@ class DirectoryFileController(QObject):
         self._clipboard_revision += 1
 
     def can_paste_to_directory(self, destination):
-        if self._shutdown_requested or self._worker is not None or not os.path.isdir(destination):
+        if self._shutdown_requested or self._worker is not None or self._rename_pending or not os.path.isdir(destination):
             return False
         if not self._files.file_writes_allowed():
             return False
@@ -169,11 +186,11 @@ class DirectoryFileController(QObject):
 
     @property
     def can_undo(self):
-        return bool(self._history.undo) and self._worker is None and not self._shutdown_requested
+        return bool(self._history.undo) and self._worker is None and not self._rename_pending and not self._shutdown_requested
 
     @property
     def can_redo(self):
-        return bool(self._history.redo) and self._worker is None and not self._shutdown_requested
+        return bool(self._history.redo) and self._worker is None and not self._rename_pending and not self._shutdown_requested
 
     def undo(self):
         if self.can_undo:
@@ -217,7 +234,7 @@ class DirectoryFileController(QObject):
             return
 
     def can_rename_directory(self, path):
-        return (not self._shutdown_requested and self._worker is None
+        return (not self._shutdown_requested and self._worker is None and not self._rename_pending
                 and self._files.file_writes_allowed() and os.path.isdir(path)
                 and not os.path.ismount(path) and Path(os.path.abspath(path)).parent != Path(os.path.abspath(path)))
 
@@ -230,6 +247,12 @@ class DirectoryFileController(QObject):
                 return
             if name == Path(source).name:
                 return
+            from .native_file_transfer import _validate_directory_name
+            try:
+                _validate_directory_name(name)
+            except ValueError as exc:
+                QMessageBox.warning(self._main, "无法重命名文件夹", str(exc))
+                continue
             browser, files = self._directories, self._files
             affected = [p for p in files._all_files if browser._is_same_or_parent_path(source, p)]
             editor = getattr(self._main, "_photo_edit", None)
@@ -241,36 +264,64 @@ class DirectoryFileController(QObject):
                     affected.append(path)
             if not files._file_operation_paths_allowed([source, *affected], "重命名文件夹", warn=True):
                 return
+            from app_common.file_browser._metadata_commit import get_metadata_commit_bridge
+            requested_dir = files.get_current_dir()
+            tree_current = browser._tree.currentItem()
+            self._rename_pending = True
             if editor:
                 editor.begin_file_operation()
-            try:
+
+            def rename():
+                from app_common.exif_io.metadata_store import get_store
                 from app_common.exif_io.meta_disk_cache import directory_file_operation
-                with directory_file_operation(source):
-                    renamed = rename_directory(source, name)
-            except (OSError, ValueError) as exc:
-                QMessageBox.warning(self._main, "无法重命名文件夹", str(exc))
-                continue
-            finally:
+                with get_store().file_operation([source]):
+                    with directory_file_operation(source):
+                        return rename_directory(source, name)
+
+            def finished(renamed):
+                self._rename_pending = False
                 if editor:
                     editor.end_file_operation(affected)
-            browser.directory_renamed(source, renamed)
-            from app_common.file_browser._browser_core import _set_cached_actual_path
-            for path in affected:
-                _set_cached_actual_path(path, os.path.join(renamed, os.path.relpath(path, source)))
-            files.clear_tag_history()
-            self.photos_moved.emit(affected)
-            current = files.get_current_dir()
-            if current and browser._is_same_or_parent_path(source, current):
-                relative = os.path.relpath(current, source)
-                current = renamed if relative == "." else os.path.join(renamed, relative)
-                self._main._on_directory_selected(current, force_reload=True)
-            elif current and browser._is_same_or_parent_path(current, source):
-                files.load_directory(current, force_reload=True)
-            self._main.statusBar().showMessage(f"已重命名文件夹：{renamed}", 5000)
+                browser.directory_renamed(source, renamed)
+                # Background list application may synchronize the tree while
+                # the rename runs. Preserve its original selection unless the
+                # user has actually switched the browsed directory meanwhile.
+                if files.get_current_dir() == requested_dir and tree_current is not None:
+                    try:
+                        if tree_current.treeWidget() is browser._tree:
+                            blocker = QSignalBlocker(browser._tree)
+                            browser._tree.setCurrentItem(tree_current)
+                            del blocker
+                    except RuntimeError:
+                        pass  # A concurrent tree refresh removed that item.
+                from app_common.file_browser._browser_core import _set_cached_actual_path
+                for path in affected:
+                    _set_cached_actual_path(path, os.path.join(renamed, os.path.relpath(path, source)))
+                files.clear_tag_history()
+                self.photos_moved.emit(affected)
+                current = files.get_current_dir()
+                if current and browser._is_same_or_parent_path(source, current):
+                    relative = os.path.relpath(current, source)
+                    current = renamed if relative == "." else os.path.join(renamed, relative)
+                    self._main._on_directory_selected(current, force_reload=True)
+                elif current and browser._is_same_or_parent_path(current, source):
+                    files.load_directory(current, force_reload=True)
+                self._main.statusBar().showMessage(f"已重命名文件夹：{renamed}", 5000)
+
+            def failed(exc):
+                self._rename_pending = False
+                if editor:
+                    editor.end_file_operation(affected)
+                QMessageBox.warning(self._main, "无法重命名文件夹", str(exc))
+                if not self._shutdown_requested:
+                    self.rename_directory(source)
+
+            self._main.statusBar().showMessage("正在同步元数据并重命名文件夹…")
+            get_metadata_commit_bridge(files).execute(rename, finished, failed)
             return
 
     def create_drag_mime(self):
-        if self._shutdown_requested or self._worker is not None:
+        if self._shutdown_requested or self._worker is not None or self._rename_pending:
             return None
         selected = self._files._active_view_selected_paths()
         entries = self._files._collect_file_clipboard_entries(selected)

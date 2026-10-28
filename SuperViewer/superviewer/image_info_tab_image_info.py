@@ -710,7 +710,7 @@ class ImageInfoTabPanel_ImageInfo(ImageInfoTabPanel):
 
     def _set_current_tag(self, tag: str, enabled: bool) -> None:
         path = self.current_photo_path()
-        if not path or not os.path.isfile(path):
+        if not path:
             return
         if not self._tag_writes_allowed():
             QMessageBox.warning(self, "写入失败", self._tag_write_disabled_tooltip("保存标签"))
@@ -734,7 +734,10 @@ class ImageInfoTabPanel_ImageInfo(ImageInfoTabPanel):
         try:
             if not self._writes_allowed(path):
                 raise PermissionError(self._write_disabled_tooltip("保存拍摄地点", path))
-            if not self._location_save_callback(path, text):
+            saved = self._location_save_callback(path, text)
+            if self._watch_metadata_commit(saved, path, text, "location"):
+                return
+            if not saved:
                 raise OSError("拍摄地点保存失败。")
         except Exception as exc:
             QMessageBox.warning(self, "拍摄地点保存失败", str(exc))
@@ -747,7 +750,7 @@ class ImageInfoTabPanel_ImageInfo(ImageInfoTabPanel):
         if self._updating_comment:
             return
         path = self.current_photo_path()
-        if not path or not os.path.isfile(path):
+        if not path:
             return
         if not self._writes_allowed(path):
             QMessageBox.warning(self, "写入失败", self._write_disabled_tooltip("保存注释", path))
@@ -761,7 +764,9 @@ class ImageInfoTabPanel_ImageInfo(ImageInfoTabPanel):
             self.refresh_current_photo()
             return
         try:
-            saved = bool(self._comment_save_callback(path, comment))
+            saved = self._comment_save_callback(path, comment)
+            if self._watch_metadata_commit(saved, path, comment, "comment"):
+                return
         except Exception as exc:
             QMessageBox.warning(self, "注释保存失败", str(exc))
             self.refresh_current_photo()
@@ -773,11 +778,38 @@ class ImageInfoTabPanel_ImageInfo(ImageInfoTabPanel):
         self._current_comment = comment
         self.refresh_current_photo()
 
+    def _watch_metadata_commit(self, result, path, text, field) -> bool:
+        """Keep drafts until SQLite commit; late receipts never change another photo."""
+        from concurrent.futures import Future
+        if not isinstance(result, Future):
+            return False
+        from app_common.file_browser._metadata_commit import get_metadata_commit_bridge
+
+        attribute = "_pending_" + field + "_commit"
+        setattr(self, attribute, result)
+
+        def committed(_receipt):
+            if getattr(self, attribute, None) is not result:
+                return
+            setattr(self, attribute, None)
+            if self.current_photo_path() != path:
+                return
+            setattr(self, "_current_" + field, text)
+            self.refresh_metadata_fields()
+
+        def failed(exc):
+            if getattr(self, attribute, None) is result:
+                setattr(self, attribute, None)
+            QMessageBox.warning(self, "元数据保存失败", str(exc))
+
+        get_metadata_commit_bridge(self).watch(result, committed, failed)
+        return True
+
     def _commit_filename_edit(self) -> None:
         if self._updating_name:
             return
         path = self.current_photo_path()
-        if not path or not os.path.isfile(path):
+        if not path:
             return
         if not self._writes_allowed(path):
             QMessageBox.warning(self, "写入失败", self._write_disabled_tooltip("重命名", path))
@@ -792,6 +824,15 @@ class ImageInfoTabPanel_ImageInfo(ImageInfoTabPanel):
         except Exception as exc:
             QMessageBox.warning(self, "重命名失败", str(exc))
             self.refresh_current_photo()
+            return
+        from concurrent.futures import Future
+        if isinstance(new_path, Future):
+            from app_common.file_browser._metadata_commit import get_metadata_commit_bridge
+            get_metadata_commit_bridge(self).watch(
+                new_path,
+                lambda renamed: self.on_photo_selected(renamed) if self.current_photo_path() == path else None,
+                lambda exc: QMessageBox.warning(self, "重命名失败", str(exc)),
+            )
             return
         if new_path:
             self.on_photo_selected(new_path)

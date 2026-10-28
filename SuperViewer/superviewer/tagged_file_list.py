@@ -9,7 +9,6 @@ from pathlib import Path
 from typing import Iterable
 
 from app_common.bird_rarity import RARITY_LEVELS, rarity_level, rarity_metadata
-from app_common.command_history import CommandHistory
 from app_common.file_browser import FileListPanel
 from app_common.file_browser._browser_core import (
     _get_cached_actual_path,
@@ -34,6 +33,7 @@ from .file_context_menu import build_file_context_menu, species_shortcut_sequenc
 from .photo_tags import (
     PhotoTagConfig,
     PhotoTagSidecarStore,
+    commit_photo_tag_states,
     TagTreeNode,
     TagStates,
     TagWriteResult,
@@ -41,7 +41,7 @@ from .photo_tags import (
     photo_tag_filter_matches,
 )
 from .qt_compat import QMenu, QMessageBox, QPixmap, QThread, QTimer, QToolButton, QWidget, pyqtSignal
-from .photo_tag_commands import ClearPhotoTagsCommand, SetPhotoTagCommand
+from .photo_tag_commands import ClearPhotoTagsCommand, SetPhotoTagCommand, PhotoTagCommandHistory
 from .tag_menu import add_filterable_tag_actions
 from .ui_theme import PanelThemeColors, panel_theme_colors
 from .rarity_file_table import RarityFileTableModel, RarityBadgeDelegate
@@ -373,7 +373,7 @@ class SuperViewerTaggedFileListPanel(FileListPanel):
         self._tag_shutdown_complete = False
         self._tag_filter_bar: FilterFlowLayout | None = None
         self._focus_source_index: dict[tuple[str, str], str] = {}
-        self._command_history = CommandHistory(max_commands=100)
+        self._command_history = PhotoTagCommandHistory(self, max_commands=100)
         super().__init__(parent)
         from app_common.file_browser._browser_core import _TREE_COL_SPECIES
         rarity_column = self._file_table_model.rarity_column
@@ -678,9 +678,39 @@ class SuperViewerTaggedFileListPanel(FileListPanel):
         self._start_photo_tag_cache_loader_if_needed(files, reason="directory_listing")
         self._probe_log("photo_tag_cache.after_listing", files=len(files), elapsed_ms=elapsed_ms(apply_t0))
 
+    def _apply_store_metadata_snapshot(self, batch: dict) -> None:
+        """A newer shared revision supersedes the prior local UI protection."""
+        from app_common.exif_io.metadata_store import get_store
+        store = get_store()
+        accepted = {}
+        overrides = getattr(self, "_local_metadata_updates_by_path", {})
+        for path, metadata in batch.items():
+            norm = os.path.normpath(path)
+            revision = int(metadata.get("_metadata_revision", 0))
+            current = max(store.current_revision(norm),
+                          int(self._meta_cache.get(norm, {}).get("_metadata_revision", 0)))
+            if revision < current or metadata == self._meta_cache.get(norm):
+                continue
+            key = os.path.normcase(norm)
+            overrides.pop(key, None)
+            self._photo_tag_generation_by_path.pop(key, None)
+            self._photo_tag_cache.pop(norm, None)
+            accepted[norm] = metadata
+        if accepted:
+            super()._apply_store_metadata_snapshot(accepted)
+
     def _on_metadata_batch_ready(self, meta_dict: dict) -> None:
         if not self._is_current_metadata_sender():
             return
+        # Check the read generation before local overlays can replace it with
+        # an edit's newer generation. Unversioned legacy deltas remain valid.
+        from app_common.exif_io.metadata_store import get_store
+        store = get_store()
+        meta_dict = {path: metadata for path, metadata in meta_dict.items()
+                     if "_metadata_revision" not in metadata or
+                     int(metadata["_metadata_revision"]) >= max(
+                         int(self._meta_cache.get(os.path.normpath(path), {}).get("_metadata_revision", 0)),
+                         store.current_revision(path))}
         library = getattr(self, "tag_library", None)
         if library is not None:
             meta_dict = {path: ({key: value for key, value in meta.items() if key != "tags"}
@@ -854,56 +884,8 @@ class SuperViewerTaggedFileListPanel(FileListPanel):
     ) -> str:
         return "xmp_sidecar"
 
-    def _apply_rating_state_via_exif(
-        self,
-        paths: list[str],
-        *,
-        rating: int | None = None,
-        pick: int | None = None,
-    ) -> list[str]:
-        if not self._sidecar_writes_allowed("修改评级"):
-            return []
-        fields: dict[str, int] = {}
-        if rating is not None:
-            fields["rating"] = max(0, min(5, int(rating)))
-        if pick is not None:
-            fields["pick"] = max(-1, min(1, int(pick)))
-        if not fields:
-            return []
-        probe_t0 = perf_counter()
-        updated_paths: list[str] = []
-        write_count = 0
-        for path in self._unique_norm_paths(paths):
-            if not path:
-                continue
-            try:
-                target_path = self._resolve_metadata_write_target(path)
-                ok = bool(target_path and self._meta_proxy.write(target_path, fields))
-            except Exception as exc:
-                _log.warning("[_apply_rating_state_via_xmp] source=%r failed: %s", path, exc)
-                continue
-            if not ok:
-                _log.warning("[_apply_rating_state_via_xmp] source=%r write returned False", path)
-                continue
-            try:
-                from app_common.exif_io.writer import invalidate_metadata_cache
-                invalidate_metadata_cache([path, target_path])
-            except Exception:
-                pass
-            write_count += 1
-            self._apply_rating_state_to_meta_cache(path, rating=rating, pick=pick)
-            updated_paths.append(path)
-        perf_log(
-            _log,
-            "[rating.xmp_sidecar] selected=%s writes=%s updated=%s rating=%r pick=%r total_ms=%.1f",
-            len(paths),
-            write_count,
-            len(updated_paths),
-            rating,
-            pick,
-            elapsed_ms(probe_t0),
-        )
-        return updated_paths
+    def _apply_rating_state_via_exif(self, paths, *, rating=None, pick=None):
+        return super()._apply_rating_state_via_exif(paths, rating=rating, pick=pick)
 
     def _has_any_filter(self) -> bool:
         return (super()._has_any_filter() or bool(self._active_tag_filters)
@@ -1367,71 +1349,18 @@ class SuperViewerTaggedFileListPanel(FileListPanel):
         return changed
 
     def _start_photo_tag_cache_loader_if_needed(
-        self,
-        paths: Iterable[str],
-        *,
-        reason: str,
-        allow_without_filters: bool = False,
+        self, paths: Iterable[str], *, reason: str, allow_without_filters: bool = False,
     ) -> None:
-        library = getattr(self, "tag_library", None)
-        if library is not None and (library.busy or library.refreshing):
-            return
+        """Tags are fields of the shared metadata snapshot, never a second XML scan."""
         if self._tag_shutdown_requested or not self._available_tags:
             return
-        if not allow_without_filters and not self._photo_tag_lookup_needed_for_filters():
-            return
         path_list = _norm_paths(paths)
-        if not path_list:
-            return
-        seeded_paths = self._seed_photo_tag_cache_from_meta(path_list)
-        path_list = [path for path in path_list if path not in self._photo_tag_cache]
-        if not path_list:
-            return
-        worker = self._photo_tag_loader or self._photo_tag_stopping_loader
-        if worker is not None:
-            # Keep ownership until the queued QThread.finished slot runs,
-            # including the interval after run() returns but before delivery.
-            pending_keys = {os.path.normcase(path) for path in self._photo_tag_pending_paths}
-            for path in path_list:
-                key = os.path.normcase(path)
-                if key not in pending_keys:
-                    pending_keys.add(key)
-                    self._photo_tag_pending_paths.append(path)
-            return
-        self._photo_tag_cache_done = 0
-        self._photo_tag_cache_total = len(path_list)
-        all_norm = _norm_paths(self._all_files)
-        covered = set(self._photo_tag_cache)
-        covered.update(path_list)
-        self._photo_tag_loader_covers_all_files = bool(all_norm) and all(
-            path in covered for path in all_norm
-        )
-        if self._photo_tag_lookup_needed_for_filters():
-            self._show_meta_progress_status("正在读取照片标签", value=0, total=len(path_list))
-        self._probe_log(
-            "photo_tag_cache.start",
-            files=len(path_list),
-            seeded=len(seeded_paths),
-            reason=reason,
-        )
-
-        worker = PhotoTagCacheWorker(path_list, allowed_tags=self._available_tags)
-        worker._tag_generation_snapshot = {
-            os.path.normcase(path): self._photo_tag_generation(path)
-            for path in path_list
-        }
-        self._photo_tag_loader = worker
-        worker.batch_ready.connect(
-            lambda batch, ldr=worker: self._on_photo_tag_cache_batch_ready(ldr, batch)
-        )
-        worker.progress_updated.connect(
-            lambda done, total, ldr=worker: self._on_photo_tag_cache_progress(ldr, done, total)
-        )
-        worker.finished_summary.connect(
-            lambda done, total, ldr=worker: self._on_photo_tag_cache_finished(ldr, done, total)
-        )
-        worker.finished.connect(lambda ldr=worker: self._on_photo_tag_cache_thread_finished(ldr))
-        worker.start()
+        changed = self._seed_photo_tag_cache_from_meta(path_list)
+        if changed:
+            self.photo_tags_cache_updated.emit(changed)
+        missing = [path for path in path_list if path not in self._photo_tag_cache]
+        if missing and self._metadata_loader is None:
+            self._start_metadata_loader(missing)
 
     def _on_photo_tag_cache_batch_ready(self, worker: PhotoTagCacheWorker, batch: dict[str, set[str]]) -> None:
         if worker is not self._photo_tag_loader or not batch:
@@ -1634,31 +1563,7 @@ class SuperViewerTaggedFileListPanel(FileListPanel):
         return set()
 
     def _queue_photo_tag_lookup(self, path: str) -> None:
-        """Start a bounded asynchronous same-directory tag batch on a cache miss."""
-        norm = os.path.normpath(path) if path else ""
-        if not norm or self._tag_shutdown_requested:
-            return
-        parent_key = os.path.normcase(os.path.dirname(os.path.abspath(norm)))
-        batch = [norm]
-        seen = {os.path.normcase(norm)}
-        for candidate in self._all_files:
-            if len(batch) >= _PHOTO_TAG_CACHE_BATCH_SIZE:
-                break
-            candidate_norm = os.path.normpath(candidate)
-            candidate_key = os.path.normcase(candidate_norm)
-            if candidate_key in seen or candidate_norm in self._photo_tag_cache:
-                continue
-            if self._meta_cache_has_photo_tags(candidate_norm):
-                continue
-            if os.path.normcase(os.path.dirname(os.path.abspath(candidate_norm))) != parent_key:
-                continue
-            seen.add(candidate_key)
-            batch.append(candidate_norm)
-        self._start_photo_tag_cache_loader_if_needed(
-            batch,
-            reason="on_demand",
-            allow_without_filters=True,
-        )
+        self._start_photo_tag_cache_loader_if_needed([path], reason="selection", allow_without_filters=True)
 
     def _on_tag_filter_toggled(self, tag: str, checked: bool) -> None:
         if checked:
@@ -1706,13 +1611,16 @@ class SuperViewerTaggedFileListPanel(FileListPanel):
 
         target_paths = list(norm_paths)
 
+        def refresh_clear() -> None:
+            act_clear.setEnabled(
+                any(self._tags_for_path(path) for path in target_paths) and writes_allowed
+            )
+
         def apply_tag(tag: str, checked: bool) -> None:
             try:
                 self._set_tag_for_paths(target_paths, tag, checked)
             finally:
-                act_clear.setEnabled(
-                    any(self._tags_for_path(path) for path in target_paths) and writes_allowed
-                )
+                refresh_clear()
 
         add_filterable_tag_actions(
             tag_menu,
@@ -1722,6 +1630,8 @@ class SuperViewerTaggedFileListPanel(FileListPanel):
             checkable=True,
             checked_provider=lambda tag: all(tag in self._tags_for_path(path) for path in target_paths),
             keep_open=True,
+            state_changed=self.photo_tags_cache_updated,
+            after_state_refresh=refresh_clear,
         )
 
         tag_menu.addSeparator()
@@ -1731,11 +1641,11 @@ class SuperViewerTaggedFileListPanel(FileListPanel):
 
     @property
     def can_undo(self) -> bool:
-        return self._command_history.can_undo and self.tag_library.available
+        return self._command_history.can_undo and self.tag_library.available and not self._command_history.busy
 
     @property
     def can_redo(self) -> bool:
-        return self._command_history.can_redo and self.tag_library.available
+        return self._command_history.can_redo and self.tag_library.available and not self._command_history.busy
 
     def clear_tag_history(self) -> None:
         """Discard path-bound tag history after an explicit file rename."""
@@ -1801,12 +1711,37 @@ class SuperViewerTaggedFileListPanel(FileListPanel):
             self._show_tag_write_error("清除标签", exc)
 
     def _apply_photo_tag_states(self, states: TagStates) -> TagWriteResult:
-        if not self.tag_edits_allowed():
-            return TagWriteResult(failed_paths={path: "请等待标签操作完成，或先重试恢复。" for path in states})
-        if self._tag_shutdown_requested or not self._sidecar_writes_allowed("保存标签"):
-            return TagWriteResult(failed_paths={path: "当前无法写入标签。" for path in states})
-        started_at = perf_counter()
-        result = self._photo_tag_store.apply_tag_states(states, allowed_tags=self._available_tags)
+        """Synchronous command adapter is worker-only; UI uses the async entry."""
+        if QThread.currentThread() is self.thread():
+            raise RuntimeError("标签提交必须通过异步元数据入口。")
+        return commit_photo_tag_states(states, allowed_tags=self._available_tags)
+
+    def _apply_photo_tag_states_async(self, states: TagStates, complete):
+        from app_common.file_browser._metadata_commit import get_metadata_commit_bridge
+        allowed = list(self._available_tags)
+        targets = {}
+        aliases = {}
+        for path, values in states.items():
+            source = _get_cached_actual_path(path) or path
+            targets.setdefault(source, {}).update(values)
+            aliases[source] = path
+
+        def committed(result):
+            for source, display in aliases.items():
+                if source != display:
+                    for mapping in (result.current_tags, result.inverse_states, result.failed_paths):
+                        if source in mapping:
+                            mapping[display] = mapping.pop(source)
+            self._sync_photo_tag_result(result)
+            complete(result)
+
+        def failed(exc):
+            complete(TagWriteResult(failed_paths={path: str(exc) for path in states}))
+
+        return get_metadata_commit_bridge(self).execute(
+            lambda: commit_photo_tag_states(targets, allowed_tags=allowed), committed, failed)
+
+    def _sync_photo_tag_result(self, result: TagWriteResult) -> None:
         cache_tags = dict(result.current_tags)
         if cache_tags:
             by_source = {os.path.normcase(path): tags for path, tags in cache_tags.items()}
@@ -1836,13 +1771,6 @@ class SuperViewerTaggedFileListPanel(FileListPanel):
                     self._apply_filter()
             except Exception as exc:
                 _log.warning("[tag.write] saved tags but filter refresh failed: %s", exc)
-        perf_log(
-            _log,
-            "[tag.write] requested=%s changed=%s failed=%s total_ms=%.1f",
-            len(states), len(result.inverse_states), len(result.failed_paths), elapsed_ms(started_at),
-        )
-        return result
-
     def tag_edits_allowed(self) -> bool:
         """Operational transaction guard, independent of filesystem permissions."""
-        return self.tag_library.available and not self._tag_shutdown_requested
+        return self.tag_library.available and not self._tag_shutdown_requested and not self._command_history.busy

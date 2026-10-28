@@ -83,6 +83,11 @@ def env(tmp_path, monkeypatch):
 
 
 def test_menu_formats_choose_directory_all_success_without_popup(env, monkeypatch):
+    from SuperViewer.superviewer import metadata_result_sync
+    legacy_gui_reads = []
+    original_xmp = metadata_result_sync.PhotoMetaDataXMP
+    monkeypatch.setattr(metadata_result_sync, "PhotoMetaDataXMP",
+                        lambda: legacy_gui_reads.append(True) or original_xmp())
     controller, files, paths, raws = env
     # 从共同根目录选择，RAW 分散在不同层级及隐藏目录时也应全部更新。
     for path, relative in zip(paths, ('2025/观鸟', '.归档/原片', '2026/十月/鸟片')):
@@ -108,7 +113,10 @@ def test_menu_formats_choose_directory_all_success_without_popup(env, monkeypatc
     assert asked and controller._succeeded == 3 and not controller._failures
     assert controller._report is None and files.updates and not selected
     assert files.selected == []
+    assert all(metadata['date_time_original'] == '2025-08-19 09:10'
+               for batch in files.updates for metadata in batch.values())
     assert all(PhotoMetaDataXMP().read(p)['date_time_original'] == '2025-08-19T09:10:11.045+08:00' for p in paths)
+    assert not legacy_gui_reads, "GUI capture-time delivery must not resolve/stat XMP"
 
 
 def test_failure_report_lists_missing_raw_and_corrupt_sidecar(env):
@@ -232,7 +240,8 @@ def test_all_information_supports_other_image_formats_but_not_video(env):
         assert len(menu.actions()) == 1 and '更新所有信息' in menu.actions()[0].text()
 
 
-def test_full_copy_result_cannot_overwrite_newer_sidecar_cache(env, monkeypatch):
+@pytest.mark.parametrize('edit_timing', ['before_snapshot', 'after_snapshot'])
+def test_full_copy_result_cannot_overwrite_newer_sidecar_cache(env, monkeypatch, edit_timing):
     controller, files, paths, raws = env
     raw = raws / (Path(paths[0]).stem + '.ARW')
     store = PhotoMetaDataXMP()
@@ -242,10 +251,18 @@ def test_full_copy_result_cannot_overwrite_newer_sidecar_cache(env, monkeypatch)
         for result in original(*args, **kwargs):
             assert store.write_title(result.source, '复制后最新编辑')
             yield result
-    monkeypatch.setattr(ui, 'update_all_information', update)
+    if edit_timing == 'before_snapshot':
+        monkeypatch.setattr(ui, 'update_all_information', update)
     assert controller.start(paths[:1], str(raws), all_information=True)
+    if edit_timing == 'after_snapshot':
+        # Keep GUI delivery queued until the complete worker snapshot is old.
+        assert controller._worker.wait(8000)
+        assert store.write_title(paths[0], '复制后最新编辑')
     assert wait_for(lambda: not controller.busy)
-    assert not files.updates
+    if edit_timing == 'before_snapshot':
+        assert files.updates and files.updates[-1][paths[0]]['title'] == '复制后最新编辑'
+    else:
+        assert not files.updates
     assert store.read(paths[0])['Title'] == '复制后最新编辑'
 
 

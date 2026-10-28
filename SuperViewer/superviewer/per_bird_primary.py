@@ -77,12 +77,14 @@ def set_primary_individual(source, index, expected, *, cancelled=lambda: False):
                 return BirdIDResult(source, 'cancelled', '已取消设置主要鸟名')
             if before != (_fingerprint(source), _fingerprint(sidecar)):
                 return BirdIDResult(source, 'skipped', '照片或 XMP 已变化，请重试')
-            if not store.write(source, fields):
+            from app_common.exif_io.metadata_store import write_with_published_revision
+            revision = write_with_published_revision(store, source, fields)
+            if revision is None:
                 raise BirdIDError('XMP 保存失败，原元数据已保留')
             saved = _fingerprint(sidecar)
         return BirdIDResult(source, 'success', f"已设为主要鸟名：{values['title']}",
                             updates={**values, **fields, 'Title': values['title']},
-                            saved_fingerprint=saved, source_fingerprint=before[0])
+                            saved_fingerprint=saved, source_fingerprint=before[0], revision=revision)
     except Exception as exc:
         return BirdIDResult(source, 'failed', f'[BirdID 主要鸟名] {exc}')
 

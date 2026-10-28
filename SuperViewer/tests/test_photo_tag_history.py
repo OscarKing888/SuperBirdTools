@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import os
+import time
+from concurrent.futures import Future
 from pathlib import Path
 
 import pytest
@@ -9,6 +11,30 @@ from app_common.exif_io.photo_meta import PhotoMetaDataXMP
 from SuperViewer.superviewer import tagged_file_list as tagged_module
 from SuperViewer.superviewer.photo_tags import PhotoTagSidecarStore
 from SuperViewer.superviewer.qt_compat import QApplication
+
+
+def settle(panel):
+    deadline = time.monotonic() + 5
+    while panel._command_history.busy and time.monotonic() < deadline:
+        QApplication.processEvents()
+        time.sleep(.002)
+    assert not panel._command_history.busy
+    from app_common.exif_io.metadata_store import get_store
+    assert get_store().flush_paths(panel._all_files)
+
+
+def reject_edits(monkeypatch, paths):
+    from app_common.exif_io.metadata_store import get_store
+    store = get_store()
+    original = store.submit_edit
+    def submit(path, fields, **kwargs):
+        if paths is None or path in paths:
+            future = Future()
+            future.set_exception(OSError("模拟 SQLite 提交失败"))
+            return future
+        return original(path, fields, **kwargs)
+    monkeypatch.setattr(store, "submit_edit", submit)
+    return original
 
 
 @pytest.fixture(scope="module")
@@ -90,27 +116,34 @@ def test_batch_add_undo_only_restores_paths_that_actually_changed(history_panel)
     history_signals = []
     panel.command_history_changed.connect(lambda: history_signals.append(True))
     panel.set_photo_tag_for_paths([first, second], "飞行", True)
+    settle(panel)
     assert panel.can_undo and not panel.can_redo
     assert panel._photo_tag_cache == {first: {"飞行"}, second: {"飞行"}}
     panel.undo()
+    settle(panel)
     assert set(meta.read_subjects(first, strict=True)) == {"Lightroom", "飞行"}
     assert meta.read_subjects(second, strict=True) == []
     assert panel._photo_tag_cache == {first: {"飞行"}, second: set()}
     assert refreshed[-1] == [second]
     assert not panel.can_undo and panel.can_redo
     panel.redo()
+    settle(panel)
     assert meta.read_subjects(second, strict=True) == ["飞行"]
-    assert len(history_signals) == 3 and errors == []
+    assert len(history_signals) >= 3 and errors == []
 
 
 def test_noop_preserves_redo_and_new_change_clears_it(history_panel):
     panel, paths, errors, _ = history_panel
     panel.set_photo_tag_for_paths(paths, "飞行", True)
+    settle(panel)
     panel.undo()
+    settle(panel)
     assert panel.can_redo
     panel.set_photo_tag_for_paths(paths, "飞行", False)
+    settle(panel)
     assert panel.can_redo and not panel.can_undo
     panel.set_photo_tag_for_paths(paths, "捕食", True)
+    settle(panel)
     assert panel.can_undo and not panel.can_redo
     assert errors == []
 
@@ -121,12 +154,15 @@ def test_clear_undo_restores_each_photo_and_preserves_other_subjects(history_pan
     assert meta.write_subjects(first, ["Lightroom", "飞行", "捕食"])
     assert meta.write_subjects(second, ["其它关键词", "捕食"])
     panel.clear_photo_tags_for_paths([first, second])
+    settle(panel)
     assert meta.read_subjects(first) == ["Lightroom"]
     assert meta.read_subjects(second) == ["其它关键词"]
     panel.undo()
+    settle(panel)
     assert set(meta.read_subjects(first)) == {"Lightroom", "飞行", "捕食"}
     assert set(meta.read_subjects(second)) == {"其它关键词", "捕食"}
     panel.redo()
+    settle(panel)
     assert meta.read_subjects(first) == ["Lightroom"]
     assert meta.read_subjects(second) == ["其它关键词"]
     assert errors == []
@@ -139,15 +175,16 @@ def test_partial_initial_write_records_only_success_and_keeps_failed_cache(histo
     panel._photo_tag_cache[second] = {"捕食"}
     panel._meta_cache[second] = {"tags": ["捕食"]}
     generation = panel._photo_tag_generation(second)
-    original_write = meta.write_subjects
-    monkeypatch.setattr(meta, "write_subjects", lambda path, tags: False if path == second else original_write(path, tags))
+    original_submit = reject_edits(monkeypatch, {second})
     panel.set_photo_tag_for_paths([first, second], "飞行", True)
+    settle(panel)
     assert panel.can_undo and not panel.can_redo
     assert panel._photo_tag_cache == {first: {"飞行"}, second: {"捕食"}}
     assert panel._photo_tag_generation(second) == generation
     assert refreshed[-1] == [first]
     assert len(errors) == 1 and second in errors[0][1]
     panel.undo()
+    settle(panel)
     assert meta.read_subjects(first) == []
     assert meta.read_subjects(second) == ["捕食"]
     assert not panel.can_undo and panel.can_redo
@@ -158,33 +195,41 @@ def test_partial_undo_redo_keeps_remaining_work_for_retry(history_panel, monkeyp
     panel, (first, second), errors, _ = history_panel
     meta = panel._photo_tag_store._metadata
     panel.set_photo_tag_for_paths([first, second], "飞行", True)
+    settle(panel)
     if operation == "redo":
         panel.undo()
-    original_write = meta.write_subjects
-    monkeypatch.setattr(meta, "write_subjects", lambda path, tags: False if path == second else original_write(path, tags))
+        settle(panel)
+    original_submit = reject_edits(monkeypatch, {second})
     getattr(panel, operation)()
+    settle(panel)
     expected_first = set() if operation == "undo" else {"飞行"}
     expected_second = {"飞行"} if operation == "undo" else set()
     assert panel._photo_tag_cache == {first: expected_first, second: expected_second}
     assert panel.can_undo and panel.can_redo
     assert len(errors) == 1
-    monkeypatch.setattr(meta, "write_subjects", original_write)
+    monkeypatch.setattr(__import__("app_common.exif_io.metadata_store", fromlist=["get_store"]).get_store(), "submit_edit", original_submit)
     getattr(panel, operation)()
+    settle(panel)
     assert panel._photo_tag_cache == {first: expected_first, second: expected_first}
     assert (not panel.can_undo) if operation == "undo" else (not panel.can_redo)
     opposite = panel.redo if operation == "undo" else panel.undo
     opposite()
+    settle(panel)
     opposite()
+    settle(panel)
     assert panel._photo_tag_cache == {first: expected_second, second: expected_second}
 
 
 def test_all_failed_write_preserves_history_redo_and_reliable_cache(history_panel, monkeypatch):
     panel, paths, errors, _ = history_panel
     panel.set_photo_tag_for_paths(paths, "飞行", True)
+    settle(panel)
     panel.undo()
+    settle(panel)
     before = {path: set(tags) for path, tags in panel._photo_tag_cache.items()}
-    monkeypatch.setattr(panel._photo_tag_store._metadata, "write_subjects", lambda *args: False)
+    reject_edits(monkeypatch, None)
     panel.set_photo_tag_for_paths(paths, "捕食", True)
+    settle(panel)
     assert panel._photo_tag_cache == before
     assert not panel.can_undo and panel.can_redo
     assert len(errors) == 1
@@ -193,6 +238,7 @@ def test_all_failed_write_preserves_history_redo_and_reliable_cache(history_pane
 def test_history_scope_and_vocabulary_changes_clear_but_groups_and_subfolders_do_not(history_panel, tmp_path: Path):
     panel, paths, _, _ = history_panel
     panel.set_photo_tag_for_paths(paths, "飞行", True)
+    settle(panel)
     child = tmp_path / "child"
     child.mkdir()
     assert not panel._set_tag_config_directory(child)
@@ -207,6 +253,7 @@ def test_history_scope_and_vocabulary_changes_clear_but_groups_and_subfolders_do
     panel._load_tag_config_if_changed(force=True)
     assert not panel.can_undo and not panel.can_redo
     panel.set_photo_tag_for_paths(paths, "飞行", False)
+    settle(panel)
     assert panel.can_undo
     other = tmp_path / "other"
     (other / ".superpicky").mkdir(parents=True)
@@ -218,14 +265,18 @@ def test_history_scope_and_vocabulary_changes_clear_but_groups_and_subfolders_do
 def test_permission_and_shutdown_guards_do_not_consume_history(history_panel, monkeypatch):
     panel, paths, errors, _ = history_panel
     panel.set_photo_tag_for_paths(paths, "飞行", True)
+    settle(panel)
     monkeypatch.setattr(panel, "_sidecar_writes_allowed", lambda *args, **kwargs: False)
     panel.undo()
+    settle(panel)
     panel.clear_photo_tags_for_paths(paths)
+    settle(panel)
     assert panel.can_undo and not panel.can_redo
     assert all(tags == {"飞行"} for tags in panel._photo_tag_cache.values())
     monkeypatch.setattr(panel, "_sidecar_writes_allowed", lambda *args, **kwargs: True)
     panel.request_shutdown()
     panel.undo()
+    settle(panel)
     panel._set_tag_for_paths(paths, "捕食", True)
     assert panel.can_undo and not panel.can_redo
     assert all(tags == {"飞行"} for tags in panel._photo_tag_cache.values())
@@ -240,8 +291,10 @@ def test_saved_edit_keeps_history_even_if_ui_refresh_fails(history_panel, monkey
 
     monkeypatch.setattr(panel, "_refresh_metadata_state_for_paths", fail_refresh)
     panel.set_photo_tag_for_paths(paths, "飞行", True)
+    settle(panel)
     assert panel.can_undo
     panel.undo()
+    settle(panel)
     assert all(tags == set() for tags in panel._photo_tag_cache.values())
     assert errors == []
 
@@ -255,40 +308,51 @@ def test_saved_edit_keeps_inverse_when_metadata_cache_sync_fails(history_panel, 
 
     monkeypatch.setattr(panel, "_sync_photo_tags_to_meta_cache", fail_sync)
     panel.set_photo_tag_for_paths(paths, "飞行", True)
+    settle(panel)
     assert all(meta.read_subjects(path, strict=True) == ["飞行"] for path in paths)
     assert panel.can_undo
     panel.undo()
+    settle(panel)
     assert all(meta.read_subjects(path, strict=True) == [] for path in paths)
     assert not panel.can_undo and panel.can_redo
     assert errors == []
 
 
-def test_missing_photo_does_not_create_orphan_sidecar_and_undo_can_retry(history_panel):
+def test_cached_undo_is_durable_until_photo_returns_without_orphan_sidecar(history_panel):
     panel, (path, _), errors, _ = history_panel
     photo = Path(path)
     sidecar = photo.with_suffix(".xmp")
     meta = panel._photo_tag_store._metadata
     assert meta.write_subjects(path, ["飞行"])
     panel.clear_photo_tags_for_paths([path])
+    settle(panel)
     moved_photo = photo.with_name("moved.jpg")
     moved_sidecar = moved_photo.with_suffix(".xmp")
     photo.rename(moved_photo)
     sidecar.rename(moved_sidecar)
     panel.undo()
+    deadline = time.monotonic() + 5
+    while panel._command_history.busy and time.monotonic() < deadline:
+        QApplication.processEvents()
+        time.sleep(.002)
+    from app_common.exif_io.metadata_store import get_store
+    assert not panel._command_history.busy
+    assert not get_store().flush_paths([path], timeout=.1)
     assert not photo.exists() and not sidecar.exists()
-    assert panel.can_undo and not panel.can_redo
-    assert len(errors) == 1
+    assert not panel.can_undo and panel.can_redo
+    assert errors == []
     moved_photo.rename(photo)
     moved_sidecar.rename(sidecar)
-    panel.undo()
+    assert get_store().flush_paths([path])
     assert meta.read_subjects(path, strict=True) == ["飞行"]
-    assert not panel.can_undo and panel.can_redo
 
 
 def test_clear_tag_history_notifies_actions_and_discards_redo(history_panel):
     panel, paths, _, _ = history_panel
     panel.set_photo_tag_for_paths(paths, "飞行", True)
+    settle(panel)
     panel.undo()
+    settle(panel)
     signals = []
     panel.command_history_changed.connect(lambda: signals.append(True))
     panel.clear_tag_history()

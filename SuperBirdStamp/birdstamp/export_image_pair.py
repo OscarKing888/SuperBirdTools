@@ -79,7 +79,9 @@ def copy_export_image(source: Path, target: Path) -> None:
 
 
 def sidecar_signature(path: Path) -> str | None:
-    from birdstamp.export_frame_cache import path_signature
+    import json
+    from app_common.exif_io.metadata_sqlite import sidecar_stamp
 
     sidecar = sidecar_for(path)
-    return path_signature(sidecar) if sidecar.is_file() else None
+    stamp = sidecar_stamp(sidecar)
+    return json.dumps(stamp) if stamp is not None else None

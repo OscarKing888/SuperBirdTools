@@ -10,9 +10,8 @@ def test_main_module_imports_current_exif_api():
 
 
 def _read_exiftool_rows(monkeypatch, metadata):
-    monkeypatch.setattr(exif, "run_exiftool_json", lambda _path: [metadata])
     monkeypatch.setattr(exif, "load_exif_tag_hidden_from_settings", lambda: set())
-    return exif.load_all_exif_exiftool("sample.CR3", tag_label_chinese=True)
+    return exif.exif_rows_from_metadata(metadata, tag_label_chinese=True)
 
 
 def test_canon_distance_bounds_keep_both_raw_tags(monkeypatch):
@@ -53,6 +52,25 @@ def test_missing_distance_has_no_computed_placeholder(monkeypatch):
     rows = _read_exiftool_rows(monkeypatch, {"ExifIFD:FNumber": "f/4"})
     assert not any(row[:2] == (exif.META_IFD_NAME, exif.FOCUS_DISTANCE_TAG_ID) for row in rows)
     assert not any(row[0] == "Calc" for row in rows)
+
+
+def test_full_display_sqlite_snapshot_retains_camera_distance_tags(tmp_path, monkeypatch):
+    from app_common.exif_io.metadata_store import get_store
+
+    photo = tmp_path / "中文对焦距离.CR3"
+    photo.write_bytes(b"camera fixture")
+    metadata = {"Canon:FocusDistanceUpper": "2.5 m", "Canon:FocusDistanceLower": "1.5 m"}
+    calls = []
+    monkeypatch.setattr(exif, "get_exiftool_executable_path", lambda: "fixture-exiftool")
+    monkeypatch.setattr(exif, "run_exiftool_json", lambda path: calls.append(path) or [metadata])
+    monkeypatch.setattr(exif, "load_exif_tag_hidden_from_settings", lambda: set())
+    first = exif.load_all_exif_exiftool(str(photo), tag_label_chinese=True)
+    cached = get_store().read_many([str(photo)], profile="full-display")[str(photo)]
+    assert {key: cached[key] for key in metadata} == metadata
+    second = exif.load_all_exif_exiftool(str(photo), tag_label_chinese=True)
+    assert first == second
+    assert calls == [str(photo)]
+    assert any(row[:2] == (exif.META_IFD_NAME, exif.FOCUS_DISTANCE_TAG_ID) for row in second)
 
 
 def test_old_hyperfocal_priority_is_discarded(monkeypatch):

@@ -274,12 +274,16 @@ def test_tag_lookup_cache_miss_queues_async_work_without_sync_store_read() -> No
     assert path not in harness._photo_tag_cache
 
 
-def test_on_demand_tag_lookup_builds_bounded_same_directory_async_batch() -> None:
+def test_on_demand_tag_lookup_queues_only_requested_photo_without_listing_scan() -> None:
     current = os.path.normpath("C:/photos/current.jpg")
     known_meta = os.path.normpath("C:/photos/known-meta.jpg")
     known_cache = os.path.normpath("C:/photos/known-cache.jpg")
     same_dir = [os.path.normpath(f"C:/photos/{index:04d}.jpg") for index in range(400)]
     other_dir = os.path.normpath("C:/other/other.jpg")
+
+    class UnvisitedListing(list):
+        def __iter__(self):
+            raise AssertionError("单张按需读取不应在 GUI 遍历整个目录")
 
     class _QueueHarness:
         _queue_photo_tag_lookup = SuperViewerTaggedFileListPanel._queue_photo_tag_lookup
@@ -287,7 +291,7 @@ def test_on_demand_tag_lookup_builds_bounded_same_directory_async_batch() -> Non
 
         def __init__(self) -> None:
             self._tag_shutdown_requested = False
-            self._all_files = [known_meta, known_cache, *same_dir, other_dir]
+            self._all_files = UnvisitedListing([known_meta, known_cache, *same_dir, other_dir])
             self._photo_tag_cache = {known_cache: set()}
             self._meta_cache = {known_meta: {"tags": []}}
             self.calls: list[tuple[list[str], str, bool]] = []
@@ -306,10 +310,6 @@ def test_on_demand_tag_lookup_builds_bounded_same_directory_async_batch() -> Non
 
     assert len(harness.calls) == 1
     batch, reason, allow_without_filters = harness.calls[0]
-    assert batch[0] == current
-    assert len(batch) == 256
-    assert known_meta not in batch
-    assert known_cache not in batch
-    assert other_dir not in batch
-    assert reason == "on_demand"
+    # 只把当前缺失照片交给共享 metadata 协调器，不再另起标签 XML 扫描。
+    assert batch == [current]
     assert allow_without_filters is True

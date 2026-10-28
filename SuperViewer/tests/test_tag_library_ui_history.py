@@ -40,6 +40,16 @@ def panel(app, tmp_path, monkeypatch):
         app.processEvents()
 
 
+def settle_tags(panel):
+    deadline = time.monotonic() + 5
+    while panel._command_history.busy and time.monotonic() < deadline:
+        QApplication.processEvents()
+        time.sleep(.002)
+    assert not panel._command_history.busy
+    from app_common.exif_io.metadata_store import get_store
+    assert get_store().flush_paths([row["path"] for row in get_store().pending_status()])
+
+
 def rename_plan(panel):
     draft = TagLibraryDraft(panel._tag_config.read_bytes())
     draft.rename(draft.roots[0], '盘旋')
@@ -54,23 +64,31 @@ def test_library_and_photo_commands_share_history_without_losing_old_entries(pan
     panel.tag_library.task_runner = immediate
     path = panel._all_files[0]
     panel.set_photo_tag_for_paths([path], '飞行', True)
+    settle_tags(panel)
     panel._active_tag_filters = {'飞行'}
     panel._command_history.add_command(TagLibraryCommand(panel.tag_library, rename_plan(panel)))
     assert panel.available_photo_tags() == ['盘旋', '捕食']
     assert panel._active_tag_filters == {'盘旋'}
     assert panel._photo_tag_cache[path] == {'盘旋'}
     panel.set_photo_tag_for_paths([path], '捕食', True)
+    settle_tags(panel)
     panel.undo()
+    settle_tags(panel)
     assert panel.photo_tags_for_path(path) == {'盘旋'}
     panel.undo()
+    settle_tags(panel)
     assert panel.available_photo_tags() == ['飞行', '捕食']
     assert panel.photo_tags_for_path(path) == {'飞行'}
     assert panel._active_tag_filters == {'飞行'}
     panel.undo()
+    settle_tags(panel)
     assert panel.photo_tags_for_path(path) == set()
     panel.redo()
+    settle_tags(panel)
     panel.redo()
+    settle_tags(panel)
     panel.redo()
+    settle_tags(panel)
     assert panel.photo_tags_for_path(path) == {'盘旋', '捕食'}
     assert panel.errors == []
 
@@ -79,15 +97,18 @@ def test_failed_undo_keeps_stack_and_retry_succeeds(panel, monkeypatch):
     panel.tag_library.task_runner = immediate
     path = panel._all_files[0]
     panel.set_photo_tag_for_paths([path], '飞行', True)
+    settle_tags(panel)
     panel._command_history.add_command(TagLibraryCommand(panel.tag_library, rename_plan(panel)))
     original = PhotoMetaDataXMP.write_subjects
     monkeypatch.setattr(PhotoMetaDataXMP, 'write_subjects', lambda *args: False)
     panel.undo()
+    settle_tags(panel)
     assert panel.can_undo and not panel.can_redo
     assert panel.available_photo_tags() == ['盘旋', '捕食']
     assert '已全部回滚' in panel.errors[-1]
     monkeypatch.setattr(PhotoMetaDataXMP, 'write_subjects', original)
     panel.undo()
+    settle_tags(panel)
     assert panel.available_photo_tags() == ['飞行', '捕食']
 
 
@@ -133,6 +154,7 @@ def test_save_dialog_confirmation_real_worker_and_empty_library(panel, monkeypat
         assert panel.can_undo
         assert '同步 0 张照片' in confirmations[0]
         panel.undo()
+        settle_tags(panel)
         assert panel.available_photo_tags() == []
     finally:
         dialog.close()
@@ -177,6 +199,7 @@ def test_old_metadata_and_tag_worker_results_cannot_restore_renamed_tag(panel, m
     panel.tag_library.task_runner = immediate
     path = panel._all_files[0]
     panel.set_photo_tag_for_paths([path], '飞行', True)
+    settle_tags(panel)
     panel._command_history.add_command(TagLibraryCommand(panel.tag_library, rename_plan(panel)))
     assert panel._merge_metadata_batch_with_photo_tag_cache({path: {'tags': ['飞行']}})[path]['tags'] == ['盘旋']
     stale = type('Worker', (), {'_tag_generation_snapshot': {os.path.normcase(path): 0}})()
@@ -193,5 +216,6 @@ def test_recovery_block_prevents_regular_tag_writes(panel):
     path = panel._all_files[0]
     panel.tag_library.blocked = True
     panel.set_photo_tag_for_paths([path], '飞行', True)
+    settle_tags(panel)
     assert not panel.can_undo
     assert PhotoMetaDataXMP().read_subjects(path) == []

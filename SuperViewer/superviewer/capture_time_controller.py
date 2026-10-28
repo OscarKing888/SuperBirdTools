@@ -9,6 +9,7 @@ import time
 
 from app_common.exif_io.exiftool_runner import exiftool_worker_session, exiftool_read_request
 from app_common.exif_io.xmp_sidecar import same_stem_key
+from app_common.file_browser._browser_core import _metadata_capture_time_text
 from app_common.image_formats import SUPPORTED_IMAGE_EXTENSIONS
 from .file_context_menu import file_menu_group
 from .capture_time_update import TARGET_EXTENSIONS, CaptureTimeResult, update_capture_times
@@ -46,6 +47,7 @@ class CaptureTimeWorker(QThread):
                 update = update_all_information if self.all_information else update_capture_times
                 if self.all_information:
                     from app_common.exif_io.photo_meta import PhotoMetaDataProxy
+                    from app_common.exif_io.reader import read_full_metadata_snapshot
                     from app_common.file_browser._workers import MetadataLoader
                     reader = PhotoMetaDataProxy()
                     normalizer = MetadataLoader([], reader)
@@ -60,12 +62,23 @@ class CaptureTimeWorker(QThread):
                         if key != refreshed_key:
                             metadata_by_path = {}
                             # 共用 XMP 的图像可能尺寸/格式不同，各自读取原图回退信息。
-                            for path in dict.fromkeys([result.source, *siblings.get(key[0], [])]):
-                                metadata = reader.read(path)
+                            paths_to_refresh = list(dict.fromkeys([result.source, *siblings.get(key[0], [])]))
+                            snapshots = read_full_metadata_snapshot(
+                                paths_to_refresh,
+                                lambda paths: {path: reader.read(str(path)) for path in paths},
+                            )
+                            for path in paths_to_refresh:
+                                metadata = snapshots.get(Path(path), {})
                                 metadata_by_path[path] = {**metadata, **normalizer._parse_rec(metadata)}
                             refreshed_key = key
                         result.metadata_by_path = metadata_by_path
                         result.updates = metadata_by_path[result.source]
+                        result.revision = result.updates.get("_metadata_revision")
+                    elif result.updates:
+                        # Keep the immediate row identical to a later browser
+                        # snapshot. Raw XMP keys retain seconds and timezone.
+                        result.updates = {**result.updates,
+                                          "date_time_original": _metadata_capture_time_text(result.updates)}
                     delivered.add(result.source)
                     # 已提交结果必须交付；关窗期间 GUI 仍排空队列。
                     self.results.put(result)

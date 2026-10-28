@@ -11,6 +11,7 @@ import tempfile
 import xml.etree.ElementTree as ET
 
 from app_common.exif_io.photo_meta import PhotoMetaDataXMP, xmp_sidecar_write_lock
+from app_common.exif_io.metadata_store import get_store, notify_sidecar_write
 from app_common.exif_io.writer import invalidate_same_stem_metadata_cache
 from app_common.image_formats import SUPPORTED_IMAGE_EXTENSIONS
 from .bird_identification import _fingerprint
@@ -33,7 +34,10 @@ def _copy_sidecar(group, raw, *, cancelled):
     locks = {xmp_sidecar_write_lock(str(raw)), xmp_sidecar_write_lock(photo)}
     staging = None
     with ExitStack() as stack:
-        for lock in sorted(locks, key=id):
+        # Flush the source before capturing its bytes; target scopes are already
+        # protected by update_all_information before their fingerprints are read.
+        stack.enter_context(get_store().file_operation([str(raw)]))
+        for lock in sorted(locks, key=lambda item: item.identity):
             stack.enter_context(lock)
         _check_cancelled(cancelled)
         source = _sidecar_path(raw)
@@ -62,6 +66,7 @@ def _copy_sidecar(group, raw, *, cancelled):
             # 已共用源侧车时保持文件原样，也避免 SameFileError。
             if not (destination.exists() and os.path.samefile(source, destination)):
                 os.replace(staging, destination)
+                notify_sidecar_write(photo).result()
             saved = _fingerprint(destination)
         finally:
             if staging is not None:
@@ -72,6 +77,18 @@ def _copy_sidecar(group, raw, *, cancelled):
 
 def update_all_information(paths, directory, *, cancelled=lambda: False):
     """递归匹配 RAW，覆盖选中照片旁的同名 XMP；失败不影响其余照片。"""
+    paths = list(dict.fromkeys(os.path.normpath(os.path.abspath(p)) for p in paths))
+    try:
+        # A failed pending edit must stop replacement, not disappear with the
+        # destination XML. Capture fingerprints only after this barrier succeeds.
+        with get_store().file_operation(paths):
+            yield from _update_all_information(paths, directory, cancelled=cancelled)
+    except Exception as exc:
+        for source in paths:
+            yield CaptureTimeResult(source, str(exc))
+
+
+def _update_all_information(paths, directory, *, cancelled):
     groups = {}
     for source in dict.fromkeys(os.path.normpath(os.path.abspath(p)) for p in paths):
         if cancelled():

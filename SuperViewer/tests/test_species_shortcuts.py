@@ -74,6 +74,10 @@ def press(view, kind):
         widget = widget.parent()
     wait_for(lambda: not ((widget._metadata_copy_controller and widget._metadata_copy_controller.busy)
                          or (widget._species_paste_controller and widget._species_paste_controller.busy)))
+    if kind == "paste":
+        from app_common.exif_io.metadata_store import get_store
+        store = get_store()
+        assert store.flush_paths([row["path"] for row in store.pending_status()])
 
 
 def select(panel, view, paths, current):

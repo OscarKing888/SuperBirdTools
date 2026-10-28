@@ -102,6 +102,7 @@ try:
         META_TITLE_TAG_ID,
         apply_tag_priority,
         load_all_exif,
+        exif_rows_from_metadata,
         load_display_description,
         load_display_title,
         load_exif_piexif,
@@ -207,6 +208,7 @@ except ImportError:
         META_TITLE_TAG_ID,
         apply_tag_priority,
         load_all_exif,
+        exif_rows_from_metadata,
         load_display_description,
         load_display_title,
         load_exif_piexif,
@@ -611,6 +613,7 @@ class MainWindow(QMainWindow):
             self._load_metadata_rows_for_current_path,
             self._save_exif_value,
             self.image_info_tabs,
+            cached_rows_loader=self._cached_metadata_rows_for_path,
         )
 
         self.image_info_tabs.add_info_panel(self.image_info_panel)
@@ -1063,6 +1066,14 @@ class MainWindow(QMainWindow):
         rows = load_all_exif(path, tag_label_chinese=tag_label_chinese)
         return apply_tag_priority(rows, load_tag_priority_from_settings())
 
+    def _cached_metadata_rows_for_path(self, path: str, tag_label_chinese: bool) -> list[tuple]:
+        from app_common.exif_io.metadata_store import get_store
+        record = get_store().peek(path, profile="full-display")
+        if not record:
+            return []
+        return apply_tag_priority(exif_rows_from_metadata(record, tag_label_chinese),
+                                  load_tag_priority_from_settings())
+
     def _sync_metadata_after_exif_save(self, path: str, meta_tag_id: str, value: str) -> None:
         meta_updates: dict[str, str] = {}
         if meta_tag_id == META_TITLE_TAG_ID:
@@ -1089,19 +1100,11 @@ class MainWindow(QMainWindow):
         except Exception:
             _log.exception("[_sync_metadata_after_exif_save] path=%r meta_tag_id=%r", path, meta_tag_id)
 
-    def _write_xmp_meta_value(self, path: str, meta_tag_id: str, value: str) -> bool:
-        xmp_meta = PhotoMetaDataXMP()
-        if meta_tag_id == META_DESCRIPTION_TAG_ID:
-            return bool(xmp_meta.write_description(path, value))
-        if meta_tag_id == META_TITLE_TAG_ID:
-            return bool(xmp_meta.write_title(path, value))
-        return False
-
     def _save_exif_value(self, ifd_name: str, tag_id, new_val: str, raw_value, exiftool_key=None):
-        """Write an edited EXIF-table value to XMP sidecar only."""
+        """Commit locally, then synchronize XMP in the owned worker."""
         path = self._current_exif_path
-        if not path or not os.path.isfile(path):
-            QMessageBox.warning(self, "无法保存", "未选择图片或文件不存在。")
+        if not path:
+            QMessageBox.warning(self, "无法保存", "未选择图片。")
             return
         try:
             if ifd_name == META_IFD_NAME and str(tag_id) in (META_TITLE_TAG_ID, META_DESCRIPTION_TAG_ID):
@@ -1111,9 +1114,8 @@ class MainWindow(QMainWindow):
                 if new_text == old_text:
                     QMessageBox.information(self, "未变更", "输入内容与当前值一致，未执行写入。")
                     return
-                if not self._write_xmp_meta_value(path, meta_tag_id, new_text):
-                    raise RuntimeError("无法写入 XMP sidecar。")
-                self._sync_metadata_after_exif_save(path, meta_tag_id, new_text)
+                tag_key = "XMP-dc:Title" if meta_tag_id == META_TITLE_TAG_ID else "XMP-dc:Description"
+                new_val = new_text
             else:
                 tag_key = str(exiftool_key or "").strip()
                 if not tag_key and ifd_name is not None and tag_id is not None:
@@ -1126,11 +1128,20 @@ class MainWindow(QMainWindow):
                 from app_common.exif_io.photo_meta import _is_xmp_subject_key
                 if _is_xmp_subject_key(tag_key) and not self._file_list.tag_edits_allowed():
                     raise RuntimeError("标签操作尚未完成；请等待，或在“编辑标签”中重试恢复。")
-                if not PhotoMetaDataXMP().write(path, {tag_key: new_val}):
-                    raise RuntimeError("无法写入 XMP sidecar。请确认 exiftool 可用或该字段支持直接 sidecar 写入。")
-                sync_saved_xmp_edit(self._file_list, path, tag_key)
-            self.exif_info_panel.refresh_current_photo()
-            QMessageBox.information(self, "已保存", "元数据已写入 XMP sidecar。")
+            from app_common.file_browser._metadata_commit import get_metadata_commit_bridge
+
+            def committed(receipts):
+                sync_saved_xmp_edit(self._file_list, path, tag_key, record=receipts[-1].record)
+                if os.path.normcase(self._current_exif_path or "") == os.path.normcase(path):
+                    self.exif_info_panel.refresh_current_photo()
+                status = getattr(self, "statusBar", None)
+                if callable(status):
+                    status().showMessage("元数据已保存，正在后台同步侧车。", 4000)
+
+            return get_metadata_commit_bridge(self._file_list).submit_edits(
+                [(path, {tag_key: new_val}, None)], committed,
+                lambda exc: QMessageBox.critical(self, "保存失败", _format_exception_message(exc)),
+            )
         except Exception as exc:
             QMessageBox.critical(self, "保存失败", _format_exception_message(exc))
 
@@ -1217,25 +1228,44 @@ class MainWindow(QMainWindow):
     def _file_writes_disabled_message(self, action: str = "写入操作", path: str | None = None) -> str:
         return ""
 
-    def _rename_photo_from_info_panel(self, path: str, requested_name: str) -> str:
-        editor = getattr(self,"_photo_edit",None)
+    def _rename_photo_from_info_panel(self, path: str, requested_name: str):
+        editor = getattr(self, "_photo_edit", None)
         if editor:
-            reason = editor.file_operation_reason([path],prepare=True)
+            reason = editor.file_operation_reason([path], prepare=True)
             if reason:
                 raise RuntimeError(reason)
         if not self._file_writes_allowed(path):
             raise PermissionError(self._file_writes_disabled_message("重命名", path))
         source_path = os.path.normpath(os.path.abspath(path)) if path else ""
-        if not source_path or not os.path.isfile(source_path):
+        if not source_path:
             raise FileNotFoundError("当前图片不存在，无法重命名。")
+        from app_common.file_browser._metadata_commit import get_metadata_commit_bridge
 
+        def rename():
+            from app_common.exif_io.metadata_store import get_store
+            store = get_store()
+            target = str(MainWindow._rename_target_path(source_path, requested_name))
+            with store.file_operation([source_path, target]):
+                renamed_path = MainWindow._rename_photo_files(source_path, requested_name)
+                store.invalidate_paths([source_path, renamed_path]).result()
+                return renamed_path
+
+        def renamed(target_path):
+            if os.path.normcase(self._current_exif_path or "") != os.path.normcase(source_path):
+                return
+            self._apply_photo_rename(target_path)
+
+        return get_metadata_commit_bridge(self._file_list).execute(rename, renamed)
+
+    @staticmethod
+    def _rename_photo_files(source_path: str, requested_name: str) -> str:
         source = Path(source_path)
-        target = self._rename_target_path(source_path, requested_name)
+        target = MainWindow._rename_target_path(source_path, requested_name)
         target_path = os.path.normpath(os.path.abspath(str(target)))
         if source_path == target_path:
             return source_path
 
-        same_photo_key = self._same_filesystem_key(source_path, target_path)
+        same_photo_key = MainWindow._same_filesystem_key(source_path, target_path)
         if not same_photo_key and os.path.exists(target_path):
             raise FileExistsError(f"目标文件已存在：{target_path}")
 
@@ -1246,7 +1276,7 @@ class MainWindow(QMainWindow):
             sidecar_target = Path(target_path).with_suffix(sidecar_suffix)
             sidecar_target_text = os.path.normpath(os.path.abspath(str(sidecar_target)))
             if (
-                not self._same_filesystem_key(xmp_sidecar_source, sidecar_target_text)
+                not MainWindow._same_filesystem_key(xmp_sidecar_source, sidecar_target_text)
                 and os.path.exists(sidecar_target_text)
             ):
                 raise FileExistsError(f"目标 sidecar 已存在：{sidecar_target_text}")
@@ -1255,22 +1285,22 @@ class MainWindow(QMainWindow):
         renamed_photo = False
         renamed_sidecars: list[tuple[Path, Path]] = []
         try:
-            self._case_safe_rename_path(source, Path(target_path))
+            MainWindow._case_safe_rename_path(source, Path(target_path))
             renamed_photo = True
             for sidecar_source, sidecar_target in sidecar_pairs:
-                self._case_safe_rename_path(sidecar_source, sidecar_target)
+                MainWindow._case_safe_rename_path(sidecar_source, sidecar_target)
                 renamed_sidecars.append((sidecar_source, sidecar_target))
         except Exception as rename_exc:
             rollback_errors: list[str] = []
             for sidecar_source, sidecar_target in reversed(renamed_sidecars):
                 if sidecar_target.exists() and not sidecar_source.exists():
                     try:
-                        self._case_safe_rename_path(sidecar_target, sidecar_source)
+                        MainWindow._case_safe_rename_path(sidecar_target, sidecar_source)
                     except Exception as exc:
                         rollback_errors.append(f"{sidecar_target} → {sidecar_source}: {exc}")
             if renamed_photo and os.path.exists(target_path) and not os.path.exists(source_path):
                 try:
-                    self._case_safe_rename_path(Path(target_path), source)
+                    MainWindow._case_safe_rename_path(Path(target_path), source)
                 except Exception as exc:
                     rollback_errors.append(f"{target_path} → {source_path}: {exc}")
             if rollback_errors:
@@ -1279,6 +1309,9 @@ class MainWindow(QMainWindow):
                 ) from rename_exc
             raise
 
+        return target_path
+
+    def _apply_photo_rename(self, target_path: str) -> None:
         # Tag history holds file paths; a successful rename invalidates them.
         clear_tag_history = getattr(self._file_list, "clear_tag_history", None)
         if callable(clear_tag_history):
@@ -1294,34 +1327,21 @@ class MainWindow(QMainWindow):
         current_dir = self._file_list.get_current_dir() or str(Path(target_path).parent)
         self._file_list.set_pending_selection([target_path], current_path=target_path, apply_immediately=False)
         self._file_list.load_directory(current_dir, force_reload=True)
-        return target_path
 
-    def _save_photo_comment_from_info_panel(self, path: str, comment: str) -> bool:
+    def _save_photo_comment_from_info_panel(self, path: str, comment: str):
         if not self._file_writes_allowed(path):
             raise PermissionError(self._file_writes_disabled_message("保存注释", path))
         source_path = os.path.normpath(os.path.abspath(path)) if path else ""
-        if not source_path or not os.path.isfile(source_path):
+        if not source_path:
             raise FileNotFoundError("当前图片不存在，无法保存注释。")
 
         text = str(comment or "").strip()
-        xmp_meta = PhotoMetaDataXMP()
-        saved = bool(xmp_meta.write_description(source_path, text))
-        if not saved:
-            raise RuntimeError("无法写入 sidecar 注释。")
-
-        self._file_list.sync_metadata_edit_for_path(
-            source_path,
-            meta_updates={
-                "comment": text,
-                "Description": text,
-                "XMP-dc:Description": text,
-                "XMP:Description": text,
-                "IFD0:XPComment": text,
-                "IFD0:ImageDescription": text,
-                "EXIF:UserComment": text,
-            },
+        from app_common.file_browser._metadata_commit import get_metadata_commit_bridge
+        return get_metadata_commit_bridge(self._file_list).submit_edits(
+            [(source_path, {"XMP-dc:Description": text}, None)],
+            lambda receipts: sync_saved_xmp_edit(
+                self._file_list, source_path, "XMP-dc:Description", record=receipts[-1].record),
         )
-        return True
 
     def on_image_loaded(self, path: str):
         """图片被拖入或选择后调用。"""

@@ -16,18 +16,6 @@ from SuperViewer.superviewer.tagged_file_list import SuperViewerTaggedFileListPa
 main_module = importlib.import_module("SuperViewer.main")
 
 
-class _LabelProbe:
-    def __init__(self) -> None:
-        self.text = ""
-        self.tooltip = ""
-
-    def setText(self, value: str) -> None:
-        self.text = value
-
-    def setToolTip(self, value: str) -> None:
-        self.tooltip = value
-
-
 class _PreviewProbe:
     def __init__(self) -> None:
         self.paths: list[str] = []
@@ -40,44 +28,10 @@ class _PreviewProbe:
         self.focus_boxes.append(focus_box)
 
 
-class _RenameFileListProbe:
-    def __init__(self, directory: Path) -> None:
-        self.directory = os.path.normpath(str(directory))
-        self.pending: list[str] = []
-        self.loaded: list[str] = []
-
-    def get_current_dir(self) -> str:
-        return self.directory
-
-    def set_pending_selection(self, paths, **_kwargs) -> None:
-        self.pending = list(paths)
-
-    def load_directory(self, path: str, **_kwargs) -> None:
-        self.loaded.append(path)
-
-
-class _RenameHarness:
-    _same_filesystem_key = staticmethod(MainWindow._same_filesystem_key)
-    _case_safe_rename_path = staticmethod(MainWindow._case_safe_rename_path)
-    _rename_target_path = staticmethod(MainWindow._rename_target_path)
-
-    def __init__(self, directory: Path) -> None:
-        self.file_label = _LabelProbe()
-        self.preview_panel = _PreviewProbe()
-        self._file_list = _RenameFileListProbe(directory)
-        self._current_exif_path = ""
-
-    @staticmethod
-    def _file_writes_allowed(_path: str | None = None) -> bool:
-        return True
-
-    @staticmethod
-    def _file_writes_disabled_message(*_args) -> str:
-        return ""
-
-
-def _rename(harness: _RenameHarness, path: Path, name: str) -> Path:
-    return Path(MainWindow._rename_photo_from_info_panel(harness, str(path), name))
+def _rename(path: Path, name: str) -> Path:
+    # Transaction safety is owned by the synchronous worker helper. The Qt
+    # wrapper now returns a Future; it does not implement conflict/rollback.
+    return Path(MainWindow._rename_photo_files(str(path), name))
 
 
 def test_rename_uses_only_strict_same_directory_sidecar(tmp_path: Path) -> None:
@@ -88,7 +42,7 @@ def test_rename_uses_only_strict_same_directory_sidecar(tmp_path: Path) -> None:
     derived = export_dir / "Bird-DxO_DeepPRIME.jpg"
     derived.write_bytes(b"derived")
 
-    renamed = _rename(_RenameHarness(export_dir), derived, "Renamed")
+    renamed = _rename(derived, "Renamed")
 
     assert renamed == export_dir / "Renamed.jpg"
     assert renamed.read_bytes() == b"derived"
@@ -102,7 +56,7 @@ def test_rename_moves_same_stem_xmp_and_preserves_suffix_case(tmp_path: Path) ->
     photo.write_bytes(b"photo")
     sidecar.write_text("中文元数据", encoding="utf-8")
 
-    renamed = _rename(_RenameHarness(tmp_path), photo, "隼")
+    renamed = _rename(photo, "隼")
 
     assert renamed == tmp_path / "隼.JPG"
     assert renamed.read_bytes() == b"photo"
@@ -125,27 +79,27 @@ def test_rename_preflights_all_conflicts_without_partial_changes(
         (tmp_path / "Target.xmp").write_text("target metadata", encoding="utf-8")
 
     with pytest.raises(FileExistsError):
-        _rename(_RenameHarness(tmp_path), photo, "Target")
+        _rename(photo, "Target")
 
     assert photo.read_bytes() == b"source photo"
     assert sidecar.read_text(encoding="utf-8") == "source metadata"
 
 
-def test_rename_rolls_back_photo_when_sidecar_rename_fails(tmp_path: Path) -> None:
+def test_rename_rolls_back_photo_when_sidecar_rename_fails(tmp_path: Path, monkeypatch) -> None:
     photo = tmp_path / "Photo.jpg"
     sidecar = tmp_path / "Photo.xmp"
     photo.write_bytes(b"source photo")
     sidecar.write_text("source metadata", encoding="utf-8")
 
-    class _FailingSidecarHarness(_RenameHarness):
-        @staticmethod
-        def _case_safe_rename_path(source: Path, target: Path) -> None:
-            if source.suffix.lower() == ".xmp":
-                raise OSError("simulated sidecar failure")
-            MainWindow._case_safe_rename_path(source, target)
+    original_rename = MainWindow._case_safe_rename_path
+    def fail_sidecar(source: Path, target: Path) -> None:
+        if source.suffix.lower() == ".xmp":
+            raise OSError("simulated sidecar failure")
+        original_rename(source, target)
+    monkeypatch.setattr(MainWindow, "_case_safe_rename_path", staticmethod(fail_sidecar))
 
     with pytest.raises(OSError, match="simulated sidecar failure"):
-        _rename(_FailingSidecarHarness(tmp_path), photo, "Target")
+        _rename(photo, "Target")
 
     assert photo.read_bytes() == b"source photo"
     assert sidecar.read_text(encoding="utf-8") == "source metadata"
@@ -159,7 +113,7 @@ def test_rename_is_case_only_safe_for_photo_and_sidecar(tmp_path: Path) -> None:
     photo.write_bytes(b"photo")
     sidecar.write_text("metadata", encoding="utf-8")
 
-    renamed = _rename(_RenameHarness(tmp_path), photo, "bird")
+    renamed = _rename(photo, "bird")
 
     names = {entry.name for entry in tmp_path.iterdir()}
     assert renamed.name == "bird.jpg"

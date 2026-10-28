@@ -23,6 +23,7 @@ class RarityResult:
     message: str = ""
     updates: dict = field(default_factory=dict)
     saved_fingerprint: tuple | None = None
+    revision: int | None = None
 
 
 def save_rarity(path: str, score: float, *, cancelled=lambda: False) -> RarityResult:
@@ -57,11 +58,13 @@ def save_rarity(path: str, score: float, *, cancelled=lambda: False) -> RarityRe
             return RarityResult(source, "已取消")
         if before != (_fingerprint(source), _fingerprint(sidecar)):
             raise RuntimeError("照片或 XMP 已变化，请重试")
-        if not store.write(source, fields):
+        from app_common.exif_io.metadata_store import write_with_published_revision
+        revision = write_with_published_revision(store, source, fields)
+        if revision is None:
             raise OSError(f"稀有度写入失败，原有 XMP 已保留：{sidecar}")
         stamp = _fingerprint(sidecar)
     updates = {**fields, **values, **{f"report.{key}": val for key, val in values.items()}}
-    return RarityResult(source, updates=updates, saved_fingerprint=stamp)
+    return RarityResult(source, updates=updates, saved_fingerprint=stamp, revision=revision)
 
 
 def main(argv=None):

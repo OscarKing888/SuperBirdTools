@@ -40,6 +40,7 @@ class CaptureTimeResult:
     raw_source: str = ''
     missing_raw: bool = False
     metadata_by_path: dict = field(default_factory=dict)
+    revision: int | None = None
 
 
 def _check_cancelled(cancelled):
@@ -200,11 +201,14 @@ def update_capture_times(paths, directory, *, cancelled=lambda: False):
                     raise ValueError('已有 XMP 损坏，未写入')
                 updates = time_updates(stamp)
                 fields = {key: value for key, value in updates.items() if key.startswith('XMP-')}
-                if not store.write(source, fields):
+                from app_common.exif_io.metadata_store import write_with_published_revision
+                revision = write_with_published_revision(store, source, fields)
+                if revision is None:
                     raise RuntimeError('拍摄时间写入失败，原 XMP 已保留')
                 saved = _fingerprint(store.sidecar_path_for(source))
             for photo, _ in group:
-                yield CaptureTimeResult(photo, updates=updates, saved_fingerprint=saved, raw_source=raw)
+                yield CaptureTimeResult(photo, updates=updates, saved_fingerprint=saved, raw_source=raw,
+                                        revision=revision)
         except CaptureTimeCancelled:
             return
         except Exception as exc:

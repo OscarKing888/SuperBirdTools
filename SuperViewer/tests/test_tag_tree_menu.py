@@ -8,8 +8,10 @@ import pytest
 
 try:
     from PyQt6.QtTest import QTest
+    from PyQt6.QtCore import QObject, pyqtSignal, QCoreApplication, QEvent
 except ImportError:
     from PyQt5.QtTest import QTest
+    from PyQt5.QtCore import QObject, pyqtSignal, QCoreApplication, QEvent
 
 from SuperViewer.superviewer.photo_tags import (
     PhotoTagConfig,
@@ -25,6 +27,7 @@ from SuperViewer.superviewer.tagged_file_list import (
     SuperViewerTaggedFileListPanel,
     filter_text_tokens_match,
 )
+from SuperViewer.tests.test_photo_tag_history import settle, reject_edits
 
 
 @pytest.fixture(scope="module")
@@ -204,6 +207,7 @@ def test_context_menu_duplicate_leaves_follow_writes_and_failure_state(
     photo = tmp_path / "photo.jpg"
     photo.write_bytes(b"source")
     path = os.path.normpath(str(photo))
+    panel._all_files = [path]
     panel._photo_tag_cache[path] = set()
     panel._meta_cache[path] = {"tags": []}
     monkeypatch.setattr(panel, "_refresh_metadata_state_for_paths", lambda paths: None)
@@ -219,11 +223,15 @@ def test_context_menu_duplicate_leaves_follow_writes_and_failure_state(
         clear = next(action for action in tag_menu.actions() if action.text() == "清除所有TAG")
         assert not clear.isEnabled()
         _click_checkbox(first.findChild(QCheckBox))
+        settle(panel)
+        qt_app.processEvents()
         assert all(box.isChecked() for box in boxes)
         assert panel._photo_tag_store.get_tags(path) == {"飞行"}
         assert clear.isEnabled()
         second = _open_submenu(qt_app, tag_menu, "场景")
         _click_checkbox(second.findChild(QCheckBox))
+        settle(panel)
+        qt_app.processEvents()
         assert all(not box.isChecked() for box in boxes)
         assert panel._photo_tag_store.get_tags(path) == set()
         assert not clear.isEnabled()
@@ -231,9 +239,11 @@ def test_context_menu_duplicate_leaves_follow_writes_and_failure_state(
         from SuperViewer.superviewer import tagged_file_list as tagged_module
 
         errors = []
-        monkeypatch.setattr(panel._photo_tag_store._metadata, "write_subjects", lambda *args, **kwargs: False)
+        reject_edits(monkeypatch, {path})
         monkeypatch.setattr(tagged_module.QMessageBox, "warning", lambda *args: errors.append(args))
         _click_checkbox(second.findChild(QCheckBox))
+        settle(panel)
+        qt_app.processEvents()
         assert all(not box.isChecked() for box in boxes)
         assert not clear.isEnabled()
         assert panel._photo_tag_store.get_tags(path) == set()
@@ -265,6 +275,75 @@ def test_menu_callback_exception_restores_checkbox_without_recursive_callbacks(q
         assert menu.isVisible()
     finally:
         menu.close()
+
+
+def test_async_menu_state_refresh_preserves_filter_and_unsubscribes_on_destruction(qt_app):
+    class Model(QObject):
+        changed = pyqtSignal()
+    model = Model()
+    menu = QMenu()
+    state, reads, refreshed, destroyed = set(), [], [], []
+    def checked(tag):
+        reads.append(tag)
+        return tag in state
+    add_filterable_tag_actions(
+        menu, None, lambda *_: None,
+        tag_tree=parse_tag_tree_text("行为\n  飞行\n  捕食\n场景\n  飞行\n"),
+        checkable=True, checked_provider=checked, keep_open=True,
+        state_changed=model.changed, after_state_refresh=lambda: refreshed.append(True),
+    )
+    menu.popup(QPoint(100, 100))
+    qt_app.processEvents()
+    search = menu.findChild(QLineEdit)
+    search.setText("飞行")
+    submenu = _open_submenu(qt_app, menu, "行为")
+    state.add("飞行")
+    model.changed.emit()
+    assert search.text() == "飞行" and menu.isVisible() and submenu.isVisible()
+    boxes = [box for box in menu.findChildren(QCheckBox) if box.text() == "飞行"]
+    assert len(boxes) == 2 and all(box.isChecked() for box in boxes)
+    assert refreshed == [True]
+    menu.destroyed.connect(lambda *_: destroyed.append(True))
+    menu.close()
+    menu.deleteLater()
+    deferred = QEvent.Type.DeferredDelete if hasattr(QEvent, "Type") else QEvent.DeferredDelete
+    QCoreApplication.sendPostedEvents(None, deferred)
+    assert destroyed
+    previous_reads = list(reads)
+    model.changed.emit()
+    assert reads == previous_reads and refreshed == [True]
+
+
+def test_warm_sql_tags_accept_edit_when_broken_xmp_remains_pending(qt_app, tree_panel, tmp_path, monkeypatch):
+    from app_common.exif_io.metadata_store import get_store
+    panel = tree_panel
+    photo = tmp_path / "待修复侧车.jpg"
+    photo.write_bytes(b"source")
+    path = str(photo)
+    damaged = b"<xmp><damaged"
+    sidecar = photo.with_suffix(".xmp")
+    sidecar.write_bytes(damaged)
+    store = get_store()
+    store.remember_many({path: {"XMP-dc:Subject": ["库外标签"], "tags": ["库外标签"]}}, profile="subjects").result(3)
+    panel._all_files = [path]
+    panel._photo_tag_cache[path] = set()
+    panel._meta_cache[path] = {"tags": []}
+    monkeypatch.setattr(panel, "_refresh_metadata_state_for_paths", lambda *_: None)
+    errors = []
+    monkeypatch.setattr(panel, "_show_tag_write_error", lambda *args: errors.append(args))
+    panel.set_photo_tag_for_paths([path], "飞行", True)
+    deadline = time.monotonic() + 5
+    while panel._command_history.busy and time.monotonic() < deadline:
+        qt_app.processEvents()
+        QTest.qWait(2)
+    assert not panel._command_history.busy and not errors
+    assert panel._photo_tag_cache[path] == {"飞行"} and panel.can_undo
+    assert "飞行" in store.peek(path)["tags"]
+    assert set(store.peek(path, profile="subjects")["tags"]) == {"库外标签", "飞行"}
+    assert not store.flush_paths([path])
+    assert sidecar.read_bytes() == damaged
+    pending = store.pending_status([path])
+    assert len(pending) == 1 and pending[0]["error"] and pending[0]["attempts"] >= 1
 
 
 @pytest.mark.parametrize("tokens, expected", [

@@ -118,12 +118,14 @@ def apply_bird(source, bird, before, *, cancelled=lambda: False):
                 return BirdIDResult(source, 'skipped', '照片或 XMP 已变化，请重试')
             if store._load_or_create_xmp_tree(store.sidecar_path_for(source)) is None:
                 raise BirdIDError('已有 XMP 损坏，未写入')
-            if not store.write(source, fields):
+            from app_common.exif_io.metadata_store import write_with_published_revision
+            revision = write_with_published_revision(store, source, fields)
+            if revision is None:
                 raise BirdIDError('XMP 保存失败，原元数据已保留')
             saved = _fingerprint(store.sidecar_path_for(source))
         return BirdIDResult(source, 'success', f'已指定：{values["title"]}',
                             updates={**values, **fields, 'Title': values['title']},
-                            saved_fingerprint=saved, source_fingerprint=before[0])
+                            saved_fingerprint=saved, source_fingerprint=before[0], revision=revision)
     except BirdIDCancelled as exc:
         return BirdIDResult(source, 'cancelled', str(exc))
     except Exception as exc:

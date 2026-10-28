@@ -159,6 +159,8 @@ def window(tmp_path, monkeypatch):
     from SuperViewer.superviewer import paths_settings
     from SuperViewer.superviewer.tagged_file_list import SuperViewerTaggedFileListPanel
     main = importlib.import_module("SuperViewer.main")
+    warnings = []
+    monkeypatch.setattr(ui.QMessageBox, "warning", lambda *args: warnings.append(args[-1]))
     settings = tmp_path / "settings"
     settings.mkdir()
     (settings / paths_settings.CONFIG_FILENAME).write_text("{}", encoding="utf-8")
@@ -181,6 +183,7 @@ def window(tmp_path, monkeypatch):
     _APP.processEvents()
     from app_common.exif_io.exiftool_path import _is_usable_exiftool
     _is_usable_exiftool.cache_clear()
+    assert not warnings, warnings
 
 
 def select_photos(window, paths, mode):

@@ -1,5 +1,9 @@
 # SuperBirdStamp 架构与开发定位
 
+## 元数据 SQLite 首响应与后台同步
+
+两款应用的用户元数据读写统一经共享 `MetadataStore`：内存/SQLite 快照先显示，源文件校验在后台执行；SQLite 事务提交后刷新界面，XMP 同步由持久 outbox 驱动。目录列表、普通信息、标签和完整 EXIF 使用明确完整性的快照，筛选仍只读内存。跨目录、跨应用和退出恢复、文件操作屏障及输出侧车规则见 [元数据服务说明](../../docs/metadata-store.md)，界面状态见 [设计与验证](../../docs/ui-design/metadata-sqlite-first.md)。下文旧解析缓存和历史基准描述的是后台验证层，不能作为 GUI 首响应耗时或待同步编辑持久化的依据。
+
 本文按当前代码说明功能入口、状态归属和数据流。行为约束与验证要求以仓库根目录的 [AGENTS.md](../../AGENTS.md) 和 [AI_CODING_RULES.md](../../ai_rules/AI_CODING_RULES.md) 为准；环境与构建入口见 [仓库 README](../../README.md)。移动模块或改变处理流程时，应同步更新这里的链接和边界说明。
 
 ## 1. 启动入口与模块边界
@@ -91,7 +95,7 @@ ExifTool 生命周期与 Viewer 共用 [`exiftool_runner.py`](../../app_common/e
 
 ## 3. 元数据与模板 provider
 
-共享批量 XMP 读取通过 [`metadata_sqlite.py`](../../app_common/exif_io/metadata_sqlite.py) 复用本机 SQLite 解析缓存；所有 `PhotoMetaDataXMP` 成功写入都会异步刷新，外部修改在读取时核验侧车指纹。原始 XMP 仍为数据源，缓存失效/失败按原流程重新解析；容量、后台写入生命周期与诊断入口见 [Viewer 元数据缓存](../../SuperViewer/docs/ARCHITECTURE.md)。
+共享批量 XMP 读取通过 [`metadata_sqlite.py`](../../app_common/exif_io/metadata_sqlite.py) 复用本机 SQLite 解析缓存；所有 `PhotoMetaDataXMP` 成功写入都会异步刷新，外部修改在读取时核验侧车指纹。已提交的本地编辑优先于 XMP；`EditorPhotoListMetadataLoader` 先发布完整 SQLite 快照，再校验源数据，`EditorMetadataStoreWatch` 后台监听跨应用变化；可重建缓存失效时按原流程解析；容量、后台写入生命周期与诊断入口见 [Viewer 元数据缓存](../../SuperViewer/docs/ARCHITECTURE.md)。
 
 “拍摄地点” `location` 使用共享 [shooting_location.py](../../app_common/shooting_location.py) 的 `XMP-superpicky:shooting_location` 文本，与 Viewer 编辑字段一致。[meta/normalize.py](../birdstamp/meta/normalize.py) 供模板、Overlay 预览/导出和 CLI 共用；不再拼接存储分析结果的 City/State/Country，也不以 GPS 代替地点，坐标仍由 `gps_text` 提供。自动字段路由固定读取已合并 XMP 的规范地点，清空侧车属性后不能回退到旧照片快照；空值沿用既有缺失字段显示规则。真实中文写入、修改/清空、原图及清晰度保留、Overlay 绘制回归见 [test_template_shooting_location.py](../tests/test_template_shooting_location.py)。
 
@@ -234,7 +238,7 @@ RAW 源图的去抖动分析、成片预览和导出统一优先读取长边至�
 
 所有新渲染的 PNG/JPG 写入（普通单图/批量、CLI、独立去抖动、GIF 和视频帧）统一经过 [export_metadata.py](../birdstamp/export_metadata.py) 的 `save_export_image`，必须传入实际 `source_path`；有效 PNG 成品或同尺寸源帧可配对复制完整图片字节和独立 XMP。ExifTool 从原文件复制 EXIF 块及可写元数据，包含 MakerNotes/未知 EXIF 标签；随后单独校正成片方向与尺寸，清除旧 IFD1 目录并按成片像素重建缩略图；即使源 EXIF 的缩略图目录截断，也不解析或沿用该损坏目录，其他 EXIF、未知标签及 MakerNotes 仍按原有完整复制路径保留。不能用模板筛选后的元数据字典重建 EXIF。临时文件完成图片和 EXIF 后才替换目标，元数据失败不冒充成功、不覆盖已有完整目标，也禁止覆盖原图。使用共享 ExifTool runner（超时、Windows 隐藏窗口、应用关闭/atexit 清理）；中文内容通过文件复制保留，不拼入命令行。原图没有 EXIF 时可正常导出。源帧缓存版本更新后不会复用旧的无 EXIF 缓存。
 
-成片的 XMP **只保存到同名 `.xmp` 侧车**，JPEG/PNG 不内嵌 XMP。共享 [exif_io/export_xmp.py](../../app_common/exif_io/export_xmp.py) 的 `read_export_xmp` 只读提取原图内嵌 XMP（含扩展段），经 `merge_export_xmp` 以同目录同名侧车为优先合并完整 RDF 属性，保留未知命名空间、多语言、数组、零值/空值和内嵌独有字段；`export_xmp_geometry` 将成片方向/尺寸写入输出侧车，移除旧 XMP 缩略图和扩展段指针，源照片/侧车不变。`birdstamp/export_xmp.py` 仅保留兼容入口。原生 EXIF 与 ICC 继续按既有规则保留，不转换成 XMP。64 KiB 填充包及更大的实际 XMP 均无需写入 JPEG 的 APP1 段。损坏或空侧车使导出明确失败。
+成片的 XMP **只保存到同名 `.xmp` 侧车**，JPEG/PNG 不内嵌 XMP。共享 [exif_io/export_xmp.py](../../app_common/exif_io/export_xmp.py) 的 `read_export_xmp` 只读提取原图内嵌 XMP（含扩展段），在侧车锁内冻结 SQLite 已提交补丁，经 `merge_export_xmp` 以同目录同名侧车及该补丁合并完整 RDF 属性，保留未知命名空间、多语言、数组、零值/空值和内嵌独有字段；`export_xmp_geometry` 将成片方向/尺寸写入输出侧车，移除旧 XMP 缩略图和扩展段指针，源照片/侧车不变。`birdstamp/export_xmp.py` 仅保留兼容入口。原生 EXIF 与 ICC 继续按既有规则保留，不转换成 XMP。64 KiB 填充包及更大的实际 XMP 均无需写入 JPEG 的 APP1 段。损坏或空侧车使导出明确失败。
 
 [export_image_pair.py](../birdstamp/export_image_pair.py) 负责图片/XMP 的配对提交和完整帧复制；两文件都暂存成功后提交，任一步失败恢复旧配对，恢复失败保留并报告副本路径。禁止输出与原图同目录同 stem，避免另一图片扩展名覆盖源 XMP。普通单张/批量、CLI、去抖动和 GIF/视频中间帧全部共用该策略；去抖动不再额外复制未经几何校正的源侧车。发送或移动成片时需携带同名 XMP。GIF/视频最终容器不保存逐照片元数据，保留的 PNG 帧各带 XMP。源帧缓存版本 18 排除旧内嵌 XMP 成片；缓存记录和已导出图片索引同时校验 sidecar 指纹，丢失/修改时重新准备该帧。拼图由多张照片组成，继续不冒用其中一张的拍摄元数据。回归见 [test_export_metadata.py](../tests/test_export_metadata.py)、[test_export_sidecar_policy.py](../tests/test_export_sidecar_policy.py)。
 

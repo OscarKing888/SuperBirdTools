@@ -549,11 +549,16 @@ def source_frame_signature_for_job(
     template_signature_state: Mapping[str, Mapping[str, Any]] | None = None,
 ) -> str:
     from app_common.exif_io import find_same_stem_xmp_sidecar
+    from app_common.exif_io.metadata_sqlite import sidecar_stamp
+    from app_common.exif_io.metadata_store import get_store
 
     render_settings = _clone_render_settings(job.settings)
     # 未知 XMP 属性不一定出现在模板元数据字典中，侧车增删改也必须使成片失效。
     sidecar = find_same_stem_xmp_sidecar(str(job.path))
-    render_settings['_export_xmp_signature'] = path_signature(Path(sidecar)) if sidecar else None
+    render_settings['_export_xmp_signature'] = sidecar_stamp(sidecar) if sidecar else None
+    # Accepted edits change export identity before an unavailable/slow source
+    # volume receives XMP. Never reuse a rendered pair from an older revision.
+    render_settings['_export_metadata_revision'] = get_store().revisions([str(job.path)]).get(str(job.path), 0)
     # The terminal exporter never changes source pixels.  Omitting it lets an
     # image, GIF and video share the same rendered-frame identity.
     render_settings.pop(EXPORT_STAGE_ID_KEY, None)

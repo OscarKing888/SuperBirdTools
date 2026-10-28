@@ -65,6 +65,9 @@ def test_late_tag_batch_preserves_xmp_edit_and_other_batch_paths(
         else:
             panel.set_photo_tag_for_paths([edited], "捕食", True)
             expected = {"捕食"}
+        _wait_until(QApplication.instance(), lambda: not panel._command_history.busy)
+        from app_common.exif_io.metadata_store import get_store
+        assert get_store().flush_paths([edited])
         updated.clear()
         panel._on_photo_tag_cache_batch_ready(worker, {edited: {"飞行"}, untouched: {"飞行"}})
 
@@ -125,110 +128,46 @@ def test_metadata_batches_protect_edits_keep_seed_and_reject_old_sender(
         previous.deleteLater()
 
 
-@pytest.mark.parametrize("cancel_first", [False, True], ids=["pending", "directory_switch"])
-def test_next_tag_batch_waits_for_actual_thread_finish(
-    tag_panel, tmp_path: Path, monkeypatch, cancel_first: bool,
-) -> None:
-    app, panel = tag_panel
-    first = os.path.normpath(str(tmp_path / "first.jpg"))
-    second = os.path.normpath(str(tmp_path / "second.jpg"))
-    summary_reached = threading.Event()
-    release_first = threading.Event()
-    starts = []
-
-    class ControlledWorker(tagged_module.PhotoTagCacheWorker):
-        def run(self) -> None:
-            starts.append(list(self._paths))
-            self._finished_processed = self._finished_total = len(self._paths)
-            self.finished_summary.emit(len(self._paths), len(self._paths))
-            if self._paths == [first]:
-                summary_reached.set()
-                release_first.wait(3.0)
-            # Even a cancelled reader can already have queued a stale result.
-            self.batch_ready.emit({path: {"飞行"} for path in self._paths})
-
-    monkeypatch.setattr(tagged_module, "PhotoTagCacheWorker", ControlledWorker)
-    try:
-        panel._start_photo_tag_cache_loader_if_needed(
-            [first], reason="test", allow_without_filters=True,
-        )
-        worker = panel._photo_tag_loader
-        _wait_until(app, lambda: summary_reached.is_set() and panel._photo_tag_cache_done == 1)
-        assert panel._photo_tag_loader is worker
-        assert worker.isRunning()
-        if cancel_first:
-            panel._stop_photo_tag_cache_loader()
-            assert panel._photo_tag_stopping_loader is worker
-            assert worker in panel._pending_loaders
-        panel._start_photo_tag_cache_loader_if_needed(
-            [second], reason="test_pending", allow_without_filters=True,
-        )
-        app.processEvents()
-        assert starts == [[first]]
-        assert panel._photo_tag_pending_paths == [second]
-        release_first.set()
-        _wait_until(app, lambda: (
-            panel._photo_tag_loader is None
-            and panel._photo_tag_stopping_loader is None
-            and not panel._photo_tag_pending_paths
-        ))
-        assert starts == [[first], [second]]
-        assert panel._photo_tag_cache[second] == {"飞行"}
-        assert (first in panel._photo_tag_cache) is (not cancel_first)
-        assert worker not in panel._pending_loaders
-    finally:
-        release_first.set()
-
-
-def test_tag_loader_ownership_survives_return_until_finished_slot(tag_panel) -> None:
+def test_tag_lookup_uses_owned_shared_loader_once(tag_panel, tmp_path, monkeypatch):
     _, panel = tag_panel
-
-    class ReturnedWorker:
-        def isRunning(self):
-            raise AssertionError("pending finished slot still owns the worker")
-
-    worker = ReturnedWorker()
-    panel._photo_tag_loader = worker
+    first, second = (os.path.normpath(str(tmp_path / name)) for name in ("first.jpg", "second.jpg"))
+    owner = object()
+    started = []
+    def start(paths):
+        started.append(list(paths))
+        panel._metadata_loader = owner
+    monkeypatch.setattr(panel, "_start_metadata_loader", start)
+    monkeypatch.setattr(tagged_module, "PhotoTagCacheWorker", lambda *a, **k: pytest.fail("second XML loader"))
     try:
-        panel._start_photo_tag_cache_loader_if_needed(
-            ["one.jpg", "two.jpg"], reason="test", allow_without_filters=True,
-        )
-        panel._on_photo_tag_cache_finished(worker, 2, 2)
-        assert panel._photo_tag_loader is worker
-        assert panel._photo_tag_pending_paths == ["one.jpg", "two.jpg"]
+        panel._start_photo_tag_cache_loader_if_needed([first], reason="test", allow_without_filters=True)
+        panel._start_photo_tag_cache_loader_if_needed([second], reason="test", allow_without_filters=True)
+        assert started == [[first]]
+        assert panel._metadata_loader is owner
+        assert panel._photo_tag_loader is None
     finally:
-        panel._photo_tag_loader = None
+        panel._metadata_loader = None
 
 
-def test_shutdown_stops_tag_refresh_and_does_not_start_pending_batch(tag_panel, monkeypatch) -> None:
-    app, panel = tag_panel
-    reached = threading.Event()
-    release = threading.Event()
-    starts = []
+def test_tag_lookup_seeds_memory_without_new_metadata_work(tag_panel, tmp_path, monkeypatch):
+    _, panel = tag_panel
+    path = os.path.normpath(str(tmp_path / "cached.jpg"))
+    panel._meta_cache[path] = {"tags": ["飞行", "未知关键字"]}
+    monkeypatch.setattr(panel, "_start_metadata_loader", lambda *a: pytest.fail("warm metadata reloaded"))
+    panel._start_photo_tag_cache_loader_if_needed([path], reason="filter")
+    assert panel._photo_tag_cache[path] == {"飞行"}
+    assert panel._photo_tag_loader is None
 
-    class ControlledWorker(tagged_module.PhotoTagCacheWorker):
-        def run(self) -> None:
-            starts.append(list(self._paths))
-            reached.set()
-            release.wait(3.0)
 
-    monkeypatch.setattr(tagged_module, "PhotoTagCacheWorker", ControlledWorker)
-    try:
-        panel._active_tag_filters = {"飞行"}
-        panel._schedule_photo_tag_filter_refresh()
-        panel._start_photo_tag_cache_loader_if_needed(["one.jpg"], reason="test")
-        panel._start_photo_tag_cache_loader_if_needed(["two.jpg"], reason="pending")
-        _wait_until(app, reached.is_set)
-        panel.request_shutdown()
-        assert panel._background_shutdown_requested
-        assert not panel._photo_tag_filter_refresh_timer.isActive()
-        release.set()
-        _wait_until(app, lambda: panel._photo_tag_stopping_loader is None)
-        assert starts == [["one.jpg"]]
-        assert panel._photo_tag_pending_paths == []
-        assert panel._photo_tag_cache == {}
-    finally:
-        release.set()
+def test_shutdown_stops_tag_refresh_and_cannot_start_shared_loader(tag_panel, monkeypatch):
+    _, panel = tag_panel
+    panel._active_tag_filters = {"飞行"}
+    panel._schedule_photo_tag_filter_refresh()
+    panel.request_shutdown()
+    monkeypatch.setattr(panel, "_start_metadata_loader", lambda *a: pytest.fail("work after shutdown"))
+    panel._start_photo_tag_cache_loader_if_needed(["one.jpg"], reason="late")
+    assert not panel._photo_tag_filter_refresh_timer.isActive()
+    assert panel._photo_tag_loader is None
+    assert panel._photo_tag_cache == {}
 
 
 @pytest.mark.parametrize("missing_tags", [False, True], ids=["complete", "partial"])

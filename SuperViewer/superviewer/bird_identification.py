@@ -145,6 +145,7 @@ class BirdIDResult:
     accepted_index: int | None = None
     response_record: str | None = None
     candidates_missing: bool = False
+    revision: int | None = None
 
 
 def collect_paths(inputs, *, recursive=False, cancelled=lambda: False):
@@ -278,7 +279,9 @@ def identify_file(source: str, client: BirdIDClient) -> BirdIDResult:
             client.check_cancelled()
             if before != (_fingerprint(source), _fingerprint(store.sidecar_path_for(source))):
                 return BirdIDResult(source, "skipped", "识别期间照片或 XMP 已变化，请重试")
-            if not store.write(source, fields):
+            from app_common.exif_io.metadata_store import write_with_published_revision
+            revision = write_with_published_revision(store, source, fields)
+            if revision is None:
                 raise BirdIDError("XMP 保存失败，原元数据已保留")
             saved_fingerprint = _fingerprint(store.sidecar_path_for(source))
         updates = dict(values)
@@ -287,7 +290,7 @@ def identify_file(source: str, client: BirdIDClient) -> BirdIDResult:
             updates["Title"] = values["title"]
         name = best.get("cn_name") or best["en_name"]
         return BirdIDResult(source, "success" if confirmed else "candidate", f"{name} {confidence:.1f}%" + ("" if confirmed else "（待确定）"), response, updates, saved_fingerprint, before[0],
-                            response["results"].index(best) if confirmed else None)
+                            response["results"].index(best) if confirmed else None, revision=revision)
     except BirdIDCancelled:
         return BirdIDResult(source, "cancelled", "已停止，未写入此照片")
     except Exception as exc:
@@ -316,12 +319,15 @@ def adopt_candidate(result: BirdIDResult, index: int, *, cancelled=lambda: False
             if (result.source_fingerprint, result.saved_fingerprint) != (
                     _fingerprint(source), _fingerprint(store.sidecar_path_for(source))):
                 return BirdIDResult(source, "skipped", "照片或 XMP 已变化，请重新识别后采纳")
-            if not store.write(source, fields):
+            from app_common.exif_io.metadata_store import write_with_published_revision
+            revision = write_with_published_revision(store, source, fields)
+            if revision is None:
                 raise BirdIDError("采纳保存失败，原元数据已保留，可重试")
             saved = _fingerprint(store.sidecar_path_for(source))
         updates = {**values, **fields, "Title": values["title"]}
         return BirdIDResult(source, "success", f"已采纳：{values['title']} {float(candidate['confidence']):.1f}%",
-                            result.response, updates, saved, result.source_fingerprint, index, result.response_record)
+                            result.response, updates, saved, result.source_fingerprint, index, result.response_record,
+                            revision=revision)
     except BirdIDCancelled:
         return BirdIDResult(source, "cancelled", "已取消采纳，原结果保留")
     except Exception as exc:

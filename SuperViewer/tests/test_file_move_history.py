@@ -13,8 +13,29 @@ from PyQt6.QtWidgets import QMenu
 from SuperViewer.superviewer import directory_file_controller as ui
 from SuperViewer.superviewer import file_move_history as journal
 from SuperViewer.tests.test_directory_file_transfer import (
-    _APP, photos, window, select_photos, wait_until,
+    _APP, photos, window as transfer_window, select_photos, wait_until,
 )
+
+
+@pytest.fixture
+def window(transfer_window, monkeypatch):
+    # The Python native-backend substitute uses immediate rename/unlink.
+    # A Windows image-read handle can make shutil.move fall back to copy/unlink
+    # and change a same-volume file ID. Keep these history-focused tests clear
+    # of unrelated preview/metadata reads while retaining real Qt selection,
+    # directory loading, metadata file-operation barriers and filesystem moves.
+    monkeypatch.setattr(transfer_window._file_list, "_start_metadata_loader", lambda *_: None)
+    transfer_window._file_list.file_selected.disconnect()
+    return transfer_window
+
+
+@pytest.fixture(autouse=True)
+def unexpected_warnings_fail_instead_of_opening_a_modal(monkeypatch):
+    """An unexpected replay error must fail headless tests, never hang them."""
+    warnings = []
+    monkeypatch.setattr(ui.QMessageBox, "warning", lambda *args: warnings.append(args[-1]))
+    yield
+    assert not warnings, warnings
 
 
 def system_transfer(paths, destination, *, copy=False, owner=0):
@@ -67,6 +88,8 @@ def test_menu_round_trip_chinese_xmp_and_directory_switch(window, photos, monkey
 
 
 def test_multiple_batches_undo_redo_and_new_move_clears_redo(window, photos, monkeypatch, tmp_path):
+    warnings = []
+    monkeypatch.setattr(ui.QMessageBox, "warning", lambda *args: warnings.append(args[-1]))
     paths, destination = photos
     controller = move(window, paths, destination, monkeypatch)
     target2 = tmp_path / "第三目录"; target2.mkdir()
@@ -82,6 +105,7 @@ def test_multiple_batches_undo_redo_and_new_move_clears_redo(window, photos, mon
     assert len(controller._history.redo) == 1
     move(window, paths2, target2, monkeypatch)
     assert not controller.can_redo
+    assert not warnings
 
 
 def test_cross_volume_round_trips_rebind_older_history_file_ids(window, photos, monkeypatch, tmp_path):

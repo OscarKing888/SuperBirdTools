@@ -160,3 +160,32 @@ def test_cli_returns_json_and_failure_status(env, capsys):
     raw.unlink()
     assert core.main(['--raw-directory', str(raws), str(photo)]) == 1
     assert '未找到同名 RAW' in capsys.readouterr().out
+
+
+def test_replacement_flushes_pending_source_and_notifies_cached_target(env):
+    from app_common.exif_io.metadata_store import get_store
+    photo, raw, raws = env
+    store = get_store()
+    store.remember_many({str(photo): {'Title': '旧快照'}}).result(5)
+    old_revision = store.revisions([str(photo)])[str(photo)]
+    store.submit_edit(str(raw), {'title': '已提交的 RAW 标题'}).result(5)
+    store.submit_edit(str(photo), {'description': '替换前已接受'}).result(5)
+    result, = core.update_all_information([str(photo)], raws)
+    assert result.updates, result.message
+    assert not store.pending_status([str(photo), str(raw)])
+    assert PhotoMetaDataXMP().read(str(photo))['Title'] == '已提交的 RAW 标题'
+    assert store.revisions([str(photo)])[str(photo)] > old_revision
+    assert store.peek(str(photo)) is None
+
+
+def test_replacement_stops_when_pending_target_cannot_sync(env, monkeypatch):
+    from app_common.exif_io.metadata_store import get_store
+    photo, raw, raws = env
+    before = photo.with_suffix('.xmp').read_bytes()
+    store = get_store()
+    store.submit_edit(str(photo), {'title': '不可丢失的输入'}).result(5)
+    monkeypatch.setattr(PhotoMetaDataXMP, 'write', lambda *_: False)
+    result, = core.update_all_information([str(photo)], raws)
+    assert not result.updates and result.message
+    assert photo.with_suffix('.xmp').read_bytes() == before
+    assert store.pending_edits(str(photo))['fields']['XMP-dc:Title'] == '不可丢失的输入'

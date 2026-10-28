@@ -50,7 +50,10 @@ class FileIdentity:
             raise ValueError(f"不能记录非普通文件：{path}")
         cross_volume = for_directory is not None and info.st_dev != os.stat(for_directory).st_dev
         # 同卷移动保留文件身份；跨卷复制后删除会改变身份，需验证内容。
-        digest = _digest(path, cancelled) if cross_volume or not info.st_ino else None
+        # NTFS can restore a previous name's creation timestamp when an edited
+        # XMP is moved back (file tunnelling).  Its small content digest lets us
+        # verify that transfer without weakening photo replacement detection.
+        digest = _digest(path, cancelled) if cross_volume or not info.st_ino or is_sidecar(path) else None
         return cls(info.st_dev, info.st_ino, digest, getattr(info, "st_birthtime_ns", None))
 
     def matches(self, path):
@@ -59,7 +62,8 @@ class FileIdentity:
             if not stat.S_ISREG(info.st_mode):
                 return False
             if self.inode and (info.st_dev, info.st_ino) == (self.device, self.inode):
-                return self.birth_ns is None or self.birth_ns == getattr(info, "st_birthtime_ns", None)
+                if self.birth_ns is None or self.birth_ns == getattr(info, "st_birthtime_ns", None):
+                    return True
             return self.digest is not None and _digest(path) == self.digest
         except OSError:
             return False

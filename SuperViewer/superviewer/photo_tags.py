@@ -271,6 +271,49 @@ class PhotoTagConfig:
         return iter_tag_tree_leaves(self.load_tree())
 
 
+def commit_photo_tag_states(states, *, allowed_tags=None):
+    """Worker-only membership commits; exact subjects are loaded once when cold."""
+    from app_common.exif_io.metadata_store import get_store
+    from app_common.exif_io.reader import full_metadata_signatures
+
+    store = get_store()
+    allowed = set(allowed_tags) if allowed_tags is not None else None
+    result = TagWriteResult()
+    for path, requested in states.items():
+        path = os.path.normpath(path)
+        desired = {str(tag): bool(enabled) for tag, enabled in requested.items()
+                   if allowed is None or tag in allowed}
+        if not desired:
+            continue
+        try:
+            known = store.read_many([path], profile="subjects").get(path)
+            if known is None:
+                browser = store.read_many([path], profile="browser").get(path)
+                if browser is not None and browser.get("_metadata_complete", True):
+                    known = browser
+            if known is None:
+                # Only a cold membership base needs source hydration. Incremental
+                # outbox subjects preserve unconfigured XML subjects at sync time.
+                if not os.path.isfile(path):
+                    raise FileNotFoundError(f"照片已不存在：{path}")
+                signatures = full_metadata_signatures([path], "subjects")
+                before_revision = store.revisions([path], signatures=signatures)
+                subjects = PhotoMetaDataXMP().read_subjects(path, strict=True)
+                record = {"SourceFile": path, "XMP-dc:Subject": subjects, "tags": subjects}
+                store.remember_many({path: record}, profile="subjects", signatures=signatures,
+                                    expected_revisions=before_revision).result()
+            receipt = store.submit_edit(path, {}, subject_states=desired).result()
+            before = set(receipt.before.get("tags", receipt.before.get("XMP-dc:Subject", [])) or [])
+            current = set(receipt.record.get("tags", []) or [])
+            inverse = {tag: tag in before for tag in desired if (tag in before) != (tag in current)}
+            if inverse:
+                result.inverse_states[path] = inverse
+            result.current_tags[path] = current if allowed is None else current.intersection(allowed)
+        except Exception as exc:
+            result.failed_paths[path] = str(exc) or type(exc).__name__
+    return result
+
+
 class PhotoTagSidecarStore:
     """XMP sidecar-backed many-to-many photo/tag store."""
 

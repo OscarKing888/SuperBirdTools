@@ -185,7 +185,9 @@ def identify_individuals(source, client, analyzer, options=PerBirdOptions(), *, 
             client.check_cancelled()
             if before != (_fingerprint(source), _fingerprint(sidecar)):
                 return BirdIDResult(source, "skipped", "识别期间照片或 XMP 已变化，请重试")
-            if not store.write(source, fields):
+            from app_common.exif_io.metadata_store import write_with_published_revision
+            revision = write_with_published_revision(store, source, fields)
+            if revision is None:
                 raise BirdIDError("XMP 保存失败，原元数据已保留")
             saved = _fingerprint(sidecar)
         message = (f"找到 {len(records)} 只鸟，识别 {identified} 只，"
@@ -195,7 +197,8 @@ def identify_individuals(source, client, analyzer, options=PerBirdOptions(), *, 
             message += f"，已设为主要鸟名：{values['title']}"
             updates["Title"] = values["title"]
         return BirdIDResult(source, "partial" if failed else "success", message,
-                            response={"individuals": records}, updates=updates, saved_fingerprint=saved, source_fingerprint=before[0])
+                            response={"individuals": records}, updates=updates, saved_fingerprint=saved,
+                            source_fingerprint=before[0], revision=revision)
     except BirdIDCancelled:
         return BirdIDResult(source, "cancelled", "已停止，此照片原列表保留", response={"individuals": records})
     except Exception as exc:

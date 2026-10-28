@@ -1000,11 +1000,35 @@ def apply_tag_priority(rows: list[tuple], priority_keys: list[str]) -> list[tupl
 
 
 def load_all_exif_exiftool(path: str, tag_label_chinese: bool = False) -> list[tuple]:
-    """用 exiftool -j -G1 加载 EXIF，返回 7 元组列表。"""
-    lst = run_exiftool_json(path)
-    if not lst or not isinstance(lst[0], dict):
-        return []
-    obj = lst[0]
+    """Read the full display profile, with committed edits and sidecar priority."""
+    from app_common.exif_io.reader import read_full_metadata_snapshot
+
+    def read_sources(paths):
+        records = {}
+        for source in paths:
+            rows = run_exiftool_json(str(source)) if get_exiftool_executable_path() else []
+            if rows and isinstance(rows[0], dict):
+                records[source] = rows[0]
+            else:
+                # Fallback fields use the same semantic keys, so sidecar and
+                # pending SQLite edits retain precedence without ExifTool too.
+                record = {"SourceFile": str(source)}
+                for row in _load_all_exif_fallback(str(source), tag_label_chinese=False):
+                    if row[0] == META_IFD_NAME and row[1] in {META_TITLE_TAG_ID, META_DESCRIPTION_TAG_ID}:
+                        key = "XMP-dc:" + str(row[1])
+                    else:
+                        key = row[6] or f"{row[2]}:{row[3]}"
+                    record[key] = row[4]
+                records[source] = record
+        return records
+
+    source = Path(path).resolve(strict=False)
+    record = read_full_metadata_snapshot([source], read_sources, profile="full-display").get(source)
+    return exif_rows_from_metadata(record, tag_label_chinese=tag_label_chinese) if record else []
+
+
+def exif_rows_from_metadata(obj: dict, tag_label_chinese: bool = False) -> list[tuple]:
+    """Format a snapshot without source, XML or SQLite I/O."""
     names_zh = load_exif_tag_names_zh_from_settings() if tag_label_chinese else None
     hidden_keys = load_exif_tag_hidden_from_settings()
     hidden_exiftool = set()
@@ -1022,18 +1046,13 @@ def load_all_exif_exiftool(path: str, tag_label_chinese: bool = False) -> list[t
     def _fmt(v):
         return _extract_exiftool_text_value(v)
 
-    title_value = _pick_preferred_meta_text(
-        obj.get("XMP-dc:Title"),
-        obj.get("IFD0:XPTitle"),
-        obj.get("IFD0:DocumentName"),
-    )
-    desc_value = _pick_preferred_meta_text(
-        obj.get("XMP-dc:Description"),
-        obj.get("IFD0:XPComment"),
-        obj.get("IFD0:ImageDescription"),
-        obj.get("EXIF:UserComment"),
-        obj.get("ExifIFD:UserComment"),
-    )
+    title_value = (_extract_exiftool_text_value(obj["XMP-dc:Title"])
+                   if "XMP-dc:Title" in obj else _pick_preferred_meta_text(
+                       obj.get("IFD0:XPTitle"), obj.get("IFD0:DocumentName")))
+    desc_value = (_extract_exiftool_text_value(obj["XMP-dc:Description"])
+                  if "XMP-dc:Description" in obj else _pick_preferred_meta_text(
+                      obj.get("IFD0:XPComment"), obj.get("IFD0:ImageDescription"),
+                      obj.get("EXIF:UserComment"), obj.get("ExifIFD:UserComment")))
     desc_raw_value = _normalize_meta_edit_text(desc_value)
     rows = []
     rows.append((
@@ -1073,13 +1092,12 @@ def load_all_exif_exiftool(path: str, tag_label_chinese: bool = False) -> list[t
 
 
 def load_all_exif(path: str, tag_label_chinese: bool = False) -> list[tuple]:
-    """加载全部 EXIF，返回 [(ifd_name, tag_id, 分组, 标签名, 值字符串, raw_value, exiftool_key?), ...]。"""
-    _log.info("[load_all_exif] EXIF 查询 path=%r", path)
-    if get_exiftool_executable_path():
-        exif_rows = load_all_exif_exiftool(path, tag_label_chinese=tag_label_chinese)
-        if len(exif_rows) > 2:
-            _log.info("[load_all_exif] 完成 来源=exiftool path=%r 条数=%s", path, len(exif_rows))
-            return exif_rows
+    """Load a SQLite-backed complete display snapshot on the owning worker."""
+    return load_all_exif_exiftool(path, tag_label_chinese=tag_label_chinese)
+
+
+def _load_all_exif_fallback(path: str, tag_label_chinese: bool = False) -> list[tuple]:
+    """Source-only fallback when ExifTool is unavailable; called on cache miss."""
     rows = []
     names_zh = load_exif_tag_names_zh_from_settings() if tag_label_chinese else None
     data = load_exif_piexif(path) or (load_exif_heic(path) if Path(path).suffix.lower() in HEIF_EXTENSIONS else None)

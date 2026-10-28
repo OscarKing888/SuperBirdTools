@@ -106,6 +106,7 @@ def test_menu_rename_preserves_tree_and_reloads_affected_directory(window, photo
     menu.setActiveAction(action)
     QTest.keyClick(menu, Qt.Key.Key_Return)
     target = source.with_name("重命名 鸟类")
+    wait_until(lambda: not window._directory_files._rename_pending)
     assert target.is_dir() and not source.exists()
     assert item.text(0) == target.name
     assert item.data(0, Qt.ItemDataRole.UserRole) == str(target)
@@ -136,6 +137,7 @@ def test_cancel_retry_busy_shutdown_and_edit_guard(window, photos, monkeypatch):
     (source.parent / "已有").mkdir()
     monkeypatch.setattr(ui.QInputDialog, "getText", lambda *a, **k: next(answers))
     controller.rename_directory(str(source))
+    wait_until(lambda: not controller._rename_pending)
     assert source.is_dir() and len(warnings) == 2
     editor = window._photo_edit
     editor._loading.add(source_key(paths[0]))  # 不在当前目录列表内的后台编辑也要保护。
@@ -217,6 +219,7 @@ def test_native_menu_and_name_dialog_render_and_keyboard(window, photos, tmp_pat
             QTest.keyClick(dialog, Qt.Key.Key_Return)
         QTimer.singleShot(0, accept_dialog)
         QTest.keyClick(menu, Qt.Key.Key_Return)
+        wait_until(lambda: not window._directory_files._rename_pending)
         assert captured and source.with_name("键盘重命名").is_dir()
     finally:
         _APP.setFont(old_font)

@@ -37,7 +37,12 @@ class MetadataResultSync:
         for result in results:
             if not result.updates:
                 continue
-            if result.saved_fingerprint != _fingerprint(PhotoMetaDataXMP().sidecar_path_for(result.source)):
+            revision = getattr(result, "revision", None)
+            if revision is not None:
+                from app_common.exif_io.metadata_store import get_store
+                if get_store().current_revision(result.source) != revision:
+                    continue
+            elif result.saved_fingerprint != _fingerprint(PhotoMetaDataXMP().sidecar_path_for(result.source)):
                 continue
             key = same_stem_key(os.path.abspath(result.source))
             paths = [*self._by_stem.get(key, []), *aliases.get(os.path.normcase(result.source), [])]

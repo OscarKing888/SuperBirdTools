@@ -28,6 +28,18 @@ def wait_for(predicate):
     return predicate()
 
 
+def sync_pending():
+    from app_common.exif_io.metadata_store import get_store
+    store = get_store()
+    assert store.flush_paths([row["path"] for row in store.pending_status()])
+
+
+def settle_single(future):
+    assert wait_for(future.done)
+    future.result()
+    sync_pending()
+
+
 @pytest.fixture
 def env(tmp_path, monkeypatch):
     from app_common import superviewer_user_options
@@ -51,6 +63,7 @@ def env(tmp_path, monkeypatch):
     yield controller, files, paths
     controller.request_shutdown()
     assert wait_for(controller.is_shutdown_done)
+    sync_pending()
     if controller._dialog:
         controller._dialog.close()
     files.shutdown()
@@ -73,6 +86,7 @@ def test_edit_copy_paste_batch_and_stale_metadata(env, monkeypatch, mode):
     monkeypatch.setattr(ui.QInputDialog, 'getText', lambda *a, **k: ('上海东滩', True))
     actions[0].trigger()
     assert wait_for(controller.is_shutdown_done)
+    sync_pending()
     controller.copy(paths[0])
     assert wait_for(lambda: not controller._copy.busy)
     assert QApplication.clipboard().text() == '上海东滩'
@@ -82,6 +96,7 @@ def test_edit_copy_paste_batch_and_stale_metadata(env, monkeypatch, mode):
     assert not multi_actions[1].isEnabled()
     multi_actions[2].trigger()
     assert wait_for(controller.is_shutdown_done)
+    sync_pending()
     assert controller._done == 2  # 同侧车只写一次。
     for path in paths:
         assert shooting_location(PhotoMetaDataXMP().read(path)) == '上海东滩'
@@ -91,6 +106,7 @@ def test_edit_copy_paste_batch_and_stale_metadata(env, monkeypatch, mode):
     assert not selected
     assert controller.start(paths, '')
     assert wait_for(controller.is_shutdown_done)
+    sync_pending()
     assert all(shooting_location(PhotoMetaDataXMP().read(p)) == '' for p in paths)
 
 
@@ -106,6 +122,8 @@ def test_information_editor_preserves_other_drafts_and_failed_location(env, monk
         panel.filename_edit.setText('尚未提交的文件名')
         panel.location_edit.setText('云南·高黎贡山')
         panel.location_edit.editingFinished.emit()
+        assert wait_for(lambda: panel._current_location == "云南·高黎贡山")
+        sync_pending()
         assert shooting_location(PhotoMetaDataXMP().read(paths[0])) == '云南·高黎贡山'
         assert panel.comment_edit.toPlainText() == '尚未提交的备注'
         assert panel.filename_edit.text() == '尚未提交的文件名'
@@ -126,15 +144,23 @@ def test_information_editor_preserves_other_drafts_and_failed_location(env, monk
         _APP.processEvents()
 
 
-def test_partial_failure_keeps_success_and_reports_path(env):
+def test_sidecar_failure_keeps_local_commit_and_can_retry(env):
+    from app_common.exif_io.metadata_store import get_store
     controller, files, paths = env
-    Path(paths[-1]).with_suffix('.xmp').write_text('<broken>', encoding='utf-8')
+    damaged = Path(paths[-1]).with_suffix('.xmp')
+    damaged.write_text('<broken>', encoding='utf-8')
     assert controller.start(paths, '江苏盐城')
     assert wait_for(controller.is_shutdown_done)
-    assert controller._failed == 1
-    assert shooting_location(PhotoMetaDataXMP().read(paths[0])) == '江苏盐城'
-    assert paths[-1] in controller._dialog.details.toPlainText()
-    assert Path(paths[-1]).with_suffix('.xmp').read_text() == '<broken>'
+    assert controller._failed == 0  # Success means the SQLite transaction committed.
+    assert shooting_location(files.cached_photo_metadata_for_path(paths[-1])) == '江苏盐城'
+    store = get_store()
+    assert not store.flush_paths(paths, timeout=.1)
+    assert damaged.read_text() == '<broken>'
+    pending = store.pending_status(paths)
+    assert any(row['error'] for row in pending)
+    damaged.unlink()  # Repair only this test's malformed sidecar, then retry.
+    assert store.flush_paths(paths)
+    assert all(shooting_location(PhotoMetaDataXMP().read(path)) == '江苏盐城' for path in paths)
 
 
 def test_shutdown_waits_for_real_finished_and_rejects_stale_callback(env, monkeypatch):
@@ -157,6 +183,7 @@ def test_shutdown_waits_for_real_finished_and_rejects_stale_callback(env, monkey
     assert not controller.start(paths, '不应写入')
     gate.set()
     assert wait_for(controller.is_shutdown_done)
+    sync_pending()
     assert shooting_location(PhotoMetaDataXMP().read(paths[0])) == '北京'
     # 已开始的并行写入允许完成，取消只阻止尚未执行的 action。
     assert shooting_location(PhotoMetaDataXMP().read(paths[-1])) in ('', '北京')
@@ -164,9 +191,10 @@ def test_shutdown_waits_for_real_finished_and_rejects_stale_callback(env, monkey
 
 def test_exif_location_clear_updates_canonical_cache(env):
     controller, files, paths = env
-    controller.save_one(paths[0], '旧地点')
-    assert PhotoMetaDataXMP().write(paths[0], {LOCATION_TAG: ''})
-    sync_saved_xmp_edit(files, paths[0], LOCATION_TAG)
+    settle_single(controller.save_one(paths[0], '旧地点'))
+    from app_common.exif_io.metadata_store import get_store
+    receipt = get_store().submit_edit(paths[0], {LOCATION_TAG: ''}).result()
+    sync_saved_xmp_edit(files, paths[0], LOCATION_TAG, record=receipt.record)
     assert shooting_location(files.cached_photo_metadata_for_path(paths[0])) == ''
 
 
@@ -191,13 +219,14 @@ def test_location_actions_share_browser_pool_and_run_concurrently(env, monkeypat
     finally:
         gate.set()
     assert wait_for(controller.is_shutdown_done)
+    sync_pending()
     assert controller._done == 2
     assert all(shooting_location(PhotoMetaDataXMP().read(path)) == '上海东滩' for path in paths)
 
 
 def test_immediate_location_paste_waits_for_copy(env, monkeypatch):
     controller, files, paths = env
-    controller.save_one(paths[0], '云南·高黎贡山')
+    settle_single(controller.save_one(paths[0], '云南·高黎贡山'))
     QApplication.clipboard().setText('旧地点')
     original = ui.LocationCopyAction.execute
     gate = threading.Event()
@@ -212,6 +241,7 @@ def test_immediate_location_paste_waits_for_copy(env, monkeypatch):
     assert not Path(paths[-1]).with_suffix('.xmp').exists()
     gate.set()
     assert wait_for(controller.is_shutdown_done)
+    sync_pending()
     assert shooting_location(PhotoMetaDataXMP().read(paths[-1])) == '云南·高黎贡山'
 
 
@@ -245,6 +275,7 @@ def test_directory_location_scope_ignores_selection_and_filter(env, tmp_path, mo
     switched = str(tmp_path / '切换后的目录')
     files._current_dir = switched
     assert wait_for(lambda: not controller.busy)
+    sync_pending()
     assert len(prompts) == 1
     assert controller._done == (2 if recursive else 1)
     assert all(shooting_location(PhotoMetaDataXMP().read(str(p))) == '云南·高黎贡山' for p in photos[:2])
@@ -258,11 +289,12 @@ def test_directory_location_scope_ignores_selection_and_filter(env, tmp_path, mo
 @pytest.mark.parametrize('accepted', [False, True])
 def test_directory_location_input_cancel_or_clear(env, tmp_path, monkeypatch, accepted):
     controller, files, paths = env
-    controller.save_one(paths[0], '上海东滩')
+    settle_single(controller.save_one(paths[0], '上海东滩'))
     old_xmp = Path(paths[0]).with_suffix('.xmp').read_bytes()
     monkeypatch.setattr(ui.QInputDialog, 'getText', lambda *a, **k: ('', accepted))
     assert controller.edit_directory(str(tmp_path))
     assert wait_for(lambda: not controller.busy)
+    sync_pending()
     assert shooting_location(PhotoMetaDataXMP().read(paths[0])) == ('' if accepted else '上海东滩')
     if not accepted:
         assert Path(paths[0]).with_suffix('.xmp').read_bytes() == old_xmp
@@ -288,6 +320,7 @@ def test_directory_location_empty_and_scan_failures(env, tmp_path, monkeypatch, 
         monkeypatch.setattr(files, 'metadata_work_pool', fail)
     assert controller.edit_directory(str(empty)) == (outcome != 'submit_error')
     assert wait_for(lambda: not controller.busy)
+    sync_pending()
     assert messages == ['没有找到受支持的照片' if outcome == 'empty' else '测试扫描失败']
 
 
@@ -313,7 +346,7 @@ def test_directory_scan_cancel_waits_and_never_opens_editor(env, tmp_path, monke
         assert not controller.edit_directory(str(tmp_path))
         assert not controller.start(paths, '不应写入')
         with pytest.raises(RuntimeError):
-            controller.save_one(paths[0], '不应写入')
+            settle_single(controller.save_one(paths[0], '不应写入'))
         controller.paste(paths)
         controller.edit(paths)
         for extend, target in ((controller.extend_directory_menu, str(tmp_path)), (controller.extend_file_menu, paths)):
@@ -333,6 +366,7 @@ def test_directory_scan_cancel_waits_and_never_opens_editor(env, tmp_path, monke
     finally:
         release.set()
     assert wait_for(controller.is_shutdown_done)
+    sync_pending()
     assert not any(Path(p).with_suffix('.xmp').exists() for p in paths)
 
 

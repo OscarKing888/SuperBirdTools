@@ -12,6 +12,10 @@ from app_common.exif_io.photo_meta import (
 )
 from app_common.file_browser import _browser_core as display
 from app_common.shooting_location import LOCATION_TAG, location_updates, shooting_location
+try:
+    from PyQt6.QtCore import QObject, QSignalBlocker
+except ImportError:  # pragma: no cover
+    from PyQt5.QtCore import QObject, QSignalBlocker
 
 
 _DISPLAY_FIELDS = {
@@ -31,20 +35,42 @@ _DISPLAY_FIELDS = {
 }
 
 
-def sync_saved_xmp_edit(file_list, path: str, tag_key: str) -> None:
-    """Read only the saved XML; never synchronously reread the source image."""
+def sync_saved_xmp_edit(file_list, path: str, tag_key: str, *, record=None) -> None:
+    """Apply a committed snapshot; GUI notifications perform no metadata I/O."""
+    blocker = QSignalBlocker(file_list) if isinstance(file_list, QObject) else None
+    try:
+        _apply_saved_xmp_edit(file_list, path, tag_key, record=record)
+    finally:
+        del blocker
+    # A metadata edit must not reload the image or replace an unrelated draft.
+    for name in ("photo_metadata_cache_updated", "photo_tags_cache_updated"):
+        signal = getattr(file_list, name, None)
+        if signal is not None and (name == "photo_metadata_cache_updated" or
+                                   _is_xmp_subject_key(_xmp_sidecar_write_key(tag_key))):
+            signal.emit([path])
+
+
+def _apply_saved_xmp_edit(file_list, path: str, tag_key: str, *, record=None) -> None:
+    if record is None:
+        from app_common.exif_io.metadata_store import get_store
+        record = get_store().peek(path) or {}
     key = _xmp_sidecar_write_key(tag_key)
     if _is_xmp_subject_key(key):
         # An EXIF-table edit bypasses tag commands. Refresh their cache and
         # generations, and discard inverses based on the previous subjects.
-        file_list._update_photo_tag_cache_for_paths([path])
+        tags = record.get("tags", record.get("XMP-dc:Subject", []))
+        if isinstance(tags, str):
+            tags = [part.strip() for part in tags.split(";") if part.strip()]
+        file_list._photo_tag_cache[path] = set(tags or []).intersection(file_list._available_tags)
+        file_list._bump_photo_tag_generations([path])
+        file_list._sync_photo_tags_to_meta_cache([path])
         file_list.clear_tag_history()
         file_list._refresh_metadata_state_for_paths([path])
         if file_list._photo_tag_lookup_needed_for_filters():
             file_list._apply_filter()
         return
 
-    fresh = PhotoMetaDataXMP().read(path)
+    fresh = record
     updates = {
         key: next((value for name, value in fresh.items() if name.lower() == key.lower()), ""),
     }

@@ -761,6 +761,8 @@ class BirdStampEditorWindow(
         self._photo_list_metadata_apply_timer = QTimer(self)
         self._photo_list_metadata_apply_timer.setInterval(0)
         self._photo_list_metadata_apply_timer.timeout.connect(self._process_photo_list_metadata_updates)
+        from birdstamp.gui.editor_metadata_store_watch import EditorMetadataStoreWatch
+        self._metadata_store_watch = EditorMetadataStoreWatch(self)
         self._photo_list_header_fast_mode = False
         self._next_photo_sequence_number: int = 0
         self._received_photo_import_pending_paths: deque[Path] = deque()
@@ -2935,6 +2937,7 @@ class BirdStampEditorWindow(
         self._invalidate_sequence_preview(shutdown=True)
         self._cancel_async_bird_detect(shutdown=True)
         self._cancel_preview_decode(shutdown=True)
+        self._metadata_store_watch.request_shutdown()
         self._preview_action_pool.request_shutdown()
         self._stop_photo_list_metadata_loader(wait=False, reset_progress=True)
         # Cancel blocked metadata reads before waiting for their QThreads.
@@ -3724,7 +3727,19 @@ class BirdStampEditorWindow(
     ) -> _template_context.PhotoInfo:
         item = self._find_photo_item_by_path(path)
         existing = item.data(PHOTO_COL_ROW, PHOTO_LIST_PHOTO_INFO_ROLE) if item is not None else None
-        metadata = raw_metadata if isinstance(raw_metadata, dict) else self._load_raw_metadata(path)
+        if isinstance(raw_metadata, dict):
+            metadata = raw_metadata
+        else:
+            from app_common.exif_io.metadata_store import get_store
+            key = _path_key(path)
+            metadata = (get_store().peek(str(path), profile="full")
+                        or self.raw_metadata_cache.get(key)
+                        or self.photo_list_metadata_cache.get(key)
+                        or {"SourceFile": str(path)})
+            if not _is_complete_list_metadata(metadata):
+                self._photo_list_metadata_pending_keys.add(key)
+                if self._photo_list_metadata_loader is None:
+                    self._restart_photo_list_metadata_loader()
         photo_info = _template_context.ensure_editor_photo_info(
             existing if isinstance(existing, _template_context.PhotoInfo) else path,
             raw_metadata=metadata,
@@ -5676,6 +5691,11 @@ class BirdStampEditorWindow(
 
     def _load_raw_metadata(self, path: Path) -> dict[str, Any]:
         key = _path_key(path)
+        from app_common.exif_io.metadata_store import get_store
+        snapshot = get_store().peek(str(path), profile="full")
+        if snapshot:
+            self.raw_metadata_cache[key] = snapshot
+            return snapshot
         if key in self.raw_metadata_cache:
             birdstamp_perf.plog("metadata cache_hit path=%s", path)
             return self.raw_metadata_cache[key]
@@ -5698,15 +5718,22 @@ class BirdStampEditorWindow(
             raw_metadata = dict(list_cached)
             birdstamp_perf.plog("[reuse-meta-base] path=%s", path)
         else:
-            try:
-                with birdstamp_perf.span("metadata.extract", path=str(path)):
-                    raw_metadata = extract_metadata_with_xmp_priority(resolved, mode="auto")
-            except Exception:
+            def read_source(*, progress_callback=None):
                 try:
-                    raw_map = extract_many([resolved], mode="auto")
-                    raw_metadata = raw_map.get(resolved) or extract_pillow_metadata(path)
+                    return extract_metadata_with_xmp_priority(resolved, mode="auto")
                 except Exception:
-                    raw_metadata = extract_pillow_metadata(path)
+                    try:
+                        raw_map = extract_many([resolved], mode="auto")
+                        return raw_map.get(resolved) or extract_pillow_metadata(path)
+                    except Exception:
+                        return extract_pillow_metadata(path)
+
+            with birdstamp_perf.span("metadata.extract", path=str(path)):
+                runner = getattr(self, "_run_blocking_task_off_gui_thread", None)
+                if callable(runner) and QThread.currentThread() is self.thread():
+                    raw_metadata = runner(read_source)
+                else:
+                    raw_metadata = read_source()
             if not isinstance(raw_metadata, dict):
                 raw_metadata = {"SourceFile": str(path)}
 
@@ -5729,11 +5756,20 @@ class BirdStampEditorWindow(
         seen_keys: set[str] = set()
         current_key = _path_key(self.current_path) if self.current_path is not None else ""
 
+        from app_common.exif_io.metadata_store import get_store
+        store = get_store()
+
         for path in paths:
             key = _path_key(path)
             if key in seen_keys:
                 continue
             seen_keys.add(key)
+
+            snapshot = store.peek(str(path), profile="full")
+            if snapshot:
+                self.raw_metadata_cache[key] = snapshot
+                metadata_by_key[key] = snapshot
+                continue
 
             cached = self.raw_metadata_cache.get(key)
             if isinstance(cached, dict) and cached:
@@ -5765,7 +5801,11 @@ class BirdStampEditorWindow(
 
         resolved_paths = [resolved for _path, _key, resolved in pending_entries]
         try:
-            full_batch = extract_many_with_xmp_priority(resolved_paths, mode="auto")
+            runner = getattr(self, "_run_blocking_task_off_gui_thread", None)
+            if callable(runner) and QThread.currentThread() is self.thread():
+                full_batch = runner(lambda *, progress_callback=None: extract_many_with_xmp_priority(resolved_paths, mode="auto"))
+            else:
+                full_batch = extract_many_with_xmp_priority(resolved_paths, mode="auto")
         except Exception:
             full_batch = {}
 
@@ -5778,14 +5818,7 @@ class BirdStampEditorWindow(
                 if isinstance(list_cached, dict) and list_cached:
                     merged = dict(list_cached)
                 else:
-                    try:
-                        merged = extract_metadata_with_xmp_priority(resolved, mode="auto")
-                    except Exception:
-                        try:
-                            raw_map = extract_many([resolved], mode="auto")
-                            merged = raw_map.get(resolved) or extract_pillow_metadata(path)
-                        except Exception:
-                            merged = extract_pillow_metadata(path)
+                    merged = BirdStampEditorWindow._load_raw_metadata(self, path)
 
             if not isinstance(merged, dict):
                 merged = {"SourceFile": str(path)}
