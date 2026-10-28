@@ -36,6 +36,7 @@ from app_common import bird_sharpness_fields as fields
 from app_common.log import get_logger
 
 from .focus import FocusProvider, ManualFocusProvider, default_focus_box, default_manual_focus, focus_window
+from .head_direction import head_direction
 from .image_source import SOURCE_RAW, AnalysisImage, load_analysis_image, source_loader
 from .metrics import (ESTIMATOR_STANDARD, EdgeBlurField, EdgeEstimator, TileOptions,
                       edge_estimator as get_edge_estimator, edge_stats, full_image_blur, sharpest_tiles_blur,
@@ -122,6 +123,12 @@ class BirdMeasurement:
     index: int = 0  # detection number (trace "鸟 #index+1"), kept when false extras are dropped
     refined_by: str = ""  # SAM model whose mask replaced the detector's ("" = detector mask/box)
     grey_filled: bool = False  # the crop was painted grey outside the bird before measuring (params.grey_fill)
+
+    head_direction_bins: Optional[List[Optional[float]]] = None
+    head_direction_counts: Optional[List[int]] = None
+    head_direction_sigma: Optional[float] = None
+    head_direction_ratio: Optional[float] = None
+    head_motion: bool = False
 
     def rank(self) -> tuple:
         # Best bird: highest score, then smallest blur radius, then detector confidence.
@@ -1159,6 +1166,7 @@ class BirdSharpnessAnalyzer:
         head = None
         selection = None
         trace_keypoints = None
+        direction = None
         if keypoints is not None and keypoints.eye_visibility >= EYE_VISIBLE_MIN and not keypoints.eye_reliable:
             # The eye model and its mirror run disagree: the head position is a guess, so
             # measure the whole bird as without an eye model (eye visible, no score cap).
@@ -1186,6 +1194,7 @@ class BirdSharpnessAnalyzer:
                 yy, xx = np.ogrid[:ch, :cw]
                 head = ((xx - eye[0]) ** 2 + (yy - eye[1]) ** 2 <= radius ** 2) & core
                 selection = self._select(field_, head)
+                direction = head_direction(field_, head)
                 head_stats = self._edge_stats(selection.sigma)
                 if head_stats.sigma is not None and max(bw, bh) < SMALL_BIRD_SIDE:
                     head_samples = [float(head_stats.sigma)]
@@ -1200,9 +1209,12 @@ class BirdSharpnessAnalyzer:
             head_sigma = head_stats.sigma if head_stats is not None else None
             if head_samples:
                 head_sigma = float(np.median(head_samples))
+            if direction is not None and direction.motion:
+                head_sigma = max(head_sigma or 0.0, direction.major)
             head_blank = head_stats is not None and head_sigma is None
             verdict, score = classify(head_sigma, body_stats.sigma, motion_ratio,
-                                      eye_visible=eye_vis >= EYE_VISIBLE_MIN, head_blank=head_blank)
+                                      eye_visible=eye_vis >= EYE_VISIBLE_MIN, head_blank=head_blank,
+                                      head_motion=direction is not None and direction.motion)
             if head_blank:
                 sigma = blank_head_sigma(body_stats.sigma)
             else:
@@ -1238,6 +1250,11 @@ class BirdSharpnessAnalyzer:
             index=index,
             refined_by=refined_by,
             grey_filled=grey_filled,
+            head_direction_bins=None if direction is None else list(direction.bins),
+            head_direction_counts=None if direction is None else list(direction.counts),
+            head_direction_sigma=None if direction is None else _r3(direction.major),
+            head_direction_ratio=None if direction is None else _r3(direction.ratio),
+            head_motion=direction is not None and direction.motion,
         )
         if tracer is not None:
             tracer.bird(index, image, (X1, Y1, X2, Y2), bird_px, body, head, trace_keypoints, selection,

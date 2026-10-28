@@ -2,7 +2,7 @@
 
 本文按代码的实际执行顺序，用流程图说明一张照片从入队到写入 XMP 的每个环节。算法的背景、标定数据和取舍理由见 [bird_sharpness.md](bird_sharpness.md)；本文只讲“先做什么、再做什么、什么条件走哪条分支”。所有阈值都标注了代码位置，以代码为准。
 
-版本：`sbt-blur-v17`（[scoring.py](../bird_sharpness/scoring.py) `ALGORITHM_VERSION`），非默认参数和 RAW 以外的图像来源会追加后缀（见文末；SuperViewer 默认测相机内嵌 JPEG，即 `sbt-blur-v17-jpeg`）。
+版本：`sbt-blur-v18`（[scoring.py](../bird_sharpness/scoring.py) `ALGORITHM_VERSION`），非默认参数和 RAW 以外的图像来源会追加后缀（见文末；SuperViewer 默认测相机内嵌 JPEG，即 `sbt-blur-v18-jpeg`）。
 
 ## 目录
 
@@ -277,14 +277,17 @@ flowchart TD
     GF1 --> K2
     GF2 --> K2
     K["body = bird_px 腐蚀 15 px（BODY_MASK_ERODE_PX）<br/>腐蚀后为空则用 bird_px"]
-    K2["core = bird_px 内缩约一个识别掩膜像素<br/>（W / 掩膜宽，限 4–12 px；无掩膜 4 px）− 高光排除区<br/>为空则用 bird_px − 高光排除区"]
-    K2 --> K3["高光排除区 specular_highlights：<br/>白顶帽（核 ≈ 0.2×头部尺度，≥ 15 px）比周围高 ≥ 0.10 且 ≥ 3× 周围的小亮斑<br/>面积 ≤ π(0.15×头部尺度)²，外扩 8 px"]
+    K2["高光候选 specular_highlights：<br/>白顶帽（核 ≈ 0.2×头部尺度，≥ 15 px）的亮斑<br/>增量 ≥ 0.10 且 ≥ 3× 周围；面积 ≤ max(100, π(0.15×头部尺度)²)"]
+    K2 --> K3["仅采纳孤立紧凑亮斑：面积 ≥ 9 px，短边 ≥ 3 px<br/>二阶矩轴比 ≤ 2.5，矩形填充 ≥ 40%<br/>斑点中位亮度对外环第 90 百分位也满足上述增量门槛<br/>通过后才外扩 8 px 排除"]
+    K3 --> K4["core = bird_px 内缩约一个识别掩膜像素<br/>（W / 掩膜宽，限 4–12 px；无掩膜 4 px）− 高光排除区<br/>为空则用 bird_px − 高光排除区"]
+    K4 --> L
     K --> L["EdgeBlurField(ROI 的 gray)：预计算梯度场（见第 10 节）"]
 ```
 
 - 头部尺度 = max(40 px, 15% × 鸟框长边)，与关键点无关，先于头部定位算出。
 - `bird_pixels` / `grey_fill`（`AnalysisParams`，设置 / 参数页 / CLI `--pixels` `--grey-fill`）：「整个鸟框区域」忽略分割与 SAM 轮廓、只测框内核；「鸟以外涂灰再测量」复刻模型链「抠出像素 + 涂灰」：SAM 在涂灰前用原图像素抠图，涂灰后的裁切交给第 7.2–7.4 节的全部测量和鸟眼定位（`locate_head` 看到的是抠图）。灰与轮廓之间的人工锐利边缘因 core / body 都向内收而通常测不到。非默认值记入版本后缀 `-box` / `-grey`。
 - 为什么内缩而不是外扩：掩膜来自 1024 px 识别副本，轮廓有约一个掩膜像素的误差；原来外扩 9 px 时，轮廓上的背景树皮裂缝会成为头部“最强边缘”（DSC06285：38 个头部测点里 13 个在树皮上）。内缩会丢掉鸟的轮廓边缘，头内的羽毛、眼、喙仍在。
+- v18 高光校验：外环是亮斑外接矩形外扩 `max(3, round(sqrt(area / π)))` 后、去掉该矩形的像素；边缘无外环时不采纳。外环第 90 百分位避免用腐蚀极小值把密集羽毛认成孤立高光；二阶矩协方差加每轴 1/12 像素面积，旋转细线也按轴比过滤。
 - 为什么排除高光：脱焦的点光源不是高斯模糊，而是硬边的光斑（bokeh 圆），阶跃边缘估计会把它的边缘测成 0.3–0.9 px。DSC06285 整只鸟脱焦（羽毛 2.2–2.7 px），眼睛里 7 px 的高光提供了 38 个头部测点中的 16 个，头部中位数 0.70 判成“清晰”；排除后头部 2.75，判“模糊”。
 
 ### 7.2 身体 σ 与运动模糊方向比
@@ -335,11 +338,15 @@ flowchart TD
     D -->|否| E["head_sigma = None → 判定走 no_eye 分支<br/>用 body_sigma，分数封顶 299"]
     D -->|是| F["head = 以眼为圆心 radius 的圆 ∩ core（第 7.1 节：内缩掩膜 − 高光）"]
     F --> G["head_stats = head 内最强边缘 σ 的统计（第 10 节）"]
-    G --> H{"测到 σ 且鸟框长边 < 450 px？（SMALL_BIRD_SIDE）"}
+    G --> GD["head_direction：原头部圆全部过噪声的有效边缘<br/>按方向拟合运动证据（第 7.5 节）"]
+    GD --> H{"测到 σ 且鸟框长边 < 450 px？（SMALL_BIRD_SIDE）"}
     H -->|是| I["再算 6 个变体圆（同样 ∩ core）：圆心沿上下左右各移 20% 半径，半径 ×0.8、×1.25<br/>head_sigma = 7 个值的中位数"]
     H -->|否| J["head_sigma = head_stats.sigma"]
-    I --> K
-    J --> K{"head_blank？<br/>（眼可见，但头部没有任何高于噪声的边缘）"}
+    I --> JD
+    J --> JD{"头部方向确认运动？"}
+    JD -->|是| JE["head_sigma = max(head_sigma or 0, direction.major)"]
+    JD -->|否| K
+    JE --> K{"head_blank？<br/>（眼可见，但最强边缘不足 8 个有效样本<br/>且方向检查未补足有效 σ）"}
     K -->|是| L["sigma = max(body_sigma, 1.55)<br/>判为 soft / motion"]
     K -->|否| M["sigma = head_sigma（为空则 body_sigma）"]
     B --> N["classify()（第 11 节）"]
@@ -349,6 +356,35 @@ flowchart TD
     M --> N
     N --> O["BirdMeasurement：verdict、score、sigma、head_sigma、body_sigma、<br/>motion_ratio、eye_visibility、confidence、box、found_by、refined_by…"]
 ```
+
+### 7.5 头部方向检查（v18）
+
+代码：[head_direction.py](../bird_sharpness/head_direction.py) `head_direction()`；只对第 7.4 节可靠定位且可见的原头部圆执行，小鸟变体圆仍按原规则取统计值。身体方向检查独立保留；整鸟回退不应用此修正。
+
+```mermaid
+flowchart TD
+    A["原 head 区域：select_strongest_edges(top_fraction=1)<br/>全部过噪声、通过第 10 节形态验证的边缘"] --> B["按梯度方向分 8 组，每组中位 σ<br/>每组至少 15 个有效点，每组一票"]
+    B --> C{"至少 3 个有效方向？"}
+    C -->|否| Z["方向证据不足，不修改原头部 σ"]
+    C -->|是| D["拟合 σθ² = a + b cos(2θ) + c sin(2θ)<br/>最小二乘；设计矩阵条件数 ≤ 6"]
+    D --> E{"条件数通过且 a > 0？"}
+    E -->|否| Z
+    E -->|是| E1{"h = hypot(b,c)<br/>a − h < 0？"}
+    E1 -->|否| E4
+    E1 -->|是| E2{"至少 6 个有效方向？"}
+    E2 -->|否| Z
+    E2 -->|是| E3["将协方差投影为正值：a = h + 0.5²"]
+    E3 --> E4{"按当前 a,b,c 重新计算<br/>归一残差 RMSE / a ≤ 0.35？"}
+    E4 -->|否| Z
+    E4 -->|是| F["minor = sqrt(max(0.5², a-h))<br/>major = min(sqrt(max(0,a+h)), 实测最宽方向 σ)"]
+    F --> G{"major > 1.05 且 major/minor ≥ 1.5？"}
+    G -->|否| Z1["保留方向明细，不修改原头部 σ"]
+    G -->|是| H["head_motion = True<br/>有头部 σ 时取 max(原值, major)<br/>最强边缘没有有效 σ 时用 major 补足，再判 motion"]
+```
+
+矩形运动核不符合高斯模型，可能拟合出负的最小协方差特征值 `a−hypot(b,c)`。仅当至少 6 个有效方向提供充分约束时，把 `a` 投影为 `hypot(b,c)+0.5²` 后重验残差；只有 3–5 个方向时直接放弃，不能把负值随意夹成锐利轴后判运动。
+
+单向拖影可能只留下与运动平行的锐利边缘，最强 5% 会偏向这些边缘；方向均衡统计补充其他方向的模糊证据。以 DSC06657 为例，旧版 24 个计分点全部集中于约 3×39 px 的同向窄条，得到 σ=0.639、801 分；本检查使用头部其他方向的有效边缘。方向不足本身不等于运动，不凭单条边或身体/翅膀运动强行降低清晰头部的分数。
 
 ---
 
@@ -441,14 +477,20 @@ flowchart TD
     E --> F["selected = passed 中 mag0 位于前 keep 的边缘"]
     F --> G["每像素：R = mag0 / mag1<br/>total = 1.5 / sqrt(R² − 1)"]
     G --> G1["σ = sqrt(total² − 1.0²)（扣除预平滑）"]
-    G1 --> H{"R > 1.02 且 total ≥ 1.0 且 σ ≥ 0.5？（SIGMA_FLOOR_PX）"}
-    H -->|否| I["line_like：比预平滑还“锐”、或低于真实阶跃边缘下限的线状结构<br/>（眼圈高光、细枝、松针、掩膜锯齿）→ 舍弃"]
-    H -->|是| J["σ 进入样本"]
+    G1 --> H{"R > 1.02？"}
+    H -->|否| I["line_like：不符合边缘模型或细线结构 → 舍弃"]
+    H -->|是| H1{"σ ≥ 0.5 且 total ≥ 1.0？"}
+    H1 -->|是| J["σ 进入样本"]
+    H1 -->|否，σ < 0.5| P["沿 g0 梯度法向采样 −6 到 +6 px<br/>两端 ±4 到 ±6 px 作为平台，必须有完整真实邻域"]
+    P --> Q{"平台差 ≥ 全段范围 65%；每端起伏 ≤ 25%；<br/>中央 ±2 px 已完成平台差的 90%？"}
+    Q -->|否| I
+    Q -->|是| R["锐化后的真实阶跃：按 σ = 0.5 保留"]
+    R --> J
     J --> K["EdgeSelection：ys, xs, sigma[], noise_sigma, threshold<br/>（计算过程窗口按此着色）"]
     K --> L["_edge_stats：样本 < 8 → None；否则<br/>standard 取中位数，dense 取第 40 百分位；另给 p25 / p75 / 数量"]
 ```
 
-原理：Zhuo & Sim (2011) 梯度再模糊比值法。σ 与对比度、曝光、羽色无关。像素采样与 Sobel 差分带来约 0.6–0.73 px 的固有下限，阈值已按实测值标定；因此低于 0.5 px 的值不可能来自阶跃边缘，v15 起按线状舍弃（身体的 `body_blur_detail` 用同一规则）。
+原理：Zhuo & Sim (2011) 梯度再模糊比值法。局部高斯阶跃模型不随对比度线性缩放而改变；未经锐化的像素采样与 Sobel 差分通常带来约 0.6–0.73 px 的下限。v15 曾把低于 0.5 的响应一律视作细线；v18 用法向平台验证区分机内锐化阶跃与细线，恢复值只记 0.5。平台检查在预平滑图 `g0` 上双线性采样，每批最多 8192 点，边界缺邻域时不做镜像补全。以上恢复规则由 `_sigma_and_valid()` 共用，适用于头部、整鸟、身体、焦点、分块和焦平面显示；身体的 Canny 与噪声门槛仍按第 7.2 节执行。头部方向检查用同一函数、`top_fraction=1`，不只取最强 5%。
 
 ---
 
@@ -460,7 +502,7 @@ flowchart TD
 
 ```mermaid
 flowchart TD
-    A["输入：head_sigma, body_sigma, motion_ratio, eye_visible, head_blank"] --> B["motion_like = body_sigma ≥ 1.55 且 motion_ratio ≥ 1.5"]
+    A["输入：head_sigma（已含头部方向修正）, body_sigma,<br/>motion_ratio（身体）, eye_visible, head_blank, head_motion"] --> B["motion_like = body_sigma ≥ 1.55 且 motion_ratio ≥ 1.5"]
     B --> C{"eye_visible 且 head_sigma 为空 且 head_blank？"}
     C -->|是| D["σ = max(body_sigma, 1.55)<br/>motion_like ? motion : soft"]
     C -->|否| E{"eye_visible 且 head_sigma 有值？"}
@@ -468,7 +510,7 @@ flowchart TD
     F -->|是| F1["sharp"]
     F -->|否| G{"head_sigma ≤ 1.05？"}
     G -->|是| G1["usable"]
-    G -->|否| G2["motion_like ? motion : soft"]
+    G -->|否| G2["motion_like 或 head_motion ? motion : soft"]
     E -->|否| H{"body_sigma 有值？"}
     H -->|否| H1["no_eye，score = None"]
     H -->|是| I["score = sigma_to_score(body_sigma) 封顶 299"]
@@ -517,7 +559,7 @@ flowchart TD
     G --> L{"当前目录列表中有读这个 sidecar 的照片？<br/>FileListPanel.listed_sidecar_siblings(显示路径 / 源路径)<br/>同 stem 不区分大小写，与列表/缩略图视图、筛选无关"}
     L -->|有| H["browser_meta_updates() 一次合并进这些照片的内存元数据<br/>SuperViewer 刷新：列表“鸟清晰”列、缩略图底栏标签、右侧信息行"]
     L -->|无| M["不改内存；打开该目录时重新读取 XMP"]
-    A --> I["birds[]、found_by、head_samples 等明细<br/>只在 CLI --json 与计算过程窗口可见，不写 XMP"]
+    A --> I["birds[]、found_by、head_samples、head_direction_bins / counts / sigma / ratio、head_motion 等明细<br/>只在 CLI --json 与计算过程窗口可见，不写 XMP"]
 ```
 
 “跳过已检测”在任务开头比较 sidecar 里的 `bird_sharpness_version` 与当前版本（含参数后缀），相同才跳过。
@@ -571,9 +613,13 @@ flowchart TD
 | `SMALL_BIRD_SIDE` / `HEAD_SAMPLE_SHIFT` | 450 / 0.2 | analyzer.py | 小鸟 7 圆中位数 |
 | `HEAD_MASK_ERODE_MIN_PX` / `HEAD_MASK_ERODE_MAX_PX` / `BODY_MASK_ERODE_PX` | 4 / 12 / 15 | analyzer.py | 头部掩膜内缩（约一个识别掩膜像素）/ 身体掩膜 |
 | `HIGHLIGHT_MIN_RISE` / `HIGHLIGHT_CONTRAST` / `HIGHLIGHT_KERNEL_RATIO` / `HIGHLIGHT_MAX_RADIUS_RATIO` / `HIGHLIGHT_MARGIN_PX` | 0.10 / 3.0 / 0.2 / 0.15 / 8 | metrics.py | 高光（眼睛反光）排除 |
+| `HIGHLIGHT_KERNEL_MIN_PX` / `HIGHLIGHT_MIN_AREA_PX` | 15 / 100 | metrics.py | 白顶帽核最小边长 / 亮斑面积上限的最小取值 |
+| `HIGHLIGHT_SPOT_MIN_AREA` / `HIGHLIGHT_SPOT_MIN_SIDE` / `HIGHLIGHT_SPOT_MAX_AXIS_RATIO` / `HIGHLIGHT_SPOT_MIN_FILL` / `HIGHLIGHT_SURROUND_QUANTILE` | 9 / 3 / 2.5 / 0.4 / 0.9 | metrics.py | 紧凑孤立亮斑的面积、短边、轴比、矩形填充、外环亮度分位 |
 | `EXTRA_BIRD_CONFIDENCE_MAX` / `EXTRA_BIRD_ANCHOR_MIN` / `PART_OF_BIRD_OVERLAP` | 0.4 / 0.5 / 0.5 | analyzer.py | 排除假鸟 / 局部 |
 | `PRE_SIGMA` / `REBLUR_SIGMA` | 1.0 / 1.5 | metrics.py | 再模糊比值法 |
-| `SIGMA_FLOOR_PX` | 0.5 | metrics.py | 低于它的边缘按线状舍弃（真实阶跃边缘 ≥ 约 0.6） |
+| `SIGMA_FLOOR_PX` | 0.5 | metrics.py | 低于它的候选仅在通过法向平台验证时按 0.5 恢复；所有区域共用 |
+| `STEP_PROFILE_RADIUS_PX` / `STEP_PROFILE_CONTRAST_MIN` / `STEP_PROFILE_RIPPLE_MAX` / `STEP_PROFILE_CENTRAL_MIN` / `STEP_PROFILE_BATCH` | 6 / 0.65 / 0.25 / 0.90 / 8192 | metrics.py | 法向半径、平台差/全段范围、端部起伏/全段范围、中央 ±2 px 完成比例、临时批量上限 |
+| `MIN_HEAD_DIRECTIONS` / `MIN_CONSTRAINED_DIRECTIONS` / `MAX_DIRECTION_CONDITION` / `MAX_DIRECTION_RESIDUAL` | 3 / 6 / 6.0 / 0.35 | head_direction.py | 头部方向拟合最少方向 / 负特征值投影最少方向 / 条件数 / 当前拟合归一残差上限 |
 | `NOISE_EDGE_FACTOR` | 4.0 | metrics.py | 边缘信噪门槛 |
 | `MIN_HEAD_EDGES` / `MIN_BODY_EDGES` | 20 / 60 | metrics.py | 最少边缘数 |
 | `DIRECTION_BINS` / `MIN_EDGES_PER_DIRECTION` | 8 / 15 | metrics.py | 运动模糊方向统计 |

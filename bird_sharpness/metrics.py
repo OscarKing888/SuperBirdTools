@@ -27,12 +27,16 @@ import numpy as np
 
 PRE_SIGMA = 1.0
 REBLUR_SIGMA = 1.5
-# Pixel sampling and the discrete Sobel difference put a real step edge at ~0.6-0.73 px even
-# in a perfectly focused image, so a radius below this floor cannot come from a step edge: it
-# is a thin line (a pine needle, an eye-ring, a mask outline staircase) whose two sides
-# merge into one over-sharp response. DSC06726 (a soft bird behind sharp needles): 11 head
-# edges at 0.3-0.44 px made the photo "sharp". Such edges are rejected as line-like (v15).
+# Unsharpened step edges measure ~0.6-0.73 px because of sampling / Sobel smoothing.
+# Smaller radii can be thin lines (DSC06726: sharp needles in front of a soft bird),
+# or real steps sharpened by the camera. Keep the floor; only restore a sub-floor
+# sample when its normal profile has two distinct, stable plateaus.
 SIGMA_FLOOR_PX = 0.5
+STEP_PROFILE_RADIUS_PX = 6
+STEP_PROFILE_CONTRAST_MIN = 0.65  # plateau difference / entire profile range
+STEP_PROFILE_RIPPLE_MAX = 0.25   # variation within either plateau / profile range
+STEP_PROFILE_CENTRAL_MIN = 0.90  # plateau transition completed within +/-2 px
+STEP_PROFILE_BATCH = 8192
 MIN_HEAD_EDGES = 20
 
 
@@ -78,6 +82,13 @@ HIGHLIGHT_KERNEL_MIN_PX = 15
 HIGHLIGHT_MAX_RADIUS_RATIO = 0.15  # larger blobs (breast, sky patches) are not highlights
 HIGHLIGHT_MIN_AREA_PX = 100        # ... but never below a disc of this area
 HIGHLIGHT_MARGIN_PX = 8            # exclusion ring around a highlight
+# A catchlight is a compact spot against a dark local surround, not a feather barb.
+# Reject unresolved specks (their blur response is line-like) before adding the margin.
+HIGHLIGHT_SPOT_MIN_AREA = 9
+HIGHLIGHT_SPOT_MIN_SIDE = 3
+HIGHLIGHT_SPOT_MAX_AXIS_RATIO = 2.5
+HIGHLIGHT_SPOT_MIN_FILL = 0.4
+HIGHLIGHT_SURROUND_QUANTILE = 0.9
 MIN_EDGES_PER_DIRECTION = 15
 # Edges must rise this far above the estimated sensor noise (edge SNR). Pure noise
 # peaks at ~0.6 x sigma_noise in mag0, and noise inflates the pre-reblur gradient
@@ -125,6 +136,18 @@ def _gradients(img: np.ndarray):
     return gx, gy
 
 
+def _sample_bilinear(image: np.ndarray, x: np.ndarray, y: np.ndarray) -> np.ndarray:
+    """Sample an edge-normal profile without OpenCV remap's 32767 px size limit."""
+    h, w = image.shape[:2]
+    x, y = np.clip(x, 0, w - 1), np.clip(y, 0, h - 1)
+    floor_x, floor_y = np.floor(x), np.floor(y)
+    x0, y0 = floor_x.astype(np.intp), floor_y.astype(np.intp)
+    x1, y1 = np.minimum(x0 + 1, w - 1), np.minimum(y0 + 1, h - 1)
+    dx, dy = x - floor_x, y - floor_y
+    return ((image[y0, x0] * (1.0 - dx) + image[y0, x1] * dx) * (1.0 - dy)
+            + (image[y1, x0] * (1.0 - dx) + image[y1, x1] * dx) * dy)
+
+
 def estimate_noise_sigma(gray: np.ndarray) -> float:
     """Immerkær (1996) fast noise estimate; texture biases it upwards (stricter, never looser)."""
     if min(gray.shape[:2]) < 3:
@@ -150,12 +173,16 @@ edge_stats = _stats  # public alias: stats of a sample array (median / quartiles
 
 def specular_highlights(gray: np.ndarray, head_radius: float, *,
                         margin: int = HIGHLIGHT_MARGIN_PX) -> np.ndarray:
-    """Pixels within ``margin`` of a specular highlight in ``gray`` (linear, 0–1).
+    """Pixels within ``margin`` of an isolated compact highlight in ``gray`` (0–1).
 
     A highlight is a connected blob that rises ≥ HIGHLIGHT_MIN_RISE and
     ≥ HIGHLIGHT_CONTRAST × its surroundings above them (white top-hat with a kernel
     of ~HIGHLIGHT_KERNEL_RATIO × ``head_radius``) and is no larger than a disc of
-    HIGHLIGHT_MAX_RADIUS_RATIO × ``head_radius``. Returns a boolean mask.
+    HIGHLIGHT_MAX_RADIUS_RATIO × ``head_radius``. The blob must also be compact
+    and stand above the 90th percentile of its immediate surround. A top-hat
+    alone compares against an erosion minimum and mislabels bright feather
+    texture as glare; expanding every such fleck removes most real head detail.
+    Returns a boolean mask.
     """
     gray = np.ascontiguousarray(gray, dtype=np.float32)
     k = max(HIGHLIGHT_KERNEL_MIN_PX, int(HIGHLIGHT_KERNEL_RATIO * float(head_radius))) | 1
@@ -164,9 +191,35 @@ def specular_highlights(gray: np.ndarray, head_radius: float, *,
     blobs = ((rise >= HIGHLIGHT_MIN_RISE) & (rise >= HIGHLIGHT_CONTRAST * opened)).astype(np.uint8)
     count, labels, stats, _ = cv2.connectedComponentsWithStats(blobs, connectivity=8)
     max_area = max(HIGHLIGHT_MIN_AREA_PX, int(np.pi * (HIGHLIGHT_MAX_RADIUS_RATIO * float(head_radius)) ** 2))
-    small = np.zeros(count, bool)
-    small[1:] = stats[1:, cv2.CC_STAT_AREA] <= max_area
-    highlights = small[labels].astype(np.uint8)
+    spots = np.zeros(count, bool)
+    for i in range(1, count):
+        x, y, w, h, area = (int(v) for v in stats[i])
+        if (not HIGHLIGHT_SPOT_MIN_AREA <= area <= max_area
+                or min(w, h) < HIGHLIGHT_SPOT_MIN_SIDE
+                or area / (w * h) < HIGHLIGHT_SPOT_MIN_FILL):
+            continue
+        component = (labels[y:y + h, x:x + w] == i).astype(np.uint8)
+        moments = cv2.moments(component)
+        covariance = np.array([[moments["mu20"], moments["mu11"]],
+                               [moments["mu11"], moments["mu02"]]]) / area
+        # Pixel area contributes 1/12 on each axis; moments catch diagonal streaks too.
+        eigenvalues = np.linalg.eigvalsh(covariance) + 1.0 / 12.0
+        if np.sqrt(eigenvalues[1] / eigenvalues[0]) > HIGHLIGHT_SPOT_MAX_AXIS_RATIO:
+            continue
+        pad = max(HIGHLIGHT_SPOT_MIN_SIDE, int(round(np.sqrt(area / np.pi))))
+        x1, y1 = max(0, x - pad), max(0, y - pad)
+        x2, y2 = min(gray.shape[1], x + w + pad), min(gray.shape[0], y + h + pad)
+        patch = gray[y1:y2, x1:x2]
+        surround = np.ones(patch.shape, bool)
+        surround[y - y1:y - y1 + h, x - x1:x - x1 + w] = False
+        if not surround.any():
+            continue
+        background = float(np.quantile(patch[surround], HIGHLIGHT_SURROUND_QUANTILE))
+        brightness = float(np.median(gray[y:y + h, x:x + w][component.astype(bool)]))
+        if (brightness - background >= HIGHLIGHT_MIN_RISE
+                and brightness - background >= HIGHLIGHT_CONTRAST * background):
+            spots[i] = True
+    highlights = spots[labels].astype(np.uint8)
     if margin > 0 and highlights.any():
         highlights = cv2.dilate(highlights, np.ones((2 * margin + 1, 2 * margin + 1), np.uint8))
     return highlights.astype(bool)
@@ -184,6 +237,7 @@ class EdgeBlurField:
         self.pre_sigma = float(pre_sigma)
         self.reblur_sigma = float(reblur_sigma)
         g0 = _gaussian(gray, self.pre_sigma)
+        self._profile_gray = g0
         g1 = _gaussian(gray, float(np.hypot(self.pre_sigma, self.reblur_sigma)))
         self.gx0, self.gy0 = _gradients(g0)
         gx1, gy1 = _gradients(g1)
@@ -206,13 +260,56 @@ class EdgeBlurField:
         """Per-pixel blur radius for ``sel`` plus which pixels are valid step edges."""
         ratio = self.mag0[sel] / np.maximum(self.mag1[sel], 1e-9)
         total = self.reblur_sigma / np.sqrt(np.maximum(ratio ** 2 - 1.0, 1e-12))
-        # A step edge already smoothed by pre_sigma cannot measure below it, nor below
-        # SIGMA_FLOOR_PX once that smoothing is removed. Thinner structures (eye-ring
-        # lines, catchlights, twigs, needles) do and would read as impossibly sharp,
-        # so they are not edges for this estimator.
         sigma = np.sqrt(np.maximum(total ** 2 - self.pre_sigma ** 2, 0.0))
         valid = (ratio > 1.02) & (total >= self.pre_sigma) & (sigma >= SIGMA_FLOOR_PX)
+        # Sharpening can make a real step narrower than the unsharpened floor.
+        # Check its two plateaus before restoring it; a thin line returns to the
+        # same background on both sides. Report the floor, not a fictitious zero
+        # radius, since the Gaussian model cannot quantify oversharpening.
+        below = (ratio > 1.02) & (sigma < SIGMA_FLOOR_PX)
+        if below.any():
+            indices = np.flatnonzero(below)
+            ys, xs = np.divmod(np.flatnonzero(sel)[below], sel.shape[1])
+            restored = indices[self._has_step_plateaus(ys, xs)]
+            sigma[restored] = SIGMA_FLOOR_PX
+            valid[restored] = True
         return sigma, valid
+
+    def _has_step_plateaus(self, ys: np.ndarray, xs: np.ndarray) -> np.ndarray:
+        """Conservative check for a sharpened step, using its smoothed normal profile.
+
+        At offsets -6..6 px the outer three samples on either side must form
+        distinct, stable plateaus in the gradient's positive direction, with at
+        least 90% of that transition inside +/-2 px (a sharpened step after the
+        1 px pre-blur). A needle superimposed on a wider blurred step can have
+        different far plateaus too, but cannot satisfy this central-width check.
+        Needles, eye rings and isolated points have a second, opposite edge and return
+        towards the first plateau. Missing neighbours at the ROI border are not
+        invented by reflection. Sampling is batched to bound temporary memory.
+        """
+        result = np.zeros(len(xs), bool)
+        h, w = self._profile_gray.shape[:2]
+        radius = STEP_PROFILE_RADIUS_PX
+        offsets = np.arange(-radius, radius + 1, dtype=np.float32)[:, None]
+        for start in range(0, len(xs), STEP_PROFILE_BATCH):
+            end = min(len(xs), start + STEP_PROFILE_BATCH)
+            y, x = ys[start:end], xs[start:end]
+            mag = np.maximum(self.mag0[y, x], 1e-9)
+            nx, ny = self.gx0[y, x] / mag, self.gy0[y, x] / mag
+            inside = ((x - radius * np.abs(nx) >= 0) & (x + radius * np.abs(nx) <= w - 1)
+                      & (y - radius * np.abs(ny) >= 0) & (y + radius * np.abs(ny) <= h - 1))
+            profile = _sample_bilinear(self._profile_gray, x.astype(np.float32) + offsets * nx,
+                                       y.astype(np.float32) + offsets * ny)
+            span = np.ptp(profile, axis=0)
+            left, right = profile[:3], profile[-3:]
+            contrast = np.mean(right, axis=0) - np.mean(left, axis=0)
+            ripple = np.maximum(np.ptp(left, axis=0), np.ptp(right, axis=0))
+            central = profile[radius + 2] - profile[radius - 2]
+            result[start:end] = (inside & (span > 1e-9)
+                                 & (contrast >= STEP_PROFILE_CONTRAST_MIN * span)
+                                 & (ripple <= STEP_PROFILE_RIPPLE_MAX * span)
+                                 & (central >= STEP_PROFILE_CENTRAL_MIN * contrast))
+        return result
 
     def _sigma_at(self, sel: np.ndarray) -> np.ndarray:
         sigma, valid = self._sigma_and_valid(sel)
@@ -271,11 +368,7 @@ class EdgeBlurField:
         if n < min_edges:
             return EdgeBlurStats(None, None, None, n), None, empty
         ys, xs = np.nonzero(edges)
-        ratio = self.mag0[edges] / np.maximum(self.mag1[edges], 1e-9)
-        ok = ratio > 1.02
-        total = self.reblur_sigma / np.sqrt(np.maximum(ratio ** 2 - 1.0, 1e-6))
-        sig = np.sqrt(np.maximum(total ** 2 - self.pre_sigma ** 2, 0.0))
-        ok = ok & (total >= self.pre_sigma) & (sig >= SIGMA_FLOOR_PX)  # drop line-like responses, as in _sigma_at
+        sig, ok = self._sigma_and_valid(edges)
         theta = np.mod(np.arctan2(self.gy0[edges], self.gx0[edges]), np.pi)
         per_dir = []
         by_bin = []

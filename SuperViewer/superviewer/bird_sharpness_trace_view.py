@@ -44,6 +44,7 @@ except ImportError:  # pragma: no cover - PyQt5 fallback
                                  QSpinBox, QTabWidget)
 
 _Qt = getattr(Qt, "AlignmentFlag", Qt)
+_WORD_WRAP = getattr(getattr(Qt, "TextFlag", Qt), "TextWordWrap")
 _KEEP_ASPECT = getattr(getattr(Qt, "AspectRatioMode", Qt), "KeepAspectRatio")
 _SMOOTH = getattr(getattr(Qt, "TransformationMode", Qt), "SmoothTransformation")
 _HORIZONTAL = getattr(getattr(Qt, "Orientation", Qt), "Horizontal")
@@ -241,10 +242,16 @@ class TraceChartWidget(QWidget):
             title_font = QFont(self.font())
             title_font.setBold(True)
             painter.setFont(title_font)
-            painter.drawText(QRectF(0, 0, self.width(), 18), _Qt.AlignLeft | _Qt.AlignVCenter, self.chart.title)
+            title_h = max(18, painter.fontMetrics().height() + 2)
+            painter.drawText(QRectF(0, 0, self.width(), title_h), _Qt.AlignLeft | _Qt.AlignVCenter, self.chart.title)
             painter.setFont(self.font())
             # Bottom 40 px: tick labels (14 px) then the legend/caption row, never overlapping.
             plot = QRectF(34, 24, self.width() - 44, self.height() - 24 - 40)
+            if self.chart.kind == "directions":
+                # Reserve two wrapped caption lines, including CJK fallback-font leading.
+                line_h = painter.fontMetrics().height() + 2
+                top = title_h + 6
+                plot = QRectF(34, top, self.width() - 44, self.height() - top - 3 * line_h - 28)
             getattr(self, f"_paint_{self.chart.kind}", lambda *a: None)(painter, plot, text, muted)
         finally:
             painter.end()
@@ -302,7 +309,7 @@ class TraceChartWidget(QWidget):
             painter.setPen(QPen(text, 2, _DASH))
             painter.drawLine(QPointF(x, plot.top()), QPointF(x, plot.bottom()))
             painter.drawText(QRectF(x + 4, plot.top(), 120, 14), _Qt.AlignLeft | _Qt.AlignVCenter,
-                             f"中位数 {float(median):.2f}")
+                             f"{data.get('marker_label', '中位数')} {float(median):.2f}")
         legend_x = plot.left()
         for s, _h in hists:
             n = np.asarray(s["values"]).size
@@ -319,6 +326,7 @@ class TraceChartWidget(QWidget):
 
     def _paint_directions(self, painter, plot, text, muted) -> None:
         data = self.chart.data
+        line_h = painter.fontMetrics().height() + 2
         values = data.get("bins") or []
         known = [v for v in values if v is not None]
         top = max(known + [1.0]) * 1.15
@@ -337,15 +345,17 @@ class TraceChartWidget(QWidget):
                 painter.setBrush(QColor(hex_color(sigma_color(v))))
                 painter.drawRoundedRect(QRectF(x + 3, plot.bottom() - h, bw - 6, h), 2, 2)
                 painter.setPen(text)
-                painter.drawText(QRectF(x, plot.bottom() - h - 14, bw, 13), _Qt.AlignCenter, f"{v:.2f}")
+                painter.drawText(QRectF(x, plot.bottom() - h - line_h, bw, line_h), _Qt.AlignCenter, f"{v:.2f}")
             painter.setPen(muted)
-            painter.drawText(QRectF(x, plot.bottom() + 2, bw, 14), _Qt.AlignCenter, f"{i * 180 // n}°")
+            painter.drawText(QRectF(x, plot.bottom() + 2, bw, line_h), _Qt.AlignCenter, f"{i * 180 // n}°")
         ratio = data.get("ratio")
         threshold = data.get("threshold", 1.5)
-        verdict = "—" if ratio is None else (f"{ratio:.2f}（≥{threshold:g} 且身体模糊 → 运动模糊）"
+        condition = data.get("condition", "身体模糊")
+        verdict = "—" if ratio is None else (f"{ratio:.2f}（≥{threshold:g} 且{condition} → 运动模糊）"
                                             if ratio >= threshold else f"{ratio:.2f}（各方向接近，非运动模糊）")
         painter.setPen(text)
-        painter.drawText(QRectF(plot.left(), self.height() - 14, plot.width(), 14), _Qt.AlignLeft, f"方向比 {verdict}")
+        painter.drawText(QRectF(plot.left(), self.height() - 2 * line_h - 18, plot.width(), 2 * line_h + 14),
+                         int(_Qt.AlignLeft) | int(_WORD_WRAP), f"方向比 {verdict}")
 
     def _paint_score_curve(self, painter, plot, text, muted) -> None:
         data = self.chart.data

@@ -332,9 +332,9 @@ def _expand(box, factor: float, shape) -> Tuple[float, float, float, float]:
     return max(0, cx - w / 2), max(0, cy - h / 2), min(W, cx + w / 2), min(H, cy + h / 2)
 
 
-def _histogram(series: List[dict], median: Optional[float], title: str) -> TraceChart:
+def _histogram(series: List[dict], median: Optional[float], title: str, *, marker_label="中位数") -> TraceChart:
     return TraceChart("histogram", title, {
-        "series": series, "median": median,
+        "series": series, "median": median, "marker_label": marker_label,
         "bands": [SIGMA_SHARP_MAX, SIGMA_USABLE_MAX, SIGMA_BLURRED_MIN],
         "band_colors": [hex_color(C_SHARP), hex_color(C_USABLE), hex_color(C_SOFT)],
     })
@@ -342,7 +342,7 @@ def _histogram(series: List[dict], median: Optional[float], title: str) -> Trace
 
 EDGE_LEGEND = [
     (hex_color(C_REJECT_NOISE), "低于 4×噪声，舍弃"),
-    (hex_color(C_WEAK), "高于噪声但非最强，未测"),
+    (hex_color(C_WEAK), "高于噪声，未入最强样本"),
     (hex_color(C_REJECT_LINE), "线状结构（细枝/高光），舍弃"),
     (hex_color(C_SHARP), "实测边缘：清晰"),
     (hex_color(C_USABLE), "实测边缘：可用"),
@@ -709,7 +709,7 @@ class AnalysisTracer:
             elif eye_ok:
                 desc = ("关键点模型定位眼和喙（原图与镜像图各定位一次取平均，空心圈为镜像结果）；"
                         "头部区域 = 以眼为圆心、半径 1.2×眼喙距的圆 ∩ 鸟体内缩约一个掩膜像素（青色），"
-                        "并挖掉眼睛高光等小亮斑周围 8 px（脱焦的点光源是硬边光斑，会被测成清晰）。"
+                        "并挖掉通过形态和邻域对比验证的孤立点状高光周围 8 px（脱焦的点光源是硬边光斑，会被测成清晰）。"
                         "头部清晰才算鸟清晰，翅膀/尾羽运动和遮挡不计入。")
             else:
                 desc = "眼睛不可见（可见度 < 0.5）：无法确认头部，改用身体模糊，分数封顶 299。"
@@ -747,18 +747,29 @@ class AnalysisTracer:
                    "values": selection.sigma if selection is not None else np.empty(0)}]
         if bsig.size:
             series.append({"name": "身体", "color": "#a0a0a0", "values": bsig})
-        charts = [_histogram(series, measurement.sigma, "模糊半径分布（px）")]
+        charts = [_histogram(series, measurement.sigma, "模糊半径分布（px）", marker_label="最终值")]
         charts.append(TraceChart("directions", "身体边缘 8 方向模糊（运动模糊检测）",
                                  {"bins": by_bin, "ratio": measurement.motion_ratio, "threshold": 1.5}))
+        if measurement.head_direction_bins is not None:
+            charts.append(TraceChart("directions", "头部边缘 8 方向模糊（全部过噪声边缘）",
+                                     {"bins": measurement.head_direction_bins,
+                                      "ratio": measurement.head_direction_ratio, "threshold": 1.5,
+                                      "condition": f"头部长轴 σ>{SIGMA_USABLE_MAX:g}"}))
         steps.append(TraceStep(
             STEP_DISTRIBUTION, "模糊分布",
-            "每个实测边缘点按模糊半径着色（绿=清晰，黄=可用，红=模糊）。取中位数作为这只鸟的值；"
-            "身体边缘按 8 个方向统计，方向间差异大（≥1.5 倍）且身体模糊时判为运动模糊。",
+            "每个实测边缘点按模糊半径着色（绿=清晰，黄=可用，红=模糊）。最强边缘中位数为基础值；可靠头部还使用全部过噪声边缘拟合方向模糊。"
+            "头部方向比 ≥1.5 且长轴 σ >1.05 px 时，提高到长轴模糊值并判运动模糊；"
+            "否则保留基础值与原身体方向判断。身体运动不覆盖清晰头部。",
             heat, frame,
-            [("测量值（中位数）", _fmt(measurement.sigma, "%.3f px")),
+            [("最终测量值", _fmt(measurement.sigma, "%.3f px")),
+             ("头部方向长轴 σ", _fmt(measurement.head_direction_sigma, "%.3f px")),
+             ("头部方向比", _fmt(measurement.head_direction_ratio)),
+             ("头部方向修正", "已采用" if measurement.head_motion else "未采用"),
              (f"{'头部' if head is not None else '鸟体'}实测点",
               (f"{selection.sigma.size}" if selection is not None and selection.sigma.size >= 8 else
-               f"{0 if selection is None else selection.sigma.size}（不足 8 点：严重模糊，按 ≥1.55 px 计）")
+               (f"{0 if selection is None else selection.sigma.size}（最强样本不足，已采用头部方向测量）"
+                if measurement.head_motion else
+                f"{0 if selection is None else selection.sigma.size}（不足 8 点：按 ≥1.55 px 回退）"))
               if (head is not None or keypoints is None or measurement.eye_reliable is False)
               else "—（眼不可见，用身体）"),
              ("头部 σ", _fmt(measurement.head_sigma, "%.3f")
@@ -802,9 +813,9 @@ class AnalysisTracer:
         noise = selection.noise_sigma if selection is not None else None
         blank = selection is not None and selection.sigma.size < 8
         desc = (f"{region_name}内的 Canny 边缘按去向着色。只有强度 ≥ 4×传感器噪声的边缘参与，取其中最强的 5%；"
-                "比预平滑还“锐”的线状结构（细枝、眼圈高光）会被误测成近乎 0 px，舍弃。")
+                "σ <0.5 px 的候选检查法向两侧平台：真实锐化阶跃按 0.5 px 保留，细线/点状响应仍舍弃。")
         if blank:
-            desc += f"\n\n{region_name}内没有足够的可测边缘：说明严重模糊，按“明显模糊”（≥ 1.55 px）计。"
+            desc += f"\n\n{region_name}内没有足够的最强边缘样本；最终值还需结合头部方向测量（如有），否则按 ≥1.55 px 回退。"
         return TraceStep(
             STEP_EDGES, "边缘筛选", desc, img, frame,
             [("噪声 σ（Immerkær）", _fmt(noise, "%.4f")),

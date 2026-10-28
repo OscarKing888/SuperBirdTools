@@ -21,7 +21,11 @@ below ``metrics.SIGMA_FLOOR_PX`` (0.5 px) are rejected as line-like). Calibrated
 of that resolution, so the same thresholds describe what a 100% view shows.
 Version 16 preserves separate bird silhouettes inside overlapping detection boxes;
 version 17 also runs the flock pass after a whole-frame recheck finds small birds;
-the blur measurement and score thresholds are unchanged.
+the blur measurement and score thresholds are unchanged. Version 18 adds a
+head-only directional blur guard, recovers profile-verified sharpened step edges,
+and limits specular exclusions to isolated compact highlights. Score anchors
+remain unchanged; the head radius supplied to classify includes any directional
+correction.
 """
 
 from __future__ import annotations
@@ -39,7 +43,7 @@ from app_common.bird_sharpness_fields import (
     VERDICT_USABLE,
 )
 
-ALGORITHM_VERSION = "sbt-blur-v17"
+ALGORITHM_VERSION = "sbt-blur-v18"
 
 # (sigma_px, score) anchors, sigma ascending / score descending.
 SCORE_ANCHORS: Tuple[Tuple[float, float], ...] = (
@@ -99,10 +103,14 @@ def classify(
     *,
     eye_visible: bool,
     head_blank: bool = False,
+    head_motion: bool = False,
 ) -> Tuple[str, Optional[int]]:
     """Return ``(verdict, score)`` from the measured blur values.
 
     ``head_blank``: the eye is visible but the head had no measurable edge.
+    ``head_motion``: reliable directional evidence inside the located head; the
+    caller supplies the corrected head_sigma. Body/wing motion never overrides
+    a sharp head.
     """
     motion_like = (
         body_sigma is not None
@@ -119,7 +127,7 @@ def classify(
             return VERDICT_SHARP, score
         if head_sigma <= SIGMA_USABLE_MAX:
             return VERDICT_USABLE, score
-        return (VERDICT_MOTION if motion_like else VERDICT_SOFT), score
+        return (VERDICT_MOTION if motion_like or head_motion else VERDICT_SOFT), score
     if body_sigma is None:
         return VERDICT_NO_EYE, None
     score = sigma_to_score(body_sigma)
