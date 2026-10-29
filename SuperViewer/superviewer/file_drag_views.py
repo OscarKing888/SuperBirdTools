@@ -6,7 +6,7 @@ import sys
 
 from app_common.file_browser import DirectoryBrowserWidget
 from app_common.file_browser._models import FileTableView
-from .rarity_file_table import RarityFileTableModel
+from .sharpness_file_table import SharpnessFileTableModel
 from .thumbnail_metadata import BirdThumbnailModel
 from .file_drag_feedback import file_drag_cursor
 
@@ -40,7 +40,7 @@ class _DragModel:
         return flags | Qt.ItemFlag.ItemIsDragEnabled if index.isValid() else flags
 
 
-class DragFileTableModel(_DragModel, RarityFileTableModel):
+class DragFileTableModel(_DragModel, SharpnessFileTableModel):
     pass
 
 

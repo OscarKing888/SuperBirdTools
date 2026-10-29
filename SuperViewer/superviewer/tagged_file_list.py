@@ -375,12 +375,26 @@ class SuperViewerTaggedFileListPanel(FileListPanel):
         self._focus_source_index: dict[tuple[str, str], str] = {}
         self._command_history = PhotoTagCommandHistory(self, max_commands=100)
         super().__init__(parent)
-        from app_common.file_browser._browser_core import _TREE_COL_SPECIES
+        from app_common.file_browser._browser_core import _TREE_COL_SPECIES, _TREE_COL_BIRD_SHARP
         rarity_column = self._file_table_model.rarity_column
         self._tree_widget.setItemDelegateForColumn(rarity_column, RarityBadgeDelegate(self._tree_widget))
         self._tree_widget.setColumnWidth(rarity_column, 88)
         header = self._tree_widget.header()
         header.moveSection(header.visualIndex(rarity_column), header.visualIndex(_TREE_COL_SPECIES) + 1)
+        # 三个清晰度值并排显示；只调整视觉顺序，逻辑列索引保持兼容。
+        score_columns = (_TREE_COL_BIRD_SHARP, self._file_table_model.head_score_column,
+                         self._file_table_model.body_score_column)
+        for offset, column in enumerate(score_columns[1:], 1):
+            header.moveSection(header.visualIndex(column), header.visualIndex(_TREE_COL_BIRD_SHARP) + offset)
+        self._tree_widget.ensurePolished()
+        header.ensurePolished()
+        metrics = header.fontMetrics()
+        interactive = getattr(type(header), "ResizeMode", type(header)).Interactive
+        for column in score_columns:
+            header.setSectionResizeMode(column, interactive)
+            label = self._file_table_model.headerData(column, getattr(Qt, "Orientation", Qt).Horizontal)
+            width = max(metrics.horizontalAdvance(label), metrics.horizontalAdvance("1000.0"))
+            self._tree_widget.setColumnWidth(column, width + max(28, 2 * metrics.height()))
         # 保留评级徽章的紧凑形状；选中态与预览 Toggle 共用高对比蓝底。
         for button in self._rating_filter_badge_buttons:
             button.setStyleSheet(button.styleSheet() + TOGGLE_CHECKED_STYLE)

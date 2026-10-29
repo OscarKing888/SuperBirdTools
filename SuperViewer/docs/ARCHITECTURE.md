@@ -380,7 +380,15 @@ Qt 进度回调只更新界面/初始需求提示，实际任务完成和需求�
 浏览器缓存，失败保留旧结果。旧记录不推算分项，在下次用户启动检测时按版本重算。
 [`ImageInfoTabPanel_ImageInfo`](../superviewer/image_info_tab_image_info.py) 的既有表格新增三行；
 计算过程复用 `TraceStep.metrics` 和逐鸟列表展示三项，旧身体统计标为“整鸟辅助（含头部）”。
-缺值为“—”，有效 0 保留，平均显示一位小数；主列表、缩略图、City 锐度槽与模板选择器不变。
+缺值为“—”，有效 0 保留，平均显示一位小数；City 锐度槽、缩略图判定徽章与模板选择器不变。
+Viewer 列表使用 [`SharpnessFileTableModel`](../superviewer/sharpness_file_table.py) 扩展现有
+`RarityFileTableModel`：原“鸟清晰”列显示平均分，两项逻辑列追加在原列之后，表头视觉顺序为
+“鸟清晰 → 头部清晰度 → 身体清晰度”。逻辑追加保留共享相机/视频/稀有度列的索引，
+[`tagged_file_list.py`](../superviewer/tagged_file_list.py) 负责位置和按字体预留的可调列宽。
+显示、提示和排序只读行/元数据缓存，`sort_key_for_path()` 与表头按同一数值排序，沿用元数据
+小批刷新及清空、列表/缩略图切换和选择保持；旧记录缺值不回退旧主分。数值列使用主题文字色，
+不套用旧主判定的颜色。共享浏览器与 BirdStamp 默认模型保持原列与显示。
+回归见[分数模型](../tests/test_sharpness_file_table.py)和[列表集成](../tests/test_sharpness_list_columns.py)。
 详细规则和执行顺序见[三项分数](../../docs/bird_sharpness.md#头部身体与平均清晰度v19)
 及[流程 7.6](../../docs/bird_sharpness_flowchart.md#76-独立头部身体与平均分v19)。
 
