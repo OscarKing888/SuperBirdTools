@@ -45,6 +45,42 @@ def test_bird_trace_steps_match_the_computation(monkeypatch) -> None:
     assert trace.result is result
 
 
+def test_trace_part_scores_match_each_bird_and_the_selected_primary_result(monkeypatch) -> None:
+    scene = _scene([(450, 600, 260, 1.8), (1350, 600, 260, 0.3)])
+    result, _plain, trace = _run(monkeypatch, scene, [(450, 600, 260), (1350, 600, 260)])
+    for bird in result.birds:
+        step = next(s for s in trace.steps_for(bird["index"]) if s.key == "distribution")
+        values = dict(step.metrics)
+        assert values["头部清晰度"] == ("—" if bird["head_score"] is None else str(bird["head_score"]))
+        assert values["身体清晰度"] == ("—" if bird["body_score"] is None else str(bird["body_score"]))
+        assert values["平均清晰度"] == ("—" if bird["mean_score"] is None else f"{bird['mean_score']:.1f}")
+        assert "整鸟辅助 σ（含头部）" in values and "身体 σ" not in values
+        assert all(series["name"] != "身体" for series in step.charts[0].data["series"])
+        assert "整鸟辅助" in step.charts[1].title and "含头部" in step.charts[1].title
+    values = dict(trace.final[0].metrics)
+    assert values["分数（0–1000）"] == str(result.score)
+    assert values["头部清晰度"] == str(result.head_score)
+    assert values["身体清晰度"] == str(result.body_score)
+    assert values["平均清晰度"] == f"{result.mean_score:.1f}"
+    for row in trace.final[0].bird_rows:
+        bird = next(b for b in result.birds if b["index"] == row.bird)
+        assert f"头部 {bird['head_score']}" in row.value
+        assert f"身体 {bird['body_score']}" in row.value
+
+
+def test_trace_part_scores_preserve_zero_and_missing_without_fallback() -> None:
+    from bird_sharpness.analyzer import BirdSharpnessResult
+    from bird_sharpness.trace import AnalysisTrace
+
+    tracer = AnalysisTracer()
+    tracer.trace = AnalysisTrace("bird.ARW")
+    tracer._overview = np.zeros((100, 160, 3), np.uint8)
+    result = BirdSharpnessResult("bird.ARW", "soft", score=0, head_score=0)
+    tracer.result(result)
+    values = dict(tracer.trace.final[-1].metrics)
+    assert (values["头部清晰度"], values["身体清晰度"], values["平均清晰度"]) == ("0", "—", "—")
+
+
 def test_multi_bird_trace_marks_best_and_switches_steps(monkeypatch) -> None:
     scene = _scene([(450, 600, 260, 1.8), (1350, 600, 260, 0.3)])
     result, plain, trace = _run(monkeypatch, scene, [(450, 600, 260), (1350, 600, 260)])

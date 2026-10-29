@@ -372,6 +372,18 @@ Qt 进度回调只更新界面/初始需求提示，实际任务完成和需求�
 分析仍为最低优先级，进度窗口的并发额度与共享池总线程数分别显示。该执行设置不进入
 `AnalysisParams`，不改变算法结果、版本或已检测结果的复用；CLI 的 `-j/--workers` 独立控制自有执行器。
 
+`sbt-blur-v19` 在原主评分之外保留 `head_score`、`body_score`、`mean_score`：
+[`_measure_bird()` / `_part_scores()`](../../bird_sharpness/analyzer.py) 复用同一次解码和边缘场，
+身体测量排除可靠头部的全部实际采样窗口，平均按两项换算后分数各占 50%。原 `body_sigma`
+包含头部，继续辅助主判定；原最佳鸟排序不变，顶层三项取自同一只最佳鸟。字段唯一来源为
+[`bird_sharpness_fields.py`](../../app_common/bird_sharpness_fields.py)，成功重算缺值清空 XMP 与
+浏览器缓存，失败保留旧结果。旧记录不推算分项，在下次用户启动检测时按版本重算。
+[`ImageInfoTabPanel_ImageInfo`](../superviewer/image_info_tab_image_info.py) 的既有表格新增三行；
+计算过程复用 `TraceStep.metrics` 和逐鸟列表展示三项，旧身体统计标为“整鸟辅助（含头部）”。
+缺值为“—”，有效 0 保留，平均显示一位小数；主列表、缩略图、City 锐度槽与模板选择器不变。
+详细规则和执行顺序见[三项分数](../../docs/bird_sharpness.md#头部身体与平均清晰度v19)
+及[流程 7.6](../../docs/bird_sharpness_flowchart.md#76-独立头部身体与平均分v19)。
+
 [`BirdSharpnessProgressDialog`](../superviewer/bird_sharpness_progress.py) 用原生 `QScrollArea` 容纳
 `WorkerLoadView` 的线程详情：1–64 个线程都保留各自的文件名、阶段进度点、阶段文字和已用秒数，
 空闲线程继续占一行，不因线程数超过 8 而隐藏。线程较多时滚动可达全部行；总进度与停止/关闭按钮

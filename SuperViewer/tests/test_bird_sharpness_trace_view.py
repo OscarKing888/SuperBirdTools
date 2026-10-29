@@ -51,6 +51,58 @@ def _key(dialog, key):
     dialog.keyPressEvent(QKeyEvent(QEvent.Type.KeyPress, key, Qt.KeyboardModifier.NoModifier))
 
 
+@pytest.mark.parametrize("dark, font_scale", [(False, 1.0), (True, 1.4)])
+def test_part_scores_remain_accessible_in_distribution_and_result(monkeypatch, dark, font_scale):
+    from PyQt6.QtWidgets import QScrollArea
+
+    trace = _trace(monkeypatch, birds=((900, 600, 260, 0.3),))
+    palette = QPalette(_APP.palette())
+    if dark:
+        current = QPalette(palette)
+        for role in (QPalette.ColorRole.Window, QPalette.ColorRole.Base, QPalette.ColorRole.Button):
+            current.setColor(role, QColor("#303030"))
+        for role in (QPalette.ColorRole.WindowText, QPalette.ColorRole.Text, QPalette.ColorRole.ButtonText):
+            current.setColor(role, QColor("#eeeeee"))
+        _APP.setPalette(current)
+    dialog = BirdSharpnessTraceDialog(None, "三分.ARW")
+    font = QFont(dialog.font())
+    font.setPointSizeF(font.pointSizeF() * font_scale)
+    dialog.setFont(font)
+    try:
+        dialog.show()
+        dialog.set_trace(trace)
+        dialog.resize(dialog.minimumSizeHint().width(), 640)
+        assert _wait(lambda: dialog.steps and dialog.view_a._has_image)
+        scroll = dialog.side_tabs.widget(0)
+        assert isinstance(scroll, QScrollArea)
+        for step_key in ("distribution", "result", "distribution"):
+            dialog.go(next(i for i, step in enumerate(dialog.steps) if step.key == step_key), force=True)
+            _APP.processEvents()
+            rows = {dialog.metrics_grid.itemAtPosition(row, 0).widget().text(): row
+                    for row in range(dialog.metrics_grid.rowCount())
+                    if dialog.metrics_grid.itemAtPosition(row, 0) is not None}
+            for key in ("头部清晰度", "身体清晰度", "平均清晰度"):
+                row = rows[key]
+                label = dialog.metrics_grid.itemAtPosition(row, 0).widget()
+                value = dialog.metrics_grid.itemAtPosition(row, 1).widget()
+                assert value.text() == dict(dialog.steps[dialog.index].metrics)[key]
+                def metric_visible():
+                    # 步骤切换后 Qt 下一轮事件才完成侧栏高度重排。
+                    scroll.ensureWidgetVisible(value)
+                    return scroll.viewport().rect().contains(
+                        QRect(value.mapTo(scroll.viewport(), QPoint()), value.size()))
+
+                assert _wait(metric_visible)
+                assert label.width() >= label.sizeHint().width()
+            _key(dialog, Qt.Key.Key_End)
+            assert dialog.steps[dialog.index].key == "result" and not dialog.next_btn.isEnabled()
+        assert not dialog.grab().isNull()
+    finally:
+        dialog.close()
+        _APP.processEvents()
+        _APP.setPalette(palette)
+
+
 def test_dialog_steps_navigation_compare_and_bird_switch(monkeypatch) -> None:
     trace = _trace(monkeypatch)
     dialog = BirdSharpnessTraceDialog(None, "x.ARW")

@@ -99,6 +99,26 @@ def _r3(value) -> Optional[float]:
     return None if value is None else round(float(value), 3)
 
 
+def _part_scores(field_: EdgeBlurField, body: np.ndarray, head_windows: Optional[np.ndarray],
+                 head_sigma: Optional[float]) -> Tuple[Optional[int], Optional[int], Optional[float]]:
+    """Additional head / head-excluded body scores; never replace the legacy decision.
+
+    ``head_windows`` is the union of the complete geometric windows actually
+    sampled for a reliably located head, before mask/highlight exclusions. None
+    means the head could not be located reliably, so a body-only region is also
+    unknown. A measurable body may still have a score when the located head has
+    no measured sigma; the synthetic blank-head fallback is never supplied here.
+    """
+    if head_windows is None:
+        return None, None, None
+    head_score = sigma_to_score(head_sigma)
+    body_stats, _motion, _detail = field_.body_blur_detail(body & ~head_windows)
+    body_score = sigma_to_score(body_stats.sigma)
+    mean_score = (round((head_score + body_score) / 2.0, 1)
+                  if head_score is not None and body_score is not None else None)
+    return head_score, body_score, mean_score
+
+
 @dataclass
 class BirdMeasurement:
     """Sharpness values computed from one bird's own pixels."""
@@ -129,6 +149,9 @@ class BirdMeasurement:
     head_direction_sigma: Optional[float] = None
     head_direction_ratio: Optional[float] = None
     head_motion: bool = False
+    head_score: Optional[int] = None
+    body_score: Optional[int] = None
+    mean_score: Optional[float] = None
 
     def rank(self) -> tuple:
         # Best bird: highest score, then smallest blur radius, then detector confidence.
@@ -163,6 +186,9 @@ class BirdSharpnessResult:
     edge_estimator: str = ESTIMATOR_STANDARD.key
     detector: str = ""   # detector file actually used (JSON / trace only; the version carries non-defaults)
     sam_model: str = ""  # SAM model used for refinement, "" = none
+    head_score: Optional[int] = None
+    body_score: Optional[int] = None
+    mean_score: Optional[float] = None
 
     @property
     def ok(self) -> bool:
@@ -182,6 +208,9 @@ class BirdSharpnessResult:
         out = {
             fields.xmp_key(fields.FIELD_VERDICT): self.verdict,
             fields.xmp_key(fields.FIELD_SCORE): "" if self.score is None else str(int(self.score)),
+            fields.xmp_key(fields.FIELD_HEAD_SCORE): num(self.head_score, "%d"),
+            fields.xmp_key(fields.FIELD_BODY_SCORE): num(self.body_score, "%d"),
+            fields.xmp_key(fields.FIELD_MEAN_SCORE): num(self.mean_score, "%.1f"),
             fields.xmp_key(fields.FIELD_SIGMA): num(self.sigma, "%.3f"),
             fields.xmp_key(fields.FIELD_REGION): self.region,
             fields.xmp_key(fields.FIELD_BIRD_COUNT): str(int(self.bird_count)),
@@ -1077,6 +1106,9 @@ class BirdSharpnessAnalyzer:
             path=path,
             verdict=best.verdict,
             score=best.score,
+            head_score=best.head_score,
+            body_score=best.body_score,
+            mean_score=best.mean_score,
             sigma=best.sigma,
             region=fields.REGION_BIRD,
             bird_count=len(birds),
@@ -1164,6 +1196,7 @@ class BirdSharpnessAnalyzer:
         radius = None
         head_stats = None
         head = None
+        head_windows = None
         selection = None
         trace_keypoints = None
         direction = None
@@ -1192,7 +1225,8 @@ class BirdSharpnessAnalyzer:
             trace_keypoints = (keypoints, radius)
             if eye_vis >= EYE_VISIBLE_MIN:
                 yy, xx = np.ogrid[:ch, :cw]
-                head = ((xx - eye[0]) ** 2 + (yy - eye[1]) ** 2 <= radius ** 2) & core
+                head_windows = (xx - eye[0]) ** 2 + (yy - eye[1]) ** 2 <= radius ** 2
+                head = head_windows & core
                 selection = self._select(field_, head)
                 direction = head_direction(field_, head)
                 head_stats = self._edge_stats(selection.sigma)
@@ -1201,7 +1235,9 @@ class BirdSharpnessAnalyzer:
                     for dx, dy, scale_r in HEAD_SAMPLE_VARIANTS[1:]:
                         cx = eye[0] + dx * HEAD_SAMPLE_SHIFT * radius
                         cy = eye[1] + dy * HEAD_SAMPLE_SHIFT * radius
-                        variant = ((xx - cx) ** 2 + (yy - cy) ** 2 <= (radius * scale_r) ** 2) & core
+                        window = (xx - cx) ** 2 + (yy - cy) ** 2 <= (radius * scale_r) ** 2
+                        head_windows |= window
+                        variant = window & core
                         value = self._edge_stats(self._select(field_, variant).sigma).sigma
                         if value is not None:
                             head_samples.append(float(value))
@@ -1229,6 +1265,7 @@ class BirdSharpnessAnalyzer:
                                       head_blank=sigma is None)
             if sigma is None:
                 sigma = blank_head_sigma(body_stats.sigma)
+        head_score, body_score, mean_score = _part_scores(field_, body, head_windows, head_sigma)
         measurement = BirdMeasurement(
             verdict=verdict,
             score=score,
@@ -1255,6 +1292,9 @@ class BirdSharpnessAnalyzer:
             head_direction_sigma=None if direction is None else _r3(direction.major),
             head_direction_ratio=None if direction is None else _r3(direction.ratio),
             head_motion=direction is not None and direction.motion,
+            head_score=head_score,
+            body_score=body_score,
+            mean_score=mean_score,
         )
         if tracer is not None:
             tracer.bird(index, image, (X1, Y1, X2, Y2), bird_px, body, head, trace_keypoints, selection,

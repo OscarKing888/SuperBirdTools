@@ -657,7 +657,8 @@ class AnalysisTracer:
 
         # ③ bird pixels
         img = _dim(crop_small, m_small, 0.3)
-        legend = [(hex_color(C_MASK), "鸟体轮廓"), (hex_color(BIRD_COLORS[index % len(BIRD_COLORS)]), "身体区域")]
+        legend = [(hex_color(C_MASK), "鸟体轮廓"),
+                  (hex_color(BIRD_COLORS[index % len(BIRD_COLORS)]), "整鸟辅助区域（含头部）")]
         source = "分割掩膜" if measurement.masked else "检测框内核"
         if detector_px is not None:
             _contour(img, small(detector_px), C_REJECT_LINE, max(1, lw // 2 + 1))
@@ -672,11 +673,11 @@ class AnalysisTracer:
         steps.append(TraceStep(
             STEP_BIRD, f"鸟 #{index + 1} 的像素",
             "只计算这只鸟自己的像素：白线为鸟体轮廓（分割掩膜，或检测框内缩 8%；开启 SAM 精修时为 SAM 抠出的鸟，"
-            "紫线为被替换的检测模型轮廓），彩线为向内收缩 15 px 的身体区域"
-            "（测身体模糊与运动方向）。轮廓外压暗部分不参与计算。",
+            "紫线为被替换的检测模型轮廓），彩线为用 15×15 像素核内缩后的整鸟辅助区域（含头部），"
+            "用于原主分数的模糊与运动方向判断。新身体清晰度还会排除全部头部采样窗口。轮廓外压暗部分不参与计算。",
             img, frame,
             [("鸟框", f"{bw} × {bh} px"), ("裁切（含 15% 外扩）", f"{X2 - X1} × {Y2 - Y1} px"),
-             ("鸟体像素", f"{int(mask.sum()):,}"), ("身体区域像素", f"{int(body.sum()):,}"),
+             ("鸟体像素", f"{int(mask.sum()):,}"), ("整鸟辅助区域像素", f"{int(body.sum()):,}"),
              ("像素来源", source)],
             legend=legend))
 
@@ -712,7 +713,7 @@ class AnalysisTracer:
                         "并挖掉通过形态和邻域对比验证的孤立点状高光周围 8 px（脱焦的点光源是硬边光斑，会被测成清晰）。"
                         "头部清晰才算鸟清晰，翅膀/尾羽运动和遮挡不计入。")
             else:
-                desc = "眼睛不可见（可见度 < 0.5）：无法确认头部，改用身体模糊，分数封顶 299。"
+                desc = "眼睛不可见（可见度 < 0.5）：无法确认头部，原主分数改用整鸟辅助模糊并封顶 299；头部、身体及平均清晰度不填值。"
             mirror = ("—" if head_kp.eye_gap is None else
                       f"眼差 {head_kp.eye_gap:.0%}，喙差 {head_kp.beak_gap:.0%} 鸟身长："
                       + ("一致" if head_kp.eye_reliable else "不一致"))
@@ -746,9 +747,9 @@ class AnalysisTracer:
         series = [{"name": "头部" if head is not None else "鸟体", "color": hex_color(C_HEAD),
                    "values": selection.sigma if selection is not None else np.empty(0)}]
         if bsig.size:
-            series.append({"name": "身体", "color": "#a0a0a0", "values": bsig})
+            series.append({"name": "整鸟辅助（含头部）", "color": "#a0a0a0", "values": bsig})
         charts = [_histogram(series, measurement.sigma, "模糊半径分布（px）", marker_label="最终值")]
-        charts.append(TraceChart("directions", "身体边缘 8 方向模糊（运动模糊检测）",
+        charts.append(TraceChart("directions", "整鸟辅助边缘 8 方向模糊（含头部）",
                                  {"bins": by_bin, "ratio": measurement.motion_ratio, "threshold": 1.5}))
         if measurement.head_direction_bins is not None:
             charts.append(TraceChart("directions", "头部边缘 8 方向模糊（全部过噪声边缘）",
@@ -759,7 +760,9 @@ class AnalysisTracer:
             STEP_DISTRIBUTION, "模糊分布",
             "每个实测边缘点按模糊半径着色（绿=清晰，黄=可用，红=模糊）。最强边缘中位数为基础值；可靠头部还使用全部过噪声边缘拟合方向模糊。"
             "头部方向比 ≥1.5 且长轴 σ >1.05 px 时，提高到长轴模糊值并判运动模糊；"
-            "否则保留基础值与原身体方向判断。身体运动不覆盖清晰头部。",
+            "否则保留基础值与原整鸟辅助方向判断。身体运动不覆盖清晰头部。"
+            "头部清晰度取可靠头部测量，身体清晰度另测排除全部头部采样窗口后的区域；平均清晰度按两项各 50% 计算，缺项为 —。"
+            "灰色分布与整鸟辅助 σ 含头部，用于原主分数，不是新身体清晰度的测量范围。",
             heat, frame,
             [("最终测量值", _fmt(measurement.sigma, "%.3f px")),
              ("头部方向长轴 σ", _fmt(measurement.head_direction_sigma, "%.3f px")),
@@ -776,9 +779,12 @@ class AnalysisTracer:
               + (f"（小鸟：{len(measurement.head_samples)} 个头部圆取中位数："
                  + " / ".join("%.2f" % v for v in measurement.head_samples) + "）"
                  if measurement.head_samples else "")),
-             ("身体 σ", _fmt(measurement.body_sigma, "%.3f")),
+             ("整鸟辅助 σ（含头部）", _fmt(measurement.body_sigma, "%.3f")),
              ("方向比", _fmt(measurement.motion_ratio)), ("判定", verdict_label(measurement.verdict)),
-             ("分数", _fmt(measurement.score, "%d"))],
+             ("分数", _fmt(measurement.score, "%d")),
+             ("头部清晰度", _fmt(measurement.head_score, "%d")),
+             ("身体清晰度", _fmt(measurement.body_score, "%d")),
+             ("平均清晰度", _fmt(measurement.mean_score, "%.1f"))],
             charts, legend=[(hex_color(C_SHARP), "清晰"), (hex_color(C_USABLE), "可用"), (hex_color(C_SOFT), "模糊")],
             focus_rect=zoom))
         for step in steps:
@@ -905,6 +911,7 @@ class AnalysisTracer:
                 bird_rows.append(TraceBirdRow(
                     f"鸟 #{bird.index + 1}{'（最佳）' if best else ''}{found_labels.get(getattr(m, 'found_by', ''), '')}",
                     f"{verdict_label(m.verdict)} · σ {_fmt(m.sigma)} · 分数 {_fmt(m.score, '%d')}"
+                    f" · 头部 {_fmt(m.head_score, '%d')} · 身体 {_fmt(m.body_score, '%d')} · 平均 {_fmt(m.mean_score, '%.1f')}"
                     f" · 置信度 {m.confidence:.2f}", hex_color(color), tile_box, bird.index))
         self.trace.common.append(TraceStep(
             STEP_BIRDS, "逐只鸟",
@@ -1057,7 +1064,9 @@ class AnalysisTracer:
             found = FOUND_LABELS.get(bird.get("found_by", ""), "")
             rows.append(TraceBirdRow(
                 f"鸟 #{i + 1}{'（最佳）' if best else ''}{found}",
-                f"{verdict_label(bird['verdict'])} · σ {_fmt(bird.get('sigma'))} · 分数 {_fmt(bird.get('score'), '%d')}",
+                f"{verdict_label(bird['verdict'])} · σ {_fmt(bird.get('sigma'))} · 分数 {_fmt(bird.get('score'), '%d')}"
+                f" · 头部 {_fmt(bird.get('head_score'), '%d')} · 身体 {_fmt(bird.get('body_score'), '%d')}"
+                f" · 平均 {_fmt(bird.get('mean_score'), '%.1f')}",
                 hex_color(color), box, i))
         if result.region_box is not None and result.region != fields.REGION_BIRD:
             _rect(img, self._display(result.region_box), C_WINDOW, lw + 1)
@@ -1073,6 +1082,8 @@ class AnalysisTracer:
             fx, fy = (self._focus_px[0] + self._focus_px[2]) / 2, (self._focus_px[1] + self._focus_px[3]) / 2
             on_bird = any(b[0] <= fx <= b[2] and b[1] <= fy <= b[3] for b in self._bird_boxes)
         metrics = [("判定", verdict_label(result.verdict) or result.verdict), ("分数（0–1000）", _fmt(result.score, "%d")),
+                   ("头部清晰度", _fmt(result.head_score, "%d")), ("身体清晰度", _fmt(result.body_score, "%d")),
+                   ("平均清晰度", _fmt(result.mean_score, "%.1f")),
                    ("模糊半径", _fmt(result.sigma, "%.3f px")), ("计算区域", region), ("鸟数", str(result.bird_count))]
         if on_bird is not None:
             metrics.append(("焦点在鸟上", "是" if on_bird else "否（相机焦点不在任何鸟上）"))
@@ -1095,6 +1106,7 @@ class AnalysisTracer:
         self.trace.final.append(TraceStep(
             STEP_RESULT, "结论",
             "多只鸟时取分数最高（其次模糊半径最小）的一只作为整张照片的清晰度；分数写入现有锐度字段，"
+            "头部、身体及平均清晰度均来自同一只最佳鸟；平均为两项各 50%，任一缺失则为 —，不参与最佳鸟选择。"
             "细节写入 XMP-superpicky:bird_sharpness_*。",
             img, "full", metrics, charts,
             legend=[(hex_color(_verdict_rgb(v)), fields.VERDICT_STYLES[v].label)

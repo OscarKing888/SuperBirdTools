@@ -149,10 +149,15 @@ def main(argv: List[str] | None = None) -> int:
         sigma = result.sigma
         sigma_text = "-" if sigma is None else f"{sigma:.2f}"
         score_text = "-" if result.score is None else str(result.score)
+        part_scores = "  ".join(
+            f"{name}={'—' if value is None else format(value, '.1f' if name == 'mean_score' else '.0f')}"
+            for name, value in (("head_score", result.head_score), ("body_score", result.body_score),
+                                ("mean_score", result.mean_score)))
         label = verdict_label(result.verdict) or result.verdict
         extra = f" {result.error}" if result.error else ""
         print(
             f"[{index}/{total}] {os.path.basename(result.path)}  {label}  score={score_text}  "
+            f"{part_scores}  "
             f"sigma={sigma_text}  region={result.region or '-'}  birds={result.bird_count}  eye={result.eye_visibility}  {result.elapsed_s:.1f}s{written}{extra}",
             flush=True,
         )

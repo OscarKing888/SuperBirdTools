@@ -2,7 +2,7 @@
 
 本文按代码的实际执行顺序，用流程图说明一张照片从入队到写入 XMP 的每个环节。算法的背景、标定数据和取舍理由见 [bird_sharpness.md](bird_sharpness.md)；本文只讲“先做什么、再做什么、什么条件走哪条分支”。所有阈值都标注了代码位置，以代码为准。
 
-版本：`sbt-blur-v18`（[scoring.py](../bird_sharpness/scoring.py) `ALGORITHM_VERSION`），非默认参数和 RAW 以外的图像来源会追加后缀（见文末；SuperViewer 默认测相机内嵌 JPEG，即 `sbt-blur-v18-jpeg`）。
+版本：`sbt-blur-v19`（[scoring.py](../bird_sharpness/scoring.py) `ALGORITHM_VERSION`），非默认参数和 RAW 以外的图像来源会追加后缀（见文末；SuperViewer 默认测相机内嵌 JPEG，即 `sbt-blur-v19-jpeg`）。
 
 ## 目录
 
@@ -56,7 +56,7 @@ flowchart TD
     G3 --> G4{"过滤后还有鸟？"}
     G4 -->|是| K
     G4 -->|否| H
-    J -->|是| K["⑤ 逐只鸟测量 _measure_bird<br/>stage = measure"]
+    J -->|是| K["⑤ 逐只鸟测量 _measure_bird<br/>保留主评分，另算头部 / 身体 / 平均分<br/>stage = measure"]
     J -->|否| N["⑦ 无鸟区域测量 _no_bird_result<br/>焦点窗口 → 手动对焦焦平面 → 全图分块"]
     K --> L["⑥ exclude_birds 开启时排除假鸟 / 鸟的局部<br/>关闭时全部候选参与取最好"]
     L --> M["取最好的一只：分数最高，其次 σ 最小，再次置信度<br/>region = bird"]
@@ -326,7 +326,9 @@ flowchart TD
 - v18 高光校验：外环是亮斑外接矩形外扩 `max(3, round(sqrt(area / π)))` 后、去掉该矩形的像素；边缘无外环时不采纳。外环第 90 百分位避免用腐蚀极小值把密集羽毛认成孤立高光；二阶矩协方差加每轴 1/12 像素面积，旋转细线也按轴比过滤。
 - 为什么排除高光：脱焦的点光源不是高斯模糊，而是硬边的光斑（bokeh 圆），阶跃边缘估计会把它的边缘测成 0.3–0.9 px。DSC06285 整只鸟脱焦（羽毛 2.2–2.7 px），眼睛里 7 px 的高光提供了 38 个头部测点中的 16 个，头部中位数 0.70 判成“清晰”；排除后头部 2.75，判“模糊”。
 
-### 7.2 身体 σ 与运动模糊方向比
+### 7.2 整鸟辅助 σ（旧身体统计，含头部）与运动模糊方向比
+
+`body_blur_detail(body)` 使用原内缩鸟体区域，包含头部，继续作为主判定的 `body_sigma` / `motion_ratio`。第 7.6 节的新身体分另用排除头部窗口的区域调用同一函数，不改变此处统计。
 
 ```mermaid
 flowchart LR
@@ -390,7 +392,8 @@ flowchart TD
     E --> N
     L --> N
     M --> N
-    N --> O["BirdMeasurement：verdict、score、sigma、head_sigma、body_sigma、<br/>motion_ratio、eye_visibility、confidence、box、found_by、refined_by…"]
+    N --> P["另算独立分项（第 7.6 节）<br/>不改变上述主评分、σ 或判定"]
+    P --> O["BirdMeasurement：verdict、score、sigma、head_sigma、body_sigma、<br/>head_score、body_score、mean_score、motion_ratio、eye_visibility、confidence、box…"]
 ```
 
 ### 7.5 头部方向检查（v18）
@@ -424,6 +427,25 @@ flowchart TD
 
 ---
 
+### 7.6 独立头部、身体与平均分（v19）
+
+代码：`_measure_bird()`、`_part_scores()`，评分复用 `sigma_to_score()`。仅增加输出，`classify()`、原 `body_stats` 和 `BirdMeasurement.rank()` 不变。
+
+```mermaid
+flowchart TD
+    A{"头部可靠定位且可见？"} -->|否| Z["head_score / body_score / mean_score = None"]
+    A -->|是| B["保留实际采样过的头部圆几何并集<br/>原圆 + 已执行的小鸟偏移 / 缩放窗口<br/>包括无有效 σ 的窗口，不挖高光孔洞"]
+    B --> C["body_only = 原内缩 body 减去窗口并集<br/>复用同一 EdgeBlurField.body_blur_detail(body_only)"]
+    C --> D["body_score = sigma_to_score(身体实测 σ)<br/>无有效测量则 None"]
+    B --> E["head_score = sigma_to_score(可靠头部实测 σ)<br/>含小鸟采样及方向修正；无实测则 None<br/>不用 head_blank 的推断回退 σ"]
+    D --> F{"头部分和身体分都有值？<br/>0 是有效值"}
+    E --> F
+    F -->|是| G["mean_score = 两项已换算分数的算术平均<br/>各占 50%，保留一位小数"]
+    F -->|否| H["mean_score = None"]
+```
+
+头部可靠但无可测细节时，身体仍可独立有分，头部和平均留空；没有可靠头部时不能界定身体排除范围，三项全空。无鸟回退也不生成三项鸟类分数。所有缺值在 UI 显示“—”，CLI JSON 保留 `null`；不是 0 分。
+
 ## 8. 排除假鸟 / 局部，取最好的一只
 
 仅 `AnalysisParams.exclude_birds=True` 时执行排除；关闭时所有候选参与取最好的一只。
@@ -448,7 +470,7 @@ flowchart TD
     D --> I["kept = 未排除的鸟（永不为空）"]
     H --> I
     I --> J["best = max(kept, rank)<br/>rank = (score 降序, sigma 升序, confidence 降序)"]
-    J --> K["整张照片 = best 的 verdict / score / sigma / head_sigma / body_sigma…<br/>bird_count = len(kept)，birds = 全部 kept 的明细<br/>region = bird"]
+    J --> K["整张照片 = 同一 best 的 verdict / score / sigma / head_sigma / body_sigma…<br/>head_score / body_score / mean_score 也全部取自 best<br/>bird_count = len(kept)，birds = 全部 kept 的明细（含各自三分）<br/>region = bird"]
 ```
 
 ---
@@ -588,7 +610,7 @@ flowchart TD
     B -->|是| Z["不写"]
     B -->|否| C["to_xmp_fields()"]
     C --> D["XMP-photoshop:City = 分数 %06.2f（现有锐度槽，无分数时不改）"]
-    C --> E["XMP-superpicky:bird_sharpness_verdict / _score / _sigma / _region /<br/>_bird_count / _head_sigma / _body_sigma / _motion_ratio / _eye_visibility / _version"]
+    C --> E["XMP-superpicky:bird_sharpness_verdict / _score / _sigma / _region /<br/>_bird_count / _head_sigma / _body_sigma / _motion_ratio / _eye_visibility / _version<br/>新增 _head_score / _body_score / _mean_score，缺值提交空字符串清除旧分"]
     D --> F["PhotoMetaDataXMP.write()：同一次提交<br/>ExifTool 字段 + 直接编辑 XML 的 superpicky 字段<br/>非 ASCII 值走 UTF-8 临时文件"]
     E --> F
     F --> G["invalidate_same_stem_metadata_cache(path)<br/>同目录同 stem（RAW+JPEG 共用 sidecar）的缓存记录一并作废"]
@@ -599,6 +621,8 @@ flowchart TD
 ```
 
 “跳过已检测”在任务开头比较 sidecar 里的 `bird_sharpness_version` 与当前版本（含参数后缀），相同才跳过。
+
+v18 等旧记录仍可读取，新分项显示“—”；下次用户启动检测时因版本不同重算，不自动启动图库扫描。成功重算后，`ALL_FIELDS`、`browser_meta_fields()` 和 `_sparse_browser_metadata()` 同时传播缺值清空，避免局部刷新保留旧分；失败不写，原结果保留。旧主锐度槽和排序继续使用主评分，三分只接入信息面板、计算过程与 CLI。
 
 ---
 

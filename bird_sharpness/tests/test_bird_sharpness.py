@@ -318,7 +318,7 @@ def test_result_xmp_fields_use_superpicky_formats() -> None:
     assert out["XMP-superpicky:bird_sharpness_bird_count"] == "2"
     assert out["XMP-superpicky:bird_sharpness_head_sigma"] == "1.269"
     assert out["XMP-superpicky:bird_sharpness_motion_ratio"] == "1.23"
-    assert out["XMP-superpicky:bird_sharpness_version"] == "sbt-blur-v18"
+    assert out["XMP-superpicky:bird_sharpness_version"] == "sbt-blur-v19"
     # No bird: the focus/whole-image value still fills the sharpness slot.
     focus = BirdSharpnessResult(path="x", verdict="no_bird", score=420, sigma=0.9, region="focus").to_xmp_fields()
     assert focus[bsf.SHARPNESS_XMP_KEY] == "420.00"
@@ -443,6 +443,50 @@ def test_action_writes_sidecar_skips_existing_and_respects_cancel(tmp_path, monk
     late = BirdSharpnessAction(fake, str(other), str(other), cancelled=lambda: next(flags)).execute()
     assert late.cancelled and not late.written
     assert not other.with_suffix(".xmp").exists()
+
+
+@pytest.mark.parametrize("source_suffix", ["", "-jpeg"])
+def test_skip_existing_recalculates_v18_and_then_skips_v19(tmp_path, monkeypatch, source_suffix) -> None:
+    from app_common.exif_io.exiftool_path import get_exiftool_executable_path
+    from app_common.exif_io.photo_meta import PhotoMetaDataReportDB, PhotoMetaDataXMP
+    from bird_sharpness.actions import BirdSharpnessAction
+    from bird_sharpness.scoring import ALGORITHM_VERSION
+
+    if not get_exiftool_executable_path():
+        pytest.skip("ExifTool is unavailable")
+    monkeypatch.setattr(PhotoMetaDataReportDB, "_row_for", lambda *_args: None)
+    photo = tmp_path / "版本升级_鹰鹃_sharp.jpg"
+    Image.new("RGB", (16, 12), "gray").save(photo)
+    writer = PhotoMetaDataXMP()
+    assert writer.write(str(photo), {
+        bsf.xmp_key(bsf.FIELD_VERDICT): "sharp",
+        bsf.xmp_key(bsf.FIELD_VERSION): "sbt-blur-v18" + source_suffix,
+        "XMP-dc:Title": "版本升级保留中文",
+    })
+
+    class VersionedAnalyzer(_CountingAnalyzer):
+        version = ALGORITHM_VERSION + source_suffix
+
+        def analyze(self, *args, **kwargs):
+            result = super().analyze(*args, **kwargs)
+            result.version = self.version
+            result.head_score, result.body_score, result.mean_score = 714, 301, 507.5
+            return result
+
+    fake = VersionedAnalyzer(delay=0)
+    upgraded = BirdSharpnessAction(fake, str(photo), str(photo), skip_existing=True).execute()
+    assert upgraded.written and not upgraded.skipped and len(fake.calls) == 1
+    rec = writer.read(str(photo))
+    assert rec[bsf.FIELD_VERSION] == "sbt-blur-v19" + source_suffix
+    assert rec["Title"] == "版本升级保留中文"
+    assert float(rec[bsf.FIELD_HEAD_SCORE]) == 714
+    assert float(rec[bsf.FIELD_BODY_SCORE]) == 301
+    assert float(rec[bsf.FIELD_MEAN_SCORE]) == 507.5
+
+    unchanged_sidecar = photo.with_suffix(".xmp").read_bytes()
+    again = BirdSharpnessAction(fake, str(photo), str(photo), skip_existing=True).execute()
+    assert again.skipped and not again.written and again.result is None and len(fake.calls) == 1
+    assert photo.with_suffix(".xmp").read_bytes() == unchanged_sidecar
 
 
 def test_heavily_blurred_noisy_head_is_soft_not_sharp(monkeypatch) -> None:

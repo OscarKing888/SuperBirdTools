@@ -77,6 +77,9 @@ _BASIC_INFO_ROWS = (
     "连拍",
     "锐度",
     "鸟清晰度",
+    "头部清晰度",
+    "身体清晰度",
+    "平均清晰度",
     "美学",
     "对焦",
     "添加日期",
@@ -84,6 +87,7 @@ _BASIC_INFO_ROWS = (
     "修改日期",
 )
 _log = get_logger("superviewer.image_info_tab_image_info")
+_PART_SCORE_ROWS = ("头部清晰度", "身体清晰度", "平均清晰度")
 
 
 def _bird_sharpness_text(metadata: dict | None) -> str:
@@ -226,7 +230,8 @@ def _metadata_burst_text(metadata: dict | None) -> str:
 
 
 def _empty_basic_info() -> dict[str, str]:
-    return {label: ("☆☆☆☆☆" if label == "评分" else "-") for label in _BASIC_INFO_ROWS}
+    return {label: ("☆☆☆☆☆" if label == "评分" else "—" if label in _PART_SCORE_ROWS else "-")
+            for label in _BASIC_INFO_ROWS}
 
 
 class _CommentTextEdit(QTextEdit):
@@ -419,6 +424,12 @@ class ImageInfoTabPanel_ImageInfo(ImageInfoTabPanel):
             line.setStyleSheet("color: %s;" % theme.separator)
         for label in self._basic_label_widgets:
             label.setStyleSheet("color: %s; font-size: 13px;" % theme.label_text)
+            label.ensurePolished()
+        # 同级字段共用标签列，五字清晰度标题也要完整显示。
+        label_width = max(64, *(label.fontMetrics().horizontalAdvance(label.text()) + 4
+                                for label in self._basic_label_widgets))
+        for label in self._basic_label_widgets:
+            label.setFixedWidth(label_width)
         for key, label in self.basic_rows.items():
             self._apply_basic_row_style(key, label.text(), label)
         self.individual_birds.refresh_badges()
@@ -560,7 +571,7 @@ class ImageInfoTabPanel_ImageInfo(ImageInfoTabPanel):
         label.setFixedWidth(64)
         self._basic_label_widgets.append(label)
         badge_class = {"稀有度": RarityBadge, "保护等级": ConservationBadge}.get(label_text)
-        value = badge_class(self) if badge_class else QLabel("-")
+        value = badge_class(self) if badge_class else QLabel("—" if label_text in _PART_SCORE_ROWS else "-")
         value.setWordWrap(not bool(badge_class))
         if not badge_class:
             value.setStyleSheet("color: %s; font-size: 13px;" % self._theme_colors.value_text)
@@ -853,6 +864,8 @@ class ImageInfoTabPanel_ImageInfo(ImageInfoTabPanel):
             created_ts = stat.st_ctime
 
         rarity, iucn = rarity_metadata(metadata)
+        sharpness = bird_sharpness_from_meta(metadata)
+        part_scores = (sharpness.head_score, sharpness.body_score, sharpness.mean_score) if sharpness else (None,) * 3
         info = {
             "稀有度": f"{rarity:g}" if rarity is not None else "-",
             "保护等级": f"{iucn} · {IUCN_LABELS[iucn]}" if iucn in IUCN_LABELS else iucn or "-",
@@ -879,6 +892,8 @@ class ImageInfoTabPanel_ImageInfo(ImageInfoTabPanel):
             "创建日期": _format_timestamp(created_ts),
             "修改日期": _format_timestamp(stat.st_mtime if stat is not None else None),
         }
+        info.update({label: "—" if value is None else f"{value:.{1 if index == 2 else 0}f}"
+                     for index, (label, value) in enumerate(zip(_PART_SCORE_ROWS, part_scores))})
         return {label: str(info.get(label) or "-") for label in _BASIC_INFO_ROWS}
 
     def _load_metadata(self, path: str) -> dict:
@@ -1001,7 +1016,7 @@ class ImageInfoTabPanel_ImageInfo(ImageInfoTabPanel):
         self.pinyin_update_button.setVisible(has_name and missing)
         self.pinyin_update_button.setEnabled(self._pinyin_update_callback is not None and self._writes_allowed(self.current_photo_path()))
         for key, label in self.basic_rows.items():
-            value = str(info.get(key) or "-")
+            value = str(info.get(key) or ("—" if key in _PART_SCORE_ROWS else "-"))
             if key == "稀有度":
                 label.set_score(value)
             elif key == "保护等级":

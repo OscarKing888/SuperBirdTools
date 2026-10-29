@@ -25,7 +25,8 @@ the blur measurement and score thresholds are unchanged. Version 18 adds a
 head-only directional blur guard, recovers profile-verified sharpened step edges,
 and limits specular exclusions to isolated compact highlights. Score anchors
 remain unchanged; the head radius supplied to classify includes any directional
-correction.
+correction. Version 19 adds separate head, head-excluded body and mean scores;
+the existing primary score, verdict and best-bird ranking keep their semantics.
 """
 
 from __future__ import annotations
@@ -43,7 +44,7 @@ from app_common.bird_sharpness_fields import (
     VERDICT_USABLE,
 )
 
-ALGORITHM_VERSION = "sbt-blur-v18"
+ALGORITHM_VERSION = "sbt-blur-v19"
 
 # (sigma_px, score) anchors, sigma ascending / score descending.
 SCORE_ANCHORS: Tuple[Tuple[float, float], ...] = (
