@@ -63,7 +63,9 @@ _SCROLL_OFF = getattr(getattr(Qt, "ScrollBarPolicy", Qt), "ScrollBarAlwaysOff")
 _EVENT = getattr(QEvent, "Type", QEvent)
 
 STEP_ICONS = {
-    "decode": "解码", "detect": "识别", "recheck": "复检", "birds": "逐只鸟", "bird": "鸟体", "head": "头部", "edges": "边缘",
+    "decode": "解码", "detect": "识别", "recheck": "复检", "birds": "逐只鸟", "bird": "鸟体", "head": "定位", "edges": "边缘",
+    "head_score": "头部分", "body_region": "身体范围", "body_edges": "身体边缘",
+    "body_score": "身体分", "mean_score": "平均分",
     "distribution": "分布", "focus": "焦点", "tiles": "分块", "manual": "焦平面", "enhanced": "找鸟", "result": "结论",
 }
 _CIRCLED = "①②③④⑤⑥⑦⑧⑨⑩⑪⑫⑬⑭⑮⑯⑰⑱⑲⑳"
@@ -804,6 +806,16 @@ class BirdSharpnessTraceDialog(QDialog):
             return step.title
         return f"鸟 #{step.bird + 1} · {step.title}"
 
+    @staticmethod
+    def _step_chip_label(step) -> str:
+        # 无鸟焦点/全图仍有边缘和分布步骤，不能误标为鸟头测量。
+        if step.bird is not None:
+            if step.key == "edges":
+                return "回退边缘" if "回退" in step.title else "头部边缘"
+            if step.key == "distribution":
+                return "主判定"
+        return STEP_ICONS.get(step.key, step.title)
+
     def _load_steps(self, steps, keep_key: Optional[str], keep_bird: Optional[int] = None) -> None:
         self.steps = list(steps)
         multi = len(getattr(self.trace, "birds", ())) > 1
@@ -812,7 +824,7 @@ class BirdSharpnessTraceDialog(QDialog):
         _clear_layout(self.chips_layout)
         for i, step in enumerate(self.steps):
             number = _CIRCLED[i] if i < len(_CIRCLED) else str(i + 1)
-            icon = STEP_ICONS.get(step.key, step.title)
+            icon = self._step_chip_label(step)
             if multi and step.bird is not None:
                 icon = f"#{step.bird + 1}{icon}"
             chip = ToggleToolButton(f"{number} {icon}", self.chips_box)

@@ -52,7 +52,7 @@ def _key(dialog, key):
 
 
 @pytest.mark.parametrize("dark, font_scale", [(False, 1.0), (True, 1.4)])
-def test_part_scores_remain_accessible_in_distribution_and_result(monkeypatch, dark, font_scale):
+def test_part_score_steps_remain_accessible_in_small_window(monkeypatch, dark, font_scale):
     from PyQt6.QtWidgets import QScrollArea
 
     trace = _trace(monkeypatch, birds=((900, 600, 260, 0.3),))
@@ -75,13 +75,16 @@ def test_part_scores_remain_accessible_in_distribution_and_result(monkeypatch, d
         assert _wait(lambda: dialog.steps and dialog.view_a._has_image)
         scroll = dialog.side_tabs.widget(0)
         assert isinstance(scroll, QScrollArea)
-        for step_key in ("distribution", "result", "distribution"):
+        for step_key, metric_keys in (("head_score", ("头部清晰度",)),
+                                      ("body_score", ("身体清晰度",)),
+                                      ("mean_score", ("头部清晰度", "身体清晰度", "平均清晰度", "计算公式")),
+                                      ("result", ("头部清晰度", "身体清晰度", "平均清晰度"))):
             dialog.go(next(i for i, step in enumerate(dialog.steps) if step.key == step_key), force=True)
             _APP.processEvents()
             rows = {dialog.metrics_grid.itemAtPosition(row, 0).widget().text(): row
                     for row in range(dialog.metrics_grid.rowCount())
                     if dialog.metrics_grid.itemAtPosition(row, 0) is not None}
-            for key in ("头部清晰度", "身体清晰度", "平均清晰度"):
+            for key in metric_keys:
                 row = rows[key]
                 label = dialog.metrics_grid.itemAtPosition(row, 0).widget()
                 value = dialog.metrics_grid.itemAtPosition(row, 1).widget()
@@ -112,24 +115,26 @@ def test_dialog_steps_navigation_compare_and_bird_switch(monkeypatch) -> None:
         dialog.set_trace(trace)
         assert _wait(lambda: dialog.stack.currentWidget() is dialog.content and dialog.steps)
         # several birds: every bird's steps in turn, after an overview of all birds
-        per_bird = ["bird", "head", "edges", "distribution"]
+        per_bird = ["bird", "head", "edges", "head_score", "body_region", "body_edges",
+                    "body_score", "mean_score", "distribution"]
         assert dialog.bird_combo.isVisible() and dialog.bird_combo.count() == 3
         assert dialog.bird_combo.currentText() == "全部鸟（逐只）"
         assert [s.key for s in dialog.steps] == ["decode", "detect", "birds", *per_bird, *per_bird, "result"]
-        assert [s.bird for s in dialog.steps[3:11]] == [0] * 4 + [1] * 4
-        assert len(dialog.chip_group.buttons()) == 12 and "#2" in dialog.chip_group.button(8).text()
+        assert [s.bird for s in dialog.steps[3:-1]] == [0] * len(per_bird) + [1] * len(per_bird)
+        assert len(dialog.chip_group.buttons()) == len(dialog.steps)
+        assert "#2" in dialog.chip_group.button(3 + len(per_bird)).text()
         overview = dialog.steps[2]
         assert overview.image.ndim == 3 and len(overview.bird_rows) == 2
         assert sum("最佳" in row.label for row in overview.bird_rows) == 1
-        dialog.go(9, force=True)
-        assert "鸟 #2 · 边缘筛选" in dialog.step_title.text()
+        dialog.go(next(i for i, s in enumerate(dialog.steps) if s.key == "edges" and s.bird == 1), force=True)
+        assert "鸟 #2 · 头部边缘" in dialog.step_title.text()
 
         # one bird only: its own steps
         best = next(i for i in range(dialog.bird_combo.count()) if "最佳" in dialog.bird_combo.itemText(i))
         dialog.bird_combo.setCurrentIndex(best)
         keys = [s.key for s in dialog.steps]
         assert keys == ["decode", "detect", "birds", *per_bird, "result"]
-        assert len(dialog.chip_group.buttons()) == 8
+        assert len(dialog.chip_group.buttons()) == len(per_bird) + 4
         assert dialog.steps[dialog.index].key == "edges"  # kept the step
         assert dialog.verdict_chip.text().strip() == "清晰"
 
@@ -140,9 +145,11 @@ def test_dialog_steps_navigation_compare_and_bird_switch(monkeypatch) -> None:
         dialog.next_btn.click()
         assert dialog.index == 2
         _key(dialog, Qt.Key.Key_End)
-        assert dialog.index == 7 and not dialog.next_btn.isEnabled()
-        dialog.slider.setValue(5)
-        assert dialog.index == 5 and dialog.step_title.text().startswith("步骤 6 / 8")
+        assert dialog.index == len(dialog.steps) - 1 and not dialog.next_btn.isEnabled()
+        edge_index = next(i for i, step in enumerate(dialog.steps) if step.key == "edges")
+        dialog.slider.setValue(edge_index)
+        assert dialog.index == edge_index
+        assert dialog.step_title.text().startswith(f"步骤 {edge_index + 1} / {len(dialog.steps)}")
         assert dialog.metrics_grid.count() > 0 and dialog.zoom_region_btn.isEnabled()
 
         # compare: previous step, same coordinate frame -> zoom/pan follow
@@ -225,6 +232,55 @@ def test_step_chips_remain_unclipped_after_bird_switch(monkeypatch, dark, font_s
         dialog.close()
         _APP.processEvents()
         _APP.setPalette(original_palette)
+
+
+def test_part_steps_keep_zoom_drafts_and_matching_step_when_switching_birds(monkeypatch):
+    trace = _trace(monkeypatch)
+    dialog = BirdSharpnessTraceDialog(None, "分项.ARW")
+    try:
+        dialog.show()
+        dialog.set_trace(trace)
+        assert _wait(lambda: dialog.steps and dialog.view_a._has_image)
+        dialog.max_birds_spin.setValue(6)  # 尚未运行或保存的参数草稿。
+        dialog.peaking_spin.setValue(1.2)
+        first = next(i for i, step in enumerate(dialog.steps) if step.key == "body_region" and step.bird == 0)
+        dialog.go(first, force=True)
+        dialog.view_a.scale(1.75, 1.75)
+        zoom = dialog.view_a.zoom_factor()
+        for key in ("body_edges", "body_score", "mean_score"):
+            index = next(i for i, step in enumerate(dialog.steps) if step.key == key and step.bird == 0)
+            dialog.go(index)
+            assert dialog.view_a.zoom_factor() == pytest.approx(zoom)
+            assert dialog.max_birds_spin.value() == 6 and dialog.peaking_spin.value() == 1.2
+            assert dialog.chip_group.button(index).isChecked()
+        dialog.bird_combo.setCurrentIndex(dialog.bird_combo.findData(1))
+        assert dialog.steps[dialog.index].key == "mean_score" and dialog.steps[dialog.index].bird == 1
+        assert dialog.max_birds_spin.value() == 6
+        dialog.bird_combo.setCurrentIndex(0)
+        assert dialog.steps[dialog.index].key == "mean_score" and dialog.steps[dialog.index].bird == 1
+        _key(dialog, Qt.Key.Key_Left)
+        assert dialog.steps[dialog.index].key == "body_score"
+        _key(dialog, Qt.Key.Key_Right)
+        assert dialog.steps[dialog.index].key == "mean_score"
+    finally:
+        dialog.close()
+        _APP.processEvents()
+
+
+@pytest.mark.parametrize("key,bird,title,expected", [
+    ("edges", None, "边缘筛选", "边缘"),
+    ("distribution", None, "模糊分布", "分布"),
+    ("edges", 0, "头部边缘", "头部边缘"),
+    ("edges", 0, "整鸟回退边缘", "回退边缘"),
+    ("distribution", 0, "主判定辅助", "主判定"),
+    ("body_region", 0, "身体范围", "身体范围"),
+    ("body_score", 0, "身体评分", "身体分"),
+    ("mean_score", 0, "平均评分", "平均分"),
+])
+def test_step_chip_names_distinguish_head_body_and_no_bird_fallback(key, bird, title, expected):
+    from types import SimpleNamespace
+
+    assert BirdSharpnessTraceDialog._step_chip_label(SimpleNamespace(key=key, bird=bird, title=title)) == expected
 
 
 def test_bird_list_shows_swatches_and_hover_highlights_the_box(monkeypatch) -> None:
@@ -675,7 +731,18 @@ def _shown_pixels(view) -> np.ndarray:
 
 
 def test_focal_plane_toggle_tints_focused_pixels_red(monkeypatch) -> None:
-    trace = _trace(monkeypatch)
+    import cv2
+
+    # 连续的真实头部边缘能通过焦平面的邻域去噪；普通点纹理的最强边缘可能全为孤立点。
+    scene = _scene([(450, 600, 260, 1.8), (1350, 600, 260, 0.3)])
+    head_patch = np.full((140, 140), 0.75, np.float32)
+    cv2.rectangle(head_patch, (40, 30), (100, 110), 0.15, -1)
+    scene[530:670, 1280:1420] = cv2.GaussianBlur(head_patch, (0, 0), 0.3)
+    _install_image(monkeypatch, scene)
+    tracer = AnalysisTracer()
+    BirdSharpnessAnalyzer(_StubModels([(450, 600, 260), (1350, 600, 260)], full_w=1800),
+                          focus_provider=_no_focus).analyze("x.ARW", tracer=tracer)
+    trace = tracer.trace
     dialog = BirdSharpnessTraceDialog(None, "x.ARW")
     try:
         dialog.show()
@@ -707,9 +774,27 @@ def test_focal_plane_toggle_tints_focused_pixels_red(monkeypatch) -> None:
         dialog.peaking_spin.setValue(0.85)
         dialog.compare_btn.setChecked(True)
         assert _wait(lambda: dialog.view_b.isVisible())
-        dialog.go(sharp + 1, force=True)
-        assert red() > plain + 200
+        sharp_bird = dialog.steps[sharp].bird
+        head_index = next(i for i, step in enumerate(dialog.steps)
+                          if step.key == "head" and step.bird == sharp_bird)
+        dialog.go(head_index, force=True)
+        head_map = trace.sigma_map(dialog.steps[head_index])
+        whole_map = trace.sigma_map(dialog.steps[sharp])
+        assert dialog.steps[head_index].sigma_map_key == f"bird{sharp_bird}:head"
+        assert 0 < np.isfinite(head_map).sum() < np.isfinite(whole_map).sum()
+        assert 0 < red() < loose  # 头部只显示局部实测焦平面，不借用整鸟边缘。
         compare = dialog.steps[dialog._compare_index()]  # 上一步 = the sharp bird's pixels
+        assert compare.key == "bird" and compare.bird == sharp_bird
+        assert np.array_equal(_shown_pixels(dialog.view_b), dialog._step_image(compare))
+        assert not np.array_equal(dialog._step_image(compare), compare.image)
+        head_score_index = next(i for i, step in enumerate(dialog.steps)
+                                if step.key == "head_score" and step.bird == sharp_bird)
+        dialog.go(head_score_index, force=True)
+        compare = dialog.steps[dialog._compare_index()]
+        assert compare.key == "edges" and compare.bird == sharp_bird
+        assert trace.sigma_map(dialog.steps[head_score_index]) is head_map
+        assert trace.sigma_map(compare) is head_map
+        assert red() > 0
         assert np.array_equal(_shown_pixels(dialog.view_b), dialog._step_image(compare))
         assert not np.array_equal(dialog._step_image(compare), compare.image)
         # the bird overview has no per-pixel map: unchanged, legend says so

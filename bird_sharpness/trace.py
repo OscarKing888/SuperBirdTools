@@ -61,6 +61,11 @@ STEP_BIRDS = "birds"
 STEP_BIRD = "bird"
 STEP_HEAD = "head"
 STEP_EDGES = "edges"
+STEP_HEAD_SCORE = "head_score"
+STEP_BODY_REGION = "body_region"
+STEP_BODY_EDGES = "body_edges"
+STEP_BODY_SCORE = "body_score"
+STEP_MEAN_SCORE = "mean_score"
 STEP_DISTRIBUTION = "distribution"
 STEP_FOCUS = "focus"
 STEP_TILES = "tiles"
@@ -147,6 +152,7 @@ class TraceStep:
     focus_rect: Optional[Tuple[int, int, int, int]] = None  # region worth zooming to, image coords
     bird: Optional[int] = None  # bird index for per-bird steps
     bird_rows: List[TraceBirdRow] = field(default_factory=list)  # shown as a list after the metrics
+    sigma_map_key: Optional[str] = None  # separate measured pixels, without changing the coordinate frame
 
     def to_json(self) -> dict:
         def clean(value):
@@ -191,7 +197,7 @@ class AnalysisTrace:
 
     def sigma_map(self, step: TraceStep) -> Optional[np.ndarray]:
         """The step's σ map when it matches the step image (``None`` for e.g. the bird overview)."""
-        sigma = self.sigma_maps.get(step.frame)
+        sigma = self.sigma_maps.get(step.sigma_map_key or step.frame)
         return sigma if sigma is not None and sigma.shape == step.image.shape[:2] else None
 
     def best_bird_index(self) -> int:
@@ -637,7 +643,7 @@ class AnalysisTracer:
     # ── per bird ──
     def bird(self, index: int, image, roi, mask: np.ndarray, body: np.ndarray, head: Optional[np.ndarray],
              keypoints, selection, body_detail, measurement, *, detector_px: Optional[np.ndarray] = None,
-             rgb_roi: Optional[np.ndarray] = None) -> None:
+             rgb_roi: Optional[np.ndarray] = None, part_detail: Optional[dict] = None) -> None:
         """``detector_px``: the detector's mask (ROI px) when SAM replaced it with ``mask``;
         ``rgb_roi``: the crop as measured when it differs from the photo (grey-filled)."""
         X1, Y1, X2, Y2 = roi
@@ -711,7 +717,7 @@ class AnalysisTracer:
                 desc = ("关键点模型定位眼和喙（原图与镜像图各定位一次取平均，空心圈为镜像结果）；"
                         "头部区域 = 以眼为圆心、半径 1.2×眼喙距的圆 ∩ 鸟体内缩约一个掩膜像素（青色），"
                         "并挖掉通过形态和邻域对比验证的孤立点状高光周围 8 px（脱焦的点光源是硬边光斑，会被测成清晰）。"
-                        "头部清晰才算鸟清晰，翅膀/尾羽运动和遮挡不计入。")
+                        "原主判定以头部为主；独立身体分还会排除全部头部采样窗口。")
             else:
                 desc = "眼睛不可见（可见度 < 0.5）：无法确认头部，原主分数改用整鸟辅助模糊并封顶 299；头部、身体及平均清晰度不填值。"
             mirror = ("—" if head_kp.eye_gap is None else
@@ -725,6 +731,12 @@ class AnalysisTracer:
                  ("头部像素", "—" if head is None else f"{int(head.sum()):,}")],
                 legend=[(hex_color(C_EYE), "眼（实心 = 可见，空心圈 = 镜像结果）"), (hex_color(C_BEAK), "喙"),
                         (hex_color(C_HEAD), "头部测量区域")]))
+        else:
+            steps.append(TraceStep(
+                STEP_HEAD, "头部定位", "没有可用的鸟眼关键点模型，无法可靠定位头部，也无法确认身体的排除范围。"
+                "三个分项留空；原主判定仍使用整鸟边缘回退。", crop_small.copy(), frame,
+                [("状态", "无鸟眼模型；头部、身体、平均分均为 —")]))
+        steps[-1].sigma_map_key = f"{frame}:head"
 
         # ⑤ edges
         zoom = _bbox(small(measure_mask), 0.6 if head is not None else 0.05)
@@ -734,6 +746,13 @@ class AnalysisTracer:
         img = _dim(_to_rgb8(gray), None, 0.7)
         steps.append(self._edge_step(img, s, selection, measure_mask, small(measure_mask), frame,
                                      "头部" if head is not None else "鸟体"))
+        steps[-1].title = "头部边缘" if head is not None else "整鸟回退边缘"
+        if head is not None:
+            steps[-1].sigma_map_key = f"{frame}:head"
+        if head is None:
+            steps[-1].description += " 这些整鸟边缘仅供原主判定回退，不作为头部实测分项。"
+            if selection is None:
+                steps[-1].description += " 本分支未提取头部边缘，原主判定使用的整鸟辅助统计见“主判定辅助”。"
         steps[-1].focus_rect = zoom
 
         # ⑥ distribution
@@ -743,6 +762,8 @@ class AnalysisTracer:
             colors = [sigma_color(v) for v in selection.sigma.tolist()]
             _paint_points(heat, (selection.ys * s).astype(int).clip(0, sh - 1),
                           (selection.xs * s).astype(int).clip(0, sw - 1), colors, max(2, 2 * lw))
+        steps.extend(self._part_steps(crop_small, s, frame, body, head, selection, measurement,
+                                      part_detail or {}, zoom))
         by, bx, bsig, by_bin = body_detail
         series = [{"name": "头部" if head is not None else "鸟体", "color": hex_color(C_HEAD),
                    "values": selection.sigma if selection is not None else np.empty(0)}]
@@ -757,7 +778,7 @@ class AnalysisTracer:
                                       "ratio": measurement.head_direction_ratio, "threshold": 1.5,
                                       "condition": f"头部长轴 σ>{SIGMA_USABLE_MAX:g}"}))
         steps.append(TraceStep(
-            STEP_DISTRIBUTION, "模糊分布",
+            STEP_DISTRIBUTION, "主判定辅助",
             "每个实测边缘点按模糊半径着色（绿=清晰，黄=可用，红=模糊）。最强边缘中位数为基础值；可靠头部还使用全部过噪声边缘拟合方向模糊。"
             "头部方向比 ≥1.5 且长轴 σ >1.05 px 时，提高到长轴模糊值并判运动模糊；"
             "否则保留基础值与原整鸟辅助方向判断。身体运动不覆盖清晰头部。"
@@ -791,6 +812,135 @@ class AnalysisTracer:
             step.bird = index
         self._measurements[index] = measurement
         self.trace.birds.append(TraceBird(index, f"鸟 #{index + 1}", False, steps))
+
+    def _part_steps(self, crop: np.ndarray, scale: float, frame: str, body: np.ndarray,
+                    head: Optional[np.ndarray], selection, measurement, detail: dict, head_zoom) -> List[TraceStep]:
+        """Render the exact part measurement already made by the analyzer; never measure again."""
+        sh, sw = crop.shape[:2]
+        lw = _line_w(crop)
+        head_windows, body_only = detail.get("head_windows"), detail.get("body")
+        head_sigma, body_stats = detail.get("head_sigma"), detail.get("body_stats")
+        body_sigma = None if body_stats is None else body_stats.sigma
+        body_motion = detail.get("body_motion")
+        empty = np.empty(0, np.float32)
+        by, bx, bsig, bins = detail.get("body_detail", (empty, empty, empty, [None] * 8))
+        reliable = head_windows is not None
+        head_key, body_key, mean_key = f"{frame}:head", f"{frame}:body", f"{frame}:mean"
+        missing_head = "头部不可可靠定位，无法确认身体排除范围；三个分项均为 —。"
+        if measurement.eye_visibility is None:
+            missing_head = "没有鸟眼模型，无法可靠定位头部；三个分项均为 —。"
+        elif measurement.eye_visibility < 0.5:
+            missing_head = "眼睛不可见，无法可靠定位头部；三个分项均为 —。"
+
+        def small(mask):
+            return cv2.resize(mask.astype(np.uint8), (sw, sh), interpolation=cv2.INTER_NEAREST).astype(bool)
+
+        def points_image(region, ys, xs, sigma, key, color):
+            img = _dim(crop, None if region is None else small(region), 0.35)
+            if region is not None:
+                _contour(img, small(region), color, lw)
+            if sigma.size:
+                yy = (ys * scale).astype(int).clip(0, sh - 1)
+                xx = (xs * scale).astype(int).clip(0, sw - 1)
+                _paint_points(img, yy, xx, [sigma_color(v) for v in sigma.tolist()], max(1, lw))
+                if self.focus_peaking:
+                    sigma_map = np.full((sh, sw), np.nan, np.float32)
+                    # 多个原像素映射到同一显示像素时取均值，与全图焦平面聚合一致。
+                    positions = yy * sw + xx
+                    counts = np.bincount(positions, minlength=sh * sw)
+                    sums = np.bincount(positions, weights=sigma, minlength=sh * sw)
+                    occupied = counts > 0
+                    sigma_map.reshape(-1)[occupied] = sums[occupied] / counts[occupied]
+                    if region is not None:
+                        sigma_map[~small(region)] = np.nan
+                    self.trace.sigma_maps[key] = sigma_map.astype(np.float16)
+            return img
+
+        def curve(name, sigma, score, color):
+            points = [] if sigma is None or score is None else [
+                {"sigma": sigma, "score": score, "label": name, "color": hex_color(color), "best": True}]
+            return TraceChart("score_curve", f"{name} σ → 分数", {
+                "anchors": [list(a) for a in SCORE_ANCHORS], "points": points,
+                "gates": [[300, "三星门槛"], [100, "判废门槛"]]})
+
+        hsig = selection.sigma if reliable and selection is not None else empty
+        hy = selection.ys if reliable and selection is not None else empty
+        hx = selection.xs if reliable and selection is not None else empty
+        head_image = points_image(head, hy, hx, hsig, head_key, C_HEAD)
+        head_status = (missing_head if not reliable else "头部没有有效实测 σ；不使用原主判定的推断模糊值。"
+                       if measurement.head_score is None else "使用可靠头部实测值。")
+        samples = detail.get("head_samples")
+        head_charts = [_histogram([{"name": "原头部窗口", "color": hex_color(C_HEAD), "values": hsig}],
+                                 head_sigma, "原头部窗口边缘分布（px）", marker_label="计分 σ"),
+                       curve("头部", head_sigma, measurement.head_score, C_HEAD)]
+        if reliable and measurement.head_direction_bins is not None:
+            head_charts.insert(1, TraceChart("directions", "头部全部过噪声边缘的方向统计", {
+                "bins": measurement.head_direction_bins, "ratio": measurement.head_direction_ratio,
+                "threshold": 1.5, "condition": f"头部长轴 σ>{SIGMA_USABLE_MAX:g}"}))
+        steps = [TraceStep(
+            STEP_HEAD_SCORE, "头部评分", "使用可靠头部实测 σ 换算为 0–1000 分。直方图仅展示原头部窗口，"
+            "小鸟按各采样窗口的 σ 取中位数，再应用已有头部方向修正；曲线标出最终计分值。" + head_status,
+            head_image, frame, [("头部清晰度", _fmt(measurement.head_score, "%d")),
+            ("实测头部 σ", _fmt(head_sigma, "%.3f px")), ("原窗口实测点", str(hsig.size)),
+            ("小鸟有效采样", " / ".join(f"{v:.3f}" for v in samples) if samples else "—"),
+            ("方向修正", "已采用" if measurement.head_motion else "未采用"), ("状态", head_status)],
+            head_charts, focus_rect=head_zoom, sigma_map_key=head_key)]
+
+        region_image = _dim(crop, None if body_only is None else small(body_only), 0.3)
+        excluded = None if head_windows is None else body & head_windows
+        body_pixels = None if body_only is None else int(body_only.sum())
+        region_status = missing_head if not reliable else ("排除后无剩余身体像素。" if not body_pixels else "身体测量范围已确定。")
+        body_zoom = _bbox(small(body_only), 0.05) if body_only is not None and body_only.any() else None
+        if head_windows is not None:
+            _contour(region_image, small(head_windows), C_BEAK, lw)
+        if body_only is not None:
+            _contour(region_image, small(body_only), C_SHARP, lw)
+        steps.append(TraceStep(
+            STEP_BODY_REGION, "身体范围", "身体 = 原内缩鸟体区域减去全部实际头部采样窗口的几何并集。"
+            "包含小鸟偏移、放大/缩小窗口，即使某窗口没有有效 σ 也排除；头部高光孔洞也不会归入身体。" + region_status,
+            region_image, frame, [("原内缩区域像素", f"{int(body.sum()):,}"),
+            ("排除的头部窗口像素", "—" if excluded is None else f"{int(excluded.sum()):,}"),
+            ("身体测量像素", "—" if body_pixels is None else f"{body_pixels:,}"), ("状态", region_status)],
+            legend=[(hex_color(C_BEAK), "排除的头部窗口并集"), (hex_color(C_SHARP), "身体测量区域")],
+            focus_rect=body_zoom, sigma_map_key=body_key))
+
+        body_image = points_image(body_only, by, bx, bsig, body_key, C_SHARP)
+        body_status = (missing_head if not reliable else "排除头部后没有有效身体测量；身体与平均分留空。"
+                       if measurement.body_score is None else "仅使用排除头部后的身体实测边缘。")
+        edge_desc = ("显示本次身体测量返回的有效边缘点，颜色表示各点 σ。身体采用 Canny(20,60)，"
+                     "强度须超过区域梯度中位数的 4 倍，候选至少 60 点，再做边缘形态验证；"
+                     "有效点不足 8 个时不计分。此处不使用头部的最强 5% 筛选，也不重复测量。")
+        steps.append(TraceStep(
+            STEP_BODY_EDGES, "身体边缘", edge_desc + body_status, body_image, frame,
+            [("有效实测点", str(bsig.size)), ("状态", body_status)],
+            legend=[(hex_color(C_SHARP), "实测边缘：清晰"), (hex_color(C_USABLE), "实测边缘：可用"),
+                    (hex_color(C_SOFT), "实测边缘：模糊")], focus_rect=body_zoom, sigma_map_key=body_key))
+        steps.append(TraceStep(
+            STEP_BODY_SCORE, "身体评分", "对上一阶段有效身体边缘的 σ 取中位数，再换算为 0–1000 分。"
+            "这里的 σ 与原主判定中包含头部的整鸟辅助 σ 是两个独立统计。" + body_status,
+            body_image.copy(), frame, [("身体清晰度", _fmt(measurement.body_score, "%d")),
+            ("身体实测 σ", _fmt(body_sigma, "%.3f px")), ("有效实测点", str(bsig.size)),
+            ("身体方向比", _fmt(body_motion)), ("状态", body_status)],
+            [_histogram([{"name": "身体（排除头部）", "color": hex_color(C_SHARP), "values": bsig}],
+                        body_sigma, "身体边缘模糊分布（px）"),
+             TraceChart("directions", "身体边缘 8 方向（排除头部）", {
+                 "bins": bins, "ratio": body_motion, "threshold": 1.5}),
+             curve("身体", body_sigma, measurement.body_score, C_SHARP)],
+            focus_rect=body_zoom, sigma_map_key=body_key))
+        hs, bs = measurement.head_score, measurement.body_score
+        mean_status = "两项分数各占 50%；不改变原主评分或最佳鸟选择。"
+        if hs is None or bs is None:
+            formula = f"({_fmt(hs, '%d')} + {_fmt(bs, '%d')}) / 2 = —"
+            mean_status = missing_head if not reliable else "缺少有效头部或身体分数，平均分留空；缺值不作为 0。"
+        else:
+            formula = f"({hs} + {bs}) / 2 = {measurement.mean_score:.1f}"
+        steps.append(TraceStep(
+            STEP_MEAN_SCORE, "平均评分", "先把头部和身体各自的实测 σ 换算成分数，再求两项分数的算术平均；"
+            "不是先平均 σ 再换算。有效 0 分照常参与平均。" + mean_status,
+            region_image.copy(), frame, [("头部清晰度", _fmt(hs, "%d")), ("身体清晰度", _fmt(bs, "%d")),
+            ("平均清晰度", _fmt(measurement.mean_score, "%.1f")), ("计算公式", formula), ("状态", mean_status)],
+            focus_rect=_bbox(small(body), 0.05), sigma_map_key=mean_key))
+        return steps
 
     def _edge_step(self, base: np.ndarray, s: float, selection, region_full: np.ndarray,
                    region_small: np.ndarray, frame: str, region_name: str) -> TraceStep:

@@ -380,6 +380,11 @@ Qt 进度回调只更新界面/初始需求提示，实际任务完成和需求�
 浏览器缓存，失败保留旧结果。旧记录不推算分项，在下次用户启动检测时按版本重算。
 [`ImageInfoTabPanel_ImageInfo`](../superviewer/image_info_tab_image_info.py) 的既有表格新增三行；
 计算过程复用 `TraceStep.metrics` 和逐鸟列表展示三项，旧身体统计标为“整鸟辅助（含头部）”。
+每鸟步骤依次拆为鸟体、头部定位/边缘/评分、身体范围/边缘/评分、平均评分、主判定辅助，
+再进入全图结论。`_part_scores()` 将本次真实身体区域、窗口并集和边缘统计交给 tracer，
+显示不重复测量身体；无可靠头或无细节时在对应步骤解释空值。新增步骤使用现有图像、
+指标与图表组件，横向步骤栏可滚动至末尾；切鸟按同一步骤键继续，保留视图缩放和参数。
+无鸟的焦点/分块路径保持原步骤；CLI `--trace` 使用相同记录导出 PNG / JSON。
 缺值为“—”，有效 0 保留，平均显示一位小数；City 锐度槽、缩略图判定徽章与模板选择器不变。
 Viewer 列表使用 [`SharpnessFileTableModel`](../superviewer/sharpness_file_table.py) 扩展现有
 `RarityFileTableModel`：原“鸟清晰”列显示平均分，两项逻辑列追加在原列之后，表头视觉顺序为

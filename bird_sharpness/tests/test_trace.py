@@ -33,7 +33,8 @@ def test_bird_trace_steps_match_the_computation(monkeypatch) -> None:
     result, plain, trace = _run(monkeypatch, _scene([(900, 600, 300, 0.3)]), [(900, 600, 300)])
     assert result.to_xmp_fields() == plain.to_xmp_fields()  # tracing never changes results
     keys = [s.key for s in trace.steps_for()]
-    assert keys == ["decode", "detect", "bird", "head", "edges", "distribution", "result"]
+    assert keys == ["decode", "detect", "bird", "head", "edges", "head_score", "body_region",
+                    "body_edges", "body_score", "mean_score", "distribution", "result"]
     dist = next(s for s in trace.steps_for() if s.key == "distribution")
     head_values = np.asarray(dist.charts[0].data["series"][0]["values"])
     assert float(np.median(head_values)) == pytest.approx(result.sigma, abs=1e-3)
@@ -183,7 +184,7 @@ def test_export_writes_step_pngs_and_manifest(monkeypatch, tmp_path) -> None:
     out = tmp_path / "计算过程"
     written = trace.export(str(out))
     pngs = sorted(p for p in written if p.endswith(".png"))
-    assert len(pngs) == 7 and os.path.basename(pngs[0]).startswith("01_decode")
+    assert len(pngs) == 12 and os.path.basename(pngs[0]).startswith("01_decode")
     manifest = json.loads((out / "trace.json").read_text(encoding="utf-8"))
     assert [s["key"] for s in manifest["steps"]][-1] == "result"
     assert manifest["result"]["verdict"] == "sharp"
@@ -232,10 +233,10 @@ def test_peaking_overlay_tints_focused_edges_red() -> None:
 def test_trace_keeps_a_sigma_map_per_frame(monkeypatch) -> None:
     scene = _scene([(450, 600, 260, 1.8), (1350, 600, 260, 0.3)])
     _result, _p, trace = _run(monkeypatch, scene, [(450, 600, 260), (1350, 600, 260)])
-    assert set(trace.sigma_maps) == {"full", "bird0", "bird1"}
+    assert set(trace.sigma_maps) == {"full", "bird0", "bird1", "bird0:head", "bird0:body", "bird1:head", "bird1:body"}
     for step in trace.steps_all():
         sigma = trace.sigma_map(step)
-        assert (sigma is None) == (step.frame == "birds")
+        assert (sigma is None) == (step.frame == "birds" or step.key == "mean_score")
         assert sigma is None or sigma.shape == step.image.shape[:2]
 
     def focused(index):

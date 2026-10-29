@@ -100,7 +100,8 @@ def _r3(value) -> Optional[float]:
 
 
 def _part_scores(field_: EdgeBlurField, body: np.ndarray, head_windows: Optional[np.ndarray],
-                 head_sigma: Optional[float]) -> Tuple[Optional[int], Optional[int], Optional[float]]:
+                 head_sigma: Optional[float], *, trace_detail: Optional[dict] = None
+                 ) -> Tuple[Optional[int], Optional[int], Optional[float]]:
     """Additional head / head-excluded body scores; never replace the legacy decision.
 
     ``head_windows`` is the union of the complete geometric windows actually
@@ -109,10 +110,16 @@ def _part_scores(field_: EdgeBlurField, body: np.ndarray, head_windows: Optional
     unknown. A measurable body may still have a score when the located head has
     no measured sigma; the synthetic blank-head fallback is never supplied here.
     """
+    if trace_detail is not None:
+        trace_detail.update(head_windows=head_windows, head_sigma=head_sigma)
     if head_windows is None:
         return None, None, None
     head_score = sigma_to_score(head_sigma)
-    body_stats, _motion, _detail = field_.body_blur_detail(body & ~head_windows)
+    body_only = body & ~head_windows
+    body_stats, motion, detail = field_.body_blur_detail(body_only)
+    if trace_detail is not None:
+        # 只在查看计算过程时保留这次实测，不为展示重复计算身体边缘。
+        trace_detail.update(body=body_only, body_stats=body_stats, body_motion=motion, body_detail=detail)
     body_score = sigma_to_score(body_stats.sigma)
     mean_score = (round((head_score + body_score) / 2.0, 1)
                   if head_score is not None and body_score is not None else None)
@@ -1265,7 +1272,14 @@ class BirdSharpnessAnalyzer:
                                       head_blank=sigma is None)
             if sigma is None:
                 sigma = blank_head_sigma(body_stats.sigma)
-        head_score, body_score, mean_score = _part_scores(field_, body, head_windows, head_sigma)
+        part_detail = None
+        if tracer is None:
+            head_score, body_score, mean_score = _part_scores(field_, body, head_windows, head_sigma)
+        else:
+            part_detail = {}
+            head_score, body_score, mean_score = _part_scores(
+                field_, body, head_windows, head_sigma, trace_detail=part_detail)
+            part_detail["head_samples"] = head_samples
         measurement = BirdMeasurement(
             verdict=verdict,
             score=score,
@@ -1298,7 +1312,8 @@ class BirdSharpnessAnalyzer:
         )
         if tracer is not None:
             tracer.bird(index, image, (X1, Y1, X2, Y2), bird_px, body, head, trace_keypoints, selection,
-                        body_detail, measurement, detector_px=detector_px, rgb_roi=roi_rgb if grey_filled else None)
+                        body_detail, measurement, detector_px=detector_px, rgb_roi=roi_rgb if grey_filled else None,
+                        part_detail=part_detail)
         return measurement
 
     def _sam_applies(self, det: BirdDetection) -> bool:
