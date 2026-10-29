@@ -622,20 +622,21 @@ flowchart TD
     A["BirdSharpnessResult"] --> B{"verdict = error？"}
     B -->|是| Z["不写"]
     B -->|否| C["to_xmp_fields()"]
-    C --> D["XMP-photoshop:City = 分数 %06.2f（现有锐度槽，无分数时不改）"]
     C --> E["XMP-superpicky:bird_sharpness_verdict / _score / _sigma / _region /<br/>_bird_count / _head_sigma / _body_sigma / _motion_ratio / _eye_visibility / _version<br/>新增 _head_score / _body_score / _mean_score，缺值提交空字符串清除旧分"]
-    D --> F["PhotoMetaDataXMP.write()：同一次提交<br/>ExifTool 字段 + 直接编辑 XML 的 superpicky 字段<br/>非 ASCII 值走 UTF-8 临时文件"]
-    E --> F
+    E --> F["PhotoMetaDataXMP.write()：同事务保护/恢复独立报告锐度<br/>写入清晰度字段与 bird_sharpness_storage_version = 2<br/>不把清晰度分数写入 City / adj_sharpness"]
+    D["只读 report.db：adj_sharpness（有效 0 保留）<br/>独立元数据转存到同名 XMP"] --> F
     F --> G["invalidate_same_stem_metadata_cache(path)<br/>同目录同 stem（RAW+JPEG 共用 sidecar）的缓存记录一并作废"]
     G --> L{"当前目录列表中有读这个 sidecar 的照片？<br/>FileListPanel.listed_sidecar_siblings(显示路径 / 源路径)<br/>同 stem 不区分大小写，与列表/缩略图视图、筛选无关"}
-    L -->|有| H["browser_meta_updates() 一次合并进这些照片的内存元数据<br/>SuperViewer 刷新：列表“鸟清晰”列、缩略图底栏标签、右侧信息行"]
+    L -->|有| H["browser_meta_updates() 仅提供清晰度字段<br/>persisted_sharpness_updates() 在工作线程读回独立锐度<br/>局部刷新这些照片的列表、缩略图与信息行"]
     L -->|无| M["不改内存；打开该目录时重新读取 XMP"]
     A --> I["birds[]、found_by、head_samples、head_direction_bins / counts / sigma / ratio、head_motion 等明细<br/>只在 CLI --json 与计算过程窗口可见，不写 XMP"]
 ```
 
-“跳过已检测”在任务开头比较 sidecar 里的 `bird_sharpness_version` 与当前版本（含参数后缀），相同才跳过。
+“跳过已检测”在任务开头比较 sidecar 里的 `bird_sharpness_version` 与当前版本（含参数后缀），相同才跳过测量；用户启动检测时仍调用 `PhotoMetaDataXMP.ensure_report_sharpness(path)` 轻量保护/恢复报告锐度。`bird_sharpness_storage_version = 2` 仅描述存储契约，不加入算法后缀，不要求重算。
 
-v18 等旧记录仍可读取，新分项显示“—”；下次用户启动检测时因版本不同重算，不自动启动图库扫描。成功重算后，`ALL_FIELDS`、`browser_meta_fields()` 和 `_sparse_browser_metadata()` 同时传播缺值清空，避免局部刷新保留旧分；失败不写，原结果保留。旧主锐度槽和最佳鸟选择继续使用主评分。SuperViewer 列表“鸟清晰”显示平均分，旁边新增头部和身体分列，三列各按其数值排序；列表与缩略图排序栏同步。信息面板、计算过程与 CLI 保留三项，缩略图判定徽章不变。本轮列表展示不改变计算流程或算法版本。
+锐度保护在报告鸟名已存在时仍执行。对存储标记缺失或为 `1` 的旧 `sbt-blur-*` 记录，City 或锐度归档数值等于旧清晰度主分的字段按旧覆盖处理：优先读取 report `adj_sharpness`，其次使用未污染的 XMP `adj_sharpness` 归档；数字 0 有效。没有可信来源时清除错误 City 和同值污染归档，清晰度字段保留。合法的不同 City 值以及明确的用户编辑/清空不被恢复逻辑覆盖。所有持久化只改同名 XMP，不写原图或 report.db；只读计算过程不修复，升级不自动扫描图库。
+
+v18 等旧记录仍可读取，新分项显示“—”；下次用户启动检测时因版本不同重算，不自动启动图库扫描。成功重算后，`ALL_FIELDS`、`browser_meta_fields()` 和 `_sparse_browser_metadata()` 同时传播缺值清空，避免局部刷新保留旧分；失败不写，原结果保留。主评分仍用于原判定和最佳鸟选择；独立的 City / adj_sharpness 锐度槽保留报告锐度，不再接收清晰度分数。SuperViewer 列表“鸟清晰”显示平均分，旁边新增头部和身体分列，三列各按其数值排序；列表与缩略图排序栏同步。信息面板、计算过程与 CLI 保留三项，缩略图判定徽章不变。清晰度与锐度分离保存不改变测量、判定、最佳鸟选择或算法版本 `sbt-blur-v19`。
 
 ---
 

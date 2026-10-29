@@ -227,9 +227,6 @@ class BirdSharpnessResult:
             fields.xmp_key(fields.FIELD_EYE_VISIBILITY): num(self.eye_visibility, "%.2f"),
             fields.xmp_key(fields.FIELD_VERSION): self.version,
         }
-        if self.score is not None:
-            # SuperPicky's own sharpness slot, same "%06.2f" format it writes.
-            out[fields.SHARPNESS_XMP_KEY] = "%06.2f" % float(self.score)
         return out
 
 

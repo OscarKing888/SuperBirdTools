@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import os
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Callable, Optional
 
 from app_common.file_browser._work_action import WorkerAction
@@ -32,6 +32,8 @@ class BirdSharpnessOutcome:
     skipped: bool = False
     cancelled: bool = False
     timing: Optional[PhotoTiming] = None  # per-stage seconds of this photo (not set when cancelled before starting)
+    metadata_updates: dict = field(default_factory=dict)  # worker-read persisted values, including explicit clears
+    metadata_error: str = ""
 
 
 class BirdSharpnessAction(WorkerAction):
@@ -69,7 +71,7 @@ class BirdSharpnessAction(WorkerAction):
         if self.is_cancelled():
             outcome.cancelled = True
             return outcome
-        from .xmp_store import already_analyzed, write_result
+        from .xmp_store import already_analyzed, browser_meta_updates, persisted_sharpness_updates, write_result
 
         clock = StageClock()
         self._set_stage(STAGE_CHECK)
@@ -77,6 +79,18 @@ class BirdSharpnessAction(WorkerAction):
         version = getattr(self.analyzer, "version", ALGORITHM_VERSION)
         if self.skip_existing and already_analyzed(self.source_path, version):
             outcome.skipped = True
+            if self.write_xmp and not self.is_cancelled():
+                from app_common.exif_io.photo_meta import PhotoMetaDataXMP
+
+                self._set_stage(STAGE_WRITE)
+                clock.enter(STAGE_WRITE)
+                try:
+                    writer = PhotoMetaDataXMP()
+                    if not writer.ensure_report_sharpness(self.source_path):
+                        raise OSError("无法保存原锐度")
+                    outcome.metadata_updates = persisted_sharpness_updates(self.source_path, reader=writer)
+                except Exception as exc:
+                    outcome.metadata_error = str(exc)
             stages = clock.finish()
             outcome.timing = PhotoTiming(self.source_path, stages, round(sum(stages.values()), 3), skipped=True)
             return outcome
@@ -91,6 +105,12 @@ class BirdSharpnessAction(WorkerAction):
             self._set_stage(STAGE_WRITE)
             t = time.perf_counter()
             outcome.written = write_result(self.source_path, outcome.result)
+            if outcome.written:
+                outcome.metadata_updates = browser_meta_updates(outcome.result)
+                try:
+                    outcome.metadata_updates.update(persisted_sharpness_updates(self.source_path))
+                except Exception as exc:
+                    outcome.metadata_error = str(exc)
             write_s = time.perf_counter() - t
         stages = dict(checked)
         for stage, seconds in (getattr(outcome.result, "stage_s", None) or {}).items():

@@ -311,7 +311,8 @@ def test_result_xmp_fields_use_superpicky_formats() -> None:
     result = BirdSharpnessResult(path="x", verdict="soft", score=193, sigma=1.2689, region="bird", bird_count=2,
                                  head_sigma=1.2689, body_sigma=1.1, motion_ratio=1.234, eye_visibility=0.998)
     out = result.to_xmp_fields()
-    assert out[bsf.SHARPNESS_XMP_KEY] == "193.00"
+    assert bsf.SHARPNESS_XMP_KEY not in out
+    assert out[bsf.xmp_key(bsf.FIELD_SCORE)] == "193"
     assert out["XMP-superpicky:bird_sharpness_verdict"] == "soft"
     assert out["XMP-superpicky:bird_sharpness_sigma"] == "1.269"
     assert out["XMP-superpicky:bird_sharpness_region"] == "bird"
@@ -319,9 +320,10 @@ def test_result_xmp_fields_use_superpicky_formats() -> None:
     assert out["XMP-superpicky:bird_sharpness_head_sigma"] == "1.269"
     assert out["XMP-superpicky:bird_sharpness_motion_ratio"] == "1.23"
     assert out["XMP-superpicky:bird_sharpness_version"] == "sbt-blur-v19"
-    # No bird: the focus/whole-image value still fills the sharpness slot.
+    # No bird: clarity remains separate from the report's original sharpness.
     focus = BirdSharpnessResult(path="x", verdict="no_bird", score=420, sigma=0.9, region="focus").to_xmp_fields()
-    assert focus[bsf.SHARPNESS_XMP_KEY] == "420.00"
+    assert bsf.SHARPNESS_XMP_KEY not in focus
+    assert focus[bsf.xmp_key(bsf.FIELD_SCORE)] == "420"
     assert focus["XMP-superpicky:bird_sharpness_head_sigma"] == ""
 
 
@@ -336,13 +338,15 @@ def test_write_result_roundtrip_on_chinese_path(tmp_path, monkeypatch) -> None:
     photo = tmp_path / "世纪公园鹰鹃.jpg"
     Image.new("RGB", (16, 12), "gray").save(photo)
     writer = PhotoMetaDataXMP()
-    assert writer.write(str(photo), {"XMP-dc:Title": "鹰鹃"})
+    assert writer.write(str(photo), {"XMP-dc:Title": "鹰鹃", "XMP-photoshop:City": "731.25"})
     result = BirdSharpnessResult(path=str(photo), verdict="usable", score=418, head_sigma=0.85, body_sigma=1.0)
     assert write_result(str(photo), result)
     rec = writer.read(str(photo))
     assert rec["Title"] == "鹰鹃"
     assert rec["bird_sharpness_verdict"] == "usable"
-    assert float(rec["XMP-photoshop:City"]) == pytest.approx(418)
+    assert float(rec["XMP-photoshop:City"]) == pytest.approx(731.25)
+    assert rec["bird_sharpness_score"] == "418"
+    assert not {"XMP:City", "XMP-photoshop:City", "city", "sharpness"} & browser_meta_updates(result).keys()
     display = bsf.bird_sharpness_from_meta(browser_meta_updates(result))
     assert display.text() == "可用 0.85"
 
@@ -866,4 +870,4 @@ def test_action_times_check_analysis_and_write(monkeypatch, tmp_path) -> None:
     assert outcome.timing.total_s == pytest.approx(sum(outcome.timing.stages.values()), abs=0.01)
     monkeypatch.setattr(xmp_store, "already_analyzed", lambda path, version, **kw: True)
     skipped = BirdSharpnessAction(analyzer, "bird.jpg", "bird.jpg", skip_existing=True).execute()
-    assert skipped.skipped and skipped.timing.skipped and list(skipped.timing.stages) == ["check"]
+    assert skipped.skipped and skipped.timing.skipped and list(skipped.timing.stages) == ["check", "write"]

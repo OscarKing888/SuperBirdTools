@@ -66,8 +66,9 @@ class BirdSharpnessWorker(QThread):
 
     status_changed = pyqtSignal(str)
     progress_changed = pyqtSignal(int, int, str)
-    result_ready = pyqtSignal(object, object, bool)  # display path, BirdSharpnessResult, written
+    result_ready = pyqtSignal(object, object, bool, object)  # display path, result, written, saved metadata
     item_skipped = pyqtSignal(object)
+    metadata_repaired = pyqtSignal(object, object, object)  # display path, source path, saved sharpness
     failed = pyqtSignal(str)
     load_changed = pyqtSignal(object)  # WorkerLoad snapshot for the progress window
     warning_changed = pyqtSignal(str)
@@ -102,15 +103,22 @@ class BirdSharpnessWorker(QThread):
         return [(os.path.normpath(p), os.path.normpath(p)) for p in paths]
 
     def _emit_outcome(self, outcome) -> None:
+        metadata_error = getattr(outcome, "metadata_error", "")
+        if metadata_error:
+            _log.warning("[BirdSharpness] sharpness metadata failed path=%r: %s", outcome.source_path, metadata_error)
+            self.warning_changed.emit(f"锐度元数据处理失败：{os.path.basename(outcome.source_path)} · {metadata_error}")
+        updates = getattr(outcome, "metadata_updates", {})
         timing = getattr(outcome, "timing", None)
         if timing is not None:
             self.timing_ready.emit(timing)
         if outcome.skipped:
+            if updates:
+                self.metadata_repaired.emit(outcome.display_path, outcome.source_path, updates)
             self.item_skipped.emit(outcome.display_path)
         elif outcome.result is not None:
             if outcome.result.verdict != VERDICT_ERROR and not outcome.written:
                 _log.warning("[BirdSharpness] XMP write failed path=%r", outcome.source_path)
-            self.result_ready.emit(outcome.display_path, outcome.result, outcome.written)
+            self.result_ready.emit(outcome.display_path, outcome.result, outcome.written, updates)
 
     def run(self) -> None:
         try:
@@ -655,7 +663,8 @@ class BirdSharpnessController(QObject):
         dialog.cancel_requested.connect(lambda w=worker: self._request_stop(w))
         worker.status_changed.connect(lambda text, w=worker: self._on_status(w, text))
         worker.progress_changed.connect(lambda d, t, n, w=worker: self._on_progress(w, d, t, n))
-        worker.result_ready.connect(lambda p, r, ok, w=worker: self._on_result(w, p, r, ok))
+        worker.result_ready.connect(lambda p, r, ok, m, w=worker: self._on_result(w, p, r, ok, m))
+        worker.metadata_repaired.connect(lambda p, source, m, w=worker: self._on_metadata_repaired(w, p, source, m))
         worker.item_skipped.connect(lambda p, w=worker: self._on_skipped(w, p))
         worker.failed.connect(lambda msg, w=worker: self._on_failed(w, msg))
         worker.load_changed.connect(lambda load, w=worker: self._on_load(w, load))
@@ -710,17 +719,24 @@ class BirdSharpnessController(QObject):
         self._skipped += 1
         self._refresh_summary()
 
-    def _on_result(self, worker, display_path: str, result, written: bool) -> None:
+    def _on_result(self, worker, display_path: str, result, written: bool, metadata_updates=None) -> None:
         if worker is not self._worker or self._shutdown_requested:
             return
         self._counts[result.verdict] += 1
         if result.verdict != VERDICT_ERROR and not written:
             self._write_failures += 1
-        paths = self._listed_paths_sharing_sidecar(display_path, getattr(result, "path", "")) if written else []
-        if paths:
+        if written:
             from bird_sharpness.xmp_store import browser_meta_updates
 
-            updates = browser_meta_updates(result)
+            updates = browser_meta_updates(result) if metadata_updates is None else metadata_updates
+            self._on_metadata_repaired(worker, display_path, getattr(result, "path", ""), updates)
+        self._refresh_summary()
+
+    def _on_metadata_repaired(self, worker, display_path: str, source_path: str, updates: dict) -> None:
+        if worker is not self._worker or self._shutdown_requested or not updates:
+            return
+        paths = self._listed_paths_sharing_sidecar(display_path, source_path)
+        if paths:
             try:
                 batch = getattr(self._file_list, "sync_metadata_edits_for_paths", None)
                 if callable(batch):
@@ -730,7 +746,6 @@ class BirdSharpnessController(QObject):
                         self._file_list.sync_metadata_edit_for_path(path, meta_updates=dict(updates))
             except Exception:
                 _log.error("[BirdSharpness] list refresh failed path=%r: %s", display_path, traceback.format_exc())
-        self._refresh_summary()
 
     def _listed_paths_sharing_sidecar(self, display_path: str, source_path: str) -> list[str]:
         """Listed rows reading the written sidecar: the photo and its same-stem RAW/JPEG siblings.

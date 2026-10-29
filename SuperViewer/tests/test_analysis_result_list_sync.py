@@ -49,6 +49,8 @@ def test_bird_sharpness_result_updates_memory_metadata_in_thumbnail_mode(thumb_l
     controller = BirdSharpnessController(window, files)
     worker = controller._worker = object()
     controller._counts = Counter()
+    for path in (listed, files.raw):
+        files._meta_cache[path] = {"sharpness": "731.25", "XMP:City": "731.25"}
     for path in (listed, other):
         result = BirdSharpnessResult(path=path, verdict="sharp", score=523, head_sigma=0.62, body_sigma=0.7)
         controller._on_result(worker, path, result, True)
@@ -56,9 +58,27 @@ def test_bird_sharpness_result_updates_memory_metadata_in_thumbnail_mode(thumb_l
     for path in (listed, files.raw):
         meta = files.cached_photo_metadata_for_path(path)
         assert meta["bird_sharpness_verdict"] == "sharp"
-        assert meta["sharpness"] == "523.00"
+        assert meta["sharpness"] == "731.25"
     assert files.unrelated not in files._meta_cache
     assert other not in files._meta_cache
+
+
+def test_sharpness_repair_clears_legacy_cache_on_listed_siblings_only(thumb_list):
+    files, window, listed, _other = thumb_list
+    controller = BirdSharpnessController(window, files)
+    worker = controller._worker = object()
+    for path in (listed, files.raw):
+        files._meta_cache[path] = {"sharpness": "523.00", "city": "523.00",
+                                  "XMP:City": "523.00", "bird_sharpness_verdict": "sharp"}
+    patch = {"sharpness": "", "city": "", "XMP:City": "", "XMP-photoshop:City": "", "adj_sharpness": ""}
+    controller._on_metadata_repaired(object(), listed, listed, patch)
+    assert files.cached_photo_metadata_for_path(listed)["sharpness"] == "523.00"
+    controller._on_metadata_repaired(worker, listed, listed, patch)
+    for path in (listed, files.raw):
+        meta = files.cached_photo_metadata_for_path(path)
+        assert meta["sharpness"] == meta["city"] == meta["XMP:City"] == ""
+        assert meta["bird_sharpness_verdict"] == "sharp"
+    assert files.unrelated not in files._meta_cache
 
 
 def test_bird_sharpness_result_of_unlisted_source_updates_listed_sibling(thumb_list) -> None:

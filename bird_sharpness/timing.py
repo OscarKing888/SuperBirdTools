@@ -109,7 +109,7 @@ class PhotoTiming:
     path: str
     stages: Dict[str, float] = field(default_factory=dict)
     total_s: float = 0.0
-    skipped: bool = False  # only the check ran: the sidecar already had this version's result
+    skipped: bool = False  # reused analysis: version check and optional report-sharpness repair only
     failed: bool = False   # the analysis raised or reported an error
 
 

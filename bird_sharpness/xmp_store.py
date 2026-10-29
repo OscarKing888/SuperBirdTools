@@ -32,9 +32,37 @@ def browser_meta_updates(result: BirdSharpnessResult) -> Dict[str, object]:
         group, _, name = key.partition(":")
         if group == fields.XMP_GROUP:
             updates[name] = value
-    if result.score is not None:
-        sharp = "%06.2f" % float(result.score)
-        updates.update({"XMP:City": sharp, "city": sharp, "sharpness": sharp})
+    return updates
+
+
+def persisted_sharpness_updates(path: str, *, reader: Optional[PhotoMetaDataXMP] = None) -> Dict[str, object]:
+    """Worker-only cache patch from saved report sharpness, never from analysis scores.
+
+    Empty values deliberately clear a legacy detection score from the browser
+    when no original report value could be recovered. A read error propagates
+    so the caller can preserve its cache rather than inventing missing values.
+    """
+    rec = (reader or PhotoMetaDataXMP()).read(path)
+    if not rec:
+        raise OSError(f"无法读回已保存的 XMP: {path}")
+
+    def value(*keys):
+        for key in keys:
+            found = rec.get(key)
+            if found is not None and str(found).strip():
+                return found
+        return ""
+
+    sharp = value("XMP-photoshop:City", "XMP:City")
+    archived = value("XMP-superpicky:adj_sharpness", "adj_sharpness")
+    city_archive = value("XMP-superpicky:city", "city")
+    updates = {"XMP-photoshop:City": sharp, "XMP:City": sharp, "city": sharp, "sharpness": sharp,
+               "XMP-superpicky:adj_sharpness": archived, "adj_sharpness": archived, "report.adj_sharpness": archived,
+               "XMP-superpicky:city": city_archive, "report.city": city_archive}
+    # The shared reader expands explicit City clears to all display fallbacks.
+    for key in ("IPTC:City", "head_sharp", "report.head_sharp", "XMP-superpicky:head_sharp"):
+        if rec.get(key) == "":
+            updates[key] = ""
     return updates
 
 

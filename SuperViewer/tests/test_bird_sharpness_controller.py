@@ -106,6 +106,8 @@ def env(tmp_path, monkeypatch):
 
 def test_file_job_writes_xmp_and_refreshes_list(env) -> None:
     controller, file_list, analyzer, _folder, paths = env
+    for path in paths:
+        assert PhotoMetaDataXMP().write(path, {"XMP-photoshop:City": "731.25"})
     assert file_list.extenders == [controller.extend_file_menu]
     controller.start_for_paths(paths)
     assert _wait(lambda: not controller.busy)
@@ -113,10 +115,11 @@ def test_file_job_writes_xmp_and_refreshes_list(env) -> None:
     rec = PhotoMetaDataXMP().read(paths[0])
     assert rec["bird_sharpness_verdict"] == "sharp"
     assert rec["bird_sharpness_version"] == ALGORITHM_VERSION
-    assert float(rec["XMP-photoshop:City"]) == pytest.approx(520)
+    assert float(rec["XMP-photoshop:City"]) == pytest.approx(731.25)
+    assert rec["bird_sharpness_score"] == "520"
     updates = file_list.synced[os.path.normpath(paths[1])]
     assert bsf.bird_sharpness_from_meta(updates).text() == "失焦 1.30"
-    assert updates["XMP:City"] == "180.00"
+    assert float(updates["XMP:City"]) == pytest.approx(731.25)
     assert "清晰 1" in controller._dialog.summary_text() and "失焦 1" in controller._dialog.summary_text()
     assert controller._dialog.button.text() == "关闭"
     # every stage is timed per photo and totalled in the progress window (准备/写入 come from the action)
@@ -139,6 +142,40 @@ def test_directory_job_skips_photos_already_analyzed_with_same_version(env) -> N
     assert _wait(lambda: not controller.busy)
     assert analyzer.analyzed == [os.path.normpath(paths[1])]
     assert "已跳过 1" in controller._dialog.summary_text()
+
+
+@pytest.mark.parametrize("original", [0.0, 786.25, None])
+def test_skipped_detection_repairs_report_sharpness_and_same_stem_cache(env, monkeypatch, original):
+    from pathlib import Path
+
+    controller, file_list, analyzer, _folder, paths = env
+    path = Path(paths[0])
+    # 模拟旧版输出，直接写测试侧车，避免新写入流程已先修复。
+    path.with_suffix('.xmp').write_text(f'''<x:xmpmeta xmlns:x="adobe:ns:meta/">
+<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description rdf:about=""
+xmlns:photoshop="http://ns.adobe.com/photoshop/1.0/"
+xmlns:superpicky="https://superbirdtools.local/xmp/superpicky/1.0/">
+<photoshop:City>520.00</photoshop:City><superpicky:bird_sharpness_score>520</superpicky:bird_sharpness_score>
+<superpicky:bird_sharpness_version>{ALGORITHM_VERSION}</superpicky:bird_sharpness_version>
+<superpicky:bird_sharpness_verdict>sharp</superpicky:bird_sharpness_verdict>
+</rdf:Description></rdf:RDF></x:xmpmeta>''', encoding='utf-8')
+    sibling = str(path.with_suffix('.ARW'))
+    Path(sibling).write_bytes(b'RAW untouched')
+    monkeypatch.setattr(PhotoMetaDataReportDB, '_row_for', lambda *_: {'adj_sharpness': original} if original is not None else None)
+    file_list.listed_sidecar_siblings = lambda _: [str(path), sibling]
+    controller.start(BirdSharpnessJob(title='恢复锐度', items=[(str(path), str(path))], skip_existing=True))
+    assert _wait(lambda: not controller.busy)
+    assert analyzer.analyzed == []
+    assert '已跳过 1' in controller._dialog.summary_text()
+    for key in (str(path), sibling):
+        updated = file_list.synced[key]
+        if original is None:
+            assert updated['sharpness'] == ''
+        else:
+            assert float(updated['sharpness']) == original
+        assert updated['XMP:City'] == updated['sharpness']
+    assert PhotoMetaDataXMP().read(str(path))['bird_sharpness_score'] == '520'
+    assert Path(sibling).read_bytes() == b'RAW untouched'
 
 
 def test_menus_offer_start_then_stop_while_busy(env) -> None:

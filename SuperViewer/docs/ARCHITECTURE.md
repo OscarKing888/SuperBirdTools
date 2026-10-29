@@ -385,7 +385,20 @@ Qt 进度回调只更新界面/初始需求提示，实际任务完成和需求�
 显示不重复测量身体；无可靠头或无细节时在对应步骤解释空值。新增步骤使用现有图像、
 指标与图表组件，横向步骤栏可滚动至末尾；切鸟按同一步骤键继续，保留视图缩放和参数。
 无鸟的焦点/分块路径保持原步骤；CLI `--trace` 使用相同记录导出 PNG / JSON。
-缺值为“—”，有效 0 保留，平均显示一位小数；City 锐度槽、缩略图判定徽章与模板选择器不变。
+缺值为“—”，有效 0 保留，平均显示一位小数；缩略图判定徽章与模板选择器不变。
+清晰度结果只写 `XMP-superpicky:bird_sharpness_*`，`browser_meta_updates()` 只合并这些字段。
+列表“锐度值”和信息面板“锐度”保留独立的 SuperPicky/report `adj_sharpness`，
+通过共享 `PhotoMetaDataXMP` 的报告转存流程保存到 `XMP-superpicky:adj_sharpness` /
+`XMP-photoshop:City`；不再由清晰度主分或平均分覆盖，也不修改 report.db 或原图。
+该存储修正不改变 `sbt-blur-v19`、测量、判定或最佳鸟选择。
+共享 [`PhotoMetaDataXMP.ensure_report_sharpness()`](../../app_common/exif_io/photo_meta.py) 与普通 XMP 写入事务
+复用锐度保护：已有鸟名也补齐报告锐度；存储标记缺失或为 `1` 的旧 `sbt-blur-*` 记录中，City 或锐度归档等于旧主分的字段
+从只读 report `adj_sharpness` 或未污染归档恢复。无可信源则清除错误锐度，保留清晰度；
+合法的不同 City 与显式用户编辑/清空保留。用户启动检测后，跳过已检测的照片也做轻量修复，
+无需重算清晰度；升级不自动扫描图库。独立 `bird_sharpness_storage_version = 2` 标记存储契约。
+工作线程通过 [`persisted_sharpness_updates()`](../../bird_sharpness/xmp_store.py) 读回真正保存的锐度，
+经 `metadata_repaired` / `_on_metadata_repaired()` 局部刷新同名侧车关联行；
+该补丁独立于 `browser_meta_updates()` 的清晰度补丁，GUI 线程不读 XMP。
 Viewer 列表使用 [`SharpnessFileTableModel`](../superviewer/sharpness_file_table.py) 扩展现有
 `RarityFileTableModel`：原“鸟清晰”列显示平均分，两项逻辑列追加在原列之后，表头视觉顺序为
 “鸟清晰 → 头部清晰度 → 身体清晰度”。逻辑追加保留共享相机/视频/稀有度列的索引，

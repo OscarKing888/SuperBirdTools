@@ -213,7 +213,8 @@ def test_xmp_part_scores_write_half_and_zero_and_clear_missing_values():
     assert values[fields.xmp_key(fields.FIELD_HEAD_SCORE)] == '0'
     assert values[fields.xmp_key(fields.FIELD_BODY_SCORE)] == '301'
     assert values[fields.xmp_key(fields.FIELD_MEAN_SCORE)] == '150.5'
-    assert values[fields.SHARPNESS_XMP_KEY] == '100.00'
+    assert fields.SHARPNESS_XMP_KEY not in values
+    assert values[fields.xmp_key(fields.FIELD_SCORE)] == '100'
     cleared = BirdSharpnessResult('bird.jpg', 'no_bird').to_xmp_fields()
     for field in (fields.FIELD_HEAD_SCORE, fields.FIELD_BODY_SCORE, fields.FIELD_MEAN_SCORE):
         assert cleared[fields.xmp_key(field)] == ''

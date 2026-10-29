@@ -31,7 +31,7 @@ SuperPicky 的鸟眼模型：
 
 - **怎么用**：在 [bird_sharpness/models.py](bird_sharpness/models.py) 中按 SuperPicky 的 `PartLocalizer`（ResNet50 加坐标、可见度输出头）重建网络，再加载同一份权重，输入 416 px。
 - **用途**：得到左眼、右眼、鸟喙的位置与可见度。眼可见（≥ 0.5）时只测眼周头部区域的清晰度；看不到眼判「无鸟眼」，分数上限 299。
-- **兼容性**：只调用模型，不调用 SuperPicky 程序。清晰度分数写入与 SuperPicky 相同的锐度字段 `XMP-photoshop:City`，使用相同的 0–1000 刻度。
+- **兼容性**：只调用模型，不调用 SuperPicky 程序。清晰度采用 0–1000 刻度，单独写入 `XMP-superpicky:bird_sharpness_*`；SuperPicky/report 锐度保留在 `XMP-photoshop:City` / `adj_sharpness`，两者互不覆盖。
 
 模型查找顺序：
 
