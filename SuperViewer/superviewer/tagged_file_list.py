@@ -578,10 +578,20 @@ class SuperViewerTaggedFileListPanel(FileListPanel):
             candidates = list(reversed(ordered[:anchor])) + ordered[anchor:]
             target = next((path for path in candidates
                            if os.path.normcase(path) not in removed), "")
-        super()._reload_after_trash(moved_paths)
-        # load_directory clears/rebuilds the old model synchronously. Queue the
-        # target afterwards so that empty rebuild cannot consume the request.
-        self.set_pending_selection([target] if target else [], apply_immediately=False)
+        self._remove_trashed_paths_from_view(moved_paths)
+        self._rebuild_focus_source_index(self._all_files)
+        self.set_pending_selection([target] if target else [])
+
+    def _forget_trashed_metadata(self, paths: list[str]) -> None:
+        super()._forget_trashed_metadata(paths)
+        removed = {os.path.normcase(os.path.normpath(path)) for path in paths}
+        for cache in (self._photo_tag_cache, self._photo_tag_generation_by_path,
+                      getattr(self, "_local_metadata_updates_by_path", {})):
+            for path in list(cache):
+                if os.path.normcase(os.path.normpath(path)) in removed:
+                    cache.pop(path, None)
+        self._photo_tag_pending_paths = [p for p in self._photo_tag_pending_paths
+                                         if os.path.normcase(p) not in removed]
 
     def _remember_directory_selection(self) -> None:
         view = self._list_widget if self._view_mode == self._MODE_THUMB else self._tree_widget
@@ -677,6 +687,10 @@ class SuperViewerTaggedFileListPanel(FileListPanel):
         report_row_by_path: dict | None = None,
         from_cache: bool = False,
     ) -> None:
+        if self._background_shutdown_requested or path != self._current_dir:
+            return
+        files = [p for p in files
+                 if os.path.normcase(os.path.normpath(p)) not in self._trashed_metadata_paths]
         apply_t0 = perf_counter()
         self._probe_log("photo_tag_cache.deferred", files=len(files), active_filters=bool(self._active_tag_filters))
         self._rebuild_focus_source_index(files)
@@ -721,10 +735,11 @@ class SuperViewerTaggedFileListPanel(FileListPanel):
         from app_common.exif_io.metadata_store import get_store
         store = get_store()
         meta_dict = {path: metadata for path, metadata in meta_dict.items()
-                     if "_metadata_revision" not in metadata or
+                     if os.path.normcase(os.path.normpath(path)) not in self._trashed_metadata_paths
+                     and ("_metadata_revision" not in metadata or
                      int(metadata["_metadata_revision"]) >= max(
                          int(self._meta_cache.get(os.path.normpath(path), {}).get("_metadata_revision", 0)),
-                         store.current_revision(path))}
+                         store.current_revision(path)))}
         library = getattr(self, "tag_library", None)
         if library is not None:
             meta_dict = {path: ({key: value for key, value in meta.items() if key != "tags"}
@@ -1383,6 +1398,8 @@ class SuperViewerTaggedFileListPanel(FileListPanel):
         accepted: list[str] = []
         for path, tags in batch.items():
             norm_path = os.path.normpath(path)
+            if os.path.normcase(norm_path) in self._trashed_metadata_paths:
+                continue
             if snapshot.get(os.path.normcase(norm_path), 0) != self._photo_tag_generation(norm_path):
                 continue
             self._photo_tag_cache[norm_path] = set(tags or set())

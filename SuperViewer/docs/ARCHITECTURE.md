@@ -8,7 +8,7 @@
 
 本文按运行中的数据流说明代码入口，供新增功能和排查问题时定位。行为约束以仓库 [AGENTS](../../AGENTS.md) 和 [AI_CODING_RULES](../../ai_rules/AI_CODING_RULES.md) 为准；安装与使用见 [README](../README.md)。共享浏览器、XMP 和画布位于 `app_common` 子模块，同时服务 BirdStamp，修改时需检查两端调用。
 
-删除后的选择由 `SuperViewerTaggedFileListPanel._reload_after_trash()` 恢复：当前图片成功删除后，按活动列表/缩略图的过滤及排序结果向前寻找未删除图片；没有前项则选剩余首项，删空则无选择。多选时跳过同批已删除项，当前图片未删除则保留。共享浏览器仅在成功删除后调用此扩展点，仍使用垃圾桶和 XMP 联动；Viewer 在清空旧模型后、异步扫描返回前设置待选路径，由原有选择机制同步预览和滚动。BirdStamp 保持默认重载行为。回归见 [`test_delete_selection.py`](../tests/test_delete_selection.py)，此交互无新增 CLI。
+删除成功后，共享 `FileListPanel._forget_trashed_metadata()` 只移除成功路径的元数据、标签、缩略图内存项及受影响目录快照；文件操作 worker 通过 `MetadataStore.invalidate_paths()` / `MetadataSQLiteCache.invalidate_paths()` 清理本机 SQLite 记录，读取代次拒绝迟到回填。`report.db` 保留只读及精确路径 tombstone。Viewer 的 `SuperViewerTaggedFileListPanel._reload_after_trash()` 使用 `_remove_trashed_paths_from_view()` 原地移除列表/缩略图行，保留剩余元数据、pixmap、过滤及排序，不再强制扫描目录或重启整批元数据读取。当前图片成功删除后，按显示顺序选择最近未删除前项；没有前项则选剩余首项，删空则无选择，当前项未删除则保留。删除失败的照片不清缓存；删除期间切目录仍清理原照片缓存，不重载无关目录。BirdStamp 保持默认重载行为。回归见 [`test_delete_selection.py`](../tests/test_delete_selection.py) 和共享 `test_metadata_memory_cache.py`、`test_directory_snapshot.py`、`test_metadata_sqlite.py`、`test_metadata_store.py`；此交互无新增 CLI。
 
 ## 1. 启动与模块边界
 
