@@ -645,6 +645,7 @@ class _BirdStampExporterMixin:
                 scale_factors=gif_request.scale_factors,
                 wechat_sticker=gif_request.wechat_sticker,
                 repeat_fps=list(getattr(gif_request, "repeat_fps", None) or ()),
+                repeat_reverse=list(getattr(gif_request, "repeat_reverse", None) or ()),
             )
             _LOG.info("gif export photos=%s prepare_s=%.3f render_cache_s=%.3f encode_s=%.3f output=%s",
                       len(paths), jobs_ready_at - started_at, frames_ready_at - jobs_ready_at,
@@ -691,10 +692,11 @@ class _BirdStampExporterMixin:
         scale_factors: list[float],
         wechat_sticker: bool = False,
         repeat_fps: list[float] | None = None,
+        repeat_reverse: list[bool] | None = None,
     ) -> list[Path]:
         variant_paths = build_gif_variant_output_paths(output_path.with_suffix(".gif"), scale_factors)
         total_outputs = 1 + len(variant_paths) + int(wechat_sticker)
-        timing = build_gif_frame_timing(len(frame_paths), fps, repeat_fps or ())
+        timing = build_gif_frame_timing(len(frame_paths), fps, repeat_fps or (), repeat_reverse or ())
         progress_token = self._begin_image_export_progress(total=timing.encoded_frame_count, label="GIF 合成", phase_text="编码中")
         try:
             options = GifExportOptions(
@@ -702,6 +704,7 @@ class _BirdStampExporterMixin:
                 fps=fps,
                 loop=loop,
                 repeat_fps=tuple(repeat_fps or ()),
+                repeat_reverse=tuple(repeat_reverse or ()),
                 scale_factors=tuple(scale_factors),
                 wechat_sticker=wechat_sticker,
                 background_color=self._gif_background_color_for_export(),

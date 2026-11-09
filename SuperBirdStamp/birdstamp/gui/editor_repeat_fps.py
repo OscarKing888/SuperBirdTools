@@ -5,7 +5,7 @@ import math
 from typing import Callable, Iterable
 
 from PyQt6.QtCore import pyqtSignal
-from PyQt6.QtWidgets import QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget
+from PyQt6.QtWidgets import QCheckBox, QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget
 
 from birdstamp.gui.editor_collapsible import refresh_layout_chain
 from birdstamp.gui.editor_fps_combo import FpsComboBox
@@ -52,10 +52,12 @@ class RepeatFpsEditor(QWidget):
         minimum: int = REPEAT_FPS_MIN,
         maximum: int = REPEAT_FPS_MAX,
         presets: Iterable[float] | None = None,
+        allow_reverse: bool = False,
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
         self._base_fps = base_fps
+        self._allow_reverse = allow_reverse
         self._minimum = int(minimum)
         self._maximum = int(maximum)
         self._presets = None if presets is None else list(presets)
@@ -80,15 +82,25 @@ class RepeatFpsEditor(QWidget):
     def values(self) -> list[float]:
         return [float(combo.value()) for _row, _label, combo in self._rows]
 
-    def set_values(self, values: object) -> None:
+    def reverse_values(self) -> list[bool]:
+        return [check.isChecked() for row, _label, _combo in self._rows
+                for check in row.findChildren(QCheckBox)]
+
+    def set_values(self, values: object, reverse_values: object = ()) -> None:
         """恢复状态：新行在连接信号前设定初值，不发出 changed。"""
         for row, _label, _combo in self._rows:
             self._layout.removeWidget(row)
             row.hide()
             row.deleteLater()
         self._rows.clear()
-        for fps in normalize_repeat_fps(values, minimum=self._minimum, maximum=self._maximum):
-            self._append_row(fps)
+        directions = reverse_values if isinstance(reverse_values, (list, tuple)) else ()
+        # 过滤无效 FPS 时同步过滤方向，避免后续遍的设置错位。
+        for index, value in enumerate(values if isinstance(values, (list, tuple)) else ()):
+            normalized = normalize_repeat_fps([value], minimum=self._minimum, maximum=self._maximum)
+            if normalized:
+                self._append_row(normalized[0], index < len(directions) and directions[index] is True)
+            if len(self._rows) >= REPEAT_PASS_LIMIT:
+                break
         self._after_rows_changed()
 
     def _on_add_clicked(self) -> None:
@@ -111,7 +123,7 @@ class RepeatFpsEditor(QWidget):
         self._after_rows_changed()
         self.changed.emit()
 
-    def _append_row(self, fps: float) -> None:
+    def _append_row(self, fps: float, reverse: bool = False) -> None:
         row = QWidget()
         row_layout = QHBoxLayout(row)
         row_layout.setContentsMargins(0, 0, 0, 0)
@@ -126,6 +138,12 @@ class RepeatFpsEditor(QWidget):
         row_layout.addWidget(label)
         row_layout.addWidget(combo)
         row_layout.addWidget(QLabel("FPS"))
+        if self._allow_reverse:
+            check = QCheckBox("倒放")
+            check.setToolTip("这一遍从最后一张播放到第一张，FPS 保持本行设置。")
+            check.setChecked(reverse)
+            check.toggled.connect(lambda _checked: self.changed.emit())
+            row_layout.addWidget(check)
         row_layout.addWidget(remove_button)
         row_layout.addStretch(1)
         self._layout.insertWidget(len(self._rows), row)

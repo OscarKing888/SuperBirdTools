@@ -30,6 +30,8 @@ class GifExportOptions:
     scale_factors: tuple[float, ...] = ()
     background_color: str = DEFAULT_GIF_BACKGROUND_COLOR
     wechat_sticker: bool = False
+    # 与 repeat_fps 逐项对应；缺省为正放。
+    repeat_reverse: tuple[bool, ...] = ()
 
     def normalized_output_path(self) -> Path:
         output_path = self.output_path.resolve(strict=False)
@@ -129,13 +131,15 @@ def validate_gif_export_options(options: GifExportOptions) -> GifExportOptions:
         fps=fps,
         loop=loop,
         repeat_fps=repeat_fps,
+        repeat_reverse=tuple(options.repeat_reverse or ()),
         scale_factors=tuple(scales),
         background_color=background_color,
         wechat_sticker=bool(options.wechat_sticker),
     )
 
 
-def build_gif_frame_timing(frame_count: int, fps: float, repeat_fps: Sequence[float] = ()) -> GifFrameTiming:
+def build_gif_frame_timing(frame_count: int, fps: float, repeat_fps: Sequence[float] = (),
+                           repeat_reverse: Sequence[bool] = ()) -> GifFrameTiming:
     """Quantize cumulative time to GIF's 10 ms ticks, sampling above 100 FPS.
 
     ``repeat_fps`` appends further passes over the complete sequence, each with
@@ -151,8 +155,15 @@ def build_gif_frame_timing(frame_count: int, fps: float, repeat_fps: Sequence[fl
     )
     indices: list[int] = []
     durations: list[int] = []
-    for rate in segment_fps:
+    directions = tuple(repeat_reverse or ())
+    if len(directions) > len(segment_fps) - 1 or any(type(value) is not bool for value in directions):
+        raise ValueError("GIF 倒放设置必须与重复播放遍对应，并使用布尔值。")
+    for pass_index, rate in enumerate(segment_fps):
         segment_indices, segment_durations = _build_segment_timing(frame_count, rate)
+        # 先按播放时间采样，再映射到逆序源帧；保持每遍时长和量化规则。
+        reverse = pass_index > 0 and pass_index <= len(directions) and directions[pass_index - 1]
+        if reverse:
+            segment_indices = tuple(frame_count - 1 - index for index in segment_indices)
         indices.extend(segment_indices)
         durations.extend(segment_durations)
     return GifFrameTiming(
@@ -249,7 +260,7 @@ def export_gif(
     normalized_frame_paths = [Path(path).resolve(strict=False) for path in frame_paths]
     if not normalized_frame_paths:
         raise ValueError("没有可用于合成 GIF 的图片。")
-    timing = build_gif_frame_timing(len(normalized_frame_paths), validated.fps, validated.repeat_fps)
+    timing = build_gif_frame_timing(len(normalized_frame_paths), validated.fps, validated.repeat_fps, validated.repeat_reverse)
     sampled_frame_paths = [normalized_frame_paths[index] for index in timing.frame_indices]
 
     output_path = validated.normalized_output_path()

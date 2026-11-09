@@ -249,3 +249,37 @@ def test_cli_repeat_fps_option(tmp_path):
     )
     assert result.exit_code == 0, result.output
     assert _read_gif(target)[0] == [50] * 3 + [100] * 3 + [200] * 3
+
+
+@pytest.mark.parametrize("fps,count", [(10, 4), (30, 7), (240, 24), (240, 1)])
+def test_reverse_pass_samples_from_end_without_changing_duration(fps, count):
+    forward = build_gif_frame_timing(count, 20, (fps,))
+    reverse = build_gif_frame_timing(count, 20, (fps,), (True,))
+    base = build_gif_frame_timing(count, 20).encoded_frame_count
+    assert reverse.frame_indices[:base] == forward.frame_indices[:base]
+    assert reverse.frame_indices[base:] == tuple(count - 1 - i for i in forward.frame_indices[base:])
+    assert reverse.durations_ms == forward.durations_ms
+
+
+def test_reverse_pass_real_outputs_and_cli(tmp_path):
+    from typer.testing import CliRunner
+    from birdstamp.cli import app
+
+    paths = _frames(tmp_path, 4)
+    outputs = export_gif(paths, GifExportOptions(
+        tmp_path / "reverse.gif", fps=20, repeat_fps=(10, 5),
+        repeat_reverse=(True, False), scale_factors=(0.5,), wechat_sticker=True,
+    ))
+    # GIF 编码器可以合并交界处相同的帧；按 10ms 展开后检查完整播放顺序。
+    expected = [i for i in range(4) for _ in range(5)]
+    expected += [i for i in reversed(range(4)) for _ in range(10)]
+    expected += [i for i in range(4) for _ in range(20)]
+    for output in outputs:
+        durations, colors = _read_gif(output)
+        actual = [color[0] // 2 for duration, color in zip(durations, colors) for _ in range(duration // 10)]
+        assert actual == expected
+    result = CliRunner().invoke(app, ["gif", *map(str, paths), "-o", str(tmp_path / "cli.gif"),
+                                      "--fps", "20", "--repeat-fps", "10", "--reverse-pass", "2"])
+    assert result.exit_code == 0, result.output
+    durations, colors = _read_gif(tmp_path / "cli.gif")
+    assert [color[0] // 2 for duration, color in zip(durations, colors) for _ in range(duration // 10)] == expected[:60]

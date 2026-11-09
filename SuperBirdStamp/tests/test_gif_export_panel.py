@@ -161,7 +161,8 @@ def test_repeat_passes_add_halved_fps_remove_and_restore(monkeypatch, tmp_path) 
         assert len(signals) == 4
 
         signals.clear()
-        panel.set_state(repeat_fps=[12, "bad", 0, 999, float("inf")])
+        panel.set_state(repeat_fps=[12, "bad", 0, 999, float("inf")],
+                        repeat_reverse=[False, False, False, True, False])
         assert panel.current_request().repeat_fps == [12.0, 240.0]
         assert not signals
 
@@ -192,9 +193,12 @@ def test_repeat_passes_add_halved_fps_remove_and_restore(monkeypatch, tmp_path) 
         workspace = tmp_path / "session.json"
         state = harness._collect_workspace_image_export_state(workspace)
         assert state["gif_repeat_fps"] == [12.0, 240.0]
+        assert state["gif_repeat_reverse"] == [False, True]
         panel.set_state(repeat_fps=[])
         harness._apply_workspace_image_export_state(state, workspace)
         assert panel.current_request().repeat_fps == [12.0, 240.0]
+        assert panel.current_request().repeat_reverse == [False, True]
+        del state["gif_repeat_reverse"]
         del state["gif_repeat_fps"]
         harness._apply_workspace_image_export_state(state, workspace)
         assert panel.current_request().repeat_fps == []
@@ -210,5 +214,30 @@ def test_repeat_pass_count_is_limited() -> None:
         panel.set_state(repeat_fps=[10] * (limit + 3))
         assert len(panel.current_request().repeat_fps) == limit
         assert not panel.repeat_editor.add_button.isEnabled()
+    finally:
+        panel.close()
+
+
+def test_reverse_controls_keep_direction_with_row_and_restore_silently():
+    from PyQt6.QtCore import Qt
+    from PyQt6.QtTest import QTest
+    panel = editor_gif_panel.GifExportPanel()
+    try:
+        panel.set_state(repeat_fps=[10, 5], repeat_reverse=[False, True])
+        changes = []
+        panel.optionsChanged.connect(lambda: changes.append(True))
+        first = panel.repeat_editor.rows[0][0].findChild(editor_gif_panel.QCheckBox)
+        first.setFocus()
+        QTest.keyClick(first, Qt.Key.Key_Space)
+        assert panel.current_request().repeat_reverse == [True, True]
+        assert len(changes) == 1
+        panel.repeat_editor.rows[0][0].findChild(editor_gif_panel.QPushButton).click()
+        assert panel.current_request().repeat_reverse == [True]
+        changes.clear()
+        panel.set_state(repeat_fps=[10, "bad", 5], repeat_reverse=[False, False, True])
+        assert panel.current_request().repeat_reverse == [False, True]
+        assert not changes
+        panel.set_state(repeat_fps=[10, 5])
+        assert panel.current_request().repeat_reverse == [False, False]
     finally:
         panel.close()

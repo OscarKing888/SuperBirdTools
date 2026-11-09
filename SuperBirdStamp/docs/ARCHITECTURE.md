@@ -403,3 +403,7 @@ Windows 合并构建由 [`stage_windows_exiftool.py`](../../build_tools/stage_wi
 ### 通用分组与 UI 设计
 
 所有有标题参数组统一使用共享 [CollapsibleSection](../../app_common/collapsible_section.py)，包括去抖动的方式/选区/分析、模板管理的当前模板/预览、叠加层属性及其内容/布局/效果/自动行列组合、安全区列表/边距/参考预览。正文布局挂 `body`；[editor_collapsible.py](../birdstamp/gui/editor_collapsible.py) 只保留兼容导出、当前页尺寸策略和应用布局诊断。共享类自带 palette 样式，独立窗口也不依赖编辑器 QSS。折叠不改模型、参数与任务；属性三列仍由 `_PropertyColumnsScroll` 处理横向溢出、外层滚动处理纵向高度，收起的列应释放高度且参数保持。纯视图变更无 CLI 参数。设计与选型以根 [UI 规范](../../docs/ui-style.md) 和 [skill](../../.agents/skills/superbird-ui-design/SKILL.md) 为准，迁移覆盖见 [设计清单](../../docs/ui-design/unified-groups.md)。
+
+### GIF 逐遍倒放
+
+`GifExportOptions.repeat_reverse` 与追加的 `repeat_fps` 逐项对应（缺省正放）。`build_gif_frame_timing` 先独立量化各遍时长，再将倒放遍的采样索引映射为 `frame_count - 1 - index`；原始帧缓存与照片列表顺序保留。全部 GIF 尺寸与微信版共用该时间线。`GifExportPanel` 在各追加遍提供倒放复选框，导出偏好及工作区以 `gif_repeat_reverse` 保存，旧文件默认正放。CLI 示例：`gif a.png b.png --output out.gif --fps 20 --repeat-fps 10 --reverse-pass 2`；可多次指定追加遍编号。回归见 `test_gif_timing.py`、`test_gif_export_panel.py`。

@@ -124,3 +124,5 @@ group.set_expanded(False)
 迁移清单及本轮设计见 [统一折叠组设计](ui-design/unified-groups.md)。应用代码不再创建原生 `QGroupBox`。
 Viewer 的长选项表单使用语义分组；照片列表、目录导航、预览视口及 Tab 页本身不机械套组。
 新增组件或适用范围改变时，必须与实现一起更新本表和对应架构入口。
+
+GIF 重复播放行复用 `RepeatFpsEditor`，GIF 宿主启用原生 `QCheckBox`「倒放」（默认关闭），放在 FPS 与删除之间。每遍方向和 FPS 一起保存，删除行保持对应，旧状态默认正放；沿用外层滚动与固定导出动作，视频宿主不启用该控件。

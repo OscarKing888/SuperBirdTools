@@ -2591,6 +2591,7 @@ class BirdStampEditorWindow(
             scale_factors=scale_factors,
             wechat_sticker=self._load_editor_export_state_value("gif_wechat_sticker", None),
             repeat_fps=self._load_editor_export_state_value("gif_repeat_fps", None),
+            repeat_reverse=self._load_editor_export_state_value("gif_repeat_reverse", None),
         )
         self._refresh_image_export_action_states()
 
@@ -2605,6 +2606,7 @@ class BirdStampEditorWindow(
             self._save_editor_export_state_value(enabled_key, bool(stage_enabled.get(stage_id, True)))
         self._save_editor_export_state_value("gif_fps", gif_request.fps)
         self._save_editor_export_state_value("gif_repeat_fps", list(gif_request.repeat_fps))
+        self._save_editor_export_state_value("gif_repeat_reverse", list(gif_request.repeat_reverse))
         self._save_editor_export_state_value("gif_loop", gif_request.loop)
         self._save_editor_export_state_value("gif_keep_frame_images", gif_request.keep_frame_images)
         self._save_editor_export_state_value("gif_scale_factors", list(gif_request.scale_factors))

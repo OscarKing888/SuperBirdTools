@@ -114,6 +114,7 @@ class GifExportRequest:
     scale_factors: list[float]
     wechat_sticker: bool = True
     repeat_fps: list[float] = field(default_factory=list)
+    repeat_reverse: list[bool] = field(default_factory=list)
 
 
 class GifExportPanel(CollapsibleSection):
@@ -133,6 +134,7 @@ class GifExportPanel(CollapsibleSection):
         root.setSpacing(6)
 
         form = QFormLayout()
+        form.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapLongRows)
         form.setContentsMargins(0, 0, 0, 0)
         form.setHorizontalSpacing(10)
         form.setVerticalSpacing(6)
@@ -151,7 +153,7 @@ class GifExportPanel(CollapsibleSection):
         fps_layout.addStretch(1)
         form.addRow("FPS", fps_widget)
 
-        self.repeat_editor = RepeatFpsEditor(self.fps_combo.value, minimum=GIF_FPS_MIN, maximum=GIF_FPS_MAX)
+        self.repeat_editor = RepeatFpsEditor(self.fps_combo.value, minimum=GIF_FPS_MIN, maximum=GIF_FPS_MAX, allow_reverse=True)
         self.repeat_editor.changed.connect(self.optionsChanged.emit)
         form.addRow("重复播放", self.repeat_editor)
 
@@ -186,7 +188,7 @@ class GifExportPanel(CollapsibleSection):
 
         hint_label = QLabel(
             "按当前照片列表顺序合成 GIF，并生成勾选的缩小版本。"
-            "重复播放会把完整序列按各自 FPS 依次追加到同一个 GIF。"
+            "重复播放会把完整序列按各自 FPS 依次追加到同一个 GIF，勾选倒放可反向播放该遍。"
             "GIF 以 10 毫秒计时；高于 100 FPS 时按原总时长采样到 100 FPS，部分输入帧不会写入 GIF。"
         )
         hint_label.setStyleSheet("color: #7A7A7A; font-size: 11px;")
@@ -208,6 +210,7 @@ class GifExportPanel(CollapsibleSection):
             scale_factors=scales,
             wechat_sticker=self.wechat_sticker_check.isChecked(),
             repeat_fps=self.repeat_editor.values(),
+            repeat_reverse=self.repeat_editor.reverse_values(),
         )
 
     def set_state(
@@ -219,6 +222,7 @@ class GifExportPanel(CollapsibleSection):
         scale_factors: list[float] | tuple[float, ...] | None = None,
         wechat_sticker: bool | None = None,
         repeat_fps: list[float] | tuple[float, ...] | None = None,
+        repeat_reverse: list[bool] | tuple[bool, ...] | None = None,
     ) -> None:
         wechat_was_blocked = self.wechat_sticker_check.blockSignals(True)
         self.fps_combo.blockSignals(True)
@@ -240,7 +244,7 @@ class GifExportPanel(CollapsibleSection):
                 for scale, check in self._scale_checks:
                     check.setChecked(round(float(scale), 6) in selected)
             if repeat_fps is not None:
-                self.repeat_editor.set_values(repeat_fps)
+                self.repeat_editor.set_values(repeat_fps, repeat_reverse)
         finally:
             self.wechat_sticker_check.blockSignals(wechat_was_blocked)
             for _scale, check in reversed(self._scale_checks):

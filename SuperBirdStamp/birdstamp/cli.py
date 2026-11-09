@@ -161,13 +161,20 @@ def gif_command(
         [], "--repeat-fps", help="完整序列再播放一遍的 FPS，可重复指定，例如 --repeat-fps 10 --repeat-fps 5。",
     ),
     loop: int = typer.Option(0, help="循环次数，0 表示无限循环。"),
+    reverse_pass: list[int] = typer.Option([], "--reverse-pass", help="倒放的追加遍编号（从 2 开始），可重复指定。"),
     wechat: bool = typer.Option(False, "--wechat/--no-wechat", help="额外生成不超过 5 MB 的微信表情版本。"),
 ) -> None:
     """将已渲染图片合成为 GIF，可额外导出微信表情。"""
     from birdstamp.gif_export import GifExportOptions, export_gif
 
     try:
-        outputs = export_gif(frames, GifExportOptions(output, fps=fps, loop=loop, repeat_fps=tuple(repeat_fps or ()), wechat_sticker=wechat))
+        if any(index < 2 or index > len(repeat_fps) + 1 for index in reverse_pass):
+            raise ValueError("倒放遍编号必须对应 --repeat-fps 添加的遍（从 2 开始）。")
+        directions = tuple(index in reverse_pass for index in range(2, len(repeat_fps) + 2))
+        outputs = export_gif(frames, GifExportOptions(
+            output, fps=fps, loop=loop, repeat_fps=tuple(repeat_fps or ()),
+            repeat_reverse=directions, wechat_sticker=wechat,
+        ))
     except (ValueError, OSError) as exc:
         raise typer.BadParameter(str(exc)) from exc
     for path in outputs:
