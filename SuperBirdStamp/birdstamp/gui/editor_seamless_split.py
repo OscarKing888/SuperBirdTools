@@ -62,11 +62,12 @@ def load_preview(path):
 class SplitWorker(QThread):
     progress = pyqtSignal(int, int)
 
-    def __init__(self, path, options, crop, generation, *, source=None, source_size=None, stamp=None, output=None, parent=None):
+    def __init__(self, path, options, crop, generation, *, source=None, source_size=None, stamp=None, output=None, page_index=None, parent=None):
         super().__init__(parent)
         self.path, self.options, self.crop, self.generation = path, options, crop, generation
         self.source, self.source_size, self.output = source, source_size, output
         self.stamp = stamp
+        self.page_index = page_index
         self.cancelled = Event()
         self.result = None
         self.error = None
@@ -82,7 +83,7 @@ class SplitWorker(QThread):
             check_cancel(self.cancelled.is_set)
             if self.output is not None:
                 self.result = export_split(self.path, self.options, self.output, self.crop,
-                                           cancel=self.cancelled.is_set, progress=self.progress.emit)
+                                           page_index=self.page_index, cancel=self.cancelled.is_set, progress=self.progress.emit)
                 return
             stamp = source_stamp(self.path)
             if self.source is not None and self.stamp != stamp:
@@ -206,13 +207,15 @@ class SeamlessSplitEditor(QObject):
         self.redo_button = self._button('重做', lambda: self.undo_crop(True), row)
         form.addRow(row)
         self.output_group, form = self._section('输出设置', root)
-        self.output_form = ImageOutputOptionsForm({'split_subdir': '连屏切图', 'split_format': 'jpeg'}, prefix='split', formats=('jpeg', 'png'))
+        self.output_form = ImageOutputOptionsForm({'split_subdir': '连屏切图', 'split_format': 'png',
+                                                   'split_output_mode': 'ask'}, prefix='split', formats=('jpeg', 'png'))
         self.output_form.format.setItemText(0, 'JPEG')
         self.output_form.format.setItemText(1, 'PNG（8 位，无损）')
         form.addRow(self.output_form)
         self.quality = self._spin(1, 100, 95)
+        self.quality.setEnabled(False)
         form.addRow('JPEG 质量', self.quality)
-        hint = QLabel('使用选中源照片，不套用普通裁剪、模板或去抖动结果。\n分割线和编号仅用于预览；每次导出到新的整组目录。')
+        hint = QLabel('使用选中源照片，不套用普通裁剪、模板或去抖动结果。\n分割线和编号仅用于预览；每次导出到新的结果目录，不生成 XMP。\n切换到逐张预览，可导出当前显示的一张。')
         hint.setWordWrap(True)
         root.addWidget(hint)
         root.addStretch()
@@ -295,6 +298,7 @@ class SeamlessSplitEditor(QObject):
         self.progress = QProgressBar()
         self.progress.hide()
         root.addWidget(self.progress)
+        self.export_current_button = self._button('导出当前张', lambda: self.pick_export(current=True), root)
         row = QHBoxLayout()
         root.addLayout(row)
         self.export_button = self._button('导出整组', self.pick_export, row)
@@ -427,7 +431,8 @@ class SeamlessSplitEditor(QObject):
         self.worker = worker
         worker.finished.connect(self._finished)
         worker.progress.connect(self._progress)
-        self.progress.setRange(0, worker.options.count if worker.output else 0)
+        total = (worker.options.count if worker.page_index is None else 1) if worker.output else 0
+        self.progress.setRange(0, total)
         self.progress.setValue(0)
         self.progress.show()
         self._update_actions()
@@ -458,12 +463,13 @@ class SeamlessSplitEditor(QObject):
                          if worker.options.fit == 'cover' else min(worker.options.size[0] / self.source_size[0], worker.options.size[1] / self.source_size[1]))
                 if worker.options.fit == 'cover':
                     scale = worker.options.size[0] / ((r - l) * self.source_size[0])
-                self.status.setText(f'预览就绪 · 输出将放大 {scale:.2f} 倍' if scale > 1.001 else '预览就绪，可导出整组。')
+                self.status.setText(f'预览就绪 · 输出将放大 {scale:.2f} 倍' if scale > 1.001 else '预览就绪，可导出整组或逐张预览中的当前张。')
             else:
                 result[0].close()
                 result[2].close()
         elif current and worker.output is not None and result is not None:
-            self.status.setText(f'已导出 {worker.options.count} 张：{result}')
+            label = f'已导出 {worker.options.count} 张' if worker.page_index is None else f'已导出第 {worker.page_index + 1} 张'
+            self.status.setText(f'{label}：{result}')
         elif current and worker.error:
             self.status.setText(f'连屏切图失败：{worker.error}')
         elif current and not self.pending:
@@ -501,6 +507,7 @@ class SeamlessSplitEditor(QObject):
         self.previous_button.setEnabled(self.page_index > 0)
         self.next_button.setEnabled(self.page_index < options.count - 1)
         self._sync_overlays(save=False)
+        self._update_actions()
         if fit:
             self.preview.canvas.fit_to_window()
 
@@ -533,6 +540,7 @@ class SeamlessSplitEditor(QObject):
         self._drag_finished()
         self._display(fit=True)
         self._sync_overlays()
+        self._update_actions()
 
     def _zoom_changed(self, value):
         if value is None:
@@ -597,19 +605,25 @@ class SeamlessSplitEditor(QObject):
         ready = self._valid and self.path is not None and not self.closed
         self.page.setEnabled(not exporting and not self.closed)
         self.tools.setEnabled(not exporting and not self.closed)
+        self.pager.setEnabled(not exporting and not self.closed)
         self.preview.canvas.setEnabled(ready and not exporting and not self.closed)
         error = self.output_form.validation_error()
         self.export_button.setEnabled(ready and not self.pending and self.worker is None and not error)
-        self.export_button.setToolTip(error or '按从左到右顺序导出整组图片和 XMP')
+        self.export_button.setToolTip(error or '按从左到右顺序导出整组图片，不生成 XMP')
+        self.export_current_button.setEnabled(self.export_button.isEnabled() and self.single.isChecked())
+        self.export_current_button.setText(f'导出当前张（{self.page_index + 1}/{self.count.value()}）' if self.single.isChecked() else '导出当前张')
+        self.export_current_button.setToolTip(error or ('导出逐张预览中显示的切片，不生成 XMP' if self.single.isChecked() else '请先切换到逐张预览，选择要导出的切片'))
         self.cancel_button.setEnabled(not self.closed and (self.worker is not None or self.pending))
         key = path_key(self.path) if self.path else ''
         self.undo_button.setEnabled(bool(self.undo_stacks.get(key)) and not exporting)
         self.redo_button.setEnabled(bool(self.redo_stacks.get(key)) and not exporting)
         self.reset_button.setEnabled(ready and not exporting)
 
-    def pick_export(self):
-        if not self.export_button.isEnabled():
+    def pick_export(self, *, current=False):
+        button = self.export_current_button if current else self.export_button
+        if not button.isEnabled():
             return
+        page_index = self.page_index if current else None
         raw = self.output_form.selected_options()
         options = ImageOutputOptions(**{key.removeprefix('split_'): value for key, value in raw.items()})
         if options.output_mode == 'ask':
@@ -622,9 +636,9 @@ class SeamlessSplitEditor(QObject):
             except ValueError as exc:
                 self.status.setText(str(exc))
                 return
-        self.start_export(Path(directory))
+        self.start_export(Path(directory), page_index=page_index)
 
-    def start_export(self, directory):
+    def start_export(self, directory, *, page_index=None):
         if not self._valid or self.path is None or self.worker is not None or self.pending or self.closed:
             return
         try:
@@ -640,9 +654,9 @@ class SeamlessSplitEditor(QObject):
         self.preview.canvas._finish_crop_resolution_drag()
         if self.pending:
             return
-        self.status.setText('正在导出整组图片和 XMP…')
+        self.status.setText('正在导出整组图片…' if page_index is None else f'正在导出第 {page_index + 1} 张…')
         self._start_worker(SplitWorker(self.path, self.options(), self.crop(), self.generation,
-                                      output=Path(directory), parent=self))
+                                      output=Path(directory), page_index=page_index, parent=self))
 
     def cancel(self):
         self.timer.stop()
@@ -691,7 +705,7 @@ class SeamlessSplitEditor(QObject):
             self.quality.setValue(options.quality)
             output = state.get('output')
             output = output if isinstance(output, dict) else {}
-            self.output_form.mode.setCurrentIndex(max(0, self.output_form.mode.findData(output.get('split_output_mode', 'source_subdir'))))
+            self.output_form.mode.setCurrentIndex(max(0, self.output_form.mode.findData(output.get('split_output_mode', 'ask'))))
             self.output_form.subdir.setText(str(output.get('split_subdir', '连屏切图')))
             self.output_form.directory.setText(str(output.get('split_output_directory', '')))
             self.output_form.format.setCurrentIndex(max(0, self.output_form.format.findData(options.format)))

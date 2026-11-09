@@ -75,16 +75,17 @@ def split_command(
     height: int = typer.Option(1440, min=64, max=8192, help='每张高度，px'),
     fit: str = typer.Option('cover', help='cover 裁满；contain 完整补边'),
     background: str = typer.Option('#FFFFFF'),
-    format: str = typer.Option('jpeg', help='jpeg / png'),
+    format: str = typer.Option('png', help='jpeg / png'),
     quality: int = typer.Option(95, min=1, max=100),
     crop: str | None = typer.Option(None, help='归一化总裁剪框 left,top,right,bottom'),
+    page: int | None = typer.Option(None, min=1, max=20, help='仅导出第几张；省略时导出整组'),
 ):
-    """将单张照片切成横向无缝连屏图，保留 EXIF/ICC 和独立 XMP。"""
+    """将单张照片切成横向无缝连屏图，保留 EXIF/ICC，不导出 XMP。"""
     from birdstamp.seamless_split import SplitOptions, export_split
     try:
         box = tuple(map(float, crop.split(','))) if crop else None
         options = SplitOptions(count, width, height, fit, background, format, quality)
-        result = export_split(photo, options, output, box)
+        result = export_split(photo, options, output, box, page_index=page - 1 if page is not None else None)
     except (ValueError, OSError, RuntimeError) as exc:
         raise typer.BadParameter(str(exc)) from exc
     typer.echo(str(result))

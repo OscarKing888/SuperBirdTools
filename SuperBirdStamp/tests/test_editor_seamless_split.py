@@ -83,6 +83,68 @@ def test_page_workspace_ratios_and_navigation(window, tmp_path):
     assert split.page_index == 1
 
 
+def test_defaults_ask_each_export_and_current_slice(window, tmp_path, monkeypatch):
+    import birdstamp.gui.editor_seamless_split as module
+    from test_seamless_split import stub_metadata
+    stub_metadata(monkeypatch)
+    split = window.seamless_split
+    window.show()
+    window.export_tabs.setCurrentWidget(split.page)
+    assert split.output_form.mode.currentData() == 'ask'
+    assert split.options().format == 'png'
+    assert not split.quality.isEnabled()
+    assert not split.export_current_button.isEnabled()
+    split.set_source(source(tmp_path))
+    split.width.setValue(128)
+    ready(split)
+    assert not split.export_current_button.isEnabled()
+    split.single.setChecked(True)
+    split.move_page(1)
+    assert split.export_current_button.isEnabled()
+    assert '2/3' in split.export_current_button.text()
+    destinations = iter(['', str(tmp_path / '单张'), str(tmp_path / '整组')])
+    asked = []
+    def pick(*args):
+        asked.append(args)
+        return next(destinations)
+    monkeypatch.setattr(module.QFileDialog, 'getExistingDirectory', pick)
+    split.export_current_button.click()
+    assert split.worker is None
+    assert not (tmp_path / '单张').exists()
+    split.export_current_button.setFocus()
+    QTest.keyClick(split.export_current_button, Qt.Key.Key_Space)
+    assert split.exporting()
+    assert not split.export_current_button.isEnabled()
+    assert not split.export_button.isEnabled()
+    assert not split.pager.isEnabled()
+    assert split.worker.page_index == 1
+    wait_for(lambda: split.worker is None)
+    assert [p.name for p in (tmp_path / '单张').rglob('*.png')] == ['风景_02.png']
+    assert '已导出第 2 张' in split.status.text()
+    assert not list((tmp_path / '单张').rglob('*.xmp'))
+    split.export_button.click()
+    wait_for(lambda: split.worker is None)
+    assert len(list((tmp_path / '整组').rglob('*.png'))) == 3
+    assert len(asked) == 3
+    assert split.output_form.mode.currentData() == 'ask'
+
+
+def test_restore_preserves_explicit_output_settings(window, tmp_path):
+    split = window.seamless_split
+    split.output_form.mode.setCurrentIndex(split.output_form.mode.findData('fixed'))
+    split.output_form.directory.setText(str(tmp_path))
+    split.output_form.format.setCurrentIndex(split.output_form.format.findData('jpeg'))
+    saved = split.state(tmp_path / 'session.json')
+    split.restore({}, tmp_path / 'session.json')
+    assert split.output_form.mode.currentData() == 'ask'
+    assert split.options().format == 'png'
+    split.restore(saved, tmp_path / 'session.json')
+    assert split.output_form.mode.currentData() == 'fixed'
+    assert split.output_form.directory.text() == str(tmp_path)
+    assert split.options().format == 'jpeg'
+    assert split.quality.isEnabled()
+
+
 def test_photo_list_routing_and_full_workspace_restore(window, tmp_path):
     split = window.seamless_split
     window.export_tabs.setCurrentWidget(split.page)
@@ -246,8 +308,8 @@ def test_export_freezes_settings_and_workspace_cancels_old_result(window, tmp_pa
     ready(split)
     split.start_export(tmp_path / '成片')
     wait_for(lambda: split.worker is None)
-    assert len(list((tmp_path / '成片').rglob('*.jpg'))) == 3
-    assert len(list((tmp_path / '成片').rglob('*.xmp'))) == 3
+    assert len(list((tmp_path / '成片').rglob('*.png'))) == 3
+    assert not list((tmp_path / '成片').rglob('*.xmp'))
     assert '已导出 3 张' in split.status.text()
     saved = split.state(tmp_path / '工作区.json')
     assert saved['crops'][0]['path']['absolute_path'].endswith('NewPhoto.png')
@@ -273,6 +335,7 @@ def test_rendered_geometry_small_window_font_theme(window, tmp_path, dark, large
     window.left_scroll.verticalScrollBar().setValue(window.left_scroll.verticalScrollBar().maximum())
     _APP.processEvents()
     assert window.rect().contains(split.export_button.mapTo(window, split.export_button.rect().bottomRight()))
+    assert window.rect().contains(split.export_current_button.mapTo(window, split.export_current_button.rect().bottomRight()))
     assert window.rect().contains(split.cancel_button.mapTo(window, split.cancel_button.rect().bottomRight()))
     for control in (split.whole, split.single, split.crop_tool, split.lines, split.zoom):
         assert split.tools.rect().contains(control.mapTo(split.tools, control.rect().bottomRight()))
@@ -284,6 +347,8 @@ def test_rendered_geometry_small_window_font_theme(window, tmp_path, dark, large
         window.grab().save(str(directory / ('split-dark-large.png' if dark else 'split-light.png')))
     split.single.setChecked(True)
     _APP.processEvents()
+    assert split.export_current_button.isEnabled()
+    assert split.export_current_button.width() >= split.export_current_button.sizeHint().width()
     if folder:
         window.grab().save(str(directory / ('split-single-dark.png' if dark else 'split-single-light.png')))
     assert split.crop() == tuple(before['crops'][0]['box'])

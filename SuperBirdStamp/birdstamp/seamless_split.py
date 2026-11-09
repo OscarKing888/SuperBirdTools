@@ -37,7 +37,7 @@ class SplitOptions:
     height: int = 1440
     fit: str = 'cover'
     background: str = '#FFFFFF'
-    format: str = 'jpeg'
+    format: str = 'png'
     quality: int = 95
 
     def __post_init__(self):
@@ -150,37 +150,41 @@ class SplitCanvasStage(ImageProcStage):
 class SplitExportStage(ImageProcExportStage):
     stage_id = 'seamless_split_export'
     export_kind = 'seamless_split'
-    label = '连屏整组导出'
+    label = '连屏图片导出'
 
     def parameter_options(self):
-        return (ImageProcOptionSpec(key='format', label='输出格式', value_type='str', default='jpeg'),
+        return (ImageProcOptionSpec(key='format', label='输出格式', value_type='str', default='png'),
                 ImageProcOptionSpec(key='quality', label='JPEG 质量', value_type='int', default=95))
 
-    def export(self, context, directory, *, xmp_snapshot, cancel, progress):
-        from birdstamp.export_metadata import save_export_image
+    def export(self, context, directory, *, page_index=None, cancel, progress):
+        from birdstamp.export_metadata import copy_export_metadata
         options = SplitOptions.from_dict(context.settings)
         suffix = '.jpg' if options.format == 'jpeg' else '.png'
-        for index, box in enumerate(slice_boxes(context.image.size, options.count), 1):
+        boxes = slice_boxes(context.image.size, options.count)
+        indices = range(options.count) if page_index is None else (page_index,)
+        for done, index in enumerate(indices, 1):
             check_cancel(cancel)
-            target = Path(directory) / f'{context.source_path.stem}_{index:02d}{suffix}'
-            with context.image.crop(box) as tile:
+            target = Path(directory) / f'{context.source_path.stem}_{index + 1:02d}{suffix}'
+            with context.image.crop(boxes[index]) as tile:
                 kwargs = dict(quality=options.quality, subsampling=0) if suffix == '.jpg' else {}
-                save_export_image(tile, target, source_path=context.source_path,
-                                  format='JPEG' if suffix == '.jpg' else 'PNG',
-                                  xmp_snapshot=xmp_snapshot, **kwargs)
-            progress(index, options.count)
+                # The caller owns this unpublished directory. Carousel outputs
+                # deliberately omit XMP; keep native EXIF/ICC and strip embedded XMP.
+                tile.save(target, format='JPEG' if suffix == '.jpg' else 'PNG', **kwargs)
+                copy_export_metadata(context.source_path, target, tile)
+            progress(done, len(indices))
         check_cancel(cancel)
 
 
-def export_split(source, options, directory, crop=None, *, cancel=lambda: False, progress=lambda done, total: None):
-    """Publish a new group directory only after all image/XMP pairs are complete."""
+def export_split(source, options, directory, crop=None, *, page_index=None,
+                 cancel=lambda: False, progress=lambda done, total: None):
+    """Publish all slices or one zero-based page in a new directory, without XMP."""
     from birdstamp.decoders.image_decoder import decode_image
-    from birdstamp.export_snapshot import capture_export_metadata
 
     source, directory = Path(source), Path(directory)
+    if page_index is not None and (type(page_index) is not int or not 0 <= page_index < options.count):
+        raise ValueError('导出张数编号必须在 1 到切分份数之间')
     check_cancel(cancel)
     before = source.stat()
-    snapshot = capture_export_metadata(source)
     directory.mkdir(parents=True, exist_ok=True)
     # Immediate ownership also covers decode/metadata/write failure and cancellation.
     with tempfile.TemporaryDirectory(prefix='.birdstamp-split-', dir=directory) as temporary:
@@ -192,7 +196,7 @@ def export_split(source, options, directory, crop=None, *, cancel=lambda: False,
             SplitCanvasStage().process(context)
             try:
                 check_cancel(cancel)
-                SplitExportStage().export(context, staging, xmp_snapshot=snapshot.xmp,
+                SplitExportStage().export(context, staging, page_index=page_index,
                                           cancel=cancel, progress=progress)
             finally:
                 context.image.close()
@@ -201,7 +205,8 @@ def export_split(source, options, directory, crop=None, *, cancel=lambda: False,
             raise RuntimeError('导出期间原图发生变化，请重新导出')
         check_cancel(cancel)
         for number in range(1, 1_000_001):
-            stem = f'{source.stem}_连屏' + (f'_{number}' if number > 1 else '')
+            stem = f'{source.stem}_连屏' + (f'_{page_index + 1:02d}' if page_index is not None else '')
+            stem += f'_{number}' if number > 1 else ''
             target = directory / stem
             # Serialize cooperating publishers; compare names portably on both OSes.
             lock_key = hashlib.sha256(portable_key(stem).encode('utf-8')).hexdigest()[:24]

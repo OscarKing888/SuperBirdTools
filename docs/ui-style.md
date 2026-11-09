@@ -17,7 +17,7 @@
 
 ## 2. 层级与组件选型
 
-BirdStamp 连屏切图：`SeamlessSplitEditor` 使用 `CurrentPageTabWidget`、`CollapsibleSection`、`ImageOutputOptionsForm`、`ColorEditor` 和固定 `ExportActionBar`；`SplitPreviewCanvas` 派生现有 `EditorPreviewCanvas`，在视口绘制等距分割线/编号，复用比例裁剪。工具栏用 `ToggleToolButton`，参数由主滚动区容纳，切页保留逐图构图和工作区参数。见[设计与覆盖](ui-design/birdstamp-seamless-split.md)。
+BirdStamp 连屏切图：`SeamlessSplitEditor` 使用 `CurrentPageTabWidget`、`CollapsibleSection`、`ImageOutputOptionsForm`、`ColorEditor` 和固定 `ExportActionBar`；`SplitPreviewCanvas` 派生现有 `EditorPreviewCanvas`，在视口绘制等距分割线/编号，复用比例裁剪。工具栏用 `ToggleToolButton`，参数由主滚动区容纳，切页保留逐图构图和工作区参数。固定操作区使用原生 QPushButton：满行「导出当前张（编号/总数）」位于「导出整组 / 取消」上方，整体视图中单张动作禁用；默认输出为每次选择目录和 PNG。见[设计与覆盖](ui-design/birdstamp-seamless-split.md)。
 
 ```text
 L0 应用外壳：主窗口、菜单、状态栏
