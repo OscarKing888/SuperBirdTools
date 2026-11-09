@@ -19,7 +19,7 @@ def gradient(size=(601, 403)):
     return image
 
 
-@pytest.mark.parametrize('count,width,height', [(2, 65, 87), (3, 108, 144), (7, 79, 64), (20, 64, 113)])
+@pytest.mark.parametrize('count,width,height', [(2, 65, 87), (3, 108, 144), (3, 108, 180), (7, 79, 64), (20, 64, 113)])
 @pytest.mark.parametrize('fit', ['cover', 'contain'])
 def test_integer_slices_reassemble_exactly(count, width, height, fit):
     options = SplitOptions(count, width, height, fit)

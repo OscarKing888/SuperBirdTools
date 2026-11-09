@@ -10,7 +10,7 @@ from PyQt6.QtCore import QObject, QSignalBlocker, QThread, QTimer, Qt, pyqtSigna
 from PyQt6.QtGui import QPixmap
 from PyQt6.QtWidgets import (
     QButtonGroup, QComboBox, QFileDialog, QFormLayout, QHBoxLayout, QLabel,
-    QProgressBar, QPushButton, QSpinBox, QVBoxLayout, QWidget,
+    QProgressBar, QPushButton, QSizePolicy, QSpinBox, QVBoxLayout, QWidget,
 )
 
 from app_common.collapsible_section import CollapsibleSection
@@ -30,7 +30,8 @@ from .editor_utils import pil_to_qpixmap, path_key
 from .split_preview_canvas import SplitPreviewCanvas
 
 
-RATIOS = ('3:4', '1:1', '4:3', '9:16', '16:9', '2:3', '3:2', 'custom')
+RATIOS = ('3:4', '3:5', '1:1', '4:3', '9:16', '16:9', '2:3', '3:2', 'custom')
+XHS_FULLSCREEN_RATIO = '3:5'
 
 
 def source_stamp(path):
@@ -179,9 +180,19 @@ class SeamlessSplitEditor(QObject):
         self.count = self._spin(2, 20, 3)
         form.addRow('切分份数', self.count)
         self.ratio = QComboBox()
+        # Let WrapLongRows move a long preset below its label instead of clipping it.
+        self.ratio.setSizePolicy(QSizePolicy.Policy.MinimumExpanding, QSizePolicy.Policy.Fixed)
         for ratio in RATIOS:
-            self.ratio.addItem('自定义宽高比' if ratio == 'custom' else ratio, ratio)
+            label = '自定义宽高比' if ratio == 'custom' else ratio
+            if ratio == XHS_FULLSCREEN_RATIO:
+                label = '小红书全屏连屏 3:5'
+            self.ratio.addItem(label, ratio)
         form.addRow('每张比例', self.ratio)
+        self.ratio_hint = QLabel('3:5 为全屏图文参考比例。发布时使用全屏图或长文入口，'
+                                 '按编号排列，避免逐张裁剪；发布预览中检查接缝。')
+        self.ratio_hint.setWordWrap(True)
+        self.ratio_hint.hide()
+        form.addRow(self.ratio_hint)
         self.resolution = QComboBox()
         for edge in (1080, 1440, 2160):
             self.resolution.addItem(f'短边 {edge} px', edge)
@@ -388,6 +399,7 @@ class SeamlessSplitEditor(QObject):
     def _settings_changed(self, *_args):
         if self.restoring or self.closed or self.exporting():
             return
+        self.ratio_hint.setVisible(self.ratio.currentData() == XHS_FULLSCREEN_RATIO)
         self.generation += 1
         self._valid = False
         if self.worker is not None:

@@ -145,6 +145,47 @@ def test_restore_preserves_explicit_output_settings(window, tmp_path):
     assert split.quality.isEnabled()
 
 
+def test_xhs_fullscreen_preset_dimensions_crop_and_restore(window, tmp_path):
+    split = window.seamless_split
+    window.show()
+    window.export_tabs.setCurrentWidget(split.page)
+    split.set_source(source(tmp_path))
+    ready(split)
+    before = split.crop()
+    index = split.ratio.findData('3:5')
+    assert index >= 0 and '小红书全屏连屏' in split.ratio.itemText(index)
+    split.ratio.setFocus()
+    QTest.keyClick(split.ratio, Qt.Key.Key_Down)
+    ready(split)
+    assert split.ratio.currentData() == '3:5'
+    assert split.ratio_hint.isVisible()
+    assert (split.width.value(), split.height.value()) == (1080, 1800)
+    assert split.options().size == (3240, 1800)
+    left, top, right, bottom = split.crop()
+    assert (left + right, top + bottom) == pytest.approx((before[0] + before[2], before[1] + before[3]))
+    assert (right - left) * 600 / ((bottom - top) * 400) == pytest.approx(9 / 5)
+    split.resolution.setCurrentIndex(split.resolution.findData(1440))
+    ready(split)
+    assert (split.width.value(), split.height.value()) == (1440, 2400)
+    split.height.setValue(2000)
+    ready(split)
+    assert (split.width.value(), split.height.value()) == (1200, 2000)
+    split.layout_group.header_button.click()
+    split.layout_group.header_button.click()
+    saved = split.state(tmp_path / '全屏.json')
+    split.restore({}, tmp_path / '全屏.json')
+    assert split.ratio.currentData() == '3:4'
+    assert split.ratio_hint.isHidden()
+    split.restore(saved, tmp_path / '全屏.json')
+    ready(split)
+    assert split.state(tmp_path / '全屏.json') == saved
+    assert split.ratio_hint.isVisible()
+    split.ratio.setCurrentIndex(split.ratio.findData('9:16'))
+    ready(split)
+    assert (split.width.value(), split.height.value()) == (1200, 2133)
+    assert split.ratio_hint.isHidden()
+
+
 def test_photo_list_routing_and_full_workspace_restore(window, tmp_path):
     split = window.seamless_split
     window.export_tabs.setCurrentWidget(split.page)
@@ -316,7 +357,8 @@ def test_export_freezes_settings_and_workspace_cancels_old_result(window, tmp_pa
 
 
 @pytest.mark.parametrize('dark,large', [(False, False), (True, True)])
-def test_rendered_geometry_small_window_font_theme(window, tmp_path, dark, large):
+@pytest.mark.parametrize('xhs', [False, True])
+def test_rendered_geometry_small_window_font_theme(window, tmp_path, dark, large, xhs):
     import os
     from pathlib import Path
     from test_seamless_split import gradient
@@ -330,8 +372,27 @@ def test_rendered_geometry_small_window_font_theme(window, tmp_path, dark, large
     with gradient((1200, 800)) as image:
         image.save(photo)
     split.set_source(photo)
+    if xhs:
+        split.ratio.setCurrentIndex(split.ratio.findData('3:5'))
     ready(split)
     window._photos_section.set_expanded(False)
+    folder = os.environ.get('SPLIT_SCREENSHOT_DIR')
+    prefix = 'xhs-' if xhs else ''
+    if folder:
+        directory = Path(folder)
+        directory.mkdir(parents=True, exist_ok=True)
+    if xhs:
+        window.left_scroll.ensureWidgetVisible(split.ratio_hint)
+        _APP.processEvents()
+        if folder:
+            window.grab().save(str(directory / ('xhs-settings-dark.png' if dark else 'xhs-settings-light.png')))
+        from PyQt6.QtWidgets import QStyle, QStyleOptionComboBox
+        option = QStyleOptionComboBox()
+        split.ratio.initStyleOption(option)
+        text_rect = split.ratio.style().subControlRect(QStyle.ComplexControl.CC_ComboBox, option,
+                                                     QStyle.SubControl.SC_ComboBoxEditField, split.ratio)
+        assert text_rect.width() >= split.ratio.fontMetrics().horizontalAdvance(split.ratio.currentText())
+        assert split.ratio_hint.height() >= split.ratio_hint.heightForWidth(split.ratio_hint.width())
     window.left_scroll.verticalScrollBar().setValue(window.left_scroll.verticalScrollBar().maximum())
     _APP.processEvents()
     assert window.rect().contains(split.export_button.mapTo(window, split.export_button.rect().bottomRight()))
@@ -340,15 +401,12 @@ def test_rendered_geometry_small_window_font_theme(window, tmp_path, dark, large
     for control in (split.whole, split.single, split.crop_tool, split.lines, split.zoom):
         assert split.tools.rect().contains(control.mapTo(split.tools, control.rect().bottomRight()))
     before = split.state(tmp_path / '保存.json')
-    folder = os.environ.get('SPLIT_SCREENSHOT_DIR')
     if folder:
-        directory = Path(folder)
-        directory.mkdir(parents=True, exist_ok=True)
-        window.grab().save(str(directory / ('split-dark-large.png' if dark else 'split-light.png')))
+        window.grab().save(str(directory / (prefix + ('split-dark-large.png' if dark else 'split-light.png'))))
     split.single.setChecked(True)
     _APP.processEvents()
     assert split.export_current_button.isEnabled()
     assert split.export_current_button.width() >= split.export_current_button.sizeHint().width()
     if folder:
-        window.grab().save(str(directory / ('split-single-dark.png' if dark else 'split-single-light.png')))
+        window.grab().save(str(directory / (prefix + ('split-single-dark.png' if dark else 'split-single-light.png'))))
     assert split.crop() == tuple(before['crops'][0]['box'])
