@@ -12,6 +12,8 @@
 
 连屏切图由 [`seamless_split.py`](../birdstamp/seamless_split.py) 的 `SplitOptions`、`SplitCanvasStage` 和 `SplitExportStage` 提供独立管线；完整总画布统一采样，再沿整数边界切出 2–20 张等尺寸图片。GUI [`SeamlessSplitEditor`](../birdstamp/gui/editor_seamless_split.py) 与 CLI `split` 使用同一核心，独立于普通图片/GIF/视频阶段与模板裁剪。`SplitPreviewCanvas` 复用裁剪手势，仅在视口绘制分割线/编号。参数、逐图裁剪、显示状态和活动页随工作区保存，后台有界预览与完整源图导出由单个 Qt worker 拥有，真实 `finished` 后才交接。整组导出固定元数据快照，经 `save_export_image` 保留 EXIF/ICC 并写同名 XMP，完成后发布为新的不重名目录；取消/失败保留既有结果。组件/布局和验证见[连屏切图设计](../../docs/ui-design/birdstamp-seamless-split.md)，回归见 `test_seamless_split.py`、`test_editor_seamless_split.py`。
 
+共享 [`exiftool_path.py`](../../app_common/exif_io/exiftool_path.py) 的 `_probe_exiftool` 仅缓存成功的健康检查；预览任务取消、启动超时或异常不会将工具永久标记为不可用，后续导出重新检查。真实工具缺失时仍停止导出，不能绕过原图 XMP 的完整读取。回归覆盖 `app_common/tests/test_exiftool_path.py` 及连屏导出的取消后中文元数据往返。
+
 | 入口或模块 | 职责与关键符号 |
 | --- | --- |
 | [entry.py](../entry.py) | `main` 补齐仓库导入路径，开发环境优先重启到仓库 `.venv`，再进入应用入口。Windows 保留 `pythonw.exe` 无控制台模式，已使用仓库解释器时不重启；目标环境缺少 `pythonw.exe` 时以隐藏控制台方式回退到 `python.exe`。回归见 [test_entry_venv.py](../tests/test_entry_venv.py)。 |

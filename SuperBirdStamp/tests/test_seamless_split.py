@@ -151,8 +151,11 @@ def test_stage_and_cli_share_core(monkeypatch, tmp_path):
             context.image.close()
 
 
-def test_real_chinese_metadata_and_oriented_source(tmp_path):
+@pytest.mark.parametrize('cancel_probe', [False, True])
+def test_real_chinese_metadata_and_oriented_source(tmp_path, cancel_probe):
     from test_export_metadata import exiftool, metadata
+    from app_common.exif_io import exiftool_path
+    from app_common.exif_io.exiftool_runner import exiftool_read_request, exiftool_worker_session
     source = tmp_path / '中文旋转.jpg'
     with gradient() as image:
         image.save(source)
@@ -161,7 +164,15 @@ def test_real_chinese_metadata_and_oriented_source(tmp_path):
     exiftool('-overwrite_original', '-Orientation#=6', '-ISO=800', f'-XMP-dc:Description<={chinese}', str(source))
     before = source.read_bytes()
     options = SplitOptions(2, 64, 128, format='png')
-    directory = export_split(source, options, tmp_path / '输出')
+    if cancel_probe:
+        executable = exiftool_path.get_exiftool_executable_path()
+        assert executable
+        exiftool_path._probe_exiftool.cache_clear()
+        with exiftool_worker_session(), exiftool_read_request(lambda: True):
+            assert not exiftool_path._is_usable_exiftool(executable)
+    # Use the same request/session lifecycle as the editor's split worker.
+    with exiftool_worker_session(), exiftool_read_request(lambda: False, timeout=60):
+        directory = export_split(source, options, tmp_path / '输出')
     for path in directory.glob('*.png'):
         tags = metadata(path)
         sidecar = metadata(path.with_suffix('.xmp'))
