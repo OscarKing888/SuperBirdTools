@@ -275,3 +275,35 @@ def export_split(source, options, directory, crop=None, *, page_index=None,
             finally:
                 lock.unlink(missing_ok=True)
         raise FileExistsError('无法分配不重名的连屏目录')
+
+
+@dataclass(frozen=True)
+class SplitExportJob:
+    source: Path
+    directory: Path
+    crop: tuple[float, float, float, float] | None = None
+
+
+def export_split_batch(jobs, options, *, page_index=None, cancel=lambda: False,
+                       progress=lambda done, total: None, published=lambda path: None):
+    """逐照片导出；每张原图的切片/XMP 完整发布，停止时保留已完成照片。"""
+    jobs = tuple(jobs)
+    if not jobs:
+        raise ValueError('照片列表为空。')
+    per_photo = options.count if page_index is None else 1
+    total = len(jobs) * per_photo
+    results = []
+    for index, job in enumerate(jobs):
+        check_cancel(cancel)
+        try:
+            result = export_split(
+                job.source, options, job.directory, job.crop, page_index=page_index, cancel=cancel,
+                progress=lambda done, _total: progress(index * per_photo + done, total))
+        except SplitCancelled:
+            raise
+        except Exception as exc:
+            check_cancel(cancel)
+            raise RuntimeError(f'{job.source}：{exc}') from exc
+        results.append(result)
+        published(result)
+    return tuple(results)

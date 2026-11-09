@@ -2263,7 +2263,7 @@ class BirdStampEditorWindow(
         self.action_export_current = QAction("导出当前", self)
         self.action_export_current.setShortcut(QKeySequence("Ctrl+E"))
         self.action_export_current.triggered.connect(
-            lambda: self.seamless_split.pick_export() if self.seamless_split.active() else self.collage.pick_export() if self.export_tabs.currentWidget() is self.collage.page else self.export_current()
+            lambda: self.seamless_split.pick_export(current=True) if self.seamless_split.active() else self.collage.pick_export() if self.export_tabs.currentWidget() is self.collage.page else self.export_current()
         )
         self.addAction(self.action_export_current)
 

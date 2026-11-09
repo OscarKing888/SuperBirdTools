@@ -68,7 +68,7 @@ def collage_command(
 
 @app.command("split")
 def split_command(
-    photo: Path = typer.Argument(..., exists=True, dir_okay=False),
+    photo: list[Path] = typer.Argument(..., exists=True, dir_okay=False),
     output: Path = typer.Option(..., '--output', '-o', help='整组目录的父目录；不覆盖已有结果。'),
     count: int = typer.Option(3, min=2, max=20),
     width: int = typer.Option(1080, min=64, max=8192, help='每张宽度，px'),
@@ -80,15 +80,16 @@ def split_command(
     crop: str | None = typer.Option(None, help='归一化总裁剪框 left,top,right,bottom'),
     page: int | None = typer.Option(None, min=1, max=20, help='仅导出第几张；省略时导出整组'),
 ):
-    """将单张照片切成横向无缝连屏图，保留 EXIF/ICC，不导出 XMP。"""
-    from birdstamp.seamless_split import SplitOptions, export_split
+    """将指定照片逐一切成横向无缝连屏图，保留 EXIF/ICC 并生成同名 XMP。"""
+    from birdstamp.seamless_split import SplitOptions, SplitExportJob, export_split_batch
     try:
         box = tuple(map(float, crop.split(','))) if crop else None
         options = SplitOptions(count, width, height, fit, background, format, quality)
-        result = export_split(photo, options, output, box, page_index=page - 1 if page is not None else None)
+        export_split_batch([SplitExportJob(path, output, box) for path in photo], options,
+                           page_index=page - 1 if page is not None else None,
+                           published=lambda path: typer.echo(str(path)))
     except (ValueError, OSError, RuntimeError) as exc:
         raise typer.BadParameter(str(exc)) from exc
-    typer.echo(str(result))
 
 
 @app.command("recommend-regions")

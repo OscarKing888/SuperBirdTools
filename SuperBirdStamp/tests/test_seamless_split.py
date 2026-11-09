@@ -326,3 +326,36 @@ def test_invalid_source_xmp_does_not_publish(tmp_path, page_index):
         export_split(source, SplitOptions(3, 64, 64), output, page_index=page_index)
     assert list(output.iterdir()) == []
     assert sidecar.read_bytes() == b'<broken>'
+
+
+@pytest.mark.parametrize('stop', ['cancel', 'failure'])
+def test_batch_stop_keeps_only_complete_photo_pairs(monkeypatch, tmp_path, stop):
+    from birdstamp.seamless_split import SplitExportJob, export_split_batch
+    stub_metadata(monkeypatch)
+    first = source_file(tmp_path)
+    second = tmp_path / '缺失.png'
+    output = tmp_path / '输出'
+    jobs = [SplitExportJob(first, output), SplitExportJob(second, output)]
+    completed, progress = [], []
+    with pytest.raises(SplitCancelled if stop == 'cancel' else RuntimeError):
+        export_split_batch(jobs, SplitOptions(2, 64, 64), published=completed.append,
+                           cancel=lambda: stop == 'cancel' and bool(completed),
+                           progress=lambda done, total: progress.append((done, total)))
+    assert len(completed) == 1
+    assert list(output.iterdir()) == completed
+    assert len(list(completed[0].glob('*.png'))) == len(list(completed[0].glob('*.xmp'))) == 2
+    assert progress == [(1, 4), (2, 4)]
+
+
+def test_cli_splits_multiple_photos(monkeypatch, tmp_path):
+    from birdstamp.cli import app
+    stub_metadata(monkeypatch)
+    first = source_file(tmp_path)
+    second = tmp_path / '第二张.png'
+    second.write_bytes(first.read_bytes())
+    output = tmp_path / '输出'
+    result = CliRunner().invoke(app, ['split', str(first), str(second), '-o', str(output),
+                                     '--count', '2', '--width', '64', '--height', '64'])
+    assert result.exit_code == 0, result.output
+    assert len(list(output.iterdir())) == 2
+    assert len(list(output.rglob('*.png'))) == len(list(output.rglob('*.xmp'))) == 4

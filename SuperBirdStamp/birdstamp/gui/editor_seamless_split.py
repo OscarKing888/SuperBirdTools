@@ -21,7 +21,7 @@ from app_common.toggle_button import ToggleToolButton
 from birdstamp.decoders.image_decoder import decode_image_for_preview, read_decoded_image_size
 from birdstamp.image_pipeline import ImageProcContext
 from birdstamp.seamless_split import (
-    SplitCancelled, SplitCanvasStage, SplitOptions, check_cancel, export_split,
+    SplitCancelled, SplitCanvasStage, SplitOptions, SplitExportJob, check_cancel, export_split, export_split_batch,
     normalized_crop, preview_size, slice_boxes, resolve_split_ratio, split_dimensions,
     FIXED_SPLIT_RATIOS, XHS_FULLSCREEN_RATIO, DEFAULT_FULLSCREEN_CALIBRATION,
 )
@@ -63,12 +63,14 @@ def load_preview(path):
 class SplitWorker(QThread):
     progress = pyqtSignal(int, int)
 
-    def __init__(self, path, options, crop, generation, *, source=None, source_size=None, stamp=None, output=None, page_index=None, parent=None):
+    def __init__(self, path, options, crop, generation, *, source=None, source_size=None, stamp=None, output=None, page_index=None, jobs=None, parent=None):
         super().__init__(parent)
         self.path, self.options, self.crop, self.generation = path, options, crop, generation
         self.source, self.source_size, self.output = source, source_size, output
         self.stamp = stamp
         self.page_index = page_index
+        self.jobs = tuple(jobs) if jobs is not None else None
+        self.completed = []
         self.cancelled = Event()
         self.result = None
         self.error = None
@@ -82,6 +84,10 @@ class SplitWorker(QThread):
         canvas = None
         try:
             check_cancel(self.cancelled.is_set)
+            if self.output is not None and self.jobs is not None:
+                self.result = export_split_batch(self.jobs, self.options, cancel=self.cancelled.is_set,
+                                                 progress=self.progress.emit, published=self.completed.append)
+                return
             if self.output is not None:
                 self.result = export_split(self.path, self.options, self.output, self.crop,
                                            page_index=self.page_index, cancel=self.cancelled.is_set, progress=self.progress.emit)
@@ -239,7 +245,7 @@ class SeamlessSplitEditor(QObject):
         self.quality = self._spin(1, 100, 95)
         self.quality.setEnabled(False)
         form.addRow('JPEG 质量', self.quality)
-        hint = QLabel('使用选中源照片，不套用普通裁剪、模板或去抖动结果。\n分割线和编号仅用于预览；每次导出到新的结果目录，不生成 XMP。\n切换到逐张预览，可导出当前显示的一张。')
+        hint = QLabel('导出整组会处理照片列表中的全部照片，使用统一切分参数和各自裁剪框。\n每张照片导出到独立结果目录，切片同时生成同名 XMP。\n不套用普通裁剪、模板或去抖动；逐张预览可导出当前照片的当前切片。')
         hint.setWordWrap(True)
         root.addWidget(hint)
         root.addStretch()
@@ -508,6 +514,8 @@ class SeamlessSplitEditor(QObject):
         worker.finished.connect(self._finished)
         worker.progress.connect(self._progress)
         total = (worker.options.count if worker.page_index is None else 1) if worker.output else 0
+        if worker.jobs is not None:
+            total = len(worker.jobs) * worker.options.count
         self.progress.setRange(0, total)
         self.progress.setValue(0)
         self.progress.show()
@@ -544,12 +552,17 @@ class SeamlessSplitEditor(QObject):
                 result[0].close()
                 result[2].close()
         elif current and worker.output is not None and result is not None:
-            label = f'已导出 {worker.options.count} 张' if worker.page_index is None else f'已导出第 {worker.page_index + 1} 张'
-            self.status.setText(f'{label}：{result}')
+            if worker.jobs is not None:
+                self.status.setText(f'已导出 {len(result)} 张照片，共 {len(result) * worker.options.count} 张切片。')
+                self.status.setToolTip('\n'.join(map(str, result)))
+            else:
+                self.status.setText(f'已导出第 {worker.page_index + 1} 张：{result}')
         elif current and worker.error:
-            self.status.setText(f'连屏切图失败：{worker.error}')
+            self.status.setText(f'连屏切图失败：{worker.error}；已保留 {len(worker.completed)} 张照片的完整结果。')
+            self.status.setToolTip('\n'.join(map(str, worker.completed)))
         elif current and not self.pending:
-            self.status.setText('已取消。')
+            self.status.setText(f'已取消。已保留 {len(worker.completed)} 张照片的完整结果。')
+            self.status.setToolTip('\n'.join(map(str, worker.completed)))
         self.progress.hide()
         worker.deleteLater()
         self._update_actions()
@@ -684,11 +697,12 @@ class SeamlessSplitEditor(QObject):
         self.pager.setEnabled(not exporting and not self.closed)
         self.preview.canvas.setEnabled(ready and not exporting and not self.closed)
         error = self.output_form.validation_error()
-        self.export_button.setEnabled(ready and not self.pending and self.worker is None and not error)
-        self.export_button.setToolTip(error or '按从左到右顺序导出整组图片，不生成 XMP')
-        self.export_current_button.setEnabled(self.export_button.isEnabled() and self.single.isChecked())
+        can_export = ready and not self.pending and self.worker is None and not error
+        self.export_button.setEnabled(can_export and bool(self.editor._list_photo_paths()))
+        self.export_button.setToolTip(error or '将照片列表中全部照片逐一连屏分割，每张切片同时生成 XMP')
+        self.export_current_button.setEnabled(can_export and self.single.isChecked())
         self.export_current_button.setText(f'导出当前张（{self.page_index + 1}/{self.count.value()}）' if self.single.isChecked() else '导出当前张')
-        self.export_current_button.setToolTip(error or ('导出逐张预览中显示的切片，不生成 XMP' if self.single.isChecked() else '请先切换到逐张预览，选择要导出的切片'))
+        self.export_current_button.setToolTip(error or ('导出当前照片在逐张预览中显示的切片和同名 XMP' if self.single.isChecked() else '请先切换到逐张预览，选择要导出的切片'))
         self.cancel_button.setEnabled(not self.closed and (self.worker is not None or self.pending))
         key = path_key(self.path) if self.path else ''
         self.undo_button.setEnabled(bool(self.undo_stacks.get(key)) and not exporting)
@@ -712,9 +726,10 @@ class SeamlessSplitEditor(QObject):
             except ValueError as exc:
                 self.status.setText(str(exc))
                 return
-        self.start_export(Path(directory), page_index=page_index)
+        self.start_export(Path(directory), page_index=page_index,
+                          output_options=options if options.output_mode != 'ask' else None)
 
-    def start_export(self, directory, *, page_index=None):
+    def start_export(self, directory, *, page_index=None, output_options=None):
         if not self._valid or self.path is None or self.worker is not None or self.pending or self.closed:
             return
         try:
@@ -730,9 +745,24 @@ class SeamlessSplitEditor(QObject):
         self.preview.canvas._finish_crop_resolution_drag()
         if self.pending:
             return
-        self.status.setText('正在导出整组图片…' if page_index is None else f'正在导出第 {page_index + 1} 张…')
+        jobs = None
+        if page_index is None:
+            paths = tuple(self.editor._list_photo_paths())
+            if not paths:
+                self.status.setText('照片列表为空。')
+                return
+            try:
+                jobs = tuple(SplitExportJob(Path(path),
+                             output_directory(path, output_options) if output_options else Path(directory),
+                             tuple(self.crops[path_key(path)]) if path_key(path) in self.crops else None)
+                             for path in paths)
+            except ValueError as exc:
+                self.status.setText(str(exc))
+                return
+        self.status.setToolTip('')
+        self.status.setText(f'正在导出列表中的 {len(jobs)} 张照片…' if jobs is not None else f'正在导出第 {page_index + 1} 张…')
         self._start_worker(SplitWorker(self.path, self.options(), self.crop(), self.generation,
-                                      output=Path(directory), page_index=page_index, parent=self))
+                                      output=Path(directory), page_index=page_index, jobs=jobs, parent=self))
 
     def cancel(self):
         self.timer.stop()

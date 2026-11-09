@@ -89,6 +89,7 @@ def test_defaults_ask_each_export_and_current_slice(window, tmp_path, monkeypatc
     from test_seamless_split import stub_metadata
     stub_metadata(monkeypatch)
     split = window.seamless_split
+    monkeypatch.setattr(window, '_list_photo_paths', lambda: [split.path] if split.path else [])
     window.show()
     window.export_tabs.setCurrentWidget(split.page)
     assert split.output_form.mode.currentData() == 'ask'
@@ -263,7 +264,8 @@ def test_drag_undo_and_per_photo_crop(window, tmp_path):
     assert split.crop() == pytest.approx(moved)
 
 
-def test_invalid_options_contain_and_fold_state(window, tmp_path):
+def test_invalid_options_contain_and_fold_state(window, tmp_path, monkeypatch):
+    monkeypatch.setattr(window, '_list_photo_paths', lambda: [window.seamless_split.path] if window.seamless_split.path else [])
     split = window.seamless_split
     window.show()
     window.export_tabs.setCurrentWidget(split.page)
@@ -334,12 +336,13 @@ def test_export_freezes_settings_and_workspace_cancels_old_result(window, tmp_pa
     split.width.setValue(128)
     ready(split)
     entered, release = Event(), Event()
-    real_export = module.export_split
+    monkeypatch.setattr(window, '_list_photo_paths', lambda: [split.path] if split.path else [])
+    real_export = module.export_split_batch
     def delayed(*args, **kwargs):
         entered.set()
         assert release.wait(5)
         return real_export(*args, **kwargs)
-    monkeypatch.setattr(module, 'export_split', delayed)
+    monkeypatch.setattr(module, 'export_split_batch', delayed)
     split.start_export(tmp_path / '成片')
     wait_for(entered.is_set)
     assert not split.page.isEnabled()
@@ -358,7 +361,7 @@ def test_export_freezes_settings_and_workspace_cancels_old_result(window, tmp_pa
     wait_for(lambda: split.worker is None)
     assert len(list((tmp_path / '成片').rglob('*.png'))) == 3
     assert len(list((tmp_path / '成片').rglob('*.xmp'))) == 3
-    assert '已导出 3 张' in split.status.text()
+    assert '已导出 1 张照片，共 3 张切片' in split.status.text()
     saved = split.state(tmp_path / '工作区.json')
     assert saved['crops'][0]['path']['absolute_path'].endswith('NewPhoto.png')
 
@@ -512,3 +515,124 @@ def test_calibration_rounding_resolution_and_output_limits(window, tmp_path):
     assert not split.export_button.isEnabled()
     split.count.setValue(3)
     ready(split)
+
+
+@pytest.mark.parametrize('mode', ['ask', 'source_subdir'])
+def test_export_all_uses_entire_list_and_freezes_each_crop(window, tmp_path, monkeypatch, mode):
+    from PyQt6.QtCore import QSignalBlocker
+    from birdstamp.gui.editor_photo_list import PhotoListItem, PHOTO_COL_ROW, PHOTO_LIST_PATH_ROLE
+    import birdstamp.gui.editor_seamless_split as module
+    from test_seamless_split import stub_metadata, gradient
+    from birdstamp.seamless_split import render_canvas
+    from PIL import ImageChops
+    stub_metadata(monkeypatch)
+    paths = []
+    for folder in ('甲', '乙'):
+        directory = tmp_path / folder
+        directory.mkdir()
+        path = directory / '同名.png'
+        with gradient() as image:
+            image.save(path)
+        paths.append(path)
+    with QSignalBlocker(window.photo_list):
+        for path in paths:
+            item = PhotoListItem(['', path.name])
+            item.setData(PHOTO_COL_ROW, PHOTO_LIST_PATH_ROLE, str(path))
+            window.photo_list.addTopLevelItem(item)
+    split = window.seamless_split
+    split.set_source(paths[0])
+    split.width.setValue(64)
+    ready(split)
+    crop = (.1, .1, .5, .5)
+    split.crops[path_key(paths[1])] = crop
+    expected_options = split.options()
+    expected_crops = [split.crop(), crop]
+    split.output_form.mode.setCurrentIndex(split.output_form.mode.findData(mode))
+    entered, release = Event(), Event()
+    real = module.export_split_batch
+    def delayed(jobs, options, **kwargs):
+        entered.set()
+        assert release.wait(5)
+        return real(jobs, options, **kwargs)
+    monkeypatch.setattr(module, 'export_split_batch', delayed)
+    monkeypatch.setattr(module.QFileDialog, 'getExistingDirectory', lambda *args: str(tmp_path / '输出'))
+    split.export_button.click()
+    wait_for(entered.is_set)
+    worker = split.worker
+    assert [job.source for job in worker.jobs] == paths
+    assert split.progress.maximum() == 6
+    # 导出启动后列表和裁剪状态的变化不能改动已提交的任务。
+    with QSignalBlocker(window.photo_list):
+        window.photo_list.clear()
+    split.crops[path_key(paths[1])] = (0., 0., 1., 1.)
+    release.set()
+    wait_for(lambda: split.worker is None)
+    assert '已导出 2 张照片，共 6 张切片' in split.status.text()
+    results = [line for line in split.status.toolTip().splitlines()]
+    assert len(results) == 2 and results[0] != results[1]
+    from pathlib import Path
+    for path, box, directory in zip(paths, expected_crops, map(Path, results)):
+        assert directory.parent == (tmp_path / '输出' if mode == 'ask' else path.parent / '连屏切图')
+        assert len(list(directory.glob('*.xmp'))) == 3
+        with Image.open(path) as original, render_canvas(original, expected_options, box) as expected:
+            rebuilt = Image.new('RGB', expected_options.size)
+            try:
+                for index, tile in enumerate(sorted(directory.glob('*.png'))):
+                    with Image.open(tile) as image:
+                        rebuilt.paste(image, (index * expected_options.width, 0))
+                with ImageChops.difference(expected, rebuilt) as difference:
+                    assert difference.getbbox() is None
+            finally:
+                rebuilt.close()
+
+
+def test_empty_list_never_exports_current_photo_as_batch(window, tmp_path):
+    split = window.seamless_split
+    split.set_source(source(tmp_path))
+    ready(split)
+    assert not split.export_button.isEnabled()
+    split.start_export(tmp_path / '输出')
+    assert split.worker is None
+    assert '照片列表为空' in split.status.text()
+    assert not (tmp_path / '输出').exists()
+
+
+def test_batch_cancel_reports_retained_results(window, tmp_path, monkeypatch):
+    import birdstamp.gui.editor_seamless_split as module
+    from test_seamless_split import stub_metadata
+    stub_metadata(monkeypatch)
+    paths = [source(tmp_path, '第一张.png'), source(tmp_path, '第二张.png')]
+    monkeypatch.setattr(window, '_list_photo_paths', lambda: paths)
+    split = window.seamless_split
+    split.set_source(paths[0])
+    split.width.setValue(64)
+    ready(split)
+    real = module.export_split_batch
+
+    def cancel_after_first(jobs, options, **kwargs):
+        published = kwargs['published']
+        def complete(path):
+            published(path)
+            split.worker.cancelled.set()
+        kwargs['published'] = complete
+        return real(jobs, options, **kwargs)
+
+    monkeypatch.setattr(module, 'export_split_batch', cancel_after_first)
+    split.start_export(tmp_path / '输出')
+    wait_for(lambda: split.worker is None)
+    assert '已取消。已保留 1 张照片' in split.status.text()
+    assert '第一张_连屏' in split.status.toolTip()
+    assert len(list((tmp_path / '输出').rglob('*.png'))) == 3
+    assert len(list((tmp_path / '输出').rglob('*.xmp'))) == 3
+    assert split.export_button.isEnabled()
+
+
+
+def test_export_menu_routes_current_slice_and_all_photos(window, monkeypatch):
+    split = window.seamless_split
+    window.export_tabs.setCurrentWidget(split.page)
+    calls = []
+    monkeypatch.setattr(split, 'pick_export', lambda *, current=False: calls.append(current))
+    window.action_export_current.trigger()
+    window.action_export_all.trigger()
+    assert calls == [True, False]
