@@ -9,7 +9,7 @@ from PIL import Image, ImageOps
 from PyQt6.QtCore import QObject, QSignalBlocker, QThread, QTimer, Qt, pyqtSignal
 from PyQt6.QtGui import QPixmap
 from PyQt6.QtWidgets import (
-    QButtonGroup, QComboBox, QFileDialog, QFormLayout, QHBoxLayout, QLabel,
+    QButtonGroup, QComboBox, QFileDialog, QFormLayout, QHBoxLayout, QLabel, QLineEdit,
     QProgressBar, QPushButton, QSizePolicy, QSpinBox, QVBoxLayout, QWidget,
 )
 
@@ -22,7 +22,8 @@ from birdstamp.decoders.image_decoder import decode_image_for_preview, read_deco
 from birdstamp.image_pipeline import ImageProcContext
 from birdstamp.seamless_split import (
     SplitCancelled, SplitCanvasStage, SplitOptions, check_cancel, export_split,
-    normalized_crop, preview_size, slice_boxes,
+    normalized_crop, preview_size, slice_boxes, resolve_split_ratio, split_dimensions,
+    FIXED_SPLIT_RATIOS, XHS_FULLSCREEN_RATIO, DEFAULT_FULLSCREEN_CALIBRATION,
 )
 from birdstamp.workspace import resolve_workspace_path, serialize_workspace_path
 from .color_editor import ColorEditor
@@ -30,8 +31,7 @@ from .editor_utils import pil_to_qpixmap, path_key
 from .split_preview_canvas import SplitPreviewCanvas
 
 
-RATIOS = ('3:4', '3:5', '1:1', '4:3', '9:16', '16:9', '2:3', '3:2', 'custom')
-XHS_FULLSCREEN_RATIO = '3:5'
+RATIOS = (*FIXED_SPLIT_RATIOS, XHS_FULLSCREEN_RATIO, 'custom')
 
 
 def source_stamp(path):
@@ -182,14 +182,26 @@ class SeamlessSplitEditor(QObject):
         self.ratio = QComboBox()
         # Let WrapLongRows move a long preset below its label instead of clipping it.
         self.ratio.setSizePolicy(QSizePolicy.Policy.MinimumExpanding, QSizePolicy.Policy.Fixed)
+        self.ratio.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
+        self.ratio.setMinimumContentsLength(20)
         for ratio in RATIOS:
             label = '自定义宽高比' if ratio == 'custom' else ratio
             if ratio == XHS_FULLSCREEN_RATIO:
-                label = '小红书全屏连屏 3:5'
+                label = '小红书全屏（校准）'
             self.ratio.addItem(label, ratio)
         form.addRow('每张比例', self.ratio)
-        self.ratio_hint = QLabel('3:5 为全屏图文参考比例。发布时使用全屏图或长文入口，'
-                                 '按编号排列，避免逐张裁剪；发布预览中检查接缝。')
+        self.calibration_fields = QWidget()
+        calibration_form = QFormLayout(self.calibration_fields)
+        calibration_form.setContentsMargins(0, 0, 0, 0)
+        calibration_form.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapLongRows)
+        self.display_width = QLineEdit(str(DEFAULT_FULLSCREEN_CALIBRATION['width']))
+        self.display_height = QLineEdit(str(DEFAULT_FULLSCREEN_CALIBRATION['height']))
+        for label, field in (('显示区宽度（px）', self.display_width), ('显示区高度（px）', self.display_height)):
+            field.setMaxLength(10)
+            calibration_form.addRow(label, field)
+        form.addRow(self.calibration_fields)
+        self.calibration_fields.hide()
+        self.ratio_hint = QLabel()
         self.ratio_hint.setWordWrap(True)
         self.ratio_hint.hide()
         form.addRow(self.ratio_hint)
@@ -199,6 +211,7 @@ class SeamlessSplitEditor(QObject):
         self.resolution.addItem('自定义', None)
         form.addRow('每张分辨率', self.resolution)
         self.width, self.height = self._spin(64, 8192, 1080), self._spin(64, 8192, 1440)
+        self._requested_dimensions = (1080, 1440)
         form.addRow('每张宽度', self.width)
         form.addRow('每张高度', self.height)
         self.dimensions = QLabel()
@@ -234,6 +247,8 @@ class SeamlessSplitEditor(QObject):
         self.resolution.currentIndexChanged.connect(self._resolution_changed)
         self.width.valueChanged.connect(lambda: self._dimension_changed(True))
         self.height.valueChanged.connect(lambda: self._dimension_changed(False))
+        self.display_width.textChanged.connect(self._calibration_changed)
+        self.display_height.textChanged.connect(self._calibration_changed)
         self.count.valueChanged.connect(self._settings_changed)
         self.fit.currentIndexChanged.connect(self._settings_changed)
         self.background.colorChanged.connect(self._settings_changed)
@@ -315,52 +330,95 @@ class SeamlessSplitEditor(QObject):
         self.export_button = self._button('导出整组', self.pick_export, row)
         self.cancel_button = self._button('取消', self.cancel, row)
 
+    def calibration(self):
+        # Retain invalid/incomplete text in workspaces so a draft is never silently fixed.
+        def value(field):
+            text = field.text()
+            return int(text) if text.isascii() and text.isdecimal() else text
+        return dict(width=value(self.display_width), height=value(self.display_height))
+
     def options(self):
-        return SplitOptions(self.count.value(), self.width.value(), self.height.value(),
+        a, b = resolve_split_ratio(self.ratio.currentData(), custom=self._requested_dimensions, calibration=self.calibration())
+        if self.ratio.currentData() == XHS_FULLSCREEN_RATIO:
+            w, h = self._requested_dimensions
+            if w * b > h * a:
+                raise ValueError('输出比例与显示区不符，请重新设置每张宽度或高度')
+        return SplitOptions(self.count.value(), *self._requested_dimensions,
                             self.fit.currentData(), self.background.value(), self.output_form.format.currentData(), self.quality.value())
 
     def crop(self):
         return self.crops.get(path_key(self.path)) if self.path else None
 
     def _set_dimensions(self, width, height):
+        # Keep impossible requested sizes in the model, never export a spinbox-clamped size.
+        self._requested_dimensions = (width, height)
         with QSignalBlocker(self.width), QSignalBlocker(self.height):
-            self.width.setValue(width)
-            self.height.setValue(height)
+            for field, value in ((self.width, width), (self.height, height)):
+                if field.minimum() <= value <= field.maximum():
+                    field.setValue(value)
 
     def _refresh_resolution(self):
-        current = min(self.width.value(), self.height.value())
+        current = min(self._requested_dimensions)
         with QSignalBlocker(self.resolution):
             self.resolution.setCurrentIndex(max(0, self.resolution.findData(current)) if current in (1080, 1440, 2160) else 3)
 
     def _ratio_changed(self):
         if self.restoring:
             return
-        if self.ratio.currentData() != 'custom':
-            a, b = map(int, self.ratio.currentData().split(':'))
+        ratio = self.ratio.currentData()
+        if ratio == 'custom':
+            self._set_dimensions(self.width.value(), self.height.value())
+            self._refresh_resolution()
+            self._settings_changed()
+            return
+        try:
+            a, b = resolve_split_ratio(ratio, custom=(self.width.value(), self.height.value()), calibration=self.calibration())
             edge = min(self.width.value(), self.height.value())
-            self._set_dimensions(round(a * edge / min(a, b)), round(b * edge / min(a, b)))
+            self._set_dimensions(*split_dimensions(ratio, edge, edge,
+                                 axis='width' if a <= b else 'height', calibration=self.calibration()))
+        except ValueError:
+            pass  # _settings_changed displays the validation error and cancels old work.
         self._refresh_resolution()
         self._settings_changed()
 
     def _resolution_changed(self):
         if self.restoring or self.resolution.currentData() is None:
             return
-        a, b = self.width.value(), self.height.value()
-        scale = min(self.resolution.currentData() / min(a, b), 8192 / max(a, b))
-        self._set_dimensions(round(a * scale), round(b * scale))
+        ratio = self.ratio.currentData()
+        try:
+            a, b = resolve_split_ratio(ratio, custom=(self.width.value(), self.height.value()), calibration=self.calibration())
+            edge = self.resolution.currentData()
+            # Custom ratios retain their current aspect at the selected short edge.
+            if ratio == 'custom':
+                self._set_dimensions(round(a * edge / min(a, b)), round(b * edge / min(a, b)))
+            else:
+                self._set_dimensions(*split_dimensions(ratio, edge, edge,
+                                     axis='width' if a <= b else 'height', calibration=self.calibration()))
+        except ValueError:
+            pass
         self._settings_changed()
 
     def _dimension_changed(self, width_changed):
         if self.restoring:
             return
         w, h = self.width.value(), self.height.value()
-        if self.ratio.currentData() != 'custom':
-            a, b = map(int, self.ratio.currentData().split(':'))
-            h = max(64, min(8192, round(w * b / a))) if width_changed else h
-            w = max(64, min(8192, round(h * a / b)))
+        try:
+            if self.ratio.currentData() != 'custom':
+                w, h = split_dimensions(self.ratio.currentData(), w, h,
+                                        axis='width' if width_changed else 'height', calibration=self.calibration())
+            self._set_dimensions(w, h)
+        except ValueError:
             self._set_dimensions(w, h)
         self._refresh_resolution()
         self._settings_changed()
+
+    def _calibration_changed(self):
+        if self.restoring:
+            return
+        if self.ratio.currentData() == XHS_FULLSCREEN_RATIO:
+            self._dimension_changed(True)
+        else:
+            self.changed.emit()
 
     def set_source(self, path):
         if self.closed or self.exporting():
@@ -399,7 +457,12 @@ class SeamlessSplitEditor(QObject):
     def _settings_changed(self, *_args):
         if self.restoring or self.closed or self.exporting():
             return
-        self.ratio_hint.setVisible(self.ratio.currentData() == XHS_FULLSCREEN_RATIO)
+        calibrated = self.ratio.currentData() == XHS_FULLSCREEN_RATIO
+        self.calibration_fields.setVisible(calibrated)
+        self.ratio_hint.setVisible(calibrated)
+        w, h = self._requested_dimensions
+        self.ratio_hint.setText(f'校准参考 · 每张 {w} × {h} px。输入图片显示区域，不含上下操作栏。'
+                                '初始 1280 × 2164 来自本次截图，不是平台通用标准；请按同一全屏图入口发布验证。')
         self.generation += 1
         self._valid = False
         if self.worker is not None:
@@ -415,6 +478,7 @@ class SeamlessSplitEditor(QObject):
         except (ValueError, TypeError) as exc:
             self.pending = False
             self.timer.stop()
+            self.dimensions.setText(f'无法输出 {w} × {h} px：{exc}。请调整输入。')
             self.status.setText(str(exc))
         self.quality.setEnabled(self.output_form.format.currentData() == 'jpeg')
         self._sync_overlays(save=False)
@@ -679,10 +743,11 @@ class SeamlessSplitEditor(QObject):
 
     def state(self, workspace_path):
         # Persist even invalid/incomplete dimension combinations so drafts are not lost.
-        options = dict(count=self.count.value(), width=self.width.value(), height=self.height.value(),
+        options = dict(count=self.count.value(), width=self._requested_dimensions[0], height=self._requested_dimensions[1],
                        fit=self.fit.currentData(), background=self.background.value(),
                        format=self.output_form.format.currentData(), quality=self.quality.value())
-        return dict(options=options, ratio=self.ratio.currentData(), output=self.output_form.selected_options(),
+        return dict(options=options, ratio=self.ratio.currentData(), fullscreen_calibration=self.calibration(),
+                    output=self.output_form.selected_options(),
                     path=serialize_workspace_path(self.path, workspace_path=workspace_path) if self.path else None,
                     crops=[dict(path=serialize_workspace_path(self.crop_paths.get(key, Path(key)), workspace_path=workspace_path), box=box)
                            for key, box in self.crops.items()],
@@ -712,6 +777,21 @@ class SeamlessSplitEditor(QObject):
                 if type(value) is int and widget.minimum() <= value <= widget.maximum():
                     widget.setValue(value)
             self.ratio.setCurrentIndex(max(0, self.ratio.findData(state.get('ratio', '3:4'))))
+            self._set_dimensions(self.width.value(), self.height.value())
+            if self.ratio.currentData() == XHS_FULLSCREEN_RATIO:
+                w, h = raw.get('width', options.width), raw.get('height', options.height)
+                if type(w) is int and type(h) is int:
+                    self._set_dimensions(w, h)
+            calibration = state.get('fullscreen_calibration')
+            calibration = calibration if isinstance(calibration, dict) else {}
+            for key, field in (('width', self.display_width), ('height', self.display_height)):
+                field.setText(str(calibration.get(key, DEFAULT_FULLSCREEN_CALIBRATION[key])))
+            if self.ratio.currentData() == XHS_FULLSCREEN_RATIO and (not calibration or 'width' not in raw or 'height' not in raw):
+                try:
+                    self._set_dimensions(*split_dimensions(XHS_FULLSCREEN_RATIO, self.width.value(), self.height.value(),
+                                                          calibration=self.calibration()))
+                except ValueError:
+                    pass  # Restore invalid drafts; validation below keeps export disabled.
             self.fit.setCurrentIndex(self.fit.findData(options.fit))
             self.background.set_value(options.background)
             self.quality.setValue(options.quality)

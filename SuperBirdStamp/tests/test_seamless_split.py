@@ -7,7 +7,7 @@ from typer.testing import CliRunner
 
 from birdstamp.seamless_split import (
     SplitOptions, SplitCancelled, SplitCanvasStage, export_split, normalized_crop,
-    preview_size, render_canvas, slice_boxes,
+    preview_size, render_canvas, slice_boxes, resolve_split_ratio, split_dimensions, XHS_FULLSCREEN_RATIO,
 )
 from birdstamp.image_pipeline import ImageProcContext
 
@@ -19,7 +19,7 @@ def gradient(size=(601, 403)):
     return image
 
 
-@pytest.mark.parametrize('count,width,height', [(2, 65, 87), (3, 108, 144), (3, 108, 180), (7, 79, 64), (20, 64, 113)])
+@pytest.mark.parametrize('count,width,height', [(2, 65, 87), (3, 108, 144), (3, 108, 180), (3, 1080, 1826), (7, 79, 64), (20, 64, 113)])
 @pytest.mark.parametrize('fit', ['cover', 'contain'])
 def test_integer_slices_reassemble_exactly(count, width, height, fit):
     options = SplitOptions(count, width, height, fit)
@@ -223,3 +223,43 @@ def test_invalid_page_does_not_create_output(tmp_path, page_index):
     with pytest.raises(ValueError):
         export_split(source_file(tmp_path), SplitOptions(), tmp_path / '输出', page_index=page_index)
     assert not (tmp_path / '输出').exists()
+
+
+@pytest.mark.parametrize('width,height', [(1080, 1826), (1440, 2435), (2160, 3652)])
+def test_calibrated_dimensions_cover_without_horizontal_loss(width, height):
+    from fractions import Fraction
+    assert split_dimensions(XHS_FULLSCREEN_RATIO, width, 1) == (width, height)
+    assert split_dimensions(XHS_FULLSCREEN_RATIO, 1, height, axis='height') == (width, height)
+    # Model aspect-fill into this screenshot's image region, not the whole phone screen.
+    scale = max(Fraction(1280, width), Fraction(2164, height))
+    assert width * scale == 1280
+    assert 0 <= height * scale - 2164 < 1
+    # The previous 3:5 tile has ~18.4 px horizontal loss in the same viewport.
+    old_scale = max(Fraction(1280, 1080), Fraction(2164, 1800))
+    assert float(1080 * old_scale - 1280) == pytest.approx(18.4)
+
+
+def test_ratio_resolution_and_rounding_direction():
+    assert resolve_split_ratio('3:5') == (3, 5)
+    assert resolve_split_ratio('custom', custom=(1079, 1825)) == (1079, 1825)
+    assert resolve_split_ratio(XHS_FULLSCREEN_RATIO, calibration={}) == (1280, 2164)
+    assert resolve_split_ratio(XHS_FULLSCREEN_RATIO, calibration={'width': '1280', 'height': '2164'}) == (1280, 2164)
+    assert split_dimensions(XHS_FULLSCREEN_RATIO, 1080, 1825, axis='height') == (1079, 1825)
+    assert split_dimensions('9:16', 1080, 1) == (1080, 1920)
+    assert split_dimensions('3:5', 1080, 1) == (1080, 1800)
+    # Sweep both directions: no floating-point roundoff or width-creep after ceiling.
+    for value in range(64, 8193):
+        w, h = split_dimensions(XHS_FULLSCREEN_RATIO, value, value)
+        assert w == value and 0 <= h * 1280 - w * 2164 < 1280
+        w, h = split_dimensions(XHS_FULLSCREEN_RATIO, value, value, axis='height')
+        assert h == value and 0 <= h * 1280 - w * 2164 < 2164
+
+
+@pytest.mark.parametrize('calibration', [
+    {'width': 0}, {'width': -1}, {'height': ''}, {'height': '1.5'}, {'height': 2164.5},
+    {'width': True}, {'width': 2164, 'height': 1280}, {'height': 1280},
+    {'width': None}, {'width': '１２８０'}, [],
+])
+def test_invalid_fullscreen_calibration(calibration):
+    with pytest.raises(ValueError):
+        resolve_split_ratio(XHS_FULLSCREEN_RATIO, calibration=calibration)

@@ -19,6 +19,45 @@ from birdstamp.image_pipeline import ImageProcContext, ImageProcExportStage, Ima
 
 
 MAX_PIXELS = 100_000_000
+XHS_FULLSCREEN_RATIO = 'xhs_fullscreen_calibrated'
+DEFAULT_FULLSCREEN_CALIBRATION = {'width': 1280, 'height': 2164}
+FIXED_SPLIT_RATIOS = ('3:4', '3:5', '1:1', '4:3', '9:16', '16:9', '2:3', '3:2')
+
+
+def resolve_split_ratio(ratio, *, custom=(1080, 1440), calibration=None):
+    """Resolve UI ratio identifiers without coupling export options to presets."""
+    if ratio == XHS_FULLSCREEN_RATIO:
+        calibration = DEFAULT_FULLSCREEN_CALIBRATION if calibration is None else calibration
+        if not isinstance(calibration, dict):
+            raise ValueError('显示区宽高必须为正整数')
+        values = [calibration.get(key, DEFAULT_FULLSCREEN_CALIBRATION[key]) for key in ('width', 'height')]
+        # Strings allow incomplete GUI drafts to be saved, but never used to export.
+        values = [int(v) if isinstance(v, str) and v.isascii() and v.isdecimal() and len(v) <= 10 else v for v in values]
+        if any(type(v) is not int or v <= 0 for v in values):
+            raise ValueError('显示区宽高必须为正整数')
+        a, b = values
+        if b <= a:
+            raise ValueError('仅支持竖向显示区：高度必须大于宽度')
+        return a, b
+    if ratio == 'custom':
+        a, b = custom
+    elif ratio in FIXED_SPLIT_RATIOS:
+        a, b = map(int, ratio.split(':'))
+    else:
+        raise ValueError('未知的切分比例')
+    if any(type(v) is not int or v <= 0 for v in (a, b)):
+        raise ValueError('每张宽高必须为正整数')
+    return a, b
+
+
+def split_dimensions(ratio, width, height, *, axis='width', calibration=None):
+    """Calibrated cover must never lose horizontal pixels through rounding."""
+    a, b = resolve_split_ratio(ratio, custom=(width, height), calibration=calibration)
+    if axis == 'width':
+        return width, (width * b + a - 1) // a if ratio == XHS_FULLSCREEN_RATIO else round(width * b / a)
+    if axis == 'height':
+        return height * a // b if ratio == XHS_FULLSCREEN_RATIO else round(height * a / b), height
+    raise ValueError('尺寸计算方向必须是 width 或 height')
 
 
 class SplitCancelled(Exception):

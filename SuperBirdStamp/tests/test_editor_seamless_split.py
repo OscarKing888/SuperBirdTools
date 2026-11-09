@@ -10,6 +10,7 @@ from PyQt6.QtTest import QTest
 from test_overlay_editor import window, _APP, mouse
 from test_editor_collage import wait_for
 from birdstamp.gui.editor_utils import path_key
+from birdstamp.seamless_split import XHS_FULLSCREEN_RATIO
 
 
 @pytest.fixture(autouse=True)
@@ -95,8 +96,10 @@ def test_defaults_ask_each_export_and_current_slice(window, tmp_path, monkeypatc
     assert not split.quality.isEnabled()
     assert not split.export_current_button.isEnabled()
     split.set_source(source(tmp_path))
+    split.ratio.setCurrentIndex(split.ratio.findData(XHS_FULLSCREEN_RATIO))
     split.width.setValue(128)
     ready(split)
+    assert (split.options().width, split.options().height) == (128, 217)
     assert not split.export_current_button.isEnabled()
     split.single.setChecked(True)
     split.move_page(1)
@@ -125,6 +128,9 @@ def test_defaults_ask_each_export_and_current_slice(window, tmp_path, monkeypatc
     split.export_button.click()
     wait_for(lambda: split.worker is None)
     assert len(list((tmp_path / '整组').rglob('*.png'))) == 3
+    one = next((tmp_path / '单张').rglob('*.png'))
+    grouped = next((tmp_path / '整组').rglob('*_02.png'))
+    assert one.read_bytes() == grouped.read_bytes()
     assert len(asked) == 3
     assert split.output_form.mode.currentData() == 'ask'
 
@@ -152,24 +158,25 @@ def test_xhs_fullscreen_preset_dimensions_crop_and_restore(window, tmp_path):
     split.set_source(source(tmp_path))
     ready(split)
     before = split.crop()
-    index = split.ratio.findData('3:5')
-    assert index >= 0 and '小红书全屏连屏' in split.ratio.itemText(index)
+    index = split.ratio.findData(XHS_FULLSCREEN_RATIO)
+    assert index >= 0 and '小红书全屏（校准）' in split.ratio.itemText(index)
+    split.ratio.setCurrentIndex(index - 1)
     split.ratio.setFocus()
     QTest.keyClick(split.ratio, Qt.Key.Key_Down)
     ready(split)
-    assert split.ratio.currentData() == '3:5'
+    assert split.ratio.currentData() == XHS_FULLSCREEN_RATIO
     assert split.ratio_hint.isVisible()
-    assert (split.width.value(), split.height.value()) == (1080, 1800)
-    assert split.options().size == (3240, 1800)
+    assert (split.width.value(), split.height.value()) == (1080, 1826)
+    assert split.options().size == (3240, 1826)
     left, top, right, bottom = split.crop()
     assert (left + right, top + bottom) == pytest.approx((before[0] + before[2], before[1] + before[3]))
-    assert (right - left) * 600 / ((bottom - top) * 400) == pytest.approx(9 / 5)
+    assert (right - left) * 600 / ((bottom - top) * 400) == pytest.approx(3240 / 1826)
     split.resolution.setCurrentIndex(split.resolution.findData(1440))
     ready(split)
-    assert (split.width.value(), split.height.value()) == (1440, 2400)
+    assert (split.width.value(), split.height.value()) == (1440, 2435)
     split.height.setValue(2000)
     ready(split)
-    assert (split.width.value(), split.height.value()) == (1200, 2000)
+    assert (split.width.value(), split.height.value()) == (1182, 2000)
     split.layout_group.header_button.click()
     split.layout_group.header_button.click()
     saved = split.state(tmp_path / '全屏.json')
@@ -182,7 +189,7 @@ def test_xhs_fullscreen_preset_dimensions_crop_and_restore(window, tmp_path):
     assert split.ratio_hint.isVisible()
     split.ratio.setCurrentIndex(split.ratio.findData('9:16'))
     ready(split)
-    assert (split.width.value(), split.height.value()) == (1200, 2133)
+    assert (split.width.value(), split.height.value()) == (1182, 2101)
     assert split.ratio_hint.isHidden()
 
 
@@ -373,7 +380,7 @@ def test_rendered_geometry_small_window_font_theme(window, tmp_path, dark, large
         image.save(photo)
     split.set_source(photo)
     if xhs:
-        split.ratio.setCurrentIndex(split.ratio.findData('3:5'))
+        split.ratio.setCurrentIndex(split.ratio.findData(XHS_FULLSCREEN_RATIO))
     ready(split)
     window._photos_section.set_expanded(False)
     folder = os.environ.get('SPLIT_SCREENSHOT_DIR')
@@ -410,3 +417,98 @@ def test_rendered_geometry_small_window_font_theme(window, tmp_path, dark, large
     if folder:
         window.grab().save(str(directory / (prefix + ('split-single-dark.png' if dark else 'split-single-light.png'))))
     assert split.crop() == tuple(before['crops'][0]['box'])
+
+
+def test_calibration_inputs_validation_retention_and_legacy_restore(window, tmp_path):
+    split = window.seamless_split
+    workspace = tmp_path / '校准.json'
+    split.set_source(source(tmp_path))
+    ready(split)
+    split.ratio.setCurrentIndex(split.ratio.findData('3:5'))
+    ready(split)
+    assert split.ratio.currentText() == '3:5'
+    assert split.options().size == (3240, 1800)
+    legacy = split.state(workspace)
+    del legacy['fullscreen_calibration']
+    crop = split.crop()
+    split.restore(legacy, workspace)
+    ready(split)
+    assert split.ratio.currentData() == '3:5'
+    assert split.options().size == (3240, 1800)
+    assert split.crop() == pytest.approx(crop)
+    assert split.calibration_fields.isHidden()
+    split.ratio.setCurrentIndex(split.ratio.findData(XHS_FULLSCREEN_RATIO))
+    ready(split)
+    split.single.setChecked(True)
+    for invalid, message in [('', '正整数'), ('0', '正整数'), ('-5', '正整数'), ('1.5', '正整数'), ('1280', '大于宽度')]:
+        split.display_height.setText(invalid)
+        assert message in split.status.text()
+        assert not split.export_button.isEnabled()
+        assert not split.export_current_button.isEnabled()
+        assert not split.pending
+        snapshot = split.state(workspace)
+        split.restore(snapshot, workspace)
+        assert split.state(workspace) == snapshot
+        assert not split.export_button.isEnabled()
+    split.display_height.setText('99999')
+    assert '8192' in split.status.text()
+    assert '84375' in split.dimensions.text()
+    invalid_size = split.state(workspace)
+    assert invalid_size['options']['height'] == 84375
+    split.restore(invalid_size, workspace)
+    assert split.state(workspace) == invalid_size
+    assert not split.export_button.isEnabled()
+    split.display_height.setText('2200')
+    ready(split)
+    assert split.options().height == 1857
+    snapshot = split.state(workspace)
+    for _ in range(2):
+        split.layout_group.header_button.click()
+        split.layout_group.header_button.click()
+    assert split.state(workspace) == snapshot
+    split.ratio.setCurrentIndex(split.ratio.findData('3:4'))
+    ready(split)
+    assert split.display_height.text() == '2200'
+    split.restore(split.state(workspace), workspace)
+    ready(split)
+    assert split.display_height.text() == '2200'
+    split.ratio.setCurrentIndex(split.ratio.findData(XHS_FULLSCREEN_RATIO))
+    ready(split)
+    assert split.options().height == 1857
+    split.restore({'ratio': XHS_FULLSCREEN_RATIO}, workspace)
+    assert split.options().height == 1826
+    split.restore({'ratio': XHS_FULLSCREEN_RATIO, 'fullscreen_calibration': {'height': 2200}}, workspace)
+    assert split.options().height == 1857
+    split.display_height.setText('')
+    split.width.setValue(1440)
+    snapshot = split.state(workspace)
+    assert snapshot['options']['width'] == 1440
+    split.restore(snapshot, workspace)
+    assert split.state(workspace) == snapshot
+    assert not split.export_button.isEnabled()
+    split.restore({}, workspace)
+    assert split.ratio.currentData() == '3:4'
+    assert split.calibration() == dict(width=1280, height=2164)
+
+
+def test_calibration_rounding_resolution_and_output_limits(window, tmp_path):
+    split = window.seamless_split
+    split.set_source(source(tmp_path))
+    split.ratio.setCurrentIndex(split.ratio.findData(XHS_FULLSCREEN_RATIO))
+    for width, height in [(1440, 2435), (2160, 3652), (1080, 1826)]:
+        split.resolution.setCurrentIndex(split.resolution.findData(width))
+        ready(split)
+        assert (split.options().width, split.options().height) == (width, height)
+    split.height.setValue(1825)
+    ready(split)
+    assert (split.options().width, split.options().height) == (1079, 1825)
+    split.height.setValue(64)
+    assert '64–8192' in split.status.text()
+    assert not split.export_button.isEnabled()
+    split.width.setValue(2160)
+    ready(split)
+    split.count.setValue(20)
+    assert '1 亿像素' in split.status.text()
+    assert not split.export_button.isEnabled()
+    split.count.setValue(3)
+    ready(split)
