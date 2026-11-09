@@ -636,3 +636,96 @@ def test_export_menu_routes_current_slice_and_all_photos(window, monkeypatch):
     window.action_export_current.trigger()
     window.action_export_all.trigger()
     assert calls == [True, False]
+
+
+def test_phone_preset_dimensions_workspace_and_manual_override(window, tmp_path):
+    split = window.seamless_split
+    split.set_source(source(tmp_path))
+    split.ratio.setCurrentIndex(split.ratio.findData(XHS_FULLSCREEN_RATIO))
+    ready(split)
+    before = split.crop()
+    split.resolution.setCurrentIndex(split.resolution.findData('iphone_14_pro_max'))
+    ready(split)
+    assert split._requested_dimensions == (1290, 2181)
+    assert split.options().size == (3870, 2181)
+    assert split.crop()[0] + split.crop()[2] == pytest.approx(before[0] + before[2])
+    assert '1290 × 2796' in split.resolution_hint.text()
+    assert '1290 × 2181' in split.resolution_hint.text()
+    saved = split.state(tmp_path / '手机.json')
+    split.layout_group.header_button.click()
+    split.layout_group.header_button.click()
+    assert split.state(tmp_path / '手机.json') == saved
+    split.restore({}, tmp_path / '手机.json')
+    wait_for(lambda: split.worker is None and not split.pending)
+    assert split.resolution.currentData() == 1080
+    split.restore(saved, tmp_path / '手机.json')
+    ready(split)
+    assert split.state(tmp_path / '手机.json') == saved
+    split.ratio.setCurrentIndex(split.ratio.findData('4:3'))
+    ready(split)
+    assert split._requested_dimensions == (1720, 1290)
+    assert split.resolution.currentData() == 'iphone_14_pro_max'
+    split.width.setValue(1500)
+    ready(split)
+    assert split.resolution.currentData() is None
+    assert split.resolution_hint.isHidden()
+    split.resolution.setCurrentIndex(split.resolution.findData(1440))
+    ready(split)
+    assert split._requested_dimensions == (1920, 1440)
+    # 旧工作区与未知机型标识只按原有尺寸恢复，不擅自替换构图。
+    saved.pop('resolution_preset')
+    split.restore(saved, tmp_path / '手机.json')
+    ready(split)
+    assert split._requested_dimensions == (1290, 2181)
+    assert split.resolution.currentData() is None
+    saved['resolution_preset'] = 'future_phone'
+    split.restore(saved, tmp_path / '手机.json')
+    ready(split)
+    assert split._requested_dimensions == (1290, 2181)
+    assert split.resolution.currentData() is None
+
+
+@pytest.mark.parametrize('dark', [False, True])
+def test_rendered_geometry_phone_preset(window, tmp_path, dark):
+    from PyQt6.QtWidgets import QStyle, QStyleOptionComboBox
+    import os
+    from pathlib import Path
+    split = window.seamless_split
+    if dark:
+        window.setStyleSheet(window.styleSheet() + '\nQWidget { font-size: 24px; }')
+    window.resize(1120 if dark else 1400, 720 if dark else 900)
+    window.show()
+    window.export_tabs.setCurrentWidget(split.page)
+    split.set_source(source(tmp_path))
+    split.ratio.setCurrentIndex(split.ratio.findData(XHS_FULLSCREEN_RATIO))
+    split.resolution.setCurrentIndex(split.resolution.findData('iphone_14_pro_max') - 1)
+    split.resolution.setFocus()
+    QTest.keyClick(split.resolution, Qt.Key.Key_Down)
+    ready(split)
+    assert split.resolution.currentData() == 'iphone_14_pro_max'
+    window._photos_section.set_expanded(False)
+    _APP.processEvents()
+    window.left_scroll.ensureWidgetVisible(split.resolution_hint)
+    _APP.processEvents()
+    option = QStyleOptionComboBox()
+    split.resolution.initStyleOption(option)
+    rect = split.resolution.style().subControlRect(QStyle.ComplexControl.CC_ComboBox, option,
+                                                 QStyle.SubControl.SC_ComboBoxEditField, split.resolution)
+    assert rect.width() >= split.resolution.fontMetrics().horizontalAdvance(split.resolution.currentText())
+    assert split.resolution_hint.height() >= split.resolution_hint.heightForWidth(split.resolution_hint.width())
+    for button in (split.export_button, split.cancel_button, split.export_current_button):
+        assert window.rect().contains(button.mapTo(window, button.rect().bottomRight()))
+    folder = os.environ.get('SPLIT_SCREENSHOT_DIR')
+    if folder:
+        Path(folder).mkdir(parents=True, exist_ok=True)
+        window.grab().save(str(Path(folder) / ('phone-dark.png' if dark else 'phone-light.png')))
+
+
+
+def test_explicit_custom_resolution_survives_workspace_restore(window, tmp_path):
+    split = window.seamless_split
+    split.resolution.setCurrentIndex(split.resolution.findData(None))
+    state = split.state(tmp_path / '自定义.json')
+    split.restore(state, tmp_path / '自定义.json')
+    assert split.resolution.currentData() is None
+    assert split._requested_dimensions == (1080, 1440)

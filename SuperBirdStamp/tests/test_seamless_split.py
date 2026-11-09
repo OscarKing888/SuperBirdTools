@@ -359,3 +359,42 @@ def test_cli_splits_multiple_photos(monkeypatch, tmp_path):
     assert result.exit_code == 0, result.output
     assert len(list(output.iterdir())) == 2
     assert len(list(output.rglob('*.png'))) == len(list(output.rglob('*.xmp'))) == 4
+
+
+@pytest.mark.parametrize('key,screen,output', [
+    ('iphone_14_pro_max', (1290, 2796), (1290, 2181)),
+    ('iphone_16_pro', (1206, 2622), (1206, 2039)),
+    ('iphone_16_pro_max', (1320, 2868), (1320, 2232)),
+])
+def test_phone_presets_keep_calibrated_viewport_ratio(key, screen, output):
+    from birdstamp.seamless_split import phone_resolution_preset, phone_split_dimensions
+    preset = phone_resolution_preset(key)
+    assert (preset.width, preset.height) == screen
+    assert phone_split_dimensions(key, XHS_FULLSCREEN_RATIO) == output
+    w, h = output
+    assert 0 <= h * 1280 - w * 2164 < 1280
+    assert phone_split_dimensions(key, '3:4') == (screen[0], round(screen[0] * 4 / 3))
+    assert phone_split_dimensions(key, '4:3') == (round(screen[0] * 4 / 3), screen[0])
+    assert phone_split_dimensions(key, 'custom', custom=(2, 3)) == (screen[0], round(screen[0] * 3 / 2))
+    assert phone_split_dimensions(key, XHS_FULLSCREEN_RATIO, calibration={'width': 1000, 'height': 2000}) == (screen[0], screen[0] * 2)
+
+
+def test_unknown_phone_preset_rejected():
+    from birdstamp.seamless_split import phone_split_dimensions
+    with pytest.raises(ValueError, match='未知'):
+        phone_split_dimensions('unknown', '3:4')
+
+
+
+def test_phone_preset_exports_actual_dimensions_and_xmp(monkeypatch, tmp_path):
+    from birdstamp.seamless_split import phone_split_dimensions
+    from test_export_metadata import metadata
+    stub_metadata(monkeypatch)
+    source = source_file(tmp_path)
+    w, h = phone_split_dimensions('iphone_14_pro_max', XHS_FULLSCREEN_RATIO)
+    output = export_split(source, SplitOptions(3, w, h), tmp_path / '输出', page_index=1)
+    path = next(output.glob('*.png'))
+    with Image.open(path) as image:
+        assert image.size == (1290, 2181)
+    tags = metadata(path.with_suffix('.xmp'))
+    assert (tags['XMP-tiff:ImageWidth'], tags['XMP-tiff:ImageHeight']) == (1290, 2181)

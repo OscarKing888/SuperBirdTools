@@ -24,6 +24,7 @@ from birdstamp.seamless_split import (
     SplitCancelled, SplitCanvasStage, SplitOptions, SplitExportJob, check_cancel, export_split, export_split_batch,
     normalized_crop, preview_size, slice_boxes, resolve_split_ratio, split_dimensions,
     FIXED_SPLIT_RATIOS, XHS_FULLSCREEN_RATIO, DEFAULT_FULLSCREEN_CALIBRATION,
+    PHONE_RESOLUTION_PRESETS, phone_resolution_preset, phone_split_dimensions,
 )
 from birdstamp.workspace import resolve_workspace_path, serialize_workspace_path
 from .color_editor import ColorEditor
@@ -214,8 +215,15 @@ class SeamlessSplitEditor(QObject):
         self.resolution = QComboBox()
         for edge in (1080, 1440, 2160):
             self.resolution.addItem(f'短边 {edge} px', edge)
+        for preset in PHONE_RESOLUTION_PRESETS:
+            self.resolution.addItem(f'{preset.label} · {preset.width} px', preset.key)
         self.resolution.addItem('自定义', None)
+        self.resolution.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToContents)
         form.addRow('每张分辨率', self.resolution)
+        self.resolution_hint = QLabel()
+        self.resolution_hint.setWordWrap(True)
+        self.resolution_hint.hide()
+        form.addRow(self.resolution_hint)
         self.width, self.height = self._spin(64, 8192, 1080), self._spin(64, 8192, 1440)
         self._requested_dimensions = (1080, 1440)
         form.addRow('每张宽度', self.width)
@@ -365,8 +373,21 @@ class SeamlessSplitEditor(QObject):
 
     def _refresh_resolution(self):
         current = min(self._requested_dimensions)
+        preset = phone_resolution_preset(self.resolution.currentData())
+        if preset is not None and current == preset.width:
+            return
         with QSignalBlocker(self.resolution):
-            self.resolution.setCurrentIndex(max(0, self.resolution.findData(current)) if current in (1080, 1440, 2160) else 3)
+            self.resolution.setCurrentIndex(self.resolution.findData(current if current in (1080, 1440, 2160) else None))
+
+    def _update_resolution_hint(self):
+        preset = phone_resolution_preset(self.resolution.currentData())
+        self.resolution_hint.setVisible(preset is not None)
+        if preset is not None:
+            w, h = self._requested_dimensions
+            self.resolution_hint.setText(
+                f'屏幕 {preset.width} × {preset.height} px；当前输出 {w} × {h} px/张。\n'
+                '匹配屏幕短边，保留图片比例。小红书仍需校准显示区，上传后以平台结果为准。')
+            self.resolution_hint.setToolTip(preset.source_url)
 
     def _ratio_changed(self):
         if self.restoring:
@@ -388,14 +409,23 @@ class SeamlessSplitEditor(QObject):
         self._settings_changed()
 
     def _resolution_changed(self):
-        if self.restoring or self.resolution.currentData() is None:
+        if self.restoring:
+            return
+        if self.resolution.currentData() is None:
+            self._update_resolution_hint()
+            self.changed.emit()
             return
         ratio = self.ratio.currentData()
         try:
             a, b = resolve_split_ratio(ratio, custom=(self.width.value(), self.height.value()), calibration=self.calibration())
-            edge = self.resolution.currentData()
+            choice = self.resolution.currentData()
+            preset = phone_resolution_preset(choice)
+            edge = preset.width if preset else choice
             # Custom ratios retain their current aspect at the selected short edge.
-            if ratio == 'custom':
+            if preset:
+                self._set_dimensions(*phone_split_dimensions(choice, ratio,
+                                     custom=(self.width.value(), self.height.value()), calibration=self.calibration()))
+            elif ratio == 'custom':
                 self._set_dimensions(round(a * edge / min(a, b)), round(b * edge / min(a, b)))
             else:
                 self._set_dimensions(*split_dimensions(ratio, edge, edge,
@@ -487,6 +517,7 @@ class SeamlessSplitEditor(QObject):
             self.dimensions.setText(f'无法输出 {w} × {h} px：{exc}。请调整输入。')
             self.status.setText(str(exc))
         self.quality.setEnabled(self.output_form.format.currentData() == 'jpeg')
+        self._update_resolution_hint()
         self._sync_overlays(save=False)
         self._update_actions()
         self.changed.emit()
@@ -777,6 +808,7 @@ class SeamlessSplitEditor(QObject):
                        fit=self.fit.currentData(), background=self.background.value(),
                        format=self.output_form.format.currentData(), quality=self.quality.value())
         return dict(options=options, ratio=self.ratio.currentData(), fullscreen_calibration=self.calibration(),
+                    resolution_preset=self.resolution.currentData(),
                     output=self.output_form.selected_options(),
                     path=serialize_workspace_path(self.path, workspace_path=workspace_path) if self.path else None,
                     crops=[dict(path=serialize_workspace_path(self.crop_paths.get(key, Path(key)), workspace_path=workspace_path), box=box)
@@ -858,7 +890,12 @@ class SeamlessSplitEditor(QObject):
                 self.page_index = 0
             for key in ('lines', 'numbers', 'crop_tool'):
                 getattr(self, key).setChecked(bool(state.get(key, True)))
-            self._refresh_resolution()
+            choice = state.get('resolution_preset')
+            index = self.resolution.findData(choice)
+            with QSignalBlocker(self.resolution):
+                self.resolution.setCurrentIndex(index if index >= 0 else self.resolution.findData(None))
+            if 'resolution_preset' not in state or (index >= 0 and choice is not None):
+                self._refresh_resolution()
             self._fit_next = True
         finally:
             self.restoring = False

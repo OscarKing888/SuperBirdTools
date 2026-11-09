@@ -17,7 +17,7 @@
 
 ## 2. 层级与组件选型
 
-BirdStamp 连屏切图：`SeamlessSplitEditor` 使用 `CurrentPageTabWidget`、`CollapsibleSection`、`ImageOutputOptionsForm`、`ColorEditor` 和固定 `ExportActionBar`；`SplitPreviewCanvas` 派生现有 `EditorPreviewCanvas`，在视口绘制等距分割线/编号，复用比例裁剪。工具栏用 `ToggleToolButton`，参数由主滚动区容纳，切页保留逐图构图和工作区参数。固定操作区使用原生 QPushButton：满行「导出当前张（编号/总数）」位于「导出整组 / 取消」上方，整体视图中单张动作禁用；「导出整组」处理照片列表全部照片，统一切分参数并保留逐图构图，每张切片同时生成同名 XMP；单张动作仅输出当前照片的当前切片。进度、取消和完成数量沿用固定区。默认输出为每次选择目录和 PNG。比例下拉提供“小红书全屏（校准）”，选中时显示原生 QLineEdit 显示区宽高表单及可换行的计算尺寸/校准参考说明；不完整或非法输入保留但禁用导出，切换比例/折叠保留输入。普通 3:5 不再标为专用比例。沿用主滚动区，长下拉名称在大字体时允许整行换行。见[设计与覆盖](ui-design/birdstamp-seamless-split.md)。
+BirdStamp 连屏切图：`SeamlessSplitEditor` 使用 `CurrentPageTabWidget`、`CollapsibleSection`、`ImageOutputOptionsForm`、`ColorEditor` 和固定 `ExportActionBar`；`SplitPreviewCanvas` 派生现有 `EditorPreviewCanvas`，在视口绘制等距分割线/编号，复用比例裁剪。工具栏用 `ToggleToolButton`，参数由主滚动区容纳，切页保留逐图构图和工作区参数。固定操作区使用原生 QPushButton：满行「导出当前张（编号/总数）」位于「导出整组 / 取消」上方，整体视图中单张动作禁用；「导出整组」处理照片列表全部照片，统一切分参数并保留逐图构图，每张切片同时生成同名 XMP；单张动作仅输出当前照片的当前切片。进度、取消和完成数量沿用固定区。默认输出为每次选择目录和 PNG。比例下拉提供“小红书全屏（校准）”，选中时显示原生 QLineEdit 显示区宽高表单及可换行的计算尺寸/校准参考说明；不完整或非法输入保留但禁用导出，切换比例/折叠保留输入。每张分辨率下拉增加手机短边像素预设，保留图片比例，紧随可换行说明同时列屏幕尺寸与实际导出尺寸；仅机型选择显示说明，选择随工作区保存，手改尺寸退出不匹配预设。下拉按内容计算宽度，表单允许换行，固定导出区不移动。普通 3:5 不再标为专用比例。沿用主滚动区，长下拉名称在大字体时允许整行换行。见[设计与覆盖](ui-design/birdstamp-seamless-split.md)。
 
 ```text
 L0 应用外壳：主窗口、菜单、状态栏

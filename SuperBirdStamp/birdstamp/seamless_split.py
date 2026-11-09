@@ -60,6 +60,43 @@ def split_dimensions(ratio, width, height, *, axis='width', calibration=None):
     raise ValueError('尺寸计算方向必须是 width 或 height')
 
 
+@dataclass(frozen=True)
+class SplitPhonePreset:
+    key: str
+    label: str
+    width: int
+    height: int
+    source_url: str
+
+
+# 原生屏幕像素只用于输出采样密度，不能替代 App 图片显示区域的比例。
+PHONE_RESOLUTION_PRESETS = (
+    SplitPhonePreset('iphone_14_pro_max', 'iPhone 14 Pro Max', 1290, 2796,
+                     'https://support.apple.com/en-us/111846'),
+    SplitPhonePreset('iphone_16_pro', 'iPhone 16 Pro', 1206, 2622,
+                     'https://support.apple.com/en-jo/121031'),
+    SplitPhonePreset('iphone_16_pro_max', 'iPhone 16 Pro Max', 1320, 2868,
+                     'https://support.apple.com/en-us/121032'),
+)
+
+
+def phone_resolution_preset(key):
+    return next((preset for preset in PHONE_RESOLUTION_PRESETS if preset.key == key), None)
+
+
+def phone_split_dimensions(key, ratio, *, custom=(1080, 1440), calibration=None):
+    """按屏幕短边采样并保留图片比例；校准比例沿用防横向裁失的整数取整。"""
+    preset = phone_resolution_preset(key)
+    if preset is None:
+        raise ValueError('未知的手机分辨率预设')
+    a, b = resolve_split_ratio(ratio, custom=custom, calibration=calibration)
+    edge = preset.width
+    if ratio == 'custom':
+        return round(a * edge / min(a, b)), round(b * edge / min(a, b))
+    return split_dimensions(ratio, edge, edge, axis='width' if a <= b else 'height',
+                            calibration=calibration)
+
+
 class SplitCancelled(Exception):
     pass
 
