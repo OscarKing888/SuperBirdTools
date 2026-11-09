@@ -1,4 +1,4 @@
-"""Real pixels, image-only output, atomic publication and CLI contract."""
+"""Real pixels, image/XMP output, atomic publication and CLI contract."""
 from dataclasses import asdict
 
 import pytest
@@ -67,10 +67,13 @@ def test_invalid_options(values):
 def stub_metadata(monkeypatch):
     import birdstamp.export_snapshot as snapshot
     import birdstamp.export_metadata as metadata
-    monkeypatch.setattr(snapshot, 'capture_export_metadata', lambda *args: pytest.fail('连屏不应读取 XMP 快照'))
+    from types import SimpleNamespace
+    from test_export_metadata import xmp_packet
+    monkeypatch.setattr(snapshot, 'capture_export_metadata',
+                        lambda *args: SimpleNamespace(xmp=xmp_packet()))
     copy = lambda source, target, image: None
     monkeypatch.setattr(metadata, 'copy_export_metadata', copy)
-    return metadata, copy
+    return metadata, metadata.save_export_image
 
 
 def source_file(tmp_path):
@@ -88,7 +91,8 @@ def test_group_export_collision_and_exact_png(monkeypatch, tmp_path):
     first = export_split(source, options, directory)
     second = export_split(source, options, directory)
     assert first != second
-    assert len(list(first.iterdir())) == len(list(first.glob('*.png'))) == 3
+    assert len(list(first.iterdir())) == 6
+    assert len(list(first.glob('*.png'))) == len(list(first.glob('*.xmp'))) == 3
     with Image.open(source) as original, render_canvas(original, options) as expected:
         rebuilt = Image.new('RGB', options.size)
         try:
@@ -115,12 +119,12 @@ def test_group_failure_retains_previous_results(monkeypatch, tmp_path, failure, 
     def progress(done, total):
         nonlocal cancelled
         cancelled = failure == 'cancel' and done == 1
-    def broken(source, target, image):
+    def broken(image, target, **kwargs):
         if target.stem.endswith('02'):
             raise OSError('模拟磁盘失败')
-        save(source, target, image)
+        save(image, target, **kwargs)
     if failure == 'write':
-        monkeypatch.setattr(metadata, 'copy_export_metadata', broken)
+        monkeypatch.setattr(metadata, 'save_export_image', broken)
     if failure == 'publish':
         from pathlib import Path
         monkeypatch.setattr(Path, 'rename', lambda *args: (_ for _ in ()).throw(OSError('模拟发布失败')))
@@ -158,10 +162,11 @@ def test_stage_and_cli_share_core(monkeypatch, tmp_path):
             context.image.close()
 
 
+@pytest.mark.parametrize('page_index', [None, 1])
 @pytest.mark.parametrize('cancel_probe', [False, True])
 @pytest.mark.parametrize('format', ['png', 'jpeg'])
-def test_real_chinese_metadata_and_oriented_source(tmp_path, cancel_probe, format, monkeypatch):
-    from test_export_metadata import exiftool, metadata
+def test_real_chinese_metadata_and_oriented_source(tmp_path, cancel_probe, format, page_index):
+    from test_export_metadata import exiftool, metadata, xmp_packet, exported_xmp, NS
     from app_common.exif_io import exiftool_path
     from app_common.exif_io.exiftool_runner import exiftool_read_request, exiftool_worker_session
     source = tmp_path / '中文旋转.jpg'
@@ -171,10 +176,10 @@ def test_real_chinese_metadata_and_oriented_source(tmp_path, cancel_probe, forma
     chinese.write_text('连屏测试，朱鹮飞过山谷', encoding='utf8')
     exiftool('-overwrite_original', '-Orientation#=6', '-ISO=800', f'-XMP-dc:Description<={chinese}', f'-EXIF:UserComment<={chinese}', str(source))
     sidecar = source.with_suffix('.xmp')
-    sidecar.write_bytes(b'not valid XMP, deliberately never parsed by split export')
+    sidecar.write_bytes(xmp_packet(
+        '<dc:description><rdf:Alt><rdf:li xml:lang="x-default">侧车描述·朱鹮</rdf:li></rdf:Alt></dc:description>'
+        '<sp:bird_species_cn>朱鹮</sp:bird_species_cn>'))
     sidecar_before = sidecar.read_bytes()
-    from app_common.exif_io import export_xmp
-    monkeypatch.setattr(export_xmp, 'read_export_xmp', lambda *args: pytest.fail('连屏不应读取 XMP'))
     before = source.read_bytes()
     options = SplitOptions(2, 64, 128, format=format)
     if cancel_probe:
@@ -185,11 +190,18 @@ def test_real_chinese_metadata_and_oriented_source(tmp_path, cancel_probe, forma
             assert not exiftool_path._is_usable_exiftool(executable)
     # Use the same request/session lifecycle as the editor's split worker.
     with exiftool_worker_session(), exiftool_read_request(lambda: False, timeout=60):
-        directory = export_split(source, options, tmp_path / '输出')
-    assert len(list(directory.iterdir())) == 2
-    assert not list(directory.glob('*.xmp'))
-    for path in directory.iterdir():
+        directory = export_split(source, options, tmp_path / '输出', page_index=page_index)
+    count = 2 if page_index is None else 1
+    assert len(list(directory.iterdir())) == count * 2
+    assert len(list(directory.glob('*.xmp'))) == count
+    for path in directory.glob('*.jpg' if format == 'jpeg' else '*.png'):
         tags = metadata(path)
+        xmp_tags = metadata(path.with_suffix('.xmp'))
+        assert xmp_tags['XMP-dc:Description'] == '侧车描述·朱鹮'
+        assert xmp_tags['XMP-tiff:Orientation'] == 1
+        assert xmp_tags['XMP-tiff:ImageWidth'] == 64
+        assert xmp_tags['XMP-tiff:ImageHeight'] == 128
+        assert exported_xmp(path).find('.//sp:bird_species_cn', NS).text == '朱鹮'
         assert tags['ExifIFD:ISO'] == 800
         assert tags['IFD0:Orientation'] == 1
         assert not any(key.startswith('XMP-') for key in tags)
@@ -212,7 +224,7 @@ def test_single_slice_matches_group_without_overwriting(monkeypatch, tmp_path, p
                        progress=lambda done, total: progress.append((done, total)))
     repeated = export_split(source, options, tmp_path / '输出', page_index=page_index)
     name = f'{source.stem}_{page_index + 1:02d}.png'
-    assert [p.name for p in one.iterdir()] == [name]
+    assert {p.name for p in one.iterdir()} == {name, name[:-4] + '.xmp'}
     assert one != group and one != repeated
     assert (one / name).read_bytes() == (group / name).read_bytes() == (repeated / name).read_bytes()
     assert progress == [(1, 1)]
@@ -263,3 +275,54 @@ def test_ratio_resolution_and_rounding_direction():
 def test_invalid_fullscreen_calibration(calibration):
     with pytest.raises(ValueError):
         resolve_split_ratio(XHS_FULLSCREEN_RATIO, calibration=calibration)
+
+
+@pytest.mark.parametrize('page_index', [None, 1])
+def test_sidecar_write_failure_publishes_nothing(monkeypatch, tmp_path, page_index):
+    from pathlib import Path
+    stub_metadata(monkeypatch)
+    source = source_file(tmp_path)
+    write = Path.write_bytes
+    calls = 0
+
+    def fail_sidecar(path, data):
+        nonlocal calls
+        if path.suffix == '.xmp':
+            calls += 1
+            if calls == (2 if page_index is None else 1):
+                raise OSError('模拟 XMP 写入失败')
+        return write(path, data)
+
+    monkeypatch.setattr(Path, 'write_bytes', fail_sidecar)
+    output = tmp_path / '输出'
+    with pytest.raises(OSError, match='XMP'):
+        export_split(source, SplitOptions(3, 64, 64), output, page_index=page_index)
+    assert list(output.iterdir()) == []
+
+
+def test_group_uses_one_snapshot_when_sidecar_changes(tmp_path):
+    from test_export_metadata import xmp_packet, exported_xmp, NS
+    source = source_file(tmp_path)
+    sidecar = source.with_suffix('.xmp')
+    sidecar.write_bytes(xmp_packet('<sp:bird_species_cn>朱鹮</sp:bird_species_cn>'))
+
+    def edit_after_first(done, total):
+        if done == 1:
+            sidecar.write_bytes(xmp_packet('<sp:bird_species_cn>白鹭</sp:bird_species_cn>'))
+
+    output = export_split(source, SplitOptions(3, 64, 64), tmp_path / '输出',
+                          progress=edit_after_first)
+    for image in output.glob('*.png'):
+        assert exported_xmp(image).find('.//sp:bird_species_cn', NS).text == '朱鹮'
+
+
+@pytest.mark.parametrize('page_index', [None, 1])
+def test_invalid_source_xmp_does_not_publish(tmp_path, page_index):
+    source = source_file(tmp_path)
+    sidecar = source.with_suffix('.xmp')
+    sidecar.write_bytes(b'<broken>')
+    output = tmp_path / '输出'
+    with pytest.raises((ValueError, RuntimeError)):
+        export_split(source, SplitOptions(3, 64, 64), output, page_index=page_index)
+    assert list(output.iterdir()) == []
+    assert sidecar.read_bytes() == b'<broken>'

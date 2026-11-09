@@ -124,7 +124,7 @@ def test_defaults_ask_each_export_and_current_slice(window, tmp_path, monkeypatc
     wait_for(lambda: split.worker is None)
     assert [p.name for p in (tmp_path / '单张').rglob('*.png')] == ['风景_02.png']
     assert '已导出第 2 张' in split.status.text()
-    assert not list((tmp_path / '单张').rglob('*.xmp'))
+    assert [p.name for p in (tmp_path / '单张').rglob('*.xmp')] == ['风景_02.xmp']
     split.export_button.click()
     wait_for(lambda: split.worker is None)
     assert len(list((tmp_path / '整组').rglob('*.png'))) == 3
@@ -357,7 +357,7 @@ def test_export_freezes_settings_and_workspace_cancels_old_result(window, tmp_pa
     split.start_export(tmp_path / '成片')
     wait_for(lambda: split.worker is None)
     assert len(list((tmp_path / '成片').rglob('*.png'))) == 3
-    assert not list((tmp_path / '成片').rglob('*.xmp'))
+    assert len(list((tmp_path / '成片').rglob('*.xmp'))) == 3
     assert '已导出 3 张' in split.status.text()
     saved = split.state(tmp_path / '工作区.json')
     assert saved['crops'][0]['path']['absolute_path'].endswith('NewPhoto.png')

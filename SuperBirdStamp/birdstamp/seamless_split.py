@@ -196,27 +196,29 @@ class SplitExportStage(ImageProcExportStage):
                 ImageProcOptionSpec(key='quality', label='JPEG 质量', value_type='int', default=95))
 
     def export(self, context, directory, *, page_index=None, cancel, progress):
-        from birdstamp.export_metadata import copy_export_metadata
+        from birdstamp.export_metadata import save_export_image
+        from birdstamp.export_snapshot import capture_export_metadata
         options = SplitOptions.from_dict(context.settings)
         suffix = '.jpg' if options.format == 'jpeg' else '.png'
         boxes = slice_boxes(context.image.size, options.count)
+        snapshot = capture_export_metadata(context.source_path)
         indices = range(options.count) if page_index is None else (page_index,)
         for done, index in enumerate(indices, 1):
             check_cancel(cancel)
             target = Path(directory) / f'{context.source_path.stem}_{index + 1:02d}{suffix}'
             with context.image.crop(boxes[index]) as tile:
                 kwargs = dict(quality=options.quality, subsampling=0) if suffix == '.jpg' else {}
-                # The caller owns this unpublished directory. Carousel outputs
-                # deliberately omit XMP; keep native EXIF/ICC and strip embedded XMP.
-                tile.save(target, format='JPEG' if suffix == '.jpg' else 'PNG', **kwargs)
-                copy_export_metadata(context.source_path, target, tile)
+                # 同组切片共用元数据快照，图片和同名 XMP 全部完成后再发布目录。
+                save_export_image(tile, target, source_path=context.source_path,
+                                  format='JPEG' if suffix == '.jpg' else 'PNG',
+                                  xmp_snapshot=snapshot.xmp, **kwargs)
             progress(done, len(indices))
         check_cancel(cancel)
 
 
 def export_split(source, options, directory, crop=None, *, page_index=None,
                  cancel=lambda: False, progress=lambda done, total: None):
-    """Publish all slices or one zero-based page in a new directory, without XMP."""
+    """Publish all slices or one zero-based page with same-stem XMP in a new directory."""
     from birdstamp.decoders.image_decoder import decode_image
 
     source, directory = Path(source), Path(directory)
