@@ -638,6 +638,9 @@ class SequenceTransport(QObject):
     def eventFilter(self, watched, event):
         if self._source_shutdown:
             return False
+        split = getattr(self.editor, 'seamless_split', None)
+        if split is not None and split.active():
+            return False
         kind = event.type()
         if kind in (QEvent.Type.WindowDeactivate, QEvent.Type.FocusOut, QEvent.Type.Hide):
             if self.active:

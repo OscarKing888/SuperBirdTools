@@ -66,6 +66,30 @@ def collage_command(
     typer.echo(str(result))
 
 
+@app.command("split")
+def split_command(
+    photo: Path = typer.Argument(..., exists=True, dir_okay=False),
+    output: Path = typer.Option(..., '--output', '-o', help='整组目录的父目录；不覆盖已有结果。'),
+    count: int = typer.Option(3, min=2, max=20),
+    width: int = typer.Option(1080, min=64, max=8192, help='每张宽度，px'),
+    height: int = typer.Option(1440, min=64, max=8192, help='每张高度，px'),
+    fit: str = typer.Option('cover', help='cover 裁满；contain 完整补边'),
+    background: str = typer.Option('#FFFFFF'),
+    format: str = typer.Option('jpeg', help='jpeg / png'),
+    quality: int = typer.Option(95, min=1, max=100),
+    crop: str | None = typer.Option(None, help='归一化总裁剪框 left,top,right,bottom'),
+):
+    """将单张照片切成横向无缝连屏图，保留 EXIF/ICC 和独立 XMP。"""
+    from birdstamp.seamless_split import SplitOptions, export_split
+    try:
+        box = tuple(map(float, crop.split(','))) if crop else None
+        options = SplitOptions(count, width, height, fit, background, format, quality)
+        result = export_split(photo, options, output, box)
+    except (ValueError, OSError, RuntimeError) as exc:
+        raise typer.BadParameter(str(exc)) from exc
+    typer.echo(str(result))
+
+
 @app.command("recommend-regions")
 def recommend_regions_command(
     frames: list[Path] = typer.Argument(..., exists=True, dir_okay=False),

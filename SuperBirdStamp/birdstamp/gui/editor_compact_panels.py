@@ -121,6 +121,7 @@ class ExportActionBar(QFrame):
         dejitter_layout.addWidget(editor.dejitter_export_complete)
         self.actions.addWidget(dejitter_page)
         self.actions.addWidget(editor.collage.actions)
+        self.actions.addWidget(editor.seamless_split.actions)
         editor.export_tabs.currentChanged.connect(self.sync)
         self.sync()
 
@@ -128,17 +129,18 @@ class ExportActionBar(QFrame):
         editor = self.editor
         dejitter = editor._dejitter_tab_active()
         collage = editor.export_tabs.currentWidget() is editor.collage.page
+        split = editor.seamless_split.active()
         video = editor._is_video_output_selected()
         gif = editor._is_gif_output_selected()
-        self.mode_label.setText('拼图导出' if collage else '去抖动导出' if dejitter else '导出')
-        editor.export_stage_widget.setVisible(not dejitter and not collage)
-        self.settings_section.setVisible(not collage)
+        self.mode_label.setText('连屏切图导出' if split else '拼图导出' if collage else '去抖动导出' if dejitter else '导出')
+        editor.export_stage_widget.setVisible(not dejitter and not collage and not split)
+        self.settings_section.setVisible(not collage and not split)
         editor.image_export_group.setVisible(not dejitter and not video)
         editor.video_export_panel.setVisible(not dejitter and video)
         editor.dejitter_export_group.setVisible(dejitter)
         # 视频优先展示完整参数；只有超出窗口的极长重复播放列表才需要滚动。
         self.settings_scroll.set_show_full_content(not dejitter and not collage and video)
-        self.actions.setCurrentIndex(3 if collage else 2 if dejitter else 1 if video else 0)
+        self.actions.setCurrentIndex(4 if split else 3 if collage else 2 if dejitter else 1 if video else 0)
         self.actions.updateGeometry()
         self.format_label.setText('GIF' if gif else editor._selected_output_suffix().upper())
         editor.export_current_btn.setVisible(not gif)

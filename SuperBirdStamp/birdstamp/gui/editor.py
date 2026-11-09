@@ -1152,6 +1152,7 @@ class BirdStampEditorWindow(
         self.preview_pages = QStackedWidget()
         self.preview_pages.addWidget(self.overlay_dock.create_host(right_panel))
         self.preview_pages.addWidget(self.collage.preview_host)
+        self.preview_pages.addWidget(self.seamless_split.preview_host)
         splitter.addWidget(self.preview_pages)
         self.export_tabs.currentChanged.connect(self._sync_collage_page)
         splitter.setStretchFactor(0, 0)
@@ -1163,12 +1164,22 @@ class BirdStampEditorWindow(
 
     def _sync_collage_page(self, *_args) -> None:
         active = self.export_tabs.currentWidget() is self.collage.page
-        self.preview_pages.setCurrentIndex(1 if active else 0)
+        split_active = self.seamless_split.active()
+        was_split = getattr(self, '_split_page_active', False)
+        self._split_page_active = split_active
+        self.preview_pages.setCurrentIndex(2 if split_active else 1 if active else 0)
         self.left_scroll.setHorizontalScrollBarPolicy(
-            Qt.ScrollBarPolicy.ScrollBarAsNeeded if active else Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+            Qt.ScrollBarPolicy.ScrollBarAsNeeded if active or split_active else Qt.ScrollBarPolicy.ScrollBarAlwaysOff
         )
         # 浮动 Dock 不随父页隐藏，切页时收起，内容与撤销历史仍保留。
         (self.overlay_dock if active else self.collage.dock).hide()
+        if split_active:
+            self.overlay_dock.hide()
+            current = self.photo_list.currentItem()
+            raw = current.data(PHOTO_COL_ROW, PHOTO_LIST_PATH_ROLE) if current else None
+            self.seamless_split.set_source(Path(raw) if isinstance(raw, str) else self.seamless_split.path)
+        elif was_split and not active and self.photo_list.currentItem() is not None:
+            self._on_photo_selected(self.photo_list.currentItem(), None)
 
     def _setup_ui_photos_list(self, left_layout: QVBoxLayout) -> None:
         """构建左侧「Report 数据库」+「照片列表」分组 UI。"""
@@ -1585,6 +1596,9 @@ class BirdStampEditorWindow(
         from .editor_collage import CollageEditor
         self.collage = CollageEditor(self)
         self.export_tabs.addTab(self.collage.page, "拼图")
+        from .editor_seamless_split import SeamlessSplitEditor
+        self.seamless_split = SeamlessSplitEditor(self)
+        self.export_tabs.addTab(self.seamless_split.page, "连屏切图")
         self.export_tabs.currentChanged.connect(self._on_export_tab_changed)
         export_section.set_content_widget(self.export_tabs)
         left_layout.addWidget(export_section)
@@ -2249,14 +2263,14 @@ class BirdStampEditorWindow(
         self.action_export_current = QAction("导出当前", self)
         self.action_export_current.setShortcut(QKeySequence("Ctrl+E"))
         self.action_export_current.triggered.connect(
-            lambda: self.collage.pick_export() if self.export_tabs.currentWidget() is self.collage.page else self.export_current()
+            lambda: self.seamless_split.pick_export() if self.seamless_split.active() else self.collage.pick_export() if self.export_tabs.currentWidget() is self.collage.page else self.export_current()
         )
         self.addAction(self.action_export_current)
 
         self.action_export_all = QAction("批量导出", self)
         self.action_export_all.setShortcut(QKeySequence("Ctrl+Shift+E"))
         self.action_export_all.triggered.connect(
-            lambda: self.collage.pick_export() if self.export_tabs.currentWidget() is self.collage.page else self.export_all()
+            lambda: self.seamless_split.pick_export() if self.seamless_split.active() else self.collage.pick_export() if self.export_tabs.currentWidget() is self.collage.page else self.export_all()
         )
         self.addAction(self.action_export_all)
 
@@ -2929,6 +2943,7 @@ class BirdStampEditorWindow(
             session.cancel()
             session.clear()
         collage_stopped = self.collage.shutdown()
+        split_stopped = self.seamless_split.shutdown()
         recommendation_stopped = self.dejitter_recommendation.shutdown()
         ab_stopped = self.ab_preview.shutdown()
         source_preview_stopped = self.sequence_transport.shutdown()
@@ -2959,7 +2974,7 @@ class BirdStampEditorWindow(
         ) or (
             metadata_worker is not None
             and metadata_worker.isRunning()
-        ) or not collage_stopped or not recommendation_stopped or pending_metadata_running or not self._exiftool_shutdown_done.is_set() or not ab_stopped or not source_preview_stopped or not self._preview_action_pool.is_finished() or not discovery_stopped or self._reference_tracking_worker is not None or self._sequence_worker is not None:
+        ) or not split_stopped or not collage_stopped or not recommendation_stopped or pending_metadata_running or not self._exiftool_shutdown_done.is_set() or not ab_stopped or not source_preview_stopped or not self._preview_action_pool.is_finished() or not discovery_stopped or self._reference_tracking_worker is not None or self._sequence_worker is not None:
             self._set_status("正在安全结束后台任务...")
             event.ignore()
             QTimer.singleShot(100, self.close)
@@ -5358,11 +5373,18 @@ class BirdStampEditorWindow(
         if hasattr(self, "overlay_panel"):
             self.overlay_panel.flush_text()
         if not current or getattr(self, "_preview_decode_shutdown", False):
+            if (current is None and not getattr(self, '_preview_decode_shutdown', False)
+                    and self.seamless_split.active() and self._workspace_restore_context is None):
+                self.seamless_split.set_source(None)
             return
         raw = current.data(PHOTO_COL_ROW, PHOTO_LIST_PATH_ROLE)
         if not isinstance(raw, str):
             return
         path = Path(raw)
+        if self.seamless_split.active():
+            if self._workspace_restore_context is None:
+                self.seamless_split.set_source(path)
+            return
         if target_view is None and self.ab_preview.route_photo_selection(path):
             return
         if self._select_sequence_preview(path):
