@@ -937,7 +937,8 @@ def _render_legacy_template_overlay(
     banner_gradient_bottom_color = _normalize_banner_gradient_color(
         template_payload.get("banner_gradient_bottom_color"), _bc_fallback
     )
-    if draw_banner and draw_banner_background and draw_commands:
+    # 底部渐变由画布尺寸决定，不依赖文本；实心底板仍由文字范围决定。
+    if draw_banner and draw_banner_background:
         if banner_background_style == _BANNER_BACKGROUND_STYLE_GRADIENT_BOTTOM:
             scrim_rect = _compute_template_bottom_gradient_rect(
                 canvas_width=canvas.width,

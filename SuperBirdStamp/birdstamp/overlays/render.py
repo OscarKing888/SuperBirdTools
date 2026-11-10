@@ -160,7 +160,8 @@ def build_scene(payload, size, *, raw_metadata=None, metadata_context=None, phot
                 w,h = item['width']*size[0]*item['scale'],item['height']*size[1]*item['scale']
                 center = (item['x']*size[0],item['y']*size[1])
             else:
-                if not text_layers:
+                # 自动渐变独立于文本，只有实心文字底板需要文本范围。
+                if not gradient and not text_layers:
                     continue
                 boxes = [(min(p[0] for p in v.corners()),min(p[1] for p in v.corners()),
                           max(p[0] for p in v.corners()),max(p[1] for p in v.corners())) for v in text_layers]

@@ -17,7 +17,8 @@ SOURCE_FRAME_BUCKET_KIND = "rendered_source_frames"
 VIDEO_FRAME_BUCKET_KIND = "video_frames"
 # v10 保留完整 EXIF；v11 支持图像着色；v12 支持圆角 Badge；v13 支持嵌套行/列布局。
 # v18 每帧配套独立 XMP，不复用旧的内嵌 XMP 输出。
-SOURCE_FRAME_CACHE_VERSION = 18
+# v19 无文本时也绘制底部渐变，旧帧需重新渲染。
+SOURCE_FRAME_CACHE_VERSION = 19
 VIDEO_FRAME_CACHE_VERSION = 2
 _DEFAULT_PIPELINE_STAGE_ORDER = (
     "template_crop",

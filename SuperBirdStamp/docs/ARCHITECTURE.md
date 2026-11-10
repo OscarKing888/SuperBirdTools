@@ -407,3 +407,5 @@ Windows 合并构建由 [`stage_windows_exiftool.py`](../../build_tools/stage_wi
 ### GIF 逐遍倒放
 
 `GifExportOptions.repeat_reverse` 与追加的 `repeat_fps` 逐项对应（缺省正放）。`build_gif_frame_timing` 先独立量化各遍时长，再将倒放遍的采样索引映射为 `frame_count - 1 - index`；原始帧缓存与照片列表顺序保留。全部 GIF 尺寸与微信版共用该时间线。`GifExportPanel` 在各追加遍提供倒放复选框，导出偏好及工作区以 `gif_repeat_reverse` 保存，旧文件默认正放。CLI 示例：`gif a.png b.png --output out.gif --fps 20 --repeat-fps 10 --reverse-pass 2`；可多次指定追加遍编号。回归见 `test_gif_timing.py`、`test_gif_export_panel.py`。
+
+底部柔和渐变背景由画布尺寸和渐变高度决定，不依赖文本图层存在、可见或非空；旧模板与 `overlays/render.py:build_scene` 共用这一语义，安全区下仍沿安全区底边布局。实心自动底板继续依赖文本范围，背景开关仍控制绘制。预览、CLI 与导出使用同一模板渲染入口，源帧缓存版本随修复更新。回归见 [test_template_overlay_banner_gradient.py](../tests/test_template_overlay_banner_gradient.py)。

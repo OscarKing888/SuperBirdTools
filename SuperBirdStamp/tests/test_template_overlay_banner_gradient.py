@@ -1,3 +1,4 @@
+import pytest
 from PIL import Image
 
 from birdstamp.gui.editor_template import (
@@ -140,3 +141,69 @@ def test_rgb_layer_composite_matches_alpha_composite_with_clipping() -> None:
         rgba = base.convert("RGBA")
         rgba.alpha_composite(rgba_layer, dest)
         assert rgb.tobytes() == rgba.convert("RGB").tobytes(), dest
+
+
+@pytest.mark.parametrize("scene", [False, True])
+@pytest.mark.parametrize("text_state", ["absent", "empty", "disabled"])
+@pytest.mark.parametrize("draw_banner", [False, True])
+def test_bottom_gradient_does_not_require_text(scene, text_state, draw_banner):
+    from birdstamp.overlays.model import document
+
+    image = Image.new("RGB", (320, 200), "white")
+    payload = default_template_payload(name="background-only")
+    payload.update(banner_gradient_height_pct=50, banner_gradient_bottom_opacity_pct=100,
+                   banner_gradient_top_opacity_pct=0, banner_gradient_top_color="#000000",
+                   banner_gradient_bottom_color="#000000")
+    payload["fields"] = ([] if text_state == "absent" else
+                         [dict(text_mode="literal", text="" if text_state == "empty" else "Bird")])
+    if scene:
+        payload = document(payload)
+    result = render_template_overlay(image, raw_metadata={}, metadata_context={},
+                                    template_payload=payload, draw_banner=draw_banner,
+                                    draw_text=text_state != "disabled")
+    assert result.getpixel((160, 50)) == (255, 255, 255)
+    if draw_banner:
+        assert 0 < result.getpixel((160, 150))[0] < 255
+        assert result.getpixel((160, 199))[0] < 10
+    else:
+        assert result.tobytes() == image.tobytes()
+    assert image.getextrema() == ((255, 255),) * 3
+
+
+@pytest.mark.parametrize("style", ["solid", "gradient_bottom"])
+def test_scene_background_with_hidden_text(style):
+    from birdstamp.overlays.model import document
+
+    payload = default_template_payload(name="hidden-text")
+    payload["banner_background_style"] = style
+    payload = document(payload)
+    for item in payload["overlays"]:
+        if item["type"] == "text":
+            item["visible"] = False
+    image = Image.new("RGB", (320, 200), "white")
+    result = render_template_overlay(image, raw_metadata={}, metadata_context={}, template_payload=payload)
+    assert (result.tobytes() != image.tobytes()) == (style == "gradient_bottom")
+    payload["overlays"][0]["visible"] = False
+    hidden = render_template_overlay(image, raw_metadata={}, metadata_context={}, template_payload=payload)
+    assert hidden.tobytes() == image.tobytes()
+
+
+def test_gradient_only_preview_respects_safe_area(monkeypatch):
+    from birdstamp.overlays import safe_area_options
+    from birdstamp.overlays.model import document
+
+    monkeypatch.setattr(safe_area_options, "current_options", lambda: {
+        "labels": {"off": "关闭", "test": "测试"},
+        "presets": {"test": {"portrait": (.1, .1, .1, .1), "landscape": (.1, .1, .1, .1)}},
+    })
+    payload = default_template_payload(name="safe-background")
+    payload["fields"] = []
+    payload["banner_gradient_height_pct"] = 50
+    image = Image.new("RGB", (320, 200), "white")
+    result = render_template_overlay(image, raw_metadata={}, metadata_context={},
+                                    template_payload=document(payload), draw_text=False,
+                                    layout_size=(640, 400), platform_safe_area="test")
+    assert result.getpixel((160, 170))[0] < 200
+    assert result.getpixel((160, 195)) == (255, 255, 255)
+    assert result.getpixel((5, 170)) == (255, 255, 255)
+    assert result.getpixel((160, 30)) == (255, 255, 255)
