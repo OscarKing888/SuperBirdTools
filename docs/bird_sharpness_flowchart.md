@@ -492,6 +492,8 @@ flowchart TD
 
 代码：`_no_bird_result()`、[focus.py](../bird_sharpness/focus.py)、[metrics.py](../bird_sharpness/metrics.py) 的 `sharpest_tiles_blur()` / `full_image_blur()`。
 
+相机焦点入口复用共享 [raw_focus_metadata.py](../app_common/raw_focus_metadata.py) / [focus_calc.py](../app_common/focus_calc.py)。佳能 CR3/CR2/CRW 的 AFInfo/AFInfo2 经后台只读 ExifTool 查询，由 [canon_focus.py](../app_common/canon_focus.py) 按 AF 画幅尺寸、有效点数、16 位合焦/选择位掩码还原矩形（EOS 的 Y 轴向上），随后应用 EXIF 方向和 `camera_crop`。只取有效合焦点，缺失时取有效所选点；手动对焦、填充零槽位不产生伪焦点。该支持同样供第 4–6 节的焦点选鸟与复检使用，不改变测量阈值或评分公式。
+
 ```mermaid
 flowchart TD
     A["无鸟"] --> B["读相机焦点框<br/>RAW MakerNote 优先，否则 EXIF/XMP；Viewer 另有 report.db 兜底<br/>按 camera_crop 映射到全分辨率像素"]

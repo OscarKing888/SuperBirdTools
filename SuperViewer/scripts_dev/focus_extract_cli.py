@@ -4,7 +4,7 @@
 Quick CLI for validating Super Viewer focus extraction on a single source file.
 
 Usage:
-  .venv\\Scripts\\python.exe scripts\\focus_extract_cli.py "F:\\path\\to\\file.ARW"
+  .venv\\Scripts\\python.exe SuperViewer\\scripts_dev\\focus_extract_cli.py "F:\\path\\to\\file.CR3"
 """
 
 from __future__ import annotations
@@ -14,12 +14,14 @@ import os
 from pathlib import Path
 import sys
 
-ROOT_DIR = Path(__file__).resolve().parents[1]
+ROOT_DIR = Path(__file__).resolve().parents[2]
 if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
-import main  # noqa: E402
-from app_common.exif_io import extract_metadata_with_xmp_priority  # noqa: E402
+from SuperViewer.superviewer.focus_preview_loader import (  # noqa: E402
+    _load_focus_metadata_for_path, _load_focus_box_for_preview, _resolve_focus_calc_image_size,
+)
+from app_common.exif_io import close_exiftool_process  # noqa: E402
 from app_common.focus_calc import extract_focus_box, resolve_focus_camera_type_from_metadata  # noqa: E402
 
 
@@ -27,7 +29,8 @@ def _print_focus_related(metadata: dict) -> None:
     print(f"metadata_keys={len(metadata)}")
     for key in sorted(metadata.keys(), key=lambda k: str(k).lower()):
         lk = str(key).lower()
-        if any(t in lk for t in ("focus", "subject", "region", "model", "make", "imagewidth", "imageheight", "orientation", "0x2027", "0x204a")):
+        if (lk.split(":")[-1].startswith(("af", "numaf", "validaf"))
+                or any(t in lk for t in ("focus", "subject", "region", "model", "make", "imagewidth", "imageheight", "orientation", "0x2027", "0x204a"))):
             value = metadata.get(key)
             sv = str(value)
             if len(sv) > 180:
@@ -50,26 +53,23 @@ def main_cli() -> int:
     print(f"source={path}")
     print(f"fallback_size={args.width}x{args.height}")
 
-    metadata = extract_metadata_with_xmp_priority(Path(path), mode="auto") or {}
-    if Path(path).suffix.lower() in main.RAW_EXTENSIONS:
-        extra = main._load_exifread_metadata_for_focus(path) or {}
-        if extra:
-            merged = dict(metadata)
-            merged.update(extra)
-            metadata = merged
+    metadata = _load_focus_metadata_for_path(path) or {}
 
     _print_focus_related(metadata)
-    focus_width, focus_height = main._resolve_focus_calc_image_size(metadata, fallback=(args.width, args.height))
+    focus_width, focus_height = _resolve_focus_calc_image_size(metadata, fallback=(args.width, args.height))
     print(f"resolved_size={focus_width}x{focus_height}")
     camera_type = resolve_focus_camera_type_from_metadata(metadata)
     print(f"camera_type={camera_type}")
 
     box_calc = extract_focus_box(metadata, focus_width, focus_height, camera_type=camera_type)
     print(f"focus_box_calc={box_calc}")
-    box_preview = main._load_focus_box_for_preview(path, args.width, args.height)
+    box_preview = _load_focus_box_for_preview(path, args.width, args.height)
     print(f"focus_box_preview={box_preview}")
     return 0
 
 
 if __name__ == "__main__":
-    raise SystemExit(main_cli())
+    try:
+        raise SystemExit(main_cli())
+    finally:
+        close_exiftool_process()

@@ -118,7 +118,7 @@ HIF/HEIF/HEIC 即使已有完整报告或 XMP 拍摄字段，仍在 `MetadataLoa
 
 “包含子目录”只改变显示范围，保留本地编辑保护和已加载的元数据，并复用当前目录的 shallow/recursive 列表；切回其他目录仍重新扫描文件列表，元数据在 worker 中按指纹复用。显式刷新使该目录及后代的会话缓存失效，重新加载报告；关闭窗口清空缓存。`[metadata.memory]` 日志记录命中/未命中、条目数、估算字节数和耗时。此策略仅用于浏览器会话缓存，无 CLI 参数；回归见 [`test_metadata_memory_cache.py`](../../app_common/tests/test_metadata_memory_cache.py) 及 [`test_directory_scope.py`](../tests/test_directory_scope.py)。
 
-[`MetadataSQLiteCache`](../../app_common/exif_io/metadata_sqlite.py) 在内存未命中后批量读取合并结果，命中跳过 XML、RAW 焦点提取与视频 ffprobe。`xmp-v1` 另存逐资源的解析行，`browser-v1` 保存合并后的拍摄/XMP/report/焦点/视频信息；改变字段解释时应升级对应 namespace。签名包含源文件和实际侧车的设备/文件身份、纳秒 mtime/ctime、大小，以及请求标签集、报告行。SQL 内采用 JSON 序列化，不使用 pickle。这层保存可重建的来源数据；已提交未同步编辑由独立 `MetadataStore` 持久保存并覆盖这些来源。
+[`MetadataSQLiteCache`](../../app_common/exif_io/metadata_sqlite.py) 在内存未命中后批量读取合并结果，命中跳过 XML、RAW 焦点提取与视频 ffprobe。`xmp-v1` 另存逐资源的解析行，`browser-v2` 保存合并后的拍摄/XMP/report/焦点/视频信息（v2 失效 Canon AF 支持前的无焦点来源缓存）；改变字段解释时应升级对应 namespace。签名包含源文件和实际侧车的设备/文件身份、纳秒 mtime/ctime、大小，以及请求标签集、报告行。SQL 内采用 JSON 序列化，不使用 pickle。这层保存可重建的来源数据；已提交未同步编辑由独立 `MetadataStore` 持久保存并覆盖这些来源。
 
 缓存存于本机 `~/Library/Caches/SuperBirdTools/metadata-v1.sqlite3`（macOS）或 `%LOCALAPPDATA%/SuperBirdTools/Cache/metadata-v1.sqlite3`（Windows）；诊断可用 `SUPERBIRD_METADATA_CACHE_DIR` 覆盖。独立只读连接批量查询，[WAL](https://www.sqlite.org/wal.html) 写入由一个后台线程执行，GUI 保存只入队；16 MiB 待写预算防止慢盘积压，最多 100,000 条/估算 512 MiB 数据，超额按最早写入淘汰，数据库页面复用。退出通过 `close_cache()` / atexit 排空队列并关闭连接；损坏、权限或锁冲突降级为源读取，不影响 XMP 保存。旧 `meta_disk_cache.py` 仍只缓存原图派生字段。
 
@@ -232,6 +232,10 @@ RAW 完整解码可能保留内嵌 JPEG 裁掉的传感器边缘。共享 [`raw_
 `_resolve_focus_metadata_source_path()` 和列表 `focus_source_for_sibling()` 优先把预览 JPEG 对应到源 RAW/HEIF。`FocusBoxLoader` 先尝试源图，再尝试不同的预览路径；文件元数据都无法给出焦点时才使用报告中的 `focus_x/focus_y`。
 
 [`focus_preview_loader.py`](../superviewer/focus_preview_loader.py) 的 `_load_focus_metadata_for_path()` 按 RAW、HEIF 和普通图像分别组合读取器；`_resolve_focus_calc_image_size()` 与方向变换保证焦点计算使用源尺寸和正确方向。实际相机焦点算法在共享 [`focus_calc.py`](../../app_common/focus_calc.py)。增加相机或格式支持时，优先扩展这些入口，不要在主窗口另建一条 EXIF 提取链。
+
+佳能由 [`canon_focus.py`](../../app_common/canon_focus.py) 解析 AFInfo/AFInfo2：按 `AFImageWidth/Height` 的中心原点坐标转为左上角坐标（EOS 的 Y 向上，PowerShot 向下），随后统一应用 EXIF 方向与实际 RAW 裁切几何。`-n` 输出的 `AFPointsInFocus/Selected` 是有符号 16 位位掩码数组，不能当作点编号；文本输出只有模式名称明确表示已转换时才按编号解析，第 0 点有效。只使用 `ValidAFPoints` 范围内且宽高非零的矩形，优先合焦点、其次所选点，多点取外接框，手动对焦和无有效点不生成中心框。
+
+[`raw_focus_metadata.py`](../../app_common/raw_focus_metadata.py) 对 CR3/CR2/CRW 及识别为 Canon 的 DNG 使用共享 ExifTool runner 的定向只读查询，兼容 ExifRead 不支持的 CR3 容器和 AF 数组；Sony 等 TIFF RAW 保留进程内读取。查询只在既有元数据/焦点 worker 中发生，复用 runner 的超时、取消和关闭策略，不在长按帧中提取。`CANON_FOCUS_TAGS` 同时加入批量读取，让缩略图与 BirdStamp 使用相同数据。实片 EOS R6m2 `211A7718(1).CR3`：6000×4000，1053 槽位中仅 1 点有效，中心 `(2989,1699)`、框 159×159。复现用根 `.venv` 执行 `SuperViewer/scripts_dev/focus_extract_cli.py <照片> --width 1200 --height 800`；回归见共享 `test_canon_focus.py`、`test_raw_focus_metadata.py` 和 [`test_canon_focus_integration.py`](../tests/test_canon_focus_integration.py)。
 
 主窗口持有 `_focus_loader`、最新待处理请求及显示 request id；结果可缓存到列表，但只有当前 request id 的结果能改变当前画布。
 

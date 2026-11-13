@@ -224,6 +224,8 @@ RAW 源图的去抖动分析、成片预览和导出统一优先读取长边至�
 
 完整 RAW 的相机裁切几何由共享 [raw_preview_geometry.py](../../app_common/raw_preview_geometry.py) 计算，降噪成片从输出 XMP 读取，均随实际 PIL 像素的 `info["raw_camera_crop_box"]` 进入 A/B；焦点先映射到 RAW 可见区，再应用裁切/补边。[preview_source_geometry.py](../birdstamp/gui/preview_source_geometry.py) 将后台鸟体识别结果归一回相机坐标后缓存；鸟框、参考区、跟踪诊断和裁切框按每侧实际像素映射，编辑后反向还原再保存，避免来源切换改变工作区坐标。快速内嵌图及去抖动成片清除 RAW 几何，不能仅凭按钮状态决定坐标。Viewer 的来源切换见 [SuperViewer architecture](../../SuperViewer/docs/ARCHITECTURE.md)。
 
+佳能 AFInfo/AFInfo2 由共享 [canon_focus.py](../../app_common/canon_focus.py) 解析，批量元数据读取同时请求 AF 坐标、尺寸、有效点数与合焦/选择位掩码。预览、裁切中心及焦点导出均经 `focus_calc` 的相机坐标和方向转换，再应用实际 RAW 几何；不另建佳能 GUI 分支。读取和有效点策略见 [Viewer 焦点来源](../../SuperViewer/docs/ARCHITECTURE.md#4-焦点来源与显示)，跨应用回归见 [test_canon_focus_integration.py](../../SuperViewer/tests/test_canon_focus_integration.py)。
+
 预览由 [editor_renderer.py](../birdstamp/gui/editor_renderer.py) 的 `render_preview`、`_render_preview_pipeline_image` 适配相同的阶段顺序和设置，但保留裁切外画布以供编辑，不直接把最终裁切位图作为交互画布。模板要与裁切区域对齐，焦点框也要经过相同坐标变换。[editor_preview_canvas.py](../birdstamp/gui/editor_preview_canvas.py) 承接交互显示和网格叠加。
 
 裁切框持久化使用**原图归一化坐标**，允许超出 0–1；裁切计划中的框则相对于补边后的画布，补边量为该计划尺寸下的像素数。[editor_core.py](../birdstamp/gui/editor_core.py) 的 `crop_box_to_source` 将交互框换回原图坐标，`rescale_crop_plan` 将原图计划映射到缩小预览。拖动期间不重建画布，松手后提交自定义裁切；四角保持对角点固定。留边表示从选定中心向四周扩展的原图像素距离，固定比例会居中包住该范围；单轴留边也参与计算。`原比例` 保持原图宽高比并应用留边，`不裁切` 则跳过所有裁切框、补边和旧预计算计划。
